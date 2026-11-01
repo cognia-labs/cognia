@@ -2930,6 +2930,9 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     "companion_browser_extension_read",
     "companion_browser_extension_call",
     "companion_browser_extension_notify",
+    // The brain connecting a GitHub account from a secret it already holds;
+    // a device would name which stored secret becomes an account credential.
+    "integration_github_account_connect_from_secret",
 ];
 
 static SERVICE_ONLY_COMMANDS_SET: once_cell::sync::Lazy<HashSet<&'static str>> =

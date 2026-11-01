@@ -1673,7 +1673,9 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
 
 /// ADR-0234 Phase 3: changing what the Host reaches is admin with an
 /// interactive lease; viewing and keeping one's own session alive is the
-/// observe baseline, and a control open escalates by payload.
+/// observe baseline, and a control open escalates by payload. Phase 5: opening
+/// a web console or RustDesk binding hands out its link, so it is `host.admin`
+/// gated by the admin lease the arm checks, without an interactive prompt.
 #[test]
 fn remote_desktop_commands_split_observe_from_admin() {
     use cognia_companion::command_manifest::{descriptor, CommandApproval, CommandTarget};
@@ -1685,11 +1687,16 @@ fn remote_desktop_commands_split_observe_from_admin() {
                 | "remote_desktop_credential_set"
                 | "remote_desktop_target_probe"
         );
+        let launch = *name == "remote_desktop_binding_launch";
         let descriptor = descriptor(name).expect("registered");
         assert_eq!(descriptor.target, CommandTarget::Execution, "{name}");
         assert_eq!(
             descriptor.capability,
-            if admin { "host.admin" } else { "host.observe" },
+            if admin || launch {
+                "host.admin"
+            } else {
+                "host.observe"
+            },
             "{name}"
         );
         assert_eq!(
@@ -2249,6 +2256,11 @@ static HOST_SECRET_STORE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 #[tokio::test]
 async fn host_secret_arms_seal_attribute_and_never_return_values() {
     let _store = HOST_SECRET_STORE.lock().await;
+    // `host_secret_list` sweeps secrets whose writer the installed security
+    // store does not know. The store is process-global, so another test's
+    // store would sweep `hs-phone`'s writes mid-test; run with none installed.
+    let _security = cognia_companion::security_store::test_guard();
+    cognia_companion::security_store::install_security_store(None);
     let state = test_state();
     let services = crate::headless::HeadlessServices::stub_for_tests();
     let host = Arc::clone(&services);
@@ -3454,14 +3466,20 @@ async fn connectors_health_reports_the_headless_ingress() {
     )
     .await
     .expect("health");
+    // The avatar-staging bearer is disclosed only here (a service-only
+    // command), and it is this process's own token.
+    let staging_token = services.connectors.inner.lock().staging_token.clone();
+    assert!(!staging_token.is_empty());
     assert_eq!(
         health,
         json!({
             "serverRunning": true,
             "boundAddr": Value::Null,
             "registeredAdapterCount": 1,
+            "stagingToken": staging_token,
         })
     );
+    assert!(is_service_only_command("connectors_health"));
 }
 
 #[tokio::test]
@@ -4061,6 +4079,13 @@ fn every_known_command_has_a_dispatch_arm() {
         include_str!("diagnostics.rs"),
         include_str!("host_admin.rs"),
         include_str!("environment.rs"),
+        include_str!("media.rs"),
+        // ADR-0233/0234: desktops route to their own crate-root dispatchers;
+        // the remote-desktop arms live with the command surface the desktop
+        // shells share.
+        include_str!("../managed_desktops.rs"),
+        include_str!("../remote_desktops.rs"),
+        include_str!("../../../../crates/cognia-remote-desktop/src/commands.rs"),
         // Live file shares: the arms live with the crate's one command
         // surface, which the desktop shells share.
         include_str!("../../../../crates/cognia-file-share/src/rpc.rs"),
@@ -5404,6 +5429,9 @@ fn command_families_cover_known_non_browser_commands_once() {
         super::host_admin::COMMANDS,
         super::environment::COMMANDS,
         super::file_share::COMMANDS,
+        super::media::COMMANDS,
+        crate::managed_desktops::COMMANDS,
+        crate::remote_desktops::COMMANDS,
     ];
     let routed: Vec<_> = families.into_iter().flatten().copied().collect();
     let unique: std::collections::HashSet<_> = routed.iter().copied().collect();
