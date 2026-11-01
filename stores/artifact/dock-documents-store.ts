@@ -9,6 +9,10 @@ import {
   type CloudDocumentTarget,
 } from "@/lib/docs-providers/document-url"
 import { isPluginDocsProviderId } from "@/lib/docs-providers/types"
+import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
 
 export type DockDocumentView = "snapshot" | "live"
 export type DockDocumentSnapshotRef = { kind: "asset"; assetId: string; messageId?: string }
@@ -17,6 +21,7 @@ export interface DockDocumentTab extends CloudDocumentTarget {
   title: string
   view: DockDocumentView
   snapshotRef?: DockDocumentSnapshotRef
+  remoteDocument?: RemoteDocumentProvenanceV1
   openedAt: number
 }
 export interface SessionDockDocuments {
@@ -66,6 +71,7 @@ function readTab(value: unknown): DockDocumentTab | null {
       target.resourceKind !== value.resourceKind)
   )
     return null
+  const provenance = parseRemoteDocumentProvenance(value.remoteDocument)
   return {
     id: value.id,
     providerId: value.providerId as DockDocumentTab["providerId"],
@@ -81,6 +87,12 @@ function readTab(value: unknown): DockDocumentTab | null {
     title: value.title,
     view: value.view as DockDocumentView,
     openedAt: value.openedAt,
+    ...(provenance &&
+    provenance.providerId === value.providerId &&
+    provenance.resourceId === value.resourceId &&
+    provenance.resourceKind === value.resourceKind
+      ? { remoteDocument: provenance }
+      : {}),
     ...(value.providerId === "lark" &&
     value.resourceKind === "doc" &&
     (value.sourceType === "doc" || value.sourceType === "docx")

@@ -66,6 +66,7 @@ export function openAttachedDocument({
   openChatDocument({
     sessionId,
     target,
+    remoteDocument: provenance,
     entry: origin === "sent" ? "sent-attachment" : "staged-attachment",
     view: "snapshot",
     // Never fall back to the part body when a sent asset has been deleted.

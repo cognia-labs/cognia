@@ -14,6 +14,8 @@ import {
 import type { DockDocumentTab } from "@/stores/artifact/dock-documents-store"
 import { DocumentGridView } from "./document-grid-view"
 import { useDocumentSnapshot } from "./use-document-snapshot"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+import { KeptCopySourceBadge } from "@/components/chat/message-parts/kept-copy-source-badge"
 
 function SnapshotBody({ content }: { content: DockDocumentSnapshotContent }) {
   const [bodyUrl, setBodyUrl] = useState<{ text: string; url: string } | null>(null)
@@ -58,6 +60,7 @@ export function DocumentSnapshotView({
   const format = useFormatter()
   const snapshot = useDocumentSnapshot(sessionId, tab)
   const { content } = snapshot
+  const source = useKeptCopySource(tab.remoteDocument)
   const [openFailed, setOpenFailed] = useState(false)
   const [attachFailed, setAttachFailed] = useState(false)
   return (
@@ -71,6 +74,7 @@ export function DocumentSnapshotView({
           · {t(`kinds.${tab.resourceKind}`)}
         </p>
         <h2 className="truncate font-medium">{content?.title || tab.title || t("title")}</h2>
+        <KeptCopySourceBadge status={source.status} />
         {content ? (
           <p className="text-xs text-muted-foreground">
             {t(content.origin === "sent" ? "sentAt" : "readAt", {
@@ -129,6 +133,7 @@ export function DocumentSnapshotView({
             variant="outline"
             disabled={
               !snapshot.reach.available ||
+              !source.canReopen ||
               ["resolving", "loading", "refreshing"].includes(snapshot.state)
             }
             onClick={() => void snapshot.refresh()}
@@ -139,13 +144,14 @@ export function DocumentSnapshotView({
             size="sm"
             variant="outline"
             onClick={() => setDockDocumentView(sessionId, tab.id, "live")}
+            disabled={!source.canReopen}
           >
             {t("openLive")}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={!tab.url}
+            disabled={!tab.url || !source.canReopen}
             onClick={() => void openExternal(tab.url).catch(() => setOpenFailed(true))}
           >
             {t("openSystem")}
@@ -157,7 +163,7 @@ export function DocumentSnapshotView({
         {attachFailed ? <p role="alert">{t("attachUnavailable")}</p> : null}
         {openFailed ? <p role="alert">{t("live.reasons.browser-error")}</p> : null}
         <DocsProviderNotice reach={snapshot.reach} />
-        {snapshot.accounts ? (
+        {snapshot.accounts && source.canReopen ? (
           <div className="space-y-2" role="group" aria-label={t("chooseAccount")}>
             <p className="text-xs">{t("chooseAccount")}</p>
             {snapshot.accounts.length ? (

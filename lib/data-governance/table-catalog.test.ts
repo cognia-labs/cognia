@@ -2,6 +2,7 @@ import "fake-indexeddb/auto"
 
 import { CogniaDB } from "@/lib/db/schema"
 import {
+  ACCOUNT_SYNC_TABLES,
   COMPANION_SYNC_DELETE_STRATEGY,
   COMPANION_SYNC_PROTOCOL_TABLE_NAMES,
   COMPANION_SYNC_TABLES,
@@ -56,7 +57,7 @@ describe("DataTableCatalog", () => {
     const catalog = DATA_TABLE_CATALOG.map((entry) => entry.name).sort()
 
     expect(catalog).toEqual(actual)
-    expect(new Set(CORE_TABLE_NAMES).size).toBe(397)
+    expect(new Set(CORE_TABLE_NAMES).size).toBe(398)
     db.close()
   })
 
@@ -681,6 +682,21 @@ it("retains desktop cleanup intents until Host acknowledgment without sync or po
   expect(policy.backupPolicy.mode).toBe("device-local")
   expect(policy.syncPolicy.mode).toBe("none")
   expect(policy.accountSync.mode).toBe("none")
+})
+
+it("keeps copy bindings device-local and outside sync, exports and plugin wipes", () => {
+  expect(policyForTable("remoteDocumentConnections")).toMatchObject({
+    owner: "docs-providers",
+    accountScope: "account",
+    backupPolicy: { mode: "device-local" },
+    accountSync: { mode: "none" },
+    syncPolicy: { mode: "none" },
+    deleteCascade: { account: true, plugin: false },
+    cleanupPolicy: "protected",
+  })
+  expect(PORTABLE_BACKUP_TABLES.has("remoteDocumentConnections")).toBe(false)
+  expect(COMPANION_SYNC_TABLES.has("remoteDocumentConnections")).toBe(false)
+  expect(ACCOUNT_SYNC_TABLES.has("remoteDocumentConnections")).toBe(false)
 })
 
 it("keeps Host auth metadata device-local and secrets externalized", () => {

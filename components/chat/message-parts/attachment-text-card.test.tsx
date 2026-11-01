@@ -1,5 +1,32 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { AttachmentTextCard } from "./attachment-text-card"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+import en from "@/i18n/messages/en/cloudDocPreview.json"
+jest.mock("@/hooks/chat/use-remote-doc-kept-copy-source", () => ({
+  useKeptCopySource: jest.fn(() => ({ status: "unknown", canReopen: true })),
+}))
+beforeEach(() =>
+  jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
+)
+
+it.each(["source-disconnected", "source-deleted", "not-on-this-device"] as const)(
+  "keeps a %s sent copy readable",
+  (status) => {
+    jest.mocked(useKeptCopySource).mockReturnValue({ status, canReopen: false })
+    render(
+      <AttachmentTextCard
+        filename="kept.md"
+        text="Kept body"
+        sessionId="s"
+        provenance={injectedCloudProvenance}
+      />
+    )
+    expect(screen.getByRole("status")).toHaveTextContent(en.sourceStatus[status])
+    expect(screen.getByRole("button", { name: en.openDock })).toBeEnabled()
+    fireEvent.click(screen.getByRole("button", { name: /kept.md/ }))
+    expect(screen.getByText("Kept body")).toBeVisible()
+  }
+)
 
 describe("AttachmentTextCard", () => {
   it("shows the filename and extracted length without the body", () => {

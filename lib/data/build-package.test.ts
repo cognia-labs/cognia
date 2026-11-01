@@ -1034,6 +1034,8 @@ it("round-trips workspace and conversation-folder parents with sessions", async 
 })
 
 const cloudProvenance = {
+  captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+  connectionScoped: true as const,
   v: 1 as const,
   providerId: "google" as const,
   resourceKind: "doc" as const,
@@ -1045,12 +1047,21 @@ const cloudProvenance = {
 }
 const injectedCloudProvenance = {
   ...cloudProvenance,
+  connectionRef: "private-connection",
+  identityKey: "private-identity",
   accountId: "private-account",
   authorizationEpoch: "private-epoch",
   accountBinding: { accountId: "private-account" },
 }
 it("backs up citation-bearing messages with sanitized provenance", async () => {
   const db = getDb()
+  await db.remoteDocumentConnections.put({
+    captureId: cloudProvenance.captureId,
+    providerId: cloudProvenance.providerId,
+    connectionRef: "private-connection",
+    identityKey: "private-identity",
+    capturedAt: 1,
+  } as never)
   await db.sessions.put({
     id: "cloud-backup",
     title: "Plan",
@@ -1066,12 +1077,19 @@ it("backs up citation-bearing messages with sanitized provenance", async () => {
     parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }],
     metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
   } as never)
-  const rows = (
-    await buildBackupPackage({ includeSessions: true, includeApiKey: false }, { storage: null })
-  ).payload.messages!
+  const { payload } = await buildBackupPackage(
+    { includeSessions: true, includeApiKey: false },
+    { storage: null }
+  )
+  expect(JSON.stringify(payload)).not.toMatch(
+    /remoteDocumentConnections|connectionRef|identityKey|private-connection|private-identity/
+  )
+  const rows = payload.messages!
   const row = rows.find((row) => (row as { id: string }).id === "cloud-message") as unknown as {
     parts: Array<{ remoteDocument: unknown }>
   }
   expect(row.parts[0].remoteDocument).toEqual(cloudProvenance)
-  expect(JSON.stringify(row)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+  expect(JSON.stringify(row)).not.toMatch(
+    /private-account|authorizationEpoch|accountBinding|connectionRef|identityKey|private-connection|private-identity/
+  )
 })

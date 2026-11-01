@@ -5,6 +5,10 @@ import { DocumentLiveView } from "./document-live-view"
 import { isTauri } from "@/lib/tauri"
 import { useLocalBrowser } from "@/hooks/browser/use-local-browser"
 import type { DockDocumentTab } from "@/stores/artifact/dock-documents-store"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+jest.mock("@/hooks/chat/use-remote-doc-kept-copy-source", () => ({
+  useKeptCopySource: jest.fn(() => ({ status: "unknown", canReopen: true })),
+}))
 let mockLiveState = "blocked"
 let mockLiveReason: string | undefined = "isolation-unavailable"
 jest.mock("@/components/browser/document-viewer-browser", () => ({
@@ -35,6 +39,7 @@ const tab: DockDocumentTab = {
   openedAt: 1,
 }
 beforeEach(() => {
+  jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
   mockLiveState = "blocked"
   mockLiveReason = "isolation-unavailable"
   ;(isTauri as jest.Mock).mockReturnValue(false)
@@ -53,6 +58,20 @@ it("lets the ready browser fill the panel without status or action rows", () => 
   expect(screen.queryByRole("button", { name: "retry" })).toBeNull()
   expect(container.firstChild).toHaveClass("relative", "min-h-0")
 })
+it.each(["source-disconnected", "source-deleted", "not-on-this-device"] as const)(
+  "does not launch a live browser for %s",
+  (status) => {
+    jest.mocked(useKeptCopySource).mockReturnValue({ status, canReopen: false })
+    jest.mocked(isTauri).mockReturnValue(true)
+    render(<DocumentLiveView sessionId="s" tab={tab} />)
+    expect(useLocalBrowser).toHaveBeenCalledWith({ enabled: false })
+    expect(screen.queryByRole("application")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "openSystem" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "retry" })).toBeDisabled()
+    expect(screen.getByText(`sourceStatus.${status}`)).toBeInTheDocument()
+    expect(screen.getByText("live.states.blocked")).toBeInTheDocument()
+  }
+)
 it("shows failures in an overlay without shrinking the page", () => {
   ;(isTauri as jest.Mock).mockReturnValue(true)
   mockLiveState = "blocked"

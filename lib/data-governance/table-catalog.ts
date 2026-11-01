@@ -93,6 +93,7 @@ export const CORE_TABLE_NAMES = [
   "artifacts",
   "authConnections",
   "connectionBindings",
+  "remoteDocumentConnections",
   "syncLeases",
   "authAttempts",
   "automationAuditLog",
@@ -1388,6 +1389,12 @@ function backupFor(
   name: CoreTableName,
   role: DataTableRole
 ): DataTableCatalogEntry["backupPolicy"] {
+  if (name === "remoteDocumentConnections")
+    return {
+      mode: "device-local",
+      reason:
+        "Kept-copy connection identities stay on the capturing device, outside share, export and sync.",
+    }
   if (name === "authAttempts")
     return {
       mode: "ephemeral",
@@ -2041,7 +2048,9 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
       name === "connectionBindings" ||
       name === "syncLeases"
         ? "plugin-auth"
-        : ownerFor(name),
+        : name === "remoteDocumentConnections"
+          ? "docs-providers"
+          : ownerFor(name),
     role,
     sensitivity,
     contentProtection: contentProtectionFor(name, sensitivity, accountScope),

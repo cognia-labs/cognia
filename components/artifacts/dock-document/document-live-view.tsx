@@ -14,14 +14,17 @@ import { getDocsProvider } from "@/lib/docs-providers/registry"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import type { DockDocumentTab } from "@/stores/artifact/dock-documents-store"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+import { KeptCopySourceBadge } from "@/components/chat/message-parts/kept-copy-source-badge"
 
 export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: DockDocumentTab }) {
   useDocsProvidersRevision()
   const providerAvailable =
     !tab.providerId.startsWith("plugin:") || !!getDocsProvider(tab.providerId)
   const t = useTranslations("cloudDocPreview")
+  const source = useKeptCopySource(tab.remoteDocument)
   const desktop = isTauri()
-  const local = useLocalBrowser({ enabled: desktop })
+  const local = useLocalBrowser({ enabled: desktop && source.canReopen })
   const [attempt, setAttempt] = useState(0)
   const [runtime, setRuntime] = useState<{ state: DocumentLiveState; reason?: string }>({
     state: "idle",
@@ -44,8 +47,9 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
             : !local.status.installed
               ? "chromium"
               : runtime.reason
-  const state =
-    !providerAvailable || !tab.url || !desktop || local.error || !local.status?.installed
+  const state = !source.canReopen
+    ? "blocked"
+    : !providerAvailable || !tab.url || !desktop || local.error || !local.status?.installed
       ? reason
         ? "blocked"
         : "preparing"
@@ -57,6 +61,7 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
         <div className="pointer-events-none absolute inset-x-2 top-11 z-10 flex justify-center">
           <div className="pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-md border bg-background/95 px-3 py-2 text-xs shadow-sm">
             <span role="status">{t(`live.states.${state}`)}</span>
+            <KeptCopySourceBadge status={source.status} />
             {reason ? (
               <span className="text-muted-foreground">
                 {t(
@@ -84,7 +89,7 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
             <Button
               size="sm"
               variant="outline"
-              disabled={!tab.url}
+              disabled={!tab.url || !source.canReopen}
               onClick={() =>
                 void openExternal(tab.url).catch(() =>
                   onState("error", { reason: "browser-error" })
@@ -96,6 +101,7 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
             <Button
               size="sm"
               variant="outline"
+              disabled={!source.canReopen}
               onClick={() => {
                 setRuntime({ state: "preparing" })
                 setAttempt((value) => value + 1)
@@ -107,7 +113,12 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
           </div>
         </div>
       ) : null}
-      {providerAvailable && desktop && tab.url && local.status?.installed && !local.error ? (
+      {source.canReopen &&
+      providerAvailable &&
+      desktop &&
+      tab.url &&
+      local.status?.installed &&
+      !local.error ? (
         <DocumentViewerBrowser
           key={attempt}
           sessionId={sessionId}

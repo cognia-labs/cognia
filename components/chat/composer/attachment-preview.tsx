@@ -31,6 +31,8 @@
 
 import { stagedRemoteDocument } from "@/lib/chat/attachments/remote-document"
 import { openAttachedDocument } from "@/lib/artifacts/open-chat-document"
+import { KeptCopySourceBadge } from "@/components/chat/message-parts/kept-copy-source-badge"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
 import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
 import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
 import { useMemo, useRef, useState } from "react"
@@ -443,6 +445,7 @@ function SortableChip({
   } = useSortable({ id: file.id })
   const tDoc = useTranslations("cloudDocPreview")
   const displayName = ("filename" in file ? file.filename : undefined) ?? t("fallbackName")
+  const source = useKeptCopySource(state?.remoteDocument)
   const isVideo = isVideoDescriptor({
     name: ("filename" in file ? file.filename : undefined) ?? "",
     mediaType: file.mediaType ?? "",
@@ -542,6 +545,7 @@ function SortableChip({
             className="top-1 right-1 size-5 bg-background/90 opacity-80 shadow-xs ring-1 ring-border/60 transition-opacity hover:opacity-100 [&>svg]:size-2.5"
           />
         </Attachment>
+        <KeptCopySourceBadge status={source.status} />
       </div>
     </motion.div>
   )

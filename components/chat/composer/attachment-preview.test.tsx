@@ -7,6 +7,11 @@ import type { VideoPreprocessResult } from "@/lib/chat/attachments/video/preproc
 import { DEFAULT_VIDEO_SETTINGS } from "@/lib/chat/attachments/video/settings"
 import { AttachmentPreview } from "./attachment-preview"
 import type { StagedAttachmentState, StagedAttachmentsValue } from "./staged-attachment-store"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+import en from "@/i18n/messages/en/cloudDocPreview.json"
+jest.mock("@/hooks/chat/use-remote-doc-kept-copy-source", () => ({
+  useKeptCopySource: jest.fn(() => ({ status: "unknown", canReopen: true })),
+}))
 
 const mockRemove = jest.fn()
 const mockToggleIncludeOcr = jest.fn()
@@ -78,6 +83,7 @@ function stage(
 }
 
 beforeEach(() => {
+  jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
   mockRemove.mockClear()
   mockToggleIncludeOcr.mockClear()
   mockReorder.mockClear()
@@ -86,6 +92,20 @@ beforeEach(() => {
 })
 
 describe("AttachmentPreview — tile rendering", () => {
+  it.each(["source-disconnected", "source-deleted", "not-on-this-device"] as const)(
+    "shows %s while keeping the staged preview available",
+    (status) => {
+      jest.mocked(useKeptCopySource).mockReturnValue({ status, canReopen: false })
+      stage([{ id: "kept", filename: "Kept.md", mediaType: "text/markdown" }], {
+        kept: { ...ready(), remoteDocument: cloudProvenance },
+      })
+      renderPreview(<AttachmentPreview videoRoute={ROUTE} />)
+      expect(screen.getByRole("status", { name: en.sourceStatus[status] })).toHaveTextContent(
+        en.sourceStatus[status]
+      )
+      expect(screen.getByRole("button", { name: "Preview Kept.md" })).toBeEnabled()
+    }
+  )
   it("renders an image thumbnail and a document tile", () => {
     stage([
       { id: "a", mediaType: "image/png", filename: "pic.png", url: "blob:x" },

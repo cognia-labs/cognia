@@ -1,5 +1,10 @@
 {
   "openDock": "在停靠区中打开",
+  "sourceStatus": {
+    "source-disconnected": "来源已断开连接",
+    "source-deleted": "来源已删除或无法再访问",
+    "not-on-this-device": "不在此设备上"
+  },
   "preview": "预览",
   "previewDocument": "预览 {title}",
   "modelView": "模型视图",

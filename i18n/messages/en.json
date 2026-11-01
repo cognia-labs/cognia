@@ -12983,6 +12983,11 @@
       }
     },
     "sourceRemoved": "The attached copy was removed from this conversation. Refresh to read the document again.",
+    "sourceStatus": {
+      "not-on-this-device": "Not on this device",
+      "source-deleted": "Source deleted or no longer accessible",
+      "source-disconnected": "Source disconnected"
+    },
     "title": "Cloud document",
     "truncated": "This snapshot was truncated.",
     "views": {

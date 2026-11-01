@@ -6,6 +6,8 @@ import {
 } from "./remote-document"
 
 const provenance = {
+  captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+  connectionScoped: true,
   v: 1,
   providerId: "google",
   resourceKind: "doc",
@@ -28,6 +30,8 @@ it.each([true, false])(
   (keep) => {
     const injected = {
       ...provenance,
+      connectionRef: "private-connection",
+      identityKey: "private-identity",
       accountId: "secret",
       authorizationEpoch: "epoch",
       accountBinding: { accountId: "secret" },
@@ -38,7 +42,7 @@ it.each([true, false])(
     }
     const projected = projectRemoteDocumentData(source, keep)
     expect(JSON.stringify(projected)).not.toMatch(
-      /accountId|authorizationEpoch|accountBinding|secret/
+      /accountId|authorizationEpoch|accountBinding|secret|connectionRef|identityKey|private-connection|private-identity/
     )
     expect(projected.parts[0][REMOTE_DOC_PART_KEY]).toEqual(keep ? provenance : undefined)
     expect(source.parts[0][REMOTE_DOC_PART_KEY].accountId).toBe("secret")

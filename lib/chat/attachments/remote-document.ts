@@ -1,4 +1,4 @@
-/** Attachment-only metadata. Retrieval authority stays in the dock's memory. */
+/** Attachment-only metadata. Connection identity stays in the device-local side table. */
 import {
   parseRemoteDocumentProvenance,
   type RemoteDocumentProvenanceV1,

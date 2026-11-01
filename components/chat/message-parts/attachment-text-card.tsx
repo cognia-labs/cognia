@@ -31,6 +31,8 @@ import {
 import { FileTypeBadge } from "@/components/shared/file-type-icon"
 import { cn } from "@/lib/utils"
 import { AttachmentSourceActions } from "./attachment-source-actions"
+import { KeptCopySourceBadge } from "./kept-copy-source-badge"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
 
 export interface AttachmentTextCardProps {
   filename: string
@@ -55,6 +57,7 @@ export function AttachmentTextCard({
   const t = useTranslations("chat.filePreview")
   const tDoc = useTranslations("cloudDocPreview")
   const provenance = parseRemoteDocumentProvenance(value)
+  const source = useKeptCopySource(provenance)
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   // The AI Elements attachment primitives the composer's tiles build on, in
@@ -100,6 +103,7 @@ export function AttachmentTextCard({
             aria-hidden
           />
         </button>
+        <KeptCopySourceBadge status={source.status} />
         {sessionId && provenance ? (
           <Button
             size="sm"

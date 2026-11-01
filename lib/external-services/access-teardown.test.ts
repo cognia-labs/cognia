@@ -19,6 +19,7 @@ import { createKeyringStore } from "@/lib/credentials/keyring-store"
 import { removeSession } from "@/lib/plugin/auth/auth-provider-registry"
 import { createSession } from "@/lib/db/sessions"
 import { acquireSyncLease } from "./sync-lease"
+import { getSessionAsset, putSessionAsset } from "@/lib/db/session-assets"
 
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({
   ...jest.requireActual("@/lib/plugin/auth/auth-provider-registry"),
@@ -98,6 +99,67 @@ it("disconnect teardown aborts sync and removes its durable cursor token", async
   await expect(lease.commit([], async () => "late cursor")).rejects.toThrow("lease")
   await lease.release()
 })
+it.each(["connection", "consumer", "plugin-data"] as const)(
+  "keeps captured attachments, dock assets and local bindings during %s teardown",
+  async (kind) => {
+    await seed("one")
+    const session = await createSession({ title: "Kept document" })
+    const provenance = {
+      v: 1,
+      captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+      connectionScoped: true,
+      providerId: "plugin:one/docs",
+      resourceKind: "resource",
+      resourceId: "report",
+      url: "",
+      title: "Report",
+      fetchedAt: 1,
+      completeness: { status: "complete" },
+    }
+    const source = {
+      captureId: provenance.captureId,
+      providerId: provenance.providerId,
+      connectionRef: ref,
+      identityKey: "original-identity",
+      capturedAt: 1,
+    }
+    const db = getDb()
+    await db.remoteDocumentConnections.put(source)
+    await db.messages.put({
+      id: "kept-message",
+      sessionId: session.id,
+      role: "user",
+      createdAt: 1,
+      parts: [{ type: "file", text: "Kept body", remoteDocument: provenance }],
+    } as never)
+    await putSessionAsset({
+      sessionId: session.id,
+      assetId: "kept-dock",
+      filename: "Report.md",
+      mediaType: "text/markdown",
+      blob: new Blob(["Kept body"]),
+    })
+    const target =
+      kind === "plugin-data"
+        ? { kind, pluginId: "one" }
+        : kind === "consumer"
+          ? { kind, ref, consumerPluginId: "one" }
+          : { kind, ref }
+    await queueAccessTeardown(target)
+    expect((await runAccessTeardown(target)).failed).toEqual([])
+    expect(await db.messages.get("kept-message")).toMatchObject({
+      parts: [{ text: "Kept body", remoteDocument: provenance }],
+    })
+    expect((await getSessionAsset(session.id, "kept-dock"))?.blob.size).toBe(9)
+    expect(await db.remoteDocumentConnections.get(source.captureId)).toEqual(source)
+    if (kind === "plugin-data") {
+      await removePluginConnectionAccess("one", true)
+      await purgePluginExternalServices("one")
+      expect(await db.messages.get("kept-message")).toBeDefined()
+      expect(await db.remoteDocumentConnections.get(source.captureId)).toEqual(source)
+    }
+  }
+)
 
 it("consumer revoke stops and purges only its accounts; a second consumer keeps working", async () => {
   const one = await seed("one")

@@ -12983,6 +12983,11 @@
       }
     },
     "sourceRemoved": "此附件副本已从对话中移除。可刷新以重新读取文档。",
+    "sourceStatus": {
+      "not-on-this-device": "不在此设备上",
+      "source-deleted": "来源已删除或无法再访问",
+      "source-disconnected": "来源已断开连接"
+    },
     "title": "云文档",
     "truncated": "此快照已截断。",
     "views": {

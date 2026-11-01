@@ -20,6 +20,27 @@ const valid: RemoteDocumentProvenanceV1 = {
 }
 
 describe("parseRemoteDocumentProvenance", () => {
+  it("keeps only non-identifying connection capture metadata", () => {
+    const capture = {
+      ...valid,
+      captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+      connectionScoped: true,
+    }
+    expect(
+      parseRemoteDocumentProvenance({
+        ...capture,
+        connectionRef: "private-connection",
+        identityKey: "private-identity",
+      })
+    ).toEqual(capture)
+    expect(
+      parseRemoteDocumentProvenance({
+        ...valid,
+        captureId: "account@example.test",
+        connectionScoped: "true",
+      })
+    ).toEqual(valid)
+  })
   it("round-trips a valid record", () => {
     expect(parseRemoteDocumentProvenance(valid)).toEqual(valid)
   })
@@ -133,6 +154,7 @@ describe("remoteDocumentProvenance", () => {
   it("builds a record from a fetched body without its account binding", () => {
     const record = remoteDocumentProvenance(content(), 42)
     expect(record).toEqual({
+      captureId: expect.any(String),
       v: 1,
       providerId: "google",
       resourceKind: "sheet",

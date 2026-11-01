@@ -3,6 +3,10 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 import { DocumentSnapshotView } from "./document-snapshot-view"
 import { useDocumentSnapshot } from "./use-document-snapshot"
 import type { DockDocumentTab } from "@/stores/artifact/dock-documents-store"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+jest.mock("@/hooks/chat/use-remote-doc-kept-copy-source", () => ({
+  useKeptCopySource: jest.fn(() => ({ status: "unknown", canReopen: true })),
+}))
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
   useFormatter: () => ({ dateTime: () => "time" }),
@@ -43,6 +47,7 @@ const tab: DockDocumentTab = {
   openedAt: 1,
 }
 beforeEach(() => {
+  jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
   URL.createObjectURL = jest.fn(() => "blob:snapshot")
   URL.revokeObjectURL = jest.fn()
   ;(useDocumentSnapshot as jest.Mock).mockReturnValue({
@@ -71,6 +76,24 @@ it("uses the existing document attachment renderer and revokes body URLs", async
   unmount()
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:snapshot")
 })
+it.each(["source-disconnected", "source-deleted", "not-on-this-device"] as const)(
+  "disables live actions for %s without hiding the snapshot",
+  async (status) => {
+    jest.mocked(useKeptCopySource).mockReturnValue({ status, canReopen: false })
+    render(
+      <DocumentSnapshotView
+        sessionId="s"
+        tab={{ ...tab, url: "https://a.feishu.cn/docx/abcdefghijklmnop1234" }}
+      />
+    )
+    await act(async () => {})
+    expect(screen.getByText(`sourceStatus.${status}`)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "refresh" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "openLive" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "openSystem" })).toBeDisabled()
+    expect(screen.getByRole("document")).toBeVisible()
+  }
+)
 it("shows explicit named account choices without silently selecting one", () => {
   const refresh = jest.fn()
   ;(useDocumentSnapshot as jest.Mock).mockReturnValue({

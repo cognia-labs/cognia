@@ -23,10 +23,9 @@
  *     it.
  */
 
-import {
-  remoteDocumentProvenance,
-  type RemoteDocumentProvenanceV1,
-} from "@/lib/docs-providers/document-provenance"
+import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
+import { captureKeptCopyProvenance } from "@/lib/docs-providers/kept-copy-source"
+import { deleteRemoteDocumentConnection } from "@/lib/db/remote-document-connections"
 import { useCallback, useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -229,9 +228,13 @@ export function useRemoteDocStaging({
           return null
         }
 
-        const provenance = remoteDocumentProvenance(content)
+        let provenance: RemoteDocumentProvenanceV1 | null = null
         let staged: readonly File[]
         try {
+          provenance = await captureKeptCopyProvenance(content, {
+            accountId: item.accountId,
+            authorizationEpoch: binding?.authorizationEpoch,
+          })
           staged = await acceptFiles([file], {
             citations: new Map([[file, remoteDocCitation(item, content.title)]]),
             provenance: new Map(provenance ? [[file, provenance]] : []),
@@ -239,6 +242,8 @@ export function useRemoteDocStaging({
             beforeCommit,
           })
         } catch (err) {
+          if (provenance?.connectionScoped && provenance.captureId)
+            await deleteRemoteDocumentConnection(provenance.captureId)
           // Kept apart from the fetch failure above: the document WAS read, so
           // "could not reach the service" would send the user to the wrong fix.
           loggers.chat.warn("remote doc staging failed", {
@@ -250,6 +255,8 @@ export function useRemoteDocStaging({
           return null
         }
         if (!staged.includes(file)) {
+          if (provenance?.connectionScoped && provenance.captureId)
+            await deleteRemoteDocumentConnection(provenance.captureId)
           // The gate refused it (count headroom, size) and has toasted its own
           // reason. "Attached" here would contradict that toast.
           toast.dismiss(pending)

@@ -12,10 +12,16 @@ import {
 } from "@/stores/artifact/dock-documents-store"
 import { DocumentLiveView } from "./document-live-view"
 import { DocumentSnapshotView } from "./document-snapshot-view"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
 
 export function DockDocumentPanel({ sessionId }: { sessionId: string | null }) {
   const t = useTranslations("cloudDocPreview")
   const tab = useDockDocumentsStore((state) => selectActiveDockDocument(state, sessionId))
+  const source = useKeptCopySource(tab?.remoteDocument)
+  useEffect(() => {
+    if (sessionId && tab?.view === "live" && source.status && !source.canReopen)
+      setDockDocumentView(sessionId, tab.id, "snapshot")
+  }, [sessionId, source.canReopen, source.status, tab])
   const orphaned = !!sessionId && !tab
   // A restored workbench can still point at this panel after its ephemeral
   // document tabs were dropped on reload; close it so the dock falls back to
@@ -36,6 +42,7 @@ export function DockDocumentPanel({ sessionId }: { sessionId: string | null }) {
             size="sm"
             variant={tab.view === view ? "secondary" : "ghost"}
             aria-pressed={tab.view === view}
+            disabled={view === "live" && !source.canReopen}
             onClick={() => setDockDocumentView(sessionId, tab.id, view)}
           >
             {t(`views.${view}`)}
@@ -43,7 +50,7 @@ export function DockDocumentPanel({ sessionId }: { sessionId: string | null }) {
         ))}
       </div>
       <div className="min-h-0 flex-1">
-        {tab.view === "snapshot" ? (
+        {tab.view === "snapshot" || !source.canReopen ? (
           <DocumentSnapshotView key={tab.id} sessionId={sessionId} tab={tab} />
         ) : (
           <DocumentLiveView key={tab.id} sessionId={sessionId} tab={tab} />

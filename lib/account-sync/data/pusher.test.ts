@@ -497,6 +497,8 @@ it.each([false, true])(
 )
 
 const cloudProvenance = {
+  captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+  connectionScoped: true as const,
   v: 1 as const,
   providerId: "google" as const,
   resourceKind: "doc" as const,
@@ -508,6 +510,8 @@ const cloudProvenance = {
 }
 const injectedCloudProvenance = {
   ...cloudProvenance,
+  connectionRef: "private-connection",
+  identityKey: "private-identity",
   accountId: "private-account",
   authorizationEpoch: "private-epoch",
   accountBinding: { accountId: "private-account" },
@@ -515,6 +519,13 @@ const injectedCloudProvenance = {
 it("re-parses captured message provenance before encrypting account-sync payloads", async () => {
   const { a, devices, deps, pushed, open } = await setup()
   try {
+    await a.db.remoteDocumentConnections.put({
+      captureId: cloudProvenance.captureId,
+      providerId: cloudProvenance.providerId,
+      connectionRef: "private-connection",
+      identityKey: "private-identity",
+      capturedAt: 1,
+    } as never)
     await a.db.messages.put({
       id: "cloud-sync",
       sessionId: "s",
@@ -527,7 +538,10 @@ it("re-parses captured message provenance before encrypting account-sync payload
     const payloads = await Promise.all(pushed.flat().map(open))
     const serialized = JSON.stringify(payloads)
     expect(serialized).toContain("remoteDocument")
-    expect(serialized).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+    expect(serialized).not.toContain("remoteDocumentConnections")
+    expect(serialized).not.toMatch(
+      /private-account|authorizationEpoch|accountBinding|connectionRef|identityKey|private-connection|private-identity/
+    )
     const message = payloads.find((row) => row.t === "messages")
     expect(
       message?.k === "upsert" &&

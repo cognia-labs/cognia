@@ -16,6 +16,7 @@ import {
   subscribeDockDocumentLifecycle,
   setDockDocumentView,
   reverifyDockDocumentBindings,
+  dropDocumentIdentity,
 } from "./dock-documents"
 import { getDocsProvider } from "@/lib/docs-providers"
 import {
@@ -58,6 +59,95 @@ it("releases original pages on leaving the chat while preserving canonical descr
   expect(closeDocumentViewerPage).toHaveBeenCalledWith(id)
   expect(useDockDocumentsStore.getState().bySession.s1.documents[0].url).toBe(target.url)
 })
+it("retains a user-kept dock snapshot and whitelisted provenance after identity teardown", () => {
+  const remoteDocument = {
+    v: 1 as const,
+    captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+    connectionScoped: true as const,
+    providerId: target.providerId,
+    resourceKind: target.resourceKind,
+    resourceId: target.resourceId,
+    url: target.url,
+    title: "Report",
+    fetchedAt: 1,
+    completeness: { status: "complete" as const },
+  }
+  const latest = {
+    title: "Report",
+    text: "Kept body",
+    format: "text" as const,
+    fetchedAt: 1,
+    origin: "fetched" as const,
+    completeness: { status: "complete" as const },
+  }
+  const id = openDockDocument({
+    sessionId: "s1",
+    target,
+    entry: "staged-attachment",
+    remoteDocument,
+  })!
+  updateDocumentMemory(id, { latest, binding: { accountId: "private", authorizationEpoch: "1" } })
+  dropDocumentIdentity(id)
+  expect(documentMemory(id).latest).toEqual(latest)
+  expect(documentMemory(id).binding).toBeUndefined()
+  expect(useDockDocumentsStore.getState().bySession.s1.documents[0].remoteDocument).toEqual(
+    remoteDocument
+  )
+})
+it.each(["sent", "staged"] as const)(
+  "switches the same resource to the clicked %s capture without its previous account or body",
+  (origin) => {
+    const provenance = {
+      v: 1 as const,
+      captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+      connectionScoped: true as const,
+      providerId: target.providerId,
+      resourceKind: target.resourceKind,
+      resourceId: target.resourceId,
+      url: target.url,
+      title: "Report",
+      fetchedAt: 1,
+      completeness: { status: "complete" as const },
+    }
+    const body = {
+      title: "Report",
+      text: "Account A's copy",
+      format: "text" as const,
+      fetchedAt: 1,
+      completeness: { status: "complete" as const },
+      origin: "sent" as const,
+    }
+    const id = openDockDocument({
+      sessionId: "s1",
+      target,
+      entry: "sent-attachment",
+      remoteDocument: provenance,
+      snapshot: { kind: "asset", assetId: "old-asset" },
+    })!
+    updateDocumentMemory(id, {
+      binding: { accountId: "account-a", authorizationEpoch: "1" },
+      sent: body,
+      latest: { ...body, origin: "fetched" },
+    })
+    const next = { ...provenance, captureId: "1d6f108d-cdf8-4abc-8192-34a187c2e17f" }
+    expect(
+      openDockDocument({
+        sessionId: "s1",
+        target,
+        entry: origin === "sent" ? "sent-attachment" : "staged-attachment",
+        remoteDocument: next,
+        snapshot: { kind: "inline", content: { ...body, text: "Account B's copy", origin } },
+      })
+    ).toBe(id)
+    const tab = useDockDocumentsStore.getState().bySession.s1.documents[0]
+    expect(tab.remoteDocument).toEqual(next)
+    expect(tab.snapshotRef).toBeUndefined()
+    const memory = documentMemory(id)
+    expect(memory.binding).toBeUndefined()
+    expect(memory.latest).toBeUndefined()
+    expect((origin === "sent" ? memory.sent : memory.seed)?.text).toBe("Account B's copy")
+  }
+)
 
 it("defers release while streaming and cancels a deferred release when returning", () => {
   const id = openDockDocument({ sessionId: "s1", target, entry: "link" })!

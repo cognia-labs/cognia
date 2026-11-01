@@ -97,6 +97,22 @@ describe("applyPluginTables", () => {
 
     expect(db.tables.map((t) => t.name)).toContain("github-delivery:repos")
   })
+  it("does not wipe the Host's kept-copy bindings when removing provider plugin tables", async () => {
+    db.version(2).stores({ remoteDocumentConnections: "&captureId" })
+    await db.open()
+    const row = {
+      captureId: "kept",
+      providerId: "plugin:vendor/docs",
+      connectionRef: "ref",
+      identityKey: "identity",
+      capturedAt: 1,
+    }
+    await db.table("remoteDocumentConnections").put(row)
+    await applyPluginTables(db, "vendor", { tables: [{ name: "cache", schema: "&id" }] })
+    await removePluginTables(db, "vendor", "purge")
+    expect(db.tables.map((table) => table.name)).not.toContain("vendor:cache")
+    expect(await db.table("remoteDocumentConnections").get(row.captureId)).toEqual(row)
+  })
 
   it("baselines a fresh v3 install without running historical migrations", async () => {
     const upgrade = jest.fn(async () => undefined)

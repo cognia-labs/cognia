@@ -12,6 +12,7 @@ import {
   type DocsProviderAccount,
   type DocsProviderAccountBinding,
   type DocsProviderErrorCode,
+  type RemoteDocContent,
 } from "@/lib/docs-providers/types"
 import { useLiveQuery } from "dexie-react-hooks"
 import { getSessionAsset, getSessionAssetMetadata } from "@/lib/db/session-assets"
@@ -30,6 +31,12 @@ import {
 } from "@/lib/artifacts/dock-documents"
 import { useDockDocumentsStore, type DockDocumentTab } from "@/stores/artifact/dock-documents-store"
 import { useChatStore } from "@/stores/chat"
+import {
+  captureKeptCopyProvenance,
+  recordKeptCopySourceFailure,
+  resolveKeptCopyConnection,
+} from "@/lib/docs-providers/kept-copy-source"
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
 
 export type DocumentSnapshotState =
   "idle" | "resolving" | "loading" | "refreshing" | "ready" | "partial" | "empty" | "error"
@@ -78,6 +85,7 @@ async function assetSnapshot(
 
 export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
   useDocsProvidersRevision()
+  const source = useKeptCopySource(tab.remoteDocument)
   const provider = getDocsProvider(tab.providerId)
   const profile = useHostProfile()
   const reach = docsProviderReach(provider ?? { hosts: [] }, profile)
@@ -185,7 +193,13 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
 
   const refresh = useCallback(
     async (choice?: DocsProviderAccountBinding) => {
-      if (!provider || !reach.available || !currentTab()) return
+      if (!provider || !reach.available || !source.canReopen || !currentTab()) return
+      if (tab.remoteDocument?.connectionScoped) {
+        const connection = await resolveKeptCopyConnection(tab.remoteDocument)
+        if (!connection || !currentTab()) return
+        // Restore only the captured identity, never another account chosen by coincidence.
+        choice = { accountId: connection.id, authorizationEpoch: String(connection.revision) }
+      }
       if (choice) bindDockDocument(tab.id, choice)
       else invalidateDocument(tab.id)
       const controller = new AbortController()
@@ -251,22 +265,33 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
               sentRevision: snapshot.revision,
             })
         }
-        const fetched = await provider.fetch(
-          {
-            providerId: tab.providerId,
-            kind: tab.resourceKind,
-            id: tab.resourceId,
-            title: tab.title,
-            url: tab.url || undefined,
-            sourceType: tab.sourceType,
-            accountBinding: { ...binding },
-          },
-          {
-            accountId: binding.accountId,
-            expectedAuthorizationEpoch: binding.authorizationEpoch,
-            signal: controller.signal,
-          }
-        )
+        let fetched: RemoteDocContent
+        try {
+          fetched = await provider.fetch(
+            {
+              providerId: tab.providerId,
+              kind: tab.resourceKind,
+              id: tab.resourceId,
+              title: tab.title,
+              url: tab.url || undefined,
+              sourceType: tab.sourceType,
+              accountBinding: { ...binding },
+            },
+            {
+              accountId: binding.accountId,
+              expectedAuthorizationEpoch: binding.authorizationEpoch,
+              signal: controller.signal,
+            }
+          )
+        } catch (error) {
+          // A missing local snapshot is not evidence of remote deletion. Only the
+          // provider read, still under this verified binding, may mark that outcome.
+          if (alive() && (await verify()))
+            await recordKeptCopySourceFailure(tab.remoteDocument, error)
+          throw error
+        }
+        if (!(await verify())) return
+        const provenance = tab.remoteDocument ?? (await captureKeptCopyProvenance(fetched, binding))
         if (!(await verify())) return
         const snapshot: DockDocumentSnapshotContent = {
           title: fetched.title,
@@ -286,8 +311,12 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
         const descriptor = useDockDocumentsStore
           .getState()
           .bySession[sessionId]?.documents.find((doc) => doc.id === tab.id)
-        if (descriptor && fetched.title && descriptor.title !== fetched.title) {
-          useDockDocumentsStore.getState().put(sessionId, { ...descriptor, title: fetched.title })
+        if (descriptor) {
+          useDockDocumentsStore.getState().put(sessionId, {
+            ...descriptor,
+            ...(fetched.title ? { title: fetched.title } : {}),
+            ...(provenance ? { remoteDocument: provenance } : {}),
+          })
         }
         setAccounts(null)
         setOperation({ phase: "ready", generation: captured.generation })
@@ -306,7 +335,16 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
         controller.abort()
       }
     },
-    [content, currentTab, provider, reach.available, sessionId, sourceRemoved, tab]
+    [
+      content,
+      currentTab,
+      provider,
+      reach.available,
+      sessionId,
+      source.canReopen,
+      sourceRemoved,
+      tab,
+    ]
   )
 
   const binding = memory?.binding
@@ -329,7 +367,11 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
     ])
     if (autoFetched.current === key) return
     autoFetched.current = key
-    void Promise.resolve().then(() => refresh())
+    void Promise.resolve().then(() => {
+      // A manual refresh can replace this generation before this queued task
+      // runs. It must not supersede the user's request while capture persists.
+      if (autoFetched.current === key) return refresh()
+    })
   }, [
     binding,
     content,

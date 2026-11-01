@@ -147,6 +147,10 @@ const cloudProvenance = {
 }
 const injectedCloudProvenance = {
   ...cloudProvenance,
+  captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+  connectionScoped: true as const,
+  connectionRef: "private-connection",
+  identityKey: "private-identity",
   accountId: "private-account",
   authorizationEpoch: "private-epoch",
   accountBinding: { accountId: "private-account" },
@@ -158,7 +162,7 @@ it("strips provenance from share links before any exporter renders parts", async
   const result = await materializeChatShareMedia([source])
   expect(result.messages[0].parts[0]).not.toHaveProperty("remoteDocument")
   expect(JSON.stringify(result.messages)).not.toMatch(
-    /private-account|authorizationEpoch|accountBinding/
+    /private-account|authorizationEpoch|accountBinding|connectionScoped|46bc6e38|private-connection|private-identity/
   )
   expect(source.parts[0]).toHaveProperty("remoteDocument.accountId", "private-account")
 })

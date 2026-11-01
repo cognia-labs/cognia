@@ -24,7 +24,18 @@ jest.mock("@/lib/docs-providers", () => ({
 import { toast } from "sonner"
 import { DocsProviderError, getDocsProvider } from "@/lib/docs-providers"
 import type { RemoteDocContent, RemoteDocRef } from "@/lib/docs-providers"
-import { remoteDocFileName, remoteDocToFile, useRemoteDocStaging } from "./use-remote-doc-staging"
+import {
+  remoteDocFileName,
+  remoteDocToFile,
+  useRemoteDocStaging,
+  type UseRemoteDocStagingOptions,
+} from "./use-remote-doc-staging"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+afterAll(fixture.dispose)
 
 const getProviderMock = getDocsProvider as jest.Mock
 
@@ -67,9 +78,18 @@ function renderStaging(acceptFiles: jest.Mock = stagingEverything()) {
   return { stage: result.current, acceptFiles }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks()
+  await fixture.restore()
 })
+async function seedConnection() {
+  await getDb().authConnections.put({
+    id: "a",
+    status: "connected",
+    revision: 1,
+    identityKey: "staging-identity",
+  } as never)
+}
 
 describe("remoteDocFileName", () => {
   it("keeps the title, dropping only characters a filesystem would reject", () => {
@@ -121,9 +141,42 @@ describe("remoteDocToFile", () => {
 })
 
 describe("useRemoteDocStaging", () => {
+  it.each(["refused", "failed"])(
+    "removes the local capture binding when intake is %s",
+    async (outcome) => {
+      await seedConnection()
+      const doc = {
+        ...REF,
+        providerId: "plugin:staging/docs",
+        accountBinding: { accountId: "a", authorizationEpoch: "1" },
+      }
+      getProviderMock.mockReturnValue({
+        listAccounts: async () => [{ id: "a", label: "Alice", authorizationEpoch: "1" }],
+        fetch: async () => content({ ref: doc }),
+      })
+      const intake = jest.fn(
+        async (
+          files: File[],
+          options: Parameters<UseRemoteDocStagingOptions["acceptFiles"]>[1]
+        ) => {
+          const provenance = options.provenance.get(files[0])!
+          expect(await getDb().remoteDocumentConnections.get(provenance.captureId!)).toMatchObject({
+            connectionRef: "a",
+          })
+          if (outcome === "failed") throw new Error("quota")
+          return []
+        }
+      )
+      const { stage } = renderStaging(intake)
+      await expect(stage({ providerId: doc.providerId, accountId: "a", doc })).resolves.toBeNull()
+      expect(intake).toHaveBeenCalledTimes(1)
+      expect(await getDb().remoteDocumentConnections.count()).toBe(0)
+    }
+  )
   it.each(["setup", "cleanup"])(
     "stages through the registry even when a plugin account subscription fails during %s",
     async (failure) => {
+      await seedConnection()
       const stop = jest.fn(() => {
         throw new Error("Broken disposer")
       })
@@ -154,6 +207,12 @@ describe("useRemoteDocStaging", () => {
         })
         expect(staged).toBeInstanceOf(File)
         expect(acceptFiles).toHaveBeenCalledTimes(1)
+        const provenance = acceptFiles.mock.calls[0][1].provenance.get(staged)
+        expect(provenance).toMatchObject({ connectionScoped: true, captureId: expect.any(String) })
+        expect(await getDb().remoteDocumentConnections.get(provenance.captureId)).toMatchObject({
+          connectionRef: "a",
+          identityKey: "staging-identity",
+        })
         if (failure === "cleanup") expect(stop).toHaveBeenCalledTimes(1)
       } finally {
         dispose()
@@ -427,6 +486,7 @@ it("hands the fetched provenance to intake beside the same File's citation", asy
     completeness: { status: "complete" },
   })
   expect(options.citations.has(file)).toBe(true)
+  expect(await getDb().remoteDocumentConnections.count()).toBe(0)
   expect(JSON.stringify(options.provenance.get(file))).not.toMatch(
     /accountId|authorizationEpoch|accountBinding/
   )

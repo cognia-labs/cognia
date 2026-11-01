@@ -52,6 +52,25 @@ it("never resurrects part text for a missing or tombstoned asset", () => {
   )
   expect(JSON.stringify(jest.mocked(openDockDocument).mock.calls)).not.toContain("removed body")
 })
+it("passes whitelisted capture metadata into the dock without the device-local identity", () => {
+  const capture = {
+    ...provenance,
+    captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+    connectionScoped: true,
+  }
+  openAttachedDocument({
+    provenance: { ...capture, connectionRef: "private", identityKey: "private" },
+    sessionId: "owner",
+    text: "Kept body",
+    origin: "sent",
+  })
+  expect(openDockDocument).toHaveBeenCalledWith(
+    expect.objectContaining({ remoteDocument: capture, view: "snapshot" })
+  )
+  expect(JSON.stringify(jest.mocked(openDockDocument).mock.calls)).not.toMatch(
+    /connectionRef|identityKey|private/
+  )
+})
 it.each(["sent", "staged"] as const)("uses inline text only when %s has no asset id", (origin) => {
   openAttachedDocument({ provenance, sessionId: "visible", text: "body", origin })
   expect(openDockDocument).toHaveBeenCalledWith(

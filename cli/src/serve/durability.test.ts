@@ -19,6 +19,32 @@ import { __resetCliDbForTesting } from "../db/bootstrap"
 jest.setTimeout(30_000)
 
 describe("startDurability", () => {
+  it("retains device-local kept-copy bindings across a CLI snapshot restart", async () => {
+    __resetCliDbForTesting()
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-kept-copy-"))
+    const row = {
+      captureId: "capture",
+      providerId: "plugin:vendor/docs",
+      connectionRef: "local-ref",
+      identityKey: "local-identity",
+      capturedAt: 1,
+      sourceDeletedAt: 2,
+    }
+    let durability: Awaited<ReturnType<typeof startDurability>> | undefined
+    try {
+      durability = await startDurability({ home, accountId: "acct_kept", backend: "snapshot-v3" })
+      await getDb().remoteDocumentConnections.put(row as never)
+      await durability.dispose()
+      await getDb().remoteDocumentConnections.clear()
+      __resetCliDbForTesting()
+      durability = await startDurability({ home, accountId: "acct_kept", backend: "snapshot-v3" })
+      expect(await getDb().remoteDocumentConnections.get(row.captureId)).toEqual(row)
+    } finally {
+      await durability?.dispose()
+      __resetCliDbForTesting()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
   it("persists a snapshot on dispose and reports the rss gauge", async () => {
     __resetCliDbForTesting()
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-durability-"))

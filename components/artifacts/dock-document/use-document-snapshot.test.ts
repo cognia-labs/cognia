@@ -22,6 +22,23 @@ import {
 } from "@/lib/artifacts/dock-documents"
 import { useDockDocumentsStore, type DockDocumentTab } from "@/stores/artifact/dock-documents-store"
 import { useChatStore } from "@/stores/chat"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+afterAll(fixture.dispose)
+import { useKeptCopySource } from "@/hooks/chat/use-remote-doc-kept-copy-source"
+import {
+  resolveKeptCopyConnection,
+  recordKeptCopySourceFailure,
+} from "@/lib/docs-providers/kept-copy-source"
+jest.mock("@/hooks/chat/use-remote-doc-kept-copy-source", () => ({
+  useKeptCopySource: jest.fn(() => ({ status: "unknown", canReopen: true })),
+}))
+jest.mock("@/lib/docs-providers/kept-copy-source", () => ({
+  ...jest.requireActual("@/lib/docs-providers/kept-copy-source"),
+  resolveKeptCopyConnection: jest.fn(),
+  recordKeptCopySourceFailure: jest.fn(async () => {}),
+}))
 
 jest.mock("@/lib/docs-providers", () => ({ getDocsProvider: jest.fn() }))
 jest.mock("@/hooks/use-host-profile", () => ({ useHostProfile: () => "desktop" }))
@@ -57,7 +74,11 @@ const content = (text = "fresh", extra = {}): RemoteDocContent => ({
   format: "text",
   ...extra,
 })
-beforeEach(() => {
+beforeEach(async () => {
+  await fixture.restore()
+  jest.mocked(useKeptCopySource).mockReturnValue({ status: "unknown", canReopen: true })
+  jest.mocked(resolveKeptCopyConnection).mockReset()
+  jest.mocked(recordKeptCopySourceFailure).mockClear()
   useDockDocumentsStore.setState({ bySession: {} })
   useDockDocumentCache.setState({ byId: {} })
   useChatStore.setState({ sessions: { s: { id: "s" } } as never, activeSessionId: "s" })
@@ -80,6 +101,54 @@ beforeEach(() => {
   mockLiveAsset = undefined
 })
 afterEach(() => subscribeDockDocumentLifecycle()())
+it.each(["source-disconnected", "source-deleted", "not-on-this-device"] as const)(
+  "never fetches a blocked kept source (%s)",
+  async (status) => {
+    jest.mocked(useKeptCopySource).mockReturnValue({ status, canReopen: false })
+    const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+    await act(async () => {
+      await result.current.refresh(binding)
+    })
+    expect(provider.fetch).not.toHaveBeenCalled()
+  }
+)
+it.each(["notFound", "noPermission"] as const)(
+  "uses a restored connection and records only the provider's %s outcome",
+  async (code) => {
+    jest.mocked(useKeptCopySource).mockReturnValue({ status: "available", canReopen: true })
+    jest
+      .mocked(resolveKeptCopyConnection)
+      .mockResolvedValue({ id: "restored", revision: 7 } as never)
+    jest
+      .mocked(provider.listAccounts)
+      .mockResolvedValue([{ id: "restored", label: "Same account", authorizationEpoch: "7" }])
+    const failure = new DocsProviderError(code)
+    jest.mocked(provider.fetch).mockRejectedValue(failure)
+    const provenance = {
+      v: 1 as const,
+      captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+      connectionScoped: true as const,
+      providerId: tab.providerId,
+      resourceKind: tab.resourceKind,
+      resourceId: tab.resourceId,
+      url: "",
+      title: tab.title,
+      fetchedAt: 1,
+      completeness: { status: "complete" as const },
+    }
+    const scoped = { ...tab, remoteDocument: provenance }
+    useDockDocumentsStore.getState().put("s", scoped)
+    const { result } = renderHook(() => useDocumentSnapshot("s", scoped))
+    await act(async () => {
+      await result.current.refresh({ accountId: "unrelated", authorizationEpoch: "other" })
+    })
+    expect(provider.fetch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ accountId: "restored", expectedAuthorizationEpoch: "7" })
+    )
+    expect(recordKeptCopySourceFailure).toHaveBeenCalledWith(provenance, failure)
+  }
+)
 
 it("requires a named account click even when there is only one account", async () => {
   const { result } = renderHook(() => useDocumentSnapshot("s", tab))
@@ -193,6 +262,7 @@ it.each([
     await result.current.refresh()
   })
   expect(result.current.state).toBe(state)
+  expect(provider.fetch).toHaveBeenCalledTimes(1)
 })
 it("reports errors without a previous body", async () => {
   bindDockDocument(tab.id, binding)

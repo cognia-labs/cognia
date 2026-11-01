@@ -5525,6 +5525,39 @@ it("v251 indexes consumer grants and preserves legacy grants without backfill", 
   }
 })
 
+it("v254 adds a device-local capture table without changing v253 data", async () => {
+  const name = "cognia-remote-document-connections-v254"
+  const previous = new Dexie(name)
+  previous.version(253).stores({ ...CURRENT_SCHEMA, remoteDocumentConnections: null })
+  await previous.open()
+  const binding = {
+    consumerPluginId: "consumer",
+    providerId: "vendor",
+    connectionRef: "ref",
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  await previous.table("connectionBindings").put(binding)
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(254)
+    expect(current.remoteDocumentConnections.schema.primKey.keyPath).toBe("captureId")
+    expect(Object.keys(current.remoteDocumentConnections.schema.idxByName).sort()).toEqual([
+      "capturedAt",
+      "connectionRef",
+      "identityKey",
+      "providerId",
+    ])
+    expect(await current.remoteDocumentConnections.count()).toBe(0)
+    expect(await current.connectionBindings.get(["consumer", "vendor"])).toEqual(binding)
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v253 opens v252 data with an empty sync lease table", async () => {
   const name = "cognia-sync-leases-v253-upgrade"
   const previous = new Dexie(name)
@@ -5542,7 +5575,7 @@ it("v253 opens v252 data with an empty sync lease table", async () => {
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(253)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(await current.connectionBindings.get(["consumer", "vendor"])).toEqual(binding)
     expect(await current.syncLeases.count()).toBe(0)
   } finally {
@@ -5555,7 +5588,7 @@ it("v253 adds device-local sync leases without changing v252 bindings", async ()
   const current = new CogniaDB("cognia-connection-bindings-v252")
   try {
     await current.open()
-    expect(CURRENT_SCHEMA_VERSION).toBe(253)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(current.syncLeases.schema.primKey.keyPath).toBe("key")
     expect(Object.keys(current.syncLeases.schema.idxByName)).toEqual(["connectionRef", "expiresAt"])
     const table = current.table("connectionBindings")

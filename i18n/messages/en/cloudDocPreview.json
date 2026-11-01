@@ -1,5 +1,10 @@
 {
   "openDock": "Open in dock",
+  "sourceStatus": {
+    "source-disconnected": "Source disconnected",
+    "source-deleted": "Source deleted or no longer accessible",
+    "not-on-this-device": "Not on this device"
+  },
   "preview": "Preview",
   "previewDocument": "Preview {title}",
   "modelView": "Model view",

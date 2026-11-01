@@ -23,6 +23,10 @@ import { useChatStore } from "@/stores/chat"
 import { unwrapUntrustedContent } from "@/lib/web/untrusted-content"
 import { isInFlight } from "@/lib/chat/aggregate-run-state"
 import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
+import {
   closeDocumentViewerPage,
   hasDocumentViewerPage,
 } from "@/lib/browser/document-viewer-session"
@@ -49,6 +53,7 @@ export interface DockDocumentOpenRequest {
   view?: DockDocumentView
   snapshot?: DockDocumentSnapshotSource
   binding?: DocsProviderAccountBinding
+  remoteDocument?: RemoteDocumentProvenanceV1
   reveal?: boolean
 }
 export interface DockDocumentMemory {
@@ -115,10 +120,13 @@ export function trackDocumentRequest(docTabId: string, controller: AbortControll
 export function dropDocumentIdentity(docTabId: string): void {
   invalidateDocument(docTabId)
   const memory = documentMemory(docTabId)
+  const kept = Object.values(useDockDocumentsStore.getState().bySession)
+    .flatMap((entry) => entry.documents)
+    .some((tab) => tab.id === docTabId && tab.remoteDocument?.connectionScoped)
   updateDocumentMemory(docTabId, {
     binding: undefined,
-    latest: undefined,
-    ...(memory.seed?.origin === "fetched" ? { seed: undefined } : {}),
+    ...(kept ? {} : { latest: undefined }),
+    ...(!kept && memory.seed?.origin === "fetched" ? { seed: undefined } : {}),
   })
 }
 
@@ -303,6 +311,33 @@ export function openDockDocument(req: DockDocumentOpenRequest): string | null {
         view:
           req.view ?? (["link", "source", "tool-result"].includes(req.entry) ? "live" : "snapshot"),
       }
+  const provenance = parseRemoteDocumentProvenance(req.remoteDocument)
+  if (
+    provenance &&
+    provenance.providerId === tab.providerId &&
+    provenance.resourceId === tab.resourceId &&
+    provenance.resourceKind === tab.resourceKind
+  ) {
+    if (
+      existing &&
+      provenance.captureId &&
+      provenance.captureId !== existing.remoteDocument?.captureId
+    ) {
+      // A resource can have several user-kept captures, including captures by
+      // different accounts. The clicked copy owns both the body and its source.
+      invalidateDocument(id)
+      updateDocumentMemory(id, {
+        binding: undefined,
+        seed: undefined,
+        sent: undefined,
+        sentRevision: undefined,
+        latest: undefined,
+        showing: undefined,
+      })
+      tab.snapshotRef = undefined
+    }
+    tab.remoteDocument = provenance
+  }
   if (existing && (tab.view !== existing.view || req.snapshot)) invalidateDocument(id)
   // The tab shows the version the user clicked: another message's asset of the
   // same document replaces the sent snapshot (the latest preview stays apart).

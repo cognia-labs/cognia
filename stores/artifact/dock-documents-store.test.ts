@@ -17,6 +17,43 @@ const tab = (id = "d1"): DockDocumentTab => ({
   view: "snapshot",
   openedAt: Date.now(),
 })
+it("persists only the matching copy's non-identifying capture provenance", () => {
+  const remoteDocument = {
+    v: 1,
+    captureId: "46bc6e38-e2f3-4afc-88d7-998581a43532",
+    connectionScoped: true,
+    providerId: "lark",
+    resourceKind: "doc",
+    resourceId: tab().resourceId,
+    url: "",
+    title: "Report",
+    fetchedAt: 1,
+    completeness: { status: "complete" },
+  }
+  const saved = {
+    bySession: {
+      s: {
+        documents: [
+          {
+            ...tab(),
+            snapshotRef: { kind: "asset", assetId: "asset" },
+            remoteDocument: { ...remoteDocument, connectionRef: "private", identityKey: "private" },
+          },
+        ],
+        activeDocumentTabId: "d1",
+        lastUsedAt: Date.now(),
+      },
+    },
+  }
+  const restored = persistedDockDocuments(saved)
+  expect(restored.bySession.s.documents[0].remoteDocument).toEqual(remoteDocument)
+  expect(JSON.stringify(restored)).not.toMatch(/connectionRef|identityKey|private/)
+  saved.bySession.s.documents[0].remoteDocument.resourceId = "another-resource"
+  expect(persistedDockDocuments(saved).bySession.s.documents[0]).not.toHaveProperty(
+    "remoteDocument"
+  )
+})
+
 beforeEach(() => {
   localStorage.clear()
   useDockDocumentsStore.setState({ bySession: {} })

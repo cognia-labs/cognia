@@ -10,9 +10,9 @@
  *
  * It deliberately carries no retrieval identity: no account id, no
  * authorization epoch, no token, no browser profile. Those stay with the
- * provider and the dock's in-memory binding, so a shared, synced or exported
- * message cannot reveal which account read the document, and reopening an old
- * attachment asks the user to choose an account instead of guessing one.
+ * device-local remoteDocumentConnections table, so a shared, synced or exported
+ * message cannot reveal which account read the document. A random capture id
+ * can resolve that binding only on the device that captured it.
  *
  * Every reader goes through `parseRemoteDocumentProvenance`: the record is
  * rebuilt from a whitelist, and the address is re-validated by the strict
@@ -31,6 +31,10 @@ import type {
 
 export interface RemoteDocumentProvenanceV1 {
   v: 1
+  /** Random capture identity, never derived from an account or remote identity. Optional on legacy copies. */
+  captureId?: string
+  /** The capture used a Host connection; its identity stays in a device-local side table. */
+  connectionScoped?: true
   providerId: string
   resourceKind: RemoteDocKind
   resourceId: string
@@ -112,6 +116,11 @@ export function parseRemoteDocumentProvenance(value: unknown): RemoteDocumentPro
   const kind = resourceKind as RemoteDocKind
   return {
     v: 1,
+    ...(typeof value.captureId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.captureId)
+      ? { captureId: value.captureId }
+      : {}),
+    ...(value.connectionScoped === true ? { connectionScoped: true } : {}),
     providerId: providerId as RemoteDocumentProvenanceV1["providerId"],
     resourceKind: kind,
     resourceId,
@@ -139,6 +148,7 @@ export function remoteDocumentProvenance(
   const { ref } = content
   return parseRemoteDocumentProvenance({
     v: 1,
+    captureId: crypto.randomUUID(),
     providerId: ref.providerId,
     resourceKind: ref.kind,
     resourceId: ref.id,
