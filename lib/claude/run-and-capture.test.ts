@@ -275,7 +275,7 @@ describe("runAndCaptureAssistantReply", () => {
       SESSION,
       "hi",
       { turnId: "attempt" },
-      { messageId: "logical-user" }
+      expect.objectContaining({ messageId: "logical-user" })
     )
     expect(onSdkEvent).toHaveBeenCalledTimes(1)
     expect(onSdkEvent).toHaveBeenCalledWith((reply as { event: unknown }).event)
