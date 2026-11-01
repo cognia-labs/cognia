@@ -469,6 +469,21 @@ describe("createPluginContext", () => {
     expect(context.pluginId).toBe("test-plugin")
   })
 
+  it("mounts the public docs provider namespace with permission enforcement", () => {
+    const ctx = createFullPluginContext(createMockPlugin(), mockManager)
+    expect(typeof ctx.docsProviders.register).toBe("function")
+    expect(() =>
+      ctx.docsProviders.register({
+        id: "docs",
+        mentionPrefix: "test-plugin.docs:",
+        kinds: ["doc"],
+        listAccounts: async () => [],
+        matchRef: () => null,
+        fetch: jest.fn(),
+      })
+    ).toThrow(/docs:provide/)
+  })
+
   it("honors auth revocations and optional runtime grants on an existing context", async () => {
     const guard = getPermissionGuard()
     guard.registerPlugin("test-plugin", ["auth:consume", "auth:provide"])

@@ -8,6 +8,7 @@ import {
   classifyCloudDocumentUrl,
   type CloudDocumentTarget,
 } from "@/lib/docs-providers/document-url"
+import { isPluginDocsProviderId } from "@/lib/docs-providers/types"
 
 export type DockDocumentView = "snapshot" | "live"
 export type DockDocumentSnapshotRef = { kind: "asset"; assetId: string; messageId?: string }
@@ -39,7 +40,8 @@ function readTab(value: unknown): DockDocumentTab | null {
     !record(value) ||
     typeof value.id !== "string" ||
     !value.id ||
-    !["lark", "google"].includes(String(value.providerId)) ||
+    (!["lark", "google"].includes(String(value.providerId)) &&
+      !isPluginDocsProviderId(String(value.providerId))) ||
     !["doc", "wiki", "sheet", "bitable", "resource"].includes(String(value.resourceKind)) ||
     typeof value.resourceId !== "string" ||
     !value.resourceId ||
@@ -57,6 +59,7 @@ function readTab(value: unknown): DockDocumentTab | null {
   const target = value.url ? classifyCloudDocumentUrl(value.url) : null
   if (
     value.url &&
+    !isPluginDocsProviderId(String(value.providerId)) &&
     (!target ||
       target.providerId !== value.providerId ||
       target.resourceId !== value.resourceId ||
@@ -68,7 +71,13 @@ function readTab(value: unknown): DockDocumentTab | null {
     providerId: value.providerId as DockDocumentTab["providerId"],
     resourceKind: value.resourceKind as DockDocumentTab["resourceKind"],
     resourceId: value.resourceId,
-    url: target?.url ?? "",
+    url:
+      target !== null &&
+      target.providerId === value.providerId &&
+      target.resourceId === value.resourceId &&
+      target.resourceKind === value.resourceKind
+        ? target.url
+        : "",
     title: value.title,
     view: value.view as DockDocumentView,
     openedAt: value.openedAt,

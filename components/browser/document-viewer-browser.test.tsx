@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import {
@@ -374,4 +375,31 @@ it("uses one tested login host list with strict suffix boundaries", () => {
   expect(
     isDocumentProviderHost("https://@docs.google.com/document/d/abcdefghijklmnop/edit", "google")
   ).toBe(false)
+})
+
+it("recognizes a plugin's exact declared origin only for the registration lifetime", () => {
+  const dispose = registerDocsProvider({
+    id: "plugin:viewer/docs",
+    label: "Acme",
+    mentionPrefix: "viewer.docs:",
+    kinds: ["doc"],
+    hosts: ["tauri"],
+    urlOrigins: ["https://docs.example.test"],
+    listAccounts: async () => [],
+    matchRef: () => null,
+    fetch: jest.fn(),
+  })
+  expect(isDocumentProviderHost("https://docs.example.test/report", "plugin:viewer/docs")).toBe(
+    true
+  )
+  expect(
+    isDocumentProviderHost("https://docs.example.test.evil/report", "plugin:viewer/docs")
+  ).toBe(false)
+  expect(isDocumentLoginUrl("https://accounts.example.test/login", "plugin:viewer/docs")).toBe(
+    false
+  )
+  dispose()
+  expect(isDocumentProviderHost("https://docs.example.test/report", "plugin:viewer/docs")).toBe(
+    false
+  )
 })

@@ -12,9 +12,18 @@ beforeEach(() => __resetDocsProvidersForTests())
 
 describe("built-in docs providers", () => {
   it("registers Feishu and Google at module load, so the composer sees them synchronously", () => {
-    expect(listDocsProviders()).toEqual([larkDocsProvider, googleDocsProvider])
-    expect(getDocsProvider("lark")).toBe(larkDocsProvider)
-    expect(getDocsProvider("google")).toBe(googleDocsProvider)
+    expect(listDocsProviders().map((provider) => provider.id)).toEqual([
+      larkDocsProvider.id,
+      googleDocsProvider.id,
+    ])
+    expect(getDocsProvider("lark")).toMatchObject({
+      id: larkDocsProvider.id,
+      mentionPrefix: larkDocsProvider.mentionPrefix,
+    })
+    expect(getDocsProvider("google")).toMatchObject({
+      id: googleDocsProvider.id,
+      mentionPrefix: googleDocsProvider.mentionPrefix,
+    })
   })
 
   it("claims distinct, colon-terminated mention prefixes", () => {
@@ -22,8 +31,8 @@ describe("built-in docs providers", () => {
       { prefix: "lark:", providerId: "lark" },
       { prefix: "gdoc:", providerId: "google" },
     ])
-    expect(getDocsProviderByPrefix("lark:")).toBe(larkDocsProvider)
-    expect(getDocsProviderByPrefix("gdoc:")).toBe(googleDocsProvider)
+    expect(getDocsProviderByPrefix("lark:")).toBe(getDocsProvider(larkDocsProvider.id))
+    expect(getDocsProviderByPrefix("gdoc:")).toBe(getDocsProvider(googleDocsProvider.id))
   })
 
   it("keeps every provider id a valid Rust callback slug", () => {

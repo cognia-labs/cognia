@@ -36,6 +36,7 @@ import type { ContextRef } from "@/lib/chat/mentions/types"
 import { wrapUntrustedContent } from "@/lib/web/untrusted-content"
 import { accountMatchesBinding, assertRemoteDocBinding } from "@/lib/docs-providers/account-binding"
 import { normalizeRemoteDocContent } from "@/lib/docs-providers/limits"
+import { subscribeDocsProviders } from "@/lib/docs-providers/registry"
 import {
   DocsProviderError,
   getDocsProvider,
@@ -145,8 +146,15 @@ export function useRemoteDocStaging({
       }
       const controller = new AbortController()
       active.current.add(controller)
+      const stopRegistry = subscribeDocsProviders(() => {
+        if (getDocsProvider(item.providerId) !== provider) controller.abort()
+      })
       const destinationCurrent = captureDestination?.() ?? (() => true)
-      const live = () => mounted.current && !controller.signal.aborted && destinationCurrent()
+      const live = () =>
+        mounted.current &&
+        !controller.signal.aborted &&
+        destinationCurrent() &&
+        getDocsProvider(item.providerId) === provider
       const binding = item.doc.accountBinding
       let verified = !binding
       let validationVersion = 0
@@ -262,6 +270,7 @@ export function useRemoteDocStaging({
         }
         return file
       } finally {
+        stopRegistry()
         unsubscribe?.()
         active.current.delete(controller)
       }

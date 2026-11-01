@@ -259,3 +259,5 @@ export type {
   PluginLibraryModuleInstance,
   PluginLibraryModuleFactory,
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
+
+export type { PluginDocsProviderDef } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"

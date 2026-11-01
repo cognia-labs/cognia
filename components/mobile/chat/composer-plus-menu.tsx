@@ -59,6 +59,7 @@
  * + enqueue an outbound `connector_send` job as appropriate.
  */
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
@@ -245,6 +246,7 @@ export function ComposerPlusMenu({
   // exist as far as a mobile user could tell. A blocked provider now renders
   // as a disabled row that says where it does work.
   const hostProfile = useHostProfile()
+  useDocsProvidersRevision()
   const docsProviders = listDocsProviders()
   const entitySources = listEntityMentionSources()
   const chatServices = listExternalCapabilities({ surface: "chat" })
@@ -277,8 +279,7 @@ export function ComposerPlusMenu({
   // A panel whose body stopped rendering while it was showing (its row
   // unmounted, or no longer offers it) leaves the root showing rather than an
   // empty body under a stale title.
-  const shown: MenuView =
-    view.kind === "panel" && !registeredPanels.has(view.id) ? ROOT_VIEW : view
+  const shown: MenuView = view.kind === "panel" && !registeredPanels.has(view.id) ? ROOT_VIEW : view
   const atRoot = shown.kind === "root"
 
   const panels: ComposerMenuPanels = {
@@ -535,7 +536,12 @@ export function ComposerPlusMenu({
               reach of the OS gesture bar. */}
           <div className="flex min-h-0 flex-col overflow-y-auto px-2 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
             {shown.kind === "docs" ? (
-              <div key="docs" role="group" aria-label={viewTitle ?? undefined} className={cn("pt-1", ENTER_FORWARD)}>
+              <div
+                key="docs"
+                role="group"
+                aria-label={viewTitle ?? undefined}
+                className={cn("pt-1", ENTER_FORWARD)}
+              >
                 {docsProviders.map((provider) => {
                   const reach = docsProviderReach(provider, hostProfile)
                   return (
@@ -547,7 +553,7 @@ export function ComposerPlusMenu({
                       // `registry-i18n.test.ts` pins the catalogue against the
                       // registry because `lint:i18n` cannot follow a template
                       // key.
-                      label={tDocs(`name.${provider.id}` as "name.lark")}
+                      label={provider.label ?? tDocs(`name.${provider.id}` as "name.lark")}
                       hint={
                         reach.block
                           ? tDocs(`reach.short.${reach.block}` as "reach.short.no-runtime")
@@ -561,7 +567,12 @@ export function ComposerPlusMenu({
                 })}
               </div>
             ) : shown.kind === "records" ? (
-              <div key="records" role="group" aria-label={viewTitle ?? undefined} className={cn("pt-1", ENTER_FORWARD)}>
+              <div
+                key="records"
+                role="group"
+                aria-label={viewTitle ?? undefined}
+                className={cn("pt-1", ENTER_FORWARD)}
+              >
                 {entitySources.map((source) => (
                   <PlusRow
                     key={source.entityKind}
@@ -592,145 +603,145 @@ export function ComposerPlusMenu({
               className={cn(returned && ENTER_BACK)}
               data-testid="composer-plus-root"
             >
-                <GroupLabel>{tMenu("attachGroup")}</GroupLabel>
-                {/* Four across is the phone idiom and the widest that keeps a
+              <GroupLabel>{tMenu("attachGroup")}</GroupLabel>
+              {/* Four across is the phone idiom and the widest that keeps a
                     one-line label at 320px — but the chat composer hides voice,
                     and three tiles in a four-column grid read as a missing
                     fourth rather than as three. */}
-                <div
-                  className={cn(
-                    "grid gap-1 px-1",
-                    showVoice && !recording ? "grid-cols-4" : "grid-cols-3"
-                  )}
+              <div
+                className={cn(
+                  "grid gap-1 px-1",
+                  showVoice && !recording ? "grid-cols-4" : "grid-cols-3"
+                )}
+              >
+                <PlusTile
+                  icon={<CameraIcon className="size-6" />}
+                  label={t("camera")}
+                  onSelect={onCamera}
+                  testId="composer-plus-camera"
+                />
+                <PlusTile
+                  icon={<ImageIcon className="size-6" />}
+                  label={t("album")}
+                  onSelect={onAlbum}
+                  testId="composer-plus-album"
+                />
+                <label
+                  className={cn(TILE_CLASS, "cursor-pointer")}
+                  data-testid="composer-plus-file"
                 >
-                  <PlusTile
-                    icon={<CameraIcon className="size-6" />}
-                    label={t("camera")}
-                    onSelect={onCamera}
-                    testId="composer-plus-camera"
+                  <FileIcon className="size-6" />
+                  <span className="text-[11px] leading-tight">{t("file")}</span>
+                  <input
+                    type="file"
+                    multiple
+                    accept={fileAccept}
+                    className="sr-only"
+                    onChange={onFilePicked}
+                    data-testid="composer-plus-file-input"
                   />
+                </label>
+                {showVoice && !recording ? (
                   <PlusTile
-                    icon={<ImageIcon className="size-6" />}
-                    label={t("album")}
-                    onSelect={onAlbum}
-                    testId="composer-plus-album"
+                    icon={<MicIcon className="size-6" />}
+                    label={t("voice")}
+                    onSelect={() => void onVoiceStart()}
+                    testId="composer-plus-voice"
                   />
-                  <label
-                    className={cn(TILE_CLASS, "cursor-pointer")}
-                    data-testid="composer-plus-file"
-                  >
-                    <FileIcon className="size-6" />
-                    <span className="text-[11px] leading-tight">{t("file")}</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept={fileAccept}
-                      className="sr-only"
-                      onChange={onFilePicked}
-                      data-testid="composer-plus-file-input"
-                    />
-                  </label>
-                  {showVoice && !recording ? (
-                    <PlusTile
-                      icon={<MicIcon className="size-6" />}
-                      label={t("voice")}
-                      onSelect={() => void onVoiceStart()}
-                      testId="composer-plus-voice"
-                    />
-                  ) : null}
-                </div>
-                {showVoice && recording ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    onClick={() => void onVoiceStop()}
-                    className="mt-2 w-full gap-2"
-                    data-testid="composer-plus-voice-stop"
-                  >
-                    <MicIcon className="animate-pulse" />
-                    <span>{t("voiceStop")}</span>
-                  </Button>
                 ) : null}
-                {/* A referenced record goes INTO the message, so it belongs to
+              </div>
+              {showVoice && recording ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void onVoiceStop()}
+                  className="mt-2 w-full gap-2"
+                  data-testid="composer-plus-voice-stop"
+                >
+                  <MicIcon className="animate-pulse" />
+                  <span>{t("voiceStop")}</span>
+                </Button>
+              ) : null}
+              {/* A referenced record goes INTO the message, so it belongs to
                     this group — it is a row rather than a tile because it opens
                     a list instead of producing an attachment. */}
-                {onInsert && docsProviders.length > 0 ? (
-                  <PlusRow
-                    icon={<CloudIcon className="size-4" />}
-                    label={tMenu("cloudDocs")}
-                    onSelect={() => setView({ kind: "docs" })}
-                    chevron
-                    testId="composer-plus-cloud-docs"
-                  />
-                ) : null}
-                {onInsert && entitySources.length > 0 ? (
-                  <PlusRow
-                    icon={<AtSignIcon className="size-4" />}
-                    label={tMenu("records")}
-                    onSelect={() => setView({ kind: "records" })}
-                    chevron
-                    testId="composer-plus-records"
-                  />
-                ) : null}
-
-                <GroupLabel className="mt-2 border-t border-border pt-3">
-                  {tMenu("turnGroup")}
-                </GroupLabel>
+              {onInsert && docsProviders.length > 0 ? (
                 <PlusRow
-                  icon={<LightbulbIcon className="size-4" />}
-                  label={tMenu("planMode")}
-                  active={permissionMode === "plan"}
-                  onSelect={() => {
-                    setPermissionMode(
-                      permissionMode === "plan" ? "default" : "plan",
-                      composerSessionId
-                    )
-                    closeMenu()
-                  }}
-                  testId="composer-plus-plan-mode"
+                  icon={<CloudIcon className="size-4" />}
+                  label={tMenu("cloudDocs")}
+                  onSelect={() => setView({ kind: "docs" })}
+                  chevron
+                  testId="composer-plus-cloud-docs"
                 />
-                {onInsert ? (
-                  <PlusRow
-                    icon={<TargetIcon className="size-4" />}
-                    label={tMenu("goal")}
-                    onSelect={() => insertAndClose("/goal ")}
-                    testId="composer-plus-goal"
-                  />
-                ) : null}
-                {/* Same contract as the desktop menu: an injected row that
+              ) : null}
+              {onInsert && entitySources.length > 0 ? (
+                <PlusRow
+                  icon={<AtSignIcon className="size-4" />}
+                  label={tMenu("records")}
+                  onSelect={() => setView({ kind: "records" })}
+                  chevron
+                  testId="composer-plus-records"
+                />
+              ) : null}
+
+              <GroupLabel className="mt-2 border-t border-border pt-3">
+                {tMenu("turnGroup")}
+              </GroupLabel>
+              <PlusRow
+                icon={<LightbulbIcon className="size-4" />}
+                label={tMenu("planMode")}
+                active={permissionMode === "plan"}
+                onSelect={() => {
+                  setPermissionMode(
+                    permissionMode === "plan" ? "default" : "plan",
+                    composerSessionId
+                  )
+                  closeMenu()
+                }}
+                testId="composer-plus-plan-mode"
+              />
+              {onInsert ? (
+                <PlusRow
+                  icon={<TargetIcon className="size-4" />}
+                  label={tMenu("goal")}
+                  onSelect={() => insertAndClose("/goal ")}
+                  testId="composer-plus-goal"
+                />
+              ) : null}
+              {/* Same contract as the desktop menu: an injected row that
                     navigates away (unconfigured web search → Settings) closes
                     the sheet behind it. */}
-                <ComposerMenuCloseProvider value={closeMenu}>
-                  {/* ...and a row that opens a list of its own (skills, the
+              <ComposerMenuCloseProvider value={closeMenu}>
+                {/* ...and a row that opens a list of its own (skills, the
                       room's members, web search's setup card) drills the sheet
                       into it instead of floating a popover over the sheet. */}
-                  <ComposerMenuPanelsProvider value={panels}>
-                    {capabilities}
-                  </ComposerMenuPanelsProvider>
-                </ComposerMenuCloseProvider>
+                <ComposerMenuPanelsProvider value={panels}>
+                  {capabilities}
+                </ComposerMenuPanelsProvider>
+              </ComposerMenuCloseProvider>
 
-                <GroupLabel className="mt-2 border-t border-border pt-3">
-                  {tMenu("extendGroup")}
-                </GroupLabel>
-                {onInsert ? (
-                  <PlusRow
-                    icon={<SlashIcon className="size-4" />}
-                    label={tMenu("slashCommands")}
-                    onSelect={() => insertAndClose("/")}
-                    testId="composer-plus-slash"
-                  />
-                ) : null}
-                {onOpenExternalServices && chatServices.length > 0 ? (
-                  <PlusRow
-                    icon={<PlugIcon className="size-4" />}
-                    label={tMenu("externalServices", { count: chatServices.length })}
-                    onSelect={() => {
-                      closeMenu()
-                      onOpenExternalServices()
-                    }}
-                    testId="composer-plus-services"
-                  />
-                ) : null}
+              <GroupLabel className="mt-2 border-t border-border pt-3">
+                {tMenu("extendGroup")}
+              </GroupLabel>
+              {onInsert ? (
+                <PlusRow
+                  icon={<SlashIcon className="size-4" />}
+                  label={tMenu("slashCommands")}
+                  onSelect={() => insertAndClose("/")}
+                  testId="composer-plus-slash"
+                />
+              ) : null}
+              {onOpenExternalServices && chatServices.length > 0 ? (
+                <PlusRow
+                  icon={<PlugIcon className="size-4" />}
+                  label={tMenu("externalServices", { count: chatServices.length })}
+                  onSelect={() => {
+                    closeMenu()
+                    onOpenExternalServices()
+                  }}
+                  testId="composer-plus-services"
+                />
+              ) : null}
             </div>
           </div>
         </DrawerContent>
@@ -826,9 +837,7 @@ function PlusRow({
       <span className="text-muted-foreground">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate">{label}</span>
-        {hint ? (
-          <span className="block truncate text-xs text-muted-foreground">{hint}</span>
-        ) : null}
+        {hint ? <span className="block truncate text-xs text-muted-foreground">{hint}</span> : null}
       </span>
       {active ? <span aria-hidden className="size-1.5 rounded-full bg-primary" /> : null}
       {chevron ? <ChevronRightIcon aria-hidden className="size-4 text-muted-foreground" /> : null}

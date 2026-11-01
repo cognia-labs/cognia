@@ -127,6 +127,24 @@ it("draws document titles/provider icons, activates and closes individual docume
   expect(useDockDocumentsStore.getState().bySession[SESSION].documents).toHaveLength(0)
 })
 
+it("uses a generic document icon for a plugin provider", () => {
+  useDockDocumentsStore.getState().put(SESSION, {
+    id: "plugin-doc",
+    providerId: "plugin:acme/docs",
+    resourceKind: "doc",
+    resourceId: "report",
+    url: "",
+    title: "Plugin report",
+    view: "snapshot",
+    openedAt: 1,
+  })
+  setPanels(["cloud-document"], "cloud-document")
+  renderStrip()
+  const tab = screen.getByRole("tab", { name: "Plugin report" })
+  expect(tab.querySelector(".lucide-file-text")).toBeInTheDocument()
+  expect(within(tab).queryByRole("img")).toBeNull()
+})
+
 it("offers document open/copy actions and uses the canonical link", async () => {
   const user = userEvent.setup()
   ;(openExternal as jest.Mock).mockResolvedValue(undefined)

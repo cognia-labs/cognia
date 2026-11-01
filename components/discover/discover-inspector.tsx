@@ -634,7 +634,7 @@ function displayName(
     case "connector":
       return t(`connectorLabels.${item.data.type}`)
     case "docsProvider":
-      return tDocs(`name.${item.data.id}`)
+      return item.data.label ?? tDocs(`name.${item.data.id}`)
     case "externalService":
       return item.data.label
     case "integration":

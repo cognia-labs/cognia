@@ -112,6 +112,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
   externalAgents: ["agent:external:read", "agent:external:manage"],
   agentConfig: ["agent-config:read", "agent-config:write"],
   decisions: ["decisions:run", "decisions:provide"],
+  docsProviders: ["docs:provide"],
   team: ["team:read", "team:write"],
   connectors: ["connectors:read", "connectors:send", "connectors:manage"],
   share: ["share:read", "share:create"],
@@ -146,6 +147,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
 }
 
 export const PERMISSION_DESCRIPTIONS: Record<PluginPermission, string> = {
+  "docs:provide": "Offer cloud document search and reading through Host connections",
   "filesystem:read": "Read files from the file system",
   "filesystem:write": "Write files to the file system",
   "network:fetch": "Make HTTP/HTTPS requests",

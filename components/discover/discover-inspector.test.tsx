@@ -926,6 +926,19 @@ describe("DiscoverInspector — connection planes", () => {
 
   beforeEach(() => hostProfileMock.mockReturnValue("desktop"))
 
+  it("uses a plugin's manifest label in its heading", () => {
+    const data = { ...larkProvider, id: "plugin:acme/docs", label: "Acme Documents" }
+    render(
+      <DiscoverInspector
+        category="docsProviders"
+        itemId={data.id}
+        items={[{ kind: "docsProvider", id: data.id, data }]}
+        onClose={jest.fn()}
+      />
+    )
+    expect(screen.getByTestId("discover-inspector-title")).toHaveTextContent("Acme Documents")
+  })
+
   it("titles a document source by name, not by its raw provider id", () => {
     // The header resolves through the `docsProviders` namespace. Scoped to
     // `discover` it fell back to the id and read "lark".

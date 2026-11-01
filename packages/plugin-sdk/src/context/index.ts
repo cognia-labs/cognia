@@ -504,3 +504,5 @@ export type {
   PluginLibraryModuleInstance,
   PluginLibraryModuleFactory,
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
+
+export type { PluginDocsProvidersAPI } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"

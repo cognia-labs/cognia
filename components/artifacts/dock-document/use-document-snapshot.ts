@@ -1,5 +1,6 @@
 "use client"
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { requestComposerDocument } from "@/lib/chat/composer-document-request"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useHostProfile } from "@/hooks/use-host-profile"
@@ -76,6 +77,7 @@ async function assetSnapshot(
 }
 
 export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
+  useDocsProvidersRevision()
   const provider = getDocsProvider(tab.providerId)
   const profile = useHostProfile()
   const reach = docsProviderReach(provider ?? { hosts: [] }, profile)
@@ -179,7 +181,7 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
       controller.abort()
       untrack()
     }
-  }, [currentTab, needsAsset, sessionId, tab])
+  }, [currentTab, memory?.generation, needsAsset, sessionId, tab])
 
   const refresh = useCallback(
     async (choice?: DocsProviderAccountBinding) => {
@@ -390,9 +392,14 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
     accounts,
     refresh,
     reach,
-    error: "error" in validOperation ? validOperation.error : undefined,
+    error: !provider
+      ? ("notConfigured" as const)
+      : "error" in validOperation
+        ? validOperation.error
+        : undefined,
     refreshFailed: !!content && validOperation.phase === "error",
     sourceRemoved,
+    provider,
     canAttach,
     attachToChat,
   }

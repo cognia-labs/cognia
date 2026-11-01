@@ -157,6 +157,7 @@ import { createToolResultAPI } from "../api/tool-result-api"
 import { createDexieAPI } from "../api/dexie-api"
 import { createOcrAPI } from "../api/ocr-api"
 import { createDecisionsAPI } from "../api/decisions-api"
+import { createDocsProvidersAPI } from "../api/docs-providers-api"
 import { createPromptsAPI } from "../api/prompts-api"
 import { createAgentConfigAPI } from "../api/agent-config-api"
 import { createWorkspaceAPI } from "../api/workspace-api"
@@ -454,6 +455,7 @@ export function createFullPluginContext(
     i18n: contextAPI.i18n,
     ocr: createOcrAPI(pluginId),
     decisions: createDecisionsAPI(pluginId),
+    docsProviders: createDocsProvidersAPI(pluginId, plugin.manifest),
     prompts: createPromptsAPI(pluginId),
     agentConfig: createAgentConfigAPI(pluginId),
     workspace: createWorkspaceAPI(pluginId, plugin.manifest),

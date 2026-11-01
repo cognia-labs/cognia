@@ -128,3 +128,19 @@ it("shows Attach only for a verified latest snapshot and invokes it explicitly",
   rerender(<DocumentSnapshotView sessionId="s" tab={tab} />)
   expect(screen.queryByRole("button", { name: "attachToChat" })).not.toBeInTheDocument()
 })
+
+it("uses a plugin's manifest name and the existing unavailable state for its saved snapshot", () => {
+  const current = jest.mocked(useDocumentSnapshot).mock.results[0]?.value ?? {
+    state: "ready",
+    reach: { available: true },
+    refresh: jest.fn(),
+  }
+  jest.mocked(useDocumentSnapshot).mockReturnValue({
+    ...current,
+    provider: { label: "Acme Documents" },
+    error: "notConfigured",
+  } as never)
+  render(<DocumentSnapshotView sessionId="s" tab={{ ...tab, providerId: "plugin:acme/docs" }} />)
+  expect(screen.getByText(/Acme Documents/)).toBeInTheDocument()
+  expect(screen.getByRole("alert")).toHaveTextContent("errors.notConfigured")
+})

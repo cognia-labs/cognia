@@ -1,3 +1,4 @@
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
@@ -340,4 +341,26 @@ it("keeps the disconnecting label while remote revocation is pending after local
   expect(screen.getByRole("button", { name: "Disconnecting…" })).toBeDisabled()
   await act(async () => finish({ revoked: true }))
   expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled()
+})
+
+it("lists a newly registered plugin by its manifest label and removes it on disable", async () => {
+  renderCard()
+  expect(screen.queryByText("Acme Documents")).toBeNull()
+  let dispose!: () => void
+  await act(async () => {
+    dispose = registerDocsProvider({
+      id: "plugin:settings/docs",
+      label: "Acme Documents",
+      mentionPrefix: "settings.docs:",
+      kinds: ["doc"],
+      hosts: ["tauri"],
+      listAccounts: async () => [{ id: "host-ref", label: "Alice", authorizationEpoch: "2" }],
+      matchRef: () => null,
+      fetch: jest.fn(),
+    })
+  })
+  expect(screen.getByText("Acme Documents")).toBeInTheDocument()
+  expect(screen.getByText("Alice")).toBeInTheDocument()
+  act(() => dispose())
+  expect(screen.queryByText("Acme Documents")).toBeNull()
 })

@@ -58,6 +58,7 @@ VALID_PERMISSIONS = (
     "ai:embed",
     "decisions:run",
     "decisions:provide",
+    "docs:provide",
     "export:session",
     "export:project",
     "theme:read",
@@ -166,6 +167,7 @@ VALID_CAPABILITIES = (
     "media",
     "canvas",
     "ai-provider",
+    "docs-provider",
     "decision-provider",
     "themes",
     "commands",
@@ -258,6 +260,9 @@ CAPABILITY_FIELDS = {
     "canvas": [],
     "ai-provider": [
         "aiProviders",
+    ],
+    "docs-provider": [
+        "docsProviders",
     ],
     "decision-provider": [
         "decisionProviders",
@@ -459,6 +464,7 @@ CAPABILITY_SUPPORT = {
     "media": "supported",
     "canvas": "supported",
     "ai-provider": "supported",
+    "docs-provider": "supported",
     "decision-provider": "supported",
     "themes": "supported",
     "commands": "supported",
@@ -539,6 +545,7 @@ CAPABILITY_INTRODUCED_VERSIONS = {
     "media": "0.1.0",
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
+    "docs-provider": "0.1.0",
     "decision-provider": "0.1.0",
     "themes": "0.1.0",
     "commands": "0.1.0",
@@ -619,6 +626,7 @@ CAPABILITY_MINIMUM_HOST_VERSIONS = {
     "media": "0.1.0",
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
+    "docs-provider": "0.1.0",
     "decision-provider": "0.1.0",
     "themes": "0.1.0",
     "commands": "0.1.0",
@@ -759,6 +767,14 @@ MANIFEST_CONTRIBUTIONS = [
         "execution": "javascript",
         "pythonExecution": "supported",
         "entryPath": "aiProviders[].entry",
+    },
+    {
+        "field": "docsProviders",
+        "capabilities": [
+            "docs-provider",
+        ],
+        "execution": "javascript",
+        "pythonExecution": "unsupported",
     },
     {
         "field": "decisionProviders",
@@ -8461,6 +8477,47 @@ API_NAMESPACE_CONTRACTS = [
                 "cancellable": False,
                 "resourceEffect": {
                     "kind": "none",
+                },
+            },
+        ],
+    },
+    {
+        "id": "docsProviders",
+        "authorPath": "ctx.docsProviders",
+        "type": "PluginDocsProvidersAPI",
+        "stability": "stable",
+        "introducedIn": "0.1.0",
+        "runtimes": [
+            "frontend",
+            "hybrid",
+        ],
+        "platforms": [
+            "desktop",
+            "web",
+            "mobile",
+        ],
+        "transport": "direct",
+        "factory": "context.docsProviders",
+        "enforcement": "shadow",
+        "dataClassification": "sensitive",
+        "timeoutMs": None,
+        "retry": "never",
+        "errorPolicy": "preserve",
+        "lifecycle": "plugin",
+        "methods": [
+            {
+                "id": "docsProviders.register",
+                "name": "register",
+                "requiredPermissions": [
+                    "docs:provide",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "returned-handle",
+                    "disposeMethod": "unregister",
                 },
             },
         ],

@@ -45,6 +45,7 @@
     "decision-provider": "Decision providers",
     "density-preset": "Density presets",
     "deployment-filter": "Deployment filters",
+    "docs-provider": "Document provider",
     "editor": "Editors",
     "exporters": "Exporters",
     "external-agent-adapter": "External agent adapters",

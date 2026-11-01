@@ -21,6 +21,7 @@
  */
 
 import { classifyCloudDocumentUrl, cloudDocumentTargetFromRef } from "./document-url"
+import { isPluginDocsProviderId } from "./types"
 import type {
   RemoteDocCompleteness,
   RemoteDocContent,
@@ -30,7 +31,7 @@ import type {
 
 export interface RemoteDocumentProvenanceV1 {
   v: 1
-  providerId: "lark" | "google"
+  providerId: string
   resourceKind: RemoteDocKind
   resourceId: string
   /** Canonical address from `classifyCloudDocumentUrl`, or "" when no trustworthy one is known. */
@@ -97,7 +98,11 @@ function trustedUrl(
 export function parseRemoteDocumentProvenance(value: unknown): RemoteDocumentProvenanceV1 | null {
   if (!record(value) || value.v !== 1) return null
   const { providerId, resourceKind, resourceId, title, fetchedAt } = value
-  if (typeof providerId !== "string" || !PROVIDERS.has(providerId)) return null
+  if (
+    typeof providerId !== "string" ||
+    (!PROVIDERS.has(providerId) && !isPluginDocsProviderId(providerId))
+  )
+    return null
   if (typeof resourceKind !== "string" || !KINDS.has(resourceKind as RemoteDocKind)) return null
   if (typeof resourceId !== "string" || !resourceId || resourceId.length > MAX_ID) return null
   if (typeof title !== "string") return null

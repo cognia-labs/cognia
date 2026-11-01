@@ -62,6 +62,7 @@ import type { AgentTeam } from "../agent/agent-team"
 import type { PluginVerificationSnapshot } from "./plugin-verification"
 import type { PluginOcrProviderDef } from "./plugin-ocr"
 import type { PluginDecisionProviderDef } from "./plugin-decisions"
+import type { PluginDocsProviderDef, PluginDocsProvidersAPI } from "./plugin-docs-providers"
 import type { PluginWorkspaceBackendDef } from "./plugin-workspace-backend"
 import type { PluginLinkMatcherDef } from "./plugin-link-matcher"
 import type { PluginMessageRendererDef } from "./plugin-message-renderer"
@@ -174,6 +175,7 @@ export type PluginCapability =
   | "media" // Provides media processing and AI image workflows
   | "canvas" // Provides canvas editing and selection workflows
   | "ai-provider" // Provides AI provider fallback and routing helpers
+  | "docs-provider"
   | "decision-provider" // Provides System-1 decision providers for ctx.decisions (ADR-0194)
   | "themes" // Provides UI themes
   | "commands" // Provides slash commands
@@ -1146,6 +1148,8 @@ export interface PluginManifest {
    * disable. Permission gate: `decisions:provide`.
    */
   decisionProviders?: PluginDecisionProviderDef[]
+  /** Credential-free document implementations register through ctx.docsProviders. */
+  docsProviders?: PluginDocsProviderDef[]
 
   /**
    * Workspace execution backends contributed by this plugin (issue-loop /
@@ -2699,6 +2703,7 @@ export interface PluginHostContextAPI {
   services: PluginServicesAPI
   ocr: import("../../lib/plugin/api/ocr-api").PluginOcrAPI
   decisions: import("../../lib/plugin/api/decisions-api").PluginDecisionsAPI
+  docsProviders: PluginDocsProvidersAPI
   prompts: import("../../lib/plugin/api/prompts-api").PluginPromptsAPI
   agentConfig: import("../../lib/plugin/api/agent-config-api").PluginAgentConfigAPI
   workspace: import("../../lib/plugin/api/workspace-api").PluginWorkspaceAPI
@@ -5580,6 +5585,7 @@ export interface PluginExtensionAPI {
  * Plugin API permissions for extended features
  */
 export type PluginAPIPermission =
+  | "docs:provide"
   | "shell:execute"
   | "network:fetch"
   | "filesystem:read"

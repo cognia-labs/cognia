@@ -422,7 +422,12 @@ export function DockTabStrip({
     const tab = parseDockTabKey(key)
     if (tab.kind === "doc") {
       const doc = documentTabs.find((entry) => entry.id === tab.docTabId)!
-      const brand = doc.providerId === "google" ? "docs.google.com" : "feishu.cn"
+      const brand =
+        doc.providerId === "google"
+          ? "docs.google.com"
+          : doc.providerId === "lark"
+            ? "feishu.cn"
+            : ""
       return {
         label: doc.title || pageTabLabel(doc) || tDoc("title"),
         icon: brand ? (

@@ -88,6 +88,7 @@ describe("MODULE_BRIDGE_CAPABILITIES", () => {
     expect(MODULE_BRIDGE_CAPABILITY_KEYS).toEqual(
       expect.arrayContaining([
         "ai-provider",
+        "docs-provider",
         "media",
         "decision-provider",
         "workspace-backend",
@@ -131,7 +132,8 @@ describe("MODULE_BRIDGE_CAPABILITIES", () => {
     // the bridge gates on `decisions:provide` via ctx.hasPermission, and
     // `decision-providers-bridge.test.ts` covers the python describe seam,
     // the JS factory, per-entry error isolation and the re-enable clear.
-    expect(MODULE_BRIDGE_CAPABILITY_KEYS).toHaveLength(28)
+    // docs-provider adds public imperative implementations with manifest descriptors and teardown.
+    expect(MODULE_BRIDGE_CAPABILITY_KEYS).toHaveLength(29)
   })
 
   describe.each(MODULE_BRIDGE_CAPABILITY_KEYS)("%s", (key) => {

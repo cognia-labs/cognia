@@ -1,3 +1,4 @@
+import { validatePluginDocsProviderDef } from "../../../types/plugin/plugin-docs-providers"
 import { subset, valid, validRange } from "semver"
 import { validateLibrarySchema } from "../library/schema"
 import { validateSubscriptionProvider } from "../../../types/subscription/provider-definition"
@@ -2964,6 +2965,40 @@ export function validatePluginManifest(
     pushWarning,
     m.type
   )
+
+  if (m.docsProviders !== undefined) {
+    if (!Array.isArray(m.docsProviders))
+      pushError("docsProviders", "manifest.docsProviders.invalid", "docsProviders must be an array")
+    else {
+      const ids = new Set<string>()
+      const prefixes = new Set<string>()
+      m.docsProviders.forEach((def, index) => {
+        for (const error of validatePluginDocsProviderDef(def, String(m.id)))
+          pushError(`docsProviders[${index}]`, "manifest.docsProviders.invalid", error)
+        if (def && typeof def === "object") {
+          const value = def as Record<string, unknown>
+          if (typeof value.id === "string") {
+            if (ids.has(value.id))
+              pushError(
+                `docsProviders[${index}].id`,
+                "manifest.docsProviders.duplicate",
+                "Duplicate docs provider id"
+              )
+            ids.add(value.id)
+          }
+          if (typeof value.mentionPrefix === "string") {
+            if (prefixes.has(value.mentionPrefix))
+              pushError(
+                `docsProviders[${index}].mentionPrefix`,
+                "manifest.docsProviders.duplicate",
+                "Duplicate docs provider prefix"
+              )
+            prefixes.add(value.mentionPrefix)
+          }
+        }
+      })
+    }
+  }
 
   validateLazyFactoryArray(
     m.decisionProviders,

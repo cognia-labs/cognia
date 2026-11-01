@@ -24,6 +24,17 @@ beforeEach(() => {
   activatePluginRuntimeAccount("acct-permission-guard-test")
 })
 
+it("describes and gates the docs provider contribution permission", () => {
+  expect(PERMISSION_GROUPS.docsProviders).toEqual(["docs:provide"])
+  expect(PERMISSION_DESCRIPTIONS["docs:provide"]).toContain("Host connections")
+  const guard = createPermissionGuard()
+  expect(guard.check("docs-plugin", "docs:provide")).toBe(false)
+  guard.registerPlugin("docs-plugin", ["docs:provide"])
+  expect(guard.check("docs-plugin", "docs:provide")).toBe(true)
+  guard.revoke("docs-plugin", "docs:provide")
+  expect(guard.check("docs-plugin", "docs:provide")).toBe(false)
+})
+
 afterAll(() => {
   clearPluginRuntimeAccount()
 })

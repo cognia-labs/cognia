@@ -18,6 +18,11 @@ import {
   reverifyDockDocumentBindings,
 } from "./dock-documents"
 import { getDocsProvider } from "@/lib/docs-providers"
+import {
+  registerDocsProvider,
+  getDocsProvider as lookupDocsProvider,
+} from "@/lib/docs-providers/registry"
+import { updateDocumentMemory } from "./dock-documents"
 import { useDockDocumentsStore } from "@/stores/artifact/dock-documents-store"
 import { useChatStore } from "@/stores/chat"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
@@ -93,6 +98,85 @@ it("keeps a closing tab until beforeunload resolves and retains it on cancel", a
   expect(useDockDocumentsStore.getState().bySession.s1.documents).toHaveLength(0)
 })
 afterEach(() => subscribeDockDocumentLifecycle()())
+
+it("drops an old provider's account check without clearing its replacement's binding", async () => {
+  let finish!: (accounts: []) => void
+  const source = {
+    id: "plugin:race/docs",
+    mentionPrefix: "race.docs:",
+    kinds: ["doc" as const],
+    hosts: ["web" as const],
+    listAccounts: () =>
+      new Promise<[]>((resolve) => {
+        finish = resolve
+      }),
+    matchRef: () => null,
+    fetch: jest.fn(),
+  }
+  const dispose = registerDocsProvider(source)
+  jest.mocked(getDocsProvider).mockImplementation(lookupDocsProvider)
+  const id = openDockDocument({
+    sessionId: "s1",
+    target: { ...target, providerId: source.id, url: "" },
+    entry: "picker",
+  })!
+  updateDocumentMemory(id, { binding: { accountId: "ref", authorizationEpoch: "1" } })
+  const pending = reverifyDockDocumentBindings(source.id)
+  await Promise.resolve()
+  dispose()
+  const stopReplacement = registerDocsProvider({ ...source, listAccounts: async () => [] })
+  const binding = { accountId: "ref", authorizationEpoch: "2" }
+  updateDocumentMemory(id, { binding })
+  try {
+    await pending
+    expect(documentMemory(id).binding).toEqual(binding)
+  } finally {
+    stopReplacement()
+    finish([])
+  }
+})
+
+it.each(["replace", "dispose"])(
+  "invalidates provider authority and previews, but retains kept content on %s",
+  (change) => {
+    const source = {
+      id: "plugin:dock/docs",
+      mentionPrefix: "dock.docs:",
+      kinds: ["doc" as const],
+      hosts: ["web" as const],
+      listAccounts: async () => [],
+      matchRef: () => null,
+      fetch: jest.fn(),
+    }
+    let dispose = registerDocsProvider(source)
+    jest.mocked(getDocsProvider).mockImplementation(lookupDocsProvider)
+    const id = openDockDocument({
+      sessionId: "s1",
+      target: { ...target, providerId: source.id, url: "" },
+      entry: "staged-attachment",
+    })!
+    const kept = {
+      title: "Kept",
+      text: "saved",
+      format: "text" as const,
+      fetchedAt: 1,
+      origin: "staged" as const,
+      completeness: { status: "complete" as const },
+    }
+    updateDocumentMemory(id, {
+      binding: { accountId: "ref", authorizationEpoch: "1" },
+      seed: kept,
+      latest: { ...kept, origin: "fetched" },
+    })
+    dispose()
+    if (change === "replace") dispose = registerDocsProvider(source)
+    expect(documentMemory(id)).toMatchObject({ seed: kept })
+    expect(documentMemory(id).binding).toBeUndefined()
+    expect(documentMemory(id).latest).toBeUndefined()
+    expect(closeDocumentViewerPage).toHaveBeenCalledWith(id)
+    dispose()
+  }
+)
 it("deduplicates by session/provider/kind/id and preserves an unnamed view", () => {
   const first = openDockDocument({ sessionId: "s1", target, entry: "link" })!
   expect(openDockDocument({ sessionId: "s1", target, entry: "picker" })).toBe(first)

@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { loggers } from "@cognia/logging"
+import { useDocsProvidersRevision } from "./use-docs-providers"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import { docsProviderReach, type DocsProviderReach } from "@/lib/docs-providers/reach"
 import { bindRemoteDocRef } from "@/lib/docs-providers/account-binding"
@@ -82,10 +83,8 @@ export function useRemoteDocSearch({
   namespace,
   query,
 }: RemoteDocSearchInput): RemoteDocSearchState {
-  const provider = useMemo(
-    () => (namespace ? (getDocsProviderByPrefix(namespace) ?? null) : null),
-    [namespace]
-  )
+  useDocsProvidersRevision()
+  const provider = namespace ? (getDocsProviderByPrefix(namespace) ?? null) : null
   const hostProfile = useHostProfile()
   const reach = useMemo<DocsProviderReach>(
     () => (provider ? docsProviderReach(provider, hostProfile) : UNAVAILABLE_NO_PROVIDER),

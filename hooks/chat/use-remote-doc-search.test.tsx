@@ -1,3 +1,7 @@
+import {
+  registerDocsProvider,
+  getDocsProviderByPrefix as lookupDocsProviderByPrefix,
+} from "@/lib/docs-providers/registry"
 import { act, renderHook, waitFor } from "@testing-library/react"
 
 jest.mock("@/lib/docs-providers", () => ({
@@ -86,6 +90,53 @@ describe("useRemoteDocSearch — host gating", () => {
 })
 
 describe("useRemoteDocSearch — accounts", () => {
+  it("keeps the picker mounted when contributed recognition and account subscriptions throw", async () => {
+    const stop = jest.fn(() => {
+      throw new Error("Broken disposer")
+    })
+    const subscribe = jest.fn(() => {
+      throw new Error("Broken subscription")
+    })
+    const dispose = registerDocsProvider(
+      provider({
+        id: "plugin:broken/docs",
+        mentionPrefix: "broken.docs:",
+        matchRef: () => {
+          throw new Error("Broken matcher")
+        },
+        subscribeAccounts: subscribe,
+        search: undefined,
+      })
+    )
+    byPrefixMock.mockImplementation(lookupDocsProviderByPrefix)
+    const { result, unmount } = renderHook(() =>
+      useRemoteDocSearch({ namespace: "broken.docs:", query: "https://docs.example.test/report" })
+    )
+    try {
+      await waitFor(() => expect(result.current.accounts).toHaveLength(1))
+      expect(result.current.items).toEqual([])
+      expect(subscribe).toHaveBeenCalledTimes(1)
+      expect(() => unmount()).not.toThrow()
+    } finally {
+      dispose()
+    }
+    const disposeSecond = registerDocsProvider(
+      provider({
+        id: "plugin:broken/second",
+        mentionPrefix: "broken.second:",
+        subscribeAccounts: () => stop,
+      })
+    )
+    const second = renderHook(() => useRemoteDocSearch({ namespace: "broken.second:", query: "" }))
+    try {
+      await waitFor(() => expect(second.result.current.accounts).toHaveLength(1))
+      expect(() => second.unmount()).not.toThrow()
+      expect(stop).toHaveBeenCalledTimes(1)
+    } finally {
+      disposeSecond()
+    }
+  })
+
   it("offers direct links without dispatching keyword searches for an account lacking search permission", async () => {
     const p = provider({
       listAccounts: async () => [{ id: "cai_1", label: "Bot", searchable: false }],
@@ -431,3 +482,46 @@ it("aborts an in-flight search when its query changes or the hook unmounts", asy
   unmount()
   expect(signals[1]?.aborted).toBe(true)
 })
+
+it.each(["dispose", "replace"])(
+  "re-subscribes and drops an in-flight search on provider %s",
+  async (change) => {
+    let resolve!: (hits: RemoteDocRef[]) => void
+    let signal!: AbortSignal
+    const p = provider({
+      id: "plugin:acme/docs",
+      mentionPrefix: "acme.docs:",
+      search: jest.fn(async (_query, options) => {
+        signal = options.signal!
+        return new Promise<RemoteDocRef[]>((done) => {
+          resolve = done
+        })
+      }),
+    })
+    byPrefixMock.mockImplementation(lookupDocsProviderByPrefix)
+    let dispose = registerDocsProvider(p)
+    const { result, unmount } = renderHook(() =>
+      useRemoteDocSearch({ namespace: p.mentionPrefix, query: "spec" })
+    )
+    await act(async () => {})
+    await flushDebounce()
+    expect(signal.aborted).toBe(false)
+    act(() => {
+      dispose()
+      if (change === "replace")
+        dispose = registerDocsProvider({
+          ...p,
+          search: async () => [{ ...HIT, providerId: p.id, title: "Replacement" }],
+        })
+    })
+    expect(signal.aborted).toBe(true)
+    await act(async () => resolve([{ ...HIT, providerId: p.id, title: "Late" }]))
+    expect(result.current.items.some((item) => item.title === "Late")).toBe(false)
+    if (change === "replace") {
+      await flushDebounce()
+      expect(result.current.items[0]?.title).toBe("Replacement")
+    } else expect(result.current.provider).toBeNull()
+    unmount()
+    dispose()
+  }
+)

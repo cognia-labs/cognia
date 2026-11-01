@@ -34,3 +34,5 @@ export * from "./plugin-auth"
 export * from "./plugin-integration"
 export * from "./plugin-service"
 export * from "./plugin-cogset"
+
+export * from "./plugin-docs-providers"

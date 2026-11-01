@@ -20,6 +20,7 @@ jest.mock("@/components/ui/popover", () => ({
   PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ComposerAttachMenu } from "./attach-menu"
@@ -279,4 +280,29 @@ describe("ComposerAttachMenu — grouped menu", () => {
     await clickLabel("Plan mode")
     expect(useChatStore.getState().permissionMode).toBe("default")
   })
+})
+
+it("updates an open picker when plugin providers are registered and disabled", async () => {
+  render(
+    <TooltipProvider>
+      <ComposerAttachMenu onPickFiles={jest.fn()} onInsert={jest.fn()} />
+    </TooltipProvider>
+  )
+  let dispose!: () => void
+  act(() => {
+    dispose = registerDocsProvider({
+      id: "plugin:picker/docs",
+      label: "Acme Documents",
+      mentionPrefix: "picker.docs:",
+      kinds: ["doc"],
+      hosts: ["tauri", "web"],
+      listAccounts: async () => [],
+      matchRef: () => null,
+      fetch: jest.fn(),
+    })
+  })
+  await clickLabel("Cloud document")
+  expect(screen.getByRole("button", { name: "Acme Documents" })).toBeInTheDocument()
+  act(() => dispose())
+  expect(screen.queryByRole("button", { name: "Acme Documents" })).toBeNull()
 })

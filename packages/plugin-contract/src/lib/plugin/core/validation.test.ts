@@ -3641,6 +3641,46 @@ describe("Plugin Validation", () => {
       )
     })
 
+    it("validates public docs provider descriptors and duplicate namespaces", () => {
+      const descriptor = {
+        id: "docs",
+        label: "Acme Docs",
+        mentionPrefix: "test-plugin.docs:",
+        kinds: ["doc"],
+        urlOrigins: ["https://docs.example.test"],
+      }
+      const manifest = {
+        ...createValidManifest(),
+        capabilities: ["docs-provider"],
+        permissions: ["docs:provide"],
+        docsProviders: [descriptor],
+      }
+      expect(validatePluginManifest(manifest).valid).toBe(true)
+      expect(
+        validatePluginManifest({
+          ...manifest,
+          type: "python",
+          main: undefined,
+          pythonMain: "main.py",
+        }).valid
+      ).toBe(false)
+      for (const patch of [
+        { mentionPrefix: "lark:" },
+        { mentionPrefix: "google:" },
+        { mentionPrefix: "test-plugin.docs" },
+        { urlOrigins: ["http://docs.example.test"] },
+        { kinds: ["slides"] },
+      ]) {
+        expect(
+          validatePluginManifest({ ...manifest, docsProviders: [{ ...descriptor, ...patch }] })
+            .valid
+        ).toBe(false)
+      }
+      expect(
+        validatePluginManifest({ ...manifest, docsProviders: [descriptor, descriptor] }).valid
+      ).toBe(false)
+    })
+
     // -----------------------------------------------------------------------
     // ADR-0026 — lazy-factory manifest fields.
     //

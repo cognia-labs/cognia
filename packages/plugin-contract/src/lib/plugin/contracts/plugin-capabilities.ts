@@ -204,6 +204,28 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     requiredTests: ["lib/plugin/api/ai-provider-api.test.ts"],
   },
   {
+    id: "docs-provider",
+    support: "supported",
+    manifestFields: ["docsProviders"],
+    runtimeBinding: "ctx.docsProviders.register + Host docs registry; disposed on plugin disable",
+    hostBindings: [
+      "lib/plugin/api/docs-providers-api.ts",
+      "lib/plugin/bridge/docs-providers-bridge.ts",
+      "lib/plugin/core/context.ts",
+    ],
+    typescriptSdk: [
+      "packages/plugin-sdk/src/define/define-docs-provider.ts",
+      "packages/plugin-sdk/src/context/index.ts",
+    ],
+    // AbortSignal and pure callbacks require the Host frontend/hybrid realm.
+    pythonSdk: [],
+    docs: "docs/content/docs/plugin-dev/api-reference.generated.mdx",
+    requiredTests: [
+      "lib/plugin/api/docs-providers-api.test.ts",
+      "lib/plugin/bridge/docs-providers-bridge.test.ts",
+    ],
+  },
+  {
     id: "decision-provider",
     support: "supported",
     manifestFields: ["decisionProviders"],

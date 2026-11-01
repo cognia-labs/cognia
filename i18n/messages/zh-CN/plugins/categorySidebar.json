@@ -45,6 +45,7 @@
     "decision-provider": "决策提供方",
     "density-preset": "密度预设",
     "deployment-filter": "部署过滤器",
+    "docs-provider": "文档提供方",
     "editor": "编辑器",
     "exporters": "导出器",
     "external-agent-adapter": "外部智能体适配器",

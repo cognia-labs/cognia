@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, renderHook } from "@testing-library/react"
 
 import type { Character, Skill, Team } from "@cognia/agent-config-types"
@@ -60,6 +61,7 @@ jest.mock("@/lib/connectors/adapter-metadata", () => ({
 // Dexie table (the favorites view aggregates every kind, so it reads them all).
 const listDocsProvidersMock = jest.fn<unknown[], []>(() => [])
 jest.mock("@/lib/docs-providers/registry", () => ({
+  ...jest.requireActual("@/lib/docs-providers/registry"),
   listDocsProviders: () => listDocsProvidersMock(),
 }))
 const listExternalServicesMock = jest.fn<unknown[], []>(() => [])
@@ -1086,4 +1088,29 @@ describe("useDiscoverQuery — connection planes", () => {
       "integration",
     ])
   })
+})
+
+it("refreshes mounted Discover results for plugin provider registration and disposal", () => {
+  const source = {
+    id: "plugin:discover/docs",
+    label: "Acme Documents",
+    mentionPrefix: "discover.docs:",
+    kinds: ["doc" as const],
+    hosts: ["web" as const],
+    listAccounts: async () => [],
+    matchRef: () => null,
+    fetch: jest.fn(),
+  }
+  const { result } = renderHook(() => useDiscoverQuery("docsProviders", "Acme"))
+  let dispose!: () => void
+  act(() => {
+    listDocsProvidersMock.mockReturnValue([source])
+    dispose = registerDocsProvider(source)
+  })
+  expect(result.current.items.map((item) => item.id)).toEqual([source.id])
+  act(() => {
+    listDocsProvidersMock.mockReturnValue([])
+    dispose()
+  })
+  expect(result.current.items).toEqual([])
 })

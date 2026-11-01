@@ -60,6 +60,7 @@
     "ai:embed",
     "decisions:run",
     "decisions:provide",
+    "docs:provide",
     "export:session",
     "export:project",
     "theme:read",
@@ -195,6 +196,13 @@
       "id": "ai-provider",
       "support": "supported",
       "manifestFields": ["aiProviders"],
+      "introducedIn": "0.1.0",
+      "minimumHostVersion": "0.1.0"
+    },
+    {
+      "id": "docs-provider",
+      "support": "supported",
+      "manifestFields": ["docsProviders"],
       "introducedIn": "0.1.0",
       "minimumHostVersion": "0.1.0"
     },
@@ -1118,6 +1126,12 @@
       "execution": "javascript",
       "pythonExecution": "supported",
       "entryPath": "aiProviders[].entry"
+    },
+    {
+      "field": "docsProviders",
+      "capabilities": ["docs-provider"],
+      "execution": "javascript",
+      "pythonExecution": "unsupported"
     },
     {
       "field": "decisionProviders",
@@ -5362,6 +5376,38 @@
           "cancellable": false,
           "resourceEffect": {
             "kind": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "docsProviders",
+      "authorPath": "ctx.docsProviders",
+      "type": "PluginDocsProvidersAPI",
+      "stability": "stable",
+      "introducedIn": "0.1.0",
+      "runtimes": ["frontend", "hybrid"],
+      "platforms": ["desktop", "web", "mobile"],
+      "transport": "direct",
+      "factory": "context.docsProviders",
+      "enforcement": "shadow",
+      "dataClassification": "sensitive",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "docsProviders.register",
+          "name": "register",
+          "requiredPermissions": ["docs:provide"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "returned-handle",
+            "disposeMethod": "unregister"
           }
         }
       ]

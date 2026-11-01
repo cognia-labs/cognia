@@ -650,3 +650,24 @@ export type {
   PluginLibraryModuleInstance,
   PluginLibraryModuleFactory,
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
+
+export { defineDocsProvider } from "./define/define-docs-provider"
+export { DocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
+export type {
+  RemoteDocKind,
+  RemoteDocFormat,
+  RemoteDocRef,
+  RemoteDocContent,
+  RemoteDocCompleteness,
+  RemoteDocIncompleteReason,
+  DocsProviderAccountBinding,
+  DocsProviderAccount,
+  DocsProviderCallOptions,
+  DocsProviderSearchOptions,
+  DocsProviderErrorCode,
+  PluginDocsProviderAccount,
+  PluginDocsProvider,
+  PluginDocsProviderDef,
+  PluginDocsProvidersAPI,
+  PluginDocsProviderRegistration,
+} from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"

@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
@@ -215,20 +216,23 @@ describe("<ComposerPlusMenu />", () => {
     )
   })
 
-  it.each(["Camera", "Album"])("localizes %s failures without exposing native error details", async (action) => {
-    const mock = action === "Camera" ? pickPhotoMock : pickMultipleMock
-    mock.mockResolvedValue({ kind: "error", message: "Native camera recovery is unavailable" })
-    const onError = jest.fn()
-    const onAttach = jest.fn()
-    const user = userEvent.setup()
-    render(<ComposerPlusMenu onAttach={onAttach} onError={onError} />)
-    await user.click(screen.getByRole("button", { name: "Attachments" }))
-    await user.click(screen.getByRole("menuitem", { name: action }))
-    await waitFor(() =>
-      expect(onError).toHaveBeenCalledWith("error", "Could not load the photo. Please try again.")
-    )
-    expect(onAttach).not.toHaveBeenCalled()
-  })
+  it.each(["Camera", "Album"])(
+    "localizes %s failures without exposing native error details",
+    async (action) => {
+      const mock = action === "Camera" ? pickPhotoMock : pickMultipleMock
+      mock.mockResolvedValue({ kind: "error", message: "Native camera recovery is unavailable" })
+      const onError = jest.fn()
+      const onAttach = jest.fn()
+      const user = userEvent.setup()
+      render(<ComposerPlusMenu onAttach={onAttach} onError={onError} />)
+      await user.click(screen.getByRole("button", { name: "Attachments" }))
+      await user.click(screen.getByRole("menuitem", { name: action }))
+      await waitFor(() =>
+        expect(onError).toHaveBeenCalledWith("error", "Could not load the photo. Please try again.")
+      )
+      expect(onAttach).not.toHaveBeenCalled()
+    }
+  )
 
   it("forwards picked photos array via onAttach", async () => {
     pickMultipleMock.mockResolvedValue({
@@ -523,6 +527,32 @@ describe("<ComposerPlusMenu /> groups", () => {
     expect(onOpenExternalServices).toHaveBeenCalled()
     expect(screen.queryByTestId("composer-plus-menu")).not.toBeInTheDocument()
   })
+
+  it("updates an open mobile picker when a plugin provider arrives and disappears", async () => {
+    const user = await openMenu({ onInsert: jest.fn() })
+    const source = {
+      id: "plugin:mobile/docs",
+      label: "Acme Documents",
+      mentionPrefix: "mobile.docs:",
+      kinds: ["doc" as const],
+      hosts: ["tauri" as const],
+      listAccounts: async () => [],
+      matchRef: () => null,
+      fetch: jest.fn(),
+    }
+    let dispose!: () => void
+    act(() => {
+      docsProvidersMock.mockReturnValue([source])
+      dispose = registerDocsProvider(source)
+    })
+    await user.click(screen.getByTestId("composer-plus-cloud-docs"))
+    expect(screen.getByRole("menuitem", { name: "Acme Documents" })).toBeInTheDocument()
+    act(() => {
+      docsProvidersMock.mockReturnValue([])
+      dispose()
+    })
+    expect(screen.queryByRole("menuitem", { name: "Acme Documents" })).toBeNull()
+  })
 })
 
 /**
@@ -594,9 +624,7 @@ describe("<ComposerPlusMenu /> injected panels", () => {
     // The sheet's own open is the drawer's slide; the root adds none of its own.
     expect(screen.getByTestId("composer-plus-root").className).not.toContain("slide-in")
     await user.click(screen.getByTestId("panel-row"))
-    expect(screen.getByTestId("composer-plus-panel").className).toContain(
-      "slide-in-from-right-8"
-    )
+    expect(screen.getByTestId("composer-plus-panel").className).toContain("slide-in-from-right-8")
     await user.click(screen.getByTestId("composer-plus-back"))
     expect(screen.queryByTestId("composer-plus-panel")).not.toBeInTheDocument()
     expect(screen.getByTestId("composer-plus-root")).toBeVisible()

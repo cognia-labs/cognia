@@ -23,6 +23,7 @@
  * `DocsProviderNotice`.
  */
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useCallback, useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
@@ -40,6 +41,8 @@ import {
 import { openUrl } from "@/lib/native/opener"
 import { connectionsHref } from "@/lib/settings/deep-link"
 import { DocsProviderError, larkDocsProvider, googleDocsProvider } from "@/lib/docs-providers"
+import { listDocsProviders } from "@/lib/docs-providers/registry"
+import type { DocsProvider, DocsProviderAccount } from "@/lib/docs-providers/types"
 import {
   GOOGLE_DOCS_SCOPES,
   getGoogleDocsSettings,
@@ -53,6 +56,10 @@ import {
 } from "@/lib/docs-providers/providers/google/auth"
 
 export function DocsProvidersCard() {
+  useDocsProvidersRevision()
+  const providers = listDocsProviders().filter(
+    (provider) => provider.id !== "lark" && provider.id !== "google"
+  )
   const t = useTranslations("docsProviders")
 
   return (
@@ -67,6 +74,9 @@ export function DocsProvidersCard() {
       <CardContent className="space-y-6">
         <LarkDocsRow />
         <GoogleDocsRow />
+        {providers.map((provider) => (
+          <ContributedDocsRow key={provider.id} provider={provider} />
+        ))}
       </CardContent>
     </Card>
   )
@@ -348,6 +358,49 @@ function GoogleDocsRow() {
           </Button>
         </div>
       )}
+    </section>
+  )
+}
+
+function ContributedDocsRow({ provider }: { provider: DocsProvider }) {
+  const t = useTranslations("docsProviders")
+  const reach = useDocsProviderReach(provider)
+  const [accounts, setAccounts] = useState<DocsProviderAccount[]>([])
+  useEffect(() => {
+    let active = true
+    let revision = 0
+    const reload = () => {
+      const attempt = ++revision
+      void provider.listAccounts().then(
+        (next) => {
+          if (active && attempt === revision) setAccounts(next)
+        },
+        () => {
+          if (active && attempt === revision) setAccounts([])
+        }
+      )
+    }
+    const stop = provider.subscribeAccounts?.(reload)
+    reload()
+    return () => {
+      active = false
+      stop?.()
+    }
+  }, [provider])
+  return (
+    <section className="space-y-1.5" data-testid={`docs-provider-${provider.id}`}>
+      <ProviderHeading
+        name={provider.label ?? provider.id}
+        mentionPrefix={provider.mentionPrefix}
+        status={
+          accounts.length
+            ? accounts.map((account) => account.label).join(" · ")
+            : t("settings.notConnected")
+        }
+        statusTone={accounts.length ? "connected" : "idle"}
+        testId={`docs-provider-${provider.id}-status`}
+      />
+      <DocsProviderNotice reach={reach} />
     </section>
   )
 }

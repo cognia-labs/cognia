@@ -72,6 +72,14 @@ describe("Permission API", () => {
     clearPluginRuntimeAccount()
   })
 
+  it("maps the docs contribution permission and honors runtime revocation", () => {
+    initializePluginPermissions(testPluginId, ["docs:provide"])
+    const api = createPermissionAPI(testPluginId, ["docs:provide"])
+    expect(api.hasPermission("docs:provide")).toBe(true)
+    revokePermission(testPluginId, "docs:provide")
+    expect(api.hasPermission("docs:provide")).toBe(false)
+  })
+
   describe("createPermissionAPI", () => {
     it("should create an API object with all expected methods", () => {
       const api = createPermissionAPI(testPluginId, [])
@@ -524,6 +532,7 @@ describe("Permission API", () => {
       "events:subscribe",
       "commands:read",
       "commands:write",
+      "docs:provide",
     ] as const satisfies readonly PluginAPIPermission[]
 
     // Compile-time exhaustiveness: if a future PluginAPIPermission member is

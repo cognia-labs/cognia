@@ -14,11 +14,141 @@
  */
 
 import { detectPlatform } from "@/lib/platform/detect"
+import { loggers } from "@cognia/logging"
 import type { DocsProvider } from "./types"
 
 const providers = new Map<string, DocsProvider>()
+const listeners = new Set<() => void>()
+const requests = new Map<DocsProvider, Set<AbortController>>()
+const accountListeners = new Map<DocsProvider, Set<() => void>>()
+let revision = 0
 
-export function registerDocsProvider(provider: DocsProvider): void {
+export function getDocsProvidersRevision(): number {
+  return revision
+}
+
+export function subscribeDocsProviders(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function changed(): void {
+  revision += 1
+  for (const listener of [...listeners]) notify(listener)
+}
+
+function notify(listener: () => void): void {
+  try {
+    listener()
+  } catch (error) {
+    loggers.chat.warn("Document provider listener failed", { error })
+  }
+}
+
+function abortError(): Error {
+  return new DOMException("Document provider is no longer available", "AbortError")
+}
+
+/** Published functions belong to one registration, including functions retained by a consumer. */
+function managedProvider(source: DocsProvider): DocsProvider {
+  const provider: DocsProvider = { ...source }
+  const run = async <T>(
+    signal: AbortSignal | undefined,
+    read: (signal: AbortSignal) => Promise<T>
+  ): Promise<T> => {
+    const controller = new AbortController()
+    const untrack = trackDocsProviderRequest(provider, controller)
+    const abort = () => controller.abort()
+    signal?.addEventListener("abort", abort, { once: true })
+    if (signal?.aborted) abort()
+    try {
+      if (controller.signal.aborted) throw abortError()
+      return await new Promise<T>((resolve, reject) => {
+        const cancelled = () => reject(abortError())
+        controller.signal.addEventListener("abort", cancelled, { once: true })
+        void Promise.resolve()
+          .then(() => {
+            if (controller.signal.aborted) throw abortError()
+            return read(controller.signal)
+          })
+          .then((value) => {
+            if (controller.signal.aborted || providers.get(provider.id) !== provider)
+              reject(abortError())
+            else resolve(value)
+          }, reject)
+          .finally(() => controller.signal.removeEventListener("abort", cancelled))
+      })
+    } finally {
+      signal?.removeEventListener("abort", abort)
+      untrack()
+    }
+  }
+  provider.listAccounts = () => run(undefined, () => source.listAccounts())
+  provider.matchRef = (input) => {
+    if (providers.get(provider.id) !== provider) return null
+    try {
+      return source.matchRef(input)
+    } catch (error) {
+      loggers.chat.warn("Document provider recognition failed", { providerId: provider.id, error })
+      return null
+    }
+  }
+  provider.fetch = (ref, options) =>
+    run(options.signal, (signal) => source.fetch(ref, { ...options, signal }))
+  if (source.search)
+    provider.search = (query, options) =>
+      run(options.signal, (signal) => source.search!(query, { ...options, signal }))
+  if (source.subscribeAccounts)
+    provider.subscribeAccounts = (listener) => {
+      if (providers.get(provider.id) !== provider) return () => {}
+      let stopSource: () => void
+      try {
+        stopSource = source.subscribeAccounts!(() => {
+          if (providers.get(provider.id) === provider) notify(listener)
+        })
+      } catch (error) {
+        loggers.chat.warn("Document provider account subscription failed", {
+          providerId: provider.id,
+          error,
+        })
+        return () => {}
+      }
+      const active = accountListeners.get(provider) ?? new Set<() => void>()
+      let listening = true
+      const stop = () => {
+        if (!listening) return
+        listening = false
+        active.delete(stop)
+        notify(stopSource)
+      }
+      active.add(stop)
+      accountListeners.set(provider, active)
+      return stop
+    }
+  return provider
+}
+
+/** Fence requests even before React has rendered a registry notification. */
+export function trackDocsProviderRequest(
+  provider: DocsProvider,
+  controller: AbortController
+): () => void {
+  if (providers.get(provider.id) !== provider) {
+    controller.abort()
+    return () => {}
+  }
+  const active = requests.get(provider) ?? new Set<AbortController>()
+  active.add(controller)
+  requests.set(provider, active)
+  return () => {
+    active.delete(controller)
+    if (!active.size) requests.delete(provider)
+  }
+}
+
+export function registerDocsProvider(provider: DocsProvider): () => void {
   if (providers.has(provider.id)) {
     throw new Error(`docs provider "${provider.id}" already registered`)
   }
@@ -34,12 +164,25 @@ export function registerDocsProvider(provider: DocsProvider): void {
       )
     }
   }
-  providers.set(provider.id, provider)
+  const published = managedProvider(provider)
+  providers.set(provider.id, published)
+  changed()
+  return () => {
+    if (providers.get(provider.id) === published) unregisterDocsProvider(provider.id)
+  }
 }
 
 /** Remove one dynamically contributed provider. Built-ins are never removed in production. */
 export function unregisterDocsProvider(id: string): boolean {
-  return providers.delete(id)
+  const provider = providers.get(id)
+  if (!provider) return false
+  providers.delete(id)
+  for (const controller of requests.get(provider) ?? []) controller.abort()
+  requests.delete(provider)
+  for (const stop of [...(accountListeners.get(provider) ?? [])]) notify(stop)
+  accountListeners.delete(provider)
+  changed()
+  return true
 }
 
 export function getDocsProvider(id: string): DocsProvider | undefined {
@@ -88,5 +231,5 @@ export function getDocsProviderByPrefix(prefix: string): DocsProvider | undefine
  * built-ins; this bare clear is for suites that register only stubs.
  */
 export function __clearDocsProvidersForTests(): void {
-  providers.clear()
+  for (const id of [...providers.keys()]) unregisterDocsProvider(id)
 }

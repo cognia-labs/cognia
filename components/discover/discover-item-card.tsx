@@ -140,9 +140,9 @@ function useItemMeta(item: DiscoverItem): ItemMeta {
       // provider from the list entirely.
       const block = docsProviderReach(provider, hostProfile).block
       return {
-        name: tDocs(`name.${provider.id}` as "name.lark"),
+        name: provider.label ?? tDocs(`name.${provider.id}` as "name.lark"),
         description: provider.kinds.map((kind) => tDocs(`kind.${kind}` as "kind.doc")).join(" · "),
-        builtIn: true,
+        builtIn: ["lark", "google"].includes(provider.id),
         badge: block ? tDocs(`reach.short.${block}` as "reach.short.no-runtime") : undefined,
         avatar: { kind: "icon", Icon: CloudIcon },
       }

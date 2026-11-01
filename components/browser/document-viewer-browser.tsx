@@ -1,5 +1,6 @@
 "use client"
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useStore } from "zustand"
 import { useTranslations } from "next-intl"
@@ -41,6 +42,7 @@ import {
   signOutDocumentViewer,
   subscribeDocumentViewerFrames,
 } from "@/lib/browser/document-viewer-session"
+import { getDocsProvider } from "@/lib/docs-providers/registry"
 import { classifyCloudDocumentUrl } from "@/lib/docs-providers/document-url"
 import { LARK_HOST_SUFFIXES } from "@/lib/twin/ingest/lark-url"
 import { isTauri } from "@/lib/tauri"
@@ -84,7 +86,6 @@ function safeUrl(raw: string): URL | null {
     return url.protocol === "https:" &&
       !url.username &&
       !url.password &&
-      !url.port &&
       !/^https:\/\/[^/?#]*@/i.test(raw.trim())
       ? url
       : null
@@ -95,6 +96,9 @@ function safeUrl(raw: string): URL | null {
 export function isDocumentProviderHost(raw: string, providerId: string): boolean {
   const url = safeUrl(raw)
   if (!url) return false
+  if (providerId.startsWith("plugin:"))
+    return getDocsProvider(providerId)?.urlOrigins?.includes(url.origin) === true
+  if (url.port) return false
   if (providerId === "google") return url.hostname === "docs.google.com"
   return (
     providerId === "lark" &&
@@ -108,7 +112,7 @@ export function isDocumentLoginUrl(raw: string, providerId: string): boolean {
   const hosts = DOCUMENT_VIEWER_LOGIN_HOSTS[
     providerId as keyof typeof DOCUMENT_VIEWER_LOGIN_HOSTS
   ] as readonly string[] | undefined
-  return !!url && !!hosts?.includes(url.hostname)
+  return !!url && !url.port && !!hosts?.includes(url.hostname)
 }
 const BLOCKED_REASONS = new Set([
   "web",
@@ -127,6 +131,7 @@ export function DocumentViewerBrowser({
   providerId,
   onState,
 }: DocumentViewerBrowserProps) {
+  useDocsProvidersRevision()
   const t = useTranslations("cloudDocPreview")
   const runtime = useStore(documentViewerStore)
   const [failure, setFailure] = useState<string | null>(null)

@@ -5,6 +5,7 @@ import {
   useDockDocumentsStore,
   type DockDocumentTab,
 } from "./dock-documents-store"
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
 
 const tab = (id = "d1"): DockDocumentTab => ({
   id,
@@ -19,6 +20,47 @@ const tab = (id = "d1"): DockDocumentTab => ({
 beforeEach(() => {
   localStorage.clear()
   useDockDocumentsStore.setState({ bySession: {} })
+})
+
+it("restores a namespaced saved snapshot even while its plugin is unavailable, without trusting its URL", () => {
+  const providerId = "plugin:persist/docs"
+  const url = "https://docs.example.test/report"
+  const saved = {
+    bySession: {
+      s: {
+        documents: [
+          {
+            ...tab(),
+            providerId,
+            url,
+            snapshotRef: { kind: "asset", assetId: "saved" },
+            connectionRef: "private",
+            text: "private",
+          },
+        ],
+        activeDocumentTabId: "d1",
+        lastUsedAt: Date.now(),
+      },
+    },
+  }
+  const unavailable = persistedDockDocuments(saved).bySession.s.documents[0]
+  expect(unavailable).toMatchObject({ providerId, url: "", snapshotRef: { assetId: "saved" } })
+  expect(unavailable).not.toHaveProperty("connectionRef")
+  expect(unavailable).not.toHaveProperty("text")
+  const dispose = registerDocsProvider({
+    id: providerId,
+    mentionPrefix: "persist.docs:",
+    kinds: ["doc"],
+    hosts: ["web"],
+    urlOrigins: ["https://docs.example.test"],
+    listAccounts: async () => [],
+    matchRef: (address) => ({ kind: "doc", id: tab().resourceId, url: address }),
+    fetch: jest.fn(),
+  })
+  expect(persistedDockDocuments(saved).bySession.s.documents[0].url).toBe(url)
+  saved.bySession.s.documents[0].url = "javascript:alert(1)"
+  expect(persistedDockDocuments(saved).bySession.s.documents[0].url).toBe("")
+  dispose()
 })
 
 it("drops ephemeral tabs and all authority/body fields from durable descriptors", () => {

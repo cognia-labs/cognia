@@ -12,6 +12,9 @@ import {
   listAvailableDocsProviders,
   listDocsProviders,
   registerDocsProvider,
+  getDocsProvidersRevision,
+  subscribeDocsProviders,
+  trackDocsProviderRequest,
   unregisterDocsProvider,
 } from "./registry"
 import type { DocsProvider } from "./types"
@@ -46,12 +49,50 @@ describe("docs provider registry", () => {
   it("registers and resolves by id", () => {
     const provider = stubProvider()
     registerDocsProvider(provider)
-    expect(getDocsProvider("stub")).toBe(provider)
-    expect(listDocsProviders()).toEqual([provider])
+    expect(getDocsProvider("stub")).toMatchObject({
+      id: provider.id,
+      mentionPrefix: provider.mentionPrefix,
+    })
+    expect(listDocsProviders()).toEqual([getDocsProvider(provider.id)])
   })
 
   it("returns undefined for an unknown id", () => {
     expect(getDocsProvider("nope")).toBeUndefined()
+  })
+
+  it("publishes registration and disposal revisions, with an idempotent disposer", () => {
+    const before = getDocsProvidersRevision()
+    const changed = jest.fn()
+    const stop = subscribeDocsProviders(changed)
+    const dispose = registerDocsProvider(stubProvider())
+    expect(getDocsProvidersRevision()).toBe(before + 1)
+    expect(changed).toHaveBeenCalledTimes(1)
+    dispose()
+    expect(getDocsProvidersRevision()).toBe(before + 2)
+    expect(changed).toHaveBeenCalledTimes(2)
+    dispose()
+    expect(changed).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it("aborts reads synchronously on removal, and an old disposer cannot remove a replacement", () => {
+    const original = stubProvider()
+    const dispose = registerDocsProvider(original)
+    const controller = new AbortController()
+    const published = getDocsProvider(original.id)!
+    const untrack = trackDocsProviderRequest(published, controller)
+    unregisterDocsProvider(original.id)
+    expect(controller.signal.aborted).toBe(true)
+    const replacement = stubProvider()
+    registerDocsProvider(replacement)
+    const current = getDocsProvider(original.id)
+    dispose()
+    expect(getDocsProvider(original.id)).toBe(current)
+    expect(current).not.toBe(published)
+    const stale = new AbortController()
+    trackDocsProviderRequest(published, stale)
+    expect(stale.signal.aborted).toBe(true)
+    untrack()
   })
 
   it("unregisters a dynamically contributed provider", () => {
@@ -83,7 +124,7 @@ describe("docs provider registry", () => {
     const provider = stubProvider()
     registerDocsProvider(provider)
     expect(docsProviderPrefixes()).toEqual([{ prefix: "stub:", providerId: "stub" }])
-    expect(getDocsProviderByPrefix("stub:")).toBe(provider)
+    expect(getDocsProviderByPrefix("stub:")).toBe(getDocsProvider(provider.id))
     expect(getDocsProviderByPrefix("missing:")).toBeUndefined()
   })
 
@@ -91,7 +132,7 @@ describe("docs provider registry", () => {
     it("exposes a tauri-only provider on the desktop", () => {
       const provider = stubProvider()
       registerDocsProvider(provider)
-      expect(listAvailableDocsProviders()).toEqual([provider])
+      expect(listAvailableDocsProviders()).toEqual([getDocsProvider(provider.id)])
       expect(isDocsProviderHostSupported(provider)).toBe(true)
     })
 

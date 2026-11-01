@@ -47,6 +47,7 @@ export const CANONICAL_PLUGIN_PERMISSION_IDS = [
   "ai:embed",
   "decisions:run",
   "decisions:provide",
+  "docs:provide",
   "export:session",
   "export:project",
   "theme:read",
@@ -1009,6 +1010,10 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   },
   "ctx.db.transaction": {
     kind: "none",
+  },
+  "ctx.docsProviders.register": {
+    kind: "returned-handle",
+    disposeMethod: "unregister",
   },
   "ctx.decisions.decide": {
     kind: "none",

@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+import {
+  registerDocsProvider,
+  getDocsProvider as lookupDocsProvider,
+} from "@/lib/docs-providers/registry"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { useDocumentSnapshot } from "./use-document-snapshot"
 import { getDocsProvider } from "@/lib/docs-providers"
@@ -367,4 +371,77 @@ it("retries a failed picker read on a new explicit Preview without an automatic 
   act(() => bindDockDocument(tab.id, binding))
   await waitFor(() => expect(result.current.content?.text).toBe("fresh"))
   expect(provider.fetch).toHaveBeenCalledTimes(2)
+})
+
+it.each(["dispose", "replace"])(
+  "aborts a snapshot read and retains a kept copy on provider %s",
+  async (change) => {
+    let finish!: (value: RemoteDocContent) => void
+    let signal!: AbortSignal
+    provider.fetch = jest.fn(async (_ref, options) => {
+      signal = options.signal!
+      return new Promise<RemoteDocContent>((resolve) => {
+        finish = resolve
+      })
+    })
+    let dispose = registerDocsProvider(provider)
+    jest.mocked(getDocsProvider).mockImplementation(lookupDocsProvider)
+    updateDocumentMemory(tab.id, {
+      seed: {
+        title: "Kept",
+        text: "user copy",
+        format: "text",
+        fetchedAt: 1,
+        origin: "sent",
+        completeness: { status: "complete" },
+      },
+    })
+    const { result, unmount } = renderHook(() => useDocumentSnapshot("s", tab))
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.refresh(binding)
+    })
+    await waitFor(() => expect(signal).toBeDefined())
+    act(() => {
+      dispose()
+      if (change === "replace")
+        dispose = registerDocsProvider({ ...provider, fetch: async () => content("replacement") })
+    })
+    expect(signal.aborted).toBe(true)
+    await act(async () => {
+      await pending
+      finish(content("late"))
+    })
+    expect(result.current.content?.text).toBe("user copy")
+    expect(result.current.latest).toBeUndefined()
+    if (change === "dispose") expect(result.current.error).toBe("notConfigured")
+    unmount()
+    dispose()
+  }
+)
+
+it("finishes loading a kept asset even if the provider disappears during its read", async () => {
+  const dispose = registerDocsProvider(provider)
+  jest.mocked(getDocsProvider).mockImplementation(lookupDocsProvider)
+  const sentTab = { ...tab, snapshotRef: { kind: "asset" as const, assetId: "saved" } }
+  useDockDocumentsStore.getState().put("s", sentTab)
+  let finish!: (asset: unknown) => void
+  const pending = new Promise((resolve) => {
+    finish = resolve
+  })
+  jest.mocked(getSessionAsset).mockReturnValue(pending as ReturnType<typeof getSessionAsset>)
+  const { result } = renderHook(() => useDocumentSnapshot("s", sentTab))
+  await waitFor(() => expect(getSessionAsset).toHaveBeenCalled())
+  act(() => dispose())
+  await act(async () =>
+    finish({
+      filename: "Report.txt",
+      mediaType: "text/plain",
+      createdAt: 123,
+      revision: 1,
+      extractedContent: { status: "ready", segments: [{ text: "kept body" }] },
+    })
+  )
+  await waitFor(() => expect(result.current.content?.text).toBe("kept body"))
+  expect(result.current.error).toBe("notConfigured")
 })

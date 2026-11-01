@@ -1,6 +1,14 @@
 import { getContributionsForCapability, getAllContributions } from "./capability-contributions"
 
 describe("getContributionsForCapability", () => {
+  it("projects document provider manifest labels", () => {
+    expect(
+      getContributionsForCapability(
+        { docsProviders: [{ id: "docs", label: "Acme Documents" }] },
+        "docs-provider"
+      )
+    ).toEqual([{ id: "docs", label: "Acme Documents" }])
+  })
   it("returns tool entries with id + name", () => {
     const manifest = {
       tools: [{ id: "tool-a", name: "Tool A" }, { id: "tool-b" }],

@@ -16,6 +16,7 @@
  * semantic sense and ignores them elsewhere.
  */
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useMemo, useSyncExternalStore } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 
@@ -282,6 +283,7 @@ export function useDiscoverQuery(
   // Slash commands live in an in-memory registry (not Dexie). Subscribe to its
   // version counter so newly (un)registered plugin commands re-derive the list.
   // The value is unused directly — it is the change signal for the memo below.
+  const docsRevision = useDocsProvidersRevision()
   const slashVersion = useSyncExternalStore(
     subscribeSlashCommands,
     getSlashCommandsVersion,
@@ -392,6 +394,7 @@ export function useDiscoverQuery(
     // Not dead code: `listSlashCommands()` below reads a mutable registry, so
     // this version counter must participate in the memo to force
     // re-derivation when the registry bumps.
+    void docsRevision
     void slashVersion
     const build = (): DiscoverItem[] => {
       switch (category) {
@@ -474,6 +477,7 @@ export function useDiscoverQuery(
           const arr = listDocsProviders().filter(
             (provider) =>
               matchesQuery(provider.id, trimmed) ||
+              matchesQuery(provider.label ?? "", trimmed) ||
               matchesQuery(provider.mentionPrefix, trimmed) ||
               provider.kinds.some((kind) => matchesQuery(kind, trimmed))
           )
@@ -727,6 +731,7 @@ export function useDiscoverQuery(
     twinSourcesRaw,
     twinDraftsRaw,
     slashVersion,
+    docsRevision,
     serviceCatalogVersion,
     integrationVersion,
     mcpPresetRevision,

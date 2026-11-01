@@ -31,6 +31,10 @@
  * are present, so a future refactor that drops a bridge export fails loudly.
  */
 
+import {
+  registerDocsProvidersForPlugin,
+  unregisterDocsProvidersForPlugin,
+} from "@/lib/plugin/bridge/docs-providers-bridge"
 import type { PluginManifest } from "@/types/plugin/plugin"
 import type { PluginTool } from "@/types/plugin/plugin"
 import type { PluginAssetResolver } from "@/lib/plugin/core/plugin-asset-resolver"
@@ -179,6 +183,14 @@ export interface ModuleBridgeCapabilityDescriptor {
  * registration stays compatible with declarative contribution arrays.
  */
 export const MODULE_BRIDGE_CAPABILITIES = {
+  "docs-provider": {
+    key: "docs-provider",
+    manifestField: "docsProviders",
+    register: async (ctx) => {
+      registerDocsProvidersForPlugin(ctx.manifest)
+    },
+    unregister: unregisterDocsProvidersForPlugin,
+  },
   "link-matcher": {
     key: "link-matcher",
     manifestField: "linkMatchers",

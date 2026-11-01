@@ -1,5 +1,6 @@
 "use client"
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
@@ -9,11 +10,15 @@ import {
 import { LocalChromiumInstall } from "@/components/browser/browser-backend-switcher"
 import { Button } from "@/components/ui/button"
 import { useLocalBrowser } from "@/hooks/browser/use-local-browser"
+import { getDocsProvider } from "@/lib/docs-providers/registry"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import type { DockDocumentTab } from "@/stores/artifact/dock-documents-store"
 
 export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: DockDocumentTab }) {
+  useDocsProvidersRevision()
+  const providerAvailable =
+    !tab.providerId.startsWith("plugin:") || !!getDocsProvider(tab.providerId)
   const t = useTranslations("cloudDocPreview")
   const desktop = isTauri()
   const local = useLocalBrowser({ enabled: desktop })
@@ -26,19 +31,21 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
       setRuntime({ state, reason: detail?.reason }),
     []
   )
-  const reason = !tab.url
+  const reason = !providerAvailable
     ? "unknown-link"
-    : !desktop
-      ? "web"
-      : local.error
-        ? "browser-error"
-        : !local.status
-          ? undefined
-          : !local.status.installed
-            ? "chromium"
-            : runtime.reason
+    : !tab.url
+      ? "unknown-link"
+      : !desktop
+        ? "web"
+        : local.error
+          ? "browser-error"
+          : !local.status
+            ? undefined
+            : !local.status.installed
+              ? "chromium"
+              : runtime.reason
   const state =
-    !tab.url || !desktop || local.error || !local.status?.installed
+    !providerAvailable || !tab.url || !desktop || local.error || !local.status?.installed
       ? reason
         ? "blocked"
         : "preparing"
@@ -100,7 +107,7 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
           </div>
         </div>
       ) : null}
-      {desktop && tab.url && local.status?.installed && !local.error ? (
+      {providerAvailable && desktop && tab.url && local.status?.installed && !local.error ? (
         <DocumentViewerBrowser
           key={attempt}
           sessionId={sessionId}

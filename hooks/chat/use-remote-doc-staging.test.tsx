@@ -1,4 +1,8 @@
-import { act, renderHook } from "@testing-library/react"
+import {
+  registerDocsProvider,
+  getDocsProvider as lookupDocsProvider,
+} from "@/lib/docs-providers/registry"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import messages from "@/i18n/messages/en.json"
@@ -117,6 +121,46 @@ describe("remoteDocToFile", () => {
 })
 
 describe("useRemoteDocStaging", () => {
+  it.each(["setup", "cleanup"])(
+    "stages through the registry even when a plugin account subscription fails during %s",
+    async (failure) => {
+      const stop = jest.fn(() => {
+        throw new Error("Broken disposer")
+      })
+      const dispose = registerDocsProvider({
+        id: "plugin:staging/docs",
+        mentionPrefix: "staging.docs:",
+        kinds: ["doc"],
+        hosts: ["web"],
+        listAccounts: async () => [{ id: "a", label: "Alice", authorizationEpoch: "1" }],
+        subscribeAccounts: () => {
+          if (failure === "setup") throw new Error("Broken subscription")
+          return stop
+        },
+        matchRef: () => null,
+        fetch: async (ref) => content({ ref }),
+      })
+      getProviderMock.mockImplementation(lookupDocsProvider)
+      const { stage, acceptFiles } = renderStaging()
+      try {
+        const staged = await stage({
+          providerId: "plugin:staging/docs",
+          accountId: "a",
+          doc: {
+            ...REF,
+            providerId: "plugin:staging/docs",
+            accountBinding: { accountId: "a", authorizationEpoch: "1" },
+          },
+        })
+        expect(staged).toBeInstanceOf(File)
+        expect(acceptFiles).toHaveBeenCalledTimes(1)
+        if (failure === "cleanup") expect(stop).toHaveBeenCalledTimes(1)
+      } finally {
+        dispose()
+      }
+    }
+  )
+
   it("surfaces semantic partial content and rejects empty partial bodies", async () => {
     getProviderMock.mockReturnValue({
       fetch: async () =>
@@ -387,3 +431,45 @@ it("hands the fetched provenance to intake beside the same File's citation", asy
     /accountId|authorizationEpoch|accountBinding/
   )
 })
+
+it.each(["dispose", "replace"])(
+  "aborts staging on provider %s and never accepts a late body",
+  async (change) => {
+    let finish!: (value: RemoteDocContent) => void
+    let signal!: AbortSignal
+    const doc = { ...REF, providerId: "plugin:staging/docs" }
+    const source = {
+      id: doc.providerId,
+      mentionPrefix: "staging.docs:",
+      kinds: ["doc" as const],
+      hosts: ["tauri" as const],
+      listAccounts: async () => [],
+      matchRef: () => null,
+      fetch: jest.fn(async (_ref, options) => {
+        signal = options.signal
+        return new Promise<RemoteDocContent>((resolve) => {
+          finish = resolve
+        })
+      }),
+    }
+    getProviderMock.mockImplementation(lookupDocsProvider)
+    let dispose = registerDocsProvider(source)
+    const { stage, acceptFiles } = renderStaging()
+    let pending!: Promise<File | null>
+    act(() => {
+      pending = stage({ providerId: doc.providerId, accountId: "account", doc })
+    })
+    await waitFor(() => expect(signal).toBeDefined())
+    act(() => {
+      dispose()
+      if (change === "replace") dispose = registerDocsProvider(source)
+    })
+    expect(signal.aborted).toBe(true)
+    await act(async () => {
+      expect(await pending).toBeNull()
+      finish(content({ ref: doc }))
+    })
+    expect(acceptFiles).not.toHaveBeenCalled()
+    dispose()
+  }
+)

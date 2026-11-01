@@ -6,6 +6,8 @@ import {
   type CloudDocumentTarget,
 } from "@/lib/docs-providers/document-url"
 import { getDocsProvider } from "@/lib/docs-providers"
+import { subscribeDocsProviders } from "@/lib/docs-providers/registry"
+import { isPluginDocsProviderId, type DocsProvider } from "@/lib/docs-providers/types"
 import { accountMatchesBinding } from "@/lib/docs-providers/account-binding"
 import type { DocsProviderAccountBinding } from "@/lib/docs-providers/types"
 import {
@@ -69,6 +71,7 @@ export const useDockDocumentCache = create<{ byId: Record<string, DockDocumentMe
 let generation = 0
 const requests = new Map<string, Set<AbortController>>()
 const accountSubscriptions = new Map<string, () => void>()
+const watchedProviders = new Map<string, DocsProvider>()
 let stopLifecycle: (() => void) | undefined
 
 export function documentMemory(docTabId: string): DockDocumentMemory {
@@ -148,6 +151,7 @@ export async function reverifyDockDocumentBindings(providerId: string): Promise<
     )
   if (!bound.length) return
   const accounts = await provider.listAccounts().catch(() => [])
+  if (getDocsProvider(providerId) !== provider) return
   for (const tab of bound) {
     const binding = useDockDocumentCache.getState().byId[tab.id]?.binding
     if (!binding || accounts.some((account) => accountMatchesBinding(account, binding))) continue
@@ -156,9 +160,23 @@ export async function reverifyDockDocumentBindings(providerId: string): Promise<
 }
 
 function watchProvider(providerId: string): void {
-  if (accountSubscriptions.has(providerId)) return
   const provider = getDocsProvider(providerId)
+  const previous = watchedProviders.get(providerId)
+  if (previous === provider) return
+  accountSubscriptions.get(providerId)?.()
+  accountSubscriptions.delete(providerId)
+  watchedProviders.delete(providerId)
+  if (previous) {
+    for (const entry of Object.values(useDockDocumentsStore.getState().bySession)) {
+      for (const tab of entry.documents)
+        if (tab.providerId === providerId) {
+          dropDocumentIdentity(tab.id)
+          void closeDocumentViewerPage(tab.id).catch(() => undefined)
+        }
+    }
+  }
   if (!provider) return
+  watchedProviders.set(providerId, provider)
   const stop = provider.subscribeAccounts?.(() => void reverifyDockDocumentBindings(providerId))
   if (stop) accountSubscriptions.set(providerId, stop)
 }
@@ -177,6 +195,7 @@ export function subscribeDockDocumentLifecycle(): () => void {
     }
   }
   watch()
+  const stopProviders = subscribeDocsProviders(watch)
   const stopDocuments = useDockDocumentsStore.subscribe((state, previous) => {
     for (const [sessionId, entry] of Object.entries(previous.bySession)) {
       const next = state.bySession[sessionId]
@@ -213,11 +232,13 @@ export function subscribeDockDocumentLifecycle(): () => void {
     }
   })
   stopLifecycle = () => {
+    stopProviders()
     stopDocuments()
     stopChat()
     waiting.clear()
     for (const stop of accountSubscriptions.values()) stop()
     accountSubscriptions.clear()
+    watchedProviders.clear()
     for (const id of Object.keys(useDockDocumentCache.getState().byId)) invalidateDocument(id, true)
     stopLifecycle = undefined
   }
@@ -242,7 +263,12 @@ export function openDockDocument(req: DockDocumentOpenRequest): string | null {
   if (!req.sessionId || !Object.hasOwn(sessions, req.sessionId) || !sessions[req.sessionId])
     return null
   const { target } = req
-  if (!["lark", "google"].includes(target.providerId) || !target.resourceId) return null
+  if (
+    (!["lark", "google"].includes(target.providerId) &&
+      !isPluginDocsProviderId(target.providerId)) ||
+    !target.resourceId
+  )
+    return null
   const parsed = target.url ? classifyCloudDocumentUrl(target.url) : null
   const url =
     parsed?.providerId === target.providerId &&

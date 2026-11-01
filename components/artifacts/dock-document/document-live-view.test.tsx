@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
-import { render, screen } from "@testing-library/react"
+import { registerDocsProvider } from "@/lib/docs-providers/registry"
+import { act, render, screen } from "@testing-library/react"
 import { DocumentLiveView } from "./document-live-view"
 import { isTauri } from "@/lib/tauri"
 import { useLocalBrowser } from "@/hooks/browser/use-local-browser"
@@ -83,4 +84,24 @@ it("never invents a link for picker hits without an original URL", () => {
   render(<DocumentLiveView sessionId="s" tab={{ ...tab, url: "" }} />)
   expect(screen.getByText("live.reasons.unknown-link")).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "openSystem" })).toBeDisabled()
+})
+
+it("unmounts a plugin's open live viewer as soon as its provider is disposed", () => {
+  jest.mocked(isTauri).mockReturnValue(true)
+  const providerId = "plugin:live/docs"
+  const dispose = registerDocsProvider({
+    id: providerId,
+    label: "Acme",
+    mentionPrefix: "live.docs:",
+    kinds: ["doc"],
+    hosts: ["tauri"],
+    listAccounts: async () => [],
+    matchRef: () => null,
+    fetch: jest.fn(),
+  })
+  render(<DocumentLiveView sessionId="s" tab={{ ...tab, providerId }} />)
+  expect(screen.getByRole("application", { name: "document" })).toBeInTheDocument()
+  act(() => dispose())
+  expect(screen.queryByRole("application", { name: "document" })).toBeNull()
+  expect(screen.getByText("live.reasons.unknown-link")).toBeInTheDocument()
 })

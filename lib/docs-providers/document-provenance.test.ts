@@ -184,3 +184,15 @@ describe("remoteDocumentProvenance", () => {
     ).toBeNull()
   })
 })
+
+it("retains an unavailable namespaced reference without adding connection provenance", () => {
+  const parsed = parseRemoteDocumentProvenance({
+    ...valid,
+    providerId: "plugin:acme/docs",
+    url: "https://docs.example.test/report",
+    connectionRef: "private",
+    connectionRevision: 4,
+  })
+  expect(parsed).toEqual({ ...valid, providerId: "plugin:acme/docs", url: "" })
+  expect(parseRemoteDocumentProvenance({ ...valid, providerId: "plugin:acme/../docs" })).toBeNull()
+})

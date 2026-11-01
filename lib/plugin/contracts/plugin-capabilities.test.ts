@@ -140,7 +140,9 @@ describe("plugin capability contracts", () => {
     for (const contract of supportedContracts) {
       expect(contract.hostBindings.length).toBeGreaterThan(0)
       expect(contract.typescriptSdk.length).toBeGreaterThan(0)
-      expect(contract.pythonSdk.length).toBeGreaterThan(0)
+      // Match the production proof audit: JS-only capabilities cannot advertise Python executors.
+      if (capabilityPythonExecution(contract.id) !== "unsupported")
+        expect(contract.pythonSdk.length).toBeGreaterThan(0)
     }
   })
 
@@ -245,4 +247,12 @@ describe("plugin capability contracts", () => {
       ])
     )
   })
+})
+
+it("keeps document provider callbacks explicitly on frontend/hybrid runtimes", () => {
+  expect(getPluginCapabilityContract("docs-provider")).toMatchObject({
+    support: "supported",
+    pythonSdk: [],
+  })
+  expect(capabilityPythonExecution("docs-provider")).toBe("unsupported")
 })

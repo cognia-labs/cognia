@@ -506,6 +506,17 @@ describe("DiscoverItemCard — connection planes", () => {
 
   beforeEach(() => hostProfileMock.mockReturnValue("desktop"))
 
+  it("uses a plugin's manifest label", () => {
+    const item = {
+      ...docsItem,
+      id: "plugin:acme/docs",
+      data: { ...docsItem.data, id: "plugin:acme/docs", label: "Acme Documents" },
+    } as DiscoverItem
+    render(<DiscoverItemCard item={item} selected={false} onSelect={jest.fn()} />)
+    expect(screen.getByText("Acme Documents")).toBeInTheDocument()
+    expect(screen.queryByText("builtInBadge")).toBeNull()
+  })
+
   it("names a document source from its own i18n catalogue", () => {
     render(<DiscoverItemCard item={docsItem} selected={false} onSelect={jest.fn()} />)
     expect(screen.getByText("name.lark")).toBeInTheDocument()

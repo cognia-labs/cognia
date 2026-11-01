@@ -1,5 +1,6 @@
 "use client"
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useEffect, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { FilePartPreview } from "@/components/chat/message-parts/file-part-preview"
@@ -52,6 +53,7 @@ export function DocumentSnapshotView({
   sessionId: string
   tab: DockDocumentTab
 }) {
+  useDocsProvidersRevision()
   const t = useTranslations("cloudDocPreview")
   const format = useFormatter()
   const snapshot = useDocumentSnapshot(sessionId, tab)
@@ -62,7 +64,11 @@ export function DocumentSnapshotView({
     <div className="flex h-full min-h-0 flex-col">
       <header className="space-y-2 border-b p-4">
         <p className="text-xs text-muted-foreground">
-          {t(`providers.${tab.providerId}`)} · {t(`kinds.${tab.resourceKind}`)}
+          {snapshot.provider?.label ??
+            (["lark", "google"].includes(tab.providerId)
+              ? t(`providers.${tab.providerId}`)
+              : tab.providerId)}{" "}
+          · {t(`kinds.${tab.resourceKind}`)}
         </p>
         <h2 className="truncate font-medium">{content?.title || tab.title || t("title")}</h2>
         {content ? (

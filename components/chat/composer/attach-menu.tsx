@@ -33,6 +33,7 @@
 // filesystem path to reference and no screen to capture, so those branches drop
 // out.
 
+import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -154,6 +155,7 @@ export function ComposerAttachMenu({
   // submenu whose every entry opens a panel that can only explain that this
   // host cannot run it. Typing `@lark:` still reaches that explanation for
   // anyone who knows the syntax — the menu is for what you can do HERE.
+  useDocsProvidersRevision()
   const docsProviders = listAvailableDocsProviders()
   const entitySources = listEntityMentionSources()
   const chatServices = listExternalCapabilities({ surface: "chat" })
@@ -249,7 +251,7 @@ export function ComposerAttachMenu({
                   // one message, not a branch here. `lint:i18n` cannot check a
                   // template key, so `docs-providers.i18n.test.ts` pins the
                   // catalogue against the registry instead.
-                  label={tDocs(`name.${provider.id}` as "name.lark")}
+                  label={provider.label ?? tDocs(`name.${provider.id}` as "name.lark")}
                   onSelect={() => insertAndClose(`@${provider.mentionPrefix}`)}
                 />
               ))}

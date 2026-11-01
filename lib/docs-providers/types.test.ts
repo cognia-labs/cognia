@@ -1,4 +1,5 @@
 import { DocsProviderError, type RemoteDocRef } from "./types"
+import { DocsProviderError as PublicDocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
 
 it("retains a provider's source type when several document types share a picker kind", () => {
   const ref: RemoteDocRef = {
@@ -14,6 +15,12 @@ it("retains a provider's source type when several document types share a picker 
 })
 
 describe("DocsProviderError", () => {
+  it("recognizes errors created by public plugin providers at the Host boundary", () => {
+    const error = new PublicDocsProviderError("noPermission")
+    expect(error).toBeInstanceOf(DocsProviderError)
+    expect(error.code).toBe("noPermission")
+  })
+
   it("keeps the code addressable for the i18n lookup", () => {
     const err = new DocsProviderError("noPermission")
     expect(err.code).toBe("noPermission")

@@ -1,4 +1,5 @@
 import { classifyCloudDocumentUrl, cloudDocumentTargetFromRef } from "./document-url"
+import { registerDocsProvider } from "./registry"
 
 const id = "abcdefghijklmnop1234"
 
@@ -51,3 +52,63 @@ describe("cloud document URLs", () => {
     })
   })
 })
+
+it("recognizes a plugin only on exact declared HTTPS origins, including a declared port", () => {
+  const providerId = "plugin:url-test/docs"
+  const origin = "https://docs.example.test:8443"
+  const dispose = registerDocsProvider({
+    id: providerId,
+    mentionPrefix: "url-test.docs:",
+    kinds: ["doc"],
+    hosts: ["web"],
+    urlOrigins: [origin],
+    listAccounts: async () => [],
+    matchRef: (url) => ({ kind: "doc", id, url }),
+    fetch: jest.fn(),
+  })
+  const url = `${origin}/report`
+  expect(classifyCloudDocumentUrl(url)).toEqual({
+    providerId,
+    resourceKind: "doc",
+    resourceId: id,
+    url,
+  })
+  expect(
+    cloudDocumentTargetFromRef(providerId, { providerId, id, kind: "doc", title: "Report", url })
+      ?.url
+  ).toBe(url)
+  expect(
+    cloudDocumentTargetFromRef(providerId, { providerId, id, kind: "sheet", title: "Report", url })
+  ).toBeNull()
+  for (const address of [
+    "https://docs.example.test/report",
+    "https://docs.example.test:8444/report",
+    "https://docs.example.test.evil:8443/report",
+    "http://docs.example.test:8443/report",
+  ])
+    expect(classifyCloudDocumentUrl(address)).toBeNull()
+  dispose()
+  expect(classifyCloudDocumentUrl(url)).toBeNull()
+  expect(
+    cloudDocumentTargetFromRef(providerId, { providerId, id, kind: "doc", title: "Report", url })
+      ?.url
+  ).toBe("")
+})
+
+it.each(["invalid-url", "https://evil.example/report"])(
+  "discards a plugin's invalid canonical address: %s",
+  (canonical) => {
+    const dispose = registerDocsProvider({
+      id: "plugin:canonical/docs",
+      mentionPrefix: "canonical.docs:",
+      kinds: ["doc"],
+      hosts: ["web"],
+      urlOrigins: ["https://docs.example.test"],
+      listAccounts: async () => [],
+      matchRef: () => ({ kind: "doc", id, url: canonical }),
+      fetch: jest.fn(),
+    })
+    expect(classifyCloudDocumentUrl("https://docs.example.test/report")).toBeNull()
+    dispose()
+  }
+)
