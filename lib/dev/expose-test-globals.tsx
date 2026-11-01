@@ -24,6 +24,7 @@ import type { MobileOutboundCommand, MobileOutboundJobRow } from "@/lib/db/mobil
 import type { SeededWorkflowKind } from "./workflow-fixtures"
 import type { ChatPerfMediaOptions } from "./chat-perf-fixtures"
 import type { StagedConversation, StagedConversationScript } from "./demo-stage-seed"
+import type { ExecutionRun, RunEvent } from "@/types/execution/run"
 
 export type MockBaseUrls = {
   anthropic?: string
@@ -68,6 +69,10 @@ declare global {
     __cogniaReadSessions?: () => Promise<
       Array<Pick<ChatSession, "id" | "projectId" | "executionContext"> & { database: string }>
     >
+    /** Canonical execution journal through the active account/target's content cipher. */
+    __cogniaReadExecutionRuns?: (
+      sessionId?: string
+    ) => Promise<Array<ExecutionRun & { events: RunEvent[] }>>
     /** Account-scoped encrypted fixtures for operator recovery checks. */
     __cogniaE2EOutbound?: {
       seed(rows: OutboundJobRow[]): Promise<void>
@@ -543,6 +548,15 @@ export function ExposeTestGlobals(): null {
                 events: events as unknown as Array<Record<string, unknown>>,
               }
             })
+          )
+        }
+
+        window.__cogniaReadExecutionRuns = async (sessionId) => {
+          const { listExecutionRuns, listExecutionRunEvents } =
+            await import("@/lib/db/execution-runs")
+          const runs = await listExecutionRuns({ sessionId, limit: Number.MAX_SAFE_INTEGER })
+          return Promise.all(
+            runs.map(async (run) => ({ ...run, events: await listExecutionRunEvents(run.id) }))
           )
         }
 
@@ -1148,6 +1162,7 @@ export function ExposeTestGlobals(): null {
         delete window.__cogniaDeleteWorkflow
         delete window.__cogniaReadMessages
         delete window.__cogniaReadSessions
+        delete window.__cogniaReadExecutionRuns
         delete window.__cogniaE2EOutbound
         delete window.__cogniaSeedCharacter
         delete window.__cogniaSeedConversation

@@ -1,0 +1,813 @@
+{
+  "inventory": "lib-ui-imports",
+  "description": "Non-test lib files importing hooks or components, including type-only and dynamic dependencies. Repay by moving shared contracts and runtime logic below the UI layer.",
+  "generatedAt": {
+    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "date": "2026-11-01"
+  },
+  "metrics": {
+    "static": 55,
+    "all": 65,
+    "staticExcludingTypeOnly": 39
+  },
+  "members": [
+    {
+      "key": "lib/agents/builder/tool-deps.ts",
+      "owner": "lib/agents",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/skills/use-plugin-skills.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/ai/agent/team/squad/start-squad-run.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "hooks/chat/use-effective-cwd.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/ai/agent/team/teammate/teammate-preset-adapter.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/presets/preset-editor-state.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/appearance/background-applier.tsx",
+      "owner": "lib/appearance",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/appearance/use-daily-wallpaper.ts",
+        "hooks/appearance/use-wallpaper-legibility.ts",
+        "hooks/appearance/use-wallpaper-rotation.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/appearance/custom-theme-applier.tsx",
+      "owner": "lib/appearance",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/use-isomorphic-layout-effect.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/artifacts/dock-pages.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/context-workbench/use-context-workbench-instance-id.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/artifacts/export/index.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/artifacts/runtime-adapters.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/artifacts/export/pdf.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/artifacts/runtime-adapters.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/artifacts/export/raster.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/artifacts/runtime-adapters.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/artifacts/park-idle-dock.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/context-workbench/use-context-workbench-instance-id.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/automation/managed-desktop-client.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/companion/use-connection-state.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/best-of-n/entry.ts",
+      "owner": "lib/best-of-n",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/use-effective-cwd.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/canvas/document-export.ts",
+      "owner": "lib/canvas",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/artifacts/runtime-adapters.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/chat/dispatch-to-codex-app.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/use-effective-cwd.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/chat/mentions/pick-registry.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/chat/composer-popover.tsx"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/chat/room/production-deps.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/use-effective-cwd.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/chat/room/runner-deps.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/chat/room/runner.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/stream-coalescing.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/chat/room/store-sinks.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/chat/turn-route/snapshot.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/agent/use-agent-runtime-catalog.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/claude/ipc.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "hooks/chat/claude-chat-send-options.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/claude/subagent-tool-parts.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/chat/message-parts/tool-activity-group.tsx"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/db/a2ui-apps.ts",
+      "owner": "lib/db",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/a2ui/app-builder/types.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/dev/expose-test-globals.tsx",
+      "owner": "lib/dev",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/connectivity/pair/pair-api.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/device/device-identity.ts",
+      "owner": "lib/device",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/connectivity/pair/pair-helpers.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/file-viewer/builtins.ts",
+      "owner": "lib/file-viewer",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/file-viewer/html-viewer.tsx",
+        "components/file-viewer/json-viewer.tsx",
+        "components/file-viewer/markdown-viewer.tsx",
+        "components/file-viewer/monaco-viewer.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/git/lane-palette.ts",
+      "owner": "lib/git",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/logging/use-theme-colors.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/global-search/providers/settings.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/finder/control-registry.ts",
+        "components/settings/settings-nav-config.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/global-search/providers/squads.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/mobile/mobile-spot-icon.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/island/main-window-controls.ts",
+      "owner": "lib/island",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/chat-control-bridge.ts",
+        "hooks/chat/chat-send-bridge.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/issues/menu-model.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/issues/assignee-picker.tsx"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/notifications/functional-toast/card.tsx",
+      "owner": "lib/notifications",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/scheduler/kind-visuals.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/notifications/functional-toast/scheduled-due.tsx",
+      "owner": "lib/notifications",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/scheduler/kind-visuals.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/observability/chart-palette.ts",
+      "owner": "lib/observability",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/logging/use-theme-colors.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/onboarding/connect-provider.ts",
+      "owner": "lib/onboarding",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/provider/provider-readiness.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/api/artifact-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/artifacts/artifact-preview.tsx",
+        "components/artifacts/artifact-renderers.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/api/chat-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/chat/composer.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/bridge/context-panel-webview-rpc.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/plugins/plugin-context-panel-webview.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/bridge/context-panels-bridge.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/plugins/plugin-context-panel-webview.tsx",
+        "components/plugins/plugin-declarative-context-panel.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/core/context.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/plugins/dialogs/plugin-data-dialog.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/core/vscode-loader.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "components/plugins/vscode/vscode-window-presenter.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/plugin/package/github-marketplace.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/plugins/use-plugin-marketplace.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/project-coordinator/continue-as-project.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/chat-send-bridge.ts",
+        "hooks/chat/claude-chat-turn-tasks.ts",
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/project-coordinator/send-extras.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/project-coordinator/thread-runtime.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/chat-control-bridge.ts",
+        "hooks/chat/chat-send-bridge.ts",
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/project-coordinator/thread-watcher.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/claude-chat-turn-tasks.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/project-coordinator/tool-deps.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/chat/claude-chat-turn-tasks.ts",
+        "hooks/chat/steer-runtime.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/scheduler/sources/backup-source.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/providers/backup-scheduler-provider.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/settings/changed-settings.ts",
+      "owner": "lib/settings",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/settings-nav-config.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/settings/deep-link.ts",
+      "owner": "lib/settings",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/settings-nav-config.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/settings/section-keys.ts",
+      "owner": "lib/settings",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/settings-nav-config.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/sftp/client.ts",
+      "owner": "lib/sftp",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/editor/project/project-file-tree.tsx"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/share/discover-item.ts",
+      "owner": "lib/share",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/discover/use-discover-query.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/shell/bar-items.ts",
+      "owner": "lib/shell",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/use-platform.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/shell/mobile-home-nav.ts",
+      "owner": "lib/shell",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/mobile/mobile-spot-icon.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/shell/sidebar-nav.ts",
+      "owner": "lib/shell",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/use-platform.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/slash-commands/builtin.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/settings/settings-nav-config.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/sync/host-state-service.ts",
+      "owner": "lib/sync",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "hooks/chat/claude-chat-send-options.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/tray/title.ts",
+      "owner": "lib/tray",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/glance/use-glance-now.ts",
+        "hooks/usage/use-cost-budget-status.ts",
+        "hooks/usage/use-usage-glance.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/tray/usage.ts",
+      "owner": "lib/tray",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/usage/use-cost-budget-status.ts",
+        "hooks/usage/use-usage-glance.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/usage/compaction-metrics.ts",
+      "owner": "lib/usage",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/chat/message-parts/compact-boundary-part.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/workflow/editor/use-mentionable-workflow-elements.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/chat/composer-trigger.ts"
+      ],
+      "typeOnly": true
+    },
+    {
+      "key": "lib/workflow/nodes/artifacts/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/artifacts/runtime-adapters.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/workflow/runs/step-breakdown.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/workflow/runs/run-timeline.tsx"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/workflow/runtime/run-single-node.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "hooks/workflow/use-latest-run-outputs.ts"
+      ],
+      "typeOnly": false
+    }
+  ],
+  "excluded": []
+}

@@ -228,9 +228,15 @@ const REGISTRY = [
   // enforced by an advisory subagent until this gate; two subsystems shipped
   // desktop-only in the interim.
   { script: "audit:headless-registry", group: "audit" },
+  // ADR-0250: exact member inventories ratchet convergence debt across layers.
+  { script: "audit:convergence", group: "audit" },
   { script: "audit:e2e-governance", group: "audit" },
   { script: "audit:docs-links", group: "audit" },
   { script: "audit:adr-catalog", group: "audit" },
+  // ADR-0250 §11: every ratchet baseline is compared with the merge base and
+  // may grow only with an exception record (owner + repayment phase). Its
+  // tests run in scripts:test:gates.
+  { script: "audit:baseline-growth", group: "audit" },
   { script: "audit:colocated-tests", group: "audit" },
   { script: "test:db-fixture:audit", group: "audit" },
   { script: "audit:pro-ide-constants", group: "audit" },
@@ -276,6 +282,7 @@ const REGISTRY = [
   // is worse than no gate, so these are gates themselves.
   { script: "gates:registry", group: "gate-tests" },
   { script: "scripts:test:gates", group: "gate-tests" },
+  { script: "test:e2e:dual-host:harness", group: "gate-tests" },
   { script: "scripts:test:build", group: "gate-tests" },
   { script: "scripts:test:sync", group: "gate-tests" },
   { script: "scripts:test:i18n", group: "gate-tests" },
@@ -297,6 +304,8 @@ const REGISTRY = [
   { script: "agent:sdk:test", group: "gate-tests" },
   { script: "pet:compat:test", group: "gate-tests" },
   { script: "audit:workspace-attribution:test", group: "gate-tests" },
+  // Fixture counter coverage includes separate databases and native limiters.
+  { script: "audit:convergence:test", group: "gate-tests" },
   { script: "audit:router-fusion-gate:test", group: "gate-tests" },
   { script: "audit:llm-ledger-boundary:test", group: "gate-tests" },
   { script: "audit:vscode-api-coverage:test", group: "gate-tests" },

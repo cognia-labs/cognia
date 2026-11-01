@@ -1,0 +1,2455 @@
+{
+  "inventory": "runtime-initializers",
+  "description": "Imported lib symbols called from provider effects or their local callees, absent from brain calls and headless exclusions. Repay by wiring the effect into the headless registry or classifying it as an explained exclusion.",
+  "generatedAt": {
+    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "date": "2026-11-01"
+  },
+  "metrics": {
+    "members": 67,
+    "initializers": 38,
+    "pending": 0
+  },
+  "members": [
+    {
+      "key": "components/project-coordinator/project-coordinator-host.tsx#getProjectPrWatch@lib/project-coordinator/pr-watch.ts",
+      "initializer": "components/project-coordinator/project-coordinator-host.tsx",
+      "symbol": "getProjectPrWatch",
+      "module": "lib/project-coordinator/pr-watch.ts",
+      "owner": "components/project-coordinator/project-coordinator-host.tsx",
+      "note": "pending-b6: components/project-coordinator/project-coordinator-host.tsx:116 (lib/project-coordinator/pr-watch.ts) maintains per-thread PR watches and auto-fix wakeups; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "3c182f15d9f73de2"
+    },
+    {
+      "key": "components/project-coordinator/project-coordinator-host.tsx#resumeProjectThreads@lib/project-coordinator/thread-runtime.ts",
+      "initializer": "components/project-coordinator/project-coordinator-host.tsx",
+      "symbol": "resumeProjectThreads",
+      "module": "lib/project-coordinator/thread-runtime.ts",
+      "owner": "components/project-coordinator/project-coordinator-host.tsx",
+      "note": "pending-b6: components/project-coordinator/project-coordinator-host.tsx:91 (lib/project-coordinator/thread-runtime.ts) recovers interrupted project-thread delivery on mount; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "e260c21823e66fb4"
+    },
+    {
+      "key": "components/project-coordinator/project-coordinator-host.tsx#sweepIdleThreads@lib/project-coordinator/auto-resolve.ts",
+      "initializer": "components/project-coordinator/project-coordinator-host.tsx",
+      "symbol": "sweepIdleThreads",
+      "module": "lib/project-coordinator/auto-resolve.ts",
+      "owner": "components/project-coordinator/project-coordinator-host.tsx",
+      "note": "pending-b6: components/project-coordinator/project-coordinator-host.tsx:132 (lib/project-coordinator/auto-resolve.ts) settles inactive project threads from the periodic sweep; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "b76d689d8061d7ca"
+    },
+    {
+      "key": "components/project-coordinator/project-coordinator-host.tsx#watchProjectThreadTurns@lib/project-coordinator/thread-watcher.ts",
+      "initializer": "components/project-coordinator/project-coordinator-host.tsx",
+      "symbol": "watchProjectThreadTurns",
+      "module": "lib/project-coordinator/thread-watcher.ts",
+      "owner": "components/project-coordinator/project-coordinator-host.tsx",
+      "note": "pending-b6: components/project-coordinator/project-coordinator-host.tsx:83 (lib/project-coordinator/thread-watcher.ts) subscribes to thread completion and reports it to the coordinator; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "8602d25a6142de26"
+    },
+    {
+      "key": "components/providers/initializers/automation-audit-mirror-initializer.tsx#startAutomationAuditMirror@lib/automation/audit.ts",
+      "initializer": "components/providers/initializers/automation-audit-mirror-initializer.tsx",
+      "symbol": "startAutomationAuditMirror",
+      "module": "lib/automation/audit.ts",
+      "owner": "components/providers/initializers/automation-audit-mirror-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/automation-audit-mirror-initializer.tsx:6 (lib/automation/audit.ts) owns the Tauri automation audit event stream and renderer audit mirror; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "ac477f2e4a7a5d55"
+    },
+    {
+      "key": "components/providers/initializers/background-task-initializer.tsx#setRendererBackgroundSettleListener@lib/background-tasks/renderer-subagent-registry.ts",
+      "initializer": "components/providers/initializers/background-task-initializer.tsx",
+      "symbol": "setRendererBackgroundSettleListener",
+      "module": "lib/background-tasks/renderer-subagent-registry.ts",
+      "owner": "components/providers/initializers/background-task-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/background-task-initializer.tsx:30 (lib/background-tasks/renderer-subagent-registry.ts) owns the renderer subagent settle callback and reinjection lifecycle; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "9a6f0dde7bc1ee0e"
+    },
+    {
+      "key": "components/providers/initializers/best-of-n-recovery-initializer.tsx#recoverBestOfNRunsOnStartup@lib/best-of-n/restart-recovery.ts",
+      "initializer": "components/providers/initializers/best-of-n-recovery-initializer.tsx",
+      "symbol": "recoverBestOfNRunsOnStartup",
+      "module": "lib/best-of-n/restart-recovery.ts",
+      "owner": "components/providers/initializers/best-of-n-recovery-initializer.tsx",
+      "note": "components/providers/initializers/best-of-n-recovery-initializer.tsx:22 (lib/best-of-n/restart-recovery.ts) recovers persisted best-of-N groups after restart; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "235e0d613aaa7f11"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#createScreenCopilotController@lib/reply-copilot/screen/controller.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "createScreenCopilotController",
+      "module": "lib/reply-copilot/screen/controller.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/chat-copilot-initializer.tsx:47 (lib/reply-copilot/screen/controller.ts) owns desktop screen capture and the chat-copilot overlay controller; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "f62141641ed2bc5f"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#onChatCopilotIntent@lib/reply-copilot/screen/overlay-client.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "onChatCopilotIntent",
+      "module": "lib/reply-copilot/screen/overlay-client.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/chat-copilot-initializer.tsx:72 (lib/reply-copilot/screen/overlay-client.ts) owns Tauri chat-copilot overlay intent events; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "0ff48e8a44617c2e"
+    },
+    {
+      "key": "components/providers/initializers/chat-middleware-flag-initializer.tsx#setChatMiddlewareExecutionEnabled@lib/claude/chat-middleware/feature-flag.ts",
+      "initializer": "components/providers/initializers/chat-middleware-flag-initializer.tsx",
+      "symbol": "setChatMiddlewareExecutionEnabled",
+      "module": "lib/claude/chat-middleware/feature-flag.ts",
+      "owner": "components/providers/initializers/chat-middleware-flag-initializer.tsx",
+      "note": "components/providers/initializers/chat-middleware-flag-initializer.tsx:23 (lib/claude/chat-middleware/feature-flag.ts) publishes the execution middleware flag read by headless turn capture; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "c38fbdd3ccfd6f53"
+    },
+    {
+      "key": "components/providers/initializers/cli-sync-initializer.tsx#maybeAutoPushToCli@lib/cli-bridge/auto-push.ts",
+      "initializer": "components/providers/initializers/cli-sync-initializer.tsx",
+      "symbol": "maybeAutoPushToCli",
+      "module": "lib/cli-bridge/auto-push.ts",
+      "owner": "components/providers/initializers/cli-sync-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/cli-sync-initializer.tsx:26 (lib/cli-bridge/auto-push.ts) owns local CLI configuration files and desktop secret storage; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "699c4e8d80852401"
+    },
+    {
+      "key": "components/providers/initializers/cloud-identity-initializer.tsx#discardLegacyGlobalLogtoSession@lib/logto/session-store.ts",
+      "initializer": "components/providers/initializers/cloud-identity-initializer.tsx",
+      "symbol": "discardLegacyGlobalLogtoSession",
+      "module": "lib/logto/session-store.ts",
+      "owner": "components/providers/initializers/cloud-identity-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/cloud-identity-initializer.tsx:45 (lib/logto/session-store.ts) owns the renderer local-profile OS keyring session migration; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "401bd5b52d3eefc9"
+    },
+    {
+      "key": "components/providers/initializers/connector-host-writes-initializer.tsx#createHostAdapterInstanceWriter@lib/connectors/host-instance-writer.ts",
+      "initializer": "components/providers/initializers/connector-host-writes-initializer.tsx",
+      "symbol": "createHostAdapterInstanceWriter",
+      "module": "lib/connectors/host-instance-writer.ts",
+      "owner": "components/providers/initializers/connector-host-writes-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/connector-host-writes-initializer.tsx installs createHostAdapterInstanceWriter to relay a paired renderer's connector credential writes to its authoritative Host (lib/connectors/host-instance-writer.ts); this client transport binding still awaits B6's documented exclusion.",
+      "evidence": "35e75205ceb2b69e"
+    },
+    {
+      "key": "components/providers/initializers/connector-host-writes-initializer.tsx#setAdapterInstanceRemoteWriter@lib/db/adapter-instance-remote-writer.ts",
+      "initializer": "components/providers/initializers/connector-host-writes-initializer.tsx",
+      "symbol": "setAdapterInstanceRemoteWriter",
+      "module": "lib/db/adapter-instance-remote-writer.ts",
+      "owner": "components/providers/initializers/connector-host-writes-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/connector-host-writes-initializer.tsx installs setAdapterInstanceRemoteWriter to relay a paired renderer's connector credential writes to its authoritative Host (lib/connectors/host-instance-writer.ts); this client transport binding still awaits B6's documented exclusion.",
+      "evidence": "520696f54b1f7c08"
+    },
+    {
+      "key": "components/providers/initializers/deferred-boot-initializers-impl.tsx#ensurePlanStepRecovery@lib/agent/plan/step-recovery.ts",
+      "initializer": "components/providers/initializers/deferred-boot-initializers-impl.tsx",
+      "symbol": "ensurePlanStepRecovery",
+      "module": "lib/agent/plan/step-recovery.ts",
+      "owner": "components/providers/initializers/deferred-boot-initializers-impl.tsx",
+      "note": "pending-exclusion: components/providers/initializers/deferred-boot-initializers-impl.tsx:54 (lib/agent/plan/step-recovery.ts) owns renderer boot identities and cross-window Web Locks for in-session plan steps; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "947b33a848cbc31c"
+    },
+    {
+      "key": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx#primeLocalBrowserRouting@lib/browser/agent-engine.ts",
+      "initializer": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx",
+      "symbol": "primeLocalBrowserRouting",
+      "module": "lib/browser/agent-engine.ts",
+      "owner": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/dock-pages-lifecycle-initializer.tsx:34 invokes primeLocalBrowserRouting, which checks isTauri and warms the local Chromium installation routing snapshot at lib/browser/agent-engine.ts:695. This desktop capability read belongs to the renderer/browser host and awaits the B6 exclusion decision.",
+      "evidence": "fa9adb6ec200d5c8"
+    },
+    {
+      "key": "components/providers/initializers/fleet-history-sink-initializer.tsx#fleetMonitorRestore@lib/tauri/fleet.ts",
+      "initializer": "components/providers/initializers/fleet-history-sink-initializer.tsx",
+      "symbol": "fleetMonitorRestore",
+      "module": "lib/tauri/fleet.ts",
+      "owner": "components/providers/initializers/fleet-history-sink-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/fleet-history-sink-initializer.tsx:30 (lib/tauri/fleet.ts) owns native fleet-monitor window restoration and persisted desktop monitor state; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "b34b40c79dc7fd2d"
+    },
+    {
+      "key": "components/providers/initializers/fleet-history-sink-initializer.tsx#islandRestore@lib/tauri/fleet.ts",
+      "initializer": "components/providers/initializers/fleet-history-sink-initializer.tsx",
+      "symbol": "islandRestore",
+      "module": "lib/tauri/fleet.ts",
+      "owner": "components/providers/initializers/fleet-history-sink-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/fleet-history-sink-initializer.tsx:30 (lib/tauri/fleet.ts) owns the native island window and its persisted desktop presentation; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "c808ff96c7042354"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#onGlanceRequest@lib/tauri/glance.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "onGlanceRequest",
+      "module": "lib/tauri/glance.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/glance-publisher-initializer.tsx:362 (lib/tauri/glance.ts) owns native glance window request events; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "88b6d558f8032c1b"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#onGlanceSubscription@lib/tauri/glance.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "onGlanceSubscription",
+      "module": "lib/tauri/glance.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/glance-publisher-initializer.tsx:350 (lib/tauri/glance.ts) owns native glance window subscription leases; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "0ffff82b7232ebf7"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#sendGlanceSnapshot@lib/tauri/glance.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "sendGlanceSnapshot",
+      "module": "lib/tauri/glance.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/glance-publisher-initializer.tsx:289 (lib/tauri/glance.ts) owns the native glance snapshot publication timer and paired-client projection source; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "a9b62989a3f3b3f9"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#defaultFailureTriggerDeps@lib/harness/runtime/failure-trigger.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "defaultFailureTriggerDeps",
+      "module": "lib/harness/runtime/failure-trigger.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "note": "components/providers/initializers/harness-evolution-initializer.tsx invokes defaultFailureTriggerDeps from lib/harness/runtime/failure-trigger.ts after a failed turn; it builds or enqueues persisted replay work, and no registered harness-evolution runtime owns that failure feed in the brain.",
+      "evidence": "03061f88b9b1b106"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#enqueueRunForFailure@lib/harness/runtime/failure-trigger.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "enqueueRunForFailure",
+      "module": "lib/harness/runtime/failure-trigger.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "note": "components/providers/initializers/harness-evolution-initializer.tsx invokes enqueueRunForFailure from lib/harness/runtime/failure-trigger.ts after a failed turn; it builds or enqueues persisted replay work, and no registered harness-evolution runtime owns that failure feed in the brain.",
+      "evidence": "f9163b5f4521d4d0"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#installHarnessNotificationActions@lib/harness/runtime/run-control.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "installHarnessNotificationActions",
+      "module": "lib/harness/runtime/run-control.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "note": "components/providers/initializers/harness-evolution-initializer.tsx:118 (lib/harness/runtime/run-control.ts) registers harness approval actions which mutate evolution runs; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "683776236bbcab90"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#installLiveToolRules@lib/harness/runtime/live-rules.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "installLiveToolRules",
+      "module": "lib/harness/runtime/live-rules.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "note": "components/providers/initializers/harness-evolution-initializer.tsx:111 (lib/harness/runtime/live-rules.ts) subscribes live adopted harness tool rules into execution; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "ab929aea9e7ca913"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#recoverOrphanedHarnessRuns@lib/harness/runtime/run-control.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "recoverOrphanedHarnessRuns",
+      "module": "lib/harness/runtime/run-control.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "note": "components/providers/initializers/harness-evolution-initializer.tsx:119 (lib/harness/runtime/run-control.ts) settles evolution runs whose previous driver died; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "80bd2c5561f44bb3"
+    },
+    {
+      "key": "components/providers/initializers/im-notify-initializer.tsx#installImNotifyWatcher@stores/chat/im-notify-store.ts",
+      "initializer": "components/providers/initializers/im-notify-initializer.tsx",
+      "symbol": "installImNotifyWatcher",
+      "module": "stores/chat/im-notify-store.ts",
+      "owner": "components/providers/initializers/im-notify-initializer.tsx",
+      "note": "components/providers/initializers/im-notify-initializer.tsx:18 (stores/chat/im-notify-store.ts) watches armed conversation settle edges and enqueues IM notifications; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "fd6fa78ab6f9ec2d"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#onIslandActionIntent@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "onIslandActionIntent",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/island-initializer.tsx:287 (lib/island/client.ts) owns native island window action events; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "4968ce6351a31cdd"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#onIslandDetailRequest@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "onIslandDetailRequest",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/island-initializer.tsx:312 (lib/island/client.ts) owns native island window detail requests; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "21b77d74154a9cd0"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#onIslandStateRequest@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "onIslandStateRequest",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/island-initializer.tsx:275 (lib/island/client.ts) owns native island window state requests; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "b3b6a7a474f01df2"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#sendIslandState@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "sendIslandState",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/island-initializer.tsx:155 (lib/island/client.ts) owns native island window snapshot publication; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "83d2c0ac9a4ff353"
+    },
+    {
+      "key": "components/providers/initializers/local-character-pack-initializer.tsx#scanAndRegisterLocalPacks@lib/plugin/character-pack/local-pack-store.ts",
+      "initializer": "components/providers/initializers/local-character-pack-initializer.tsx",
+      "symbol": "scanAndRegisterLocalPacks",
+      "module": "lib/plugin/character-pack/local-pack-store.ts",
+      "owner": "components/providers/initializers/local-character-pack-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/local-character-pack-initializer.tsx:41 (lib/plugin/character-pack/local-pack-store.ts) owns local desktop character-pack directories and filesystem scans; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "23ae2fddccf45597"
+    },
+    {
+      "key": "components/providers/initializers/managed-desktop-alerts-initializer.tsx#startManagedDesktopAlerts@lib/automation/managed-desktop-alerts.ts",
+      "initializer": "components/providers/initializers/managed-desktop-alerts-initializer.tsx",
+      "symbol": "startManagedDesktopAlerts",
+      "module": "lib/automation/managed-desktop-alerts.ts",
+      "owner": "components/providers/initializers/managed-desktop-alerts-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/managed-desktop-alerts-initializer.tsx:27 (lib/automation/managed-desktop-alerts.ts) owns client-of-Host billing and cleanup alerts for the Host this renderer drives; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "4a5e8594f5ca242f"
+    },
+    {
+      "key": "components/providers/initializers/models-dev-catalog-initializer.tsx#initializeProviderCatalog@lib/ai/providers/models-dev-sync.ts",
+      "initializer": "components/providers/initializers/models-dev-catalog-initializer.tsx",
+      "symbol": "initializeProviderCatalog",
+      "module": "lib/ai/providers/models-dev-sync.ts",
+      "owner": "components/providers/initializers/models-dev-catalog-initializer.tsx",
+      "note": "components/providers/initializers/models-dev-catalog-initializer.tsx:18 (lib/ai/providers/models-dev-sync.ts) seeds and refreshes the persisted models.dev provider catalog; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "5c5eae72d5105be9"
+    },
+    {
+      "key": "components/providers/initializers/openrouter-catalog-initializer.tsx#refreshOpenRouterCatalogIfStale@lib/ai/providers/openrouter-catalog-sync.ts",
+      "initializer": "components/providers/initializers/openrouter-catalog-initializer.tsx",
+      "symbol": "refreshOpenRouterCatalogIfStale",
+      "module": "lib/ai/providers/openrouter-catalog-sync.ts",
+      "owner": "components/providers/initializers/openrouter-catalog-initializer.tsx",
+      "note": "components/providers/initializers/openrouter-catalog-initializer.tsx:19 (lib/ai/providers/openrouter-catalog-sync.ts) hydrates and refreshes the persisted OpenRouter model catalog; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "6324eb3c77f89239"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#seedBundledPluginsOnHost@lib/plugin/distribution/seed-bundled-plugins.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "seedBundledPluginsOnHost",
+      "module": "lib/plugin/distribution/seed-bundled-plugins.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/plugin-runtime-initializer.tsx:182 (lib/plugin/distribution/seed-bundled-plugins.ts) owns Tauri installer resource directories and plugin_install_from_directory; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "2a378e0e88c9ce70"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#setPluginSecurityPostureSource@lib/plugin/security/security-posture.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "setPluginSecurityPostureSource",
+      "module": "lib/plugin/security/security-posture.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "note": "components/providers/initializers/plugin-runtime-initializer.tsx:162 installs the live settings source for lib/plugin/security/security-posture.ts; the registered brain plugin-runtime never seeds that policy source and therefore silently uses balanced, so this remains migration debt.",
+      "evidence": "38e687554f4d8f80"
+    },
+    {
+      "key": "components/providers/initializers/provider-cost-mirror-initializer.tsx#rebuildProviderCostDaily@lib/usage/usage-ledger.ts",
+      "initializer": "components/providers/initializers/provider-cost-mirror-initializer.tsx",
+      "symbol": "rebuildProviderCostDaily",
+      "module": "lib/usage/usage-ledger.ts",
+      "owner": "components/providers/initializers/provider-cost-mirror-initializer.tsx",
+      "note": "components/providers/initializers/provider-cost-mirror-initializer.tsx:84 (lib/usage/usage-ledger.ts) rebuilds durable usage-cost projections after schema changes; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "0d642afd26f26c4b"
+    },
+    {
+      "key": "components/providers/initializers/provider-cost-mirror-initializer.tsx#setBudgetMirrorSink@lib/usage/usage-ledger.ts",
+      "initializer": "components/providers/initializers/provider-cost-mirror-initializer.tsx",
+      "symbol": "setBudgetMirrorSink",
+      "module": "lib/usage/usage-ledger.ts",
+      "owner": "components/providers/initializers/provider-cost-mirror-initializer.tsx",
+      "note": "components/providers/initializers/provider-cost-mirror-initializer.tsx:71 (lib/usage/usage-ledger.ts) subscribes committed usage totals into the routing budget mirror; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "589ca90f949d68ba"
+    },
+    {
+      "key": "components/providers/initializers/provider-oauth-refresh-initializer.tsx#refreshExpiringOAuthCredentials@lib/ai/providers/oauth-credential-refresh.ts",
+      "initializer": "components/providers/initializers/provider-oauth-refresh-initializer.tsx",
+      "symbol": "refreshExpiringOAuthCredentials",
+      "module": "lib/ai/providers/oauth-credential-refresh.ts",
+      "owner": "components/providers/initializers/provider-oauth-refresh-initializer.tsx",
+      "note": "components/providers/initializers/provider-oauth-refresh-initializer.tsx:46 (lib/ai/providers/oauth-credential-refresh.ts) runs the recurring provider OAuth renewal sweep; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "eb239bbe4232d421"
+    },
+    {
+      "key": "components/providers/initializers/remote-host-keys-initializer.tsx#followRemoteHostKeys@lib/host-secrets/remote-host-keys-follower.ts",
+      "initializer": "components/providers/initializers/remote-host-keys-initializer.tsx",
+      "symbol": "followRemoteHostKeys",
+      "module": "lib/host-secrets/remote-host-keys-follower.ts",
+      "owner": "components/providers/initializers/remote-host-keys-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/remote-host-keys-initializer.tsx:20 (lib/host-secrets/remote-host-keys-follower.ts) owns client-of-Host sealed provider-key availability subscriptions; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "78ca6b6be1e16491"
+    },
+    {
+      "key": "components/providers/initializers/remote-host-liveness-initializer.tsx#startHostLivenessLoop@lib/remote-host/liveness.ts",
+      "initializer": "components/providers/initializers/remote-host-liveness-initializer.tsx",
+      "symbol": "startHostLivenessLoop",
+      "module": "lib/remote-host/liveness.ts",
+      "owner": "components/providers/initializers/remote-host-liveness-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/remote-host-liveness-initializer.tsx:33 (lib/remote-host/liveness.ts) owns client-side probes of paired remote Hosts rather than the brain server itself; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "96470abe614b78be"
+    },
+    {
+      "key": "components/providers/initializers/routing-runtime-initializer.tsx#installDesktopCertificationRuntime@lib/ai/agent/execution/certification-store.ts",
+      "initializer": "components/providers/initializers/routing-runtime-initializer.tsx",
+      "symbol": "installDesktopCertificationRuntime",
+      "module": "lib/ai/agent/execution/certification-store.ts",
+      "owner": "components/providers/initializers/routing-runtime-initializer.tsx",
+      "note": "components/providers/initializers/routing-runtime-initializer.tsx:47 (lib/ai/agent/execution/certification-store.ts) installs signed execution certification policy through its injectable filesystem port; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "552a569cc59bd1d5"
+    },
+    {
+      "key": "components/providers/initializers/routing-runtime-initializer.tsx#rebuildCompatibilityProjection@lib/db/agent-compatibility.ts",
+      "initializer": "components/providers/initializers/routing-runtime-initializer.tsx",
+      "symbol": "rebuildCompatibilityProjection",
+      "module": "lib/db/agent-compatibility.ts",
+      "owner": "components/providers/initializers/routing-runtime-initializer.tsx",
+      "note": "components/providers/initializers/routing-runtime-initializer.tsx:50 (lib/db/agent-compatibility.ts) rebuilds persisted compatibility projections from signed certification bundles; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "b73b651882d20359"
+    },
+    {
+      "key": "components/providers/initializers/session-import-watch-initializer.tsx#retargetSessionImportWatch@lib/session-import/watch-controller.ts",
+      "initializer": "components/providers/initializers/session-import-watch-initializer.tsx",
+      "symbol": "retargetSessionImportWatch",
+      "module": "lib/session-import/watch-controller.ts",
+      "owner": "components/providers/initializers/session-import-watch-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/session-import-watch-initializer.tsx:48 (lib/session-import/watch-controller.ts) owns Tauri filesystem watcher over desktop external-agent histories; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "5dc32422d14db0ad"
+    },
+    {
+      "key": "components/providers/initializers/session-import-watch-initializer.tsx#stopSessionImportWatch@lib/session-import/watch-controller.ts",
+      "initializer": "components/providers/initializers/session-import-watch-initializer.tsx",
+      "symbol": "stopSessionImportWatch",
+      "module": "lib/session-import/watch-controller.ts",
+      "owner": "components/providers/initializers/session-import-watch-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/session-import-watch-initializer.tsx:41 (lib/session-import/watch-controller.ts) owns Tauri filesystem watcher teardown over desktop external-agent histories; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "39210f89ee64101e"
+    },
+    {
+      "key": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx#connectSharedSessionStream@lib/collab/shared-chat-sync.ts",
+      "initializer": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "symbol": "connectSharedSessionStream",
+      "module": "lib/collab/shared-chat-sync.ts",
+      "owner": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/shared-chat-lifecycle-initializer.tsx:185 (lib/collab/shared-chat-sync.ts) owns document visibility and renderer-open shared-conversation message streams; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "ca5ebcb10b4fd9fb"
+    },
+    {
+      "key": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx#listAndCacheSharedSessions@lib/collab/shared-chat-sync.ts",
+      "initializer": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "symbol": "listAndCacheSharedSessions",
+      "module": "lib/collab/shared-chat-sync.ts",
+      "owner": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/shared-chat-lifecycle-initializer.tsx:88 (lib/collab/shared-chat-sync.ts) owns the client account/workspace shared-session discovery poller; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "d16b149a38320068"
+    },
+    {
+      "key": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx#recoverSharedSessionRun@lib/collab/shared-run-coordinator.ts",
+      "initializer": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "symbol": "recoverSharedSessionRun",
+      "module": "lib/collab/shared-run-coordinator.ts",
+      "owner": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/shared-chat-lifecycle-initializer.tsx:192 (lib/collab/shared-run-coordinator.ts) owns renderer-open shared-conversation recovery keyed to the client chat store; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "fe44a1f550f4cf8e"
+    },
+    {
+      "key": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx#suspendSharedSessionRuns@lib/collab/shared-run-coordinator.ts",
+      "initializer": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "symbol": "suspendSharedSessionRuns",
+      "module": "lib/collab/shared-run-coordinator.ts",
+      "owner": "components/providers/initializers/shared-chat-lifecycle-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/shared-chat-lifecycle-initializer.tsx:55 (lib/collab/shared-run-coordinator.ts) owns teardown of client-open shared-conversation execution scopes; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "f8b3d7f5b91405c8"
+    },
+    {
+      "key": "components/providers/initializers/subscription-initializer.tsx#deferUntilSecretStoreReady@lib/credentials/secret-store-readiness.ts",
+      "initializer": "components/providers/initializers/subscription-initializer.tsx",
+      "symbol": "deferUntilSecretStoreReady",
+      "module": "lib/credentials/secret-store-readiness.ts",
+      "owner": "components/providers/initializers/subscription-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/subscription-initializer.tsx:45 (lib/credentials/secret-store-readiness.ts) owns the interactive desktop subscription vault unlock lifecycle; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "13450cefeac0617c"
+    },
+    {
+      "key": "components/providers/initializers/subscription-initializer.tsx#subscriptionInitOnce@lib/subscription/core/migration.ts",
+      "initializer": "components/providers/initializers/subscription-initializer.tsx",
+      "symbol": "subscriptionInitOnce",
+      "module": "lib/subscription/core/migration.ts",
+      "owner": "components/providers/initializers/subscription-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/subscription-initializer.tsx:39 (lib/subscription/core/migration.ts) owns the desktop subscription_init keyring migration and local profile state; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "5f6567f4f36fca77"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#migrateLegacyTemplates@lib/templates/migration.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "migrateLegacyTemplates",
+      "module": "lib/templates/migration.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "note": "components/providers/initializers/template-platform-initializer.tsx:24 (lib/templates/migration.ts) migrates persisted legacy template definitions at account boot; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "55772374454fa2c4"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#refreshBuiltInTemplateOverlays@lib/templates/builtin-overlays.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "refreshBuiltInTemplateOverlays",
+      "module": "lib/templates/builtin-overlays.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "note": "components/providers/initializers/template-platform-initializer.tsx:39 (lib/templates/builtin-overlays.ts) reconciles persisted built-in template overlays after migration; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "97022886aeef91d4"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#refreshCatalogOnlyTemplateAdapters@lib/templates/catalog-only-adapters.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "refreshCatalogOnlyTemplateAdapters",
+      "module": "lib/templates/catalog-only-adapters.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "note": "components/providers/initializers/template-platform-initializer.tsx:40 (lib/templates/catalog-only-adapters.ts) hydrates runtime template adapters beyond the registered trust/catalog pass; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "65afbebdb0085d8a"
+    },
+    {
+      "key": "components/providers/initializers/terminal-boot-initializer.tsx#rehydrateTerminals@lib/terminal/rehydrate.ts",
+      "initializer": "components/providers/initializers/terminal-boot-initializer.tsx",
+      "symbol": "rehydrateTerminals",
+      "module": "lib/terminal/rehydrate.ts",
+      "owner": "components/providers/initializers/terminal-boot-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/terminal-boot-initializer.tsx:63 (lib/terminal/rehydrate.ts) owns native Tauri terminal process/session restoration; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "03ecbbea52ec03c8"
+    },
+    {
+      "key": "components/providers/initializers/tray-panel-initializer.tsx#onTrayPanelRequest@lib/tauri/tray-panel.ts",
+      "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
+      "symbol": "onTrayPanelRequest",
+      "module": "lib/tauri/tray-panel.ts",
+      "owner": "components/providers/initializers/tray-panel-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/tray-panel-initializer.tsx:171 (lib/tauri/tray-panel.ts) owns native system tray panel request events; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "d45d63706489814e"
+    },
+    {
+      "key": "components/providers/initializers/update-center-initializer.tsx#getAppUpdateInfo@lib/capacitor/app-update.ts",
+      "initializer": "components/providers/initializers/update-center-initializer.tsx",
+      "symbol": "getAppUpdateInfo",
+      "module": "lib/capacitor/app-update.ts",
+      "owner": "components/providers/initializers/update-center-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/update-center-initializer.tsx:74 (lib/capacitor/app-update.ts) reads Android Play Store/Google Play Services state through Capacitor; the native mobile-only symbol awaits its documented B6 exclusion.",
+      "evidence": "56a367cb01909709"
+    },
+    {
+      "key": "components/providers/initializers/update-center-initializer.tsx#getGooglePlayServicesStatus@lib/capacitor/google-play-services.ts",
+      "initializer": "components/providers/initializers/update-center-initializer.tsx",
+      "symbol": "getGooglePlayServicesStatus",
+      "module": "lib/capacitor/google-play-services.ts",
+      "owner": "components/providers/initializers/update-center-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/update-center-initializer.tsx:73 (lib/capacitor/google-play-services.ts) reads Android Play Store/Google Play Services state through Capacitor; the native mobile-only symbol awaits its documented B6 exclusion.",
+      "evidence": "5e944ec01ad8c894"
+    },
+    {
+      "key": "components/providers/initializers/update-center-initializer.tsx#getUpdateCoordinator@lib/updates/runtime.ts",
+      "initializer": "components/providers/initializers/update-center-initializer.tsx",
+      "symbol": "getUpdateCoordinator",
+      "module": "lib/updates/runtime.ts",
+      "owner": "components/providers/initializers/update-center-initializer.tsx",
+      "note": "components/providers/initializers/update-center-initializer.tsx:82 (lib/updates/runtime.ts) owns the general update restore/check interval; only the Android half has a documented exclusion; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "d3ea4df176cfc514"
+    },
+    {
+      "key": "components/providers/initializers/usage-dock-initializer.tsx#onUsageDockOpenFull@lib/usage-dock/client.ts",
+      "initializer": "components/providers/initializers/usage-dock-initializer.tsx",
+      "symbol": "onUsageDockOpenFull",
+      "module": "lib/usage-dock/client.ts",
+      "owner": "components/providers/initializers/usage-dock-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/usage-dock-initializer.tsx:112 (lib/usage-dock/client.ts) owns native usage-dock window events; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "eaea7b064e53463e"
+    },
+    {
+      "key": "components/providers/initializers/usage-dock-initializer.tsx#onUsageDockStateRequest@lib/usage-dock/client.ts",
+      "initializer": "components/providers/initializers/usage-dock-initializer.tsx",
+      "symbol": "onUsageDockStateRequest",
+      "module": "lib/usage-dock/client.ts",
+      "owner": "components/providers/initializers/usage-dock-initializer.tsx",
+      "note": "pending-exclusion: components/providers/initializers/usage-dock-initializer.tsx:104 (lib/usage-dock/client.ts) owns native usage-dock window snapshot requests; this client/desktop effect cannot run as a brain registry entry and awaits a per-symbol exclusion from the B6 owner.",
+      "evidence": "01a2eb7979c691a3"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#dispatchDesktopDeeplink@lib/navigation/desktop-deeplink-dispatch.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "dispatchDesktopDeeplink",
+      "module": "lib/navigation/desktop-deeplink-dispatch.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "note": "pending-exclusion: components/providers/tauri-provider.tsx:166 dispatches OS launch URLs through lib/navigation/desktop-deeplink-dispatch.ts, including promoted scheduler wakes and native workspace navigation; the browserless brain cannot own this desktop launch capability.",
+      "evidence": "c23d1da9d61fdc9c"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#installNotificationBridges@lib/notifications/install.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "installNotificationBridges",
+      "module": "lib/notifications/install.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "note": "pending-b6: components/providers/tauri-provider.tsx:49 (lib/notifications/install.ts) subscribes plugin and connector events into the Notification Center without native dependencies; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "7ca5b59809bcdf17"
+    },
+    {
+      "key": "components/providers/workflow-runtime-provider.tsx#installApprovalNotificationActions@lib/workflow/runtime/approval-notify.ts",
+      "initializer": "components/providers/workflow-runtime-provider.tsx",
+      "symbol": "installApprovalNotificationActions",
+      "module": "lib/workflow/runtime/approval-notify.ts",
+      "owner": "components/providers/workflow-runtime-provider.tsx",
+      "note": "pending-b6: components/providers/workflow-runtime-provider.tsx:199 (lib/workflow/runtime/approval-notify.ts) registers workflow approval actions that mutate paused workflow work; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "5b0c9b8324f232fd"
+    },
+    {
+      "key": "components/scheduler/scheduler-initializer.tsx#reconcileAgentTaskRuntime@lib/agent-tasks/runtime.ts",
+      "initializer": "components/scheduler/scheduler-initializer.tsx",
+      "symbol": "reconcileAgentTaskRuntime",
+      "module": "lib/agent-tasks/runtime.ts",
+      "owner": "components/scheduler/scheduler-initializer.tsx",
+      "note": "pending-b6: components/scheduler/scheduler-initializer.tsx:60 (lib/agent-tasks/runtime.ts) recovers persisted single-Agent attempts against scheduler executions; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "ee5f27206e8e9376"
+    },
+    {
+      "key": "components/shell/project-kb-worker-initializer.tsx#createProjectKnowledgeIngestController@lib/project-knowledge/wire-ingest.ts",
+      "initializer": "components/shell/project-kb-worker-initializer.tsx",
+      "symbol": "createProjectKnowledgeIngestController",
+      "module": "lib/project-knowledge/wire-ingest.ts",
+      "owner": "components/shell/project-kb-worker-initializer.tsx",
+      "note": "pending-b6: components/shell/project-kb-worker-initializer.tsx:22 (lib/project-knowledge/wire-ingest.ts) subscribes project knowledge changes and performs debounced indexing and removal; no equivalent registered headless owner is shown for this effect, so it remains runtime convergence debt.",
+      "evidence": "0fe7ce75432f498a"
+    }
+  ],
+  "excluded": [
+    {
+      "key": "components/account/sync/account-sync-host.tsx#clearRequestNotification@lib/account-sync/approval-notifications.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-poller.ts",
+      "symbol": "clearRequestNotification",
+      "module": "lib/account-sync/approval-notifications.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-poller.ts:96 (lib/account-sync/approval-notifications.ts): Client-side enrollment approval notifications require this interactive account/profile and its approval dialog; the registered account-sync brain runtime owns data-engine synchronization independently.",
+      "evidence": "e9265b65171ddf41"
+    },
+    {
+      "key": "components/account/sync/account-sync-host.tsx#notifyIncomingRequest@lib/account-sync/approval-notifications.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-poller.ts",
+      "symbol": "notifyIncomingRequest",
+      "module": "lib/account-sync/approval-notifications.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-poller.ts:92 (lib/account-sync/approval-notifications.ts): Client-side enrollment approval notifications require this interactive account/profile and its approval dialog; the registered account-sync brain runtime owns data-engine synchronization independently.",
+      "evidence": "c4242f1710ad45d2"
+    },
+    {
+      "key": "components/account/sync/account-sync-host.tsx#officialSyncSession@lib/account-sync/sync-session.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-poller.ts",
+      "symbol": "officialSyncSession",
+      "module": "lib/account-sync/sync-session.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-poller.ts:44 (lib/account-sync/sync-session.ts): officialSyncSession is a account-sync client session lookup, owned by the account-sync hook lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "996c2b4636ed97f3"
+    },
+    {
+      "key": "components/account/sync/account-sync-host.tsx#pollDelayMs@lib/account-sync/poll.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-poller.ts",
+      "symbol": "pollDelayMs",
+      "module": "lib/account-sync/poll.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-poller.ts:107 (lib/account-sync/poll.ts): pollDelayMs is a pure poll-backoff calculation; it does not independently own an unregistered runtime effect.",
+      "evidence": "5e0f9bbe10b06d3e"
+    },
+    {
+      "key": "components/account/sync/account-sync-host.tsx#publishRemoteChanges@lib/account-sync/data/remote-changes.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-engine.ts",
+      "symbol": "publishRemoteChanges",
+      "module": "lib/account-sync/data/remote-changes.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-engine.ts:101 (lib/account-sync/data/remote-changes.ts): publishRemoteChanges is a client projection invalidation notification, not an independently owned worker; it does not independently own an unregistered runtime effect.",
+      "evidence": "976ae6ead3eeea67"
+    },
+    {
+      "key": "components/account/sync/account-sync-host.tsx#requestChanges@lib/account-sync/poll.ts",
+      "initializer": "components/account/sync/account-sync-host.tsx",
+      "effectFile": "hooks/account-sync/use-account-sync-poller.ts",
+      "symbol": "requestChanges",
+      "module": "lib/account-sync/poll.ts",
+      "owner": "components/account/sync/account-sync-host.tsx",
+      "reason": "hooks/account-sync/use-account-sync-poller.ts:89 (lib/account-sync/poll.ts): requestChanges is a pure diff of incoming enrollment request lists; it does not independently own an unregistered runtime effect.",
+      "evidence": "6790c3e1c5bf74f4"
+    },
+    {
+      "key": "components/project-coordinator/project-coordinator-host.tsx#coordinatorNeedsHold@lib/project-coordinator/auto-resolve.ts",
+      "initializer": "components/project-coordinator/project-coordinator-host.tsx",
+      "symbol": "coordinatorNeedsHold",
+      "module": "lib/project-coordinator/auto-resolve.ts",
+      "owner": "components/project-coordinator/project-coordinator-host.tsx",
+      "reason": "components/project-coordinator/project-coordinator-host.tsx:103 (lib/project-coordinator/auto-resolve.ts): coordinatorNeedsHold is a pure predicate over current thread status; it does not independently own an unregistered runtime effect.",
+      "evidence": "2fe0d4860ea6f80c"
+    },
+    {
+      "key": "components/providers/canvas-bridge-provider.tsx#startArtifactDexieBridge@lib/artifacts/dexie-bridge.ts",
+      "initializer": "components/providers/canvas-bridge-provider.tsx",
+      "symbol": "startArtifactDexieBridge",
+      "module": "lib/artifacts/dexie-bridge.ts",
+      "owner": "components/providers/canvas-bridge-provider.tsx",
+      "reason": "components/providers/canvas-bridge-provider.tsx:43 (lib/artifacts/dexie-bridge.ts): client editor working-copy subscriptions persist current in-memory artifact/canvas buffers; the bridge requires the mounted renderer editor stores, not autonomous headless work.",
+      "evidence": "a7edaef174c918e3"
+    },
+    {
+      "key": "components/providers/canvas-bridge-provider.tsx#startCanvasDexieBridge@lib/canvas/dexie-bridge.ts",
+      "initializer": "components/providers/canvas-bridge-provider.tsx",
+      "symbol": "startCanvasDexieBridge",
+      "module": "lib/canvas/dexie-bridge.ts",
+      "owner": "components/providers/canvas-bridge-provider.tsx",
+      "reason": "components/providers/canvas-bridge-provider.tsx:42 (lib/canvas/dexie-bridge.ts): client editor working-copy subscriptions persist current in-memory artifact/canvas buffers; the bridge requires the mounted renderer editor stores, not autonomous headless work.",
+      "evidence": "6960acb6bd4b8595"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#beginMobileBootStage@lib/boot/mobile-boot-stages.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "beginMobileBootStage",
+      "module": "lib/boot/mobile-boot-stages.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "beginMobileBootStage updates the splash-stage snapshot at lib/boot/mobile-boot-stages.ts:139; the mounted phone boot UI reports progress, without installing an independently owned background runtime.",
+      "evidence": "c743f145af0d233a"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#dismissTopmostOverlayOnBack@hooks/ui/use-back-dismiss.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "dismissTopmostOverlayOnBack",
+      "module": "hooks/ui/use-back-dismiss.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "dismissTopmostOverlayOnBack queries open DOM overlays and dispatches Escape at hooks/ui/use-back-dismiss.ts:128; this is interactive back-button UI behavior, not headless work.",
+      "evidence": "f18f0953c253e715"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#dispatchRoute@lib/capacitor/deeplink-router.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "dispatchRoute",
+      "module": "lib/capacitor/deeplink-router.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "dispatchRoute switches a parsed mobile deep link into router navigation at lib/capacitor/deeplink-router.ts:34; the paired client's visible route is UI state, not a brain lifecycle.",
+      "evidence": "f5b058358156b756"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#ensureChannel@lib/capacitor/local-notifications.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "ensureChannel",
+      "module": "lib/capacitor/local-notifications.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "ensureChannel creates an Android local-notification channel through the Capacitor plugin at lib/capacitor/local-notifications.ts:213; it requires the phone OS notification capability and belongs to client enrollment/setup.",
+      "evidence": "b36487dbd662805a"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#getLaunchRoute@lib/capacitor/deeplink.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "getLaunchRoute",
+      "module": "lib/capacitor/deeplink.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "getLaunchRoute reads App.getLaunchUrl and parses a mobile launch deep link at lib/capacitor/deeplink.ts:55; it consumes this device's launch intent rather than running Host work.",
+      "evidence": "08513c3e34293c72"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#getShellColors@lib/appearance/shell-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "getShellColors",
+      "module": "lib/appearance/shell-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "getShellColors at lib/appearance/shell-sync.ts:82 purely converts the supplied appearance palette into shell background/foreground colors; components/providers/companion-boot-provider.tsx:173 uses it before native bar painting. It installs no timer, subscription or independent runtime.",
+      "evidence": "7e5f2d5801556b56"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#hide@lib/capacitor/splash-screen.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "hide",
+      "module": "lib/capacitor/splash-screen.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "hide calls the native splash-screen plugin at lib/capacitor/splash-screen.ts:38 to dismiss this phone's boot overlay; renderer presentation requires the client shell and is not missing brain work.",
+      "evidence": "52f957166d974813"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installCapabilityReporter@lib/companion/capability-reporter.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installCapabilityReporter",
+      "module": "lib/companion/capability-reporter.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installCapabilityReporter at lib/companion/capability-reporter.ts:45 reports the paired device's detected platform/capabilities to its authoritative Host; this client connection lifecycle is mounted only in the mobile boot effect at components/providers/companion-boot-provider.tsx:195.",
+      "evidence": "6369b49514181df5"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installEventDrivenSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installEventDrivenSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installEventDrivenSync at lib/sync/companion-sync.ts:1496 coalesces Host invalidation frames into replica table pulls; the mobile boot effect at components/providers/companion-boot-provider.tsx:195 owns the client replica subscription, not an unregistered authoritative brain worker.",
+      "evidence": "49d01fca63e84f15"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installForegroundSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installForegroundSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installForegroundSync at lib/sync/companion-sync.ts:1473 listens to document visibility and triggers a client sync-down on foreground return; it requires the visible mobile document and is outside brain runtime ownership.",
+      "evidence": "55d1d84eb784fd5a"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installHostStateSyncForTarget@lib/sync/host-state-service.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installHostStateSyncForTarget",
+      "module": "lib/sync/host-state-service.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installHostStateSyncForTarget at lib/sync/host-state-service.ts:998 binds the current client database and open chat panes to HostState synchronization; it maintains the paired renderer replica, while the Host remains authoritative.",
+      "evidence": "2f5ebff35392eb09"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installNetworkSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installNetworkSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installNetworkSync at lib/sync/companion-sync.ts:1626 subscribes to client network connectivity and pulls the replica when connected; the mobile effect owns reconnect synchronization to its Host, not Host-side work.",
+      "evidence": "4725cfe2bf483a7c"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installPushNotificationBridge@lib/notifications/inbound-push.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installPushNotificationBridge",
+      "module": "lib/notifications/inbound-push.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installPushNotificationBridge at lib/notifications/inbound-push.ts:60 converts native push deliveries into notifications for this phone; receiving device push events is a client OS capability rather than a missing brain lifecycle.",
+      "evidence": "2105fd4ea47dc04e"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installRemoteStepServer@lib/companion/remote-step-server.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installRemoteStepServer",
+      "module": "lib/companion/remote-step-server.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installRemoteStepServer at lib/companion/remote-step-server.ts:152 binds MOBILE_STEP_EXECUTORS and device receipts for steps delegated by the paired Host; it is the client capability endpoint, not an authoritative job scheduler.",
+      "evidence": "bb3544a4ef7e275d"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installResumeSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installResumeSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installResumeSync at lib/sync/companion-sync.ts:1641 subscribes to native app resume and triggers a coalesced replica pull; the phone lifecycle capability cannot be owned by the brain process.",
+      "evidence": "ddef4e52ef2ab3b6"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#installWorkflowRunStatusSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "installWorkflowRunStatusSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "installWorkflowRunStatusSync at lib/sync/companion-sync.ts:1570 subscribes to Host workflow-status frames for the client replica; the mounted mobile provider projects remote execution state rather than owning workflow execution.",
+      "evidence": "b0ddd84d0f7236d6"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#makeRouterNavigators@lib/capacitor/deeplink-router.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "makeRouterNavigators",
+      "module": "lib/capacitor/deeplink-router.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "makeRouterNavigators returns router.push closures for session/share navigation at lib/capacitor/deeplink-router.ts:88; constructing these UI helpers starts no independent effect.",
+      "evidence": "39de5683060f4653"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#minimizeApp@lib/capacitor/app.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "minimizeApp",
+      "module": "lib/capacitor/app.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "minimizeApp invokes the Capacitor native minimize command at lib/capacitor/app.ts:130; it handles this device's back-button shell behavior, with no headless equivalent.",
+      "evidence": "e2c68152281b262b"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#onAction@lib/capacitor/local-notifications.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "onAction",
+      "module": "lib/capacitor/local-notifications.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "onAction attaches the localNotificationActionPerformed plugin listener at lib/capacitor/local-notifications.ts:198; handling a phone notification tap is a client OS event capability.",
+      "evidence": "b26701c7ec2cf907"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#registerMobileHostBindingController@lib/companion/mobile-host-binding-lifecycle.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "registerMobileHostBindingController",
+      "module": "lib/companion/mobile-host-binding-lifecycle.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "registerMobileHostBindingController sets a client-global controller reference and returns a matching unregister callback at lib/companion/mobile-host-binding-lifecycle.ts:10; this wiring helper does not independently start a worker.",
+      "evidence": "e551a41e18f14005"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#registerPushNotifications@lib/push/push-notifications.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "registerPushNotifications",
+      "module": "lib/push/push-notifications.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "registerPushNotifications selects and registers the native push plugin at lib/push/push-notifications.ts:178; it enrolls this phone's token for delivery rather than installing a Host-side runtime.",
+      "evidence": "583449ed36b810cd"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#registerRuntimeTargetSubscriptionStopper@lib/runtime/runtime-target-lifecycle.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "registerRuntimeTargetSubscriptionStopper",
+      "module": "lib/runtime/runtime-target-lifecycle.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "registerRuntimeTargetSubscriptionStopper stores a teardown callback for the active client target at lib/runtime/runtime-target-lifecycle.ts:34; it is lifecycle cleanup wiring, not an independently executing subscription.",
+      "evidence": "2409b89b7b1fbc86"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#runApprovalTapHref@lib/execution/run-approval-tap.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "runApprovalTapHref",
+      "module": "lib/execution/run-approval-tap.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "runApprovalTapHref validates interruptId and an allowlisted navigation href at lib/execution/run-approval-tap.ts:21; this is a pure notification-tap routing guard, not a runtime owner.",
+      "evidence": "917761a45786beed"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#subscribe@lib/capacitor/deeplink.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "subscribe",
+      "module": "lib/capacitor/deeplink.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "subscribe at lib/capacitor/deeplink.ts:38 attaches the App appUrlOpen listener and parses phone deep links; it requires the native client URL-open capability and does not own headless work.",
+      "evidence": "2dc9085be0f080b7"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#subscribeBackButton@lib/capacitor/app.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "subscribeBackButton",
+      "module": "lib/capacitor/app.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "subscribeBackButton registers the native App backButton listener at lib/capacitor/app.ts:109; the handler dismisses overlays/navigates or minimizes this phone, all interactive shell behavior.",
+      "evidence": "e2ec640b8162942f"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#subscribeToPushTokenChanges@lib/push/push-notifications.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "subscribeToPushTokenChanges",
+      "module": "lib/push/push-notifications.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "subscribeToPushTokenChanges attaches device push-token event sources at lib/push/push-notifications.ts:347; reporting a rotated native token to the paired Host is client enrollment rather than Host execution.",
+      "evidence": "efa08f1bb886e366"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#syncWithTheme@lib/capacitor/navigation-bar.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "syncWithTheme",
+      "module": "lib/capacitor/navigation-bar.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "syncWithTheme computes contrast and paints the Android navigation bar at lib/capacitor/navigation-bar.ts:71; it needs the native phone shell and owns no independent background work.",
+      "evidence": "ff2e4413ae79b14f"
+    },
+    {
+      "key": "components/providers/companion-boot-provider.tsx#syncWithTheme@lib/capacitor/status-bar.ts",
+      "initializer": "components/providers/companion-boot-provider.tsx",
+      "symbol": "syncWithTheme",
+      "module": "lib/capacitor/status-bar.ts",
+      "owner": "components/providers/companion-boot-provider.tsx",
+      "reason": "syncWithTheme applies the Capacitor status-bar style/background at lib/capacitor/status-bar.ts:90; it mirrors the visible client appearance and is not brain runtime work.",
+      "evidence": "e0d9ac9eb23f74a4"
+    },
+    {
+      "key": "components/providers/companion-event-bridge-provider.tsx#installCompanionEventBridge@lib/companion/event-bridge.ts",
+      "initializer": "components/providers/companion-event-bridge-provider.tsx",
+      "symbol": "installCompanionEventBridge",
+      "module": "lib/companion/event-bridge.ts",
+      "owner": "components/providers/companion-event-bridge-provider.tsx",
+      "reason": "components/providers/companion-event-bridge-provider.tsx:38 (lib/companion/event-bridge.ts): Client-side Tauri/mobile signaling and companion event lifecycle; the brain owns its server/bridge endpoint instead.",
+      "evidence": "5a05596a9bc7247e"
+    },
+    {
+      "key": "components/providers/companion-event-bridge-provider.tsx#installCompanionSignalingController@lib/signaling/index.ts",
+      "initializer": "components/providers/companion-event-bridge-provider.tsx",
+      "symbol": "installCompanionSignalingController",
+      "module": "lib/signaling/index.ts",
+      "owner": "components/providers/companion-event-bridge-provider.tsx",
+      "reason": "components/providers/companion-event-bridge-provider.tsx:39 (lib/signaling/index.ts): Client-side Tauri/mobile signaling and companion event lifecycle; the brain owns its server/bridge endpoint instead.",
+      "evidence": "a4719c797c4030af"
+    },
+    {
+      "key": "components/providers/companion-event-bridge-provider.tsx#installDesktopSignalingController@lib/signaling/index.ts",
+      "initializer": "components/providers/companion-event-bridge-provider.tsx",
+      "symbol": "installDesktopSignalingController",
+      "module": "lib/signaling/index.ts",
+      "owner": "components/providers/companion-event-bridge-provider.tsx",
+      "reason": "components/providers/companion-event-bridge-provider.tsx:53 (lib/signaling/index.ts): Client-side Tauri/mobile signaling and companion event lifecycle; the brain owns its server/bridge endpoint instead.",
+      "evidence": "dc4f8cffb3c06acf"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#clearOutboundApproval@lib/queue/outbound-approval.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "clearOutboundApproval",
+      "module": "lib/queue/outbound-approval.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:227 (lib/queue/outbound-approval.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "b5651c4ad3ba26f9"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#createOutboundRunner@lib/queue/outbound-queue.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "createOutboundRunner",
+      "module": "lib/queue/outbound-queue.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:229 (lib/queue/outbound-queue.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "e9773fd1f9d2b211"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#ensureOutboundApproval@lib/queue/outbound-approval.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "ensureOutboundApproval",
+      "module": "lib/queue/outbound-approval.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:244 (lib/queue/outbound-approval.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "a3cd78eec0ef6474"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#hasOutboundApprovalReporter@lib/queue/outbound-approval.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "hasOutboundApprovalReporter",
+      "module": "lib/queue/outbound-approval.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:302 (lib/queue/outbound-approval.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "75274a0bb146c0f1"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#installHostStateSyncForTarget@lib/sync/host-state-service.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "installHostStateSyncForTarget",
+      "module": "lib/sync/host-state-service.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:362 (lib/sync/host-state-service.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "17b9e0fde350982e"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#outboundConsentCode@lib/queue/outbound-approval.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "outboundConsentCode",
+      "module": "lib/queue/outbound-approval.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:301 (lib/queue/outbound-approval.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "c519bb808ca92b4a"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#registerRuntimeTargetTransitionParticipant@lib/runtime/runtime-target-lifecycle.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "registerRuntimeTargetTransitionParticipant",
+      "module": "lib/runtime/runtime-target-lifecycle.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:267 (lib/runtime/runtime-target-lifecycle.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "947bca94fb033e18"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#subscribeOutboundApproval@lib/queue/outbound-approval.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "subscribeOutboundApproval",
+      "module": "lib/queue/outbound-approval.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:317 (lib/queue/outbound-approval.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "b7fb888d0237a733"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#subscribeRemoteMemoryRefusals@lib/memory/control-plane/remote-outcomes.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "subscribeRemoteMemoryRefusals",
+      "module": "lib/memory/control-plane/remote-outcomes.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:214 (lib/memory/control-plane/remote-outcomes.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "2935e3f785553272"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#subscribeToHostConsent@lib/host-consent/client.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "subscribeToHostConsent",
+      "module": "lib/host-consent/client.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:262 (lib/host-consent/client.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "dbc9cedfcf5313fa"
+    },
+    {
+      "key": "components/providers/companion-outbound-runner-provider.tsx#updateRuntimeSnapshot@lib/runtime/runtime-snapshot-store.ts",
+      "initializer": "components/providers/companion-outbound-runner-provider.tsx",
+      "symbol": "updateRuntimeSnapshot",
+      "module": "lib/runtime/runtime-snapshot-store.ts",
+      "owner": "components/providers/companion-outbound-runner-provider.tsx",
+      "reason": "components/providers/companion-outbound-runner-provider.tsx:358 (lib/runtime/runtime-snapshot-store.ts): Client-side browser-local mobileOutboundQueue and Host consent/replica lifecycle; the brain is the receiving authority (documented in lib/headless/runtimes/index.ts).",
+      "evidence": "815124e66107e05b"
+    },
+    {
+      "key": "components/providers/desktop-message-source-provider.tsx#installCliRendererRequestSource@lib/cli-bridge/renderer-request-source.ts",
+      "initializer": "components/providers/desktop-message-source-provider.tsx",
+      "symbol": "installCliRendererRequestSource",
+      "module": "lib/cli-bridge/renderer-request-source.ts",
+      "owner": "components/providers/desktop-message-source-provider.tsx",
+      "reason": "components/providers/desktop-message-source-provider.tsx:45 (lib/cli-bridge/renderer-request-source.ts): Tauri-only renderer request source over native IPC; the registered desktop-message-source brain runtime owns its authenticated bridge counterpart.",
+      "evidence": "0d42171561f51704"
+    },
+    {
+      "key": "components/providers/desktop-message-source-provider.tsx#installWasmRendererRequestSource@lib/plugin/wasm-bridge/index.ts",
+      "initializer": "components/providers/desktop-message-source-provider.tsx",
+      "symbol": "installWasmRendererRequestSource",
+      "module": "lib/plugin/wasm-bridge/index.ts",
+      "owner": "components/providers/desktop-message-source-provider.tsx",
+      "reason": "components/providers/desktop-message-source-provider.tsx:57 (lib/plugin/wasm-bridge/index.ts): Tauri-only renderer request source over native IPC; the registered desktop-message-source brain runtime owns its authenticated bridge counterpart.",
+      "evidence": "02f50c42e2af3129"
+    },
+    {
+      "key": "components/providers/desktop-sync-source-provider.tsx#migrateMcpCredentials@lib/mcp/credential-migrator.ts",
+      "initializer": "components/providers/desktop-sync-source-provider.tsx",
+      "symbol": "migrateMcpCredentials",
+      "module": "lib/mcp/credential-migrator.ts",
+      "owner": "components/providers/desktop-sync-source-provider.tsx",
+      "reason": "components/providers/desktop-sync-source-provider.tsx:42 (lib/mcp/credential-migrator.ts): Tauri-only local agent configuration projection and credential migration; lib/claude/sync.ts explicitly skips non-Tauri hosts.",
+      "evidence": "5402df80fef7242a"
+    },
+    {
+      "key": "components/providers/desktop-sync-source-provider.tsx#startMcpSyncCoordinator@lib/mcp/sync-coordinator.ts",
+      "initializer": "components/providers/desktop-sync-source-provider.tsx",
+      "symbol": "startMcpSyncCoordinator",
+      "module": "lib/mcp/sync-coordinator.ts",
+      "owner": "components/providers/desktop-sync-source-provider.tsx",
+      "reason": "components/providers/desktop-sync-source-provider.tsx:41 (lib/mcp/sync-coordinator.ts): Tauri-only local agent configuration projection and credential migration; lib/claude/sync.ts explicitly skips non-Tauri hosts.",
+      "evidence": "9594a82f7814b22f"
+    },
+    {
+      "key": "components/providers/gateway-provider.tsx#gatewayDecisionResponse@lib/tauri/gateway.ts",
+      "initializer": "components/providers/gateway-provider.tsx",
+      "symbol": "gatewayDecisionResponse",
+      "module": "lib/tauri/gateway.ts",
+      "owner": "components/providers/gateway-provider.tsx",
+      "reason": "components/providers/gateway-provider.tsx:197 (lib/tauri/gateway.ts): Renderer settings/vault gateway projection over Tauri events; lib/headless/runtimes/index.ts documents the gateway-telemetry counterpart and native Rust ownership.",
+      "evidence": "d6712fd607b1245d"
+    },
+    {
+      "key": "components/providers/gateway-provider.tsx#resolveGatewayDecision@lib/gateway/decide.ts",
+      "initializer": "components/providers/gateway-provider.tsx",
+      "symbol": "resolveGatewayDecision",
+      "module": "lib/gateway/decide.ts",
+      "owner": "components/providers/gateway-provider.tsx",
+      "reason": "components/providers/gateway-provider.tsx:187 (lib/gateway/decide.ts): Renderer settings/vault gateway projection over Tauri events; lib/headless/runtimes/index.ts documents the gateway-telemetry counterpart and native Rust ownership.",
+      "evidence": "d65e7044955e9efa"
+    },
+    {
+      "key": "components/providers/gateway-provider.tsx#subscribeGatewaySnapshotChanged@lib/gateway/snapshot-events.ts",
+      "initializer": "components/providers/gateway-provider.tsx",
+      "symbol": "subscribeGatewaySnapshotChanged",
+      "module": "lib/gateway/snapshot-events.ts",
+      "owner": "components/providers/gateway-provider.tsx",
+      "reason": "components/providers/gateway-provider.tsx:142 (lib/gateway/snapshot-events.ts): Renderer settings/vault gateway projection over Tauri events; lib/headless/runtimes/index.ts documents the gateway-telemetry counterpart and native Rust ownership.",
+      "evidence": "190078fcd90b47bc"
+    },
+    {
+      "key": "components/providers/hook-trust-sync-provider.tsx#syncAllowedRootsToRust@lib/files/allowed-roots-sync.ts",
+      "initializer": "components/providers/hook-trust-sync-provider.tsx",
+      "symbol": "syncAllowedRootsToRust",
+      "module": "lib/files/allowed-roots-sync.ts",
+      "owner": "components/providers/hook-trust-sync-provider.tsx",
+      "reason": "components/providers/hook-trust-sync-provider.tsx:23 (lib/files/allowed-roots-sync.ts): Tauri-only filesystem allowed-root policy mirror for this desktop; no headless renderer trust store exists.",
+      "evidence": "a2fbb43dd4eb78d9"
+    },
+    {
+      "key": "components/providers/initializers/a2ui-surface-persistence-initializer.tsx#hydrateA2UISurfaceCache@stores/a2ui/a2ui-store.ts",
+      "initializer": "components/providers/initializers/a2ui-surface-persistence-initializer.tsx",
+      "symbol": "hydrateA2UISurfaceCache",
+      "module": "stores/a2ui/a2ui-store.ts",
+      "owner": "components/providers/initializers/a2ui-surface-persistence-initializer.tsx",
+      "reason": "components/providers/initializers/a2ui-surface-persistence-initializer.tsx:13 (stores/a2ui/a2ui-store.ts): hydrateA2UISurfaceCache is a UI A2UI surface cache hydration, not authoritative execution; it does not independently own an unregistered runtime effect.",
+      "evidence": "44f6777efbe88b3a"
+    },
+    {
+      "key": "components/providers/initializers/account-store-initializer.tsx#markStartupReactReady@lib/boot/startup-recovery.ts",
+      "initializer": "components/providers/initializers/account-store-initializer.tsx",
+      "symbol": "markStartupReactReady",
+      "module": "lib/boot/startup-recovery.ts",
+      "owner": "components/providers/initializers/account-store-initializer.tsx",
+      "reason": "components/providers/initializers/account-store-initializer.tsx:29 (lib/boot/startup-recovery.ts): markStartupReactReady is a renderer watchdog/React startup handoff state; it does not independently own an unregistered runtime effect.",
+      "evidence": "7f012091d60b6cc3"
+    },
+    {
+      "key": "components/providers/initializers/approval-journal-initializer.tsx#unannouncedInterrupted@stores/agent/approval-journal-store.ts",
+      "initializer": "components/providers/initializers/approval-journal-initializer.tsx",
+      "symbol": "unannouncedInterrupted",
+      "module": "stores/agent/approval-journal-store.ts",
+      "owner": "components/providers/initializers/approval-journal-initializer.tsx",
+      "reason": "components/providers/initializers/approval-journal-initializer.tsx:36 (stores/agent/approval-journal-store.ts): unannouncedInterrupted is a pure selection of unannounced approval-journal entries for a UI toast; it does not independently own an unregistered runtime effect.",
+      "evidence": "1efbd9ce9bb82c2f"
+    },
+    {
+      "key": "components/providers/initializers/background-task-initializer.tsx#onBackgroundRunSettled@hooks/chat/background-result-runtime.ts",
+      "initializer": "components/providers/initializers/background-task-initializer.tsx",
+      "symbol": "onBackgroundRunSettled",
+      "module": "hooks/chat/background-result-runtime.ts",
+      "owner": "components/providers/initializers/background-task-initializer.tsx",
+      "reason": "components/providers/initializers/background-task-initializer.tsx:1 (hooks/chat/background-result-runtime.ts): onBackgroundRunSettled is a callback injected into setRendererBackgroundSettleListener; that installer owns its lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "8849393436f63c1a"
+    },
+    {
+      "key": "components/providers/initializers/background-task-initializer.tsx#registerBackgroundResultNotifyStrings@hooks/chat/background-result-runtime.ts",
+      "initializer": "components/providers/initializers/background-task-initializer.tsx",
+      "symbol": "registerBackgroundResultNotifyStrings",
+      "module": "hooks/chat/background-result-runtime.ts",
+      "owner": "components/providers/initializers/background-task-initializer.tsx",
+      "reason": "components/providers/initializers/background-task-initializer.tsx:31 (hooks/chat/background-result-runtime.ts): registerBackgroundResultNotifyStrings is a localized display-string registration for the settle callback; it does not independently own an unregistered runtime effect.",
+      "evidence": "85d76445ece6a858"
+    },
+    {
+      "key": "components/providers/initializers/boot-capability-route-activator.tsx#resolveRouteBootCapabilities@lib/boot/route-capabilities.ts",
+      "initializer": "components/providers/initializers/boot-capability-route-activator.tsx",
+      "symbol": "resolveRouteBootCapabilities",
+      "module": "lib/boot/route-capabilities.ts",
+      "owner": "components/providers/initializers/boot-capability-route-activator.tsx",
+      "reason": "components/providers/initializers/boot-capability-route-activator.tsx:19 (lib/boot/route-capabilities.ts): resolveRouteBootCapabilities is a pure route-to-capability mapping for UI chunk loading; it does not independently own an unregistered runtime effect.",
+      "evidence": "622e57bfcbac2f34"
+    },
+    {
+      "key": "components/providers/initializers/boot-profile-startup-probe.tsx#probeConfiguredBootCapabilities@lib/boot/startup-probe.ts",
+      "initializer": "components/providers/initializers/boot-profile-startup-probe.tsx",
+      "symbol": "probeConfiguredBootCapabilities",
+      "module": "lib/boot/startup-probe.ts",
+      "owner": "components/providers/initializers/boot-profile-startup-probe.tsx",
+      "reason": "components/providers/initializers/boot-profile-startup-probe.tsx:17 (lib/boot/startup-probe.ts): probeConfiguredBootCapabilities is a renderer startup chunk-readiness probe, not kernel work execution; it does not independently own an unregistered runtime effect.",
+      "evidence": "ebe78efd7024b5dc"
+    },
+    {
+      "key": "components/providers/initializers/bot-runtime-initializer.tsx#getLocalAccountId@lib/bot/runtime/runner-owner.ts",
+      "initializer": "components/providers/initializers/bot-runtime-initializer.tsx",
+      "symbol": "getLocalAccountId",
+      "module": "lib/bot/runtime/runner-owner.ts",
+      "owner": "components/providers/initializers/bot-runtime-initializer.tsx",
+      "reason": "lib/bot/runtime/runner-owner.ts:27 only computes platform plus current account identity for the already-registered bot-runtime; it owns no timer, subscription or drain loop.",
+      "evidence": "2e3c1462712b4f6f"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#claimConsentSurface@lib/automation/consent-routing.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "claimConsentSurface",
+      "module": "lib/automation/consent-routing.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "reason": "components/providers/initializers/chat-copilot-initializer.tsx:62 (lib/automation/consent-routing.ts): claimConsentSurface is a UI screen-consent presentation arbitration; it does not independently own an unregistered runtime effect.",
+      "evidence": "a2cd986c46a8f574"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#draftForScreen@lib/reply-copilot/screen/run-screen-copilot.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "draftForScreen",
+      "module": "lib/reply-copilot/screen/run-screen-copilot.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "reason": "components/providers/initializers/chat-copilot-initializer.tsx:50 (lib/reply-copilot/screen/run-screen-copilot.ts): draftForScreen is a on-demand screen-copilot draft helper owned by its controller; it does not independently own an unregistered runtime effect.",
+      "evidence": "6218798fde3bb25a"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#readChatScreen@lib/reply-copilot/screen/run-screen-copilot.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "readChatScreen",
+      "module": "lib/reply-copilot/screen/run-screen-copilot.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "reason": "components/providers/initializers/chat-copilot-initializer.tsx:49 (lib/reply-copilot/screen/run-screen-copilot.ts): readChatScreen is a on-demand desktop screen read owned by the copilot controller; it does not independently own an unregistered runtime effect.",
+      "evidence": "92ac79644adb538b"
+    },
+    {
+      "key": "components/providers/initializers/chat-copilot-initializer.tsx#repairSelectionToolbarPermission@lib/tauri/selection-toolbar.ts",
+      "initializer": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "symbol": "repairSelectionToolbarPermission",
+      "module": "lib/tauri/selection-toolbar.ts",
+      "owner": "components/providers/initializers/chat-copilot-initializer.tsx",
+      "reason": "components/providers/initializers/chat-copilot-initializer.tsx:65 (lib/tauri/selection-toolbar.ts): repairSelectionToolbarPermission is a on-demand native screen-recording Settings UI action; it does not independently own an unregistered runtime effect.",
+      "evidence": "69fac53749496ec5"
+    },
+    {
+      "key": "components/providers/initializers/computer-use-kill-switch-initializer.tsx#clearAllSessionGrants@lib/claude/computer-use-session-grants.ts",
+      "initializer": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
+      "symbol": "clearAllSessionGrants",
+      "module": "lib/claude/computer-use-session-grants.ts",
+      "owner": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
+      "reason": "lib/claude/computer-use-session-grants.ts clears renderer permission state after the native kill-switch event; this is a UI consent reset helper, not an independent runtime owner.",
+      "evidence": "f500c9c4b91e767b"
+    },
+    {
+      "key": "components/providers/initializers/context-keys-initializer.tsx#deriveContextKeys@lib/plugin/context-keys/derive-context-keys.ts",
+      "initializer": "components/providers/initializers/context-keys-initializer.tsx",
+      "symbol": "deriveContextKeys",
+      "module": "lib/plugin/context-keys/derive-context-keys.ts",
+      "owner": "components/providers/initializers/context-keys-initializer.tsx",
+      "reason": "components/providers/initializers/context-keys-initializer.tsx:35 (lib/plugin/context-keys/derive-context-keys.ts): deriveContextKeys is a pure UI context-key projection; it does not independently own an unregistered runtime effect.",
+      "evidence": "05a8a50fdb19e124"
+    },
+    {
+      "key": "components/providers/initializers/context-keys-initializer.tsx#detectOs@lib/plugin/context-keys/derive-context-keys.ts",
+      "initializer": "components/providers/initializers/context-keys-initializer.tsx",
+      "symbol": "detectOs",
+      "module": "lib/plugin/context-keys/derive-context-keys.ts",
+      "owner": "components/providers/initializers/context-keys-initializer.tsx",
+      "reason": "components/providers/initializers/context-keys-initializer.tsx:37 (lib/plugin/context-keys/derive-context-keys.ts): detectOs is a platform check used by a UI context projection; it does not independently own an unregistered runtime effect.",
+      "evidence": "050af71c99d714f9"
+    },
+    {
+      "key": "components/providers/initializers/context-keys-initializer.tsx#setContextKey@lib/plugin/context-keys/context-key-store.ts",
+      "initializer": "components/providers/initializers/context-keys-initializer.tsx",
+      "symbol": "setContextKey",
+      "module": "lib/plugin/context-keys/context-key-store.ts",
+      "owner": "components/providers/initializers/context-keys-initializer.tsx",
+      "reason": "components/providers/initializers/context-keys-initializer.tsx:55 (lib/plugin/context-keys/context-key-store.ts): setContextKey is a UI command/context visibility state; it does not independently own an unregistered runtime effect.",
+      "evidence": "0720fc68a8595071"
+    },
+    {
+      "key": "components/providers/initializers/context-keys-initializer.tsx#setContextKeys@lib/plugin/context-keys/context-key-store.ts",
+      "initializer": "components/providers/initializers/context-keys-initializer.tsx",
+      "symbol": "setContextKeys",
+      "module": "lib/plugin/context-keys/context-key-store.ts",
+      "owner": "components/providers/initializers/context-keys-initializer.tsx",
+      "reason": "components/providers/initializers/context-keys-initializer.tsx:34 (lib/plugin/context-keys/context-key-store.ts): setContextKeys is a UI command/context visibility state; it does not independently own an unregistered runtime effect.",
+      "evidence": "c3ae8c3da30dffef"
+    },
+    {
+      "key": "components/providers/initializers/deferred-boot-initializers-impl.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/deferred-boot-initializers-impl.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/deferred-boot-initializers-impl.tsx",
+      "reason": "components/providers/initializers/deferred-boot-initializers-impl.tsx:48 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "0322428c3356e76c"
+    },
+    {
+      "key": "components/providers/initializers/desktop-only-initializers.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/desktop-only-initializers.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/desktop-only-initializers.tsx",
+      "reason": "components/providers/initializers/desktop-only-initializers.tsx:227 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "666c01a6e2dc5e04"
+    },
+    {
+      "key": "components/providers/initializers/developer-mode-initializer.tsx#migrateDeveloperMode@lib/plugin/devtools/developer-mode.ts",
+      "initializer": "components/providers/initializers/developer-mode-initializer.tsx",
+      "symbol": "migrateDeveloperMode",
+      "module": "lib/plugin/devtools/developer-mode.ts",
+      "owner": "components/providers/initializers/developer-mode-initializer.tsx",
+      "reason": "components/providers/initializers/developer-mode-initializer.tsx:21 (lib/plugin/devtools/developer-mode.ts): migrateDeveloperMode is a UI developer-tool preference migration; it does not independently own an unregistered runtime effect.",
+      "evidence": "93bad5865529c001"
+    },
+    {
+      "key": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx#configureAgentPageOwnership@lib/browser/agent-engine.ts",
+      "initializer": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx",
+      "symbol": "configureAgentPageOwnership",
+      "module": "lib/browser/agent-engine.ts",
+      "owner": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx",
+      "reason": "components/providers/initializers/dock-pages-lifecycle-initializer.tsx:31 (lib/browser/agent-engine.ts): configureAgentPageOwnership is a visible browser dock page ownership bindings, not an autonomous worker; it does not independently own an unregistered runtime effect.",
+      "evidence": "a48e1c01e39b4784"
+    },
+    {
+      "key": "components/providers/initializers/external-agent-initializer.tsx#onProtocolAdapterRegistryChange@lib/ai/agent/external/protocol-adapter.ts",
+      "initializer": "components/providers/initializers/external-agent-initializer.tsx",
+      "symbol": "onProtocolAdapterRegistryChange",
+      "module": "lib/ai/agent/external/protocol-adapter.ts",
+      "owner": "components/providers/initializers/external-agent-initializer.tsx",
+      "reason": "components/providers/initializers/external-agent-initializer.tsx:86 (lib/ai/agent/external/protocol-adapter.ts): the registered external-agent runtime in lib/headless/runtimes/initializers.ts uses startExternalAgentRehydration for the same rehydration/registry-change lifecycle.",
+      "evidence": "98061ec1b99e0e72"
+    },
+    {
+      "key": "components/providers/initializers/external-agent-initializer.tsx#rehydrateExternalAgent@lib/ai/agent/external/session/rehydrate.ts",
+      "initializer": "components/providers/initializers/external-agent-initializer.tsx",
+      "symbol": "rehydrateExternalAgent",
+      "module": "lib/ai/agent/external/session/rehydrate.ts",
+      "owner": "components/providers/initializers/external-agent-initializer.tsx",
+      "reason": "components/providers/initializers/external-agent-initializer.tsx:65 (lib/ai/agent/external/session/rehydrate.ts): the registered external-agent runtime in lib/headless/runtimes/initializers.ts uses startExternalAgentRehydration for the same rehydration/registry-change lifecycle.",
+      "evidence": "4bef6e08b80f0dc1"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#getCommand@lib/plugin/commands/registry.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "getCommand",
+      "module": "lib/plugin/commands/registry.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:215 (lib/plugin/commands/registry.ts): getCommand is a read-only command registry lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "2dd1c2b280bc9393"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#getIslandProjection@lib/island/projection-store.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "getIslandProjection",
+      "module": "lib/island/projection-store.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:140 (lib/island/projection-store.ts): getIslandProjection is a read-only island display snapshot; it does not independently own an unregistered runtime effect.",
+      "evidence": "2aaf13dbb5e25465"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#glanceOwnerHref@lib/glance/owner-routes.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "glanceOwnerHref",
+      "module": "lib/glance/owner-routes.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:155 (lib/glance/owner-routes.ts): glanceOwnerHref is a pure UI navigation route mapping; it does not independently own an unregistered runtime effect.",
+      "evidence": "cbe10edef589aa3e"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#normalizeGlancePanelSettings@lib/glance/presets.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "normalizeGlancePanelSettings",
+      "module": "lib/glance/presets.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:86 (lib/glance/presets.ts): normalizeGlancePanelSettings is a pure UI layout normalization; it does not independently own an unregistered runtime effect.",
+      "evidence": "1db11ecc9846fa60"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#openIslandWindow@lib/tauri/fleet.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "openIslandWindow",
+      "module": "lib/tauri/fleet.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:149 (lib/tauri/fleet.ts): openIslandWindow is a on-demand native window UI action; it does not independently own an unregistered runtime effect.",
+      "evidence": "d34c55afc32820da"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#parseGlanceRequest@lib/glance/requests.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "parseGlanceRequest",
+      "module": "lib/glance/requests.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:364 (lib/glance/requests.ts): parseGlanceRequest is a pure request parsing helper; it does not independently own an unregistered runtime effect.",
+      "evidence": "ff7be28dc76c33d6"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#requestIslandFocus@lib/island/focus-request.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "requestIslandFocus",
+      "module": "lib/island/focus-request.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:147 (lib/island/focus-request.ts): requestIslandFocus is a on-demand UI focus action; it does not independently own an unregistered runtime effect.",
+      "evidence": "9f3e24ef3af1c439"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#requestNotificationCenter@lib/notifications/center-request.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "requestNotificationCenter",
+      "module": "lib/notifications/center-request.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:161 (lib/notifications/center-request.ts): requestNotificationCenter is a on-demand UI navigation action; it does not independently own an unregistered runtime effect.",
+      "evidence": "7ec73099cb31f05b"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#runGlancePluginAction@lib/glance/plugin-actions.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "runGlancePluginAction",
+      "module": "lib/glance/plugin-actions.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:219 (lib/glance/plugin-actions.ts): runGlancePluginAction is a on-demand UI action dispatch owned by the glance request subscriber; it does not independently own an unregistered runtime effect.",
+      "evidence": "f1eeb38fd6a25de9"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#sendGlanceResult@lib/tauri/glance.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "sendGlanceResult",
+      "module": "lib/tauri/glance.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:373 (lib/tauri/glance.ts): sendGlanceResult is a request-response helper owned by onGlanceRequest, not an autonomous lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "f5501f0a1fb90cc7"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#withEditedEntries@lib/glance/layout-edit.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "withEditedEntries",
+      "module": "lib/glance/layout-edit.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:206 (lib/glance/layout-edit.ts): withEditedEntries is a pure glance layout transform; it does not independently own an unregistered runtime effect.",
+      "evidence": "1e343f756d85eec9"
+    },
+    {
+      "key": "components/providers/initializers/glance-publisher-initializer.tsx#withPreset@lib/glance/layout-edit.ts",
+      "initializer": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "symbol": "withPreset",
+      "module": "lib/glance/layout-edit.ts",
+      "owner": "components/providers/initializers/glance-publisher-initializer.tsx",
+      "reason": "components/providers/initializers/glance-publisher-initializer.tsx:209 (lib/glance/layout-edit.ts): withPreset is a pure glance layout transform; it does not independently own an unregistered runtime effect.",
+      "evidence": "bcf17ea8be53a1fb"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#isHarnessFailure@lib/harness/failure-offer.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "isHarnessFailure",
+      "module": "lib/harness/failure-offer.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "reason": "components/providers/initializers/harness-evolution-initializer.tsx:82 (lib/harness/failure-offer.ts): isHarnessFailure is a pure diagnostic predicate used by the enclosing harness failure watcher; it does not independently own an unregistered runtime effect.",
+      "evidence": "7089ce7fca35d979"
+    },
+    {
+      "key": "components/providers/initializers/harness-evolution-initializer.tsx#lastUserRequest@lib/harness/failure-offer.ts",
+      "initializer": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "symbol": "lastUserRequest",
+      "module": "lib/harness/failure-offer.ts",
+      "owner": "components/providers/initializers/harness-evolution-initializer.tsx",
+      "reason": "lib/harness/failure-offer.ts:157 is a pure reverse search over supplied messages; failure-trigger runtime ownership belongs to enqueueRunForFailure, not this text-selection helper.",
+      "evidence": "b66e62fba6472e1d"
+    },
+    {
+      "key": "components/providers/initializers/integration-boot-initializers.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/integration-boot-initializers.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/integration-boot-initializers.tsx",
+      "reason": "components/providers/initializers/integration-boot-initializers.tsx:13 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "0c5248d6c32891a9"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#executeIslandAction@lib/island/actions.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "executeIslandAction",
+      "module": "lib/island/actions.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:300 (lib/island/actions.ts): executeIslandAction is a on-demand UI action handler owned by the island subscriber; it does not independently own an unregistered runtime effect.",
+      "evidence": "c6414439e779435b"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#projectIslandState@lib/island/projection.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "projectIslandState",
+      "module": "lib/island/projection.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:139 (lib/island/projection.ts): projectIslandState is a pure display-state projection; it does not independently own an unregistered runtime effect.",
+      "evidence": "e8c136e6510da7e4"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#publishIslandProjection@lib/island/projection-store.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "publishIslandProjection",
+      "module": "lib/island/projection-store.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:154 (lib/island/projection-store.ts): publishIslandProjection is a publishes UI projection state, not authoritative work; it does not independently own an unregistered runtime effect.",
+      "evidence": "cb156027ab6b5529"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#selectExternalAgent@lib/agent/external-agent-selection.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "selectExternalAgent",
+      "module": "lib/agent/external-agent-selection.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:181 (lib/agent/external-agent-selection.ts): selectExternalAgent is a UI model/agent selection action; it does not independently own an unregistered runtime effect.",
+      "evidence": "545138c58c3546c4"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#sendIslandActionResult@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "sendIslandActionResult",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:292 (lib/island/client.ts): sendIslandActionResult is a response helper owned by the island action subscriber; it does not independently own an unregistered runtime effect.",
+      "evidence": "8bbe1e2843a18d08"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#sendIslandFocusRow@lib/island/client.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "sendIslandFocusRow",
+      "module": "lib/island/client.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:283 (lib/island/client.ts): sendIslandFocusRow is a UI focus response helper; it does not independently own an unregistered runtime effect.",
+      "evidence": "63eac469d7a56e0f"
+    },
+    {
+      "key": "components/providers/initializers/island-initializer.tsx#takePendingIslandFocus@lib/island/focus-request.ts",
+      "initializer": "components/providers/initializers/island-initializer.tsx",
+      "symbol": "takePendingIslandFocus",
+      "module": "lib/island/focus-request.ts",
+      "owner": "components/providers/initializers/island-initializer.tsx",
+      "reason": "components/providers/initializers/island-initializer.tsx:281 (lib/island/focus-request.ts): takePendingIslandFocus is a UI focus-request lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "b00d7e3b5587c92a"
+    },
+    {
+      "key": "components/providers/initializers/knowledge-agent-boot-initializers.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/knowledge-agent-boot-initializers.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/knowledge-agent-boot-initializers.tsx",
+      "reason": "components/providers/initializers/knowledge-agent-boot-initializers.tsx:18 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "18ac7a1e42cf92ec"
+    },
+    {
+      "key": "components/providers/initializers/mobile-only-initializers.tsx#hide@lib/capacitor/splash-screen.ts",
+      "initializer": "components/providers/initializers/mobile-only-initializers.tsx",
+      "symbol": "hide",
+      "module": "lib/capacitor/splash-screen.ts",
+      "owner": "components/providers/initializers/mobile-only-initializers.tsx",
+      "reason": "components/providers/initializers/mobile-only-initializers.tsx:25 (lib/capacitor/splash-screen.ts): Capacitor splash-screen visibility is mobile UI startup state, not autonomous kernel work.",
+      "evidence": "1a5282057b87d58f"
+    },
+    {
+      "key": "components/providers/initializers/plugin-cogset-initializer.tsx#isMirroredPluginClient@lib/plugin/core/mirrored-client.ts",
+      "initializer": "components/providers/initializers/plugin-cogset-initializer.tsx",
+      "symbol": "isMirroredPluginClient",
+      "module": "lib/plugin/core/mirrored-client.ts",
+      "owner": "components/providers/initializers/plugin-cogset-initializer.tsx",
+      "reason": "components/providers/initializers/plugin-cogset-initializer.tsx:36 (lib/plugin/core/mirrored-client.ts): isMirroredPluginClient is a runtime-target predicate, not an owned lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "5bb8534348987d9e"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#markBootCapabilityFailed@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "markBootCapabilityFailed",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "reason": "components/providers/initializers/plugin-runtime-initializer.tsx:210 (lib/boot/capabilities.ts): markBootCapabilityFailed is a renderer code-split capability failure state; it does not independently own an unregistered runtime effect.",
+      "evidence": "4cbe7d0a77a46e40"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "reason": "components/providers/initializers/plugin-runtime-initializer.tsx:152 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "39294b5ff9900f84"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#onPluginNavigationRequest@lib/plugin/api/navigation-request.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "onPluginNavigationRequest",
+      "module": "lib/plugin/api/navigation-request.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "reason": "components/providers/initializers/plugin-runtime-initializer.tsx:96 (lib/plugin/api/navigation-request.ts): onPluginNavigationRequest is a UI App Router navigation subscription; it does not independently own an unregistered runtime effect.",
+      "evidence": "a9cc43757de6b13c"
+    },
+    {
+      "key": "components/providers/initializers/plugin-runtime-initializer.tsx#resolvePluginRuntimeBootstrap@lib/plugin/core/bootstrap.ts",
+      "initializer": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "symbol": "resolvePluginRuntimeBootstrap",
+      "module": "lib/plugin/core/bootstrap.ts",
+      "owner": "components/providers/initializers/plugin-runtime-initializer.tsx",
+      "reason": "components/providers/initializers/plugin-runtime-initializer.tsx:144 (lib/plugin/core/bootstrap.ts): resolvePluginRuntimeBootstrap is a pure bootstrap decision helper; plugin-runtime owns startup; it does not independently own an unregistered runtime effect.",
+      "evidence": "0609a18e9c813662"
+    },
+    {
+      "key": "components/providers/initializers/provider-oauth-refresh-initializer.tsx#jitterCadenceMs@lib/subscription/retry/backoff.ts",
+      "initializer": "components/providers/initializers/provider-oauth-refresh-initializer.tsx",
+      "symbol": "jitterCadenceMs",
+      "module": "lib/subscription/retry/backoff.ts",
+      "owner": "components/providers/initializers/provider-oauth-refresh-initializer.tsx",
+      "reason": "components/providers/initializers/provider-oauth-refresh-initializer.tsx:58 (lib/subscription/retry/backoff.ts): jitterCadenceMs is a pure timer-jitter calculation; it does not independently own an unregistered runtime effect.",
+      "evidence": "d1d76909392b7301"
+    },
+    {
+      "key": "components/providers/initializers/pwa-badge-initializer.tsx#applyAppBadge@lib/pwa/app-badge.ts",
+      "initializer": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "symbol": "applyAppBadge",
+      "module": "lib/pwa/app-badge.ts",
+      "owner": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "reason": "components/providers/initializers/pwa-badge-initializer.tsx:36 (lib/pwa/app-badge.ts): applyAppBadge is a UI launcher badge projection requiring navigator badge APIs; it does not independently own an unregistered runtime effect.",
+      "evidence": "873ef122c7c2f5ac"
+    },
+    {
+      "key": "components/providers/initializers/pwa-badge-initializer.tsx#countMobileUnread@lib/inbox/unread-count.ts",
+      "initializer": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "symbol": "countMobileUnread",
+      "module": "lib/inbox/unread-count.ts",
+      "owner": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "reason": "components/providers/initializers/pwa-badge-initializer.tsx:36 (lib/inbox/unread-count.ts): countMobileUnread is a pure UI unread count; it does not independently own an unregistered runtime effect.",
+      "evidence": "1315d73e21ede026"
+    },
+    {
+      "key": "components/providers/initializers/pwa-badge-initializer.tsx#getUnreadSessionsSnapshot@lib/chat/unread-sessions.ts",
+      "initializer": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "symbol": "getUnreadSessionsSnapshot",
+      "module": "lib/chat/unread-sessions.ts",
+      "owner": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "reason": "components/providers/initializers/pwa-badge-initializer.tsx:34 (lib/chat/unread-sessions.ts): getUnreadSessionsSnapshot is a read-only renderer unread snapshot; it does not independently own an unregistered runtime effect.",
+      "evidence": "b593f7525b47a1b9"
+    },
+    {
+      "key": "components/providers/initializers/pwa-badge-initializer.tsx#isStandaloneDisplayMode@lib/pwa/install-state.ts",
+      "initializer": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "symbol": "isStandaloneDisplayMode",
+      "module": "lib/pwa/install-state.ts",
+      "owner": "components/providers/initializers/pwa-badge-initializer.tsx",
+      "reason": "components/providers/initializers/pwa-badge-initializer.tsx:49 (lib/pwa/install-state.ts): isStandaloneDisplayMode is a PWA display-mode check; it does not independently own an unregistered runtime effect.",
+      "evidence": "39d159e9d2ecf267"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#buildHeadlessTurnLlmClient@lib/ai/headless-turn-llm-client.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "buildHeadlessTurnLlmClient",
+      "module": "lib/ai/headless-turn-llm-client.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:241 (lib/ai/headless-turn-llm-client.ts): buildHeadlessTurnLlmClient is a on-demand selection rewrite client construction, not an autonomous runtime owner; it does not independently own an unregistered runtime effect.",
+      "evidence": "1855f0e62067dfc6"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#classifySelection@lib/selection/classify-selection.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "classifySelection",
+      "module": "lib/selection/classify-selection.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:97 (lib/selection/classify-selection.ts): classifySelection is a pure selection classification; it does not independently own an unregistered runtime effect.",
+      "evidence": "b229820d93ecd43b"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#enhancePrompt@lib/chat/completion/enhance.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "enhancePrompt",
+      "module": "lib/chat/completion/enhance.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:250 (lib/chat/completion/enhance.ts): enhancePrompt is a on-demand selection UI rewrite action, not background runtime ownership; it does not independently own an unregistered runtime effect.",
+      "evidence": "b9b0d74ef658e998"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#executePluginSelectionQuickAction@lib/selection/plugin-actions.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "executePluginSelectionQuickAction",
+      "module": "lib/selection/plugin-actions.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:331 (lib/selection/plugin-actions.ts): executePluginSelectionQuickAction is a on-demand selection toolbar action dispatch; it does not independently own an unregistered runtime effect.",
+      "evidence": "f04e6f5bb331dff8"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#getCurrentSelectionCandidate@lib/tauri/selection-toolbar.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "getCurrentSelectionCandidate",
+      "module": "lib/tauri/selection-toolbar.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:217 (lib/tauri/selection-toolbar.ts): getCurrentSelectionCandidate is a read-only native selection lookup for a UI action; it does not independently own an unregistered runtime effect.",
+      "evidence": "588977422ed367ad"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#getQuickAction@lib/plugin/registries/quick-action-registry.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "getQuickAction",
+      "module": "lib/plugin/registries/quick-action-registry.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:281 (lib/plugin/registries/quick-action-registry.ts): getQuickAction is a read-only plugin quick-action registry lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "48eaf4b80c82aca5"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#listQuickActions@lib/plugin/registries/quick-action-registry.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "listQuickActions",
+      "module": "lib/plugin/registries/quick-action-registry.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:98 (lib/plugin/registries/quick-action-registry.ts): listQuickActions is a read-only plugin quick-action registry lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "044fb8f8db8f16d9"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#pluginActionIsEligible@lib/selection/action-layout.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "pluginActionIsEligible",
+      "module": "lib/selection/action-layout.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:111 (lib/selection/action-layout.ts): pluginActionIsEligible is a pure selection-action eligibility predicate; it does not independently own an unregistered runtime effect.",
+      "evidence": "e2a1a0d2d5e22874"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#speakSelection@lib/tts/speak-selection.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "speakSelection",
+      "module": "lib/tts/speak-selection.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:393 (lib/tts/speak-selection.ts): speakSelection is a on-demand UI speech action, not an autonomous worker; it does not independently own an unregistered runtime effect.",
+      "evidence": "97e774d52233e53f"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#stopSelectionSpeech@lib/tts/speak-selection.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "stopSelectionSpeech",
+      "module": "lib/tts/speak-selection.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:516 (lib/tts/speak-selection.ts): stopSelectionSpeech is a UI speech cancellation action; it does not independently own an unregistered runtime effect.",
+      "evidence": "5c7e516806b21a57"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-initializer.tsx#takePendingSelectionStage@lib/tauri/selection-toolbar.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "symbol": "takePendingSelectionStage",
+      "module": "lib/tauri/selection-toolbar.ts",
+      "owner": "components/providers/initializers/selection-toolbar-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-initializer.tsx:471 (lib/tauri/selection-toolbar.ts): takePendingSelectionStage is a UI pending selection lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "c97eaa1aeb1fa6f7"
+    },
+    {
+      "key": "components/providers/initializers/selection-toolbar-restore-initializer.tsx#migrateSelectionToolbarMode@lib/selection/preferences.ts",
+      "initializer": "components/providers/initializers/selection-toolbar-restore-initializer.tsx",
+      "symbol": "migrateSelectionToolbarMode",
+      "module": "lib/selection/preferences.ts",
+      "owner": "components/providers/initializers/selection-toolbar-restore-initializer.tsx",
+      "reason": "components/providers/initializers/selection-toolbar-restore-initializer.tsx:28 (lib/selection/preferences.ts): migrateSelectionToolbarMode is a pure preference migration; it does not independently own an unregistered runtime effect.",
+      "evidence": "aeab6374245cd412"
+    },
+    {
+      "key": "components/providers/initializers/session-focus-initializer.tsx#parkIdleArtifactDock@lib/artifacts/park-idle-dock.ts",
+      "initializer": "components/providers/initializers/session-focus-initializer.tsx",
+      "symbol": "parkIdleArtifactDock",
+      "module": "lib/artifacts/park-idle-dock.ts",
+      "owner": "components/providers/initializers/session-focus-initializer.tsx",
+      "reason": "components/providers/initializers/session-focus-initializer.tsx:66 (lib/artifacts/park-idle-dock.ts): parkIdleArtifactDock is a visible artifact dock layout state; it does not independently own an unregistered runtime effect.",
+      "evidence": "9818cb41efb509b7"
+    },
+    {
+      "key": "components/providers/initializers/session-focus-initializer.tsx#rememberedDockFor@stores/artifact/dock-tabs-store.ts",
+      "initializer": "components/providers/initializers/session-focus-initializer.tsx",
+      "symbol": "rememberedDockFor",
+      "module": "stores/artifact/dock-tabs-store.ts",
+      "owner": "components/providers/initializers/session-focus-initializer.tsx",
+      "reason": "components/providers/initializers/session-focus-initializer.tsx:64 (stores/artifact/dock-tabs-store.ts): rememberedDockFor is a visible artifact dock layout lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "77ba33d10f9132e2"
+    },
+    {
+      "key": "components/providers/initializers/session-focus-initializer.tsx#retryTitleIfNeeded@lib/ai/generation/title-retry.ts",
+      "initializer": "components/providers/initializers/session-focus-initializer.tsx",
+      "symbol": "retryTitleIfNeeded",
+      "module": "lib/ai/generation/title-retry.ts",
+      "owner": "components/providers/initializers/session-focus-initializer.tsx",
+      "reason": "components/providers/initializers/session-focus-initializer.tsx:55 (lib/ai/generation/title-retry.ts): retryTitleIfNeeded is a title recovery gated by renderer conversation focus; a UI-only mounted-pane concern; it does not independently own an unregistered runtime effect.",
+      "evidence": "e2f16517be53582d"
+    },
+    {
+      "key": "components/providers/initializers/storage-persistence-initializer.tsx#requestPersistentStorage@lib/storage/persistence-request.ts",
+      "initializer": "components/providers/initializers/storage-persistence-initializer.tsx",
+      "symbol": "requestPersistentStorage",
+      "module": "lib/storage/persistence-request.ts",
+      "owner": "components/providers/initializers/storage-persistence-initializer.tsx",
+      "reason": "components/providers/initializers/storage-persistence-initializer.tsx:25 (lib/storage/persistence-request.ts): requestPersistentStorage is a browser navigator.storage.persist permission request; no autonomous work lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "95b5f3f1389fbeb9"
+    },
+    {
+      "key": "components/providers/initializers/telemetry-session-initializer.tsx#trackAppLaunched@lib/telemetry/app-session.ts",
+      "initializer": "components/providers/initializers/telemetry-session-initializer.tsx",
+      "symbol": "trackAppLaunched",
+      "module": "lib/telemetry/app-session.ts",
+      "owner": "components/providers/initializers/telemetry-session-initializer.tsx",
+      "reason": "components/providers/initializers/telemetry-session-initializer.tsx:35 (lib/telemetry/app-session.ts): trackAppLaunched is a renderer telemetry event helper; it does not independently own an unregistered runtime effect.",
+      "evidence": "d1cc936bd2ef27d5"
+    },
+    {
+      "key": "components/providers/initializers/telemetry-session-initializer.tsx#trackScreenViewed@lib/telemetry/app-session.ts",
+      "initializer": "components/providers/initializers/telemetry-session-initializer.tsx",
+      "symbol": "trackScreenViewed",
+      "module": "lib/telemetry/app-session.ts",
+      "owner": "components/providers/initializers/telemetry-session-initializer.tsx",
+      "reason": "components/providers/initializers/telemetry-session-initializer.tsx:48 (lib/telemetry/app-session.ts): trackScreenViewed is a route-view telemetry event helper; it does not independently own an unregistered runtime effect.",
+      "evidence": "656b5bd36016757e"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#createLegacyTemplateSources@lib/templates/legacy-sources.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "createLegacyTemplateSources",
+      "module": "lib/templates/legacy-sources.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "reason": "components/providers/initializers/template-platform-initializer.tsx:25 (lib/templates/legacy-sources.ts): createLegacyTemplateSources is a one-shot source adapter builder used by migrateLegacyTemplates; it does not independently own an unregistered runtime effect.",
+      "evidence": "ce1bf6a5c46cd6b8"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#isUnifiedTemplatePlatformEnabled@lib/templates/feature-flags.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "isUnifiedTemplatePlatformEnabled",
+      "module": "lib/templates/feature-flags.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "reason": "components/providers/initializers/template-platform-initializer.tsx:74 (lib/templates/feature-flags.ts): isUnifiedTemplatePlatformEnabled is a feature flag predicate; it does not independently own an unregistered runtime effect.",
+      "evidence": "857d4f477a5b4e9d"
+    },
+    {
+      "key": "components/providers/initializers/template-platform-initializer.tsx#refreshTemplateOwners@lib/global-search/providers/library.ts",
+      "initializer": "components/providers/initializers/template-platform-initializer.tsx",
+      "symbol": "refreshTemplateOwners",
+      "module": "lib/global-search/providers/library.ts",
+      "owner": "components/providers/initializers/template-platform-initializer.tsx",
+      "reason": "components/providers/initializers/template-platform-initializer.tsx:44 (lib/global-search/providers/library.ts): refreshTemplateOwners is a UI global-search ownership snapshot, not the template execution runtime; it does not independently own an unregistered runtime effect.",
+      "evidence": "eccc5479106695f6"
+    },
+    {
+      "key": "components/providers/initializers/tray-panel-initializer.tsx#getCommand@lib/plugin/commands/registry.ts",
+      "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
+      "symbol": "getCommand",
+      "module": "lib/plugin/commands/registry.ts",
+      "owner": "components/providers/initializers/tray-panel-initializer.tsx",
+      "reason": "components/providers/initializers/tray-panel-initializer.tsx:133 (lib/plugin/commands/registry.ts): getCommand is a read-only command registry lookup; it does not independently own an unregistered runtime effect.",
+      "evidence": "dcd8098196011400"
+    },
+    {
+      "key": "components/providers/initializers/tray-panel-initializer.tsx#handleTrayUsageCommand@lib/tray/dispatcher.ts",
+      "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
+      "symbol": "handleTrayUsageCommand",
+      "module": "lib/tray/dispatcher.ts",
+      "owner": "components/providers/initializers/tray-panel-initializer.tsx",
+      "reason": "components/providers/initializers/tray-panel-initializer.tsx:132 (lib/tray/dispatcher.ts): handleTrayUsageCommand is a on-demand tray UI command handler; it does not independently own an unregistered runtime effect.",
+      "evidence": "1a0fda2a7834edfd"
+    },
+    {
+      "key": "components/providers/initializers/tray-panel-initializer.tsx#migrateTrayPanelActions@lib/tray-panel/migrate-actions.ts",
+      "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
+      "symbol": "migrateTrayPanelActions",
+      "module": "lib/tray-panel/migrate-actions.ts",
+      "owner": "components/providers/initializers/tray-panel-initializer.tsx",
+      "reason": "components/providers/initializers/tray-panel-initializer.tsx:85 (lib/tray-panel/migrate-actions.ts): migrateTrayPanelActions is a tray layout preference migration; it does not independently own an unregistered runtime effect.",
+      "evidence": "f75ee229d66a15f7"
+    },
+    {
+      "key": "components/providers/initializers/tray-panel-initializer.tsx#sendTrayPanelResult@lib/tauri/tray-panel.ts",
+      "initializer": "components/providers/initializers/tray-panel-initializer.tsx",
+      "symbol": "sendTrayPanelResult",
+      "module": "lib/tauri/tray-panel.ts",
+      "owner": "components/providers/initializers/tray-panel-initializer.tsx",
+      "reason": "components/providers/initializers/tray-panel-initializer.tsx:153 (lib/tauri/tray-panel.ts): sendTrayPanelResult is a native UI request response owned by onTrayPanelRequest; it does not independently own an unregistered runtime effect.",
+      "evidence": "ee364a58ac2ebac6"
+    },
+    {
+      "key": "components/providers/initializers/update-center-initializer.tsx#openUpdateCenter@lib/updates/open-update-center.ts",
+      "initializer": "components/providers/initializers/update-center-initializer.tsx",
+      "symbol": "openUpdateCenter",
+      "module": "lib/updates/open-update-center.ts",
+      "owner": "components/providers/initializers/update-center-initializer.tsx",
+      "reason": "components/providers/initializers/update-center-initializer.tsx:95 (lib/updates/open-update-center.ts): openUpdateCenter is a UI navigation action that opens the Update Center; it does not independently own an unregistered runtime effect.",
+      "evidence": "d07692d939259874"
+    },
+    {
+      "key": "components/providers/initializers/update-center-initializer.tsx#readUpdateCenterSettings@lib/updates/runtime.ts",
+      "initializer": "components/providers/initializers/update-center-initializer.tsx",
+      "symbol": "readUpdateCenterSettings",
+      "module": "lib/updates/runtime.ts",
+      "owner": "components/providers/initializers/update-center-initializer.tsx",
+      "reason": "components/providers/initializers/update-center-initializer.tsx:149 (lib/updates/runtime.ts): readUpdateCenterSettings is a settings lookup for the coordinator-owned interval; it does not independently own an unregistered runtime effect.",
+      "evidence": "a943901734700af9"
+    },
+    {
+      "key": "components/providers/initializers/usage-dock-initializer.tsx#closeUsageDock@lib/usage-dock/client.ts",
+      "initializer": "components/providers/initializers/usage-dock-initializer.tsx",
+      "symbol": "closeUsageDock",
+      "module": "lib/usage-dock/client.ts",
+      "owner": "components/providers/initializers/usage-dock-initializer.tsx",
+      "reason": "components/providers/initializers/usage-dock-initializer.tsx:80 (lib/usage-dock/client.ts): closeUsageDock is a native window UI action; it does not independently own an unregistered runtime effect.",
+      "evidence": "57050d17433b4e49"
+    },
+    {
+      "key": "components/providers/initializers/usage-dock-initializer.tsx#openUsageDock@lib/usage-dock/client.ts",
+      "initializer": "components/providers/initializers/usage-dock-initializer.tsx",
+      "symbol": "openUsageDock",
+      "module": "lib/usage-dock/client.ts",
+      "owner": "components/providers/initializers/usage-dock-initializer.tsx",
+      "reason": "components/providers/initializers/usage-dock-initializer.tsx:79 (lib/usage-dock/client.ts): openUsageDock is a native window UI action; it does not independently own an unregistered runtime effect.",
+      "evidence": "bd8fe519e79d9c45"
+    },
+    {
+      "key": "components/providers/initializers/usage-dock-initializer.tsx#sendUsageDockState@lib/usage-dock/client.ts",
+      "initializer": "components/providers/initializers/usage-dock-initializer.tsx",
+      "symbol": "sendUsageDockState",
+      "module": "lib/usage-dock/client.ts",
+      "owner": "components/providers/initializers/usage-dock-initializer.tsx",
+      "reason": "components/providers/initializers/usage-dock-initializer.tsx:87 (lib/usage-dock/client.ts): sendUsageDockState is a UI state response helper owned by the usage-dock subscription; it does not independently own an unregistered runtime effect.",
+      "evidence": "36d5660a7a1d0c46"
+    },
+    {
+      "key": "components/providers/initializers/webview-heartbeat-initializer.tsx#takeWhiteScreenRecoveryNotice@lib/tauri/webview-watchdog.ts",
+      "initializer": "components/providers/initializers/webview-heartbeat-initializer.tsx",
+      "symbol": "takeWhiteScreenRecoveryNotice",
+      "module": "lib/tauri/webview-watchdog.ts",
+      "owner": "components/providers/initializers/webview-heartbeat-initializer.tsx",
+      "reason": "components/providers/initializers/webview-heartbeat-initializer.tsx:28 (lib/tauri/webview-watchdog.ts): takeWhiteScreenRecoveryNotice is a read-and-clear renderer recovery notice for a UI toast; it does not independently own an unregistered runtime effect.",
+      "evidence": "dcb04d559035515a"
+    },
+    {
+      "key": "components/providers/initializers/window-show-initializer.tsx#isMacPlatform@lib/tauri/os.ts",
+      "initializer": "components/providers/initializers/window-show-initializer.tsx",
+      "symbol": "isMacPlatform",
+      "module": "lib/tauri/os.ts",
+      "owner": "components/providers/initializers/window-show-initializer.tsx",
+      "reason": "components/providers/initializers/window-show-initializer.tsx:69 (lib/tauri/os.ts): isMacPlatform is a platform predicate for window setup; it does not independently own an unregistered runtime effect.",
+      "evidence": "7ec8e63c7c54a850"
+    },
+    {
+      "key": "components/providers/initializers/window-show-initializer.tsx#refreshHostMode@lib/tauri/host-mode.ts",
+      "initializer": "components/providers/initializers/window-show-initializer.tsx",
+      "symbol": "refreshHostMode",
+      "module": "lib/tauri/host-mode.ts",
+      "owner": "components/providers/initializers/window-show-initializer.tsx",
+      "reason": "components/providers/initializers/window-show-initializer.tsx:44 (lib/tauri/host-mode.ts): refreshHostMode is a native window-role lookup used to choose renderer window chrome; it does not independently own an unregistered runtime effect.",
+      "evidence": "c93c7c5c1055f74c"
+    },
+    {
+      "key": "components/providers/initializers/workflow-automation-boot-initializers.tsx#markBootCapabilityReady@lib/boot/capabilities.ts",
+      "initializer": "components/providers/initializers/workflow-automation-boot-initializers.tsx",
+      "symbol": "markBootCapabilityReady",
+      "module": "lib/boot/capabilities.ts",
+      "owner": "components/providers/initializers/workflow-automation-boot-initializers.tsx",
+      "reason": "components/providers/initializers/workflow-automation-boot-initializers.tsx:17 (lib/boot/capabilities.ts): markBootCapabilityReady is a renderer code-split capability readiness state; it does not independently own an unregistered runtime effect.",
+      "evidence": "4cf03ade9661798f"
+    },
+    {
+      "key": "components/providers/logger-provider.tsx#cleanupTauriLogBridge@lib/native/tauri-log-bridge.ts",
+      "initializer": "components/providers/logger-provider.tsx",
+      "symbol": "cleanupTauriLogBridge",
+      "module": "lib/native/tauri-log-bridge.ts",
+      "owner": "components/providers/logger-provider.tsx",
+      "reason": "components/providers/logger-provider.tsx:123 (lib/native/tauri-log-bridge.ts): Tauri renderer log listener/teardown; headless processes own process logging independently.",
+      "evidence": "fc975f3f08291129"
+    },
+    {
+      "key": "components/providers/logger-provider.tsx#initTauriLogBridge@lib/native/tauri-log-bridge.ts",
+      "initializer": "components/providers/logger-provider.tsx",
+      "symbol": "initTauriLogBridge",
+      "module": "lib/native/tauri-log-bridge.ts",
+      "owner": "components/providers/logger-provider.tsx",
+      "reason": "components/providers/logger-provider.tsx:117 (lib/native/tauri-log-bridge.ts): Tauri renderer log listener/teardown; headless processes own process logging independently.",
+      "evidence": "a9b261849070b049"
+    },
+    {
+      "key": "components/providers/mcp-log-provider.tsx#subscribeToMcpLogs@lib/mcp/log-bridge.ts",
+      "initializer": "components/providers/mcp-log-provider.tsx",
+      "symbol": "subscribeToMcpLogs",
+      "module": "lib/mcp/log-bridge.ts",
+      "owner": "components/providers/mcp-log-provider.tsx",
+      "reason": "components/providers/mcp-log-provider.tsx:26 (lib/mcp/log-bridge.ts): Tauri MCP log event listener for renderer diagnostics; no kernel work lifecycle.",
+      "evidence": "866ca30e175c06fc"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#canProxyRemoteToolCall@lib/claude/controller-tool-proxy.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "canProxyRemoteToolCall",
+      "module": "lib/claude/controller-tool-proxy.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:35 (lib/claude/controller-tool-proxy.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "81c37a3e55e84254"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#dispatchProtocolAdapterExec@lib/claude/protocol-adapter-ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "dispatchProtocolAdapterExec",
+      "module": "lib/claude/protocol-adapter-ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:122 (lib/claude/protocol-adapter-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "b767f6137e855ab7"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#handlePluginHookExec@lib/claude/plugin-hook-ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "handlePluginHookExec",
+      "module": "lib/claude/plugin-hook-ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:68 (lib/claude/plugin-hook-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "6c8518dea1249601"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendPluginHookResponse@lib/claude/ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "sendPluginHookResponse",
+      "module": "lib/claude/ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:70 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "3b9ea5f7b71bc056"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendProtocolAdapterMessage@lib/claude/ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "sendProtocolAdapterMessage",
+      "module": "lib/claude/ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:106 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "6e716694f3c52634"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribePluginHookExec@lib/claude/ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "subscribePluginHookExec",
+      "module": "lib/claude/ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:64 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "a9d2a69706727ada"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterCancel@lib/claude/ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "subscribeProtocolAdapterCancel",
+      "module": "lib/claude/ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:142 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "e5e7213edfbb773b"
+    },
+    {
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterExec@lib/claude/ipc.ts",
+      "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "symbol": "subscribeProtocolAdapterExec",
+      "module": "lib/claude/ipc.ts",
+      "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:104 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "evidence": "180da6feaef9aaa1"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#clearBootMirror@lib/appearance/boot-script.ts",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "clearBootMirror",
+      "module": "lib/appearance/boot-script.ts",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:178 (lib/appearance/boot-script.ts): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "b6d525a886b28b3f"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#getShellColors@lib/appearance/shell-sync.ts",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "getShellColors",
+      "module": "lib/appearance/shell-sync.ts",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:114 (lib/appearance/shell-sync.ts): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "06575b8d28106dc7"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#resolveRadiusVar@lib/appearance/radius-applier.tsx",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "resolveRadiusVar",
+      "module": "lib/appearance/radius-applier.tsx",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:141 (lib/appearance/radius-applier.tsx): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "2b35bc118c37ba99"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#resolveStylePackDom@lib/appearance/style-pack-applier.tsx",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "resolveStylePackDom",
+      "module": "lib/appearance/style-pack-applier.tsx",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:146 (lib/appearance/style-pack-applier.tsx): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "c357011af4e600e6"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#resolveTypographyVars@lib/appearance/typography-applier.tsx",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "resolveTypographyVars",
+      "module": "lib/appearance/typography-applier.tsx",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:156 (lib/appearance/typography-applier.tsx): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "1615e4dc8ffc7fb6"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#stylePackRadiusBase@lib/appearance/radius-applier.tsx",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "stylePackRadiusBase",
+      "module": "lib/appearance/radius-applier.tsx",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:141 (lib/appearance/radius-applier.tsx): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "2b35bc118c37ba99"
+    },
+    {
+      "key": "components/providers/settings-hydrator.tsx#writeBootMirror@lib/appearance/boot-script.ts",
+      "initializer": "components/providers/settings-hydrator.tsx",
+      "symbol": "writeBootMirror",
+      "module": "lib/appearance/boot-script.ts",
+      "owner": "components/providers/settings-hydrator.tsx",
+      "reason": "components/providers/settings-hydrator.tsx:181 (lib/appearance/boot-script.ts): UI document theme, typography, radius and pre-hydration appearance mirror only.",
+      "evidence": "6833d85ba09d1d66"
+    },
+    {
+      "key": "components/providers/settings-sync-provider.tsx#applyZoom@lib/tauri/webview-zoom.ts",
+      "initializer": "components/providers/settings-sync-provider.tsx",
+      "symbol": "applyZoom",
+      "module": "lib/tauri/webview-zoom.ts",
+      "owner": "components/providers/settings-sync-provider.tsx",
+      "reason": "components/providers/settings-sync-provider.tsx:104 (lib/tauri/webview-zoom.ts): UI zoom and per-account window appearance persistence only.",
+      "evidence": "e40fd0248f1616fb"
+    },
+    {
+      "key": "components/providers/settings-sync-provider.tsx#writeAccountTheme@lib/appearance/lock-screen-preferences.ts",
+      "initializer": "components/providers/settings-sync-provider.tsx",
+      "symbol": "writeAccountTheme",
+      "module": "lib/appearance/lock-screen-preferences.ts",
+      "owner": "components/providers/settings-sync-provider.tsx",
+      "reason": "components/providers/settings-sync-provider.tsx:79 (lib/appearance/lock-screen-preferences.ts): UI zoom and per-account window appearance persistence only.",
+      "evidence": "0d581ca9937a319e"
+    },
+    {
+      "key": "components/providers/sidecar-span-provider.tsx#subscribeToSidecarSpans@lib/agent-trace/sidecar-span-bridge.ts",
+      "initializer": "components/providers/sidecar-span-provider.tsx",
+      "symbol": "subscribeToSidecarSpans",
+      "module": "lib/agent-trace/sidecar-span-bridge.ts",
+      "owner": "components/providers/sidecar-span-provider.tsx",
+      "reason": "components/providers/sidecar-span-provider.tsx:27 (lib/agent-trace/sidecar-span-bridge.ts): Tauri-only onClaudeMessage IPC span listener (guarded in the provider); headless sidecar telemetry has its own processor.",
+      "evidence": "9fa66f752953cde6"
+    },
+    {
+      "key": "components/providers/subscription-usage-provider.tsx#subscribeToUsageHeaders@lib/subscription/anthropic/usage-collector.ts",
+      "initializer": "components/providers/subscription-usage-provider.tsx",
+      "symbol": "subscribeToUsageHeaders",
+      "module": "lib/subscription/anthropic/usage-collector.ts",
+      "owner": "components/providers/subscription-usage-provider.tsx",
+      "reason": "components/providers/subscription-usage-provider.tsx:23 (lib/subscription/anthropic/usage-collector.ts): Tauri-only onClaudeMessage usage_headers event listener (guarded in the provider), not a host-neutral event producer.",
+      "evidence": "31ede74fb7314bc7"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#getCloseBehavior@lib/tauri/close-behavior.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "getCloseBehavior",
+      "module": "lib/tauri/close-behavior.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:133 (lib/tauri/close-behavior.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "d89a101fcf951077"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#getLaunchCli@lib/tauri/cli.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "getLaunchCli",
+      "module": "lib/tauri/cli.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:141 (lib/tauri/cli.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "83cfb35dac109608"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#getLaunchDeepLink@lib/tauri/deep-link.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "getLaunchDeepLink",
+      "module": "lib/tauri/deep-link.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:164 (lib/tauri/deep-link.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "4ffdfc6c34a0cec2"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#getShellColors@lib/appearance/shell-sync.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "getShellColors",
+      "module": "lib/appearance/shell-sync.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:88 (lib/appearance/shell-sync.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "7e5f2d5801556b56"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#pushCloseBehaviorToRust@lib/tauri/close-behavior.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "pushCloseBehaviorToRust",
+      "module": "lib/tauri/close-behavior.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:133 (lib/tauri/close-behavior.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "bc18042c9c99ddc2"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#pushCrashContext@lib/native/crash-context.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "pushCrashContext",
+      "module": "lib/native/crash-context.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:72 (lib/native/crash-context.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "04c7d486184b2a0b"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#rasterizeAndRegisterTrayIcons@lib/tray/icon-builder.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "rasterizeAndRegisterTrayIcons",
+      "module": "lib/tray/icon-builder.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:126 (lib/tray/icon-builder.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "76887e804b8bc311"
+    },
+    {
+      "key": "components/providers/tauri-provider.tsx#setWindowBackgroundColor@lib/tauri/shell-window.ts",
+      "initializer": "components/providers/tauri-provider.tsx",
+      "symbol": "setWindowBackgroundColor",
+      "module": "lib/tauri/shell-window.ts",
+      "owner": "components/providers/tauri-provider.tsx",
+      "reason": "components/providers/tauri-provider.tsx:97 (lib/tauri/shell-window.ts): native window/tray/CLI/deep-link/crash-context UI synchronization requires the Tauri shell.",
+      "evidence": "f2c7c58b083066c3"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#describeCompanionCredentialDiagnosis@lib/companion/credential-availability.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "describeCompanionCredentialDiagnosis",
+      "module": "lib/companion/credential-availability.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:157 (lib/companion/credential-availability.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "ef4bce6bc1c7dcb1"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#diagnoseCompanionCredential@lib/companion/credential-availability.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "diagnoseCompanionCredential",
+      "module": "lib/companion/credential-availability.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:149 (lib/companion/credential-availability.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "3c84bdfa9a3c8f86"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#hydrateCompanionConfig@lib/tauri/transport-companion.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "hydrateCompanionConfig",
+      "module": "lib/tauri/transport-companion.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:140 (lib/tauri/transport-companion.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "985bcd2b4f80e027"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#installEventDrivenSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "installEventDrivenSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:322 (lib/sync/companion-sync.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "3325e315c5da203b"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#installForegroundSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "installForegroundSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:328 (lib/sync/companion-sync.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "4396a086ec0b8902"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#installHostStateSyncForTarget@lib/sync/host-state-service.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "installHostStateSyncForTarget",
+      "module": "lib/sync/host-state-service.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:255 (lib/sync/host-state-service.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "5376497e7f58c0eb"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#installNetworkSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "installNetworkSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:329 (lib/sync/companion-sync.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "d5eadc4274ca63d2"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#installWorkflowRunStatusSync@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "installWorkflowRunStatusSync",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:323 (lib/sync/companion-sync.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "5715587ff0f3b255"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#jitteredBackoffMs@lib/companion/host-manifest-retry.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "jitteredBackoffMs",
+      "module": "lib/companion/host-manifest-retry.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:339 (lib/companion/host-manifest-retry.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "49000eb21aebf565"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#notifyWebHostBindingsFailed@lib/companion/web-host-binding-lifecycle.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "notifyWebHostBindingsFailed",
+      "module": "lib/companion/web-host-binding-lifecycle.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:155 (lib/companion/web-host-binding-lifecycle.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "96ae8959e3a4c754"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#notifyWebHostBindingsReady@lib/companion/web-host-binding-lifecycle.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "notifyWebHostBindingsReady",
+      "module": "lib/companion/web-host-binding-lifecycle.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:375 (lib/companion/web-host-binding-lifecycle.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "f48a5cab1b3fc5dc"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#registerRuntimeTargetSubscriptionStopper@lib/runtime/runtime-target-lifecycle.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "registerRuntimeTargetSubscriptionStopper",
+      "module": "lib/runtime/runtime-target-lifecycle.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:137 (lib/runtime/runtime-target-lifecycle.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "438cdf1ebd9f95fe"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#registerWebHostBindingOwner@lib/companion/web-host-binding-lifecycle.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "registerWebHostBindingOwner",
+      "module": "lib/companion/web-host-binding-lifecycle.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:73 (lib/companion/web-host-binding-lifecycle.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "7389633b44c73bb3"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#runStagedSyncDown@lib/sync/companion-sync.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "runStagedSyncDown",
+      "module": "lib/sync/companion-sync.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:366 (lib/sync/companion-sync.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "dc592879661a71b5"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#updateRuntimeSnapshot@lib/runtime/runtime-snapshot-store.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "updateRuntimeSnapshot",
+      "module": "lib/runtime/runtime-snapshot-store.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:160 (lib/runtime/runtime-snapshot-store.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "68268d3beecc38c0"
+    },
+    {
+      "key": "components/providers/web-companion-boot-provider.tsx#waitForHostManifest@lib/companion/host-manifest-retry.ts",
+      "initializer": "components/providers/web-companion-boot-provider.tsx",
+      "symbol": "waitForHostManifest",
+      "module": "lib/companion/host-manifest-retry.ts",
+      "owner": "components/providers/web-companion-boot-provider.tsx",
+      "reason": "components/providers/web-companion-boot-provider.tsx:276 (lib/companion/host-manifest-retry.ts): Client-side paired-Web-Host bootstrap and local replica synchronization; the brain is the server authority, not its own client.",
+      "evidence": "26b7c206a038e0ae"
+    },
+    {
+      "key": "components/providers/webdav-mobile-autosync-provider.tsx#maybeAutoUploadNow@lib/webdav/auto-upload.ts",
+      "initializer": "components/providers/webdav-mobile-autosync-provider.tsx",
+      "symbol": "maybeAutoUploadNow",
+      "module": "lib/webdav/auto-upload.ts",
+      "owner": "components/providers/webdav-mobile-autosync-provider.tsx",
+      "reason": "components/providers/webdav-mobile-autosync-provider.tsx:43 (lib/webdav/auto-upload.ts): Capacitor/client-local backup upload on app resume; the registered backup-scheduler covers the brain-owned filesystem backup.",
+      "evidence": "db655280d92dfe2e"
+    },
+    {
+      "key": "components/providers/workflow-runtime-provider.tsx#disposeDesktopEventTrigger@lib/workflow/runtime/desktop-event-trigger.ts",
+      "initializer": "components/providers/workflow-runtime-provider.tsx",
+      "symbol": "disposeDesktopEventTrigger",
+      "module": "lib/workflow/runtime/desktop-event-trigger.ts",
+      "owner": "components/providers/workflow-runtime-provider.tsx",
+      "reason": "components/providers/workflow-runtime-provider.tsx:141 (lib/workflow/runtime/desktop-event-trigger.ts): native desktop UIA automation-event lifecycle; lib/headless/runtimes/initializers.ts explicitly excludes this producer capability.",
+      "evidence": "60fdbd868a04d10f"
+    },
+    {
+      "key": "components/providers/workflow-runtime-provider.tsx#disposePluginTriggerLifecycle@lib/workflow/triggers/lifecycle.ts",
+      "initializer": "components/providers/workflow-runtime-provider.tsx",
+      "symbol": "disposePluginTriggerLifecycle",
+      "module": "lib/workflow/triggers/lifecycle.ts",
+      "owner": "components/providers/workflow-runtime-provider.tsx",
+      "reason": "components/providers/workflow-runtime-provider.tsx:128 (lib/workflow/triggers/lifecycle.ts): teardown of the plugin-trigger lifecycle already owned by registered workflow-runtime in lib/headless/runtimes/initializers.ts.",
+      "evidence": "d3fded0890667a79"
+    },
+    {
+      "key": "components/providers/workflow-runtime-provider.tsx#initDesktopEventTrigger@lib/workflow/runtime/desktop-event-trigger.ts",
+      "initializer": "components/providers/workflow-runtime-provider.tsx",
+      "symbol": "initDesktopEventTrigger",
+      "module": "lib/workflow/runtime/desktop-event-trigger.ts",
+      "owner": "components/providers/workflow-runtime-provider.tsx",
+      "reason": "components/providers/workflow-runtime-provider.tsx:140 (lib/workflow/runtime/desktop-event-trigger.ts): native desktop UIA automation-event lifecycle; lib/headless/runtimes/initializers.ts explicitly excludes this producer capability.",
+      "evidence": "ee8f20abe99b969c"
+    },
+    {
+      "key": "components/scheduler/scheduler-initializer.tsx#installScheduledNotificationCommands@lib/scheduler/notification-commands.ts",
+      "initializer": "components/scheduler/scheduler-initializer.tsx",
+      "symbol": "installScheduledNotificationCommands",
+      "module": "lib/scheduler/notification-commands.ts",
+      "owner": "components/scheduler/scheduler-initializer.tsx",
+      "reason": "components/scheduler/scheduler-initializer.tsx:34 (lib/scheduler/notification-commands.ts): UI App Router navigation commands (router.push), not the scheduler execution runtime.",
+      "evidence": "f4deec1771d2896e"
+    },
+    {
+      "key": "components/twin/twin-worker-initializer.tsx#buildTwinWorkerConfig@lib/twin/worker-runtime.ts",
+      "initializer": "components/twin/twin-worker-initializer.tsx",
+      "effectFile": "components/twin/use-twin-worker.ts",
+      "symbol": "buildTwinWorkerConfig",
+      "module": "lib/twin/worker-runtime.ts",
+      "owner": "components/twin/twin-worker-initializer.tsx",
+      "reason": "components/twin/use-twin-worker.ts:67 (lib/twin/worker-runtime.ts): buildTwinWorkerConfig is a settings-to-worker configuration builder; startJobWorker owns the lifecycle; it does not independently own an unregistered runtime effect.",
+      "evidence": "4d428916bb30c6e4"
+    },
+    {
+      "key": "components/twin/twin-worker-initializer.tsx#startJobWorker@lib/twin/job-worker.ts",
+      "initializer": "components/twin/twin-worker-initializer.tsx",
+      "effectFile": "components/twin/use-twin-worker.ts",
+      "symbol": "startJobWorker",
+      "module": "lib/twin/job-worker.ts",
+      "owner": "components/twin/twin-worker-initializer.tsx",
+      "reason": "components/twin/use-twin-worker.ts:74 (lib/twin/job-worker.ts): this root owns the Tauri-vector-bound twin worker; lib/headless/runtimes/index.ts documents twin-job-worker exclusion until a server-side vector adapter exists.",
+      "evidence": "b749a43231717c5f"
+    }
+  ]
+}

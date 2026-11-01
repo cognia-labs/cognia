@@ -1,0 +1,547 @@
+{
+  "version": 1,
+  "note": "Every ratchet baseline the repo keeps, its stable id (preserved across file moves), and how to measure it, for scripts/gates/check-baseline-growth.mjs (ADR-0250 §11). A measure is a number that may only fall: the check compares it at HEAD against the merge base and fails when it rose, unless the change adds an exception record under scripts/gates/baseline-exceptions/. Measure kinds: `length` (array length or object key count at `path`), `sum` (sum of every numeric leaf under `path`), `value` (the number at `path`), `eachValue` (every numeric leaf under `path`, each compared on its own), `sumLength` (sum of the lengths of every array named `key` under `path`). `path` is dot-separated; an empty path is the document root. A file that holds no ratchet goes under `notRatchets` with the reason, so the coverage test can tell a decision from an omission.",
+  "ratchets": [
+    {
+      "id": "colocated-test-baseline",
+      "file": "scripts/gates/colocated-test-baseline.json",
+      "gate": "audit:colocated-tests",
+      "measures": [
+        {
+          "id": "files",
+          "kind": "length",
+          "path": "files"
+        }
+      ]
+    },
+    {
+      "id": "host-parity-baseline",
+      "file": "scripts/gates/host-parity-baseline.json",
+      "gate": "audit:host-parity",
+      "measures": [
+        {
+          "id": "findings",
+          "kind": "length",
+          "path": "findings"
+        }
+      ]
+    },
+    {
+      "id": "rpc-semantic-parity-baseline",
+      "file": "scripts/gates/rpc-semantic-parity-baseline.json",
+      "gate": "audit:rpc-semantic-parity",
+      "measures": [
+        {
+          "id": "findings",
+          "kind": "length",
+          "path": "findings"
+        },
+        {
+          "id": "ceilings",
+          "kind": "eachValue",
+          "path": "ceilings"
+        }
+      ]
+    },
+    {
+      "id": "invoke-arg-parity-baseline",
+      "file": "scripts/gates/invoke-arg-parity-baseline.json",
+      "gate": "audit:invoke-arg-parity",
+      "measures": [
+        {
+          "id": "findings",
+          "kind": "length",
+          "path": "findings"
+        }
+      ]
+    },
+    {
+      "id": "clippy-baseline",
+      "file": "scripts/gates/clippy-baseline.json",
+      "gate": "rust:clippy",
+      "measures": [
+        {
+          "id": "total",
+          "kind": "value",
+          "path": "total"
+        },
+        {
+          "id": "pairs",
+          "kind": "sum",
+          "path": "pairs"
+        }
+      ]
+    },
+    {
+      "id": "identity-vocabulary-baseline",
+      "file": "scripts/gates/identity-vocabulary-baseline.json",
+      "gate": "audit:identity-vocabulary",
+      "measures": [
+        {
+          "id": "total",
+          "kind": "value",
+          "path": "total"
+        },
+        {
+          "id": "entries",
+          "kind": "sum",
+          "path": "entries"
+        }
+      ]
+    },
+    {
+      "id": "llm-ledger-boundary-baseline",
+      "file": "scripts/gates/llm-ledger-boundary-baseline.json",
+      "gate": "audit:llm-ledger-boundary",
+      "measures": [
+        {
+          "id": "files",
+          "kind": "length",
+          "path": "files"
+        },
+        {
+          "id": "entries",
+          "kind": "sumLength",
+          "path": "files",
+          "key": "entries"
+        }
+      ]
+    },
+    {
+      "id": "loading-states-baseline",
+      "file": "scripts/gates/loading-states-baseline.json",
+      "gate": "audit:loading-states",
+      "measures": [
+        {
+          "id": "files",
+          "kind": "length",
+          "path": "files"
+        }
+      ]
+    },
+    {
+      "id": "unreachable-component-baseline",
+      "file": "scripts/gates/unreachable-component-baseline.json",
+      "gate": "audit:unreachable-components",
+      "measures": [
+        {
+          "id": "files",
+          "kind": "length",
+          "path": "files"
+        }
+      ]
+    },
+    {
+      "id": "rust-architecture-baseline",
+      "file": "scripts/gates/rust-architecture-baseline.json",
+      "gate": "audit:rust-architecture",
+      "measures": [
+        {
+          "id": "findings",
+          "kind": "length",
+          "path": "findings"
+        }
+      ]
+    },
+    {
+      "id": "sidecar-architecture-baseline",
+      "file": "scripts/gates/sidecar-architecture-baseline.json",
+      "gate": "audit:sidecar-architecture",
+      "measures": [
+        {
+          "id": "findings",
+          "kind": "length",
+          "path": "findings"
+        }
+      ]
+    },
+    {
+      "id": "surface-baseline",
+      "file": "scripts/gates/surface-baseline.json",
+      "gate": "audit:surfaces",
+      "measures": [
+        {
+          "id": "violations",
+          "kind": "sum",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "workspace-attribution-baseline",
+      "file": "scripts/gates/workspace-attribution-baseline.json",
+      "gate": "audit:workspace-attribution",
+      "measures": [
+        {
+          "id": "violations",
+          "kind": "sum",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "pro-ide-perf-baseline",
+      "file": "scripts/gates/pro-ide-perf-baseline.json",
+      "gate": "audit:pro-ide-perf",
+      "measures": [
+        {
+          "id": "budgets",
+          "kind": "eachValue",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "network-egress-allowlist",
+      "file": "scripts/gates/network-egress-allowlist.json",
+      "gate": "audit:network-egress",
+      "measures": [
+        {
+          "id": "exceptions",
+          "kind": "length",
+          "path": "exceptions"
+        }
+      ]
+    },
+    {
+      "id": "pii-boundary-allowlist",
+      "file": "scripts/gates/pii-boundary-allowlist.json",
+      "gate": "audit:pii-boundaries",
+      "measures": [
+        {
+          "id": "entries",
+          "kind": "length",
+          "path": ""
+        },
+        {
+          "id": "boundaries",
+          "kind": "sumLength",
+          "path": "",
+          "key": "boundaries"
+        }
+      ]
+    },
+    {
+      "id": "static-export-allowlist",
+      "file": "scripts/gates/static-export-allowlist.json",
+      "gate": "lint:static-export",
+      "measures": [
+        {
+          "id": "entries",
+          "kind": "length",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "identity-wire-exceptions",
+      "file": "scripts/gates/identity-wire-exceptions.json",
+      "gate": "audit:identity-vocabulary",
+      "measures": [
+        {
+          "id": "exceptions",
+          "kind": "length",
+          "path": "exceptions"
+        }
+      ]
+    },
+    {
+      "id": "headless-registry-exclusions",
+      "file": "scripts/gates/headless-registry-exclusions.json",
+      "gate": "audit:headless-registry",
+      "measures": [
+        {
+          "id": "excludedSymbols",
+          "kind": "sumLength",
+          "path": "initializers",
+          "key": "symbols"
+        }
+      ]
+    },
+    {
+      "id": "rust-architecture",
+      "file": "scripts/gates/rust-architecture.json",
+      "gate": "audit:rust-architecture",
+      "measures": [
+        {
+          "id": "appShellMaxLoc",
+          "kind": "value",
+          "path": "appShell.maxLoc"
+        }
+      ]
+    },
+    {
+      "id": "i18n-baseline",
+      "file": "scripts/i18n-baseline.json",
+      "gate": "lint:i18n",
+      "measures": [
+        {
+          "id": "count",
+          "kind": "value",
+          "path": "count"
+        },
+        {
+          "id": "knownMissingKeyRefs",
+          "kind": "length",
+          "path": "knownMissingKeyRefs"
+        },
+        {
+          "id": "parityDriftEn",
+          "kind": "length",
+          "path": "knownParityDrift.onlyInEn"
+        },
+        {
+          "id": "parityDriftZh",
+          "kind": "length",
+          "path": "knownParityDrift.onlyInZh"
+        }
+      ]
+    },
+    {
+      "id": "db-fixture-baseline",
+      "file": "scripts/test/db-fixture-baseline.json",
+      "gate": "test:db-fixture:audit",
+      "measures": [
+        {
+          "id": "maxLegacyResets",
+          "kind": "value",
+          "path": "maxLegacyResets"
+        }
+      ]
+    },
+    {
+      "id": "sdk-standalone-baseline",
+      "file": "scripts/plugin/sdk-standalone-baseline.json",
+      "gate": "plugin:sdk:standalone",
+      "measures": [
+        {
+          "id": "references",
+          "kind": "sum",
+          "path": "files"
+        }
+      ]
+    },
+    {
+      "id": "author-import-baseline",
+      "file": "scripts/plugin/author-import-baseline.json",
+      "gate": "plugin:author-imports",
+      "measures": [
+        {
+          "id": "notYetMigrated",
+          "kind": "length",
+          "path": "notYetMigrated"
+        }
+      ]
+    },
+    {
+      "id": "performance-baseline",
+      "file": "packages/plugin-sdk/contract/performance-baseline.json",
+      "gate": "plugin-sdk performance:check",
+      "measures": [
+        {
+          "id": "budgets",
+          "kind": "eachValue",
+          "path": "budgets"
+        },
+        {
+          "id": "chunk",
+          "kind": "eachValue",
+          "path": "chunk"
+        },
+        {
+          "id": "lifecycle",
+          "kind": "eachValue",
+          "path": "lifecycle"
+        }
+      ]
+    },
+    {
+      "id": "external-agent-runtimes",
+      "file": "protocol/external-agent-runtimes.json",
+      "gate": "audit:external-agent-runtimes",
+      "measures": [
+        {
+          "id": "unpinnedLaunchWaivers",
+          "kind": "length",
+          "path": "unpinnedLaunchWaivers.runtimes"
+        }
+      ]
+    },
+    {
+      "id": "governance-exceptions",
+      "file": "scripts/e2e/governance-exceptions.json",
+      "gate": "audit:e2e-governance",
+      "measures": [
+        {
+          "id": "exceptions",
+          "kind": "length",
+          "path": "exceptions"
+        },
+        {
+          "id": "occurrences",
+          "kind": "sum",
+          "path": "exceptions"
+        }
+      ]
+    },
+    {
+      "id": "runtime-initializers",
+      "file": "scripts/gates/convergence/inventories/runtime-initializers.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "members",
+          "kind": "length",
+          "path": "members"
+        },
+        {
+          "id": "initializers",
+          "kind": "value",
+          "path": "metrics.initializers"
+        }
+      ]
+    },
+    {
+      "id": "lib-store-imperative",
+      "file": "scripts/gates/convergence/inventories/lib-store-imperative.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "static",
+          "kind": "value",
+          "path": "metrics.static"
+        },
+        {
+          "id": "all",
+          "kind": "value",
+          "path": "metrics.all"
+        }
+      ]
+    },
+    {
+      "id": "lib-ui-imports",
+      "file": "scripts/gates/convergence/inventories/lib-ui-imports.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "static",
+          "kind": "value",
+          "path": "metrics.static"
+        },
+        {
+          "id": "all",
+          "kind": "value",
+          "path": "metrics.all"
+        }
+      ]
+    },
+    {
+      "id": "tauri-dynamic-imports",
+      "file": "scripts/gates/convergence/inventories/tauri-dynamic-imports.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "members",
+          "kind": "value",
+          "path": "metrics.members"
+        }
+      ]
+    },
+    {
+      "id": "durable-queues",
+      "file": "scripts/gates/convergence/inventories/durable-queues.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "members",
+          "kind": "length",
+          "path": "members"
+        }
+      ]
+    },
+    {
+      "id": "caps",
+      "file": "scripts/gates/convergence/inventories/caps.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "business",
+          "kind": "value",
+          "path": "metrics.business"
+        },
+        {
+          "id": "unclassified",
+          "kind": "value",
+          "path": "metrics.unclassified"
+        }
+      ]
+    },
+    {
+      "id": "run-tables",
+      "file": "scripts/gates/convergence/inventories/run-tables.json",
+      "gate": "audit:convergence",
+      "measures": [
+        {
+          "id": "nameOnly",
+          "kind": "value",
+          "path": "metrics.nameOnly"
+        },
+        {
+          "id": "none",
+          "kind": "value",
+          "path": "metrics.none"
+        }
+      ]
+    }
+  ],
+  "notRatchets": [
+    {
+      "file": "scripts/gates/host-parity-annotations.json",
+      "reason": "Classifies subsystems (unmigrated, ui-assumption, physically-impossible, seam-infrastructure); it does not tolerate findings. The findings it explains are ratcheted by host-parity-baseline.json above."
+    },
+    {
+      "file": "scripts/gates/frozen-wasm-api.json",
+      "reason": "A frozen snapshot of the archived WASM API that must never change at all; check-frozen-wasm-api.mjs fails on any edit, so growth is already impossible."
+    },
+    {
+      "file": "scripts/gates/sidecar-architecture.json",
+      "reason": "The sidecar layer map (ADR-0197): layer assignments, launcher paths and the public surface. It holds decisions, not tolerated findings; tolerated findings live in sidecar-architecture-baseline.json above."
+    },
+    {
+      "file": "packages/plugin-contract/contract/api-surface-baseline.json",
+      "reason": "A snapshot of the published plugin API surface used to detect breaking removals; growth is the contract gaining methods, which is not debt."
+    },
+    {
+      "file": "scripts/test/db-fixture-exclusions.json",
+      "reason": "Tests that require real database recreation (schema, migration, connection lifecycle or timer behavior), not a shrinking debt allowance. Legacy reset debt is counted separately by db-fixture-baseline.json."
+    },
+    {
+      "file": "protocol/external-agent-security-policy.json",
+      "reason": "Runtime binary and package security allowlists mirrored into launchers and checked against shipped presets. New supported runtimes legitimately extend this policy; it is not an only-shrink debt waiver."
+    },
+    {
+      "file": "lib/usage/model-price-catalog.generated.json",
+      "reason": "Generated provider prices, not adjustable debt ceilings. check-price-catalog.mjs owns the fixed 250 KB ceiling in code and validates this artifact; more supported models are not baseline growth."
+    },
+    {
+      "file": "plugins/pi-latex-workbench/plugin.json",
+      "reason": "The bundle_include packaging allowlist is generated from the pinned vendor tree and Cognia glue. Its gate checks exact content; adding shipped files is not an only-shrink debt exemption."
+    },
+    {
+      "file": "packages/plugin-contract/contract/code-1.128-ide.json",
+      "reason": "The versioned IDE capability catalog includes supported APIs and compatibility exceptions. It describes the published contract; additional supported APIs are not tolerated architecture debt."
+    },
+    {
+      "file": "protocol/companion-verbs.json",
+      "reason": "The closed command verb vocabulary contains definitions and refused aliases, not tolerated violations. Reviewed verbs may be added for new operations; it is not an only-shrink baseline."
+    },
+    {
+      "file": "protocol/companion-request-schemas.json",
+      "reason": "Canonical request schemas include the generated settings write allowlist and API validation bounds. These describe supported inputs, not tolerated findings; new supported settings are not debt growth."
+    },
+    {
+      "file": "protocol/headless-command-dispositions.json",
+      "reason": "Classifies command ownership and exposure (local-only, runtime-internal, covered or separate-design-required). This is a transport contract, not an only-shrink waiver; tolerated parity findings have their own ratcheted baselines."
+    }
+  ]
+}

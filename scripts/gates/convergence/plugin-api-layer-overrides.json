@@ -1,0 +1,14 @@
+{
+  "canvas.getContent": {
+    "layer": "both",
+    "reason": "An explicit document id reads host data; omitting it resolves the active document in a client."
+  },
+  "editor.saveDirty": {
+    "layer": "both",
+    "reason": "Flushes the client's dirty editor buffers to host files and updates editor save state."
+  },
+  "media.utils.createCanvas": {
+    "layer": "ui",
+    "reason": "Returns a client OffscreenCanvas object rather than serializable media data."
+  }
+}

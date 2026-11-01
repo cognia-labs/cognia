@@ -1,0 +1,17 @@
+[
+  {
+    "source": "direct-chat",
+    "kind": "agent-turn",
+    "status": "succeeded",
+    "events": [
+      "run.started",
+      "step.added",
+      "step.started",
+      "tool.started",
+      "tool.completed",
+      "step.completed",
+      "run.completed"
+    ],
+    "toolCalls": [{ "name": "TodoWrite", "status": "completed" }]
+  }
+]

@@ -1,4 +1,5 @@
 import { createServer } from "node:http"
+import { toolTurnResponse } from "./scenarios/tool-turn.mjs"
 
 const port = Number.parseInt(process.env.PORT ?? "4010", 10)
 const marker = "[web-headless-e2e] deterministic assistant reply"
@@ -85,6 +86,19 @@ const server = createServer((request, response) => {
       body = JSON.parse(raw)
     } catch {
       json(response, 400, { error: { type: "invalid_request_error", message: "invalid JSON" } })
+      return
+    }
+    const toolTurn = toolTurnResponse(body)
+    if (toolTurn) {
+      if (body.stream === true) {
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+        })
+        response.end(toolTurn.sse)
+      } else {
+        json(response, 200, toolTurn.message)
+      }
       return
     }
     if (body.stream === true) {

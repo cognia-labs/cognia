@@ -79,6 +79,16 @@ export const EXEMPTIONS = {
   "audit:rpc-semantic-parity:report":
     "reporter — prints every finding including the ungated ones (opaque response schemas, desktop-dead arms); the gated half is `audit:rpc-semantic-parity`",
   "audit:host-parity:baseline": "writer — regenerates the host-parity baseline",
+  "audit:convergence:baseline": "writer — regenerates the ADR-0250 member inventories",
+  "audit:convergence:report":
+    "reporter — prints inventory metrics and unresolved rows; the gate is audit:convergence",
+  // The ADR-0250 A6 plugin API matrix is a one-time input to the plugin-contract
+  // ADR, pinned in docs/research/plugin-api-matrix-2026-11-01.md. As a gate it would
+  // fail unrelated PRs that touch the catalog or a plugin call site, and that
+  // contract is about to be replaced, so all three commands stay on demand.
+  "plugin:api-matrix": "on-demand generator for the pinned ADR-0250 A6 research snapshot",
+  "plugin:api-matrix:check": "on-demand freshness check of that snapshot; deliberately not a gate",
+  "plugin:api-matrix:test": "on-demand fixtures of that generator; deliberately not a gate",
   "audit:host-parity:report":
     "reporter — prints the full headless↔desktop inventory including the ungated class-D subsystem census; the gated half is `audit:host-parity`",
   "rust:clippy:baseline": "writer — regenerates the clippy baseline",
@@ -138,6 +148,10 @@ export const EXEMPTIONS = {
   "test:e2e:mobile": "playwright mobile project — owned by test.yml",
   "test:e2e:mobile:ios": "playwright iOS project — owned by nightly.yml",
   "test:e2e:tauri": "playwright tauri project — owned by nightly.yml",
+  "test:e2e:dual-host:desktop":
+    "dual-host desktop behaviour — owned by test.yml's Windows e2e-tauri job, using its built app",
+  "test:e2e:dual-host:web-headless":
+    "dual-host Web + Headless behaviour — owned by dual-host.yml's blocking Compose lane; requires a live stack",
   "test:e2e:workflows": "playwright subset helper — owned by test.yml",
   "test:e2e:workflows:editor": "playwright subset helper — owned by test.yml",
   "test:e2e:workflows:nodes": "playwright subset helper — owned by test.yml",

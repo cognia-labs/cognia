@@ -1,0 +1,4703 @@
+{
+  "inventory": "lib-store-imperative",
+  "description": "Non-test lib files importing stores and using getState, setState or subscribe. Repay by moving state ownership into the kernel and consuming an injected or host-neutral interface.",
+  "generatedAt": {
+    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "date": "2026-11-01"
+  },
+  "metrics": {
+    "static": 294,
+    "all": 410
+  },
+  "members": [
+    {
+      "key": "lib/a2ui/acp-bridge.ts",
+      "owner": "lib/a2ui",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/a2ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/a2ui/ai-generate.ts",
+      "owner": "lib/a2ui",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/a2ui/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/a2ui/ipc.ts",
+      "owner": "lib/a2ui",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/a2ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/account-sync/approval-notifications.ts",
+      "owner": "lib/account-sync",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/notifications/notification-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent-config/facts.ts",
+      "owner": "lib/agent-config",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent-config/surfaces.ts",
+      "owner": "lib/agent-config",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent-config/workspace.ts",
+      "owner": "lib/agent-config",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/composition/app-preset-catalog.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/custom-mode-store/index.ts",
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/composition/verified-fresh-agent.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/ensure-external-agent-ready.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/external-agent-binding.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/external-agent-selection.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/agent/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/plan/repair-client.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/plan/runtime.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/pending-gates-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/plan/step-dispatch.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/store.ts",
+        "stores/agent/pending-gates-store.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/plan/step-watchdog.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/agent/resolve-agent-mode.ts",
+      "owner": "lib/agent",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/custom-mode-store/index.ts",
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/agent-executor.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/capability/process-plane.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/config/gateway-model-facts.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/config/host-config-service.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/agent/external-agent-store/types.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/integrations/siwc.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/lifecycle/service.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/manager.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/session/active-agent-model.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/session/open-native-session-in-chat.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/session/rehydrate.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/external/session/renderer-tool-host.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/agent-team-runtime-deps.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/agent-team.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/auto/handoff.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/auto/materialize.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/capability-audit.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/consensus-orchestrator.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/delegation-orchestrator.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/delivery/github-delivery-adapter.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/gates/decide-pending-gate.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/pending-gates-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/gates/record-gate-answer.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/memory/memory-context.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/memory/shared-memory-orchestrator.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/agent-team-store/selectors.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/squad/lead-execution.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/squad/squad-control.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/squad/squad-lifecycle-runner.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/squad/start-squad-run.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/teammate/dispatch-teammate.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/workflow-nodes/index.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/agent/team/workflow-nodes/team-ops.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/chat/standalone-engine.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/effort-surface-session.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts",
+        "stores/agent/external-agent-store/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/eval/environment-preflight.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/eval/execution-runtime.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/eval/project-service.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/eval/runtime-context.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/eval/team-execution.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/generation/title-retry.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/headless-turn-llm-client.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/media/video-jobs/renderer-host.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/operations/index.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/ai/routing/cheap-model-hint.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/appearance/use-auto-mode.ts",
+      "owner": "lib/appearance",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/dexie-bridge.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/dock-documents.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/artifact/dock-documents-store.ts",
+        "stores/artifact/dock-tabs-store.ts",
+        "stores/chat/index.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/dock-pages.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/artifact/dock-tabs-store.ts",
+        "stores/chat/index.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/open-chat-document.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/park-idle-dock.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/artifacts/reveal.ts",
+      "owner": "lib/artifacts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/chat/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/attention/attention-store.ts",
+      "owner": "lib/attention",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/approval-journal-store.ts",
+        "stores/agent/pending-gates-store.ts",
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/automation/managed-desktop-alerts.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/automation/managed-desktop-client.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/automation/managed-desktop-result-deletion.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/automation/managed-desktop-results-client.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/best-of-n/entry.ts",
+      "owner": "lib/best-of-n",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/bot/runtime/run-cost.ts",
+      "owner": "lib/bot",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/bot/runtime/runner-owner.ts",
+      "owner": "lib/bot",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/browser-companion/host-dispatch.ts",
+      "owner": "lib/browser-companion",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/canvas/collaboration/canvas-transport.ts",
+      "owner": "lib/canvas",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/canvas/dexie-bridge.ts",
+      "owner": "lib/canvas",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts",
+        "stores/canvas/comment-store.ts"
+      ]
+    },
+    {
+      "key": "lib/canvas/register-canvas-editor-actions.ts",
+      "owner": "lib/canvas",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/canvas/canvas-settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/ccswitch/switch.ts",
+      "owner": "lib/ccswitch",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/auto-archive-schedule.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/branch-whole-conversation.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/cross-session-jump.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-viewport-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/image-edit/ai-service.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/mentions/entity-sources.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/mentions/message-reference.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/phantom-run-reconciler.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/reactions-store.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/room/store-sinks.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/composer-typing-store.ts",
+        "stores/chat/index.ts",
+        "stores/settings/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/search/pending-rows.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/session-deletion.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/im-notify-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/session-workspace-move-writes.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/shell-job-transcript.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/smart-snapshot-command.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/start-session.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/agent/index.ts",
+        "stores/chat/index.ts",
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/template/repo-template-write.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/turn-route/snapshot.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts",
+        "stores/agent/agent-team-store/dexie-bridge.ts",
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/external-agent-store/index.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/unread-marker.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/unread-marker-store.ts"
+      ]
+    },
+    {
+      "key": "lib/chat/video-job-card.ts",
+      "owner": "lib/chat",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/agents/cancel-subagent.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/agents/dispatch-runtime.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/agents/subagents/index.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/artifact-builtin-tools.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts",
+        "stores/chat/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/build-options.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts",
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/custom-mode-store/helpers.ts",
+        "stores/chat/fusion-mode-store.ts",
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/env-resolver.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/pet-builtin-tools.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/plugin-hook-ipc.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/plugin-tool-ipc.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/ask-user-store.ts",
+        "stores/chat/chat-store.ts",
+        "stores/index.ts",
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/provider-attempt-options.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/provider-telemetry.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/circuit-breaker-store.ts",
+        "stores/settings/health-metrics-store.ts",
+        "stores/settings/rate-limit-store.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/routing-fallback.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/settings/in-flight-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/routing-runtime-deps.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/circuit-breaker-store.ts",
+        "stores/settings/health-metrics-store.ts",
+        "stores/settings/in-flight-store.ts",
+        "stores/settings/index.ts",
+        "stores/settings/provider-cost-mirror-store.ts",
+        "stores/settings/rate-limit-store.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/sdk-subagent-bridge.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/sites-builtin-tools.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/subagent-importers/apply.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/team-builtin-tools.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/template-builtin-tools.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/claude/turn-agent-mode.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts"
+      ]
+    },
+    {
+      "key": "lib/cli-bridge/handlers/agent-team.ts",
+      "owner": "lib/cli-bridge",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/cli-bridge/handlers/plugin-dev-reload.ts",
+      "owner": "lib/cli-bridge",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/cli-bridge/renderer-request-source.ts",
+      "owner": "lib/cli-bridge",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/plugin-runtime/hot-reload-history-store.ts",
+        "stores/plugins/plugin-dev-session-store.ts"
+      ]
+    },
+    {
+      "key": "lib/code-adoption/turn-tracker.ts",
+      "owner": "lib/code-adoption",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/task-workspace-store.ts"
+      ]
+    },
+    {
+      "key": "lib/collab/notifications-sync.ts",
+      "owner": "lib/collab",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/notifications/notification-store.ts"
+      ]
+    },
+    {
+      "key": "lib/collab/open-shared-session.ts",
+      "owner": "lib/collab",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/collab/shared-run-coordinator.ts",
+      "owner": "lib/collab",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/companion/agent-team-write-handlers.ts",
+      "owner": "lib/companion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/companion/desktop-write-source.ts",
+      "owner": "lib/companion",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/companion/event-bridge.ts",
+      "owner": "lib/companion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/bootstrap/install-connector-runtime.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/commands/goal.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/inbox-writes/use-inbox-write-route.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/runtime.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/inbox/active-conversation-store.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/team-dispatch.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/connectors/voice.ts",
+      "owner": "lib/connectors",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/context-workbench/active-context.ts",
+      "owner": "lib/context-workbench",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/creator/agent-turn-runner.ts",
+      "owner": "lib/creator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/db/agent-team-projection.ts",
+      "owner": "lib/db",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/db/sessions.ts",
+      "owner": "lib/db",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/db/twin-runtime-settings.ts",
+      "owner": "lib/db",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/vector/vector-store.ts"
+      ]
+    },
+    {
+      "key": "lib/desktop/menu-actions.ts",
+      "owner": "lib/desktop",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/terminal/terminal-store.ts",
+        "stores/ui/ui-store.ts"
+      ]
+    },
+    {
+      "key": "lib/desktop/sidebar-edge-transition.ts",
+      "owner": "lib/desktop",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts",
+        "stores/ui/shell-columns-store.ts"
+      ]
+    },
+    {
+      "key": "lib/dev/expose-test-globals.tsx",
+      "owner": "lib/dev",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/agent/agent-team-store/dexie-bridge.ts",
+        "stores/agent/agent-team-store/index.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/chat/chat-store.ts",
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/devices/execution-host-guard.ts",
+      "owner": "lib/devices",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/diagnostics/notification-commands.ts",
+      "owner": "lib/diagnostics",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/notifications/notification-store.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/execution/chat-lease.ts",
+      "owner": "lib/execution",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/execution/promote-to-pane.ts",
+      "owner": "lib/execution",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/execution/run-learning-materializer.ts",
+      "owner": "lib/execution",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/execution/run-retrospective.ts",
+      "owner": "lib/execution",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/external-bridge/handlers/orchestration.ts",
+      "owner": "lib/external-bridge",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/file-viewer/open.ts",
+      "owner": "lib/file-viewer",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/file-viewer/file-viewer-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/download.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/duplicate.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/open.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts",
+        "stores/chat/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/ops.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/remote/host-dispatch.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/remote/remote-ops.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/rename.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/trash.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files-library/use-in-chat.ts",
+      "owner": "lib/files-library",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/files/allowed-roots-sync.ts",
+      "owner": "lib/files",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/files/edit-review-bridge.ts",
+      "owner": "lib/files",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/filespace/load.ts",
+      "owner": "lib/filespace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/remote-host/remote-host-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/filespace/open.ts",
+      "owner": "lib/filespace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/chat/index.ts",
+        "stores/filespace/filespace-panel-store.ts"
+      ]
+    },
+    {
+      "key": "lib/fleet/acp-fleet-projection.ts",
+      "owner": "lib/fleet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/agent/external-elicitation-store.ts",
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/gateway/mint-session-ticket.ts",
+      "owner": "lib/gateway",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/git/load.ts",
+      "owner": "lib/git",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/global-search/providers/devices.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/global-search/providers/files.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/global-search/providers/git.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/global-search/providers/squads.ts",
+      "owner": "lib/global-search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/goal/verification.ts",
+      "owner": "lib/goal",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/harness/runtime/adoption.ts",
+      "owner": "lib/harness",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/session-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/harness/runtime/run-control.ts",
+      "owner": "lib/harness",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/notifications/notification-store.ts"
+      ]
+    },
+    {
+      "key": "lib/headless/runtimes/initializers.ts",
+      "owner": "lib/headless",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/scheduler/index.ts",
+        "stores/settings/provider-cost-mirror-store.ts"
+      ]
+    },
+    {
+      "key": "lib/headless/runtimes/room-runner.ts",
+      "owner": "lib/headless",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/i18n/runtime-translator.ts",
+      "owner": "lib/i18n",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/island/main-window-controls.ts",
+      "owner": "lib/island",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/pending-gates-store.ts",
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/issues/im/callback-handler.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/issues/run/agent-team-adapter.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/issues/run/running.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/issues/service.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/issues/sources/agent-team-source.ts",
+      "owner": "lib/issues",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/lsp/lsp-status-store.ts",
+      "owner": "lib/lsp",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/lsp/migrate-settings-initializer.ts",
+      "owner": "lib/lsp",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/memory/run-turn-memory.ts",
+      "owner": "lib/memory",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/monaco/index.ts",
+      "owner": "lib/monaco",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/canvas/canvas-settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/native/local-runtime.ts",
+      "owner": "lib/native",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/navigation/desktop-deeplink-dispatch.ts",
+      "owner": "lib/navigation",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/network/proxy-fetch.ts",
+      "owner": "lib/network",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/system/index.ts"
+      ]
+    },
+    {
+      "key": "lib/notifications/api.ts",
+      "owner": "lib/notifications",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/notifications/inbound-connector.ts",
+      "owner": "lib/notifications",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/inbox/active-conversation-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/notifications/runtime.ts",
+      "owner": "lib/notifications",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/notifications/notification-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/perf/capture-controller.ts",
+      "owner": "lib/perf",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/access/gate.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/bubbles/say.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/pet/pet-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/chat/seed-main-chat.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/session-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/commands.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/cross-window-bridge.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/pet/pet-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/agent-team-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/capture-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/capture/capture-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/chat-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/git-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/radar-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/events/sources/terminal-source.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/remote/host-dispatch.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/pet/pet-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/remote/host-snapshot.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/runtime/pet-controller.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/pet/pet-store.ts"
+      ]
+    },
+    {
+      "key": "lib/pet/settings-sync.ts",
+      "owner": "lib/pet",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/placement/authority-host.ts",
+      "owner": "lib/placement",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/agent-sdk/context-providers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/agent-team-store/selectors.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/artifact-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/automation-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/bot-integration-binding.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/canvas-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/chat-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/composer-intent-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/config-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/editor-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/eval-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/export-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/session-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/external-agent-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/external-agents-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/external-agents-changes.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/git-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/goal-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/i18n-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/media-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/pet-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/plan-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/plugin-capability-registry.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/project-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/scheduler-tasks.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/scheduler/scheduler-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/session-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/chat/session-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/subscription-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/team-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/terminal-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/theme-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/vector-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts",
+        "stores/vector/vector-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/view-container-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/workspace-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/api/workspace-root.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/a2ui-bridge.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/a2ui/index.ts",
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/project-webview-rpc.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/sidecar-tools-bridge.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/tools-bridge.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/workflow-integration.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/cogpack/transfer-install.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/cogset/actions.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugins/cogset-session-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/cogset/follower.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugins/cogset-session-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/core/apply-plugin-config.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/core/context.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/a2ui/index.ts",
+        "stores/plugin-runtime/index.ts",
+        "stores/plugin-runtime/plugin-modal-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/core/install-plugin-host-dispatch.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/core/manager.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts",
+        "stores/plugin-runtime/plugin-activation-progress-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/core/plugin-asset-resolver.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/devtools/developer-mode.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/distribution/seed-bundled-plugins.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/ide/broker-runtime.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/ide/dev-mode-session.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/ide/protocol-runtime.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/library/access.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/lifecycle/backup.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/lifecycle/rollback.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/lifecycle/updater.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/lsp/lsp-bootstrap.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/marketplace/install-flow.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/messaging/chat-lifecycle-hook-source.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/messaging/glance-visibility-hook-source.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/messaging/hooks-system.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/messaging/ipc.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/pi-packages/resolve.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/runtime/renderer-host-runtime.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/security/account-isolation.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/activation-triggers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/chat-participant-registry.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/configuration-handlers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/extensions-handlers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/host-supervisor.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/lm-handler.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/runtime-handlers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/terminal-handlers.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/plugin-store.ts",
+        "stores/project/project-store.ts",
+        "stores/remote-host/remote-host-store.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/plugin/vscode-shim/webview-restoration.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/policy/action-review/allow-recipient.ts",
+      "owner": "lib/policy",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/policy/action-review/plan-context.ts",
+      "owner": "lib/policy",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/profile/use-user-profile.ts",
+      "owner": "lib/profile",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/project-coordinator/project-access.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/project-coordinator/send-extras.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/project-coordinator/thread-runtime.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/project-coordinator/thread-watcher.ts",
+      "owner": "lib/project-coordinator",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/project-environment/resolve-environment.ts",
+      "owner": "lib/project-environment",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/app-settings.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/custom-modes.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/custom-mode-store/index.ts",
+        "stores/plugin-runtime/plugin-store.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/instruction-files.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/subagent-templates.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/team-templates.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/prompts/adapters/workspace-instructions.ts",
+      "owner": "lib/prompts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/provider-diagnostics/companion.ts",
+      "owner": "lib/provider-diagnostics",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/provider-diagnostics/endpoints.ts",
+      "owner": "lib/provider-diagnostics",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/provider-diagnostics/refresh.ts",
+      "owner": "lib/provider-diagnostics",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/remote-host/liveness.ts",
+      "owner": "lib/remote-host",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/remote-host/management-channel.ts",
+      "owner": "lib/remote-host",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/remote-host/target-transport.ts",
+      "owner": "lib/remote-host",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/calls/live-settings.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/chat/chat-route-host.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/chat/chat-turn-bridge.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/pending-gates-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/gate/current-settings.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/routing/delegate-capabilities.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/settings/save-router-fusion-settings.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/router-fusion/verify/acceptance-profiles.ts",
+      "owner": "lib/router-fusion",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/runtime/standalone-mode.ts",
+      "owner": "lib/runtime",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sandbox/delivery-source-hosts.ts",
+      "owner": "lib/sandbox",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sandbox/host-agent-placement.ts",
+      "owner": "lib/sandbox",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sandbox/run-environment.ts",
+      "owner": "lib/sandbox",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sandbox/task-shell-placement.ts",
+      "owner": "lib/sandbox",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/scheduler/executors/index.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/custom-mode-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/scheduler/notification-commands.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/scheduler/scheduler-store.ts"
+      ]
+    },
+    {
+      "key": "lib/scheduler/promoted-wake.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/scheduler/scheduler-store.ts"
+      ]
+    },
+    {
+      "key": "lib/scheduler/task-workspace-binding.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/scheduler/webhook-outbound-config.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/webhooks/store.ts"
+      ]
+    },
+    {
+      "key": "lib/search/configured-search.ts",
+      "owner": "lib/search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/search/search-service.ts",
+      "owner": "lib/search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/search/standalone-answer.ts",
+      "owner": "lib/search",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/settings-import/apply.ts",
+      "owner": "lib/settings-import",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/settings-import/index.ts",
+      "owner": "lib/settings-import",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/shell/start-guild-conversation.ts",
+      "owner": "lib/shell",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/shortcuts/unified.ts",
+      "owner": "lib/shortcuts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/shortcuts/app-keybinding-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sites/notify.ts",
+      "owner": "lib/sites",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/sites/site-console-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sites/preview.ts",
+      "owner": "lib/sites",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/built-in/desktop-hitl.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/built-in/issues/_core.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/built-in/issues/link-artifact.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/built-in/issues/list-projects.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/marketplace-skillssh.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/recording/controller.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/skills/recorder-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/session-suggestion.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/skills/recorder-store.ts"
+      ]
+    },
+    {
+      "key": "lib/skills/sync.ts",
+      "owner": "lib/skills",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/billing.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/diagnostics.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/goal.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/issue.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/composer-intent-store.ts",
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/loop.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/memory.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/pet.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/plan.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/report.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/sessions.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/side-chat.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/chat/composer-intent-store.ts",
+        "stores/chat/side-chat-request-store.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/actions/squad.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/slash-commands/builtin.ts",
+      "owner": "lib/slash-commands",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/anthropic/refresh.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/account-lifecycle.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/managed-key-credential.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/model-discovery.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/provider-registry.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/transport.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/core/vault-snapshot.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/limits/hooks.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/limits/quota-failover.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/limits/runner.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/siwc/execution.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts",
+        "stores/agent/external-agent-store/index.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/subscription/siwc/transport.ts",
+      "owner": "lib/subscription",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sync/desktop-sync-source.ts",
+      "owner": "lib/sync",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sync/host-state-service.ts",
+      "owner": "lib/sync",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/agent-runtime-store.ts",
+        "stores/agent/ask-user-store.ts",
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sync/host-state-session-move.ts",
+      "owner": "lib/sync",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/sync/host-state-title.ts",
+      "owner": "lib/sync",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/client.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/task-workspace-store.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/execution-port-lease.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/managed-workspace.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/origin.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/tool-evidence.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/task-workspace-store.ts"
+      ]
+    },
+    {
+      "key": "lib/task-workspace/workspace-provisioning.ts",
+      "owner": "lib/task-workspace",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tasks/spawn-task-dispatch.ts",
+      "owner": "lib/tasks",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-dock-layout-store.ts",
+        "stores/artifact/artifact-store.ts",
+        "stores/context-workbench/context-workbench-store.ts"
+      ]
+    },
+    {
+      "key": "lib/templates/legacy-sources.ts",
+      "owner": "lib/templates",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/custom-mode-store/index.ts",
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/templates/runtime.ts",
+      "owner": "lib/templates",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/agent/custom-mode-store/index.ts",
+        "stores/agent/subagent-runtime-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/boot-reattach.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/dock-tool-handler.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/headless-exec.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static",
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/headless-session-registry.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/host-profiles.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/rehydrate.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/run-in-dock.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/saved-ssh-hosts.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/spawn-default.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts",
+        "stores/project/project-store.ts",
+        "stores/settings/index.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/spawn-orchestrator.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/terminal/spawner-message-arg.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tools/tool-catalog.ts",
+      "owner": "lib/tools",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/plugin-runtime/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tray/tray-actions.ts",
+      "owner": "lib/tray",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/ui/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tts/speak-chat-message.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tts/speak-pet.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/tts/speak-selection.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/twin/runtime/twin-embedding-status.ts",
+      "owner": "lib/twin",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/updates/open-update-center.ts",
+      "owner": "lib/updates",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/ui/ui-store.ts"
+      ]
+    },
+    {
+      "key": "lib/updates/runtime.ts",
+      "owner": "lib/updates",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts",
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/usage/cost-budget-gate.ts",
+      "owner": "lib/usage",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/usage/cost-budget-runtime.ts",
+      "owner": "lib/usage",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/pending-gates-store.ts",
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/usage/run-estimate/load-samples.ts",
+      "owner": "lib/usage",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/agent/external-agent-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/voice/live/approval.ts",
+      "owner": "lib/voice",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/chat/chat-store.ts"
+      ]
+    },
+    {
+      "key": "lib/webhooks/egress-registry.ts",
+      "owner": "lib/webhooks",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/webhooks/store.ts"
+      ]
+    },
+    {
+      "key": "lib/work-submission/stored-chat-dispatch.ts",
+      "owner": "lib/work-submission",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/ai/ai-prompt-routed.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/circuit-breaker-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/artifacts/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/artifact/artifact-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/automation/web-clone.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/evaluation/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/goals/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/plans/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/settings-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/sites/index.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/account/account-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/source-control/repo-target.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/git/git-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/nodes/terminal/session.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/settings/index.ts",
+        "stores/terminal/terminal-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/runtime/placed-trigger.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/remote-host/remote-host-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workflow/runtime/run-title.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/settings/index.ts"
+      ]
+    },
+    {
+      "key": "lib/workspace/ensure-default-workspace.ts",
+      "owner": "lib/workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workspace/open-folder.ts",
+      "owner": "lib/workspace",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    },
+    {
+      "key": "lib/workspace/project-transfer.ts",
+      "owner": "lib/workspace",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "stores": [
+        "stores/project/project-store.ts"
+      ]
+    }
+  ],
+  "excluded": []
+}

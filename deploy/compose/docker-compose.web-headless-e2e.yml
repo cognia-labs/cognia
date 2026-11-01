@@ -11,7 +11,7 @@ services:
     environment:
       PORT: "4010"
     volumes:
-      - ../../tests/real-e2e/anthropic-fixture.mjs:/fixture/anthropic-fixture.mjs:ro
+      - ../../tests/real-e2e:/fixture:ro
     healthcheck:
       test:
         [

@@ -307,6 +307,11 @@ jobs:
       # blocking gate failed.
       - name: Run gate group
         id: gates
+        env:
+          # audit:baseline-growth compares every ratchet baseline with this
+          # commit (fetched on demand, since the checkout is shallow). It
+          # falls back to the change plan's base when this is empty.
+          BASELINE_GROWTH_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: node scripts/gates/check-all.mjs --change-plan .cache/ci/changes.json --group ${{ matrix.group }}
 
       - name: Save lint result cache

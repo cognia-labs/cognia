@@ -1,0 +1,526 @@
+{
+  "inventory": "tauri-dynamic-imports",
+  "description": "Renderer files dynamically loading Tauri core/event outside the transport seam owners. Repay by routing through the transport seam; static imports remain host-parity class A's responsibility.",
+  "generatedAt": {
+    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "date": "2026-11-01"
+  },
+  "metrics": {
+    "members": 73,
+    "staticAlsoInClassA": 3
+  },
+  "members": [
+    {
+      "key": "components/fleet/island-shell.tsx",
+      "file": "components/fleet/island-shell.tsx",
+      "owner": "components/fleet",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/plugins/detail/plugin-cli-tools-section.tsx",
+      "file": "components/plugins/detail/plugin-cli-tools-section.tsx",
+      "owner": "components/plugins",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
+      "file": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
+      "owner": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/providers/initializers/window-show-initializer.tsx",
+      "file": "components/providers/initializers/window-show-initializer.tsx",
+      "owner": "components/providers/initializers/window-show-initializer.tsx",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/settings/connections/forms/onebot-config.tsx",
+      "file": "components/settings/connections/forms/onebot-config.tsx",
+      "owner": "components/settings",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/settings/ocr/tabs/ocr-models-tab.tsx",
+      "file": "components/settings/ocr/tabs/ocr-models-tab.tsx",
+      "owner": "components/settings",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/shared/file-type-icon.tsx",
+      "file": "components/shared/file-type-icon.tsx",
+      "owner": "components/shared",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/skills/recorder/recorder-controller-view.tsx",
+      "file": "components/skills/recorder/recorder-controller-view.tsx",
+      "owner": "components/skills",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "components/terminal/terminal-shell-picker.tsx",
+      "file": "components/terminal/terminal-shell-picker.tsx",
+      "owner": "components/terminal",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "hooks/plugins/use-plugin-icon-src.ts",
+      "file": "hooks/plugins/use-plugin-icon-src.ts",
+      "owner": "hooks/plugins",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/ai/agent/external/agent-transport.ts",
+      "file": "lib/ai/agent/external/agent-transport.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/ai/agent/team/workers/wake-worker.ts",
+      "file": "lib/ai/agent/team/workers/wake-worker.ts",
+      "owner": "lib/ai",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/appearance/load-system-fonts.ts",
+      "file": "lib/appearance/load-system-fonts.ts",
+      "owner": "lib/appearance",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/automation/audit.ts",
+      "file": "lib/automation/audit.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/automation/client.ts",
+      "file": "lib/automation/client.ts",
+      "owner": "lib/automation",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/capture/capture-manager.ts",
+      "file": "lib/capture/capture-manager.ts",
+      "owner": "lib/capture",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/companion/desktop-write-source.ts",
+      "file": "lib/companion/desktop-write-source.ts",
+      "owner": "lib/companion",
+      "note": "",
+      "staticAlsoInClassA": true
+    },
+    {
+      "key": "lib/credentials/keyring-store.ts",
+      "file": "lib/credentials/keyring-store.ts",
+      "owner": "lib/credentials",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/db/schema.ts",
+      "file": "lib/db/schema.ts",
+      "owner": "lib/db",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/dev/expose-test-globals.tsx",
+      "file": "lib/dev/expose-test-globals.tsx",
+      "owner": "lib/dev",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/files/file-bridge.ts",
+      "file": "lib/files/file-bridge.ts",
+      "owner": "lib/files",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/host-secrets/provider-key-overlay.ts",
+      "file": "lib/host-secrets/provider-key-overlay.ts",
+      "owner": "lib/host-secrets",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/island/client.ts",
+      "file": "lib/island/client.ts",
+      "owner": "lib/island",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/native/tauri-log-bridge.ts",
+      "file": "lib/native/tauri-log-bridge.ts",
+      "owner": "lib/native",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/ocr/deps.ts",
+      "file": "lib/ocr/deps.ts",
+      "owner": "lib/ocr",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/ocr/runtime.ts",
+      "file": "lib/ocr/runtime.ts",
+      "owner": "lib/ocr",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/perf/host-dispatch.ts",
+      "file": "lib/perf/host-dispatch.ts",
+      "owner": "lib/perf",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/api/media-api.ts",
+      "file": "lib/plugin/api/media-api.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/bridge/_shared/python-backed-proxy.ts",
+      "file": "lib/plugin/bridge/_shared/python-backed-proxy.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/bridge/plugin-file-path.ts",
+      "file": "lib/plugin/bridge/plugin-file-path.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/cli-tools/execute-cli-tool.ts",
+      "file": "lib/plugin/cli-tools/execute-cli-tool.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/cogpack/transfer-install.ts",
+      "file": "lib/plugin/cogpack/transfer-install.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/core/loader.ts",
+      "file": "lib/plugin/core/loader.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/core/manager.ts",
+      "file": "lib/plugin/core/manager.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": true
+    },
+    {
+      "key": "lib/plugin/core/vscode-loader.ts",
+      "file": "lib/plugin/core/vscode-loader.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/core/wasm-loader.ts",
+      "file": "lib/plugin/core/wasm-loader.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/devtools/file-watch.ts",
+      "file": "lib/plugin/devtools/file-watch.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/distribution/seed-bundled-plugins.ts",
+      "file": "lib/plugin/distribution/seed-bundled-plugins.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/ide/dev-mode-session.ts",
+      "file": "lib/plugin/ide/dev-mode-session.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/ide/dev-mode.ts",
+      "file": "lib/plugin/ide/dev-mode.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/ide/proxy-manager.ts",
+      "file": "lib/plugin/ide/proxy-manager.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/package/git-installer.ts",
+      "file": "lib/plugin/package/git-installer.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/package/http-installer.ts",
+      "file": "lib/plugin/package/http-installer.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/package/local-installer.ts",
+      "file": "lib/plugin/package/local-installer.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/package/marketplace.ts",
+      "file": "lib/plugin/package/marketplace.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/pi-packages/operations.ts",
+      "file": "lib/plugin/pi-packages/operations.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/runtime/renderer-host-runtime.ts",
+      "file": "lib/plugin/runtime/renderer-host-runtime.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/styles/plugin-stylesheet.ts",
+      "file": "lib/plugin/styles/plugin-stylesheet.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/vscode-shim/install-vscode-extension.ts",
+      "file": "lib/plugin/vscode-shim/install-vscode-extension.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/plugin/vscode-shim/openvsx-install-flow.ts",
+      "file": "lib/plugin/vscode-shim/openvsx-install-flow.ts",
+      "owner": "lib/plugin",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/power/screen-wake-lock.ts",
+      "file": "lib/power/screen-wake-lock.ts",
+      "owner": "lib/power",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/reply-copilot/screen/overlay-client.ts",
+      "file": "lib/reply-copilot/screen/overlay-client.ts",
+      "owner": "lib/reply-copilot",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/scheduler/daemon-bridge.ts",
+      "file": "lib/scheduler/daemon-bridge.ts",
+      "owner": "lib/scheduler",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/session-import/adapters/opencode-db.ts",
+      "file": "lib/session-import/adapters/opencode-db.ts",
+      "owner": "lib/session-import",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/session-import/fs.ts",
+      "file": "lib/session-import/fs.ts",
+      "owner": "lib/session-import",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/sites/build-version.ts",
+      "file": "lib/sites/build-version.ts",
+      "owner": "lib/sites",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/sites/cloudflare/version-uploader.ts",
+      "file": "lib/sites/cloudflare/version-uploader.ts",
+      "owner": "lib/sites",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/sites/confined-build.ts",
+      "file": "lib/sites/confined-build.ts",
+      "owner": "lib/sites",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/tauri/event-store.ts",
+      "file": "lib/tauri/event-store.ts",
+      "owner": "lib/tauri",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/tauri/pet-window.ts",
+      "file": "lib/tauri/pet-window.ts",
+      "owner": "lib/tauri",
+      "note": "",
+      "staticAlsoInClassA": true
+    },
+    {
+      "key": "lib/terminal/completion/exe-provider.ts",
+      "file": "lib/terminal/completion/exe-provider.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/terminal/headless-exec.ts",
+      "file": "lib/terminal/headless-exec.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/terminal/headless-session-registry.ts",
+      "file": "lib/terminal/headless-session-registry.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/terminal/serial/serial-connection.ts",
+      "file": "lib/terminal/serial/serial-connection.ts",
+      "owner": "lib/terminal",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/tts/host-bindings.ts",
+      "file": "lib/tts/host-bindings.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/tts/keyring.ts",
+      "file": "lib/tts/keyring.ts",
+      "owner": "lib/tts",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/usage-dock/client.ts",
+      "file": "lib/usage-dock/client.ts",
+      "owner": "lib/usage-dock",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/workflow/nodes/automation/web-clone.ts",
+      "file": "lib/workflow/nodes/automation/web-clone.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/workflow/nodes/terminal/session.ts",
+      "file": "lib/workflow/nodes/terminal/session.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "lib/workflow/runtime/tauri-bridge.ts",
+      "file": "lib/workflow/runtime/tauri-bridge.ts",
+      "owner": "lib/workflow",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "packages/provider-core/src/providers/ollama-pull.ts",
+      "file": "packages/provider-core/src/providers/ollama-pull.ts",
+      "owner": "packages/provider-core",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "packages/vector/src/index.ts",
+      "file": "packages/vector/src/index.ts",
+      "owner": "packages/vector",
+      "note": "",
+      "staticAlsoInClassA": false
+    },
+    {
+      "key": "packages/vector/src/store.ts",
+      "file": "packages/vector/src/store.ts",
+      "owner": "packages/vector",
+      "note": "",
+      "staticAlsoInClassA": false
+    }
+  ],
+  "excluded": []
+}

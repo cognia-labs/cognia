@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process"
 
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test } from "@playwright/test"
+import { createPairedAccount, vaultPassword } from "./helpers/pairing"
 
 const pairPayload = process.env.COGNIA_REAL_PAIR_PAYLOAD
 const lifecyclePairPayload = process.env.COGNIA_REAL_LIFECYCLE_PAIR_PAYLOAD
@@ -15,7 +16,6 @@ const directOrigin = process.env.COGNIA_REAL_DIRECT_URL ?? "https://127.0.0.1:27
 const secondDirectOrigin = process.env.COGNIA_REAL_SECOND_URL ?? "https://127.0.0.1:27891"
 const oidcMemberOrigin = process.env.COGNIA_REAL_OIDC_MEMBER_URL ?? "https://127.0.0.1:27892"
 const oidcOwnerOrigin = process.env.COGNIA_REAL_OIDC_OWNER_URL ?? "https://127.0.0.1:27893"
-const vaultPassword = "cognia-real-e2e-password"
 const memberCapabilities = ["host.observe", "agent.run", "workspace.read"]
 
 function required(value: string | undefined, name: string): string {
@@ -33,40 +33,6 @@ function hostIdFromPairPayload(payload: string): string {
     throw new Error("pair payload is missing its host identity")
   }
   return decoded.host
-}
-
-async function createBrowserAccount(page: Page, label: string): Promise<void> {
-  // Create the account on the destination route. A full navigation after
-  // creation intentionally locks the browser vault again, so pairing must
-  // continue in the same unlocked document.
-  await page.goto("/pair")
-  const accountForm = page.locator("form")
-  await accountForm.locator('input:not([type="password"])').fill(label)
-  await accountForm.locator('input[type="password"]').fill(vaultPassword)
-  await accountForm.locator('button[type="submit"]').click()
-
-  const recovery = page.getByTestId("account-vault-recovery")
-  await expect(recovery).toBeVisible()
-  await recovery.getByRole("checkbox").check()
-  await page.getByTestId("account-vault-recovery-continue").click()
-}
-
-async function pairThroughUi(page: Page, payload: string): Promise<void> {
-  await expect(page.getByTestId("pair-onboarding")).toHaveAttribute("data-step", "pair")
-  await page.getByTestId("pair-payload").fill(payload)
-  await page.getByTestId("pair-submit").click()
-  await expect(page.getByTestId("pair-onboarding")).toHaveAttribute("data-step", "paired")
-  await page.waitForFunction(() => window.__cogniaE2ECompanion?.connectionState() === "connected")
-  await expect
-    .poll(async () =>
-      page.evaluate(async () => (await window.__cogniaE2ECompanion?.runtime())?.targetId ?? null)
-    )
-    .not.toBe("web-standalone")
-}
-
-async function createPairedAccount(page: Page, label: string, payload: string): Promise<void> {
-  await createBrowserAccount(page, label)
-  await pairThroughUi(page, payload)
 }
 
 function killHeadlessBrain(): void {

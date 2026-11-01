@@ -182,6 +182,13 @@ Six runners, each with one owner:
 | pytest                           | `plugin-sdk/python`     | `quality.yml`, `plugin-sdk` group                                                 |
 | Agent conformance                | real sidecars + server  | `test.yml`, dedicated conformance job                                             |
 
+The `dual-host.yml` lane runs the composer-driven `TodoWrite` behaviour on Web + Headless
+for runtime, companion, contract and harness changes. Its always-running `dual-host-required`
+job passes unrelated PRs and requires selected runs to succeed. The Windows `e2e-tauri` job
+runs the same behaviour on desktop against its existing build; both compare the renderer
+execution journal to `tests/dual-host/expected/chat-tool-turn.json`. Whether the brain holds
+that run is recorded as an annotation, an open ADR-0250 phase 1 question.
+
 PRs and validated trunk pushes use **incremental tests without coverage**.
 Before installing dependencies, `scripts/ci/change-plan.mjs` compares the exact
 PR base tree (against the checked-out synthetic merge tree), or the previous push

@@ -1,0 +1,102 @@
+{
+  "roots": [
+    {
+      "file": "components/project-coordinator/project-coordinator-host.tsx",
+      "reason": "Owns thread completion subscriptions, recovery, PR watches and idle-thread resolution at app-runtime mount."
+    },
+    {
+      "file": "components/scheduler/scheduler-initializer.tsx",
+      "reason": "Owns scheduler boot, execution-event bridge, reconciliation and graceful shutdown in the composite workflow initializers."
+    },
+    {
+      "file": "components/connectors/connector-bus-provider.tsx",
+      "reason": "Owns connector bootstrap, transport routing and lease-reclaim retry timers in the deferred initializer tree."
+    },
+    {
+      "file": "components/account/sync/account-sync-host.tsx",
+      "reason": "Owns the account synchronization poller and engine plus approval notification registration at app-runtime mount."
+    },
+    {
+      "file": "components/twin/twin-worker-initializer.tsx",
+      "reason": "Owns all-twins ingest and distill workers via useBackgroundTwinWorker in the deferred initializer tree."
+    },
+    {
+      "file": "components/shell/project-kb-worker-initializer.tsx",
+      "reason": "Owns project store subscriptions and debounced knowledge ingestion independent of the visible workbench."
+    }
+  ],
+  "notRuntime": [
+    {
+      "file": "components/agent/team/gate-modals-host.tsx",
+      "reason": "Only renders pending approval dialogs and resolves the user decision through the approval bus."
+    },
+    {
+      "file": "components/chat/chat-scope-provider.tsx",
+      "reason": "Only supplies per-composer React context; no timers, persistent writes or autonomous worker lifecycle."
+    },
+    {
+      "file": "components/chat/composer-reference-host.tsx",
+      "reason": "UI-only composer-reference subscription stages a context chip in the currently focused composer."
+    },
+    {
+      "file": "components/inbox/inbox-composer-actions-host.tsx",
+      "reason": "Only renders a plugin extension slot for the visible inbox composer; it starts no autonomous runtime."
+    },
+    {
+      "file": "components/mobile/glance/mobile-glance-provider.tsx",
+      "reason": "Client-bound mobile glance projection and navigation context; owns screen state, not authoritative background execution."
+    },
+    {
+      "file": "components/mobile/shell/mobile-global-search-host.tsx",
+      "reason": "Only renders a route-aware mobile search dialog and navigation actions."
+    },
+    {
+      "file": "components/pet/console/pet-console-actions-provider.tsx",
+      "reason": "Client-bound console action context chooses local or remote UI actions; autonomous pet execution is owned elsewhere."
+    },
+    {
+      "file": "components/plugins/dialogs/plugin-delete-dialog-host.tsx",
+      "reason": "Only advances the explicit uninstall confirmation dialog queue on user decisions; no durable autonomous drain."
+    },
+    {
+      "file": "components/plugins/plugin-custom-view-host.tsx",
+      "reason": "Only delegates visible custom view rendering; no background worker or queue ownership."
+    },
+    {
+      "file": "components/plugins/plugin-permission-request-host.tsx",
+      "reason": "Client-bound permission dialog consumer; resolves user decisions for displayed requests rather than owning work execution."
+    },
+    {
+      "file": "components/plugins/plugin-tree-view-host.tsx",
+      "reason": "Visible plugin tree rendering and change refresh; subscriptions maintain UI tree state only."
+    },
+    {
+      "file": "components/plugins/plugin-view-host.tsx",
+      "reason": "Only selects and renders the visible plugin view; its subscriptions refresh presentation state."
+    },
+    {
+      "file": "components/plugins/plugin-webview-host.tsx",
+      "reason": "Client-bound iframe message and load handlers require a mounted DOM frame; only projects plugin webview UI state."
+    },
+    {
+      "file": "components/settings/provider/provider-detail-host.tsx",
+      "reason": "Only assembles provider settings tabs and lazy visible detail panels."
+    },
+    {
+      "file": "components/settings/provider/provider-rail-host.tsx",
+      "reason": "Only lays out the responsive provider settings navigation and selected detail panel."
+    },
+    {
+      "file": "components/support/report-problem-host.tsx",
+      "reason": "Only renders the store-requested report dialog; it owns no autonomous runtime."
+    },
+    {
+      "file": "components/terminal/terminal-dock-move-provider.tsx",
+      "reason": "Only binds drag-and-drop sensors and panel positions in the visible terminal dock."
+    },
+    {
+      "file": "components/workspace/workspace-dialog-host.tsx",
+      "reason": "UI-only workspace dialog request subscription lazily mounts the requested editor."
+    }
+  ]
+}

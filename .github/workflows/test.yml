@@ -1499,6 +1499,24 @@ jobs:
           # (target/debug/cognia-next.exe) must stay exercised by CI, or a
           # wrong default silently rots (it shipped broken for two months
           # because this override was the only path that ever ran).
+      # Report-only until its first green run, like dual-host.yml's
+      # DUAL_HOST_BLOCKING (convergence 0a ledger X4); the same change that
+      # flips that flag removes this continue-on-error.
+      - name: Run dual-host desktop project against the same built app
+        continue-on-error: true
+        run: pnpm test:e2e:dual-host:desktop
+        env:
+          CI: "true"
+          PLAYWRIGHT_TAURI: "1"
+      - name: Upload dual-host desktop evidence
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dual-host-desktop
+          path: |
+            .cache/playwright-report/dual-host/
+            .cache/test-results/dual-host/
+          retention-days: 14
       - name: Upload Playwright HTML report
         uses: actions/upload-artifact@v7
         if: always()

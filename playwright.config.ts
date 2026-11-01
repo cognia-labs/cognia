@@ -47,6 +47,13 @@ const isCI = Boolean(process.env.CI)
 // Native and mobile specs have their own explicitly configured projects.
 const WEB_PROJECT_IGNORE = ["**/tests/e2e/tauri/**", "**/tests/e2e/mobile/**"]
 
+// Shared with the dual-host lane: global setup owns the mock fleet and the
+// Tauri CDP launcher, and both native projects reuse the existing fixture.
+export const tauriHarness = {
+  globalSetup: "./tests/e2e/global-setup.ts",
+  project: { fullyParallel: false },
+}
+
 export default defineConfig({
   testDir: "./tests/e2e",
   // Helpers have co-located Jest unit tests; only browser specs belong here.
@@ -95,7 +102,7 @@ export default defineConfig({
     ? [["list"], ["html", { open: "never", outputFolder: "playwright-report" }], ["github"]]
     : [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
 
-  globalSetup: process.env.PLAYWRIGHT_NO_GLOBAL_SETUP ? undefined : "./tests/e2e/global-setup.ts",
+  globalSetup: process.env.PLAYWRIGHT_NO_GLOBAL_SETUP ? undefined : tauriHarness.globalSetup,
 
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
@@ -202,7 +209,7 @@ export default defineConfig({
             // scenario, so tests must not interleave. (The tauriEnabled branch
             // of `workers` above already forces a single worker; this keeps the
             // constraint explicit at the project level.)
-            fullyParallel: false,
+            ...tauriHarness.project,
           },
         ]
       : []),

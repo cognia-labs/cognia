@@ -23,6 +23,7 @@ const cleanWindowKeys: Array<keyof Window> = [
   "__cogniaDeleteWorkflow",
   "__cogniaReadMessages",
   "__cogniaReadSessions",
+  "__cogniaReadExecutionRuns",
   "__cogniaE2EOutbound",
   "__cogniaE2EAutomation",
   "__cogniaE2ERestartLocalTransport",
@@ -87,6 +88,7 @@ describe("ExposeTestGlobals", () => {
     await Promise.resolve()
     expect(window.__cogniaResetDb).toBeUndefined()
     expect(window.__cogniaReadSessions).toBeUndefined()
+    expect(window.__cogniaReadExecutionRuns).toBeUndefined()
     expect(window.__cogniaE2EOutbound).toBeUndefined()
     expect(window.__cogniaE2EAutomation).toBeUndefined()
     expect(window.__cogniaE2ERestartLocalTransport).toBeUndefined()
@@ -114,6 +116,7 @@ describe("ExposeTestGlobals", () => {
     expect(typeof window.__cogniaDeleteWorkflow).toBe("function")
     expect(typeof window.__cogniaReadMessages).toBe("function")
     expect(typeof window.__cogniaReadSessions).toBe("function")
+    expect(typeof window.__cogniaReadExecutionRuns).toBe("function")
     expect(typeof window.__cogniaE2EAutomation?.settingsGet).toBe("function")
     expect(typeof window.__cogniaE2EAutomation?.click).toBe("function")
     expect(typeof window.__cogniaE2ERestartLocalTransport).toBe("function")
@@ -419,6 +422,44 @@ describe("ExposeTestGlobals", () => {
         },
       ])
     )
+  })
+
+  it("reads all execution runs or one session with ordered decrypted events", async () => {
+    process.env.NEXT_PUBLIC_E2E = "1"
+    await provisionBrowserVault("acct_e2e_vault", "correct horse battery staple")
+    activateAccountDatabase("acct_e2e_vault")
+    render(<ExposeTestGlobals />)
+    await waitFor(() => expect(window.__cogniaTestGlobalsReady).toBe(true))
+    const { createExecutionRun, runEventJournal, semanticRunEvent } =
+      await import("@/lib/db/execution-runs")
+    for (const sessionId of ["session-one", "session-two"]) {
+      await createExecutionRun({
+        id: `run-${sessionId}`,
+        kind: "agent-turn",
+        sourceId: `run-${sessionId}`,
+        sessionId,
+        title: "Encrypted chat run",
+        status: "queued",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+      })
+      await runEventJournal.append(
+        `run-${sessionId}`,
+        semanticRunEvent("run.started", { surface: "chat" }, { ts: 2 })
+      )
+      await runEventJournal.append(
+        `run-${sessionId}`,
+        semanticRunEvent("run.completed", { summary: "Decrypted summary" }, { ts: 3 })
+      )
+    }
+    const runs = await window.__cogniaReadExecutionRuns!("session-one")
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ id: "run-session-one", status: "completed" })
+    expect(runs[0].events.map((event) => event.type)).toEqual(["run.started", "run.completed"])
+    expect(runs[0].events[1].payload).toMatchObject({ summary: "Decrypted summary" })
+    expect(await window.__cogniaReadExecutionRuns!()).toHaveLength(2)
+    expect(await window.__cogniaReadExecutionRuns!("missing")).toEqual([])
   })
 
   it("__cogniaReadMessages returns the text an encrypted account database stores", async () => {

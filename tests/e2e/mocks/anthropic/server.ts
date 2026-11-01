@@ -15,6 +15,7 @@
 const createExpressApp = () => require("express")() as import("express").Application
 
 import type { Server } from "http"
+import { toolTurnResponse } from "../../../real-e2e/scenarios/tool-turn.mjs"
 
 export interface MessagesRequestPayload {
   model: string
@@ -295,6 +296,18 @@ export function createMockAnthropicServer(): MockAnthropicServer {
         const i = messagesResolvers.indexOf(r)
         if (i !== -1) messagesResolvers.splice(i, 1)
       }
+    }
+
+    const toolTurn = toolTurnResponse(body)
+    if (toolTurn) {
+      if (body.stream === true) {
+        res.set("content-type", "text/event-stream")
+        res.set("cache-control", "no-cache")
+        res.end(toolTurn.sse)
+      } else {
+        res.json(toolTurn.message)
+      }
+      return
     }
 
     switch (scenario.kind) {

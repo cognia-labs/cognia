@@ -1,0 +1,196 @@
+name: Dual Host
+
+# Desktop (test.yml's Windows Tauri job) and Web + Headless run one composer
+# behaviour and compare their renderer journals to the same committed projection.
+# Brain possession of that run is an observational ADR-0250 phase 1 question.
+# No workflow paths filter: a skipped workflow leaves a required check pending
+# forever on unrelated PRs. The always-running final job reports the decision.
+on:
+  pull_request:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+# REPORT-ONLY until the lane's first green CI run (convergence 0a ledger X4).
+# A lane that has never run must not block every kernel PR on harness bugs:
+# while this is "false", dual-host-required turns a failed or cancelled lane
+# into a warning. After the first green run, the user (or the session they
+# delegate) sets it to "true" and marks dual-host-required as a required check
+# in branch protection, in one change.
+env:
+  DUAL_HOST_BLOCKING: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dual-host-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  relevance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      relevant: ${{ steps.paths.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.x
+      - name: Resolve committed changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_FORCED: ${{ github.event.forced }}
+          GITHUB_TOKEN: ${{ github.token }}
+        # The shared planner fetches the event base; unknown diffs select a full run.
+        run: node scripts/ci/change-plan.mjs --output .cache/ci/changes.json
+      - name: Select dual-host inputs
+        id: paths
+        run: node scripts/ci/dual-host-paths.mjs .cache/ci/changes.json
+
+  lane:
+    needs: relevance
+    if: needs.relevance.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    # Cold-cache runtime-slim build time has not been measured yet.
+    timeout-minutes: 180
+    env:
+      SHARE_UPLOAD_SECRET: ci-dual-host-secret
+      COGNIA_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      SIGNALING_IMAGE: cognia-signaling:ci
+      SHARE_IMAGE: cognia-share:ci
+      COGNIA_SERVER_IMAGE: cognia-server:ci-slim
+      COGNIA_WEB_IMAGE: cognia-web:ci
+      COGNIA_PUBLIC_URL: https://cognia.localhost
+      COGNIA_PUBLIC_SIGNALING_URL: wss://cognia.localhost/v2/signaling
+      COGNIA_ALLOWED_WEB_ORIGINS: https://cognia.localhost
+      COGNIA_ALLOW_PRIVATE_NETWORK: "true"
+      SIGNALING_ALLOWED_ORIGINS: https://cognia.localhost
+      COGNIA_DOMAIN: cognia.localhost
+      NEXT_PUBLIC_E2E: "1"
+      NEXT_PUBLIC_ACCOUNT_GATE: "1"
+      COMPOSE_FILE: docker-compose.yml:docker-compose.web-headless-e2e.yml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # The raw Buildx CLI needs Actions' cache runtime variables exported;
+      # docker/build-push-action normally supplies these for its own builds.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - name: Checkout the pinned cognia-services
+        uses: ./.github/actions/checkout-cognia-services
+      - name: Build service images
+        run: |
+          docker build -t cognia-signaling:ci .cache/cognia-services/services/signaling-server
+          docker build -t cognia-share:ci .cache/cognia-services/services/share-server
+      - name: Build cognia-server (runtime-slim)
+        run: |
+          docker buildx build --load \
+            --file deploy/docker/Dockerfile.cognia-server --target runtime-slim \
+            --tag cognia-server:ci-slim \
+            --cache-from "type=registry,ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cognia-server:buildcache" \
+            --cache-from type=gha,scope=dual-host \
+            --cache-to type=gha,scope=dual-host,mode=max \
+            .
+      # The web export peaks at ~17 GB RSS, past the 16 GB runner (the same
+      # measurement images.yml grows swap for); /mnt is the large scratch disk.
+      - name: Grow swap for the web export
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+      - name: Build same-origin Web/Caddy image
+        working-directory: deploy/compose
+        run: docker compose --profile tls build caddy
+      - name: Up + wait
+        working-directory: deploy/compose
+        # These entry services pull in signaling and the Anthropic fixture.
+        # server + tls suffice; the sample needs no secondary Hosts or IdP.
+        run: docker compose --profile server --profile tls up -d --wait cognia-server caddy
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.x
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            sidecar/pnpm-lock.yaml
+      - name: Cache standalone npm downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-${{ runner.arch }}-node26-npm-${{ hashFiles('sidecar/vscode-ext-host/package-lock.json', 'sidecar/webclone/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node26-npm-
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run dual-host Web Headless project
+        working-directory: deploy/compose
+        run: |
+          set -euo pipefail
+          pair_payload="$(docker compose exec -T cognia-server \
+            cognia-server pair --device-name dual-host-e2e --advertise-url https://cognia.localhost \
+            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          test -n "$pair_payload"
+          cd ../..
+          COGNIA_REAL_PAIR_PAYLOAD="$pair_payload" \
+            COGNIA_REAL_COMPOSE_DIR=deploy/compose \
+            pnpm test:e2e:dual-host:web-headless
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dual-host-web-headless
+          path: |
+            .cache/playwright-report/dual-host/
+            .cache/test-results/dual-host/
+          retention-days: 14
+      - name: Logs on failure
+        if: failure()
+        working-directory: deploy/compose
+        run: docker compose --profile server --profile tls logs --no-color
+      - name: Down
+        if: always()
+        working-directory: deploy/compose
+        run: docker compose --profile server --profile tls down -v
+
+  dual-host-required:
+    name: dual-host-required
+    needs: [relevance, lane]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.x
+      - name: Require the selected lane to succeed
+        env:
+          RELEVANCE_RESULT: ${{ needs.relevance.result }}
+          SELECTED: ${{ needs.relevance.outputs.relevant }}
+          LANE_RESULT: ${{ needs.lane.result }}
+          DUAL_HOST_BLOCKING: ${{ env.DUAL_HOST_BLOCKING }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { dualHostVerdict } from './scripts/ci/dual-host-paths.mjs'
+          const { RELEVANCE_RESULT, SELECTED, LANE_RESULT } = process.env
+          const verdict = dualHostVerdict(RELEVANCE_RESULT, SELECTED, LANE_RESULT, process.env.DUAL_HOST_BLOCKING)
+          const detail = `relevance=${RELEVANCE_RESULT}, selected=${SELECTED}, lane=${LANE_RESULT}`
+          if (verdict === "fail") {
+            console.error(`Dual-host check failed: ${detail}`)
+            process.exitCode = 1
+          } else if (verdict === "warn") {
+            console.log(`::warning::Dual-host lane did not pass (${detail}); report-only until its first green run`)
+          }
+          NODE
