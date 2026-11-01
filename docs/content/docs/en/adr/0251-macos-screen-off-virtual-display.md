@@ -1,9 +1,9 @@
 ---
-title: "0242 — macOS screen-off virtual display"
+title: "0251 — macOS screen-off virtual display"
 description: "A Developer ID beta uses one runtime-resolved CGVirtualDisplay and explicit ScreenCaptureKit targeting while the unlocked Mac keeps computing with its physical panel asleep."
 ---
 
-# ADR 0242 — macOS screen-off virtual display
+# ADR 0251 — macOS screen-off virtual display
 
 **Status:** Accepted (beta)
 **Date:** 2026-10-27

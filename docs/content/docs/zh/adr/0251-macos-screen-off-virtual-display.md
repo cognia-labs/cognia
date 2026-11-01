@@ -1,9 +1,9 @@
 ---
-title: "0242 — macOS 熄屏虚拟显示器"
+title: "0251 — macOS 熄屏虚拟显示器"
 description: "Developer ID Beta 通过运行时解析 CGVirtualDisplay，明确绑定 ScreenCaptureKit 的捕获目标，在物理面板休眠且会话未锁定时维持 Computer Use。"
 ---
 
-# ADR 0242 — macOS 熄屏虚拟显示器
+# ADR 0251 — macOS 熄屏虚拟显示器
 
 **Status:** Accepted (beta)
 **Date:** 2026-10-27
