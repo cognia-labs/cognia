@@ -56,6 +56,7 @@ import type { BackupPackageV3, EncryptedEnvelopeV1 } from "@/lib/data/types"
 import { WebDavSyncCard } from "@/components/settings/data/webdav-sync-card"
 import { GithubBackupCard } from "@/components/settings/data/github-backup-card"
 import { GoogleDriveBackupCard } from "@/components/settings/data/google-drive-backup-card"
+import { PluginBackupDestinations } from "@/components/settings/data/plugin-backup-destinations"
 import { requireBiometric } from "@/lib/biometric/prompt"
 
 export function BackupRestoreTab() {
@@ -71,6 +72,7 @@ export function BackupRestoreTab() {
       <WebDavSyncCard />
       <GithubBackupCard />
       <GoogleDriveBackupCard />
+      <PluginBackupDestinations />
       <FullRestoreDialog />
     </div>
   )

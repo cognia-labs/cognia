@@ -833,5 +833,38 @@
     "title": "Trace retention",
     "unit": "days",
     "zeroHint": "Set to 0 to keep traces forever."
+  },
+  "pluginDestinations": {
+    "backupNow": "Back up now",
+    "restore": "Restore",
+    "settings": "Plugin settings",
+    "cancel": "Cancel",
+    "passphrase": "Sync passphrase",
+    "notReady": "Check the plugin settings for details.",
+    "succeeded": "Backup completed.",
+    "failed": "Backup operation failed.",
+    "restored": "Backup restored.",
+    "lastResult": "Last result: {result}",
+    "restoreTitle": "Restore from {label}",
+    "restoreDescription": "The Host decrypts and validates this backup before importing it. Existing records are kept. Enter the passphrase used for this snapshot.",
+    "snapshot": "Snapshot",
+    "empty": "No snapshots available.",
+    "readiness": {
+      "ready": "Ready",
+      "needs-setup": "Needs setup",
+      "needs-auth": "Sign in required",
+      "unavailable": "Unavailable"
+    },
+    "reasons": {
+      "syncPassphraseLocked": "Unlock the sync passphrase to back up.",
+      "destinationUnavailable": "Destination unavailable on this runtime."
+    },
+    "results": {
+      "success": "Succeeded",
+      "failed": "Failed",
+      "skipped": "Skipped: not ready",
+      "cancelled": "Cancelled"
+    },
+    "importing": "Importing backup…"
   }
 }

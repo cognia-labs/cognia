@@ -33,15 +33,6 @@ export const GOOGLE_DRIVE_TOKENS_KEY = "google-drive-tokens"
 export const DEFAULT_GITHUB_BACKUP_PATH = "cognia-backups"
 export const DEFAULT_GOOGLE_DRIVE_FOLDER_NAME = "Cognia Backups"
 
-/** Destinations that have a wired backend on this build. */
-export const SUPPORTED_BACKUP_DESTINATIONS: readonly BackupDestination[] = Object.freeze([
-  "local",
-  "webdav",
-  "github",
-  "googledrive",
-  "all",
-] as const)
-
 /** Destinations kept in the enum for persisted rows but no longer offered. */
 export const DEPRECATED_BACKUP_DESTINATIONS: readonly BackupDestination[] = Object.freeze([
   "convex",
@@ -248,27 +239,24 @@ export async function clearGoogleDriveTokens(): Promise<void> {
 // ── Aggregate readiness (used by the scheduler dialog + host matrix) ────────
 
 export type BackupDestinationReadiness =
-  | { destination: BackupDestination; state: "ready" }
-  | { destination: BackupDestination; state: "not-configured"; reason: string }
-  | { destination: BackupDestination; state: "deprecated" }
+  import("@cognia/plugin-contract/types/plugin/plugin-backup-destinations").BackupDestinationReadiness & {
+    destination: BackupDestination
+    label: string
+  }
 
-/** Which remote destinations are configured well enough to be scheduled. */
-export async function describeBackupDestinationReadiness(): Promise<BackupDestinationReadiness[]> {
-  const settings = await getBackupDestinationsSettings()
-  const out: BackupDestinationReadiness[] = [{ destination: "local", state: "ready" }]
-  const github = resolveGithubBackupConfig(settings.github)
-  out.push(
-    github
-      ? { destination: "github", state: "ready" }
-      : { destination: "github", state: "not-configured", reason: "github" }
-  )
-  const drive = resolveGoogleDriveBackupConfig(settings.googleDrive)
-  const driveTokens = drive ? await loadGoogleDriveTokens() : null
-  out.push(
-    drive && driveTokens?.refreshToken
-      ? { destination: "googledrive", state: "ready" }
-      : { destination: "googledrive", state: "not-configured", reason: "googledrive" }
-  )
-  out.push({ destination: "convex", state: "deprecated" })
-  return out
+/** Shared list for scheduling/settings; key readiness is owned by the Host. */
+export async function describeBackupDestinationReadiness(
+  signal?: AbortSignal
+): Promise<BackupDestinationReadiness[]> {
+  const { listBackupDestinations, readBackupDestinationReadiness } = await import("./index")
+  return [
+    { destination: "local", label: "local", state: "ready" },
+    ...(await Promise.all(
+      listBackupDestinations().map(async (entry) => ({
+        destination: entry.id,
+        label: entry.label,
+        ...(await readBackupDestinationReadiness(entry.id, signal)),
+      }))
+    )),
+  ]
 }

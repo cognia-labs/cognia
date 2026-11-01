@@ -1,4 +1,5 @@
 import { validatePluginDocsProviderDef } from "../../../types/plugin/plugin-docs-providers"
+import { validateBackupDestinationDeclaration } from "../../../types/plugin/plugin-backup-destinations"
 import { validatePluginIssueSyncProviderDef } from "../../issues/sync/resources"
 import { subset, valid, validRange } from "semver"
 import { validateLibrarySchema } from "../library/schema"
@@ -2985,6 +2986,30 @@ export function validatePluginManifest(
             `issueSyncProviders[${index}].id`,
             "manifest.issueSyncProviders.duplicate",
             "Duplicate issue-sync provider id"
+          )
+        if (id) ids.add(id)
+      })
+    }
+  }
+
+  if (m.backupDestinations !== undefined) {
+    if (!Array.isArray(m.backupDestinations))
+      pushError(
+        "backupDestinations",
+        "manifest.backupDestinations.invalid",
+        "backupDestinations must be an array"
+      )
+    else {
+      const ids = new Set<string>()
+      m.backupDestinations.forEach((def, index) => {
+        for (const error of validateBackupDestinationDeclaration(def))
+          pushError(`backupDestinations[${index}]`, "manifest.backupDestinations.invalid", error)
+        const id = (def as { id?: string } | null)?.id
+        if (id && ids.has(id))
+          pushError(
+            `backupDestinations[${index}].id`,
+            "manifest.backupDestinations.duplicate",
+            "Duplicate backup destination id"
           )
         if (id) ids.add(id)
       })

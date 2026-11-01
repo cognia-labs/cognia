@@ -36,6 +36,10 @@ import {
   unregisterIssueSyncProvidersForPlugin,
 } from "@/lib/plugin/bridge/issue-sync-providers-bridge"
 import {
+  registerBackupDestinationsForPlugin,
+  unregisterBackupDestinationsForPlugin,
+} from "@/lib/plugin/bridge/backup-destinations-bridge"
+import {
   registerDocsProvidersForPlugin,
   unregisterDocsProvidersForPlugin,
 } from "@/lib/plugin/bridge/docs-providers-bridge"
@@ -187,6 +191,14 @@ export interface ModuleBridgeCapabilityDescriptor {
  * registration stays compatible with declarative contribution arrays.
  */
 export const MODULE_BRIDGE_CAPABILITIES = {
+  "backup-destination": {
+    key: "backup-destination",
+    manifestField: "backupDestinations",
+    register: async (ctx) => {
+      registerBackupDestinationsForPlugin(ctx.manifest)
+    },
+    unregister: unregisterBackupDestinationsForPlugin,
+  },
   "issue-sync-provider": {
     key: "issue-sync-provider",
     manifestField: "issueSyncProviders",

@@ -495,7 +495,7 @@ export function createFullPluginContext(
       permissionsAPI.hasPermission(permission as never)
     ),
     share: createShareAPI(pluginId),
-    backup: createBackupAPI(pluginId),
+    backup: createBackupAPI(pluginId, plugin.manifest),
     automation: createAutomationAPI(pluginId),
     browser: createGuardedBrowserAPI(pluginId, plugin.source),
     characterPacks: createCharacterPacksAPI(pluginId),

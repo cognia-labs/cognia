@@ -9,7 +9,7 @@ jest.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastError(...
 
 const readinessMock = jest.fn(async () => [
   { destination: "local", state: "ready" },
-  { destination: "github", state: "not-configured", reason: "github" },
+  { destination: "github", state: "needs-setup", reasonKey: "github" },
   { destination: "googledrive", state: "ready" },
   { destination: "convex", state: "deprecated" },
 ])

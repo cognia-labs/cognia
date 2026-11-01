@@ -34,11 +34,15 @@ import {
 import type { ExportOptions } from "@/lib/data/types"
 import { getDefaultBackupPassphrase } from "@/lib/data/backup-key"
 import { appendBackupHistory, type BackupHistoryEncryption } from "@/lib/db/backup-history"
-import { saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
 import { assertTaskTypeSupportedOnHost } from "../host-support"
 import { loggers } from "@cognia/logging"
-import { dispatchBackupDestination, remoteLegsFor } from "@/lib/data/destinations"
+import {
+  dispatchBackupDestination,
+  remoteLegsFor,
+  readBackupDestinationReadiness,
+  getBackupDestination,
+} from "@/lib/data/destinations"
 import { isDeprecatedBackupDestination } from "@/lib/data/destinations/config"
 import { encryptSnapshotBody, webdavSnapshotName } from "@/lib/data/destinations/webdav"
 import { resolveBackupHostFilesystem } from "@/lib/data/backup-host-filesystem"
@@ -131,13 +135,6 @@ function isSupportedDestination(destination: BackupDestination | undefined): boo
   return wantsLocal(destination) || remoteLegsFor(destination).length > 0
 }
 
-/** Human-readable name of a remote leg for messages/history rows. */
-const REMOTE_LEG_LABEL: Record<"webdav" | "github" | "googledrive", string> = {
-  webdav: "WebDAV",
-  github: "GitHub",
-  googledrive: "Google Drive",
-}
-
 export async function executeBackupTask(
   task: ScheduledTask,
   execution: TaskExecution,
@@ -148,8 +145,10 @@ export async function executeBackupTask(
     _signal.throwIfAborted()
     if (getDb() !== db) throw new Error("backup_owner_changed")
   }
+  const finishedLegs = new Set<BackupDestination>()
   const payload = (task.payload ?? {}) as Partial<BackupTaskPayload>
   const destination = payload.destination
+  const plannedRemoteLegs = remoteLegsFor(destination)
 
   if (!isSupportedDestination(destination)) {
     const error = isDeprecatedBackupDestination(destination)
@@ -169,7 +168,7 @@ export async function executeBackupTask(
     const buildOpts = payloadToBuildOptions(payload.backupType, payload.options)
     let basePackage: Awaited<ReturnType<typeof buildBackupPackage>> | undefined
     const output: Record<string, unknown> = {}
-    const remoteLegs = remoteLegsFor(destination)
+    const remoteLegs = plannedRemoteLegs
     const localOnly = destination === undefined || destination === "local"
 
     if (wantsLocal(destination)) {
@@ -183,6 +182,7 @@ export async function executeBackupTask(
         await safelyAppendFailure(error, "auto-key", "local")
         // Local-only tasks fail hard; `all` keeps going and reports the leg.
         if (localOnly) return { success: false, error }
+        finishedLegs.add("local")
         output.local = { skipped: true, error }
       } else {
         const passphrase = await getDefaultBackupPassphrase()
@@ -214,6 +214,7 @@ export async function executeBackupTask(
           destination: "local",
           producer: "cron",
         })
+        finishedLegs.add("local")
         output.local = { target, sizeBytes: written.sizeBytes, filename }
       }
     }
@@ -221,17 +222,33 @@ export async function executeBackupTask(
     assertActive()
     if (remoteLegs.length > 0) {
       const syncPass = getSyncPassphrase()
-      if (!syncPass) {
-        const error =
-          "Remote upload skipped — unlock the sync passphrase this session to enable it."
-        await safelyAppendFailure(error, "passphrase", destination)
-        // For a remote-only task this is a hard failure; for `all` the local
-        // backup already succeeded, so keep going and report partial success —
-        // but surface the skipped legs in `output` so they aren't silent at the
-        // result level (and the next scheduled tick retries the upload).
-        if (!wantsLocal(destination)) return { success: false, error }
-        for (const leg of remoteLegs) output[leg] = { skipped: true, error }
-      } else {
+      const readyLegs: BackupDestination[] = []
+      for (const leg of remoteLegs) {
+        const readiness = await readBackupDestinationReadiness(leg, _signal)
+        assertActive()
+        if (readiness.state === "ready") readyLegs.push(leg)
+        else {
+          const unavailable = !getBackupDestination(leg)
+          const error = unavailable
+            ? "destination unavailable on this runtime"
+            : `skipped: not ready (${readiness.reasonKey ?? readiness.state})${readiness.reasonKey === "syncPassphraseLocked" ? "; unlock the sync passphrase" : ""}`
+          await appendBackupHistory({
+            completedAt: Date.now(),
+            type: "scheduled",
+            success: false,
+            encryption: "passphrase",
+            destination: leg,
+            producer: "cron",
+            errorMessage: error,
+            result: { status: unavailable ? "failed" : "skipped", reasonKey: readiness.reasonKey },
+          })
+          finishedLegs.add(leg)
+          output[leg] = { skipped: !unavailable, failed: unavailable, error }
+        }
+      }
+      if (!readyLegs.length && !wantsLocal(destination))
+        return { success: false, output, error: (output[remoteLegs[0]] as { error: string }).error }
+      if (syncPass && readyLegs.length) {
         try {
           basePackage ??= await buildBackupPackage(buildOpts)
           const pkg = await attachPortableRetrievalKeys(basePackage, syncPass)
@@ -240,9 +257,28 @@ export async function executeBackupTask(
           const filename = webdavSnapshotName(pkg.manifest.exportedAt)
           const meta = { filename, exportedAt: pkg.manifest.exportedAt, sizeBytes: body.length }
           let anyRemoteSucceeded = false
-          for (const leg of remoteLegs) {
+          for (const leg of readyLegs) {
             assertActive()
-            const result = await dispatchBackupDestination(leg, body, meta, assertActive)
+            const result = await dispatchBackupDestination(leg, body, meta, assertActive, _signal)
+            if (getDb() !== db)
+              return { success: false, error: "backup_owner_changed_or_cancelled" }
+            finishedLegs.add(leg)
+            if (result.cancelled) {
+              await appendBackupHistory({
+                completedAt: Date.now(),
+                type: "scheduled",
+                success: false,
+                encryption: "passphrase",
+                destination: leg,
+                producer: "cron",
+                errorMessage: "cancelled",
+                result: { status: "cancelled" },
+              })
+              output[leg] = { cancelled: true }
+              // Let the outer cancellation handler close every remaining planned leg.
+              _signal.throwIfAborted()
+              continue
+            }
             assertActive()
             if (result.ok) {
               anyRemoteSucceeded = true
@@ -255,13 +291,11 @@ export async function executeBackupTask(
                 filename,
                 destination: leg,
                 producer: "cron",
+                result: { status: "success", ...result.result },
               })
               output[leg] = { target: result.target, sizeBytes: body.length, filename }
-              if (leg === "webdav") await stampWebdavLastSync(assertActive)
             } else {
-              const error =
-                result.error ??
-                `${REMOTE_LEG_LABEL[leg as keyof typeof REMOTE_LEG_LABEL] ?? leg} upload failed.`
+              const error = result.error ?? `${leg} upload failed.`
               await safelyAppendFailure(error, "passphrase", leg)
               output[leg] = { failed: true, error }
             }
@@ -269,8 +303,10 @@ export async function executeBackupTask(
           // A single-remote task fails when its one leg failed; `all` (or a
           // remote-only fan-out) fails only when every remote leg failed and
           // there was no local success to report.
-          const remoteFailures = remoteLegs.filter(
-            (leg) => (output[leg] as { failed?: boolean } | undefined)?.failed
+          const remoteFailures = readyLegs.filter(
+            (leg) =>
+              (output[leg] as { failed?: boolean; cancelled?: boolean } | undefined)?.failed ||
+              (output[leg] as { cancelled?: boolean } | undefined)?.cancelled
           )
           if (remoteFailures.length > 0 && !wantsLocal(destination) && !anyRemoteSucceeded) {
             const first = output[remoteFailures[0]] as { error?: string }
@@ -287,7 +323,7 @@ export async function executeBackupTask(
         } catch (error) {
           assertActive()
           const message = error instanceof Error ? error.message : String(error)
-          for (const leg of remoteLegs) {
+          for (const leg of readyLegs) {
             await safelyAppendFailure(message, "passphrase", leg)
             output[leg] = { failed: true, error: message }
           }
@@ -304,31 +340,38 @@ export async function executeBackupTask(
       output,
     })
 
+    if (
+      !Object.values(output).some(
+        (value) => value && typeof value === "object" && "target" in value
+      )
+    )
+      return { success: false, output, error: "No backup destination is ready." }
     return { success: true, output }
   } catch (err) {
-    if (getDb() !== db || _signal.aborted)
-      return { success: false, error: "backup_owner_changed_or_cancelled" }
+    if (getDb() !== db) return { success: false, error: "backup_owner_changed_or_cancelled" }
+    if (_signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+      const pending: BackupDestination[] = [
+        ...(wantsLocal(destination) ? ["local" as const] : []),
+        ...plannedRemoteLegs,
+      ].filter((leg) => !finishedLegs.has(leg))
+      for (const leg of pending) {
+        await appendBackupHistory({
+          completedAt: Date.now(),
+          type: "scheduled",
+          success: false,
+          encryption: leg === "local" ? "auto-key" : "passphrase",
+          destination: leg,
+          producer: "cron",
+          errorMessage: "cancelled",
+          result: { status: "cancelled" },
+        })
+      }
+      return { success: false, error: "cancelled" }
+    }
     const error = err instanceof Error ? err.message : String(err)
     await safelyAppendFailure(error, "auto-key", destination)
     log.error("Scheduler backup task failed", { taskId: task.id, error })
     return { success: false, error }
-  }
-}
-
-/** Stamp `webdavSync.lastSyncAt` after a successful upload. Best-effort. */
-async function stampWebdavLastSync(assertActive: () => void): Promise<void> {
-  try {
-    assertActive()
-    const db = getDb()
-    await saveSettings(
-      (current) => {
-        assertActive()
-        return { webdavSync: { ...current.webdavSync, lastSyncAt: new Date().toISOString() } }
-      },
-      { mirrorToHost: false, scope: { db, assertActive } }
-    )
-  } catch {
-    // Non-fatal.
   }
 }
 
@@ -345,6 +388,8 @@ async function safelyAppendFailure(
       encryption,
       errorMessage,
       destination,
+      producer: "cron",
+      result: { status: "failed" },
     })
   } catch {
     // Don't let history failures mask the real error in the result.

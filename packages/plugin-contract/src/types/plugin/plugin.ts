@@ -176,6 +176,7 @@ export type PluginCapability =
   | "canvas" // Provides canvas editing and selection workflows
   | "ai-provider" // Provides AI provider fallback and routing helpers
   | "docs-provider"
+  | "backup-destination"
   | "issue-sync-provider"
   | "decision-provider" // Provides System-1 decision providers for ctx.decisions (ADR-0194)
   | "themes" // Provides UI themes
@@ -1151,6 +1152,8 @@ export interface PluginManifest {
   decisionProviders?: PluginDecisionProviderDef[]
   /** Credential-free document implementations register through ctx.docsProviders. */
   docsProviders?: PluginDocsProviderDef[]
+  /** Ciphertext destinations registered through ctx.backup.registerDestination. */
+  backupDestinations?: import("./plugin-backup-destinations").BackupDestinationDeclaration[]
   /** Portable issue resources, contributed through ctx.issues.registerSyncProvider. */
   issueSyncProviders?: import("../../lib/issues/sync/types").PluginIssueSyncProviderDef[]
 
@@ -5589,6 +5592,7 @@ export interface PluginExtensionAPI {
  */
 export type PluginAPIPermission =
   | "docs:provide"
+  | "backup:destination"
   | "shell:execute"
   | "network:fetch"
   | "filesystem:read"

@@ -833,5 +833,38 @@
     "title": "追踪保留期",
     "unit": "天",
     "zeroHint": "设为 0 则永久保留追踪记录。"
+  },
+  "pluginDestinations": {
+    "backupNow": "立即备份",
+    "restore": "恢复",
+    "settings": "插件设置",
+    "cancel": "取消",
+    "passphrase": "同步口令",
+    "notReady": "请在插件设置中查看详情。",
+    "succeeded": "备份已完成。",
+    "failed": "备份操作失败。",
+    "restored": "备份已恢复。",
+    "lastResult": "最近结果：{result}",
+    "restoreTitle": "从 {label} 恢复",
+    "restoreDescription": "Host 将先解密并验证备份，再导入数据，保留已有记录。请输入此快照使用的口令。",
+    "snapshot": "快照",
+    "empty": "暂无可用快照。",
+    "readiness": {
+      "ready": "就绪",
+      "needs-setup": "需要设置",
+      "needs-auth": "需要登录",
+      "unavailable": "不可用"
+    },
+    "reasons": {
+      "syncPassphraseLocked": "请先解锁同步口令再备份。",
+      "destinationUnavailable": "此运行环境中备份目的地不可用。"
+    },
+    "results": {
+      "success": "成功",
+      "failed": "失败",
+      "skipped": "已跳过：尚未就绪",
+      "cancelled": "已取消"
+    },
+    "importing": "正在导入备份…"
   }
 }

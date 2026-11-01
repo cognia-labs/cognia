@@ -15,18 +15,29 @@ import {
   persistSyncPassphrase,
   setSyncPassphrase,
 } from "@/lib/webdav/passphrase-cache"
+import { getDb } from "@/lib/db/schema"
+import type { BackupPackageV3 } from "@/lib/data/types"
 import type { BackupDestination } from "@/types/scheduler"
-import { dispatchBackupDestination } from "./index"
+import {
+  dispatchBackupDestination,
+  readBackupDestinationReadiness,
+  getBackupDestination,
+} from "./index"
 import { encryptSnapshotBody, webdavSnapshotName } from "./webdav"
 
 export type RemoteBackupSyncPhase = "building" | "encrypting" | "uploading" | "done"
 
 export type RemoteBackupSyncDestination = Extract<
   BackupDestination,
-  "github" | "googledrive" | "webdav"
+  "github" | "googledrive" | "webdav" | `plugin:${string}/${string}`
 >
 
 export interface RemoteBackupSyncNowOptions {
+  missingPassphraseMessage?: string
+  basePackage?: BackupPackageV3
+  producer?: "interval" | "cron"
+  assertActive?: () => void
+  signal?: AbortSignal
   historyType?: BackupHistoryType
   onProgress?: (phase: RemoteBackupSyncPhase) => void
   /** Test seam. */
@@ -42,41 +53,124 @@ export async function runRemoteBackupSyncNow(
   const onProgress = opts.onProgress ?? (() => undefined)
   const dispatch = opts.dispatch ?? dispatchBackupDestination
 
+  const db = getDb()
+  const assertActive = () => {
+    opts.signal?.throwIfAborted()
+    opts.assertActive?.()
+    if (getDb() !== db) throw new Error("backup_owner_changed")
+  }
   const pass = passphrase || getSyncPassphrase() || ""
-  if (!pass) return { ok: false, error: "A sync passphrase is required." }
+  if (!pass) {
+    const error = opts.missingPassphraseMessage ?? "A sync passphrase is required."
+    await appendBackupHistory({
+      completedAt: Date.now(),
+      type: historyType,
+      success: false,
+      encryption: "passphrase",
+      destination,
+      producer: opts.producer,
+      errorMessage: error,
+      result: { status: "skipped", reasonKey: "syncPassphraseLocked" },
+    })
+    return { ok: false, error }
+  }
 
-  onProgress("building")
-  const basePackage = await buildBackupPackage({ includeSessions: true, includeApiKey: false })
-  const pkg = await attachPortableRetrievalKeys(basePackage, pass)
-  const plaintext = serializePackage(pkg)
-  onProgress("encrypting")
-  const body = await encryptSnapshotBody(plaintext, pkg, pass)
-  const filename = webdavSnapshotName(pkg.manifest.exportedAt)
+  try {
+    assertActive()
+    if (!opts.dispatch) {
+      const readiness = await readBackupDestinationReadiness(
+        destination,
+        opts.signal,
+        Boolean(pass)
+      )
+      assertActive()
+      if (readiness.state !== "ready") {
+        const unavailable = !getBackupDestination(destination)
+        const error = unavailable
+          ? "destination unavailable on this runtime"
+          : `skipped: not ready (${readiness.reasonKey ?? readiness.state})`
+        await appendBackupHistory({
+          completedAt: Date.now(),
+          type: historyType,
+          success: false,
+          encryption: "passphrase",
+          destination,
+          producer: opts.producer,
+          errorMessage: error,
+          result: {
+            status: unavailable ? "failed" : "skipped",
+            reasonKey: readiness.reasonKey,
+          },
+        })
+        return { ok: false, error }
+      }
+    }
+    opts.signal?.throwIfAborted()
+    onProgress("building")
+    const basePackage =
+      opts.basePackage ??
+      (await buildBackupPackage({ includeSessions: true, includeApiKey: false }))
+    const pkg = await attachPortableRetrievalKeys(basePackage, pass)
+    const plaintext = serializePackage(pkg)
+    onProgress("encrypting")
+    const body = await encryptSnapshotBody(plaintext, pkg, pass)
+    assertActive()
+    const filename = webdavSnapshotName(pkg.manifest.exportedAt)
 
-  onProgress("uploading")
-  const result = await dispatch(destination, body, {
-    filename,
-    exportedAt: pkg.manifest.exportedAt,
-    sizeBytes: body.length,
-  })
+    onProgress("uploading")
+    const result = await dispatch(
+      destination,
+      body,
+      {
+        filename,
+        exportedAt: pkg.manifest.exportedAt,
+        sizeBytes: body.length,
+      },
+      assertActive,
+      opts.signal
+    )
 
-  await appendBackupHistory({
-    completedAt: Date.now(),
-    type: historyType,
-    success: result.ok,
-    encryption: "passphrase",
-    sizeBytes: result.ok ? body.length : undefined,
-    filename: result.ok ? filename : undefined,
-    errorMessage: result.ok ? undefined : result.error,
-    deviceId: pkg.manifest.device?.id,
-    deviceLabel: pkg.manifest.device?.label,
-    destination,
-  })
+    if (!result.cancelled) assertActive()
+    if (getDb() !== db) throw new Error("backup_owner_changed")
+    await appendBackupHistory({
+      completedAt: Date.now(),
+      type: historyType,
+      success: result.ok,
+      encryption: "passphrase",
+      sizeBytes: result.ok ? body.length : undefined,
+      filename: result.ok ? filename : undefined,
+      errorMessage: result.ok ? undefined : result.error,
+      deviceId: pkg.manifest.device?.id,
+      deviceLabel: pkg.manifest.device?.label,
+      destination,
+      producer: opts.producer,
+      result: {
+        status: result.cancelled ? "cancelled" : result.ok ? "success" : "failed",
+        ...result.result,
+      },
+    })
 
-  if (!result.ok) return { ok: false, error: result.error ?? "Upload failed." }
+    if (!result.ok) return { ok: false, error: result.error ?? "Upload failed." }
 
-  setSyncPassphrase(pass)
-  await persistSyncPassphrase(pass)
-  onProgress("done")
-  return { ok: true, target: result.target }
+    setSyncPassphrase(pass)
+    await persistSyncPassphrase(pass)
+    onProgress("done")
+    return { ok: true, target: result.target }
+  } catch (error) {
+    if (getDb() !== db) return { ok: false, error: "backup_owner_changed" }
+    const cancelled =
+      opts.signal?.aborted || (error instanceof Error && error.name === "AbortError")
+    const message = cancelled ? "cancelled" : error instanceof Error ? error.message : String(error)
+    await appendBackupHistory({
+      completedAt: Date.now(),
+      type: historyType,
+      success: false,
+      encryption: "passphrase",
+      destination,
+      producer: opts.producer,
+      errorMessage: message,
+      result: { status: cancelled ? "cancelled" : "failed" },
+    })
+    return { ok: false, error: message }
+  }
 }

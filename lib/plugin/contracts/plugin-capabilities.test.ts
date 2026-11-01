@@ -256,3 +256,14 @@ it("keeps document provider callbacks explicitly on frontend/hybrid runtimes", (
   })
   expect(capabilityPythonExecution("docs-provider")).toBe("unsupported")
 })
+
+it("binds the public backup destination helper to the live lifecycle bridge", () => {
+  expect(getPluginCapabilityContract("backup-destination")).toMatchObject({
+    support: "supported",
+    manifestFields: ["backupDestinations"],
+    typescriptSdk: expect.arrayContaining([
+      "packages/plugin-sdk/src/define/define-backup-destination.ts",
+    ]),
+  })
+  expect(capabilityPythonExecution("backup-destination")).toBe("unsupported")
+})

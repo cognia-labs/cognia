@@ -110,3 +110,31 @@ describe("createBackupAPI", () => {
     })
   })
 })
+
+describe("destination contribution permissions", () => {
+  it("requires backup:destination, an owned declaration, and a live activation", () => {
+    resetPermissionGuard()
+    const guard = getPermissionGuard()
+    const manifest = {
+      id: PLUGIN,
+      backupDestinations: [{ id: "archive", label: "Archive" }],
+    } as import("@/types/plugin").PluginManifest
+    const contribution = {
+      id: "archive",
+      label: "Archive",
+      readiness: async () => ({ state: "ready" as const }),
+      upload: jest.fn(),
+    }
+    guard.registerPlugin(PLUGIN, ["backup:read"])
+    let api = createBackupAPI(PLUGIN, manifest)
+    expect(() => api.registerDestination(contribution)).toThrow(PermissionError)
+    guard.registerPlugin(PLUGIN, ["backup:destination"])
+    api = createBackupAPI(PLUGIN, manifest)
+    expect(() => api.registerDestination({ ...contribution, id: "other" })).toThrow(/declared/)
+    guard.setTier(PLUGIN, "backup:destination", "confirm")
+    const registered = api.registerDestination(contribution)
+    expect(registered).not.toBeInstanceOf(Promise)
+    expect(registered.destinationId).toBe(`plugin:${PLUGIN}/archive`)
+    registered.unregister()
+  })
+})

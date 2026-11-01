@@ -261,7 +261,9 @@ export type BackupTaskType = "full" | "sessions" | "settings" | "plugins" | "all
  * `convex` is DEPRECATED — kept only so persisted rows keep type-checking;
  * the executor refuses it with a clear message and the UI never offers it.
  */
-export type BackupDestination = "local" | "webdav" | "github" | "googledrive" | "convex" | "all"
+/** Plugin destinations require an active frontend/hybrid runtime; P9 exposes the runtime matrix. */
+export type BackupDestination =
+  "local" | "webdav" | "github" | "googledrive" | "convex" | "all" | `plugin:${string}/${string}`
 
 export interface BackupSelectionOptions {
   includeSessions?: boolean

@@ -99,7 +99,8 @@
     "workflow": "工作流节点",
     "workflow-template": "工作流模板",
     "workflow-trigger": "工作流触发器",
-    "workspace-backend": "工作区后端"
+    "workspace-backend": "工作区后端",
+    "backup-destination": "备份目的地"
   },
   "heading": "按能力",
   "otherHeading": "其它"

@@ -3716,6 +3716,33 @@ describe("Plugin Validation", () => {
       ).toBe(false)
     })
 
+    it("validates public backup destinations and rejects duplicates, built-in collisions and Python execution", () => {
+      const descriptor = { id: "archive", label: "Archive" }
+      const manifest = {
+        ...createValidManifest(),
+        capabilities: ["backup-destination"],
+        permissions: ["backup:destination"],
+        backupDestinations: [descriptor],
+      }
+      expect(validatePluginManifest(manifest).valid).toBe(true)
+      for (const backupDestinations of [
+        [descriptor, descriptor],
+        [{ id: "webdav", label: "Bad" }],
+        [{ id: "plugin:other/archive", label: "Bad" }],
+        [{ id: "archive", label: "" }],
+        "bad",
+      ])
+        expect(validatePluginManifest({ ...manifest, backupDestinations }).valid).toBe(false)
+      expect(
+        validatePluginManifest({
+          ...manifest,
+          type: "python",
+          main: undefined,
+          pythonMain: "main.py",
+        }).valid
+      ).toBe(false)
+    })
+
     // -----------------------------------------------------------------------
     // ADR-0026 — lazy-factory manifest fields.
     //

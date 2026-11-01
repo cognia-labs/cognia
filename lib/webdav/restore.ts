@@ -40,6 +40,8 @@ export async function listRemoteSnapshots(): Promise<RemoteSnapshot[]> {
 }
 
 export interface RestoreOptions {
+  /** Host UI switches to its non-cancellable local import phase at this boundary. */
+  onImportStart?: () => void
   /** Defaults to the `latest.enc.cbk` pointer. */
   path?: string
   passphrase: string
@@ -70,13 +72,27 @@ export async function restoreFromWebDav(opts: RestoreOptions): Promise<RestoreFr
   const path = opts.path ?? `${config.remoteDir}/${LATEST_POINTER}`
   const raw = await client.getFile(path)
 
+  return restoreBackupCiphertext(raw, opts)
+}
+
+/** Shared trust boundary for WebDAV and contributed destinations. */
+export async function restoreBackupCiphertext(
+  raw: string,
+  opts: RestoreOptions,
+  assertActive: () => void = () => undefined
+): Promise<RestoreFromWebDavResult> {
+  assertActive()
   const parsed = JSON.parse(raw)
   if (!isEncryptedEnvelope(parsed)) {
     throw new Error("Remote snapshot is not an encrypted backup.")
   }
   const plaintext = await decryptBackupPackage(parsed, opts.passphrase)
+  assertActive()
   const pkg = await migrateEnvelope(JSON.parse(plaintext))
+  assertActive()
 
+  opts.onImportStart?.()
+  assertActive()
   const summary = await applyBackupPackage(pkg, {
     mergeStrategy: opts.mergeStrategy,
     includeSessions: opts.includeSessions ?? true,

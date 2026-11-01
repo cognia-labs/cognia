@@ -36,3 +36,4 @@ export * from "./plugin-service"
 export * from "./plugin-cogset"
 
 export * from "./plugin-docs-providers"
+export * from "./plugin-backup-destinations"

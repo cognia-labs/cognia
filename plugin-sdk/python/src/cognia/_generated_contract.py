@@ -59,6 +59,7 @@ VALID_PERMISSIONS = (
     "decisions:run",
     "decisions:provide",
     "docs:provide",
+    "backup:destination",
     "export:session",
     "export:project",
     "theme:read",
@@ -167,6 +168,7 @@ VALID_CAPABILITIES = (
     "media",
     "canvas",
     "ai-provider",
+    "backup-destination",
     "docs-provider",
     "issue-sync-provider",
     "decision-provider",
@@ -261,6 +263,9 @@ CAPABILITY_FIELDS = {
     "canvas": [],
     "ai-provider": [
         "aiProviders",
+    ],
+    "backup-destination": [
+        "backupDestinations",
     ],
     "docs-provider": [
         "docsProviders",
@@ -468,6 +473,7 @@ CAPABILITY_SUPPORT = {
     "media": "supported",
     "canvas": "supported",
     "ai-provider": "supported",
+    "backup-destination": "supported",
     "docs-provider": "supported",
     "issue-sync-provider": "supported",
     "decision-provider": "supported",
@@ -550,6 +556,7 @@ CAPABILITY_INTRODUCED_VERSIONS = {
     "media": "0.1.0",
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
+    "backup-destination": "0.1.0",
     "docs-provider": "0.1.0",
     "issue-sync-provider": "0.1.0",
     "decision-provider": "0.1.0",
@@ -632,6 +639,7 @@ CAPABILITY_MINIMUM_HOST_VERSIONS = {
     "media": "0.1.0",
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
+    "backup-destination": "0.1.0",
     "docs-provider": "0.1.0",
     "issue-sync-provider": "0.1.0",
     "decision-provider": "0.1.0",
@@ -774,6 +782,14 @@ MANIFEST_CONTRIBUTIONS = [
         "execution": "javascript",
         "pythonExecution": "supported",
         "entryPath": "aiProviders[].entry",
+    },
+    {
+        "field": "backupDestinations",
+        "capabilities": [
+            "backup-destination",
+        ],
+        "execution": "javascript",
+        "pythonExecution": "unsupported",
     },
     {
         "field": "docsProviders",
@@ -5550,6 +5566,25 @@ API_NAMESPACE_CONTRACTS = [
         "errorPolicy": "preserve",
         "lifecycle": "plugin",
         "methods": [
+            {
+                "id": "backup.registerDestination",
+                "name": "registerDestination",
+                "runtimes": [
+                    "frontend",
+                    "hybrid",
+                ],
+                "requiredPermissions": [
+                    "backup:destination",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "returned-handle",
+                    "disposeMethod": "unregister",
+                },
+            },
             {
                 "id": "backup.create",
                 "name": "create",

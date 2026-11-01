@@ -1,3 +1,7 @@
+jest.mock("@/lib/db/schema", () => {
+  const db = { name: "backup-test" }
+  return { getDb: () => db }
+})
 const buildMock = jest.fn(async (..._a: unknown[]) => ({
   manifest: {
     version: "3.0",
@@ -41,6 +45,15 @@ jest.mock("@/lib/db/backup-history", () => ({
 jest.mock("@/lib/db/settings", () => ({
   getSettings: async () => ({ webdavSync: { enabled: true } }),
   saveSettings: (...a: unknown[]) => saveSettingsMock(...a),
+}))
+jest.mock("./config", () => ({
+  ...jest.requireActual("./config"),
+  resolveWebDavConfig: async () => ({
+    baseUrl: "https://dav.example.test",
+    remoteDir: "/r",
+    username: "user",
+    password: "secret",
+  }),
 }))
 jest.mock("./passphrase-cache", () => ({
   setSyncPassphrase: (...a: unknown[]) => setSyncPassphraseMock(...a),

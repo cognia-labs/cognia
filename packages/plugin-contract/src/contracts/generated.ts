@@ -48,6 +48,7 @@ export const CANONICAL_PLUGIN_PERMISSION_IDS = [
   "decisions:run",
   "decisions:provide",
   "docs:provide",
+  "backup:destination",
   "export:session",
   "export:project",
   "theme:read",
@@ -448,6 +449,10 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   },
   "ctx.automation.zoom": {
     kind: "none",
+  },
+  "ctx.backup.registerDestination": {
+    kind: "returned-handle",
+    disposeMethod: "unregister",
   },
   "ctx.backup.create": {
     kind: "none",

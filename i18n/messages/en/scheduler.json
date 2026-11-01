@@ -109,7 +109,8 @@
       "settings": "Settings Only"
     },
     "defaultTaskName": "Scheduled backup",
-    "scheduleFailed": "Could not schedule the backup"
+    "scheduleFailed": "Could not schedule the backup",
+    "destinationPluginHint": "Uploaded as ciphertext through the plugin destination."
   },
   "basicInfo": "Basic Information",
   "breadcrumb": "Breadcrumb",

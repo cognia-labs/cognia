@@ -33,7 +33,15 @@ export interface BackupHistoryRow {
    * no Dexie bump; old rows lack it and read as "local"). One row per remote
    * leg when a scheduled backup fans out to `all`.
    */
-  destination?: "local" | "webdav" | "github" | "googledrive" | "convex" | "all"
+  destination?: import("../../types/scheduler").BackupDestination
+  /** One sanitized result per leg; contains no connection reference or credential. */
+  result?: {
+    status: "success" | "failed" | "skipped" | "cancelled"
+    remoteId?: string
+    bytes?: number
+    locationLabel?: string
+    reasonKey?: string
+  }
   /**
    * Provenance of the device that produced the snapshot (additive 2026-06 —
    * no Dexie index change; old rows simply lack it). Mirrors

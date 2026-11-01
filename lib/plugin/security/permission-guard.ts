@@ -116,7 +116,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
   team: ["team:read", "team:write"],
   connectors: ["connectors:read", "connectors:send", "connectors:manage"],
   share: ["share:read", "share:create"],
-  backup: ["backup:read", "backup:write"],
+  backup: ["backup:read", "backup:write", "backup:destination"],
   automation: [
     "automation:screenshot",
     "automation:read",
@@ -148,6 +148,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
 
 export const PERMISSION_DESCRIPTIONS: Record<PluginPermission, string> = {
   "docs:provide": "Offer cloud document search and reading through Host connections",
+  "backup:destination": "Offer an encrypted backup destination through Host connections",
   "filesystem:read": "Read files from the file system",
   "filesystem:write": "Write files to the file system",
   "network:fetch": "Make HTTP/HTTPS requests",

@@ -108,6 +108,10 @@ jest.mock("@/components/settings/data/google-drive-backup-card", () => ({
   GoogleDriveBackupCard: () => null,
 }))
 
+jest.mock("@/components/settings/data/plugin-backup-destinations", () => ({
+  PluginBackupDestinations: () => <section aria-label="Plugin backup destinations" />,
+}))
+
 function packageWith(payload: Record<string, unknown>) {
   return {
     version: "3.0",
@@ -145,6 +149,7 @@ beforeEach(() => {
 it("offers the file-sharing policy alongside the share settings", () => {
   render(<BackupRestoreTab />)
   expect(screen.getByTestId("file-sharing-policy-card")).toBeInTheDocument()
+  expect(screen.getByRole("region", { name: "Plugin backup destinations" })).toBeInTheDocument()
 })
 
 it("requires an explicit warning confirmation before plaintext backup", async () => {

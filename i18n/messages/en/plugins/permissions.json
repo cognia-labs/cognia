@@ -135,7 +135,8 @@
     "vector:read": "Search the vector store",
     "vector:write": "Add to and delete from the vector store",
     "workflow:read": "Read workflow metadata and selection",
-    "knowledge:read": "Read original documents authorized for the active Agent run"
+    "knowledge:read": "Read original documents authorized for the active Agent run",
+    "backup:destination": "Offer an encrypted backup destination"
   },
   "emptyAll": "No plugins are installed yet.",
   "groups": {

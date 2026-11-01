@@ -66,6 +66,12 @@ const dispatchMock = jest.fn(
 jest.mock("@/lib/data/destinations", () => ({
   ...jest.requireActual("@/lib/data/destinations"),
   dispatchBackupDestination: (...args: unknown[]) => dispatchMock(...args),
+  // Protocol dispatch is injected in this suite; destination-account readiness
+  // belongs to registry/integration tests, while the real Host key gate stays active.
+  readBackupDestinationReadiness: async () =>
+    syncPassphrase
+      ? { state: "ready" }
+      : { state: "needs-setup", reasonKey: "syncPassphraseLocked" },
 }))
 jest.mock("@/lib/data/retrieval-key-backup", () => ({
   ...jest.requireActual("@/lib/data/retrieval-key-backup"),
@@ -227,7 +233,8 @@ describe("executeBackupTask", () => {
       "webdav",
       expect.any(String),
       expect.objectContaining({ filename: expect.stringMatching(/^cognia-backup-.*\.enc\.cbk$/) }),
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(AbortSignal)
     )
     // webdav-only never touches the disk.
     expect(writeTextFileMock).not.toHaveBeenCalled()

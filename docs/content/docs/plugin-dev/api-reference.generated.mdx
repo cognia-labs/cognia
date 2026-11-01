@@ -18,7 +18,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.artifact` | 12 | `artifact:write`, `artifact:read` | frontend, hybrid | internal |
 | `ctx.auth` | 10 | `auth:provide`, `network:fetch`, `auth:consume` | frontend, hybrid | secret |
 | `ctx.automation` | 27 | `automation:read`, `automation:screenshot`, `automation:click`, `automation:pointer`, `automation:type`, `automation:window` | frontend, hybrid | internal |
-| `ctx.backup` | 6 | `backup:read`, `backup:write` | frontend, hybrid | internal |
+| `ctx.backup` | 7 | `backup:destination`, `backup:read`, `backup:write` | frontend, hybrid | internal |
 | `ctx.bots` | 16 | `agent:control` | frontend, hybrid, python | sensitive |
 | `ctx.browser` | 9 | `agent:control`, `session:read` | frontend, hybrid | sensitive |
 | `ctx.canvas` | 32 | `canvas:write`, `canvas:read` | frontend, hybrid | internal |
@@ -258,6 +258,7 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 
 | Method | Permissions | Risk | Idempotent | Runtimes |
 | --- | --- | --- | --- | --- |
+| `backup.registerDestination` | `backup:destination` | medium | No | frontend, hybrid |
 | `backup.create` | `backup:read` | medium | No | frontend, hybrid |
 | `backup.getLatestSuccessful` | `backup:read` | medium | Yes | frontend, hybrid |
 | `backup.listHistory` | `backup:read` | medium | Yes | frontend, hybrid |

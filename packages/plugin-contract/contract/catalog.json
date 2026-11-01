@@ -61,6 +61,7 @@
     "decisions:run",
     "decisions:provide",
     "docs:provide",
+    "backup:destination",
     "export:session",
     "export:project",
     "theme:read",
@@ -196,6 +197,13 @@
       "id": "ai-provider",
       "support": "supported",
       "manifestFields": ["aiProviders"],
+      "introducedIn": "0.1.0",
+      "minimumHostVersion": "0.1.0"
+    },
+    {
+      "id": "backup-destination",
+      "support": "supported",
+      "manifestFields": ["backupDestinations"],
       "introducedIn": "0.1.0",
       "minimumHostVersion": "0.1.0"
     },
@@ -1133,6 +1141,12 @@
       "execution": "javascript",
       "pythonExecution": "supported",
       "entryPath": "aiProviders[].entry"
+    },
+    {
+      "field": "backupDestinations",
+      "capabilities": ["backup-destination"],
+      "execution": "javascript",
+      "pythonExecution": "unsupported"
     },
     {
       "field": "docsProviders",
@@ -2881,6 +2895,20 @@
       "errorPolicy": "preserve",
       "lifecycle": "plugin",
       "methods": [
+        {
+          "id": "backup.registerDestination",
+          "name": "registerDestination",
+          "runtimes": ["frontend", "hybrid"],
+          "requiredPermissions": ["backup:destination"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "returned-handle",
+            "disposeMethod": "unregister"
+          }
+        },
         {
           "id": "backup.create",
           "name": "create",

@@ -61,6 +61,29 @@ describe("appendBackupHistory", () => {
     expect(stored?.destination).toBe("github")
   })
 
+  it("stores namespaced destinations and sanitized leg results without connection refs", async () => {
+    const row = await appendBackupHistory({
+      completedAt: 5,
+      type: "manual",
+      success: true,
+      encryption: "passphrase",
+      destination: "plugin:archive/snapshots",
+      result: {
+        status: "success",
+        remoteId: "one",
+        bytes: 42,
+        connectionRef: "private",
+        token: "secret",
+      } as never,
+    })
+    const stored = await getDb().backupHistory.get(row.id)
+    expect(stored).toMatchObject({
+      destination: "plugin:archive/snapshots",
+      result: { status: "success", remoteId: "one", bytes: 42 },
+    })
+    expect(JSON.stringify(stored)).not.toMatch(/private|secret|connectionRef|token/)
+  })
+
   it("respects an explicit id when provided", async () => {
     const row = await appendBackupHistory({
       id: "explicit-1",

@@ -50,11 +50,17 @@ describe("runRemoteBackupSyncNow", () => {
       onProgress: (p) => phases.push(p),
     })
     expect(result).toEqual({ ok: true, target: "o/r:x" })
-    expect(dispatch).toHaveBeenCalledWith("github", "envelope", {
-      filename: "cognia-backup-2026-08-16T02-00-00-000Z.enc.cbk",
-      exportedAt: "2026-08-16T02:00:00.000Z",
-      sizeBytes: "envelope".length,
-    })
+    expect(dispatch).toHaveBeenCalledWith(
+      "github",
+      "envelope",
+      {
+        filename: "cognia-backup-2026-08-16T02-00-00-000Z.enc.cbk",
+        exportedAt: "2026-08-16T02:00:00.000Z",
+        sizeBytes: "envelope".length,
+      },
+      expect.any(Function),
+      undefined
+    )
     expect(phases).toEqual(["building", "encrypting", "uploading", "done"])
     expect(appendMock).toHaveBeenCalledWith(
       expect.objectContaining({

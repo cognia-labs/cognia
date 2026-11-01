@@ -61,8 +61,19 @@ jest.mock("@/lib/data/destinations/webdav", () => ({
 }))
 jest.mock("@/lib/webdav/passphrase-cache", () => ({
   getSyncPassphrase: () => mockGetSyncPassphrase(),
+  setSyncPassphrase: jest.fn(),
+  persistSyncPassphrase: jest.fn(async () => undefined),
   hasSyncPassphrase: () => mockHasSyncPassphrase(),
   loadPersistedSyncPassphrase: () => mockLoadPersistedSyncPassphrase(),
+}))
+jest.mock("@/lib/webdav/config", () => ({
+  ...jest.requireActual("@/lib/webdav/config"),
+  resolveWebDavConfig: async () => ({
+    baseUrl: "https://dav.example.test",
+    username: "test",
+    password: "secret",
+    remoteDir: "/cognia-backups",
+  }),
 }))
 jest.mock("@/lib/webdav/remote-newer-notify", () => ({
   notifyIfRemoteNewer: (input: unknown) => mockNotifyRemoteNewer(input),
@@ -177,6 +188,8 @@ it("stops generating stream chunks when a scheduled task is cancelled", async ()
 })
 
 it("retains a completed local stream when the remote package exceeds its size limit", async () => {
+  mockGetSyncPassphrase.mockReturnValue("sync-passphrase")
+  mockHasSyncPassphrase.mockReturnValue(true)
   mockPrune.mockReturnValue([])
   mockGetSettings.mockResolvedValue({
     backupAutoSchedule: { enabled: true, dirPath: "/srv/backups", retainCount: 2 },
@@ -457,7 +470,7 @@ it("preserves every WebDAV outcome in backup history", async () => {
 
   mockHasSyncPassphrase.mockReturnValue(true)
   mockGetSyncPassphrase.mockReturnValue("sync-passphrase")
-  mockUpload.mockResolvedValueOnce({ ok: true })
+  mockUpload.mockResolvedValueOnce({ ok: true, remotePath: "/cognia-backups/remote.enc.cbk" })
   mockGetSettings.mockResolvedValueOnce({ webdavSync: { enabled: true } })
   await maybeUploadToWebDav(true, pkg as never, "plain", messages)
   expect(mockSaveSettings).toHaveBeenLastCalledWith({
@@ -511,4 +524,91 @@ it("runs immediately, repeats on the configured interval, and tears down cleanly
   await jest.advanceTimersByTimeAsync(0)
   expect(log).toHaveBeenCalledWith("warn", "keyring locked")
   stopAfterStringError()
+})
+
+it("fans interval backups through the registry, preserves producer/readiness, and keeps local success on remote failure", async () => {
+  const { registerBackupDestination } = await import("./destinations/registry")
+  mockGetSyncPassphrase.mockReturnValue("sync-passphrase")
+  mockEncrypt.mockResolvedValue(
+    JSON.stringify({ version: "enc-v1", kdf: {}, ciphertext: "ciphertext" })
+  )
+  const upload = jest.fn(async () => ({ remoteId: "one", bytes: 42 }))
+  const unreadyUpload = jest.fn()
+  const failedUpload = jest.fn(async () => {
+    throw new Error("quota")
+  })
+  const disposers = [
+    registerBackupDestination(
+      { id: "ready", label: "Ready", readiness: async () => ({ state: "ready" }), upload },
+      { pluginId: "interval", declarations: [{ id: "ready", label: "Ready" }] }
+    ),
+    registerBackupDestination(
+      {
+        id: "locked",
+        label: "Locked",
+        readiness: async () => ({ state: "needs-auth", reasonKey: "signIn" }),
+        upload: unreadyUpload,
+      },
+      { pluginId: "interval", declarations: [{ id: "locked", label: "Locked" }] }
+    ),
+    registerBackupDestination(
+      {
+        id: "failed",
+        label: "Failed",
+        readiness: async () => ({ state: "ready" }),
+        upload: failedUpload,
+      },
+      { pluginId: "interval", declarations: [{ id: "failed", label: "Failed" }] }
+    ),
+  ]
+  try {
+    expect(
+      await runScheduledBackupOnce({
+        filesystem: {
+          writeTextFile: jest.fn(async () => undefined),
+          readDirNames: async () => [],
+          remove: async () => undefined,
+        },
+        messages,
+      })
+    ).toBe(true)
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(unreadyUpload).not.toHaveBeenCalled()
+    expect(failedUpload).toHaveBeenCalledTimes(1)
+    expect(mockUpload).not.toHaveBeenCalled() // disabled built-in interval destination
+    expect(mockAppendHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ destination: "local", success: true, producer: "interval" })
+    )
+    const pluginRows = (destination: string) =>
+      mockAppendHistory.mock.calls
+        .map(([row]) => row as { destination?: string })
+        .filter((row) => row.destination === destination)
+    expect(pluginRows("plugin:interval/ready")).toEqual([
+      expect.objectContaining({
+        destination: "plugin:interval/ready",
+        success: true,
+        producer: "interval",
+        result: expect.objectContaining({ status: "success" }),
+      }),
+    ])
+    expect(pluginRows("plugin:interval/locked")).toEqual([
+      expect.objectContaining({
+        destination: "plugin:interval/locked",
+        success: false,
+        producer: "interval",
+        result: { status: "skipped", reasonKey: "signIn" },
+      }),
+    ])
+    expect(pluginRows("plugin:interval/failed")).toEqual([
+      expect.objectContaining({
+        destination: "plugin:interval/failed",
+        success: false,
+        producer: "interval",
+        errorMessage: "quota",
+        result: { status: "failed" },
+      }),
+    ])
+  } finally {
+    for (const dispose of disposers) dispose()
+  }
 })

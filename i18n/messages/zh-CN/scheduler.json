@@ -109,7 +109,8 @@
       "settings": "仅设置"
     },
     "defaultTaskName": "定时备份",
-    "scheduleFailed": "无法创建定时备份"
+    "scheduleFailed": "无法创建定时备份",
+    "destinationPluginHint": "通过插件目的地上传加密备份。"
   },
   "basicInfo": "基础信息",
   "breadcrumb": "面包屑导航",

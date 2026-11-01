@@ -42,11 +42,18 @@ describe("dispatchBackupDestination", () => {
   it("propagates the owner check into every destination rather than dropping it at dispatch", async () => {
     const assertActive = jest.fn()
     await dispatchBackupDestination("webdav", "encrypted", meta, assertActive)
-    expect(uploadMock).toHaveBeenLastCalledWith("encrypted", meta, assertActive)
+    expect(uploadMock).toHaveBeenLastCalledWith("encrypted", meta, expect.any(Function))
+    const ownerChecks = assertActive.mock.calls.length
+    ;(uploadMock.mock.calls.at(-1)![2] as () => void)()
+    expect(assertActive.mock.calls.length).toBe(ownerChecks + 1)
     await dispatchBackupDestination("github", "encrypted", meta, assertActive)
-    expect(githubUploadMock).toHaveBeenLastCalledWith("encrypted", meta, { assertActive })
+    expect(githubUploadMock).toHaveBeenLastCalledWith("encrypted", meta, {
+      assertActive: expect.any(Function),
+    })
     await dispatchBackupDestination("googledrive", "encrypted", meta, assertActive)
-    expect(driveUploadMock).toHaveBeenLastCalledWith("encrypted", meta, { assertActive })
+    expect(driveUploadMock).toHaveBeenLastCalledWith("encrypted", meta, {
+      assertActive: expect.any(Function),
+    })
   })
   it("treats local / undefined as a no-op handled by the caller", async () => {
     expect(await dispatchBackupDestination(undefined, "b", meta)).toEqual({
@@ -62,7 +69,15 @@ describe("dispatchBackupDestination", () => {
 
   it("uploads for webdav and all", async () => {
     const webdav = await dispatchBackupDestination("webdav", "b", meta)
-    expect(webdav).toEqual({ ok: true, target: "/cognia-backups/x.enc.cbk" })
+    expect(webdav).toEqual({
+      ok: true,
+      target: "/cognia-backups/x.enc.cbk",
+      result: {
+        remoteId: "/cognia-backups/x.enc.cbk",
+        bytes: 1,
+        locationLabel: "/cognia-backups/x.enc.cbk",
+      },
+    })
     await dispatchBackupDestination("all", "b", meta)
     expect(uploadMock).toHaveBeenCalledTimes(2)
   })
@@ -98,6 +113,7 @@ describe("dispatchBackupDestination", () => {
     expect(await dispatchBackupDestination("github", "b", meta)).toEqual({
       ok: true,
       target: "o/r:cognia-backups/x",
+      result: { remoteId: "o/r:cognia-backups/x", bytes: 1, locationLabel: "o/r:cognia-backups/x" },
     })
     githubUploadMock.mockResolvedValueOnce({ ok: false, error: "public" })
     expect(await dispatchBackupDestination("github", "b", meta)).toEqual({
@@ -108,6 +124,7 @@ describe("dispatchBackupDestination", () => {
     expect(await dispatchBackupDestination("googledrive", "b", meta)).toEqual({
       ok: true,
       target: "Cognia Backups/x",
+      result: { remoteId: "f", bytes: 1, locationLabel: "Cognia Backups/x" },
     })
     driveUploadMock.mockResolvedValueOnce({ ok: false, error: "nope" })
     expect(await dispatchBackupDestination("googledrive", "b", meta)).toEqual({

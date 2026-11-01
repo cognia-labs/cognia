@@ -204,6 +204,28 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     requiredTests: ["lib/plugin/api/ai-provider-api.test.ts"],
   },
   {
+    id: "backup-destination",
+    support: "supported",
+    manifestFields: ["backupDestinations"],
+    runtimeBinding:
+      "ctx.backup.registerDestination + Host backup registry; disposed on plugin disable",
+    hostBindings: [
+      "lib/plugin/api/backup-api.ts",
+      "lib/plugin/bridge/backup-destinations-bridge.ts",
+      "lib/plugin/core/context.ts",
+    ],
+    typescriptSdk: [
+      "packages/plugin-sdk/src/define/define-backup-destination.ts",
+      "packages/plugin-sdk/src/context/index.ts",
+    ],
+    pythonSdk: [],
+    docs: "docs/content/docs/plugin-dev/api-reference.generated.mdx",
+    requiredTests: [
+      "lib/plugin/api/backup-api.test.ts",
+      "lib/plugin/bridge/backup-destinations-bridge.test.ts",
+    ],
+  },
+  {
     id: "docs-provider",
     support: "supported",
     manifestFields: ["docsProviders"],

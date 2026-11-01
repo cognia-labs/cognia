@@ -809,3 +809,9 @@ describe("Factory + __resetForTesting (PR-E)", () => {
     }
   })
 })
+
+it("includes ciphertext destination contributions in the backup permission group", () => {
+  const { PERMISSION_GROUPS, PERMISSION_DESCRIPTIONS } = jest.requireActual("./permission-guard")
+  expect(PERMISSION_GROUPS.backup).toContain("backup:destination")
+  expect(PERMISSION_DESCRIPTIONS["backup:destination"]).toContain("encrypted backup destination")
+})

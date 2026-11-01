@@ -484,6 +484,28 @@ describe("createPluginContext", () => {
     ).toThrow(/docs:provide/)
   })
 
+  it("mounts backup destination registration with manifest ownership and permissions", () => {
+    const contribution = {
+      id: "archive",
+      label: "Archive",
+      readiness: async () => ({ state: "ready" as const }),
+      upload: jest.fn(),
+    }
+    const manifest = {
+      ...mockManifest,
+      permissions: ["backup:destination" as const],
+      backupDestinations: [{ id: "archive", label: "Archive" }],
+    }
+    const plugin = createMockPlugin({ manifest })
+    const denied = createFullPluginContext(plugin, mockManager)
+    expect(() => denied.backup.registerDestination(contribution)).toThrow(/backup:destination/)
+    getPermissionGuard().registerPlugin("test-plugin", ["backup:destination"])
+    const ctx = createFullPluginContext(plugin, mockManager)
+    const registration = ctx.backup.registerDestination(contribution)
+    expect(registration.destinationId).toBe("plugin:test-plugin/archive")
+    registration.unregister()
+  })
+
   it("mounts issue-sync registration with issue:write enforcement", () => {
     const ctx = createFullPluginContext(createMockPlugin(), mockManager)
     expect(typeof ctx.issues.registerSyncProvider).toBe("function")

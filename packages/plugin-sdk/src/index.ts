@@ -652,6 +652,18 @@ export type {
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
 
 export { defineDocsProvider } from "./define/define-docs-provider"
+export { defineBackupDestination } from "./define/define-backup-destination"
+export type {
+  BackupDestinationContribution,
+  BackupDestinationDeclaration,
+  BackupDestinationReadiness,
+  BackupDestinationMeta,
+  BackupDestinationBody,
+  BackupDestinationResult,
+  BackupDestinationSnapshot,
+  BackupDestinationRegistration,
+  PluginBackupDestinationId,
+} from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"
 export { defineIssueSyncProvider } from "./define/define-issue-sync-provider"
 export { DocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
 export type {

@@ -42,6 +42,15 @@ export async function appendBackupHistory(
     deviceId: partial.deviceId,
     deviceLabel: partial.deviceLabel,
     destination: partial.destination,
+    result: partial.result
+      ? {
+          status: partial.result.status,
+          remoteId: partial.result.remoteId,
+          bytes: partial.result.bytes,
+          locationLabel: partial.result.locationLabel,
+          reasonKey: partial.result.reasonKey,
+        }
+      : undefined,
     schemaVersion: 3,
   }
   await db.transaction("rw", db.backupHistory, async () => {

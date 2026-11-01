@@ -1,3 +1,5 @@
+import { listBackupDestinations, dispatchBackupDestination } from "./destinations"
+import { runRemoteBackupSyncNow } from "./destinations/sync-now"
 /**
  * Host-neutral scheduled-backup runtime (ADR-0059 T-A6).
  *
@@ -14,11 +16,7 @@ import {
 } from "@/lib/data/build-package"
 import { getDefaultBackupPassphrase } from "@/lib/data/backup-key"
 import { pruneScheduledBackups, shouldRunScheduledBackup } from "@/lib/data/scheduler"
-import {
-  encryptSnapshotBody,
-  uploadSnapshotToWebDav,
-  webdavSnapshotName,
-} from "@/lib/data/destinations/webdav"
+import { encryptSnapshotBody, webdavSnapshotName } from "@/lib/data/destinations/webdav"
 import { appendBackupHistory } from "@/lib/db/backup-history"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
@@ -251,26 +249,16 @@ async function runIntervalBackup(
     })
 
     assertActive()
-    if (settings.webdavSync?.enabled === true) {
-      try {
-        const pkg =
-          written.basePackage ??
-          (await buildBackupPackage({ includeSessions: true, includeApiKey: false }))
-        assertActive()
-        await maybeUploadToWebDav(true, pkg, "", opts.messages, assertActive)
-      } catch (error) {
-        assertActive()
-        // A remote serialization limit must not invalidate the durable local stream.
-        await appendBackupHistory({
-          completedAt: Date.now(),
-          type: "scheduled",
-          success: false,
-          encryption: "passphrase",
-          destination: "webdav",
-          producer: "interval",
-          errorMessage: error instanceof Error ? error.message : String(error),
-        })
-      }
+    for (const entry of listBackupDestinations()) {
+      assertActive()
+      if (entry.intervalEnabled && !entry.intervalEnabled(settings)) continue
+      await runRemoteBackupSyncNow(entry.id as Parameters<typeof runRemoteBackupSyncNow>[0], "", {
+        historyType: "scheduled",
+        producer: "interval",
+        basePackage: written.basePackage,
+        assertActive,
+        missingPassphraseMessage: opts.messages.syncPassphraseLocked,
+      })
     }
 
     return true
@@ -316,7 +304,8 @@ export async function maybeUploadToWebDav(
     const body = await encryptSnapshotBody(plaintext, portablePackage, syncPassphrase)
     const filename = webdavSnapshotName(portablePackage.manifest.exportedAt)
     assertActive()
-    const result = await uploadSnapshotToWebDav(
+    const result = await dispatchBackupDestination(
+      "webdav",
       body,
       {
         filename,
@@ -339,17 +328,6 @@ export async function maybeUploadToWebDav(
       deviceId: portablePackage.manifest.device?.id,
       deviceLabel: portablePackage.manifest.device?.label,
     })
-    if (result.ok) {
-      assertActive()
-      const db = getDb()
-      await saveSettings(
-        (current) => {
-          assertActive()
-          return { webdavSync: { ...current.webdavSync, lastSyncAt: new Date().toISOString() } }
-        },
-        { mirrorToHost: false, scope: { db, assertActive } }
-      )
-    }
   } catch (error) {
     assertActive()
     await appendBackupHistory({

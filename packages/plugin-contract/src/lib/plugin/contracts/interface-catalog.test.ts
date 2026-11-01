@@ -14,7 +14,14 @@ describe("plugin interface catalog", () => {
   it("indexes the canonical ctx method surface", () => {
     // A canary, not a fact worth memorising: any catalog edit lands here so
     // the method surface cannot grow or shrink without someone noticing.
-    expect(listPluginApiMethodContracts()).toHaveLength(944)
+    expect(listPluginApiMethodContracts()).toHaveLength(945)
+    expect(getPluginApiMethodContract("backup.registerDestination")).toMatchObject({
+      requiredPermissions: ["backup:destination"],
+      consentTier: "policy",
+      risk: "medium",
+      runtimes: ["frontend", "hybrid"],
+      resourceEffect: { kind: "returned-handle", disposeMethod: "unregister" },
+    })
     expect(getPluginApiMethodContract("docsProviders.register")).toMatchObject({
       requiredPermissions: ["docs:provide"],
       namespace: { enforcement: "shadow", runtimes: ["frontend", "hybrid"] },

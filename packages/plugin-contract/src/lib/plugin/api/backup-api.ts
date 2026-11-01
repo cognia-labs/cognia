@@ -3,6 +3,10 @@
  */
 import type { BackupHistoryRow, BackupHistoryType } from "../../db/backup-history"
 import type { BackupPackageV3, ImportMergeStrategy, ImportSummary } from "@/lib/data/types"
+import type {
+  BackupDestinationContribution,
+  BackupDestinationRegistration,
+} from "../../../types/plugin/plugin-backup-destinations"
 
 /** Plugin-facing create options — `includeApiKey` is intentionally absent. */
 export interface PluginBackupCreateOptions {
@@ -20,6 +24,8 @@ export interface PluginBackupRestoreOptions {
 }
 
 export interface PluginBackupAPI {
+  /** Frontend/hybrid contribution; absent destinations fail on headless runtimes (P9). */
+  registerDestination(contribution: BackupDestinationContribution): BackupDestinationRegistration
   /** Build an encrypted backup package (never carries the API key). */
   create(opts?: PluginBackupCreateOptions): Promise<BackupPackageV3>
   /** Serialize a package to its on-disk JSON string. */

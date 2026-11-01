@@ -261,3 +261,9 @@ export type {
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
 
 export type { PluginDocsProviderDef } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
+
+export type {
+  BackupDestinationContribution,
+  BackupDestinationDeclaration,
+  BackupDestinationRegistration,
+} from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"

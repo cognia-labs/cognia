@@ -533,6 +533,7 @@ describe("Permission API", () => {
       "commands:read",
       "commands:write",
       "docs:provide",
+      "backup:destination",
     ] as const satisfies readonly PluginAPIPermission[]
 
     // Compile-time exhaustiveness: if a future PluginAPIPermission member is

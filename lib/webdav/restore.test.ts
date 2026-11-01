@@ -32,7 +32,7 @@ jest.mock("./passphrase-cache", () => ({
   persistSyncPassphrase: jest.fn(async () => undefined),
 }))
 
-import { listRemoteSnapshots, restoreFromWebDav } from "./restore"
+import { listRemoteSnapshots, restoreFromWebDav, restoreBackupCiphertext } from "./restore"
 
 function entry(name: string, lastModified?: number, isCollection = false): WebDavEntry {
   return { href: `/cognia-backups/${name}`, name, isCollection, lastModified }
@@ -139,4 +139,27 @@ it("forwards the proven passphrase for nested retrieval-key restoration", async 
     expect.anything(),
     expect.objectContaining({ retrievalDekPassphrase: "portable-regression" })
   )
+})
+
+it("shares decrypt, validation and import for contributed ciphertext, and checks cancellation before apply", async () => {
+  const options = { passphrase: "p", mergeStrategy: "skip" as const }
+  await restoreBackupCiphertext('{"version":"enc-v1"}', options)
+  expect(decryptMock).toHaveBeenCalledWith({ version: "enc-v1" }, "p")
+  expect(migrateMock).toHaveBeenCalledWith({ version: "3.0" })
+  expect(applyMock).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ mergeStrategy: "skip", retrievalDekPassphrase: "p" })
+  )
+  applyMock.mockClear()
+  const controller = new AbortController()
+  decryptMock.mockImplementationOnce(async () => {
+    controller.abort()
+    return "{}"
+  })
+  await expect(
+    restoreBackupCiphertext('{"version":"enc-v1"}', options, () =>
+      controller.signal.throwIfAborted()
+    )
+  ).rejects.toMatchObject({ name: "AbortError" })
+  expect(applyMock).not.toHaveBeenCalled()
 })

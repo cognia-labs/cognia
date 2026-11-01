@@ -52,6 +52,7 @@ import {
   type BackupTaskType,
   DEFAULT_EXECUTION_CONFIG,
 } from "@/types/scheduler"
+import { subscribeBackupDestinations } from "@/lib/data/destinations/registry"
 import { TimezoneSelect } from "./timezone-select"
 
 type BackupType = Exclude<BackupTaskType, "plugins">
@@ -94,6 +95,8 @@ export function BackupScheduleDialog({
 }: BackupScheduleDialogProps) {
   const t = useTranslations("scheduler")
   const tCommon = useTranslations("common")
+  const tReadiness = useTranslations("settings.data.pluginDestinations")
+  const tRoot = useTranslations()
   const { createTask } = useScheduler()
 
   const controlled = openProp !== undefined
@@ -118,21 +121,26 @@ export function BackupScheduleDialog({
 
   useEffect(() => {
     if (!open) return
-    let cancelled = false
-    void describeBackupDestinationReadiness()
-      .then((rows) => {
-        if (!cancelled) setReadiness(rows)
-      })
-      .catch(() => {
-        if (!cancelled) setReadiness(null)
-      })
+    let controller: AbortController | undefined
+    const refresh = () => {
+      controller?.abort()
+      const current = new AbortController()
+      controller = current
+      void describeBackupDestinationReadiness(current.signal)
+        .then((rows) => {
+          if (!current.signal.aborted) setReadiness(rows)
+        })
+        .catch(() => {
+          if (!current.signal.aborted) setReadiness(null)
+        })
+    }
+    refresh()
+    const stop = subscribeBackupDestinations(refresh)
     return () => {
-      cancelled = true
+      controller?.abort()
+      stop()
     }
   }, [open])
-
-  const readinessOf = (target: BackupDestination): BackupDestinationReadiness["state"] =>
-    readiness?.find((row) => row.destination === target)?.state ?? "not-configured"
 
   const [maxRetries, setMaxRetries] = useState(DEFAULT_EXECUTION_CONFIG.maxRetries)
   const [retryDelay, setRetryDelay] = useState(DEFAULT_EXECUTION_CONFIG.retryDelay)
@@ -310,28 +318,23 @@ export function BackupScheduleDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="local">{t("backup.destinations.local")}</SelectItem>
-                <SelectItem value="webdav">{t("backup.destinations.webdav")}</SelectItem>
-                <SelectItem
-                  value="github"
-                  disabled={readinessOf("github") !== "ready"}
-                  data-testid="backup-destination-github"
-                >
-                  {t("backup.destinations.github")}
-                  {readinessOf("github") !== "ready"
-                    ? ` — ${t("backup.destinationNotConfigured")}`
-                    : ""}
-                </SelectItem>
-                <SelectItem
-                  value="googledrive"
-                  disabled={readinessOf("googledrive") !== "ready"}
-                  data-testid="backup-destination-googledrive"
-                >
-                  {t("backup.destinations.googledrive")}
-                  {readinessOf("googledrive") !== "ready"
-                    ? ` — ${t("backup.destinationNotConfigured")}`
-                    : ""}
-                </SelectItem>
+                {(readiness ?? [{ destination: "local", state: "ready", label: "local" }]).map(
+                  (row) => (
+                    <SelectItem
+                      key={row.destination}
+                      value={row.destination}
+                      disabled={row.state !== "ready"}
+                      data-testid={`backup-destination-${row.destination}`}
+                    >
+                      {row.destination.startsWith("plugin:")
+                        ? row.label
+                        : t(`backup.destinations.${row.destination}` as never)}
+                      {row.state !== "ready"
+                        ? ` — ${tReadiness(`readiness.${row.state}`)}${row.reasonKey ? `: ${tReadiness.has(`reasons.${row.reasonKey}`) ? tReadiness(`reasons.${row.reasonKey}`) : tRoot.has(row.reasonKey) ? tRoot(row.reasonKey) : tReadiness("notReady")}` : ""}`
+                        : ""}
+                    </SelectItem>
+                  )
+                )}
                 <SelectItem value="all">{t("backup.destinations.all")}</SelectItem>
               </SelectContent>
             </Select>
@@ -344,7 +347,9 @@ export function BackupScheduleDialog({
                     ? t("backup.destinationGithubHint")
                     : destination === "googledrive"
                       ? t("backup.destinationGoogleDriveHint")
-                      : t("backup.destinationAllHint")}
+                      : destination === "all"
+                        ? t("backup.destinationAllHint")
+                        : t("backup.destinationPluginHint")}
             </p>
           </div>
 

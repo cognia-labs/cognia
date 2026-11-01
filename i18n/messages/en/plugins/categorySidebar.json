@@ -99,7 +99,8 @@
     "workflow": "Workflow nodes",
     "workflow-template": "Workflow templates",
     "workflow-trigger": "Workflow triggers",
-    "workspace-backend": "Workspace backends"
+    "workspace-backend": "Workspace backends",
+    "backup-destination": "Backup destination"
   },
   "heading": "By capability",
   "otherHeading": "Other"

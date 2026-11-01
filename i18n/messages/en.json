@@ -34623,6 +34623,7 @@
         "ai-provider": "AI providers",
         "auth-provider": "Auth providers",
         "automation": "Automation",
+        "backup-destination": "Backup destination",
         "balance-adapter": "Balance adapters",
         "bot": "Bots",
         "canvas": "Canvas",
@@ -36230,6 +36231,7 @@
         "automation:screenshot": "Capture screenshots of your desktop",
         "automation:type": "Type text and send keyboard input to your desktop",
         "automation:window": "Focus, close, minimize, maximize, or resize desktop windows",
+        "backup:destination": "Offer an encrypted backup destination",
         "backup:read": "Build and read encrypted backups and the backup history",
         "backup:write": "Restore a backup, overwriting your local data",
         "builtin-skills:invoke": "Invoke manifest-allowlisted built-in skills through the host policy gate",
@@ -42357,6 +42359,7 @@
       "destinationHint": "Choose where this scheduled backup should be uploaded.",
       "destinationLocalHint": "Saved to the app data directory under /backups/.",
       "destinationNotConfigured": "not configured (Settings → Data)",
+      "destinationPluginHint": "Uploaded as ciphertext through the plugin destination.",
       "destinationWebdavHint": "Uploaded to the WebDAV server configured in Data & Privacy → Backup. Requires the sync passphrase to be unlocked this session.",
       "destinations": {
         "all": "All Configured Targets",
@@ -51172,6 +51175,39 @@
           "usageUnavailable": "Browser doesn't expose a quota estimate for this origin."
         },
         "success": "Success"
+      },
+      "pluginDestinations": {
+        "backupNow": "Back up now",
+        "cancel": "Cancel",
+        "empty": "No snapshots available.",
+        "failed": "Backup operation failed.",
+        "importing": "Importing backup…",
+        "lastResult": "Last result: {result}",
+        "notReady": "Check the plugin settings for details.",
+        "passphrase": "Sync passphrase",
+        "readiness": {
+          "needs-auth": "Sign in required",
+          "needs-setup": "Needs setup",
+          "ready": "Ready",
+          "unavailable": "Unavailable"
+        },
+        "reasons": {
+          "destinationUnavailable": "Destination unavailable on this runtime.",
+          "syncPassphraseLocked": "Unlock the sync passphrase to back up."
+        },
+        "restore": "Restore",
+        "restoreDescription": "The Host decrypts and validates this backup before importing it. Existing records are kept. Enter the passphrase used for this snapshot.",
+        "restoreTitle": "Restore from {label}",
+        "restored": "Backup restored.",
+        "results": {
+          "cancelled": "Cancelled",
+          "failed": "Failed",
+          "skipped": "Skipped: not ready",
+          "success": "Succeeded"
+        },
+        "settings": "Plugin settings",
+        "snapshot": "Snapshot",
+        "succeeded": "Backup completed."
       },
       "portLeases": {
         "cancel": "Cancel",

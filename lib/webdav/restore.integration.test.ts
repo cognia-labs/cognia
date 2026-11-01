@@ -152,3 +152,48 @@ test("WebDAV still restores encrypted legacy packages without portable retrieval
   expect(restored.summary.restoredRetrievalKeyProfiles).toEqual([])
   expect(await getDb().sessions.get("legacy-recovery")).toMatchObject({ title: "Legacy" })
 })
+
+test("plugin downloads restore through the real Host decrypt, checksum validation and database apply path", async () => {
+  const { registerBackupDestination } = await import("@/lib/data/destinations/registry")
+  const { restoreFromBackupDestination } = await import("@/lib/data/destinations/restore")
+  const pkg = makePackage({
+    sessions: [
+      {
+        id: "plugin-recovery",
+        kind: "direct",
+        title: "Plugin restored",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  })
+  pkg.manifest.integrity.checksum = await sha256Hex(canonicalStringify(pkg.payload))
+  const envelope = await encryptBackupPackage(JSON.stringify(pkg), "plugin-pass", pkg.manifest)
+  const input = {
+    id: "archive",
+    label: "Archive",
+    readiness: async () => ({ state: "ready" as const }),
+    upload: jest.fn(),
+    list: async () => [{ remoteId: "one", label: "One" }],
+    download: async () => new TextEncoder().encode(JSON.stringify(envelope)),
+  }
+  const dispose = registerBackupDestination(input, { pluginId: "recovery", declarations: [input] })
+  try {
+    await expect(
+      restoreFromBackupDestination("plugin:recovery/archive", "one", {
+        passphrase: "wrong",
+        mergeStrategy: "skip",
+      })
+    ).rejects.toThrow()
+    expect(await getDb().sessions.get("plugin-recovery")).toBeUndefined()
+    await restoreFromBackupDestination("plugin:recovery/archive", "one", {
+      passphrase: "plugin-pass",
+      mergeStrategy: "skip",
+    })
+    expect(await getDb().sessions.get("plugin-recovery")).toMatchObject({
+      title: "Plugin restored",
+    })
+  } finally {
+    dispose()
+  }
+})

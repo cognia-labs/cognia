@@ -244,14 +244,26 @@ describe("google drive config + secrets", () => {
 })
 
 describe("readiness matrix", () => {
-  it("reports local ready, remotes by configuration, convex deprecated", async () => {
+  it("lists the registry, and requires both Host encryption and destination credentials", async () => {
+    const { clearSyncPassphrase, setSyncPassphrase } = await import("@/lib/webdav/passphrase-cache")
+    clearSyncPassphrase()
     let readiness = await describeBackupDestinationReadiness()
-    expect(readiness).toEqual([
-      { destination: "local", state: "ready" },
-      { destination: "github", state: "not-configured", reason: "github" },
-      { destination: "googledrive", state: "not-configured", reason: "googledrive" },
-      { destination: "convex", state: "deprecated" },
+    expect(readiness.map((row) => row.destination)).toEqual([
+      "local",
+      "webdav",
+      "github",
+      "googledrive",
     ])
+    expect(readiness.find((row) => row.destination === "github")).toMatchObject({
+      state: "needs-setup",
+      reasonKey: "syncPassphraseLocked",
+    })
+    setSyncPassphrase("sync-pass")
+    readiness = await describeBackupDestinationReadiness()
+    expect(readiness.find((row) => row.destination === "github")).toMatchObject({
+      state: "needs-setup",
+      reasonKey: "github",
+    })
     settingsState.current = {
       backupDestinations: {
         github: { enabled: true, repo: "o/r" },
@@ -259,8 +271,10 @@ describe("readiness matrix", () => {
       },
     }
     await saveGoogleDriveTokens({ accessToken: "a", refreshToken: "r", expiresAt: 1 })
+    await setGithubBackupToken("github-token")
     readiness = await describeBackupDestinationReadiness()
-    expect(readiness.find((r) => r.destination === "github")?.state).toBe("ready")
-    expect(readiness.find((r) => r.destination === "googledrive")?.state).toBe("ready")
+    expect(readiness.find((row) => row.destination === "github")?.state).toBe("ready")
+    expect(readiness.find((row) => row.destination === "googledrive")?.state).toBe("ready")
+    clearSyncPassphrase()
   })
 })
