@@ -574,7 +574,8 @@
       "classification": "physically-impossible",
       "note": "Inter-window channel between the desktop main window and its tray-panel/pet/island/dock webviews (ADR-0225 \u00a77). Every event is sent with `emitTo(windowLabel)` because those windows share one root layout; Transport has no emit and no window addressing, and a headless host has no second window. The phone glance travels on lib/glance/remote/. Same footing as lib/island and lib/usage-dock.",
       "physicalSeam": {
-        "imports": ["emitTo", "listen"]
+        "imports": ["emitTo", "listen"],
+        "events": ["glance://request", "glance://result", "glance://snapshot", "glance://subscribe"]
       }
     },
     "lib/terminal": {

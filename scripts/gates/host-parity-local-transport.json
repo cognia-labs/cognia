@@ -1,0 +1,205 @@
+{
+  "note": "localTransport pins (scripts/gates/check-host-parity.mjs): every use of localTransport, which always reaches this machine whichever host the client drives. Each entry is a judgment that the call must stay local (a client.local family, this machine's companion server, a local sidecar). Add a use here by hand, in review; `node scripts/gates/check-host-parity.mjs --prune-local-transport` only removes what is no longer used. `<dynamic>` means the command is not a literal; `references` counts the times the file hands localTransport on as a value, whose calls are pinned only by that count. Bootstrapped 2026-11-01 from the tree as it stood (convergence 0b review).",
+  "files": {
+    "components/settings/companion/browser-access-card.tsx": {
+      "uses": ["call:companion_browser_access_get", "call:companion_browser_access_set"],
+      "references": 0
+    },
+    "components/settings/companion/browser-companion-card.tsx": {
+      "uses": ["call:companion_browser_access_get", "call:companion_create_browser_enrollment"],
+      "references": 0
+    },
+    "components/settings/companion/channel-matrix-card.tsx": {
+      "uses": [
+        "call:companion_mdns_status",
+        "call:companion_server_status",
+        "call:companion_test_local_reachability",
+        "call:companion_tunnel_current"
+      ],
+      "references": 0
+    },
+    "components/settings/companion/paired-browsers-list.tsx": {
+      "uses": [
+        "call:companion_browser_extension_list",
+        "call:companion_browser_extension_set_drive"
+      ],
+      "references": 0
+    },
+    "components/settings/companion/webrtc-card.tsx": {
+      "uses": [
+        "call:companion_signaling_devices_status",
+        "call:companion_signaling_reconnect_device",
+        "call:companion_signaling_status"
+      ],
+      "references": 0
+    },
+    "components/settings/connectivity/blocks/companion-server-commands.ts": {
+      "uses": [
+        "call:<dynamic:cmd>",
+        "call:companion_mdns_status",
+        "call:companion_mesh_status",
+        "call:companion_migrate_legacy_device_grants",
+        "call:companion_seed_locked_computer_use",
+        "call:companion_server_start",
+        "call:companion_server_status",
+        "call:companion_server_stop",
+        "call:companion_tunnel_clear_named",
+        "call:companion_tunnel_current",
+        "call:companion_tunnel_get_config",
+        "call:companion_tunnel_set_mode",
+        "call:companion_tunnel_stop"
+      ],
+      "references": 0
+    },
+    "components/settings/connectivity/blocks/mdns-block.tsx": {
+      "uses": ["call:companion_get_tls_fingerprint"],
+      "references": 0
+    },
+    "components/settings/connectivity/blocks/server-block.tsx": {
+      "uses": ["call:companion_tls_paths"],
+      "references": 0
+    },
+    "hooks/connectivity/use-remote-access.ts": {
+      "uses": ["call:companion_mesh_status", "call:companion_tunnel_current"],
+      "references": 1
+    },
+    "lib/ai/agent/external/runtimes/remote/remote-host-configs.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/automation/lume-client.ts": {
+      "uses": ["call:lume_sandbox_local_call"],
+      "references": 0
+    },
+    "lib/automation/managed-desktop-client.ts": {
+      "uses": ["call:managed_desktop_local_call", "subscribe:<dynamic:topic>"],
+      "references": 1
+    },
+    "lib/automation/managed-desktop-result-deletion.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/automation/managed-desktop-results-client.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/browser-companion/host-transport.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/connectivity/reachability-prefs.ts": {
+      "uses": ["call:companion_reachability_get", "call:companion_reachability_set"],
+      "references": 0
+    },
+    "lib/dev/expose-test-globals.tsx": {
+      "uses": [],
+      "references": 3
+    },
+    "lib/docs-providers/providers/lark/index.ts": {
+      "uses": ["subscribe:lark-user-authorization-changed"],
+      "references": 0
+    },
+    "lib/filespace/grants-client.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/host-installer/client.ts": {
+      "uses": [
+        "call:<dynamic:command>",
+        "member:subscribeAttached",
+        "subscribeAttached:host-installer://stage"
+      ],
+      "references": 0
+    },
+    "lib/identity/deployment-discovery.ts": {
+      "uses": ["call:companion_local_auth_config", "call:companion_server_status"],
+      "references": 0
+    },
+    "lib/magpie/client.ts": {
+      "uses": ["call:magpie_gateway_port"],
+      "references": 0
+    },
+    "lib/network/net-meter.ts": {
+      "uses": ["call:network_interface_counters", "call:network_latency_probe"],
+      "references": 0
+    },
+    "lib/pet/media-packs/prepare.ts": {
+      "uses": ["call:plugin_media_get_video_frame", "call:video_get_info"],
+      "references": 0
+    },
+    "lib/plugin/api/companion-api.ts": {
+      "uses": [
+        "call:companion_revoke_device",
+        "call:companion_server_status",
+        "call:companion_set_remote_control",
+        "call:companion_unrevoke_device"
+      ],
+      "references": 0
+    },
+    "lib/plugin/cogpack/plugin-tree.ts": {
+      "uses": ["call:plugin_export_tree", "call:plugin_install_from_files"],
+      "references": 0
+    },
+    "lib/remote-desktop/console-webview.ts": {
+      "uses": [
+        "call:remote_console_close",
+        "call:remote_console_open",
+        "call:remote_console_reload",
+        "call:remote_console_set_bounds",
+        "call:remote_console_set_visible"
+      ],
+      "references": 3
+    },
+    "lib/remote-desktop/host-client.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/remote-desktop/launch.ts": {
+      "uses": ["call:remote_desktop_open_app"],
+      "references": 0
+    },
+    "lib/remote-host/github-runner/client.ts": {
+      "uses": [
+        "call:github_runner_cancel",
+        "call:github_runner_create",
+        "call:github_runner_list",
+        "call:github_runner_pairing",
+        "call:github_runner_preflight",
+        "call:github_runner_refresh"
+      ],
+      "references": 0
+    },
+    "lib/sandbox/delivery-source-hosts.ts": {
+      "uses": ["call:managed_desktop_local_call"],
+      "references": 1
+    },
+    "lib/sandbox/e2b-adapter.ts": {
+      "uses": ["call:cua_sandbox_exec", "call:cua_sandbox_read_file"],
+      "references": 0
+    },
+    "lib/sandbox/session-runtime.ts": {
+      "uses": ["call:cua_sandbox_download_file", "call:cua_sandbox_upload_file"],
+      "references": 0
+    },
+    "lib/session-import/watch-controller.ts": {
+      "uses": [
+        "call:<dynamic:cmd>",
+        "member:subscribeAttached",
+        "subscribeAttached:<dynamic:event>"
+      ],
+      "references": 0
+    },
+    "lib/subscription/siwc/native-fetch.ts": {
+      "uses": ["call:<dynamic:command>"],
+      "references": 0
+    },
+    "lib/task-workspace/origin.ts": {
+      "uses": [],
+      "references": 1
+    },
+    "lib/tauri/host-mode.ts": {
+      "uses": ["call:host_mode_get", "call:host_mode_set"],
+      "references": 0
+    }
+  }
+}
