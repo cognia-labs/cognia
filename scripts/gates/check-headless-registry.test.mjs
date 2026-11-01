@@ -7,6 +7,7 @@ import {
   EFFECT_PATTERN,
   MIN_REASON_LENGTH,
   analyze,
+  brainCorpus,
   calledInBrain,
   effectBodies,
   effectCalls,
@@ -19,6 +20,7 @@ import {
   readBaseCeiling,
   readExclusions,
   reconcile,
+  stripComments,
   uiOnlyKey,
 } from "./check-headless-registry.mjs"
 
@@ -271,6 +273,15 @@ describe("isUiOnlyModule", () => {
   })
 })
 
+describe("effectCalls over stores", () => {
+  it("counts a store module's watcher an effect calls", () => {
+    const source =
+      'import { installImNotifyWatcher } from "@/stores/chat/im-notify-store"\n' +
+      "useEffect(() => installImNotifyWatcher({ done: (t) => t }), [t])"
+    assert.deepEqual(effectSymbols(source), ["installImNotifyWatcher"])
+  })
+})
+
 describe("calledInBrain", () => {
   it("is true when a reachable module calls the symbol", () => {
     const corpus = new Map([["/repo/lib/headless/runtimes/a.ts", "installFoo({ x: 1 })"]])
@@ -318,6 +329,43 @@ describe("calledInBrain", () => {
   it("is false when nothing reachable mentions it", () => {
     const corpus = new Map([["/repo/lib/headless/runtimes/a.ts", "installBar()"]])
     assert.equal(calledInBrain("installFoo", corpus), false)
+  })
+})
+
+describe("brainCorpus", () => {
+  const root = "/repo"
+  const files = {
+    "/repo/lib/automation/audit.ts":
+      "/**\n * `startAutomationAuditMirror()` registers the listener.\n */\n" +
+      "export async function startAutomationAuditMirror() {}\n" +
+      '// scanAndRegisterLocalPacks() runs at boot\nconst url = "https://x.test/a"\n',
+    "/repo/components/agent/plan/plan-halt-dock.tsx":
+      "useEffect(() => { void ensurePlanStepRecovery() })",
+    "/repo/hooks/use-x.ts": "installFoo()",
+    "/repo/components/providers/initializers/x-initializer.tsx": "installFoo()",
+    "/repo/lib/x.test.ts": "installFoo()",
+    "/repo/lib/headless/runtimes/a.ts": "installBar()",
+  }
+  const corpus = brainCorpus(Object.keys(files), (f) => files[f], root)
+
+  it("does not count a call named only in a comment", () => {
+    assert.equal(calledInBrain("startAutomationAuditMirror", corpus), false)
+    assert.equal(calledInBrain("scanAndRegisterLocalPacks", corpus), false)
+    assert.match(corpus.get("/repo/lib/automation/audit.ts"), /https:\/\/x\.test\/a/)
+  })
+
+  it("drops render-only directories, initializers and tests", () => {
+    assert.equal(calledInBrain("ensurePlanStepRecovery", corpus), false)
+    assert.equal(calledInBrain("installFoo", corpus), false)
+    assert.equal(calledInBrain("installBar", corpus), true)
+    assert.deepEqual([...corpus.keys()].sort(), [
+      "/repo/lib/automation/audit.ts",
+      "/repo/lib/headless/runtimes/a.ts",
+    ])
+  })
+
+  it("blanks block and line comments but keeps code", () => {
+    assert.equal(stripComments("a() /* b() */ // c()\nd()").replace(/\s+/g, " ").trim(), "a() d()")
   })
 })
 

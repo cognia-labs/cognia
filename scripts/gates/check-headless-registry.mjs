@@ -279,7 +279,9 @@ function skipRegex(src, at) {
 }
 
 /**
- * The `@/lib/**` value bindings an initializer has: named imports (static, or
+ * The `@/lib/**` and `@/stores/**` value bindings an initializer has (a store
+ * module can own a runtime watcher too: `installImNotifyWatcher` pings a
+ * session's IM conversation when its run settles): named imports (static, or
  * destructured from `await import()`, alone or inside `Promise.all([...])`)
  * keyed by local name, and whole-module bindings keyed by local name.
  * Type-only imports are skipped: `import type { StartFooOptions }` is not an
@@ -299,21 +301,21 @@ export function libBindings(source) {
       if (/^[A-Za-z_$][\w$]*$/.test(local)) named.set(local, { imported, spec })
     }
   }
-  const staticRe = /import\s+(type\s+)?\{([^}]+)\}\s*from\s*["'](@\/lib\/[^"']+)["']/g
+  const staticRe = /import\s+(type\s+)?\{([^}]+)\}\s*from\s*["'](@\/(?:lib|stores)\/[^"']+)["']/g
   for (const m of source.matchAll(staticRe)) {
     if (!m[1]) addClause(m[2], m[3], /\s+as\s+/)
   }
-  const nsRe = /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'](@\/lib\/[^"']+)["']/g
+  const nsRe = /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["'](@\/(?:lib|stores)\/[^"']+)["']/g
   for (const m of source.matchAll(nsRe)) namespaces.set(m[1], m[2])
   const dynamicRe =
-    /(?:const|let)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*await\s+import\(\s*["'](@\/lib\/[^"']+)["']\s*\)/g
+    /(?:const|let)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*await\s+import\(\s*["'](@\/(?:lib|stores)\/[^"']+)["']\s*\)/g
   for (const m of source.matchAll(dynamicRe)) {
     if (m[1].startsWith("{")) addClause(m[1].slice(1, -1), m[2], ":")
     else namespaces.set(m[1], m[2])
   }
   // `import("@/lib/x").then(({ a }) => …)` and `.then(async (ns) => ns.a())`.
   const thenRe =
-    /import\(\s*["'](@\/lib\/[^"']+)["']\s*\)\s*\.then\(\s*(?:async\s*)?\(?\s*(\{[^}]*\}|[A-Za-z_$][\w$]*)/g
+    /import\(\s*["'](@\/(?:lib|stores)\/[^"']+)["']\s*\)\s*\.then\(\s*(?:async\s*)?\(?\s*(\{[^}]*\}|[A-Za-z_$][\w$]*)/g
   for (const m of source.matchAll(thenRe)) {
     if (m[2].startsWith("{")) addClause(m[2].slice(1, -1), m[1], ":")
     else namespaces.set(m[2], m[1])
@@ -330,7 +332,9 @@ export function libBindings(source) {
     const slots = splitTopLevel(source.slice(open + 1, close - 1))
     const elements = splitTopLevel(source.slice(listOpen + 1, matchClose(source, listOpen) - 1))
     slots.forEach((slot, index) => {
-      const spec = elements[index]?.match(/^import\(\s*["'](@\/lib\/[^"']+)["']\s*\)$/)?.[1]
+      const spec = elements[index]?.match(
+        /^import\(\s*["'](@\/(?:lib|stores)\/[^"']+)["']\s*\)$/
+      )?.[1]
       if (!spec) return
       if (slot.startsWith("{")) addClause(slot.slice(1, -1), spec, ":")
       else if (/^[A-Za-z_$][\w$]*$/.test(slot)) namespaces.set(slot, spec)
@@ -503,6 +507,49 @@ export function isUiOnlyModule(file, read) {
  *
  * @param {string} symbol @param {Map<string, string>} corpus reachable file → contents
  */
+/**
+ * Source with its comments blanked. A doc comment naming `startX()` is not a
+ * call: counting it let `startAutomationAuditMirror` and
+ * `scanAndRegisterLocalPacks` pass as wired. `//` right after `:` (a URL) or a
+ * quote is kept.
+ *
+ * @param {string} source
+ */
+export function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`\\])\/\/[^\n]*/gm, "$1")
+}
+
+/**
+ * Directories whose calls run only inside React. The brain reaches some of
+ * their modules through imports, but never renders them, so a call there (a
+ * component's own `useEffect` calling `ensurePlanStepRecovery`) proves nothing.
+ */
+export const RENDER_ONLY_DIRS = ["components/", "hooks/", "app/"]
+
+/**
+ * The text the call-site search runs over: every reachable file outside the
+ * initializer directory, tests and render-only directories, comments blanked.
+ *
+ * @param {Iterable<string>} reachable absolute paths
+ * @param {(file: string) => string} read
+ * @param {string} root
+ */
+export function brainCorpus(reachable, read, root = REPO_ROOT) {
+  const initDir = join(root, INITIALIZER_DIR)
+  const corpus = new Map()
+  for (const file of reachable) {
+    if (file.startsWith(initDir) || TEST_FILE.test(file)) continue
+    const rel = relative(root, file)
+    if (RENDER_ONLY_DIRS.some((dir) => rel.startsWith(dir))) continue
+    try {
+      corpus.set(file, stripComments(read(file)))
+    } catch {
+      /* unreadable file contributes nothing */
+    }
+  }
+  return corpus
+}
+
 export function calledInBrain(symbol, corpus) {
   const call = new RegExp(`\\b${symbol}\\s*\\(`)
   const declaration = new RegExp(
@@ -705,19 +752,10 @@ export function analyze(opts = {}) {
   const reachable = reachableFrom(roots, cachedRead)
 
   // Corpus the call-site search runs over: the reachable set minus the
-  // initializer directory (a provider calling its own effect proves nothing)
-  // and minus tests.
+  // initializer directory (a provider calling its own effect proves nothing),
+  // tests and render-only directories, with comments blanked.
   const initDirAbs = join(REPO_ROOT, INITIALIZER_DIR)
-  const corpus = new Map()
-  for (const file of reachable) {
-    if (file.startsWith(initDirAbs)) continue
-    if (TEST_FILE.test(file)) continue
-    try {
-      corpus.set(file, cachedRead(file))
-    } catch {
-      /* unreadable file contributes nothing */
-    }
-  }
+  const corpus = brainCorpus(reachable, cachedRead)
 
   // Keyed by module AND symbol: a row excuses that export of that module, so a
   // moved or same-named export elsewhere does not inherit it.

@@ -6,6 +6,14 @@
       "symbols": ["startUsageScheduler"],
       "reason": "Polls Anthropic quota through lib/subscription/core/transport, whose whole command family (subscription_get_active, subscription_get_account, ...) is target:client / transports:[\"internal\"] in protocol/companion-commands.json and local-only in protocol/headless-command-dispositions.json. The brain does not read that vault at all: its provider credentials arrive through the claude_set_* arms (R7), which is why lib/headless/runtimes/initializers.ts already excludes subscription-initializer for the same reason. Exposing quota probing to the brain is a subscription-vault decision, not a wiring one."
     },
+    "components/providers/initializers/approval-journal-initializer.tsx": {
+      "symbols": ["unannouncedInterrupted"],
+      "reason": "Boot notice in the main app window for tool approvals whose sidecar waiter died with the previous page load. The journal (stores/agent/approval-journal-store) is this renderer's persisted record of the asks it showed; a brain shows no asks and has no page load to survive."
+    },
+    "components/providers/initializers/automation-audit-mirror-initializer.tsx": {
+      "symbols": ["startAutomationAuditMirror"],
+      "reason": "Mirrors the Rust `automation:event` stream of this desktop's own computer-use automation (AX / UIA / screen capture, ADR-0020) into the Dexie audit table that Settings -> Automation -> Audit reads. Desktop automation is one of ADR-0059 D7's recorded physical boundaries: a headless host has no automation host emitting those events."
+    },
     "components/providers/initializers/boot-capability-route-activator.tsx": {
       "symbols": ["resolveRouteBootCapabilities"],
       "reason": "Maps the renderer's App Router pathname and ?section= (lib/boot/route-capabilities.ts ROUTE_PREFIXES) to the lazily split React initializer bundles that ensureBootCapability mounts. The brain has no routes and no deferred bundles. Its roster (lib/headless/runtimes/index.ts) imports and starts every registered runtime at boot, so there is no capability to activate on navigation."
@@ -169,7 +177,9 @@
         "pluginActionIsEligible",
         "speakSelection",
         "stopSelectionSpeech",
-        "takePendingSelectionStage"
+        "takePendingSelectionStage",
+        "enhancePrompt",
+        "getQuickAction"
       ],
       "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as watchSelectionSpeech above. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing. Every symbol serves the native selection toolbar over the OS text selection (ADR-0093/0095). They read the current selection candidate and staged selection from the desktop perception bus (lib/tauri/selection-toolbar.ts), classify it, build and run the plugin quick-action catalogue for the overlay window (lib/selection/plugin-actions.ts, action-layout.ts) and speak or stop speaking it (lib/tts/speak-selection.ts). Desktop selection awareness is a recorded ADR-0059 D7 physical boundary: a brain has no OS selection and no overlay window."
     },
@@ -289,9 +299,17 @@
     "@/lib/updates/open-update-center": {
       "symbols": ["openUpdateCenter"],
       "reason": "Asks the settings shell to navigate to the Updates section and highlight a row via in-process listeners. It is a UI navigation seam with no host work."
+    },
+    "@/stores/a2ui/a2ui-store": {
+      "symbols": ["hydrateA2UISurfaceCache"],
+      "reason": "Merges the durable A2UI surface rows into the renderer's zustand ready-surface LRU that the chat view paints from. The Dexie table stays the authority; the cache is renderer display state."
+    },
+    "@/stores/artifact/dock-tabs-store": {
+      "symbols": ["rememberedDockFor"],
+      "reason": "Reads how a conversation left its right-rail dock (ADR-0214 D9) so a conversation switch restores it. Renderer layout state with no host work."
     }
   },
-  "pendingCeiling": 21,
+  "pendingCeiling": 25,
   "pending": {
     "components/providers/initializers/background-task-initializer.tsx": {
       "symbols": ["setRendererBackgroundSettleListener"],
@@ -308,16 +326,32 @@
       "phase": "phase 1",
       "reason": "lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API). Nothing seeds the flag in the brain, so a user who enabled AppSettings.developer.chatMiddlewareExecution gets around-middlewares skipped on brain-hosted turns. The brain needs a runtime that reads the account settings row and keeps the flag in sync."
     },
+    "components/providers/initializers/deferred-boot-initializers-impl.tsx": {
+      "symbols": ["ensurePlanStepRecovery"],
+      "phase": "phase 2",
+      "reason": "Halts in-session plans whose in-flight turn died with the previous load (ADR-0045 §2), marking the step failed/interrupted instead of leaving it in_progress forever. The brain also runs direct-chat turns that drive in-session steps and loses them on a restart, but registers no recovery and has no boot id of its own; it needs the sweep keyed to its own process lifetime."
+    },
     "components/providers/initializers/harness-evolution-initializer.tsx": {
       "symbols": [
         "defaultFailureTriggerDeps",
         "enqueueRunForFailure",
         "installHarnessNotificationActions",
         "installLiveToolRules",
+        "lastUserRequest",
         "recoverOrphanedHarnessRuns"
       ],
       "phase": "phase 1",
       "reason": "In ADR-0237 background mode, a harness failure queues a replay run for the scheduled sweep. The initializer itself defers to the host (hostOwnsSessionState: 'the host sees the same failure and owns the runs'), yet the brain registers no harness evolution runtime at all: no failure trigger, live tool rules or orphan recovery. The brain needs a failure feed from its own turn outcomes into lib/harness/runtime/failure-trigger.ts."
+    },
+    "components/providers/initializers/im-notify-initializer.tsx": {
+      "symbols": ["installImNotifyWatcher"],
+      "phase": "phase 2",
+      "reason": "Pings a session's bound IM conversation when its run settles (done / error / needs input). The watcher subscribes to the renderer chat store, so a session armed while the brain hosts its turns never pings. Moves with the chat engine extraction; titles come from the React tree's translations today."
+    },
+    "components/providers/initializers/local-character-pack-initializer.tsx": {
+      "symbols": ["scanAndRegisterLocalPacks"],
+      "phase": "phase 2",
+      "reason": "Registers locally imported character packs from <appData>/cognia/local-character-packs/ (ADR-0030) into the in-memory character-pack registry. The brain registers none, so a turn the brain runs for a character from a local pack cannot resolve it. The scan is host-neutral file reading behind appDataDir()."
     },
     "components/providers/initializers/models-dev-catalog-initializer.tsx": {
       "symbols": ["initializeProviderCatalog"],
