@@ -24,7 +24,7 @@ import {
   type CliDbHandle,
   type SnapshotStoreImportResult,
 } from "../db/bootstrap"
-import type { DbLike, SnapshotSource } from "../db/snapshot"
+import type { DbLike, LegacySnapshotReporter, SnapshotSource } from "../db/snapshot"
 import { installWriteFlush, type DexieLike } from "../db/write-flush"
 import {
   backendHeldByUnpinnedRoot,
@@ -32,6 +32,12 @@ import {
   inspectDurabilityRoot,
 } from "./persistence/backend"
 import { manifestFile, readManifest } from "./persistence/manifest"
+import {
+  formatLegacyValueFinding,
+  LegacyValueReport,
+  legacyValueReportPath,
+  recordLegacyValueFindings,
+} from "./persistence/value-codec"
 import {
   openDurabilityStore,
   type DurabilityDbLike,
@@ -136,6 +142,46 @@ async function resolveDurabilitySources(): Promise<DurabilitySourceLike[]> {
 }
 
 /**
+ * Collects what a snapshot store written before value codec 1 may have lost
+ * (a Date kept as its string, a Map, Set, RegExp or DataView kept as `{}`, a
+ * File kept as a nameless Blob) and records it in the durability root's
+ * `value-loss-report.json`, as the journal and SQLite readers do for their own
+ * pre-codec-1 rows, so `durability verify` names them for good.
+ */
+function legacySnapshotValueReport(root: string): {
+  onLegacyValue: LegacySnapshotReporter
+  record: () => void
+} {
+  const report = new LegacyValueReport()
+  return {
+    onLegacyValue: (database, table, key, path, shape) =>
+      report.add(database, table, key, path, shape),
+    // Best-effort: the report is evidence, not data. A torn or newer report
+    // file, or a full disk, must not stop the brain booting from a store that
+    // restored fine (snapshot-v3 is the rung an operator rolls back to).
+    record: () => {
+      const findings = report.findings()
+      if (findings.length === 0) return
+      const listed = findings.map((finding) => `  ${formatLegacyValueFinding(finding)}`).join("\n")
+      try {
+        recordLegacyValueFindings(root, findings)
+      } catch (error) {
+        console.warn(
+          `[durability] could not record ${findings.length} value-loss finding(s) in ${legacyValueReportPath(root)}: ` +
+            `${error instanceof Error ? error.message : String(error)}; the snapshot store's pre-codec-1 rows:\n${listed}`
+        )
+        return
+      }
+      console.warn(
+        `[durability] ${findings.length} field path(s) of the snapshot store hold values written ` +
+          "before value codec 1 that may have lost their type; `cognia-agent durability verify` lists them:\n" +
+          listed
+      )
+    },
+  }
+}
+
+/**
  * `journal-v4` / `sqlite-v5` rungs.
  *
  * There is no debounce and no flush here — every committed Dexie transaction is
@@ -164,10 +210,13 @@ async function startLedgerDurability(
     // first checkpoint and then left untouched as a rollback source.
     importInitialState: hasSnapshotStore(opts.home, fileName)
       ? async (sources) => {
+          const legacy = legacySnapshotValueReport(durabilityRoot(opts.home, opts.accountId))
           const result = await importSnapshotStore(sources as unknown as SnapshotSource[], {
             home: opts.home,
             fileName,
+            onLegacyValue: legacy.onLegacyValue,
           })
+          legacy.record()
           opts.onLegacyImport?.(result)
         }
       : undefined,
@@ -259,10 +308,12 @@ export async function startDurability(opts: DurabilityOptions): Promise<Durabili
     handleRef.current?.scheduleFlush()
   }
 
+  const legacy = legacySnapshotValueReport(durabilityRoot(opts.home, opts.accountId))
   const db = await ensureCliDb({
     home: opts.home,
     fileName: snapshotFileName(opts.accountId),
     debounceMs: opts.debounceMs,
+    onLegacyValue: legacy.onLegacyValue,
     // One database since schema v219: the schedule is `scheduledTasks` inside
     // the account database rather than a separate `CogniaSchedulerDB`. It still
     // MUST be snapshotted, or a restarted brain reboots with an empty schedule
@@ -285,6 +336,8 @@ export async function startDurability(opts: DurabilityOptions): Promise<Durabili
     },
   })
   handleRef.current = db
+  // `ensureCliDb` resolves after the restore, so every finding is in.
+  legacy.record()
 
   const flushAndStamp = async (): Promise<void> => {
     await db.flush()

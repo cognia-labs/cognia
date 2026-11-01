@@ -571,3 +571,88 @@ describe("value codec 1 on every rung", () => {
     }
   )
 })
+
+describe("a snapshot store written before value codec 1", () => {
+  // conv-s1 X9: the journal and SQLite readers report their pre-codec-1 rows;
+  // the snapshot store's own readers (the snapshot rung, and the import into a
+  // ledger rung) must too, or a Date, Map or File lost there goes unnamed.
+  it.each([
+    ["snapshot-v3", "readable"],
+    ["sqlite-v5", "readable"],
+    ["snapshot-v3", "torn"],
+    ["sqlite-v5", "torn"],
+  ] as const)(
+    "%s restores it as written and records what it may have lost (%s report file)",
+    async (backend, reportFile) => {
+      const [{ installFakeIndexedDb }, { __resetDbForTesting }] = await Promise.all([
+        import("@/lib/headless/node-indexeddb"),
+        import("@/lib/db/schema"),
+      ])
+      await installFakeIndexedDb()
+      __resetCliDbForTesting()
+      __resetDbForTesting()
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), `cognia-serve-legacy-${backend}-`))
+      const accountId = `acct_legacy_${backend.replace(/[^a-z0-9]/g, "")}`
+      const databaseName = getDb().name
+      const tableDirectory = path.join(home, `db-${accountId}.json.tables`)
+      fs.mkdirSync(tableDirectory, { recursive: true })
+      fs.writeFileSync(
+        path.join(tableDirectory, "manifest.json"),
+        JSON.stringify({
+          snapshotFormat: 3,
+          dbs: { [databaseName]: { version: 1, tables: ["petMediaPacks"] } },
+        })
+      )
+      // What the pre-codec-1 encoder wrote for `at: new Date(…)` and `set: new Set(…)`.
+      const legacyRow = {
+        id: "pack-1",
+        displayName: "Pack",
+        createdAt: 1,
+        at: "2026-10-01T08:00:00.000Z",
+        set: {},
+      }
+      fs.writeFileSync(
+        path.join(tableDirectory, `${encodeURIComponent(databaseName)}--petMediaPacks.json`),
+        JSON.stringify([legacyRow])
+      )
+      const reportPath = path.join(durabilityRoot(home, accountId), "value-loss-report.json")
+      if (reportFile === "torn") {
+        fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+        fs.writeFileSync(reportPath, '{"reportFormat":1,"findings":[')
+      }
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+      let handle: Awaited<ReturnType<typeof startDurability>> | undefined
+      try {
+        // The report is evidence, not data: an unreadable one never stops the boot.
+        handle = await startDurability({ home, accountId, backend })
+        expect(await getDb().table("petMediaPacks").get("pack-1")).toEqual(legacyRow)
+        if (reportFile === "torn") {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining(reportPath))
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("petMediaPacks.at"))
+          await handle.dispose()
+          return
+        }
+        const report = JSON.parse(
+          fs.readFileSync(
+            path.join(durabilityRoot(home, accountId), "value-loss-report.json"),
+            "utf8"
+          )
+        ) as { findings: Array<{ table: string; path: string; shape: string }> }
+        expect(
+          report.findings.map((finding) => `${finding.table}.${finding.path} ${finding.shape}`)
+        ).toEqual(["petMediaPacks.at iso-date-string", "petMediaPacks.set empty-object"])
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("durability verify"))
+        await handle.dispose()
+      } finally {
+        warn.mockRestore()
+        await handle?.db?.flush().catch(() => {})
+        await getDb()
+          .delete()
+          .catch(() => {})
+        __resetDbForTesting()
+        __resetCliDbForTesting()
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+  )
+})

@@ -74,7 +74,10 @@ export function decodeDurableValue(value: unknown, root?: string): unknown {
 
 /** What a codec-0 value looks like where binary data was lost, or where it cannot be told apart. */
 export type LegacyValueLossShape =
-  /** `{}`: a Blob or ArrayBuffer (or a genuinely empty object). */
+  /**
+   * `{}`: a Blob or ArrayBuffer in the journal or SQLite store; a Map, Set,
+   * RegExp or DataView in the snapshot store (or a genuinely empty object).
+   */
   | "empty-object"
   /** `{"0": n, "1": n, …}`: a typed array written as its indices. */
   | "index-keyed-object"
@@ -83,6 +86,16 @@ export type LegacyValueLossShape =
    * build loaded without decoding and wrote back as codec 0. Kept as user data.
    */
   | "envelope-key-object"
+  /**
+   * An ISO timestamp string in a pre-codec-1 snapshot store: a Date (which the
+   * old encoder wrote as its `toJSON` string) or a string that was always one.
+   */
+  | "iso-date-string"
+  /**
+   * A Blob in a pre-codec-1 snapshot store: a File written then lost its name
+   * and modification time and restores as a plain Blob.
+   */
+  | "legacy-blob"
 
 /** One aggregated report row: same table, same field path, same shape. */
 export interface LegacyValueFinding {
@@ -290,9 +303,13 @@ export function formatLegacyValueFinding(finding: LegacyValueFinding): string {
   const where = `${finding.database}.${finding.table}${finding.path ? `.${finding.path}` : ""}`
   const what =
     finding.shape === "empty-object"
-      ? "read back as {} (a Blob or ArrayBuffer written before value codec 1 kept no bytes; a genuinely empty object looks the same)"
+      ? "read back as {} (a value written before value codec 1 that kept nothing: a Blob or ArrayBuffer in the journal or SQLite store, a Map, Set, RegExp, DataView, Blob or ArrayBuffer in the snapshot store; a genuinely empty object looks the same)"
       : finding.shape === "index-keyed-object"
         ? "read back as an index-keyed object (a typed array written before value codec 1; its element type was not kept)"
-        : "hold the value codec's envelope key and were kept as plain data (user data, or values an older build loaded without decoding and wrote back; those were not revived)"
+        : finding.shape === "iso-date-string"
+          ? "read back as an ISO timestamp string (a Date written to the snapshot store before value codec 1 became its string; a value that was always a string looks the same)"
+          : finding.shape === "legacy-blob"
+            ? "read back as a Blob (a File written to the snapshot store before value codec 1 lost its name; a plain Blob looks the same)"
+            : "hold the value codec's envelope key and were kept as plain data (user data, or values an older build loaded without decoding and wrote back; those were not revived)"
   return `${where}: ${finding.count} row(s) ${what}; e.g. ${finding.sampleKeys.join(", ")}`
 }

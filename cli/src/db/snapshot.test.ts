@@ -8,6 +8,7 @@ import {
   decodeSnapshotRowsAsync,
   parseMultiSnapshot,
   parseSnapshot,
+  reportLegacySnapshotRows,
   restoreMultiSnapshot,
   restoreSnapshot,
   serializeDb,
@@ -15,6 +16,7 @@ import {
   serializeSources,
   type DbLike,
 } from "./snapshot"
+import { encodeKey } from "../serve/persistence/canonical"
 
 class FakeTable {
   rows: unknown[]
@@ -322,7 +324,11 @@ describe("parseMultiSnapshot", () => {
   it("normalises a legacy single-database snapshot onto the primary name", () => {
     expect(parseMultiSnapshot('{"version":82,"tables":{"goals":[]}}', "CogniaDB")).toEqual({
       kind: "valid",
-      snapshot: { snapshotFormat: 3, dbs: { CogniaDB: { version: 82, tables: { goals: [] } } } },
+      snapshot: {
+        snapshotFormat: 3,
+        dbs: { CogniaDB: { version: 82, tables: { goals: [] } } },
+        legacyValueCodec: true,
+      },
     })
   })
 
@@ -337,6 +343,7 @@ describe("parseMultiSnapshot", () => {
       snapshot: {
         snapshotFormat: 3,
         dbs: { CogniaSchedulerDB: { version: 2, tables: { tasks: [{ id: "t" }] } } },
+        legacyValueCodec: true,
       },
     })
   })
@@ -358,9 +365,15 @@ describe("parseMultiSnapshot", () => {
     expect(parseMultiSnapshot("[1,2]", "CogniaDB")).toMatchObject({ kind: "corrupt" })
     // Legacy path still validated by parseSnapshot's rules.
     expect(parseMultiSnapshot('{"version":1}', "CogniaDB")).toMatchObject({ kind: "corrupt" })
-    expect(parseMultiSnapshot('{"snapshotFormat":4,"dbs":{}}', "CogniaDB")).toMatchObject({
+    expect(parseMultiSnapshot('{"snapshotFormat":1,"dbs":{}}', "CogniaDB")).toMatchObject({
       kind: "corrupt",
-      reason: "unsupported snapshot format 4",
+      reason: "unsupported snapshot format 1",
+    })
+    // A newer build's file is not damage, and must not read as such.
+    expect(parseMultiSnapshot('{"snapshotFormat":4,"dbs":{}}', "CogniaDB")).toEqual({
+      kind: "newer",
+      reason:
+        "snapshot format 4 was written by a newer version of Cognia (this version reads up to 3)",
     })
     expect(parseMultiSnapshot('{"snapshotFormat":2,"dbs":[]}', "CogniaDB")).toMatchObject({
       kind: "corrupt",
@@ -383,6 +396,125 @@ describe("parseMultiSnapshot", () => {
         reason: "snapshot for database X is malformed",
       })
     }
+  })
+})
+
+describe("what a pre-codec-1 snapshot may have lost", () => {
+  type Finding = [string, string, string, string, string]
+  const collect = () => {
+    const found: Finding[] = []
+    return {
+      found,
+      report: (database: string, table: string, key: string, path: string, shape: string) => {
+        found.push([database, table, key, path, shape])
+      },
+    }
+  }
+
+  // Exactly what the pre-codec-1 encoder wrote for each value it could not keep.
+  const legacyRow = {
+    id: "r1",
+    createdAt: "2026-10-01T08:00:00.000Z",
+    tags: {},
+    floats: { "0": 1.5, "1": null },
+    attachment: {
+      $cogniaSnapshotValue: {
+        version: 1,
+        type: "blob",
+        mediaType: "text/plain",
+        byteLength: 0,
+        chunks: [],
+      },
+    },
+    bytes: { $cogniaSnapshotValue: { version: 1, type: "uint8array", byteLength: 0, chunks: [] } },
+    nested: { history: [{ at: "2026-10-02T09:30:00.000Z", note: "plain text" }] },
+    escaped: {
+      $cogniaSnapshotValue: { version: 1, type: "record", entries: [["meta", {}]] },
+    },
+    title: "2026-10-01",
+  }
+
+  it("names each lossy shape by row and field path, and leaves the rows alone", () => {
+    const { found, report } = collect()
+    const rows = [legacyRow, { name: "no id", lookup: {} }]
+    const before = JSON.stringify(rows)
+    reportLegacySnapshotRows(rows, "CogniaDB", "items", report)
+    expect(JSON.stringify(rows)).toBe(before)
+    const r1 = encodeKey("r1")
+    expect(found).toEqual([
+      ["CogniaDB", "items", r1, "createdAt", "iso-date-string"],
+      ["CogniaDB", "items", r1, "tags", "empty-object"],
+      ["CogniaDB", "items", r1, "floats", "index-keyed-object"],
+      ["CogniaDB", "items", r1, "attachment", "legacy-blob"],
+      ["CogniaDB", "items", r1, "nested.history[].at", "iso-date-string"],
+      ["CogniaDB", "items", r1, "escaped.meta", "empty-object"],
+      ["CogniaDB", "items", "#1", "lookup", "empty-object"],
+    ])
+  })
+
+  it("reports a legacy file's rows during restore, and a current file's never", async () => {
+    for (const [text, expected] of [
+      [
+        JSON.stringify({
+          snapshotFormat: 2,
+          dbs: { CogniaDB: { version: 82, tables: { items: [legacyRow] } } },
+        }),
+        6,
+      ],
+      [JSON.stringify({ version: 82, tables: { items: [legacyRow] } }), 6],
+      [
+        JSON.stringify({
+          snapshotFormat: 3,
+          dbs: { CogniaDB: { version: 82, tables: { items: [legacyRow] } } },
+        }),
+        0,
+      ],
+    ] as const) {
+      const parsed = parseMultiSnapshot(text, "CogniaDB")
+      if (parsed.kind !== "valid") throw new Error(parsed.kind)
+      const table = new FakeTable("items")
+      const { found, report } = collect()
+      await restoreMultiSnapshot(
+        [{ name: "CogniaDB", db: fakeDb([table]) }],
+        parsed.snapshot,
+        report
+      )
+      expect(found).toHaveLength(expected)
+      // Restored exactly as before: reporting changes nothing.
+      expect((table.rows[0] as { createdAt: unknown }).createdAt).toBe("2026-10-01T08:00:00.000Z")
+    }
+  })
+
+  it("reports only the tables restore actually restores", async () => {
+    const lossy = { id: "x", at: "2026-10-01T08:00:00.000Z" }
+    const parsed = parseMultiSnapshot(
+      JSON.stringify({
+        snapshotFormat: 2,
+        dbs: {
+          CogniaDB: {
+            version: 82,
+            tables: {
+              items: [lossy],
+              // Derived (regenerated, never restored) and absent from the live schema.
+              sessionList: [lossy],
+              droppedTable: [lossy],
+              // The derived readiness row is filtered out of restore.
+              storageLayout: [{ id: "session-list-v241", at: "2026-10-01T08:00:00.000Z" }],
+            },
+          },
+        },
+      }),
+      "CogniaDB"
+    )
+    if (parsed.kind !== "valid") throw new Error(parsed.kind)
+    const { found, report } = collect()
+    const db = fakeDb([
+      new FakeTable("items"),
+      new FakeTable("sessionList"),
+      new FakeTable("storageLayout"),
+    ])
+    await restoreMultiSnapshot([{ name: "CogniaDB", db }], parsed.snapshot, report)
+    expect(found.map((finding) => finding[1])).toEqual(["items"])
   })
 })
 

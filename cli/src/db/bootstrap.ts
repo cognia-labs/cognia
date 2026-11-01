@@ -39,6 +39,8 @@ import {
   prepareRestoredSessionLists,
   encodeSnapshotRows,
   parseMultiSnapshot,
+  reportLegacySnapshotRows,
+  type LegacySnapshotReporter,
   restoreMultiSnapshot,
   serializeSnapshot,
   serializeSources,
@@ -84,6 +86,12 @@ export interface EnsureCliDbOptions {
     snapshotVersions: Readonly<Record<string, number>>,
     snapshotTables?: Readonly<Record<string, readonly string[]>>
   ) => Promise<void>
+  /**
+   * Told every shape a restored pre-value-codec-1 snapshot (single file
+   * format 2, table store format 3) may have lost a value in. The rows still
+   * restore as written; the durability host records these in its loss report.
+   */
+  onLegacyValue?: LegacySnapshotReporter
 }
 
 export interface CliDbHandle {
@@ -334,6 +342,28 @@ interface TableStoreManifest {
   dbs: Record<string, { version: number; tables: string[] }>
   /** Diagnostics about the process that last flushed. Never load-bearing. */
   writer?: TableStoreWriter
+  /** Parsed from a format-3 store, whose rows predate value codec 1. */
+  legacyValueCodec?: true
+}
+
+/**
+ * The format number of a manifest a newer build wrote, or `null`. Lets a
+ * refusal say "newer version" instead of "corrupt" for a store this build
+ * simply cannot read yet.
+ */
+function newerTableStoreFormat(text: string): number | null {
+  try {
+    const format = (JSON.parse(text) as { snapshotFormat?: unknown } | null)?.snapshotFormat
+    return Number.isInteger(format) && (format as number) > TABLE_STORE_FORMAT
+      ? (format as number)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function newerTableStoreProblem(format: number): string {
+  return `incompatible: table manifest format ${format} was written by a newer version of Cognia (this version reads up to ${TABLE_STORE_FORMAT})`
 }
 
 /** Human-readable writer provenance for error messages; empty when absent. */
@@ -523,7 +553,12 @@ function parseTableStoreManifest(text: string): TableStoreManifest | null {
       }
     }
   }
-  return { snapshotFormat: TABLE_STORE_FORMAT, dbs, writer }
+  return {
+    snapshotFormat: TABLE_STORE_FORMAT,
+    dbs,
+    writer,
+    ...(root.snapshotFormat === 3 ? { legacyValueCodec: true as const } : {}),
+  }
 }
 
 interface TableStoreRestore {
@@ -552,11 +587,15 @@ async function restoreTableStore(
    * persists through a worker thread, and Node cannot pass a file-backed Blob
    * to one (the read fails and the process aborts at exit).
    */
-  materializeBlobs = false
+  materializeBlobs = false,
+  /** Told what a format-3 store's rows may have lost (see {@link reportLegacySnapshotRows}). */
+  legacy?: LegacySnapshotReporter
 ): Promise<TableStoreRestore> {
   const rawManifest = fs.readFileSync(manifestFile, "utf8")
   const manifest = parseTableStoreManifest(rawManifest)
   if (!manifest) {
+    const newer = newerTableStoreFormat(rawManifest)
+    if (newer !== null) throw preserve("incompatible", newerTableStoreProblem(newer))
     throw preserve("corrupt", "corrupt (invalid table manifest)")
   }
   const restored = new Set<string>()
@@ -583,8 +622,17 @@ async function restoreTableStore(
       let rows: unknown
       try {
         const binaryStore = tableBinaryStore(tableDirectory)
+        const raw: unknown = JSON.parse(fs.readFileSync(tableFile, "utf8"))
+        if (manifest.legacyValueCodec && legacy && Array.isArray(raw)) {
+          reportLegacySnapshotRows(
+            snapshotRowsForTable(tableName, raw),
+            source.name,
+            tableName,
+            legacy
+          )
+        }
         rows = await decodeSnapshotRowsAsync(
-          JSON.parse(fs.readFileSync(tableFile, "utf8")),
+          raw,
           materializeBlobs ? { read: binaryStore.read } : binaryStore
         )
       } catch {
@@ -917,7 +965,12 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
           )
         }
         if (!candidate) {
-          refuse("is not a valid table manifest")
+          const newer = newerTableStoreFormat(candidateText)
+          refuse(
+            newer !== null
+              ? `was written by a newer version of Cognia (table manifest format ${newer} > ${TABLE_STORE_FORMAT})`
+              : "is not a valid table manifest"
+          )
         } else {
           await prepareForManifest(candidate)
           const tablesBySource = new Map(
@@ -974,7 +1027,9 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
         sources,
         manifestFile,
         tableDirectory,
-        preserve(manifestFile)
+        preserve(manifestFile),
+        false,
+        opts.onLegacyValue
       )
     }
     if (!restore) {
@@ -982,9 +1037,12 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
       if (parsed.kind === "corrupt") {
         throw preserve(file)("corrupt", `corrupt (${parsed.reason})`)
       }
+      if (parsed.kind === "newer") {
+        throw preserve(file)("incompatible", `incompatible: ${parsed.reason}`)
+      }
       if (parsed.kind === "valid") {
         try {
-          await restoreMultiSnapshot(sources, parsed.snapshot)
+          await restoreMultiSnapshot(sources, parsed.snapshot, opts.onLegacyValue)
         } catch (error) {
           if (error instanceof SnapshotVersionMismatchError) {
             throw preserve(file)(
@@ -1215,6 +1273,8 @@ export interface SnapshotStoreImportOptions {
   ) => Promise<void>
   /** Store-lock environment (tests). */
   lockEnvironment?: StoreLockEnvironment
+  /** Told what a pre-value-codec-1 store may have lost (see `EnsureCliDbOptions.onLegacyValue`). */
+  onLegacyValue?: LegacySnapshotReporter
 }
 
 export type SnapshotStoreImportResult =
@@ -1301,8 +1361,14 @@ export async function importSnapshotStore(
   try {
     if (fs.existsSync(manifestFile)) {
       assertNoPendingSnapshotRecovery(manifestFile)
-      const manifest = parseTableStoreManifest(fs.readFileSync(manifestFile, "utf8"))
-      if (!manifest) throw refuse(manifestFile)("corrupt", "corrupt (invalid table manifest)")
+      const manifestText = fs.readFileSync(manifestFile, "utf8")
+      const manifest = parseTableStoreManifest(manifestText)
+      if (!manifest) {
+        const newer = newerTableStoreFormat(manifestText)
+        if (newer !== null)
+          throw refuse(manifestFile)("incompatible", newerTableStoreProblem(newer))
+        throw refuse(manifestFile)("corrupt", "corrupt (invalid table manifest)")
+      }
       await prepareDynamicSchema(
         sources,
         Object.fromEntries(
@@ -1317,7 +1383,8 @@ export async function importSnapshotStore(
         manifestFile,
         tableDirectory,
         refuse(manifestFile),
-        true
+        true,
+        opts.onLegacyValue
       )
       await prepareRestoredSessionLists(sources)
       return { kind: "table-store", tables: restore.restored.size }
@@ -1326,9 +1393,11 @@ export async function importSnapshotStore(
     assertNoPendingSnapshotRecovery(file)
     const parsed = parseMultiSnapshot(fs.readFileSync(file, "utf8"), sources[0]?.name ?? "CogniaDB")
     if (parsed.kind === "corrupt") throw refuse(file)("corrupt", `corrupt (${parsed.reason})`)
+    if (parsed.kind === "newer")
+      throw refuse(file)("incompatible", `incompatible: ${parsed.reason}`)
     if (parsed.kind === "absent") return { kind: "none" }
     try {
-      await restoreMultiSnapshot(sources, parsed.snapshot)
+      await restoreMultiSnapshot(sources, parsed.snapshot, opts.onLegacyValue)
     } catch (error) {
       if (error instanceof SnapshotVersionMismatchError) {
         throw refuse(file)(

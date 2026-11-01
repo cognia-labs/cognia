@@ -140,7 +140,7 @@ async function runVerify(root: string, out: OutputSink, json: boolean): Promise<
   if (status.parity) out.write(`${formatParityReport(status.parity)}\n`)
   if (status.legacyValueLoss.length > 0) {
     out.write(
-      `value loss:      ${status.legacyValueLoss.length} field path(s) written before value codec 1 look like lost binary data\n`
+      `value loss:      ${status.legacyValueLoss.length} field path(s) written before value codec 1 may have lost their value or type\n`
     )
     for (const finding of status.legacyValueLoss) {
       out.write(`  ${formatLegacyValueFinding(finding)}\n`)

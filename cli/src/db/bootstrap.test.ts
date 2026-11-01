@@ -22,6 +22,7 @@ import {
 import { readBlobBytesSync, stopBlobReader } from "../serve/persistence/blob-sync"
 import { acquireStoreLock, releaseStoreLock } from "./store-lock"
 import { encodeSnapshotRows, type DbLike } from "./snapshot"
+import { encodeKey } from "../serve/persistence/canonical"
 
 class FakeTable {
   rows: unknown[]
@@ -307,7 +308,6 @@ describe("ensureCliDb", () => {
     null,
     [],
     { snapshotFormat: 2, dbs: {} },
-    { snapshotFormat: 5, dbs: {} },
     { snapshotFormat: 3, dbs: null },
     { snapshotFormat: 3, dbs: { CogniaDB: [] } },
     { snapshotFormat: 3, dbs: { CogniaDB: { version: "82", tables: [] } } },
@@ -335,6 +335,36 @@ describe("ensureCliDb", () => {
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
+
+  it.each([
+    ["table manifest", "db.json.tables/manifest.json", { snapshotFormat: 5, dbs: {} }],
+    ["single file", "db.json", { snapshotFormat: 4, dbs: {} }],
+  ])(
+    "refuses a %s a newer version wrote as incompatible, not corrupt",
+    async (_kind, relative, content) => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-newer-format-"))
+      const file = path.join(home, relative)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      const text = JSON.stringify(content)
+      fs.writeFileSync(file, text)
+      const opts = {
+        home,
+        getDatabase: () => ({ verno: 82, name: "CogniaDB", tables: [] }),
+        installGlobals: async () => {},
+        whenReady: async () => {},
+      }
+      try {
+        const refusal = ensureCliDb(opts)
+        await expect(refusal).rejects.toThrow(/written by a newer version of Cognia/)
+        await expect(refusal).rejects.not.toThrow(/corrupt/)
+        expect(fs.readFileSync(`${file}.incompatible-1`, "utf8")).toBe(text)
+        expect(fs.existsSync(`${file}.corrupt-1`)).toBe(false)
+      } finally {
+        __resetCliDbForTesting()
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+  )
 
   it("does not treat an unrelated backup filename as a quarantined snapshot", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-backup-name-"))
@@ -1286,13 +1316,15 @@ describe("ensureCliDb — multiple databases", () => {
     }
   })
 
-  it("rejects an unsupported envelope format instead of guessing", async () => {
+  it("rejects a newer envelope format instead of guessing", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-badfmt-"))
     const future = JSON.stringify({ snapshotFormat: 99, dbs: {} })
     fs.writeFileSync(path.join(home, "db.json"), future, "utf8")
     const { opts } = makeMultiOpts({ home, readSnapshot: () => future, writeSnapshot: undefined })
     try {
-      await expect(ensureCliDb(opts)).rejects.toThrow("unsupported snapshot format 99")
+      await expect(ensureCliDb(opts)).rejects.toThrow(
+        "snapshot format 99 was written by a newer version of Cognia"
+      )
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
@@ -1375,6 +1407,75 @@ describe("importSnapshotStore", () => {
     expect(Array.from(readBlobBytesSync(imported))).toEqual(Array.from(bytes))
     await stopBlobReader()
   })
+
+  it.each([
+    [3, 2],
+    [4, 0],
+  ])(
+    "reports what a format-%i table store's rows may have lost, through both readers",
+    async (format, expected) => {
+      const directory = path.join(home, "db-acct.json.tables")
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(
+        path.join(directory, "manifest.json"),
+        JSON.stringify({
+          snapshotFormat: format,
+          dbs: { CogniaDB: { version: 82, tables: ["goals"] } },
+        })
+      )
+      // The pre-codec-1 encoder's output for `{createdAt: new Date(…), tags: new Set()}`.
+      fs.writeFileSync(
+        path.join(directory, "CogniaDB--goals.json"),
+        JSON.stringify([{ id: "g1", createdAt: "2026-10-01T08:00:00.000Z", tags: {} }])
+      )
+      const findings: string[] = []
+      const onLegacyValue = (
+        database: string,
+        table: string,
+        key: string,
+        field: string,
+        shape: string
+      ) => findings.push(`${database}.${table} ${key} ${field} ${shape}`)
+
+      const imported = fakeDb()
+      await importSnapshotStore([{ name: "CogniaDB", db: imported.db }], {
+        home,
+        fileName: "db-acct.json",
+        prepareDynamicSchema: noDynamicSchema,
+        onLegacyValue,
+      })
+      expect(imported.goals.rows).toEqual([
+        { id: "g1", createdAt: "2026-10-01T08:00:00.000Z", tags: {} },
+      ])
+      expect(findings).toHaveLength(expected)
+      if (expected) {
+        const g1 = encodeKey("g1")
+        expect(findings).toEqual([
+          `CogniaDB.goals ${g1} createdAt iso-date-string`,
+          `CogniaDB.goals ${g1} tags empty-object`,
+        ])
+      }
+
+      findings.length = 0
+      const restored = fakeDb()
+      try {
+        const handle = await ensureCliDb({
+          home,
+          fileName: "db-acct.json",
+          getDatabase: () => ({ ...restored.db, name: "CogniaDB" }),
+          installGlobals: async () => {},
+          whenReady: async () => {},
+          schedule: () => () => {},
+          prepareDynamicSchema: noDynamicSchema,
+          onLegacyValue,
+        })
+        await handle.dispose()
+      } finally {
+        __resetCliDbForTesting()
+      }
+      expect(findings).toHaveLength(expected)
+    }
+  )
 
   it("refuses while another process holds the store, changing nothing", async () => {
     const file = path.join(home, "db-acct.json")
