@@ -3724,7 +3724,8 @@ describe("agent imperative API", () => {
     it.each([false, true])(
       "resolves download headers with a prefix (gateway=%s)",
       async (gateway) => {
-        const secret = "xoxb-1234567890-1234567890-abcdefghijklmnop"
+        // Not token-shaped: GitHub push protection flags a realistic Slack token.
+        const secret = "download-test-secret-value"
         mockIsTauri.mockReturnValue(gateway)
         const invokeMock = invoke as jest.Mock
         invokeMock.mockImplementation(
