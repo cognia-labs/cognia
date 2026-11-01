@@ -8,8 +8,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { openBackend } from "./backend"
-import { encodeKey } from "./canonical"
+import { durabilityRoot, openBackend } from "./backend"
+import { canonicalJson, encodeKey, sha256Hex } from "./canonical"
+import { verifyDurability } from "./operations"
+import { readLegacyValueReport } from "./value-codec"
 import type { CaptureCoreLike, CaptureMutateRequest, CaptureTableLike } from "./capture"
 import {
   openDurabilityStore,
@@ -941,4 +943,226 @@ describe("session list durability", () => {
       }
     }
   )
+})
+
+describe("binary and Date values", () => {
+  const bytes = Uint8Array.from([0, 1, 2, 250, 255])
+  // Past the inline limit, so it travels as a side file under the root.
+  const large = Uint8Array.from({ length: 100_000 }, (_, index) => index % 249)
+  const row = () => ({
+    id: "media",
+    blob: new Blob([bytes], { type: "image/png" }),
+    largeBlob: new Blob([large], { type: "video/mp4" }),
+    largeU16: new Uint16Array(large.buffer.slice(0, 40_000)),
+    emptyBlob: new Blob([], { type: "" }),
+    u8: Uint8Array.from(bytes),
+    f32: Float32Array.from([1.5, -2.25]),
+    buffer: Uint8Array.from([9, 8, 7]).buffer,
+    at: new Date("2026-11-01T00:00:00.000Z"),
+    nested: [{ chunk: Uint8Array.from([4, 2]) }],
+    // User data that happens to use the codec's own property names.
+    userTag: { $cogniaSnapshotValue: { version: 1, type: "blob" } },
+    userDate: { __date: "not a date" },
+    plain: {},
+  })
+
+  // fake-indexeddb clones in Node's realm, Jest's globals live in the test's,
+  // so `instanceof` is unreliable for typed arrays and Dates; check the tag.
+  const tag = (value: unknown) => Object.prototype.toString.call(value)
+
+  async function expectRow(value: Record<string, unknown> | undefined): Promise<void> {
+    expect(value).toBeDefined()
+    const read = value!
+    expect(read.blob).toBeInstanceOf(Blob)
+    expect((read.blob as Blob).type).toBe("image/png")
+    expect(new Uint8Array(await (read.blob as Blob).arrayBuffer())).toEqual(bytes)
+    expect((read.largeBlob as Blob).type).toBe("video/mp4")
+    expect(new Uint8Array(await (read.largeBlob as Blob).arrayBuffer())).toEqual(large)
+    expect(tag(read.largeU16)).toBe("[object Uint16Array]")
+    expect((read.largeU16 as Uint16Array).length).toBe(20_000)
+    expect((read.largeU16 as Uint16Array)[1]).toBe(new Uint16Array(large.buffer, 0, 2)[1])
+    expect(read.emptyBlob).toBeInstanceOf(Blob)
+    expect((read.emptyBlob as Blob).size).toBe(0)
+    expect(tag(read.u8)).toBe("[object Uint8Array]")
+    expect(Array.from(read.u8 as Uint8Array)).toEqual(Array.from(bytes))
+    expect(tag(read.f32)).toBe("[object Float32Array]")
+    expect(Array.from(read.f32 as Float32Array)).toEqual([1.5, -2.25])
+    expect(tag(read.buffer)).toBe("[object ArrayBuffer]")
+    expect(Array.from(new Uint8Array(read.buffer as ArrayBuffer))).toEqual([9, 8, 7])
+    expect(tag(read.at)).toBe("[object Date]")
+    expect((read.at as Date).toISOString()).toBe("2026-11-01T00:00:00.000Z")
+    const nested = read.nested as Array<{ chunk: unknown }>
+    expect(tag(nested[0].chunk)).toBe("[object Uint8Array]")
+    expect(Array.from(nested[0].chunk as Uint8Array)).toEqual([4, 2])
+    expect(read.userTag).toEqual({ $cogniaSnapshotValue: { version: 1, type: "blob" } })
+    expect(read.userDate).toEqual({ __date: "not a date" })
+    expect(read.plain).toEqual({})
+  }
+
+  it.each(["journal-v4", "sqlite-v5"] as const)(
+    "%s round-trips Blob, typed arrays, ArrayBuffer and Date through a commit, a restart and a compaction",
+    async (backend) => {
+      const home = tempHome()
+      const name = `BinaryLedger-${backend}-${path.basename(home)}`
+      await installFakeIndexedDb()
+      const open = () => {
+        const db = new Dexie(name)
+        db.version(1).stores({ media: "id" })
+        return db
+      }
+      let db = open()
+      let store: Awaited<ReturnType<typeof openDurabilityStore>> | undefined
+      const options = () => ({
+        home,
+        accountId: "acct",
+        backend,
+        getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+      })
+      try {
+        store = await openDurabilityStore(options())
+        await db.table("media").put(row())
+        expect(store.sequence()).toBe(1)
+        // Large values left the JSON record for content-addressed side files.
+        expect(fs.readdirSync(path.join(durabilityRoot(home, "acct"), "binary"))).toHaveLength(2)
+        await store.close()
+        await db.delete()
+
+        // Restart: the row comes back from the commit record / row store.
+        db = open()
+        store = await openDurabilityStore(options())
+        await expectRow(await db.table("media").get("media"))
+
+        // Fold into a checkpoint / rewritten rows, restart again.
+        await store.compact()
+        await store.close()
+        await db.delete()
+        db = open()
+        store = await openDurabilityStore(options())
+        await expectRow(await db.table("media").get("media"))
+      } finally {
+        await store?.close()
+        await db.delete()
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+  )
+})
+
+describe("values written before value codec 1", () => {
+  let home: string
+  beforeEach(() => {
+    home = tempHome()
+  })
+  afterEach(() => {
+    jest.restoreAllMocks()
+    fs.rmSync(home, { recursive: true, force: true })
+  })
+
+  /** Rewrite every journal line as a build before codec 1 wrote it. */
+  function downgradeJournal(root: string): void {
+    const dir = path.join(root, "journal")
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name)
+      const lines = fs
+        .readFileSync(file, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const payload = JSON.parse(line.slice(0, line.lastIndexOf("\t")))
+          delete payload.valueCodec
+          const text = canonicalJson(payload)
+          return `${text}\t${sha256Hex(text)}\n`
+        })
+      fs.writeFileSync(file, lines.join(""))
+    }
+  }
+
+  /** Rewrite every generation manifest as a build before codec 1 wrote it (format 3). */
+  function downgradeGenerations(root: string): string[] {
+    const dir = path.join(root, "generations")
+    const names = fs.readdirSync(dir).sort()
+    for (const name of names) {
+      const file = path.join(dir, name, "checkpoint.json")
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"))
+      delete manifest.valueCodec
+      manifest.checkpointFormat = 3
+      fs.writeFileSync(file, JSON.stringify(manifest))
+    }
+    return names
+  }
+
+  const manifestFormat = (root: string, generation: string) =>
+    JSON.parse(
+      fs.readFileSync(path.join(root, "generations", generation, "checkpoint.json"), "utf8")
+    ).checkpointFormat
+
+  it("restores what codec 0 kept, reports what it lost, and keeps the report past compaction", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    const first = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "journal-v4",
+      getSources: async () => [first],
+    })
+    // What a codec-0 build left behind: the Blob already flattened to {}.
+    await first.db.commit("sessions", {
+      type: "put",
+      values: [{ id: "a", at: { __date: "2026-11-01T00:00:00.000Z" }, cover: {} }],
+    })
+    await store.close()
+    const root = durabilityRoot(home, "acct")
+    downgradeJournal(root)
+    const legacyGenerations = downgradeGenerations(root)
+
+    const revived = makeSource()
+    const second = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      getSources: async () => [revived],
+    })
+    // Boot re-cut the format-3 generation as a format-4 one before any commit
+    // could land in its journal, which a build before codec 1 would replay.
+    const generations = fs.readdirSync(path.join(root, "generations")).sort()
+    expect(generations.length).toBe(legacyGenerations.length + 1)
+    expect(manifestFormat(root, generations.at(-1)!)).toBe(4)
+    await revived.db.commit("sessions", { type: "put", values: [{ id: "b" }] })
+    const [row] = (await revived.db.tables[0].toArray()) as Array<Record<string, unknown>>
+    expect(Object.prototype.toString.call(row.at)).toBe("[object Date]")
+    expect(row.cover).toEqual({})
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/1 field path\(s\).*sessions\.cover/s))
+    const report = readLegacyValueReport(root)
+    expect(report?.findings).toEqual([
+      expect.objectContaining({
+        table: "sessions",
+        path: "cover",
+        shape: "empty-object",
+        count: 1,
+      }),
+    ])
+
+    // Compaction rewrites the rows as codec 1; the report still names them.
+    await second.compact()
+    expect((await second.backend.load()).legacyValueFindings).toBeUndefined()
+    await second.close()
+    expect((await verifyDurability(root)).legacyValueLoss).toEqual(report?.findings)
+  })
+
+  it("writes no report for a root that never held codec-0 values", async () => {
+    const source = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      getSources: async () => [source],
+    })
+    await source.db.commit("sessions", { type: "put", values: [{ id: "a", meta: {} }] })
+    await store.close()
+    const again = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      getSources: async () => [makeSource()],
+    })
+    await again.close()
+    expect(readLegacyValueReport(durabilityRoot(home, "acct"))).toBeNull()
+  })
 })

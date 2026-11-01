@@ -19,6 +19,7 @@ import {
   installFakeIndexedDb,
   writeSnapshotAtomically,
 } from "./bootstrap"
+import { readBlobBytesSync, stopBlobReader } from "../serve/persistence/blob-sync"
 import { acquireStoreLock, releaseStoreLock } from "./store-lock"
 import type { DbLike } from "./snapshot"
 
@@ -1344,6 +1345,40 @@ describe("importSnapshotStore", () => {
     expect(goals.rows).toEqual([{ id: "g1" }])
     expect(fs.readFileSync(file, "utf8")).toBe(text)
     expect(fs.existsSync(`${file}.lock`)).toBe(false)
+  })
+
+  it("imports table-store Blobs into memory, readable by the durability ledger's worker", async () => {
+    const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 253)
+    const media = new FakeTable("messageMedia", [
+      { hash: "source", blob: new Blob([bytes], { type: "application/pdf" }) },
+    ])
+    const options = {
+      home,
+      fileName: "db-acct.json",
+      getDatabase: () => ({ name: "CogniaDB", verno: 82, tables: [media] }),
+      installGlobals: async () => {},
+      whenReady: async () => {},
+      schedule: () => () => {},
+    }
+    try {
+      const written = await ensureCliDb(options)
+      await written.dispose()
+    } finally {
+      __resetCliDbForTesting()
+    }
+    expect(fs.readdirSync(path.join(home, "db-acct.json.tables", "binary"))).toHaveLength(1)
+
+    const target = new FakeTable("messageMedia")
+    const result = await importSnapshotStore(
+      [{ name: "CogniaDB", db: { verno: 82, tables: [target] } }],
+      { home, fileName: "db-acct.json", prepareDynamicSchema: noDynamicSchema }
+    )
+    expect(result).toEqual({ kind: "table-store", tables: 1 })
+    const imported = (target.rows[0] as { blob: Blob }).blob
+    expect(imported.type).toBe("application/pdf")
+    // A file-backed Blob would fail here (and abort the process at exit).
+    expect(Array.from(readBlobBytesSync(imported))).toEqual(Array.from(bytes))
+    await stopBlobReader()
   })
 
   it("refuses while another process holds the store, changing nothing", async () => {

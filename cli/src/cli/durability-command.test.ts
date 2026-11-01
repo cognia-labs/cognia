@@ -7,6 +7,7 @@ import { writeCheckpoint } from "../serve/persistence/checkpoint"
 import { journalFile } from "../serve/persistence/journal"
 import { readManifest } from "../serve/persistence/manifest"
 import type { DurabilityCommit, DurabilityState } from "../serve/persistence/types"
+import { recordLegacyValueFindings } from "../serve/persistence/value-codec"
 import { parseArgv } from "./args"
 import { durabilityCommand, DURABILITY_HELP } from "./durability-command"
 import type { OutputSink } from "./output"
@@ -116,6 +117,25 @@ describe("durability verify", () => {
     expect(text).toContain("active backend:  journal-v4")
     expect(text).toContain("generations:     gen-0001")
     expect(text).toContain("journal commits: 1 (sequence 1)")
+  })
+
+  it("lists values a pre-codec-1 build left lossy, without failing verify", async () => {
+    const root = await seed(home, [commit(1, "s:a", { id: "a" })])
+    recordLegacyValueFindings(root, [
+      {
+        database: "CogniaDB",
+        table: "petMediaPacks",
+        path: "blob",
+        shape: "empty-object",
+        count: 3639,
+        sampleKeys: ["s:pack-1"],
+      },
+    ])
+    const out = sink()
+    expect(await run(["verify", "--account", "acct"], out, home)).toBe(0)
+    const text = out.out.join("")
+    expect(text).toContain("value loss:      1 field path(s)")
+    expect(text).toContain("CogniaDB.petMediaPacks.blob: 3639 row(s) read back as {}")
   })
 
   it("exits non-zero and prints the fault when the journal is damaged", async () => {

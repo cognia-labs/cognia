@@ -3,6 +3,7 @@
  */
 import {
   encodeSnapshotRows,
+  encodeSnapshotValueSync,
   decodeSnapshotRows,
   decodeSnapshotRowsAsync,
   parseMultiSnapshot,
@@ -406,4 +407,83 @@ it("omits derived session lists and their readiness from snapshots and legacy re
   expect(sessions.rows).toEqual([{ id: "s", title: "Restored source" }])
   expect(projection.rows).toEqual([{ id: "s", title: "Current" }])
   expect(layout.rows).toEqual([marker])
+})
+
+describe("encodeSnapshotValueSync", () => {
+  const readBlob = () => Uint8Array.from([1, 2, 3])
+  const tag = (value: unknown) => Object.prototype.toString.call(value)
+
+  it("writes the async encoder's envelope for the types both encode", async () => {
+    const value = { u8: Uint8Array.from([4, 5]), buffer: Uint8Array.from([6]).buffer }
+    expect(encodeSnapshotValueSync(value, { readBlob })).toEqual(
+      (await encodeSnapshotRows([value]))[0]
+    )
+    const blob = new Blob([Uint8Array.from([1, 2, 3])], { type: "text/plain" })
+    expect(encodeSnapshotValueSync({ blob }, { readBlob })).toEqual(
+      (await encodeSnapshotRows([{ blob }]))[0]
+    )
+  })
+
+  it("keeps what the async encoder flattens: typed arrays, Date, Map, Set, bigint", () => {
+    const decoded = decodeSnapshotRows(
+      JSON.parse(
+        JSON.stringify([
+          encodeSnapshotValueSync(
+            {
+              f64: Float64Array.from([2.5]),
+              at: new Date(5),
+              map: new Map([[1, "a"]]),
+              set: new Set(["x"]),
+              big: BigInt("-7"),
+            },
+            { readBlob }
+          ),
+        ])
+      )
+    )[0] as Record<string, unknown>
+    expect(tag(decoded.f64)).toBe("[object Float64Array]")
+    expect((decoded.at as Date).getTime()).toBe(5)
+    expect((decoded.map as Map<number, string>).get(1)).toBe("a")
+    expect((decoded.set as Set<string>).has("x")).toBe(true)
+    expect(decoded.big).toBe(BigInt("-7"))
+  })
+
+  it("uses readBlob for Blob bytes", () => {
+    const encoded = encodeSnapshotValueSync(new Blob(["ignored"], { type: "a/b" }), { readBlob })
+    expect(encoded).toEqual({
+      $cogniaSnapshotValue: {
+        version: 1,
+        type: "blob",
+        byteLength: 3,
+        mediaType: "a/b",
+        chunks: ["AQID"],
+      },
+    })
+  })
+})
+
+describe("decoding the codec-1 envelope types", () => {
+  const envelope = (data: Record<string, unknown>) => [
+    { $cogniaSnapshotValue: { version: 1, ...data } },
+  ]
+
+  it("rejects malformed dates, bigints, maps and sets", () => {
+    expect(() => decodeSnapshotRows(envelope({ type: "date", time: "x" }))).toThrow(/date/)
+    expect(() => decodeSnapshotRows(envelope({ type: "date", time: Infinity }))).toThrow(/date/)
+    expect(() => decodeSnapshotRows(envelope({ type: "bigint", value: "1.5" }))).toThrow(/bigint/)
+    expect(() => decodeSnapshotRows(envelope({ type: "map", entries: [[1]] }))).toThrow(/map/)
+    expect(() => decodeSnapshotRows(envelope({ type: "set", values: {} }))).toThrow(/set/)
+  })
+
+  it("rejects a typed array whose byte length is not a whole number of elements", () => {
+    expect(() =>
+      decodeSnapshotRows(envelope({ type: "int16array", byteLength: 3, chunks: ["AQID"] }))
+    ).toThrow(/binary metadata/)
+  })
+
+  it("rejects an envelope type it does not know", () => {
+    expect(() =>
+      decodeSnapshotRows(envelope({ type: "constructor", byteLength: 0, chunks: [] }))
+    ).toThrow(/binary metadata/)
+  })
 })

@@ -107,16 +107,384 @@ async function encodeSnapshotValue(
   }
 }
 
+/**
+ * Typed-array envelope types beyond `uint8array`, by the constructor they
+ * restore. Only the synchronous encoder below writes them; the async snapshot
+ * encoder keeps its original three binary types so a snapshot an older build
+ * reads back never carries a type that build refuses.
+ */
+const TYPED_ARRAY_TYPES = {
+  int8array: Int8Array,
+  uint8clampedarray: Uint8ClampedArray,
+  int16array: Int16Array,
+  uint16array: Uint16Array,
+  int32array: Int32Array,
+  uint32array: Uint32Array,
+  float32array: Float32Array,
+  float64array: Float64Array,
+  bigint64array: BigInt64Array,
+  biguint64array: BigUint64Array,
+} as const
+
+interface TypedArrayConstructorLike {
+  readonly BYTES_PER_ELEMENT: number
+  new (buffer: ArrayBuffer): ArrayBufferView
+}
+
+/**
+ * Every typed-array kind this runtime has. `Float16Array` is newer than the
+ * TypeScript lib this package targets, so it is looked up rather than named;
+ * a row holding one decodes only where the constructor exists.
+ */
+const TYPED_ARRAY_CONSTRUCTORS: Readonly<Record<string, TypedArrayConstructorLike>> = (() => {
+  const constructors: Record<string, TypedArrayConstructorLike> = { ...TYPED_ARRAY_TYPES }
+  const float16 = (globalThis as { Float16Array?: TypedArrayConstructorLike }).Float16Array
+  if (float16) constructors.float16array = float16
+  return constructors
+})()
+const BINARY_TYPES = new Set<string>([
+  "blob",
+  "file",
+  "uint8array",
+  "arraybuffer",
+  "dataview",
+  ...Object.keys(TYPED_ARRAY_TYPES),
+  "float16array",
+])
+
+function viewType(view: ArrayBufferView): string | null {
+  if (view instanceof Uint8Array) return "uint8array"
+  if (view instanceof DataView) return "dataview"
+  for (const [type, constructor] of Object.entries(TYPED_ARRAY_CONSTRUCTORS)) {
+    if (view instanceof (constructor as unknown as abstract new () => unknown)) return type
+  }
+  return null
+}
+
+/** Error constructors `structuredClone` keeps the name of; anything else restores as `Error`. */
+const ERROR_TYPES: Readonly<Record<string, ErrorConstructor>> = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError,
+}
+
+/**
+ * A built-in with its own clone semantics that the encoder does not know. A
+ * class instance has no global constructor under its tag and is copied as a
+ * plain object, exactly as `structuredClone` copies it; a platform type (a
+ * `DOMException`, a `SharedArrayBuffer`, a `WeakMap`) would otherwise be
+ * written as `{}` and is refused instead. The tag alone decides, so a built-in
+ * from another realm (which fails the `instanceof` checks above) is refused
+ * too rather than flattened.
+ */
+function unknownBuiltinTag(value: object): string | null {
+  const tag = Object.prototype.toString.call(value).slice(8, -1)
+  if (tag === "Object" || tag === "Array") return null
+  return typeof (globalThis as Record<string, unknown>)[tag] === "function" ? tag : null
+}
+
+const UNDEFINED_ENVELOPE = { [SNAPSHOT_VALUE_KEY]: { version: 1, type: "undefined" } }
+const HOLE_ENVELOPE = { [SNAPSHOT_VALUE_KEY]: { version: 1, type: "hole" } }
+
+function binaryEnvelope(
+  type: string,
+  bytes: Uint8Array,
+  options: SnapshotSyncEncodeOptions,
+  meta: Record<string, unknown> = {}
+): Record<string, unknown> {
+  if (options.writeBinary && bytes.byteLength > (options.inlineLimit ?? 0)) {
+    return {
+      [SNAPSHOT_VALUE_KEY]: {
+        version: 1,
+        type,
+        byteLength: bytes.byteLength,
+        ...meta,
+        fileRef: options.writeBinary(bytes),
+      },
+    }
+  }
+  const chunks: string[] = []
+  for (let offset = 0; offset < bytes.byteLength; offset += BINARY_CHUNK_BYTES) {
+    const chunk = bytes.subarray(offset, offset + BINARY_CHUNK_BYTES)
+    chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).toString("base64"))
+  }
+  return {
+    [SNAPSHOT_VALUE_KEY]: {
+      version: 1,
+      type,
+      byteLength: bytes.byteLength,
+      ...meta,
+      chunks,
+    },
+  }
+}
+
+export interface SnapshotSyncEncodeOptions {
+  /** Read a Blob's bytes without awaiting (see `persistence/blob-sync.ts`). */
+  readBlob: (blob: Blob) => Uint8Array
+  /**
+   * Durably store bytes and return their sha256 reference. When given, binary
+   * values larger than `inlineLimit` become `fileRef` envelopes; otherwise
+   * every binary value is written inline as base64 chunks.
+   */
+  writeBinary?: (bytes: Uint8Array) => string
+  /** Largest binary value (in bytes) kept inline when `writeBinary` is given. */
+  inlineLimit?: number
+}
+
+/**
+ * Synchronous counterpart of the snapshot encoder, for paths that cannot await
+ * (the durability journal's transaction-complete hook).
+ *
+ * It writes the same envelope (inline chunks, or `fileRef` side files through
+ * `writeBinary`), and preserves what plain JSON loses, i.e. what
+ * `structuredClone` (and so IndexedDB) keeps: every ArrayBuffer view type (not
+ * just `Uint8Array`), `File` name and `lastModified`, `Date` (as an envelope,
+ * not the async encoder's ISO string), `Map`, `Set`, `RegExp`, `Error`, boxed
+ * primitives, `bigint`, `NaN`, `±Infinity`, `-0`, `undefined` and array holes.
+ * Objects that use the codec's own property name are escaped exactly as the
+ * async encoder escapes them, and a built-in it does not know is refused
+ * rather than written as `{}`.
+ *
+ * Not kept: non-index properties of an array (JSON never carried them, and no
+ * Dexie row is known to set one) and an error's non-standard own properties
+ * (`structuredClone` drops those too).
+ */
+export function encodeSnapshotValueSync(
+  value: unknown,
+  options: SnapshotSyncEncodeOptions,
+  ancestors = new Set<object>()
+): unknown {
+  if (typeof value === "bigint")
+    return { [SNAPSHOT_VALUE_KEY]: { version: 1, type: "bigint", value: value.toString() } }
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && !Object.is(value, -0)) return value
+    return {
+      [SNAPSHOT_VALUE_KEY]: {
+        version: 1,
+        type: "number",
+        value: Object.is(value, -0) ? "-0" : String(value),
+      },
+    }
+  }
+  if (value === undefined) return UNDEFINED_ENVELOPE
+  if (typeof value === "function" || typeof value === "symbol")
+    throw new TypeError(`Cannot durably encode a ${typeof value}`)
+  if (!value || typeof value !== "object") return value
+  if (typeof File !== "undefined" && value instanceof File)
+    return binaryEnvelope("file", options.readBlob(value), options, {
+      mediaType: value.type,
+      name: value.name,
+      lastModified: value.lastModified,
+    })
+  if (value instanceof Blob)
+    return binaryEnvelope("blob", options.readBlob(value), options, { mediaType: value.type })
+  if (value instanceof ArrayBuffer)
+    return binaryEnvelope("arraybuffer", new Uint8Array(value), options)
+  if (ArrayBuffer.isView(value)) {
+    const type = viewType(value)
+    if (type) {
+      return binaryEnvelope(
+        type,
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+        options
+      )
+    }
+  }
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return {
+      [SNAPSHOT_VALUE_KEY]: { version: 1, type: "date", time: Number.isNaN(time) ? null : time },
+    }
+  }
+  if (value instanceof RegExp)
+    return {
+      [SNAPSHOT_VALUE_KEY]: {
+        version: 1,
+        type: "regexp",
+        source: value.source,
+        flags: value.flags,
+      },
+    }
+  if (
+    value instanceof Boolean ||
+    value instanceof Number ||
+    value instanceof String ||
+    value instanceof BigInt
+  ) {
+    return {
+      [SNAPSHOT_VALUE_KEY]: {
+        version: 1,
+        type: "boxed",
+        value: encodeSnapshotValueSync(value.valueOf(), options, ancestors),
+      },
+    }
+  }
+  if (ancestors.has(value)) throw new TypeError("Cannot snapshot a cyclic value")
+  ancestors.add(value)
+  try {
+    if (value instanceof Map) {
+      return {
+        [SNAPSHOT_VALUE_KEY]: {
+          version: 1,
+          type: "map",
+          entries: [...value].map(([key, item]) => [
+            encodeSnapshotValueSync(key, options, ancestors),
+            encodeSnapshotValueSync(item, options, ancestors),
+          ]),
+        },
+      }
+    }
+    if (value instanceof Set) {
+      return {
+        [SNAPSHOT_VALUE_KEY]: {
+          version: 1,
+          type: "set",
+          values: [...value].map((item) => encodeSnapshotValueSync(item, options, ancestors)),
+        },
+      }
+    }
+    // The tag check keeps a DOMException (an Error subclass in Node) out of
+    // this branch: structuredClone restores it as a DOMException, so it is
+    // refused below rather than stored as a plain Error.
+    if (value instanceof Error && Object.prototype.toString.call(value) === "[object Error]") {
+      const name = Object.hasOwn(ERROR_TYPES, value.name) ? value.name : "Error"
+      return {
+        [SNAPSHOT_VALUE_KEY]: {
+          version: 1,
+          type: "error",
+          name,
+          message: value.message,
+          ...(typeof value.stack === "string" ? { stack: value.stack } : {}),
+          ...(Object.hasOwn(value, "cause")
+            ? { cause: encodeSnapshotValueSync(value.cause, options, ancestors) }
+            : {}),
+        },
+      }
+    }
+    if (Array.isArray(value)) {
+      const items: unknown[] = new Array(value.length)
+      for (let index = 0; index < value.length; index += 1) {
+        items[index] = Object.hasOwn(value, index)
+          ? encodeSnapshotValueSync(value[index], options, ancestors)
+          : HOLE_ENVELOPE
+      }
+      return items
+    }
+    const unknown = unknownBuiltinTag(value)
+    if (unknown) throw new TypeError(`Cannot durably encode a ${unknown} value`)
+    const entries: [string, unknown][] = Object.entries(value).map(([key, item]) => [
+      key,
+      encodeSnapshotValueSync(item, options, ancestors),
+    ])
+    return Object.hasOwn(value, SNAPSHOT_VALUE_KEY)
+      ? { [SNAPSHOT_VALUE_KEY]: { version: 1, type: "record", entries } }
+      : Object.fromEntries(entries)
+  } finally {
+    ancestors.delete(value)
+  }
+}
+
+/** A binary envelope's value from freshly copied bytes the result may own. */
+function materializeBinary(
+  type: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  data: Record<string, unknown>
+): unknown {
+  if (type === "blob") return new Blob([bytes], { type: data.mediaType as string })
+  if (type === "file")
+    return new File([bytes], data.name as string, {
+      type: data.mediaType as string,
+      lastModified: data.lastModified as number,
+    })
+  if (type === "arraybuffer") return bytes.buffer
+  if (type === "dataview") return new DataView(bytes.buffer)
+  if (Object.hasOwn(TYPED_ARRAY_CONSTRUCTORS, type))
+    return new TYPED_ARRAY_CONSTRUCTORS[type](bytes.buffer)
+  if (type === "float16array") throw new Error("Float16Array is not available in this runtime")
+  return bytes
+}
+
+/** The keys each envelope type may carry besides `version` and `type`. */
+const ENVELOPE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  record: ["entries"],
+  date: ["time"],
+  bigint: ["value"],
+  map: ["entries"],
+  set: ["values"],
+  undefined: [],
+  hole: [],
+  number: ["value"],
+  regexp: ["source", "flags"],
+  boxed: ["value"],
+  error: ["name", "message", "stack", "cause"],
+  blob: ["byteLength", "chunks", "fileRef", "mediaType"],
+  file: ["byteLength", "chunks", "fileRef", "mediaType", "name", "lastModified"],
+}
+const BINARY_ENVELOPE_KEYS = ["byteLength", "chunks", "fileRef"] as const
+
+/** An envelope with a key its type never writes is malformed, not data to skip. */
+function assertEnvelopeKeys(data: Record<string, unknown>): void {
+  const type = String(data.type)
+  const allowed = Object.hasOwn(ENVELOPE_KEYS, type)
+    ? ENVELOPE_KEYS[type]
+    : BINARY_TYPES.has(type)
+      ? BINARY_ENVELOPE_KEYS
+      : null
+  if (!allowed) return // an unknown type fails in its own check below
+  for (const key of Object.keys(data)) {
+    if (key !== "version" && key !== "type" && !allowed.includes(key))
+      throw new Error(`invalid snapshot ${type} envelope: unexpected ${key}`)
+  }
+}
+
+function isEnvelopeOfType(value: unknown, type: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const object = value as Record<string, unknown>
+  if (Object.keys(object).length !== 1) return false
+  const envelope = object[SNAPSHOT_VALUE_KEY]
+  return (
+    !!envelope &&
+    typeof envelope === "object" &&
+    (envelope as Record<string, unknown>).version === 1 &&
+    (envelope as Record<string, unknown>).type === type
+  )
+}
+
 function decodeSnapshotValue(
   value: unknown,
   materialize = true,
   binaryStore?: SnapshotBinaryStore
 ): unknown {
   if (!value || typeof value !== "object") return value
-  if (value instanceof Blob || value instanceof Uint8Array || value instanceof ArrayBuffer)
+  // Already-live values (a hydrated Blob, or anything a caller decoded twice).
+  if (
+    value instanceof Blob ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value) ||
+    value instanceof Date ||
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof RegExp ||
+    value instanceof Error ||
+    value instanceof Boolean ||
+    value instanceof Number ||
+    value instanceof String
+  )
     return value
-  if (Array.isArray(value))
-    return value.map((item) => decodeSnapshotValue(item, materialize, binaryStore))
+  if (Array.isArray(value)) {
+    const items: unknown[] = new Array(value.length)
+    for (let index = 0; index < value.length; index += 1) {
+      const item = value[index]
+      if (materialize && isEnvelopeOfType(item, "hole")) continue
+      items[index] = decodeSnapshotValue(item, materialize, binaryStore)
+    }
+    return items
+  }
   const object = value as Record<string, unknown>
   if (Object.keys(object).length === 1 && Object.hasOwn(object, SNAPSHOT_VALUE_KEY)) {
     const envelope = object[SNAPSHOT_VALUE_KEY]
@@ -124,6 +492,7 @@ function decodeSnapshotValue(
       throw new Error("invalid snapshot value envelope")
     const data = envelope as Record<string, unknown>
     if (data.version !== 1) throw new Error("unsupported snapshot value version")
+    assertEnvelopeKeys(data)
     if (data.type === "record") {
       if (
         !Array.isArray(data.entries) ||
@@ -139,8 +508,85 @@ function decodeSnapshotValue(
         ])
       )
     }
+    if (data.type === "date") {
+      if (data.time !== null && (typeof data.time !== "number" || !Number.isFinite(data.time)))
+        throw new Error("invalid snapshot date")
+      return materialize ? new Date(data.time ?? Number.NaN) : value
+    }
+    if (data.type === "undefined" || data.type === "hole") {
+      // A hole outside an array has no position to leave empty: it reads as
+      // `undefined`, which is what indexing a hole yields.
+      return materialize ? undefined : value
+    }
+    if (data.type === "number") {
+      const special: Record<string, number> = {
+        NaN: Number.NaN,
+        Infinity: Number.POSITIVE_INFINITY,
+        "-Infinity": Number.NEGATIVE_INFINITY,
+        "-0": -0,
+      }
+      if (typeof data.value !== "string" || !Object.hasOwn(special, data.value))
+        throw new Error("invalid snapshot number")
+      return materialize ? special[data.value] : value
+    }
+    if (data.type === "regexp") {
+      if (typeof data.source !== "string" || typeof data.flags !== "string")
+        throw new Error("invalid snapshot regexp")
+      return materialize ? new RegExp(data.source, data.flags) : value
+    }
+    if (data.type === "boxed") {
+      const inner = decodeSnapshotValue(data.value, true, binaryStore)
+      if (!["boolean", "number", "string", "bigint"].includes(typeof inner))
+        throw new Error("invalid snapshot boxed primitive")
+      return materialize ? Object(inner) : value
+    }
+    if (data.type === "error") {
+      if (
+        typeof data.name !== "string" ||
+        !Object.hasOwn(ERROR_TYPES, data.name) ||
+        typeof data.message !== "string" ||
+        (data.stack !== undefined && typeof data.stack !== "string")
+      )
+        throw new Error("invalid snapshot error")
+      const cause = Object.hasOwn(data, "cause")
+        ? decodeSnapshotValue(data.cause, materialize, binaryStore)
+        : undefined
+      if (!materialize) return value
+      const error = new ERROR_TYPES[data.name](
+        data.message,
+        Object.hasOwn(data, "cause") ? { cause } : undefined
+      )
+      if (data.stack === undefined) delete (error as { stack?: string }).stack
+      else error.stack = data.stack
+      return error
+    }
+    if (data.type === "bigint") {
+      if (typeof data.value !== "string" || !/^-?(?:0|[1-9][0-9]*)$/.test(data.value))
+        throw new Error("invalid snapshot bigint")
+      return materialize ? BigInt(data.value) : value
+    }
+    if (data.type === "map") {
+      if (
+        !Array.isArray(data.entries) ||
+        data.entries.some((entry) => !Array.isArray(entry) || entry.length !== 2)
+      )
+        throw new Error("invalid snapshot map")
+      const entries = (data.entries as [unknown, unknown][]).map(
+        ([key, item]) =>
+          [
+            decodeSnapshotValue(key, materialize, binaryStore),
+            decodeSnapshotValue(item, materialize, binaryStore),
+          ] as const
+      )
+      return materialize ? new Map(entries) : value
+    }
+    if (data.type === "set") {
+      if (!Array.isArray(data.values)) throw new Error("invalid snapshot set")
+      const values = data.values.map((item) => decodeSnapshotValue(item, materialize, binaryStore))
+      return materialize ? new Set(values) : value
+    }
     if (
-      !["blob", "uint8array", "arraybuffer"].includes(String(data.type)) ||
+      !BINARY_TYPES.has(String(data.type)) ||
       !Number.isSafeInteger(data.byteLength) ||
       (data.byteLength as number) < 0 ||
       (data.fileRef === undefined &&
@@ -150,7 +596,15 @@ function decodeSnapshotValue(
         (typeof data.fileRef !== "string" ||
           !/^[a-f0-9]{64}$/.test(data.fileRef) ||
           data.chunks !== undefined)) ||
-      (data.type === "blob" && typeof data.mediaType !== "string")
+      ((data.type === "blob" || data.type === "file") && typeof data.mediaType !== "string") ||
+      (data.type === "file" &&
+        (typeof data.name !== "string" ||
+          typeof data.lastModified !== "number" ||
+          !Number.isFinite(data.lastModified))) ||
+      (Object.hasOwn(TYPED_ARRAY_CONSTRUCTORS, String(data.type)) &&
+        (data.byteLength as number) %
+          TYPED_ARRAY_CONSTRUCTORS[String(data.type)].BYTES_PER_ELEMENT !==
+          0)
     )
       throw new Error("invalid snapshot binary metadata")
     if (typeof data.fileRef === "string") {
@@ -158,11 +612,7 @@ function decodeSnapshotValue(
       if (!binaryStore?.read) throw new Error("snapshot binary store unavailable")
       const bytes = binaryStore.read(data.fileRef, data.byteLength as number)
       if (bytes.byteLength !== data.byteLength) throw new Error("snapshot binary length mismatch")
-      return data.type === "blob"
-        ? new Blob([bytes], { type: data.mediaType as string })
-        : data.type === "arraybuffer"
-          ? new Uint8Array(bytes).buffer
-          : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      return materializeBinary(String(data.type), new Uint8Array(bytes), data)
     }
     const parts: Uint8Array<ArrayBuffer>[] = []
     let remaining = data.byteLength as number
@@ -181,14 +631,13 @@ function decodeSnapshotValue(
       remaining -= expected
     }
     if (!materialize) return value
-    if (data.type === "blob") return new Blob(parts, { type: data.mediaType as string })
     const result = new Uint8Array(data.byteLength as number)
     let offset = 0
     for (const part of parts) {
       result.set(part, offset)
       offset += part.length
     }
-    return data.type === "arraybuffer" ? result.buffer : result
+    return materializeBinary(String(data.type), result, data)
   }
   return Object.fromEntries(
     Object.entries(object).map(([key, item]) => [

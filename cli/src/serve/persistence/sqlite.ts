@@ -2,6 +2,7 @@
  * `sqlite-v5` — Node's built-in SQLite as the headless durability store.
  *
  * Deliberately **generic**: three tables holding database/table/key/value rows
+ * (`durability_rows_codec1`, with a tombstone view under the pre-codec-1 name)
  * plus commit sequence and schema metadata. Mirroring the Dexie schema into
  * SQL would create a second hand-maintained Cognia schema that drifts on every
  * Dexie version bump — the exact failure ADR-0059 D3 rejects.
@@ -16,7 +17,9 @@ import fs from "node:fs"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
+import { collectBinaryReferences } from "./binary-store"
 import { canonicalJson } from "./canonical"
+import { LegacyValueReport, normalizeLegacyValue, VALUE_CODEC } from "./value-codec"
 import {
   DurabilityFault,
   type CompactionResult,
@@ -46,14 +49,85 @@ CREATE TABLE IF NOT EXISTS durability_schema (
   tables   TEXT NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS durability_rows (
-  database   TEXT NOT NULL REFERENCES durability_schema(database) ON DELETE CASCADE,
-  table_name TEXT NOT NULL,
-  row_key    TEXT NOT NULL,
-  value      TEXT NOT NULL,
+`
+
+/**
+ * Row values live in `durability_rows_codec1`, each marked with the value codec
+ * it was written in. Only this build writes the table, so the marker cannot
+ * disagree with the bytes.
+ */
+export const SQLITE_ROWS_TABLE = "durability_rows_codec1"
+
+const ROWS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS ${SQLITE_ROWS_TABLE} (
+  database    TEXT NOT NULL REFERENCES durability_schema(database) ON DELETE CASCADE,
+  table_name  TEXT NOT NULL,
+  row_key     TEXT NOT NULL,
+  value       TEXT NOT NULL,
+  value_codec INTEGER NOT NULL,
   PRIMARY KEY (database, table_name, row_key)
 ) STRICT, WITHOUT ROWID;
 `
+
+/**
+ * What a build from before value codec 1 finds under the table name it knows.
+ * Its `CREATE TABLE IF NOT EXISTS durability_rows` is a no-op against a view,
+ * and preparing its row upsert then fails ("cannot modify durability_rows
+ * because it is a view"), so it stops at open, before it writes anything,
+ * instead of loading codec-1 rows undecoded and writing them back as codec 0
+ * under a stale marker. Any other reader of the old name gets a SQL error from
+ * the deliberately malformed `json()` call rather than a value.
+ */
+const TOMBSTONE_VIEW_SQL = `
+CREATE VIEW durability_rows AS
+SELECT database, table_name, row_key,
+       json('durability rows moved to ${SQLITE_ROWS_TABLE}: this store needs a newer Cognia') AS value
+FROM ${SQLITE_ROWS_TABLE};
+`
+
+/**
+ * Move a store written before value codec 1 onto the codec-1 layout, in one
+ * transaction: its rows are copied across marked codec 0, which is what they
+ * are, and the old table is replaced by the tombstone view. A fresh store gets
+ * the table and the view directly.
+ */
+function ensureRowsTable(db: SqliteDatabaseLike): void {
+  const kindOf = (name: string) =>
+    (
+      db.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name) as
+        { type?: unknown } | undefined
+    )?.type
+  // Inspect inside the write lock: a second process opening the same store
+  // must see the first one's migration, not race it.
+  db.exec("BEGIN IMMEDIATE;")
+  try {
+    const existing = kindOf("durability_rows")
+    if (existing === "view") {
+      // Migrated before. A missing rows table here is not a fresh store: the
+      // sequence and schemas survive, so recreating it would open as empty.
+      if (kindOf(SQLITE_ROWS_TABLE) !== "table") {
+        throw new DurabilityFault(
+          "sqlite-integrity-failure",
+          `sqlite store has the durability_rows tombstone but no ${SQLITE_ROWS_TABLE} table`
+        )
+      }
+    } else {
+      db.exec(ROWS_TABLE_SQL)
+      if (existing === "table") {
+        db.exec(
+          `INSERT INTO ${SQLITE_ROWS_TABLE} (database, table_name, row_key, value, value_codec) ` +
+            "SELECT database, table_name, row_key, value, 0 FROM durability_rows;"
+        )
+        db.exec("DROP TABLE durability_rows;")
+      }
+      db.exec(TOMBSTONE_VIEW_SQL)
+    }
+    db.exec("COMMIT;")
+  } catch (error) {
+    db.exec("ROLLBACK;")
+    throw error
+  }
+}
 
 /** The `node:sqlite` surface used here, narrowed so tests can substitute it. */
 export interface SqliteDatabaseLike {
@@ -109,7 +183,9 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
   const file = sqliteFile(opts.root)
   const db = (opts.open ?? defaultOpen)(file)
   db.exec(SCHEMA_SQL)
+  // Check before the layout migration copies and drops the old rows table.
   assertIntegrity(db)
+  ensureRowsTable(db)
   restrictPermissions(file)
 
   const selectSequence = db.prepare("SELECT value FROM durability_meta WHERE key = 'sequence'")
@@ -122,13 +198,18 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
       "ON CONFLICT(database) DO UPDATE SET version = excluded.version, tables = excluded.tables"
   )
   const selectSchemas = db.prepare("SELECT database, version, tables FROM durability_schema")
-  const selectRows = db.prepare("SELECT database, table_name, row_key, value FROM durability_rows")
+  const selectRows = db.prepare(
+    `SELECT database, table_name, row_key, value, value_codec FROM ${SQLITE_ROWS_TABLE}`
+  )
+  // Values arrive in codec-1 form (the store encodes them at the Dexie boundary).
   const upsertRow = db.prepare(
-    "INSERT INTO durability_rows (database, table_name, row_key, value) VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT(database, table_name, row_key) DO UPDATE SET value = excluded.value"
+    `INSERT INTO ${SQLITE_ROWS_TABLE} (database, table_name, row_key, value, value_codec) ` +
+      `VALUES (?, ?, ?, ?, ${VALUE_CODEC}) ` +
+      "ON CONFLICT(database, table_name, row_key) DO UPDATE SET value = excluded.value, " +
+      "value_codec = excluded.value_codec"
   )
   const deleteRow = db.prepare(
-    "DELETE FROM durability_rows WHERE database = ? AND table_name = ? AND row_key = ?"
+    `DELETE FROM ${SQLITE_ROWS_TABLE} WHERE database = ? AND table_name = ? AND row_key = ?`
   )
 
   function readSequence(): number {
@@ -151,6 +232,7 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
 
   async function load(): Promise<DurabilityState> {
     const state: DurabilityState = { sequence, dbs: {} }
+    const report = new LegacyValueReport()
     for (const raw of selectSchemas.all() as Array<Record<string, unknown>>) {
       const database = String(raw.database)
       let tables: string[] = []
@@ -171,16 +253,36 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
     for (const raw of selectRows.all() as Array<Record<string, unknown>>) {
       const entry = state.dbs[String(raw.database)]
       if (!entry) continue
-      const table = (entry.rows[String(raw.table_name)] ??= {})
+      const tableName = String(raw.table_name)
+      const key = String(raw.row_key)
+      const table = (entry.rows[tableName] ??= {})
+      let value: unknown
       try {
-        table[String(raw.row_key)] = JSON.parse(String(raw.value))
+        value = JSON.parse(String(raw.value))
       } catch {
         throw new DurabilityFault(
           "sqlite-integrity-failure",
-          `sqlite row ${String(raw.database)}.${String(raw.table_name)} holds unreadable JSON`
+          `sqlite row ${String(raw.database)}.${tableName} holds unreadable JSON`
         )
       }
+      const codec = Number(raw.value_codec)
+      if (codec === 0) {
+        value = normalizeLegacyValue(value, {
+          database: String(raw.database),
+          table: tableName,
+          key,
+          report,
+        })
+      } else if (codec !== VALUE_CODEC) {
+        throw new DurabilityFault(
+          "sqlite-integrity-failure",
+          `sqlite row ${String(raw.database)}.${tableName} uses unsupported value codec ${codec}`
+        )
+      }
+      table[key] = value
     }
+    const findings = report.findings()
+    if (findings.length > 0) state.legacyValueFindings = findings
     return state
   }
 
@@ -231,7 +333,7 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
   function replaceAll(state: DurabilityState): void {
     db.exec("BEGIN IMMEDIATE")
     try {
-      db.exec("DELETE FROM durability_rows")
+      db.exec(`DELETE FROM ${SQLITE_ROWS_TABLE}`)
       db.exec("DELETE FROM durability_schema")
       writeSchemas(state)
       for (const [database, entry] of Object.entries(state.dbs)) {
@@ -282,4 +384,29 @@ export function asSqliteBackend(
   return backend.id === "sqlite-v5"
     ? (backend as HeadlessDurabilityBackend & { replaceAll(state: DurabilityState): void })
     : null
+}
+
+/**
+ * Side-file references every SQLite row holds, read straight from the file so
+ * `durability finalize` (synchronous) can keep them. A store that does not
+ * exist references nothing.
+ */
+export function collectSqliteBinaryReferences(root: string, into: Set<string>): Set<string> {
+  const file = sqliteFile(root)
+  if (!fs.existsSync(file)) return into
+  const db = new DatabaseSync(file, { readOnly: true })
+  try {
+    // A store no codec-1 build has opened yet has only the old table, and
+    // codec-0 rows never reference side files.
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(SQLITE_ROWS_TABLE))
+      return into
+    for (const raw of db.prepare(`SELECT value FROM ${SQLITE_ROWS_TABLE}`).all() as Array<
+      Record<string, unknown>
+    >) {
+      collectBinaryReferences(JSON.parse(String(raw.value)), into)
+    }
+  } finally {
+    db.close()
+  }
+  return into
 }

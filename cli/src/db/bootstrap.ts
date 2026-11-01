@@ -533,7 +533,14 @@ async function restoreTableStore(
   preserve: (label: "corrupt" | "incompatible", problem: string) => CliDbSnapshotError = (
     label,
     problem
-  ) => preserveUnsafeSnapshot(manifestFile, label, problem)
+  ) => preserveUnsafeSnapshot(manifestFile, label, problem),
+  /**
+   * Read binary side files into memory instead of handing out file-backed
+   * Blobs. The durability import needs this: the ledger reads every Blob it
+   * persists through a worker thread, and Node cannot pass a file-backed Blob
+   * to one (the read fails and the process aborts at exit).
+   */
+  materializeBlobs = false
 ): Promise<TableStoreRestore> {
   const rawManifest = fs.readFileSync(manifestFile, "utf8")
   const manifest = parseTableStoreManifest(rawManifest)
@@ -563,9 +570,10 @@ async function restoreTableStore(
       const tableFile = path.join(tableDirectory, tableFileName(source.name, tableName))
       let rows: unknown
       try {
+        const binaryStore = tableBinaryStore(tableDirectory)
         rows = await decodeSnapshotRowsAsync(
           JSON.parse(fs.readFileSync(tableFile, "utf8")),
-          tableBinaryStore(tableDirectory)
+          materializeBlobs ? { read: binaryStore.read } : binaryStore
         )
       } catch {
         throw preserve(
@@ -1296,7 +1304,8 @@ export async function importSnapshotStore(
         sources,
         manifestFile,
         tableDirectory,
-        refuse(manifestFile)
+        refuse(manifestFile),
+        true
       )
       await prepareRestoredSessionLists(sources)
       return { kind: "table-store", tables: restore.restored.size }

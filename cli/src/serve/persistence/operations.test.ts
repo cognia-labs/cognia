@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { openBackend } from "./backend"
+import { BINARY_PRUNE_GRACE_MS, binaryDir, writeBinarySync } from "./binary-store"
 import { generationDir, listGenerations, readCheckpoint, writeCheckpoint } from "./checkpoint"
 import { encodeCommitLine, journalFile } from "./journal"
 import { readManifest, writeManifest } from "./manifest"
@@ -19,6 +20,7 @@ import {
   writeRollbackBundle,
 } from "./operations"
 import type { DurabilityCommit, DurabilityState } from "./types"
+import { readLegacyValueReport } from "./value-codec"
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-ops-"))
@@ -363,6 +365,26 @@ describe("rollbackDurability", () => {
     expect(readManifest(root).activeBackend).toBe("journal-v4")
   })
 
+  it("keeps the value-loss report of a target from before codec 1 that it re-cuts", async () => {
+    writeCheckpoint(root, "gen-0001", state(1, { "s:old": { id: "old", cover: {} } }))
+    const manifestFile = path.join(generationDir(root, "gen-0001"), "checkpoint.json")
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"))
+    delete manifest.valueCodec
+    manifest.checkpointFormat = 3
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest))
+    writeCheckpoint(root, "gen-0002", state(9, { "s:new": 1 }))
+
+    rollbackDurability(root, "gen-0001", () => 3)
+    // The re-cut gen-0003 is codec 1 and says nothing of the loss; the
+    // persisted report does, and survives finalize pruning gen-0001.
+    expect(readLegacyValueReport(root)?.findings).toEqual([
+      expect.objectContaining({ table: "sessions", path: "cover", shape: "empty-object" }),
+    ])
+    expect((await verifyDurability(root)).legacyValueLoss).toEqual([
+      expect.objectContaining({ path: "cover", sampleKeys: ["s:old"] }),
+    ])
+  })
+
   it("records a rollback bundle", () => {
     writeCheckpoint(root, "gen-0001", state(1))
     rollbackDurability(root, "gen-0001")
@@ -419,6 +441,39 @@ describe("finalizeDurability", () => {
     fs.writeFileSync(journalFile(root, "gen-0001"), encodeCommitLine(commit(2, "s:a", 1)))
     finalizeDurability(root, "gen-0002", { confirm: true })
     expect(fs.existsSync(journalFile(root, "gen-0001"))).toBe(false)
+  })
+
+  it("removes side files no kept generation, journal or SQLite row names, sparing young ones", async () => {
+    const ref = (bytes: number[]) => writeBinarySync(root, Uint8Array.from(bytes))
+    const envelope = (fileRef: string) => ({
+      $cogniaSnapshotValue: { version: 1, type: "uint8array", byteLength: 1, fileRef },
+    })
+    const onlyPruned = ref([1])
+    const inCheckpoint = ref([2])
+    const inJournal = ref([3])
+    const inSqlite = ref([4])
+    const young = ref([5])
+    fs.rmSync(generationDir(root, "gen-0001"), { recursive: true })
+    writeCheckpoint(root, "gen-0001", state(1, { "s:a": { bytes: envelope(onlyPruned) } }))
+    fs.rmSync(generationDir(root, "gen-0003"), { recursive: true })
+    writeCheckpoint(root, "gen-0003", state(3, { "s:a": { bytes: envelope(inCheckpoint) } }))
+    fs.mkdirSync(path.join(root, "journal"), { recursive: true })
+    fs.writeFileSync(
+      journalFile(root, "gen-0003"),
+      encodeCommitLine(commit(4, "s:b", { bytes: envelope(inJournal) }))
+    )
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(4, { "s:c": { bytes: envelope(inSqlite) } }))
+    await sqlite.close()
+    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
+    for (const name of [onlyPruned, inCheckpoint, inJournal, inSqlite])
+      fs.utimesSync(path.join(binaryDir(root), name), old, old)
+
+    const result = finalizeDurability(root, "gen-0002", { confirm: true })
+    expect(result.prunedBinaries).toEqual([onlyPruned])
+    expect(fs.readdirSync(binaryDir(root)).sort()).toEqual(
+      [inCheckpoint, inJournal, inSqlite, young].sort()
+    )
   })
 
   it("rejects a generation that is not on disk", () => {

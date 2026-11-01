@@ -383,8 +383,9 @@ await import(${JSON.stringify(pathToFileURL(this.brainPath).href)});
     assert.equal(stores.length, 1, "private profile must have one SQLite durability store")
     const db = new DatabaseSync(stores[0], { readOnly: true })
     try {
+      // Rows the Brain wrote in value codec 1; plain fields read as plain JSON.
       return db
-        .prepare("SELECT value FROM durability_rows WHERE table_name = ?")
+        .prepare("SELECT value FROM durability_rows_codec1 WHERE table_name = ?")
         .all(table)
         .map((row) => JSON.parse(row.value))
     } finally {

@@ -28,6 +28,12 @@ import {
   type ResolvedBackend,
 } from "./backend"
 import { applyCommits } from "./journal"
+import {
+  decodeDurableValue,
+  encodeDurableValue,
+  formatLegacyValueFinding,
+  recordLegacyValueFindings,
+} from "./value-codec"
 import type {
   DurabilityBackendId,
   DurabilityCommit,
@@ -133,8 +139,14 @@ function extractByKeyPath(value: unknown, keyPath: string | string[]): unknown {
   return cursor
 }
 
-/** Dump one table into `{ encodedKey: row }`, handling outbound-key tables. */
-export async function readTableRows(table: DurabilityTableLike): Promise<Record<string, unknown>> {
+/**
+ * Dump one table into `{ encodedKey: row }`, handling outbound-key tables.
+ * Rows come back in value-codec-1 form, the form every backend persists.
+ */
+export async function readTableRows(
+  table: DurabilityTableLike,
+  encode: (value: unknown) => unknown = (value) => encodeDurableValue(value)
+): Promise<Record<string, unknown>> {
   const rows = snapshotRowsForTable(table.name, await table.toArray())
   const keyPath = keyPathOf(table)
   const out: Record<string, unknown> = {}
@@ -142,7 +154,7 @@ export async function readTableRows(table: DurabilityTableLike): Promise<Record<
     for (const row of rows) {
       const key = extractByKeyPath(row, keyPath)
       if (key === undefined) continue
-      out[encodeKey(key)] = row
+      out[encodeKey(key)] = encode(row)
     }
     return out
   }
@@ -150,7 +162,7 @@ export async function readTableRows(table: DurabilityTableLike): Promise<Record<
   for (let index = 0; index < rows.length; index += 1) {
     const key = keys[index]
     if (key === undefined) continue
-    out[encodeKey(key)] = rows[index]
+    out[encodeKey(key)] = encode(rows[index])
   }
   return out
 }
@@ -158,13 +170,16 @@ export async function readTableRows(table: DurabilityTableLike): Promise<Record<
 /** Materialise every included table of every source. */
 export async function readSourcesState(
   sources: readonly DurabilitySourceLike[],
-  sequence: number
+  sequence: number,
+  /** The durability root whose side-file store binary values go to. */
+  root?: string
 ): Promise<DurabilityState> {
   const state: DurabilityState = { sequence, dbs: {} }
   for (const source of sources) {
     const tables = includedTables(source)
     const rows: Record<string, Record<string, unknown>> = {}
-    for (const table of tables) rows[table.name] = await readTableRows(table)
+    for (const table of tables)
+      rows[table.name] = await readTableRows(table, (value) => encodeDurableValue(value, root))
     state.dbs[source.name] = {
       schema: { version: source.db.verno, tables: tables.map((t) => t.name).sort() },
       rows,
@@ -176,7 +191,9 @@ export async function readSourcesState(
 /** Overlay persisted rows onto the (already open, already seeded) databases. */
 export async function restoreState(
   sources: readonly DurabilitySourceLike[],
-  state: DurabilityState
+  state: DurabilityState,
+  /** The durability root whose side-file store `fileRef` values come from. */
+  root?: string
 ): Promise<void> {
   for (const source of sources) {
     const entry = state.dbs[source.name]
@@ -202,7 +219,7 @@ export async function restoreState(
         (key) => table.name !== "storageLayout" || key !== encodeKey("session-list-v241")
       )
       if (encodedKeys.length === 0) continue
-      const values = encodedKeys.map((key) => rows[key])
+      const values = encodedKeys.map((key) => decodeDurableValue(rows[key], root))
       if (keyPathOf(table)) await table.bulkPut(values)
       else await table.bulkPut(values, encodedKeys.map(decodeKey))
     }
@@ -245,6 +262,15 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     if (mutations.length === 0) return
     const backend = backendRef
     if (!backend) return
+    // Encode at the boundary, synchronously: the backends store JSON, and a
+    // Blob or typed array handed to them raw would persist as `{}` or as its
+    // indices. A value that cannot be encoded throws here, which the capture
+    // contract turns into a brain that stops instead of one that serves on.
+    mutations = mutations.map((mutation) =>
+      mutation.value === null
+        ? mutation
+        : { ...mutation, value: encodeDurableValue(mutation.value, root) }
+    )
     sequence += 1
     const commit = { sequence, committedAt: now(), mutations }
     backend.commitSync(commit)
@@ -292,7 +318,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
 
   // Seed the immutable generation from whatever the freshly-opened (seeded)
   // databases hold, so a first boot has a checkpoint to append against.
-  const seed = await readSourcesState(sources, 0)
+  const seed = await readSourcesState(sources, 0, root)
   const resolved: ResolvedBackend = await resolveBackend({
     root,
     seed,
@@ -300,6 +326,19 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   })
   backendRef = resolved.backend
   sequence = resolved.backend.lastSequence()
+  // Rows written before value codec 1 that look like lost binary data. The
+  // report is kept before anything can compact those rows into codec 1 and
+  // erase the evidence; the bytes themselves are gone and are not invented.
+  const legacyReport = recordLegacyValueFindings(root, resolved.state.legacyValueFindings, now)
+  if (legacyReport) {
+    console.warn(
+      `[durability] ${resolved.state.legacyValueFindings!.length} field path(s) hold values written ` +
+        "before value codec 1 that look like lost binary data; `cognia-agent durability verify` lists them:\n" +
+        resolved.state
+          .legacyValueFindings!.map((finding) => `  ${formatLegacyValueFinding(finding)}`)
+          .join("\n")
+    )
+  }
 
   await withAllSuppressed(captures, async () => {
     if (opts.prepareDynamicSchema) {
@@ -313,16 +352,20 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
         )
       )
     }
-    await restoreState(sources, resolved.state)
+    await restoreState(sources, resolved.state, root)
     await prepareRestoredSessionLists(sources)
     // Pin a forward move once; future boots need not reinterpret an older
-    // checkpoint version. Restore/rebuild remains capture-suppressed.
+    // checkpoint version. A generation written before value codec 1 is
+    // rewritten the same way, before any commit can be appended to it (the
+    // journal refuses that), now that its findings are on record above.
+    // Restore/rebuild remains capture-suppressed.
     if (
+      resolved.legacyValueCodec ||
       sources.some((source) =>
         isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
       )
     ) {
-      await resolved.backend.compact(await readSourcesState(sources, sequence))
+      await resolved.backend.compact(await readSourcesState(sources, sequence, root))
     }
   })
 
@@ -350,7 +393,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       // Runtime plugin registration can add tables after the backend opened.
       // Keep the previous schema-repinning behavior for that exceptional path;
       // replaying the captured tail also makes these live reads consistent.
-      if (schemaChanged) checkpoint = await readSourcesState(sources, checkpoint.sequence)
+      if (schemaChanged) checkpoint = await readSourcesState(sources, checkpoint.sequence, root)
       applyCommits(
         checkpoint,
         compactionTail.filter((commit) => commit.sequence > checkpoint.sequence)
@@ -383,7 +426,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     sequence: () => sequence,
     commitCount: () => commits,
     compact,
-    readLiveState: () => readSourcesState(sources, sequence),
+    readLiveState: () => readSourcesState(sources, sequence, root),
     close,
   }
 }

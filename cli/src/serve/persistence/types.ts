@@ -17,6 +17,7 @@
  * Every id is wire format: it appears in the on-disk backend manifest and in
  * `durability` CLI output. Append-only, never renamed.
  */
+import type { LegacyValueFinding } from "./value-codec"
 
 /** Persisted backend implementations, ordered oldest → newest. */
 export const DURABILITY_BACKEND_IDS = ["snapshot-v3", "journal-v4", "sqlite-v5"] as const
@@ -60,6 +61,19 @@ export interface DurabilitySchema {
 export interface DurabilityState {
   /** Highest applied commit sequence; 0 when only a checkpoint exists. */
   sequence: number
+  /**
+   * Set by a backend's `load()` when rows written before value codec 1 look
+   * like lost binary data (`value-codec.ts`). Report-only: never persisted
+   * with the state, never used to change a row.
+   */
+  legacyValueFindings?: LegacyValueFinding[]
+  /**
+   * Set when the state was read from a checkpoint generation written before
+   * value codec 1 (format 3). The journal refuses to append codec-1 lines to
+   * such a generation (an older build would replay them undecoded), so the
+   * store compacts it into a format-4 generation at boot before any commit.
+   */
+  legacyValueCodec?: true
   dbs: Record<
     string,
     {

@@ -24,6 +24,7 @@ import {
   type BackendManifest,
 } from "./manifest"
 import { openSqliteBackend, sqliteFile } from "./sqlite"
+import { LegacyValueReport } from "./value-codec"
 import {
   DurabilityFault,
   type DurabilityBackendId,
@@ -148,6 +149,13 @@ export interface ResolvedBackend {
   state: DurabilityState
   /** Commits replayed into the shadow because it lagged the journal. */
   shadowCatchUp: number
+  /**
+   * The primary or the shadow was read from a checkpoint generation written
+   * before value codec 1 (`DurabilityState.legacyValueCodec`). The journal
+   * refuses to append to such a generation, so the caller must compact before
+   * the first commit; a dual-write compaction re-cuts both sides.
+   */
+  legacyValueCodec: boolean
 }
 
 export interface ResolveBackendOptions {
@@ -180,7 +188,13 @@ export async function resolveBackend(opts: ResolveBackendOptions): Promise<Resol
   const state = await primary.load()
 
   if (!manifest.shadowBackend) {
-    return { backend: primary, manifest, state, shadowCatchUp: 0 }
+    return {
+      backend: primary,
+      manifest,
+      state,
+      shadowCatchUp: 0,
+      legacyValueCodec: state.legacyValueCodec === true,
+    }
   }
   if (manifest.shadowBackend === manifest.activeBackend) {
     throw new DurabilityFault(
@@ -191,12 +205,25 @@ export async function resolveBackend(opts: ResolveBackendOptions): Promise<Resol
 
   const shadow = openBackend(manifest.shadowBackend, root)
   const shadowState = await shadow.load()
+  // The shadow's codec-0 findings belong to the same account: hand them to the
+  // caller with the primary's, so they are on record before compaction
+  // rewrites the rows that show them.
+  if (shadowState.legacyValueFindings?.length) {
+    const merged = new LegacyValueReport()
+    for (const finding of [
+      ...(state.legacyValueFindings ?? []),
+      ...shadowState.legacyValueFindings,
+    ])
+      merged.merge(finding)
+    state.legacyValueFindings = merged.findings()
+  }
   const catchUp = await catchUpShadow(root, shadow, shadowState, state)
   return {
     backend: createDualWriteBackend(primary, shadow),
     manifest,
     state,
     shadowCatchUp: catchUp,
+    legacyValueCodec: state.legacyValueCodec === true || shadowState.legacyValueCodec === true,
   }
 }
 
@@ -224,7 +251,13 @@ async function pinInitialBackend(
       state = await primary.load()
     }
     writeManifest(root, { ...defaultManifest(), activeBackend: id })
-    return { backend: primary, manifest: readManifest(root), state, shadowCatchUp: 0 }
+    return {
+      backend: primary,
+      manifest: readManifest(root),
+      state,
+      shadowCatchUp: 0,
+      legacyValueCodec: state.legacyValueCodec === true,
+    }
   } catch (error) {
     await primary.close()
     throw error
@@ -242,6 +275,8 @@ async function pinInitialBackend(
  * - **Behind by a replayable tail** → apply the missing commits one by one.
  * - **Behind the checkpoint** (its sequence predates the journal's base, so the
  *   tail cannot bridge the gap) → rewrite it wholesale from the primary state.
+ * - **A shadow journal on a pre-codec-1 generation**, level or not → rewrite it
+ *   too: it refuses appends.
  */
 async function catchUpShadow(
   root: string,
@@ -249,7 +284,6 @@ async function catchUpShadow(
   shadowState: DurabilityState,
   primaryState: DurabilityState
 ): Promise<number> {
-  if (shadowState.sequence === primaryState.sequence) return 0
   if (shadowState.sequence > primaryState.sequence) {
     throw new DurabilityFault(
       "parity-mismatch",
@@ -257,6 +291,14 @@ async function catchUpShadow(
       primaryState.sequence
     )
   }
+  // A shadow journal on a generation from before value codec 1 refuses
+  // appends (an older build still reads that generation), so even a shadow
+  // that is level is rewritten from the primary rather than appended to.
+  if (shadowState.legacyValueCodec) {
+    await shadow.compact(primaryState)
+    return primaryState.sequence - shadowState.sequence
+  }
+  if (shadowState.sequence === primaryState.sequence) return 0
 
   const tail = await readJournalTail(root, shadowState.sequence)
   if (tail === null) {
@@ -264,6 +306,14 @@ async function catchUpShadow(
     return primaryState.sequence - shadowState.sequence
   }
   for (const commit of tail) shadow.commitSync(commit)
+  // The tail is read from the journal under this root. When the journal is
+  // itself the shadow, that is the file its load just replayed, so the tail
+  // cannot bridge a commit the shadow missed (a failed append, say): rewrite
+  // it rather than leave it one behind, failing every later commit.
+  if (shadow.lastSequence() !== primaryState.sequence) {
+    await shadow.compact(primaryState)
+    return primaryState.sequence - shadowState.sequence
+  }
   return tail.length
 }
 

@@ -358,6 +358,74 @@ describe("resolveBackend", () => {
     expect(caught.sequence).toBe(10)
   })
 
+  /** Rewrite a generation's manifest as a build before value codec 1 wrote it. */
+  function makeLegacyGeneration(generation: string): void {
+    const file = path.join(root, "generations", generation, "checkpoint.json")
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"))
+    delete manifest.valueCodec
+    manifest.checkpointFormat = 3
+    fs.writeFileSync(file, JSON.stringify(manifest))
+  }
+  const sqliteActive = () =>
+    writeManifest(root, {
+      manifestFormat: 1,
+      activeBackend: "sqlite-v5",
+      shadowBackend: "journal-v4",
+      rollbackWatermark: null,
+      updatedAt: 0,
+    })
+
+  it("re-cuts a level shadow journal from before codec 1 so commits can land in it", async () => {
+    // What an older build's `durability migrate --to sqlite-v5` leaves: SQLite
+    // active, the journal kept as shadow on a format-3 generation.
+    writeCheckpoint(root, "gen-0001", state(4, { "s:a": { id: "a", cover: {} } }))
+    makeLegacyGeneration("gen-0001")
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(4, { "s:a": { id: "a", cover: {} } }))
+    await sqlite.close()
+    sqliteActive()
+
+    const resolved = await resolveBackend({ root })
+    expect(resolved.legacyValueCodec).toBe(true)
+    // The shadow's codec-0 findings reach the caller, for the report.
+    expect(resolved.state.legacyValueFindings).toEqual([
+      expect.objectContaining({ path: "cover", shape: "empty-object" }),
+    ])
+    resolved.backend.commitSync(commit(5, "s:b", { id: "b" }))
+    await resolved.backend.close()
+
+    const generations = fs.readdirSync(path.join(root, "generations")).sort()
+    expect(generations).toEqual(["gen-0001", "gen-0002"])
+    const again = await resolveBackend({ root })
+    expect(again.legacyValueCodec).toBe(false)
+    again.backend.commitSync(commit(6, "s:c", { id: "c" }))
+    await again.backend.close()
+    const journal = openBackend("journal-v4", root)
+    expect((await journal.load()).sequence).toBe(6)
+    await journal.close()
+  })
+
+  it("rewrites a shadow journal the tail cannot bridge instead of leaving it behind", async () => {
+    // The journal shadow missed commit 5 (a failed append): its own file is
+    // the only tail there is, and its load already replayed it.
+    writeCheckpoint(root, "gen-0001", state(4))
+    const sqlite = openBackend("sqlite-v5", root)
+    await sqlite.compact(state(4))
+    sqlite.commitSync(commit(5, "s:missed", { id: "missed" }))
+    await sqlite.close()
+    sqliteActive()
+
+    const resolved = await resolveBackend({ root })
+    expect(resolved.shadowCatchUp).toBe(1)
+    resolved.backend.commitSync(commit(6, "s:next", { id: "next" }))
+    await resolved.backend.close()
+    const journal = openBackend("journal-v4", root)
+    const caught = await journal.load()
+    await journal.close()
+    expect(caught.sequence).toBe(6)
+    expect(Object.keys(caught.dbs.CogniaDB.rows.sessions).sort()).toEqual(["s:missed", "s:next"])
+  })
+
   it("refuses to run with a shadow that is ahead of the journal", async () => {
     writeCheckpoint(root, "gen-0001", state(1))
     const sqlite = openBackend("sqlite-v5", root)
