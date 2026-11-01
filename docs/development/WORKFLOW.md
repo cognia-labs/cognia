@@ -40,7 +40,8 @@ Not every change earns the full 0–9. Pick the lightest lane that fits:
 - **Bugfix**: replace 2–3 with `superpowers:systematic-debugging` (diagnose
   before you touch a fix), then **5 → 6 → 7 → 8 → 9**.
 - **Docs only** (subsystem / ADR docs): use `subsystem-docs`; the gate is
-  `rtk pnpm docs:build` (the only thing that catches MDX prerender errors).
+  `pnpm check` in cognia-docs for public pages; retained ADRs use
+  `pnpm audit:adr-catalog` and `pnpm audit:docs-links` here.
 - **Schema change** (IndexedDB): route stage 5 through `dexie-migration`.
 - **Visual workflow node**: route stage 5 through `workflow-node`.
 - **Full feature / new subsystem / architecture decision**: run all of 0–9,
@@ -111,7 +112,7 @@ rtk tsc && rtk pnpm lint && rtk pnpm lint:i18n && pnpm i18n:sort:check
 rtk pnpm test -- <changed test files>                  # narrow first
 pnpm test:coverage                                     # opt-in — only when the user explicitly requests a coverage check (≥90%)
 rtk cargo test --manifest-path src-tauri/Cargo.toml    # if src-tauri/ changed
-rtk pnpm docs:build                                    # if docs/ changed
+rtk pnpm docs:check                                    # pinned publication artifacts
 ```
 
 Baselines are known-broken on `dev` (tsc, `eslint .`, i18n sort, rust

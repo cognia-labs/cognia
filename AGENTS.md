@@ -5,7 +5,7 @@ These project-specific requirements supplement inherited instructions. Use the r
 ## Project boundaries
 
 - The main app uses Next.js 16, React 19, TypeScript, and Tailwind CSS v4. Its production build is a static export in `out/`, shared by the browser and Tauri; Capacitor uses the mobile build variant. Do not introduce dependencies on a runtime Next.js server into exported functionality.
-- `pnpm-workspace.yaml` defines the JavaScript workspaces: the root app, `docs/`, `mobile/`, `cli/`, `packages/*`, and `services/workspace-runtime/` (the other services live in cognia-labs/cognia-services, pinned by `integrations/cognia-services.json`). Install workspace dependencies from the repository root. Independently managed sidecars and services may have their own manifests and lockfiles. The browser extension lives in `cognia-labs/cognia-browser-extension`. Its driving profile `agent-safe-v1` is frozen: add browser operations only as a named capability in `hello.features`, mapped in `operationFeatures` of `packages/companion-client/src/browser-agent-protocol.json` and refused by the Host for a browser that did not name it (ADR-0242).
+- `pnpm-workspace.yaml` defines the JavaScript workspaces: the root app, `mobile/`, `cli/`, `packages/*`, and `services/workspace-runtime/` (the other services live in cognia-labs/cognia-services, pinned by `integrations/cognia-services.json`). Install workspace dependencies from the repository root. Independently managed sidecars and services may have their own manifests and lockfiles. The browser extension lives in `cognia-labs/cognia-browser-extension`. Its driving profile `agent-safe-v1` is frozen: add browser operations only as a named capability in `hello.features`, mapped in `operationFeatures` of `packages/companion-client/src/browser-agent-protocol.json` and refused by the Host for a browser that did not name it (ADR-0242).
 - `Cargo.toml` defines the Rust workspace containing `src-tauri/` and shared crates. Place new Rust logic in the lowest-layer crate that can own it, following `scripts/gates/rust-architecture.json`; keep desktop integration in the Tauri shell.
 - Main-app code lives in `app/`, `components/`, `hooks/`, `lib/`, and `stores/`; static assets live in `public/`. Follow the existing App Router file conventions. The main development server uses port 3000; docs development uses port 3001.
 - Keep contributor guides in `docs/development/` and repository-root-context Dockerfiles in `deploy/docker/`. Keep their Docker build context at the repository root; update CI, Compose, gates, and links when moving build inputs. See [the directory guide](docs/README.md) for ownership.
@@ -41,15 +41,13 @@ Run commands from the repository root unless a workspace is explicitly selected.
 | `pnpm test:e2e`                                           | Playwright E2E tests                                             |
 | `pnpm lint:static-export`                                 | Static-export compatibility checks                               |
 | `pnpm tauri dev` / `pnpm tauri build` / `pnpm tauri info` | Tauri development / packaging / environment information          |
-| `pnpm docs:dev` / `pnpm docs:build`                       | Docs development / production static export                      |
-| `pnpm --filter docs typecheck`                            | Generate Fumadocs sources and type-check the docs workspace      |
 
-## Docs workspace
+## Documentation ownership
 
-- Docs uses Fumadocs and exports to `docs/out/`; `docs/.next/` is a build directory, not the deployment artifact. Deploy docs separately from the main app. The `docs:start` static-preview mismatch is tracked in [the separate issue note](docs/reports/2026-10-20-docs-static-preview-mismatch.md); do not present that command as a working production server.
-- `docs/app/` contains routes, `docs/content/docs/` contains MDX and sidebar `meta.json` files, and `docs/source.config.ts` defines the content collection. Docs styles use `docs/app/global.css` and `docs/postcss.config.mjs`.
-- Within the docs workspace, import the loader from `@/lib/source` (`docs/lib/source.ts`), never `@/app/source`. Import `RootProvider` from `fumadocs-ui/provider/next`, not `fumadocs-ui/provider`. Docs has its own `@/*` alias scope.
-- `docs/.source/` is generated and gitignored. The `collections/*` alias in `docs/tsconfig.json` resolves `collections/server` to `docs/.source/server`. For resolution failures, inspect both generation and alias configuration; `pnpm --filter docs typecheck` generates the collection before checking types. Do not assume every such error means the directory is missing.
+- The public Fumadocs site and product guides live in [cognia-labs/cognia-docs](https://github.com/cognia-labs/cognia-docs), with independent install, tests, build and deployment. Follow that repository's AGENTS.md; do not recreate its app/components/lib or product-guide tree here.
+- ADRs stay under `docs/content/docs/{en,zh}/adr/`; API contracts, plans, research, evidence, development guides and runbooks remain in this repository. Generated SDK reference stays owned by its generator and is published as a read-only snapshot.
+- The application consumes a committed offline corpus and page index pinned by `integrations/cognia-docs.json`. `pnpm docs:check` verifies hashes without fetching or reading a sibling checkout. Update intentionally with `pnpm docs:sync --docs-root <committed docs checkout>`.
+- `pnpm audit:docs-links` validates retained source links against the pinned publication index; the docs repository owns full-site sidebar, route, MDX and Pages checks.
 
 ## Security and PR requirements
 

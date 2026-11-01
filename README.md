@@ -91,7 +91,7 @@ The desktop app runs a local **Rust host** and a **Node agent sidecar**. Browser
 | **Devices & collaboration** | Device pairing and grants, WebRTC relay, always-on headless hosts, remote desktop, and shared conversations. Encrypted account sync is experimental.                                                                                                                                                               |
 | **Desktop extras**          | Tray glance panel, desktop pet, selection toolbar, and voice / TTS.                                                                                                                                                                                                                                                |
 
-What is available depends on the host's capabilities, device grants, and plugin compatibility. For entry points and limits, read the [subsystem docs](./docs/content/docs/en/subsystems/).
+What is available depends on the host's capabilities, device grants, and plugin compatibility. For entry points and limits, read the [subsystem docs](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/en/subsystems/).
 
 ### Clients
 
@@ -208,18 +208,18 @@ Major decisions are recorded as [ADRs](./docs/content/docs/en/adr/). An ADR expl
 
 Run everything from the repository root, one frontend launch path at a time.
 
-| Task             | Commands                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------- |
-| App              | `pnpm dev` · `pnpm build` · `pnpm lint` · `pnpm format` · `pnpm typecheck`                               |
-| Unit tests       | `pnpm test` · `pnpm test:changed` · `pnpm test -- path/to/file.test.ts`                                  |
-| E2E (Playwright) | `pnpm test:e2e` · `pnpm test:e2e:changed` · `pnpm test:e2e:mobile` · `pnpm test:e2e:tauri`               |
-| Desktop          | `pnpm tauri dev` · `pnpm tauri build` · `pnpm tauri info`                                                |
-| Headless hosts   | `pnpm dev:headless` · `pnpm dev:web-headless` · `pnpm dev:workspace-runtime`                             |
-| CLI              | `pnpm cli:dev chat` · `pnpm cli:build` · `pnpm cli:test`                                                 |
-| Sidecar          | `pnpm sidecars:install` · `pnpm sidecar:test` · `pnpm sidecar:typecheck`                                 |
-| Mobile           | `pnpm mobile:sync:ios` · `pnpm mobile:sync:android` · `pnpm mobile:deploy`                               |
-| Docs (port 3001) | `pnpm docs:dev` · `pnpm docs:build`                                                                      |
-| Gates            | `pnpm audit:colocated-tests` · `pnpm lint:i18n` · `pnpm i18n:build:check` · `pnpm cognia-services:check` |
+| Task                       | Commands                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| App                        | `pnpm dev` · `pnpm build` · `pnpm lint` · `pnpm format` · `pnpm typecheck`                               |
+| Unit tests                 | `pnpm test` · `pnpm test:changed` · `pnpm test -- path/to/file.test.ts`                                  |
+| E2E (Playwright)           | `pnpm test:e2e` · `pnpm test:e2e:changed` · `pnpm test:e2e:mobile` · `pnpm test:e2e:tauri`               |
+| Desktop                    | `pnpm tauri dev` · `pnpm tauri build` · `pnpm tauri info`                                                |
+| Headless hosts             | `pnpm dev:headless` · `pnpm dev:web-headless` · `pnpm dev:workspace-runtime`                             |
+| CLI                        | `pnpm cli:dev chat` · `pnpm cli:build` · `pnpm cli:test`                                                 |
+| Sidecar                    | `pnpm sidecars:install` · `pnpm sidecar:test` · `pnpm sidecar:typecheck`                                 |
+| Mobile                     | `pnpm mobile:sync:ios` · `pnpm mobile:sync:android` · `pnpm mobile:deploy`                               |
+| Docs (separate repository) | [https://github.com/cognia-labs/cognia-docs](https://github.com/cognia-labs/cognia-docs)                 |
+| Gates                      | `pnpm audit:colocated-tests` · `pnpm lint:i18n` · `pnpm i18n:build:check` · `pnpm cognia-services:check` |
 
 [`package.json`](./package.json) has the full list.
 
@@ -249,7 +249,7 @@ cognia/
 ├── plugins/ skills/     First-party plugins and bundled skills
 ├── services/            Workspace browser runtime bundled with the desktop
 ├── deploy/              Docker, Compose, Kubernetes, runner deployment
-├── docs/                Fumadocs site, ADRs, development guides
+├── docs/                ADRs, API contracts, development and research
 ├── tests/e2e/           Playwright suites
 └── scripts/             Build, gate, and release tooling
 ```
@@ -271,18 +271,17 @@ The [directory guide](./docs/README.md) says where new files belong.
 <details>
 <summary><b>Troubleshooting</b></summary>
 
-| Symptom                                           | Try                                                                                                                    |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Port 3000 is in use                               | Stop the other process if that is safe, or run `pnpm dev --port 3002`                                                  |
-| Tauri build fails                                 | Run `pnpm tauri info` and check the platform prerequisites                                                             |
-| Module not found                                  | Run `pnpm install --frozen-lockfile` from the root, and `pnpm sidecars:install` for the sidecar                        |
-| `Cannot find module 'collections/server'` in docs | Run `pnpm docs:dev` once to generate `docs/.source/`                                                                   |
-| i18n check fails                                  | Run `pnpm i18n:build`, then fix the reported key gap. Don't reset the baseline to hide it                              |
-| Monaco assets missing                             | Run `pnpm monaco:copy` (`predev` and `prebuild` also run it)                                                           |
-| Browser or phone can't send, or asks to pair      | Check the selected host, the pairing, and the chat grant. `pnpm dev` starts only the UI                                |
-| External agent won't start                        | Check the agent's install, version, and sign-in on the execution host. Paired clients also need an Agent Control grant |
-| Plugin found but can't be enabled                 | Read the compatibility and permission diagnostics. Native plugins need a host                                          |
-| Android fast deploy rejects assets                | Run `pnpm mobile:build:android` again before deploying                                                                 |
+| Symptom                                      | Try                                                                                                                    |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Port 3000 is in use                          | Stop the other process if that is safe, or run `pnpm dev --port 3002`                                                  |
+| Tauri build fails                            | Run `pnpm tauri info` and check the platform prerequisites                                                             |
+| Module not found                             | Run `pnpm install --frozen-lockfile` from the root, and `pnpm sidecars:install` for the sidecar                        |
+| i18n check fails                             | Run `pnpm i18n:build`, then fix the reported key gap. Don't reset the baseline to hide it                              |
+| Monaco assets missing                        | Run `pnpm monaco:copy` (`predev` and `prebuild` also run it)                                                           |
+| Browser or phone can't send, or asks to pair | Check the selected host, the pairing, and the chat grant. `pnpm dev` starts only the UI                                |
+| External agent won't start                   | Check the agent's install, version, and sign-in on the execution host. Paired clients also need an Agent Control grant |
+| Plugin found but can't be enabled            | Read the compatibility and permission diagnostics. Native plugins need a host                                          |
+| Android fast deploy rejects assets           | Run `pnpm mobile:build:android` again before deploying                                                                 |
 
 </details>
 
@@ -296,15 +295,15 @@ The [directory guide](./docs/README.md) says where new files belong.
 
 ## Documentation
 
-| Topic                  | Where                                                                                                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Getting started        | [`docs/content/docs/en/getting-started.mdx`](./docs/content/docs/en/getting-started.mdx)                                                                    |
-| Subsystems             | [`docs/content/docs/en/subsystems/`](./docs/content/docs/en/subsystems/)                                                                                    |
-| Architecture decisions | [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/) (rendered at <http://localhost:3001> after `pnpm docs:dev`)                                      |
-| Agent execution        | [Unified agent execution](./docs/content/docs/en/subsystems/unified-agent-execution/) · [Agent packages](./docs/content/docs/en/subsystems/agent-packages/) |
-| Plugins                | [Plugin system](./docs/content/docs/en/subsystems/plugin-system/) · [Plugin SDK](./packages/plugin-sdk/)                                                    |
-| Clients                | [CLI](./cli/README.md) · [Mobile](./mobile/README.md)                                                                                                       |
-| Development            | [Workflow](./docs/development/WORKFLOW.md) · [Testing](./docs/development/TESTING.md) · [CI/CD](./docs/development/CI_CD.md)                                |
+| Topic                  | Where                                                                                                                                                                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Getting started        | [`docs/content/docs/en/getting-started.mdx`](https://github.com/cognia-labs/cognia-docs/blob/main/content/docs/en/getting-started.mdx)                                                                                                                  |
+| Subsystems             | [`docs/content/docs/en/subsystems/`](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/en/subsystems/)                                                                                                                                  |
+| Architecture decisions | [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/) (published by [cognia-docs](https://github.com/cognia-labs/cognia-docs))                                                                                                                     |
+| Agent execution        | [Unified agent execution](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/en/subsystems/unified-agent-execution/) · [Agent packages](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/en/subsystems/agent-packages/) |
+| Plugins                | [Plugin system](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/en/subsystems/plugin-system/) · [Plugin SDK](./packages/plugin-sdk/)                                                                                                  |
+| Clients                | [CLI](./cli/README.md) · [Mobile](./mobile/README.md)                                                                                                                                                                                                   |
+| Development            | [Workflow](./docs/development/WORKFLOW.md) · [Testing](./docs/development/TESTING.md) · [CI/CD](./docs/development/CI_CD.md)                                                                                                                            |
 
 ## License and support
 

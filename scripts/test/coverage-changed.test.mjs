@@ -869,3 +869,16 @@ test("listChangedFiles merges diff + untracked, dedupes, drops blanks", () => {
   assert.deepEqual(calls[0], ["git", "merge-base", "HEAD", "master"])
   assert.deepEqual(calls[1], ["git", "diff", "--name-only", "--diff-filter=d", "abc123"])
 })
+
+test("docs publication updates select the exact pinned-consumer CI lane", () => {
+  for (const file of [
+    "integrations/cognia-docs.json",
+    "integrations/cognia-docs-pages.json",
+    "lib/support-agent/support-docs.generated.json",
+    "scripts/build/build-support-docs.mjs",
+    "scripts/sync/docs-sync.mjs",
+    "scripts/gates/check-docs-links.mjs",
+  ]) {
+    assert.equal(classifyCiImpact([file]).docs, true, file)
+  }
+})

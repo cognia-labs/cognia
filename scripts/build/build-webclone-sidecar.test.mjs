@@ -17,7 +17,7 @@ test("root analysis builds generated entrypoints before resolving them", () => {
     scripts.typecheck,
     /^pnpm run sidecar:webclone:build && .*(?:tsc|node scripts\/gates\/typecheck-root\.mjs) --noEmit\b/
   )
-  assert.match(scripts.knip, /^pnpm run sidecar:webclone:build && pnpm --filter docs exec fumadocs-mdx && knip /)
+  assert.match(scripts.knip, /^pnpm run sidecar:webclone:build && knip /)
 })
 
 test("parseArgs supports install-only mode and rejects unknown options", () => {

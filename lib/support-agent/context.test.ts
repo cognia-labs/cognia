@@ -1,5 +1,7 @@
 jest.mock("@/lib/app-version", () => ({ APP_VERSION: "2.4.0" }))
 
+import docsPin from "@/integrations/cognia-docs.json"
+
 import {
   SUPPORT_AGENT_CANONICAL_ID,
   SUPPORT_AGENT_ID,
@@ -62,7 +64,9 @@ describe("buildSupportAgentContext", () => {
     })
     expect(context).toContain("Bundled app version: 2.4.0")
     expect(context).toContain("MCP")
-    expect(context).toContain("docs/content/docs/zh/")
+    expect(context).toContain(
+      `https://github.com/cognia-labs/cognia-docs/blob/${docsPin.revision}/content/docs/zh/`
+    )
     expect(context).not.toContain("Redacted local diagnostics")
   })
 

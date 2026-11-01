@@ -235,7 +235,11 @@ export function classifyCiImpact(changedFiles, mode = "incremental") {
     sidecar: globalJS || any(/^(?:sidecar|cli|packages|lib)\//),
     deepseekRuntime:
       all || globalJS || changedFiles.some((file) => /^packages\/agent-dsh\/runtime\//.test(file)),
-    docs: globalJS || any(/^docs\//),
+    docs:
+      globalJS ||
+      any(
+        /^(?:docs\/|integrations\/cognia-docs(?:-pages)?\.json$|lib\/support-agent\/|scripts\/(?:build\/build-support-docs|sync\/docs-sync|gates\/check-docs-links)\.(?:mjs|test\.mjs)$)/
+      ),
     mobile: globalJS || any(/^mobile\/|^lib\/capacitor\/|\.mobile\.tsx?$|^next\.config\./),
     browserExtension:
       globalJS ||

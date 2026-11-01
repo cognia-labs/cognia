@@ -17360,39 +17360,6 @@
       "title": "Remote documents"
     }
   },
-  "docsSite": {
-    "home": {
-      "browseEyebrow": "Browse by area",
-      "browseTitle": "Pick up wherever your question starts.",
-      "eyebrow": "Documentation",
-      "github": "GitHub",
-      "llmsBody": "Every page is also served as plain Markdown, and the whole set as one file.",
-      "llmsFull": "llms-full.txt",
-      "llmsIndex": "llms.txt",
-      "llmsTitle": "Reading this with an agent?",
-      "navDocs": "Docs",
-      "openArea": "Open",
-      "pageCount": "{count, plural, one {# page} other {# pages}}",
-      "primaryCta": "Get started",
-      "searchHint": "Search every page",
-      "secondaryCta": "Read the overview",
-      "subtitle": "Architecture, subsystems, plugin authoring and the decision records behind them — the same reference the codebase is built against.",
-      "title": "Everything Cognia does, written down.",
-      "website": "Website"
-    },
-    "notFound": {
-      "body": "The page this link points to has moved or no longer exists.",
-      "docs": "Back to the docs home",
-      "heading": "Page not found",
-      "other": "中文版本"
-    },
-    "pageActions": {
-      "copied": "Copied",
-      "failed": "Copy failed",
-      "idle": "Copy Markdown",
-      "view": "View Markdown"
-    }
-  },
   "documentTemplates": {
     "blank": {
       "description": "Start from an empty page.",

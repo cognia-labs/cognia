@@ -3,6 +3,9 @@ name: subsystem-docs
 description: Write or renovate implementation-accurate bilingual Fumadocs subsystem documentation under docs/content/docs/{en,zh}/. Use for subsystem sections, stale docs replacement, ADR-backed docs, sidebar changes, or MDX build failures.
 ---
 
+> Repository ownership: public documentation moved to cognia-labs/cognia-docs. Resolve an explicit docs checkout and read its AGENTS.md before editing product pages. Public-page paths below that previously began docs/content/docs/ now mean content/docs/ in that checkout. ADRs, API contracts, research and evidence keep their existing main-repository paths. Do not recreate migrated product pages here. Run pnpm check in cognia-docs; use pnpm docs:check plus ADR/link gates in the product repository.
+
+
 # Subsystem Docs (bilingual Fumadocs canvas section)
 
 The repeatable workflow for replacing a stale single page with a multi-page,

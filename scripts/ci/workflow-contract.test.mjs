@@ -22,16 +22,28 @@ test("website extraction removes the old workspace from install and release meta
   assert.ok(!JSON.parse(changesets).ignore.includes("web"))
 })
 
-test("website extraction removes tracked source and keeps docs deployment current", async () => {
+test("site extraction keeps publishing outside the product and verifies the pinned docs contract", async () => {
   const root = new URL("../../", import.meta.url)
   assert.equal(
     execFileSync("git", ["ls-files", "--", "web/"], { cwd: root, encoding: "utf8" }).trim(),
     ""
   )
-  const deployment = parse(await readWorkflow("deploy.yml"))
-  assert.deepEqual(deployment.on.workflow_dispatch.inputs.target.options, ["all", "docs"])
-  assert.deepEqual(deployment.jobs.summary.needs, ["gate", "deploy-docs"])
-  assert.equal(deployment.jobs["deploy-web"], undefined)
+  await assert.rejects(() => readWorkflow("deploy.yml"), /ENOENT/)
+  const { jobs } = parse(await readWorkflow("test.yml"))
+  const job = jobs["docs-build"]
+  const checkout = job.steps.find((step) => step.with?.repository === "cognia-labs/cognia-docs")
+  assert.equal(checkout.with.ref, "${{ steps.docs-pin.outputs.revision }}")
+  assert.equal(checkout.with["persist-credentials"], false)
+  assert.match(job.steps.at(-1).run, /build-support-docs\.mjs --docs-root \.cache\/pinned-docs/)
+  assert.ok(
+    job.steps.every((step) => !step.run?.includes("pnpm install")),
+    "contract validation needs no application installation"
+  )
+  const packageJson = JSON.parse(
+    await readFile(new URL("../../package.json", import.meta.url), "utf8")
+  )
+  assert.equal(packageJson.scripts["docs:build"], undefined)
+  assert.equal(packageJson.scripts["docs:sync"], "node scripts/sync/docs-sync.mjs")
   const guide = await readFile(new URL("../../docs/development/CI_CD.md", import.meta.url), "utf8")
   assert.doesNotMatch(guide, /CF_WEB_PAGES_PROJECT|web\/out/)
 })
@@ -225,12 +237,10 @@ test("frontend build caches cover each build mode without sharing incompatible c
   for (const [workflow, jobName, cachePath] of [
     ["test.yml", "build", ".next/cache"],
     ["test.yml", "build-e2e", ".next/cache"],
-    ["test.yml", "docs-build", "docs/.next/cache"],
     ["test.yml", "mobile-android-build", ".next/cache"],
     ["test.yml", "mobile-ios-build", ".next/cache"],
     ["test.yml", "e2e-tauri", ".next/cache"],
     ["build-tauri.yml", "build-tauri", ".next/cache"],
-    ["deploy.yml", "deploy-docs", "docs/.next/cache"],
   ]) {
     const { jobs } = parse(await readWorkflow(workflow))
     const job = jobs[jobName]
@@ -249,16 +259,12 @@ test("frontend build caches cover each build mode without sharing incompatible c
     assert.ok(!scopes.has(scope), `${workflow}: ${jobName} has a distinct mode/origin scope`)
     scopes.add(scope)
     assert.equal(scope, cache.with.key.replace(/\$\{\{ github\.sha \}\}$/, ""))
-    if (workflow === "deploy.yml") {
-      assert.match(scope, /inputs\.environment/)
-      assert.match(scope, /vars\.DOCS_SITE_URL/)
-    }
   }
 })
 
 test("Linux frontend consumers reuse this run's compiled packages before frozen install", async () => {
   const { jobs } = parse(await readWorkflow("test.yml"))
-  for (const name of ["docs-build", "mobile-android-build", "sidecar", "build", "build-e2e"]) {
+  for (const name of ["mobile-android-build", "sidecar", "build", "build-e2e"]) {
     const job = jobs[name]
     const download = job.steps.find(
       (step) => step.name === "Restore compiled workspace prerequisites"
@@ -280,7 +286,6 @@ test("workspace pnpm caches account for the sidecar lock installed by root posti
     "quality.yml",
     "build-tauri.yml",
     "release.yml",
-    "deploy.yml",
     "compose-e2e.yml",
     "report.yml",
   ]) {
@@ -604,9 +609,9 @@ test("CI exposes stable and complete verification seams", async () => {
     /ci-gate:[\s\S]*name: CI Gate[\s\S]*needs:\s*\[quality, test\][\s\S]*if: always\(\)/
   )
   assert.match(testWorkflow, /conformance:[\s\S]*pnpm test:conformance/)
-  assert.match(testWorkflow, /docs-build:[\s\S]*pnpm docs:build/)
+  assert.match(testWorkflow, /docs-build:[\s\S]*build-support-docs\.mjs --docs-root/)
   assert.equal(parse(testWorkflow).jobs["web-build"], undefined)
-  assert.equal(parse(await readWorkflow("deploy.yml")).jobs["deploy-web"], undefined)
+  await assert.rejects(() => readWorkflow("deploy.yml"), /ENOENT/)
   assert.match(testWorkflow, /mobile-android-build:[\s\S]*assembleDebug/)
   // The nightly Tauri matrix is the most expensive job in the repo and is
   // gated on quality and tests for that reason: a bundle built
@@ -736,7 +741,6 @@ test("pnpm caches immutable store data but always validates and links frozen ins
     "build-tauri.yml",
     "compose-e2e.yml",
     "release.yml",
-    "deploy.yml",
   ]) {
     const workflow = parse(await readWorkflow(name))
     for (const job of Object.values(workflow.jobs)) {
@@ -841,7 +845,6 @@ test("every root install restores standalone npm downloads before postinstall", 
     "quality.yml",
     "build-tauri.yml",
     "release.yml",
-    "deploy.yml",
     "compose-e2e.yml",
     "report.yml",
   ]) {

@@ -24,6 +24,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join, relative } from "node:path"
+import { verifyPinnedCorpus } from "../build/build-support-docs.mjs"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 export const CONTENT_ROOT = join(REPO_ROOT, "docs", "content", "docs")
@@ -114,7 +115,7 @@ function collect(contentRoot) {
 function main() {
   const { pages, metas } = collect(CONTENT_ROOT)
 
-  const knownUrls = new Set()
+  const knownUrls = new Set(verifyPinnedCorpus(REPO_ROOT).pages.urls)
   for (const page of pages) {
     for (const url of urlsForContentPath(page)) knownUrls.add(url)
   }

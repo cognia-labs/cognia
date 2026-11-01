@@ -95,3 +95,6 @@ plugins/pi-latex-workbench/vendor-lock.json
 .cache/
 
 sidecar/native-agents/
+
+# Byte-identical publication artifact, verified against the cognia-docs pin.
+integrations/cognia-docs-pages.json

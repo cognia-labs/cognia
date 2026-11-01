@@ -18,7 +18,6 @@
  *   - mobile/package.json            (Capacitor shell)
  *   - mobile/android/version.properties (Android display and upgrade versions)
  *   - mobile/ios/App/App.xcodeproj/project.pbxproj (App target versions)
- *   - docs/package.json
  *
  * Deliberately EXCLUDED (they version independently of the app): everything
  * under `services/`, the `crates/cognia-plugin-template*` scaffolds,
@@ -67,7 +66,6 @@ export const TARGETS = [
   { path: "mobile/package.json", kind: "json" },
   { path: "mobile/android/version.properties", kind: "android-properties" },
   { path: "mobile/ios/App/App.xcodeproj/project.pbxproj", kind: "ios-project" },
-  { path: "docs/package.json", kind: "json" },
 ]
 
 const JSON_VERSION_RE = /"version":\s*"([^"]+)"/

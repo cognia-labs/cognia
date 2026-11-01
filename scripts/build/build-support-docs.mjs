@@ -1,113 +1,80 @@
-// Codegen: turn the bilingual Fumadocs source tree into a compact, bundled
-// retrieval corpus for the in-app Support Agent. The main app is a static
-// export, so runtime filesystem reads are unavailable; the generated JSON is
-// loaded only when a Support session needs documentation.
+#!/usr/bin/env node
+/** Verify the versioned, offline documentation corpus published by cognia-docs. */
+import { createHash } from "node:crypto"
+import { execFileSync } from "node:child_process"
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { existsSync, readFileSync } from "node:fs"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
-import { Command, CommanderError } from "commander"
-import { globSync } from "glob"
-import matter from "gray-matter"
-import writeFileAtomic from "write-file-atomic"
-import { z } from "zod"
+export const REPOSITORY = "cognia-labs/cognia-docs"
+export const CORPUS_PATH = "lib/support-agent/support-docs.generated.json"
+export const PAGES_PATH = "integrations/cognia-docs-pages.json"
+export const PIN_PATH = "integrations/cognia-docs.json"
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
 
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(HERE, "..", "..")
-const DOCS_ROOT = path.join(REPO_ROOT, "docs", "content", "docs")
-const OUT_FILE = path.join(REPO_ROOT, "lib", "support-agent", "support-docs.generated.json")
-const MAX_DOCUMENT_CHARS = 2_400
-
-function markdownFiles(root) {
-  return globSync("**/*.{md,mdx}", { cwd: root, nodir: true }).sort()
-}
-
-function cleanMarkdown(markdown) {
-  return markdown
-    .replace(/^\s*(?:import|export)\s.+$/gm, " ")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/[{}*_~>|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-export function extractDocument(relativePath, source) {
-  const { data, content } = matter(source)
-  const heading = content.match(/^\s*#\s+(.+)$/m)?.[1]
-  const title = cleanMarkdown(String(data?.title ?? heading ?? path.basename(relativePath)))
-  const description = typeof data?.description === "string" ? cleanMarkdown(data.description) : ""
-  const body = cleanMarkdown(content)
-  const text = [description, body].filter(Boolean).join(" ").slice(0, MAX_DOCUMENT_CHARS).trim()
-  return { path: relativePath.split(path.sep).join(path.posix.sep), title, text }
-}
-
-export function buildCorpus(root = DOCS_ROOT) {
-  return Object.fromEntries(
-    ["en", "zh"].map((locale) => {
-      const localeRoot = path.join(root, locale)
-      const documents = markdownFiles(localeRoot).map((relativePath) =>
-        extractDocument(relativePath, readFileSync(path.join(localeRoot, relativePath), "utf8"))
-      )
-      return [locale, documents]
-    })
-  )
-}
-
-export function renderCorpusModule(corpus) {
-  return `${JSON.stringify({ schemaVersion: 1, locales: corpus })}\n`
-}
-
-export function writeCorpusIfChanged(root = DOCS_ROOT, output = OUT_FILE) {
-  const rendered = renderCorpusModule(buildCorpus(root))
-  if (existsSync(output) && readFileSync(output, "utf8") === rendered) return false
-  writeFileAtomic.sync(output, rendered)
-  return true
-}
-
-const cliSchema = z.object({ check: z.boolean().default(false) })
-
-function createProgram() {
-  return new Command()
-    .name("pnpm support:docs:build")
-    .description("Build or verify the bundled Support Agent documentation corpus.")
-    .configureOutput({ writeErr: () => {} })
-    .showHelpAfterError()
-    .exitOverride()
-    .option("--check", "Verify the generated corpus without writing it.")
-}
-
-export function parseArgs(argv) {
-  const program = createProgram()
-  try {
-    program.parse(argv, { from: "user" })
-  } catch (error) {
-    if (error instanceof CommanderError && error.code === "commander.helpDisplayed") return null
-    throw error
-  }
-  return cliSchema.parse(program.opts())
-}
-
-function main(argv) {
-  const options = parseArgs(argv)
-  if (!options) return
-  if (options.check) {
-    const rendered = renderCorpusModule(buildCorpus())
-    if (!existsSync(OUT_FILE) || readFileSync(OUT_FILE, "utf8") !== rendered) {
-      console.error("Support documentation corpus is stale; run pnpm support:docs:build")
-      process.exitCode = 1
+export function validateCorpus(bytes) {
+  const corpus = JSON.parse(bytes.toString())
+  if (corpus.schemaVersion !== 1) throw new Error("Unsupported documentation corpus schema")
+  for (const locale of ["en", "zh"]) {
+    const entries = corpus.locales?.[locale]
+    if (!Array.isArray(entries) || entries.length === 0) throw new Error(`Empty ${locale} corpus`)
+    const paths = new Set()
+    for (const entry of entries) {
+      if (typeof entry.path !== "string" || !/^[a-zA-Z0-9_./-]+\.mdx?$/.test(entry.path) || entry.path.startsWith("/") || entry.path.split("/").some((part) => !part || part === "." || part === "..") || typeof entry.title !== "string" || typeof entry.text !== "string" || paths.has(entry.path)) {
+        throw new Error(`Invalid ${locale} corpus entry`)
+      }
+      paths.add(entry.path)
     }
-    return
   }
-  const changed = writeCorpusIfChanged()
-  console.log(`${changed ? "Generated" : "Unchanged"} ${path.relative(REPO_ROOT, OUT_FILE)}`)
+  return corpus
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2))
+export function validatePages(bytes) {
+  const pages = JSON.parse(bytes.toString())
+  if (pages.schemaVersion !== 1 || !Array.isArray(pages.urls) || !pages.urls.includes("/en/docs") || !pages.urls.includes("/zh/docs") || new Set(pages.urls).size !== pages.urls.length || pages.urls.some((url) => typeof url !== "string" || !/^\/(en|zh)\/docs(?:\/[a-zA-Z0-9_.-]+)*$/.test(url))) throw new Error("Invalid documentation page index")
+  return pages
+}
+
+export function verifyPinnedCorpus(root = ROOT, docsRoot, runGit = execFileSync) {
+  const pin = JSON.parse(readFileSync(resolve(root, PIN_PATH), "utf8"))
+  if (pin.repository !== REPOSITORY || !/^[a-f0-9]{40}$/.test(pin.revision ?? "") || !/^[a-f0-9]{64}$/.test(pin.corpusSha256 ?? "") || !/^[a-f0-9]{64}$/.test(pin.pagesSha256 ?? "")) {
+    throw new Error(`${PIN_PATH} must contain the pinned docs repository, revision and corpus SHA-256`)
+  }
+  const bytes = readFileSync(resolve(root, CORPUS_PATH))
+  if (sha256(bytes) !== pin.corpusSha256) throw new Error("Documentation corpus SHA-256 does not match its pin; run pnpm docs:sync --docs-root <checkout>")
+  const corpus = validateCorpus(bytes)
+  const pageBytes = readFileSync(resolve(root, PAGES_PATH))
+  if (sha256(pageBytes) !== pin.pagesSha256) throw new Error("Documentation page index SHA-256 does not match its pin")
+  const pages = validatePages(pageBytes)
+  if (docsRoot) {
+    let revision, published, publishedPages
+    try {
+      revision = runGit("git", ["-C", resolve(docsRoot), "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+      published = runGit("git", ["-C", resolve(docsRoot), "show", `${revision}:artifacts/support-docs.json`], { maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+      publishedPages = runGit("git", ["-C", resolve(docsRoot), "show", `${revision}:artifacts/doc-pages.json`], { maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+    } catch (cause) {
+      throw new Error("The docs checkout must contain a committed publication artifact", { cause })
+    }
+    if (revision !== pin.revision || !published.equals(bytes) || !publishedPages.equals(pageBytes)) throw new Error("The pinned docs checkout or published corpus differs from the application copy")
+  }
+  return { pin, corpus, pages }
+}
+
+export function parseArgs(args) {
+  let check = false, docsRoot
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--check") check = true
+    else if (args[i] === "--docs-root") {
+      if (!args[i + 1] || args[i + 1].startsWith("--")) throw new Error("--docs-root requires a path")
+      docsRoot = args[++i]
+    } else throw new Error(`unknown option: ${args[i]}`)
+  }
+  return { check, docsRoot }
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const args = parseArgs(process.argv.slice(2))
+  const { pin, corpus } = verifyPinnedCorpus(ROOT, args.docsRoot)
+  console.log(`[support-docs] verified ${pin.repository}@${pin.revision}: en=${corpus.locales.en.length}, zh=${corpus.locales.zh.length}`)
 }

@@ -3,10 +3,9 @@ paths:
   - "docs/**"
 ---
 
-# Docs site (Fumadocs) rules
+# Documentation ownership
 
-- Import `@/lib/source` (NOT `@/app/source`); `collections/server` resolves via tsconfig alias to `docs/.source/` — run `pnpm docs:dev` once if TypeScript can't resolve it.
-- `import { RootProvider } from "fumadocs-ui/provider/next"` — not `fumadocs-ui/provider`.
-- `docs/.source/` is auto-generated (edits are hook-blocked) — regenerate via `pnpm docs:dev` / `pnpm docs:build`.
-- Gate: `pnpm docs:build` is the only check that catches MDX prerender errors.
-- Subsystem docs are bilingual under `docs/content/docs/{en,zh}/` — use the `subsystem-docs` skill; ADRs use the next free sequential number (`ls` the adr dir, take max + 1).
+- The Fumadocs site and product guides live in https://github.com/cognia-labs/cognia-docs. Follow that checkout's AGENTS.md; do not recreate site code or public guide folders here.
+- ADRs remain under docs/content/docs/{en,zh}/adr/. API contracts, plans, research, reports and evidence stay here. Preserve bilingual ADR catalogs and use a unique sequential identifier.
+- The docs site imports ADRs and generated reference as committed, read-only snapshots. Normal app builds consume pinned local corpus/page-index artifacts and require no sibling checkout.
+- Run pnpm docs:check, pnpm audit:adr-catalog and pnpm audit:docs-links here. Run pnpm check and Pages/browser verification in the standalone docs checkout.
