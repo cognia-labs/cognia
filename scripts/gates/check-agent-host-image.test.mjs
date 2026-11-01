@@ -140,8 +140,13 @@ test("headless Rust stages build named packages only and retain the real brain l
       assert.doesNotMatch(command, /(?:-p|--package) cognia-next\b/, `${stage}: ${command}`)
     }
     assert.doesNotMatch(source, /TAURI_CONFIG/)
-    // Only test fixtures: the sidecar tree itself is staged by brain-builder.
-    assert.doesNotMatch(source, /COPY sidecar\/(?!\S*\/tests\/fixtures\/)/)
+    // Only test fixtures and the one data file Rust embeds at compile time
+    // (cognia-external-agent's native bridge pins): the sidecar tree itself is
+    // staged by brain-builder.
+    assert.doesNotMatch(
+      source,
+      /COPY sidecar\/(?!\S*\/tests\/fixtures\/|native-agents\/pins\.json )/
+    )
     assert.doesNotMatch(source, /echo placeholder/)
   }
   const runtime = stageText(dockerfile, "runtime-slim")
@@ -164,11 +169,13 @@ test("all literal server Docker COPY inputs exist in a fresh checkout", () => {
   }).split("\0")
   for (const line of dockerfile.split("\n")) {
     if (!line.startsWith("COPY ") || line.includes("--from=")) continue
-    for (const input of line.split(/\s+/).slice(1, -1)) {
-      if (input === ".") continue
+    for (const raw of line.split(/\s+/).slice(1, -1)) {
+      if (raw === ".") continue
+      // `COPY dir/ dest` names the same tracked directory as `COPY dir dest`.
+      const input = raw.replace(/\/+$/, "")
       assert.ok(
         tracked.some((file) => file === input || file.startsWith(`${input}/`)),
-        `${input} is not tracked`
+        `${raw} is not tracked`
       )
     }
   }
