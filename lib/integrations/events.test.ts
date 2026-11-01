@@ -12,6 +12,8 @@ import {
 import { __resetIntegrationRegistryForTesting, registerIntegrationDefinitions } from "./registry"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import { publishIntegrationEvent, recoverIntegrationEventProjections } from "./events"
+import { acquireSyncLease } from "@/lib/external-services/sync-lease"
+import { claimSyncLease } from "@/lib/db/sync-leases"
 
 const findMatchingWorkflows = jest.fn()
 const dispatchTrigger = jest.fn()
@@ -92,6 +94,106 @@ describe("Integration event publication", () => {
     })
     return { account, subscription }
   }
+
+  it("rejects a stale sync owner before writing a delivery or cursor", async () => {
+    const { account } = await setup()
+    await getDb().authConnections.put({ id: "ref", status: "connected" } as never)
+    const lease = (await acquireSyncLease("ref", "ingress", { ttlMs: 1000 }))!
+    await getDb().syncLeases.update(lease.row.key, { expiresAt: Date.now() - 1 })
+    expect(await claimSyncLease("ref", "ingress", "B", 1000)).not.toBeNull()
+    const event = {
+      schemaVersion: 1 as const,
+      id: "stale",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "stale",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    await expect(
+      publishIntegrationEvent("example-delivery", event, { syncLease: lease })
+    ).rejects.toThrow("lease")
+    expect(await getDb().integrationEvents.get(event.id)).toBeUndefined()
+    expect(dispatchTrigger).not.toHaveBeenCalled()
+    await lease.release()
+  })
+
+  it("fences a projection cursor when its sync lease is lost during dispatch", async () => {
+    const { account } = await setup()
+    await getDb().authConnections.put({ id: "ref", status: "connected" } as never)
+    const lease = (await acquireSyncLease("ref", "ingress"))!
+    let entered!: () => void
+    let finish!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const paused = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    dispatchTrigger.mockImplementationOnce(async () => {
+      entered()
+      await paused
+    })
+    const event = {
+      schemaVersion: 1 as const,
+      id: "mid-dispatch",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "mid-dispatch",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    const pending = publishIntegrationEvent("example-delivery", event, { syncLease: lease })
+    const failed = expect(pending).rejects.toThrow("lease")
+    await ready
+    const cursor = await getDb().integrationEvents.get(event.id)
+    await getDb().syncLeases.update(lease.row.key, { expiresAt: Date.now() - 1 })
+    expect(await claimSyncLease("ref", "ingress", "B", 30_000)).not.toBeNull()
+    finish()
+    await failed
+    expect(await getDb().integrationEvents.get(event.id)).toEqual(cursor)
+    expect(await getDb().integrationAudit.where("kind").equals("event.issue.updated").count()).toBe(
+      0
+    )
+    await lease.release()
+  })
+
+  it("projection recovery waits for the connection drainer without claiming or charging its event", async () => {
+    const { account } = await setup()
+    await getDb().authConnections.put({ id: "ref", status: "connected" } as never)
+    await getDb().integrationAccounts.update(account.id, { connectionId: "ref" })
+    const lease = (await acquireSyncLease("ref", "ingress"))!
+    const event = {
+      schemaVersion: 1 as const,
+      id: "due",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "due",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    await insertIntegrationEvent(event, 1)
+    const cursor = await getDb().integrationEvents.get(event.id)
+    expect(await recoverIntegrationEventProjections()).toBe(0)
+    expect(await getDb().integrationEvents.get(event.id)).toEqual(cursor)
+    expect(dispatchTrigger).not.toHaveBeenCalled()
+    await lease.release()
+    expect(await recoverIntegrationEventProjections()).toBe(1)
+    expect(await getDb().integrationEvents.get(event.id)).toMatchObject({
+      projectionState: "complete",
+    })
+    expect(dispatchTrigger).toHaveBeenCalledTimes(1)
+    expect(await getDb().syncLeases.count()).toBe(0)
+  })
 
   it("rejects late ingress and skips stored projections after access teardown disabled the account", async () => {
     const { account } = await setup()

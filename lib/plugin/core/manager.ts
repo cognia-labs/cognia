@@ -3568,15 +3568,22 @@ export class PluginManager {
         grantedPreopens: await getGrantedPreopens(pluginId),
       }
       const wasActive = previous?.status === "enabled" || previous?.status === "suspended"
+      // Every replacement entry point shares this gate, including reinstall
+      // and a provider whose package is installed but whose service is draining.
+      if (previous && this.runtimeServicesEnabled()) {
+        await this.quiesceServiceConsumers(pluginId)
+      }
       const hadRuntime =
         previous &&
         ["loading", "loaded", "enabling", "enabled", "suspended", "disabled"].includes(
           previous.status
         )
       if (hadRuntime) {
+        // A teardown can fail after its resources have already stopped. The
+        // rollback still restores that clean old runtime before resuming users.
+        runtimeQuiesced = true
         if (wasActive) await this.disablePlugin(pluginId, "transactional-install")
         await this.unloadPlugin(pluginId)
-        runtimeQuiesced = true
       }
       if (this.hasUnresolvedActivationResources(pluginId)) {
         throw new Error(
@@ -3722,6 +3729,20 @@ export class PluginManager {
             await applyWasmCapabilityGrant(priorGrants)
           } catch (rollbackError) {
             failures.push(`permission rollback: ${String(rollbackError)}`)
+          }
+        }
+        if (
+          canRestore &&
+          runtimeQuiesced &&
+          previous &&
+          (previous.status === "enabled" || previous.status === "suspended") &&
+          !this.hasUnresolvedActivationResources(pluginId)
+        ) {
+          try {
+            await this.enablePlugin(pluginId, "transactional-install-rollback")
+            await this.resumeWaitingServiceConsumers()
+          } catch (rollbackError) {
+            failures.push(`runtime rollback: ${String(rollbackError)}`)
           }
         }
         dispatchPluginError({

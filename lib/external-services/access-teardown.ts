@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/schema"
 import { getIntegrationIngressEndpoint } from "@/lib/db/integrations"
 import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
+import { fenceConnectionSyncLeases } from "./sync-lease"
 import {
   listDerivedDataAccounts,
   purgeDerivedData,
@@ -64,6 +65,7 @@ async function runQueuedTeardown(target: DerivedDataTarget): Promise<DerivedData
     }
   }
   if (target.kind !== "plugin-data") {
+    await step("sync-leases", () => fenceConnectionSyncLeases(target.ref))
     await step("integration-background", async () => {
       // Migrate legacy endpoint fields before deleting subscriptions/cursors.
       for (const account of await listDerivedDataAccounts(target)) {

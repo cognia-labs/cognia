@@ -934,7 +934,9 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     if (
       controller.signal.aborted ||
       current.status !== "running" ||
-      current.claimToken !== claimToken
+      current.claimToken !== claimToken ||
+      !current.claimLeaseExpiresAt ||
+      current.claimLeaseExpiresAt <= new Date(Date.now()).toISOString()
     ) {
       controller.abort()
       throw new Error("Action execution claim is no longer active")

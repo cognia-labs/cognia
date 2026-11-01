@@ -93,6 +93,7 @@ export const CORE_TABLE_NAMES = [
   "artifacts",
   "authConnections",
   "connectionBindings",
+  "syncLeases",
   "authAttempts",
   "automationAuditLog",
   "backgroundTasks",
@@ -1433,6 +1434,13 @@ const WORKFLOW_APP_ROW_EXPIRY: DataRetentionPolicy = {
 }
 
 const RETENTION_OVERRIDES: Partial<Record<CoreTableName, DataRetentionPolicy>> = {
+  syncLeases: {
+    mode: "ttl",
+    enforcement: "domain",
+    executorId: "sync-leases",
+    reason:
+      "lib/db/sync-leases sweeps expired rows on every claim and ingress drain; disconnect releases connection leases.",
+  },
   authAttempts: {
     mode: "ttl",
     days: 10 / 1440,
@@ -2028,7 +2036,10 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
   return {
     name,
     owner:
-      name === "authConnections" || name === "authAttempts" || name === "connectionBindings"
+      name === "authConnections" ||
+      name === "authAttempts" ||
+      name === "connectionBindings" ||
+      name === "syncLeases"
         ? "plugin-auth"
         : ownerFor(name),
     role,

@@ -3,6 +3,8 @@ import { createDiagnostic } from "@cognia/diagnostics"
 import { detectPlatform } from "@/lib/platform/detect"
 import { transport } from "@/lib/tauri"
 import { getDb } from "@/lib/db/schema"
+import { sweepExpiredSyncLeases } from "@/lib/db/sync-leases"
+import { withSyncLease, type SyncLease } from "@/lib/external-services/sync-lease"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import {
   getIntegrationIngressEndpoint,
@@ -114,6 +116,7 @@ export async function syncIntegrationIngressRoutes(): Promise<number> {
 
 export async function drainIntegrationIngress(): Promise<number> {
   if (!supportsIntegrationExecution()) return 0
+  await sweepExpiredSyncLeases()
   const deliveries = await transport.call<IntegrationVerifiedDelivery[]>(
     "integration_ingress_poll",
     {
@@ -127,7 +130,7 @@ export async function drainIntegrationIngress(): Promise<number> {
       .map((account) => [account.ingressEndpoint!.routeId, account])
   )
   let acknowledged = 0
-  for (const delivery of deliveries) {
+  const processDelivery = async (delivery: IntegrationVerifiedDelivery, lease?: SyncLease) => {
     const subscription = byRoute.get(delivery.routeId)
     let stage: IngressDeliveryStage = "route"
     try {
@@ -145,22 +148,39 @@ export async function drainIntegrationIngress(): Promise<number> {
         accountId: subscription.id,
       })
       stage = "publish"
+      if (lease) await lease.commit([], async () => undefined)
       for (const event of Array.isArray(normalized) ? normalized : [normalized]) {
-        await publishIntegrationEvent(subscription.pluginId, event)
+        if (lease) await publishIntegrationEvent(subscription.pluginId, event, { syncLease: lease })
+        else await publishIntegrationEvent(subscription.pluginId, event)
       }
       stage = "acknowledge"
+      if (lease) await lease.commit([], async () => undefined)
       await transport.call("integration_ingress_ack", {
         routeId: delivery.routeId,
         deliveryId: delivery.deliveryId,
       })
       acknowledged += 1
     } catch (error) {
+      // A stale drainer must not ACK or NACK a new owner's delivery.
+      if (lease?.signal.aborted) throw error
+      if (lease) await lease.commit([], async () => undefined)
       reportIngressFailure(delivery, stage, error)
       await transport.call("integration_ingress_nack", {
         routeId: delivery.routeId,
         deliveryId: delivery.deliveryId,
       })
     }
+  }
+  const byConnection = new Map<string, IntegrationVerifiedDelivery[]>()
+  for (const delivery of deliveries) {
+    const ref = byRoute.get(delivery.routeId)?.connectionId
+    if (!ref) await processDelivery(delivery)
+    else byConnection.set(ref, [...(byConnection.get(ref) ?? []), delivery])
+  }
+  for (const [ref, batch] of byConnection) {
+    await withSyncLease(ref, "ingress", async (lease) => {
+      for (const delivery of batch) await processDelivery(delivery, lease)
+    })
   }
   return acknowledged
 }

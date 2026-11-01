@@ -29,6 +29,7 @@ import { dispatchTrigger } from "@/lib/workflow/runtime/trigger-bridge"
 import { getRegisteredIntegration } from "./registry"
 import { reconcileGithubLifecycle } from "./github-lifecycle"
 import type { UIMessage } from "ai"
+import { withSyncLease, type SyncLease } from "@/lib/external-services/sync-lease"
 
 export interface PublishIntegrationEventResult {
   inserted: boolean
@@ -148,7 +149,8 @@ async function projectEventToInbox(
 
 export async function publishIntegrationEvent(
   pluginId: string,
-  event: IntegrationEventEnvelope
+  event: IntegrationEventEnvelope,
+  options: { syncLease?: SyncLease } = {}
 ): Promise<PublishIntegrationEventResult> {
   if (event.pluginId !== pluginId) {
     throw new Error("An Integration plugin cannot publish events for another plugin")
@@ -162,21 +164,31 @@ export async function publishIntegrationEvent(
   if (!account || !account.enabled || account.integrationId !== event.integrationId) {
     throw new Error(`Integration account "${event.accountId}" does not belong to this integration`)
   }
-  const stored = await insertIntegrationEvent(event, undefined, { requireActiveAccount: true })
+  const insert = () => insertIntegrationEvent(event, undefined, { requireActiveAccount: true })
+  const db = getDb()
+  const stored = options.syncLease
+    ? await options.syncLease.commit([db.integrationEvents, db.integrationAccounts], insert)
+    : await insert()
   if (stored.inserted) {
-    return { inserted: true, ...(await projectStoredEvent(stored.row, { retry: false })) }
+    return {
+      inserted: true,
+      ...(await projectStoredEvent(stored.row, { retry: false, ...options })),
+    }
   }
   // A redelivery of an event whose projections never finished (the process
   // died, or a consumer threw) resumes them instead of being dropped as a
   // duplicate. A finished, deadlettered or legacy row is a plain duplicate.
-  const claimed = await claimIntegrationEventProjection(stored.row.id)
+  const claim = () => claimIntegrationEventProjection(stored.row.id)
+  const claimed = options.syncLease
+    ? await options.syncLease.commit([db.integrationEvents], claim)
+    : await claim()
   if (!claimed) {
     return { inserted: false, workflowDispatches: 0, inboxProjections: 0, botDeliveries: 0 }
   }
   return {
     inserted: false,
     resumed: true,
-    ...(await projectStoredEvent(claimed, { retry: true })),
+    ...(await projectStoredEvent(claimed, { retry: true, ...options })),
   }
 }
 
@@ -219,7 +231,7 @@ function reportProjectionFailure(
  */
 async function projectStoredEvent(
   row: IntegrationEventRow,
-  options: { retry: boolean }
+  options: { retry: boolean; syncLease?: SyncLease }
 ): Promise<ProjectionCounts> {
   const event = publicEnvelope(row)
   const pluginId = row.pluginId
@@ -236,6 +248,7 @@ async function projectStoredEvent(
     body: () => Promise<IntegrationProjectionStepState | void>
   ): Promise<void> {
     if (steps[step].status === "complete") return
+    if (options.syncLease) await options.syncLease.commit([], async () => undefined)
     try {
       const account = await getIntegrationAccount(pluginId, event.accountId)
       if (!account?.enabled) return
@@ -336,41 +349,48 @@ async function projectStoredEvent(
   // Share the access writer's tables: an in-flight projection cannot recreate
   // an event summary after terminal cleanup removed its event/account.
   const db = getDb()
-  await db.transaction(
-    "rw",
-    db.integrationAccounts,
-    db.integrationEvents,
-    db.integrationAudit,
-    async () => {
-      if (!(await getIntegrationAccount(pluginId, event.accountId))?.enabled) return
-      const recorded = await recordIntegrationEventProjection(row.id, steps)
-      if (!recorded) return
-      await appendIntegrationAudit({
-        pluginId,
-        integrationId: event.integrationId,
-        accountId: event.accountId,
-        kind: `event.${event.eventType}`,
-        outcome: pendingSteps.length === 0 ? "succeeded" : "failed",
-        detail: {
-          eventId: event.id,
-          deliveryId: event.deliveryId,
-          workflowDispatches,
-          inboxProjections,
-          botDeliveries,
-          ...(pendingSteps.length > 0
-            ? {
-                pendingSteps,
-                projectionState: recorded?.projectionState,
-                errorCodes: Object.fromEntries(
-                  pendingSteps.map((step) => [step, steps[step].errorCode ?? "pending"])
-                ),
-              }
-            : {}),
-          ...(options.retry ? { retry: true } : {}),
-        },
-      })
-    }
-  )
+  const record = () =>
+    db.transaction(
+      "rw",
+      db.integrationAccounts,
+      db.integrationEvents,
+      db.integrationAudit,
+      async () => {
+        if (!(await getIntegrationAccount(pluginId, event.accountId))?.enabled) return
+        const recorded = await recordIntegrationEventProjection(row.id, steps)
+        if (!recorded) return
+        await appendIntegrationAudit({
+          pluginId,
+          integrationId: event.integrationId,
+          accountId: event.accountId,
+          kind: `event.${event.eventType}`,
+          outcome: pendingSteps.length === 0 ? "succeeded" : "failed",
+          detail: {
+            eventId: event.id,
+            deliveryId: event.deliveryId,
+            workflowDispatches,
+            inboxProjections,
+            botDeliveries,
+            ...(pendingSteps.length > 0
+              ? {
+                  pendingSteps,
+                  projectionState: recorded?.projectionState,
+                  errorCodes: Object.fromEntries(
+                    pendingSteps.map((step) => [step, steps[step].errorCode ?? "pending"])
+                  ),
+                }
+              : {}),
+            ...(options.retry ? { retry: true } : {}),
+          },
+        })
+      }
+    )
+  if (options.syncLease) {
+    await options.syncLease.commit(
+      [db.integrationAccounts, db.integrationEvents, db.integrationAudit],
+      record
+    )
+  } else await record()
   return {
     workflowDispatches,
     inboxProjections,
@@ -413,21 +433,35 @@ export function recoverIntegrationEventProjections(
       const due = await listDueIntegrationEventProjections(now, options.limit ?? 100)
       let projected = 0
       for (const candidate of due) {
-        const claimed = await claimIntegrationEventProjection(candidate.id, now)
-        if (!claimed) continue
-        const registered = getRegisteredIntegration(claimed.pluginId, claimed.integrationId)
-        if (!registered) {
-          // The provider plugin is not loaded (yet). Charge the attempt so a
-          // plugin that never comes back ends in the deadletter, not a loop.
-          await recordIntegrationEventProjection(
-            claimed.id,
-            claimed.projection?.steps ?? allPendingSteps(),
-            now
-          )
-          continue
+        const recover = async (syncLease?: SyncLease) => {
+          const db = getDb()
+          const claim = () => claimIntegrationEventProjection(candidate.id, now)
+          const claimed = syncLease
+            ? await syncLease.commit([db.integrationEvents], claim)
+            : await claim()
+          if (!claimed) return 0
+          const registered = getRegisteredIntegration(claimed.pluginId, claimed.integrationId)
+          if (!registered) {
+            // The provider plugin is not loaded (yet). Charge the attempt so a
+            // plugin that never comes back ends in the deadletter, not a loop.
+            const record = () =>
+              recordIntegrationEventProjection(
+                claimed.id,
+                claimed.projection?.steps ?? allPendingSteps(),
+                now
+              )
+            if (syncLease) await syncLease.commit([db.integrationEvents], record)
+            else await record()
+            return 0
+          }
+          await projectStoredEvent(claimed, { retry: true, syncLease })
+          return 1
         }
-        await projectStoredEvent(claimed, { retry: true })
-        projected += 1
+        const account = await getIntegrationAccount(candidate.pluginId, candidate.accountId)
+        // The event's retry lease cannot supersede a healthy connection drainer.
+        projected += account?.connectionId
+          ? ((await withSyncLease(account.connectionId, "ingress", recover)) ?? 0)
+          : await recover()
       }
       return projected
     } finally {

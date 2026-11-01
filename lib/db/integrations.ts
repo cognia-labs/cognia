@@ -32,7 +32,7 @@ import { sha256Hex } from "@/lib/share/hash"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
 
 function nowIso(): string {
-  return new Date().toISOString()
+  return new Date(Date.now()).toISOString()
 }
 
 function normalizeApprovedOrigins(origins?: string[]): string[] | undefined {
@@ -681,7 +681,10 @@ export async function updateIntegrationActionJob(
     if (!existing) throw new Error(`Integration action job "${jobId}" was not found`)
     if (
       (condition.claimToken !== undefined &&
-        (existing.status !== "running" || existing.claimToken !== condition.claimToken)) ||
+        (existing.status !== "running" ||
+          existing.claimToken !== condition.claimToken ||
+          !existing.claimLeaseExpiresAt ||
+          existing.claimLeaseExpiresAt <= nowIso())) ||
       (condition.statuses && !condition.statuses.includes(existing.status)) ||
       existing.status === "cancelled"
     )

@@ -79,6 +79,7 @@ jest.mock("@/lib/tauri", () => ({
 jest.mock("@/lib/platform/detect", () => ({ detectPlatform: jest.fn(() => "tauri") }))
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({
+    syncLeases: { where: () => ({ belowOrEqual: () => ({ delete: async () => 0 }) }) },
     integrationSubscriptions: {
       toArray: jest.fn(async () => [subscription]),
       get: jest.fn(async () => subscription),

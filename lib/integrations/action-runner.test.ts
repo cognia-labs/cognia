@@ -560,6 +560,53 @@ describe("Integration action runner", () => {
     }
   )
 
+  it.each(["issue.delete", "issue.read"])(
+    "fault injection: runner B respects runner A's lease and recovers %s safely",
+    async (actionId) => {
+      const account = await setup()
+      const job = await queue(account.id, actionId)
+      const now = Date.now()
+      const clock = jest.spyOn(Date, "now").mockReturnValue(now)
+      const remote = jest.fn(async <T>() => ({ status: 200, headers: {}, data: { ok: true } as T }))
+      setIntegrationAuthenticatedRequestExecutorForTesting(remote as never)
+      try {
+        const first = (await claimIntegrationActionJob(
+          job.id,
+          { owner: "runner-A", leaseMs: 1000 },
+          now
+        ))!
+        if (actionId === "issue.delete")
+          await updateIntegrationActionJob(
+            job.id,
+            { remoteWriteStartedAt: new Date(now).toISOString() },
+            { claimToken: first.claimToken }
+          )
+        clock.mockReturnValue(now + 999)
+        expect(await drainIntegrationActionJobs()).toEqual([])
+        expect((await getIntegrationActionJob(job.id))?.claimOwner).toBe("runner-A")
+        clock.mockReturnValue(now + 1000)
+        const [recovered] = await drainIntegrationActionJobs()
+        expect(recovered).toMatchObject(
+          actionId === "issue.delete"
+            ? { status: "cancelled", remoteOutcome: "unknown", attempts: 1 }
+            : { status: "succeeded", attempts: 2 }
+        )
+        expect(remote).toHaveBeenCalledTimes(actionId === "issue.read" ? 1 : 0)
+        if (actionId === "issue.read") expect(recovered.claimToken).not.toBe(first.claimToken)
+        expect(
+          await updateIntegrationActionJob(
+            job.id,
+            { status: "succeeded", output: "late-A" },
+            { claimToken: first.claimToken }
+          )
+        ).toEqual(recovered)
+        expect(await drainIntegrationActionJobs()).toEqual([])
+      } finally {
+        clock.mockRestore()
+      }
+    }
+  )
+
   it("review regression: recovers an expired claim with no dispatched write exactly once", async () => {
     const handler = jest.fn(async () => ({ updated: true }))
     const account = await setup(handler)

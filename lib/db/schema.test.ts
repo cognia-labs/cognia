@@ -5525,11 +5525,39 @@ it("v251 indexes consumer grants and preserves legacy grants without backfill", 
   }
 })
 
-it("v252 adds account-local consumer connection bindings", async () => {
+it("v253 opens v252 data with an empty sync lease table", async () => {
+  const name = "cognia-sync-leases-v253-upgrade"
+  const previous = new Dexie(name)
+  previous.version(252).stores({ ...CURRENT_SCHEMA, syncLeases: null })
+  await previous.open()
+  const binding = {
+    consumerPluginId: "consumer",
+    providerId: "vendor",
+    connectionRef: "ref",
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  await previous.table("connectionBindings").put(binding)
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(253)
+    expect(await current.connectionBindings.get(["consumer", "vendor"])).toEqual(binding)
+    expect(await current.syncLeases.count()).toBe(0)
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
+it("v253 adds device-local sync leases without changing v252 bindings", async () => {
   const current = new CogniaDB("cognia-connection-bindings-v252")
   try {
     await current.open()
-    expect(CURRENT_SCHEMA_VERSION).toBe(252)
+    expect(CURRENT_SCHEMA_VERSION).toBe(253)
+    expect(current.syncLeases.schema.primKey.keyPath).toBe("key")
+    expect(Object.keys(current.syncLeases.schema.idxByName)).toEqual(["connectionRef", "expiresAt"])
     const table = current.table("connectionBindings")
     expect(table.schema.primKey.keyPath).toEqual(["consumerPluginId", "providerId"])
     expect(table.schema.idxByName.connectionRef.keyPath).toBe("connectionRef")

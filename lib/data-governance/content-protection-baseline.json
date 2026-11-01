@@ -324,6 +324,7 @@
   "subscriptionBalance": "metadata-only",
   "subscriptionUsage": "metadata-only",
   "syncFieldClocks": "encrypted-content",
+  "syncLeases": "metadata-only",
   "syncTombstones": "metadata-only",
   "teamPrObservations": "metadata-only",
   "teams": "metadata-only",

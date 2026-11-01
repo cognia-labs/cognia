@@ -567,6 +567,32 @@ describe("Integration persistence", () => {
 
   const lease = { owner: "window-1", leaseMs: 1000 }
 
+  it("rejects an expired owner's commit before another runner reclaims", async () => {
+    const job = await queuedJob()
+    const claim = (await claimIntegrationActionJob(job.id, lease))!
+    const clock = jest.spyOn(Date, "now").mockReturnValue(Date.parse(claim.claimLeaseExpiresAt!))
+    try {
+      expect(
+        await updateIntegrationActionJob(
+          job.id,
+          { status: "succeeded", output: "late" },
+          {
+            claimToken: claim.claimToken,
+            audit: {
+              pluginId: "example",
+              integrationId: "example",
+              kind: "late",
+              outcome: "succeeded",
+            },
+          }
+        )
+      ).toEqual(claim)
+      expect(await getDb().integrationAudit.count()).toBe(0)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it("claims atomically, rejects early retries and fences stale executor writes and audits", async () => {
     const job = await queuedJob()
     const now = Date.now()

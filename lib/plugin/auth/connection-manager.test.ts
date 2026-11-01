@@ -1,4 +1,8 @@
 import "fake-indexeddb/auto"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { createCliFileLock, FileLockLostError } from "@/cli/src/plugin/file-lock"
 import { withNamedLock } from "@/lib/locks/named-lock"
 import {
   AuthConnectionManager,
@@ -392,6 +396,55 @@ it("fences a revision change during asynchronous provider validation", async () 
     await expect(f.manager.getConnection(ref, 1)).rejects.toBeInstanceOf(ConnectionRevisionChanged)
   } finally {
     lookup.mockRestore()
+  }
+})
+
+it("fault injection: a stalled lineage owner is replaced only beyond the stale bound and its late CAS loses", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-refresh-takeover-"))
+  const realNow = Date.now()
+  let now = realNow
+  const clock = jest.spyOn(Date, "now").mockImplementation(() => now)
+  const f = fixture()
+  const fileLock = createCliFileLock(home, { staleMs: 1000, retryMs: 2, waitMs: 2000 })
+  const lock: typeof import("./connection-credentials").withAuthLock = (name, task, category) =>
+    category === "lineage"
+      ? fileLock(name, task, category)
+      : withNamedLock(name, task, { mode: "in-process" })
+  const a = f.makeManager(false, lock)
+  const b = f.makeManager(false, lock)
+  const started = deferred<void>()
+  const late = deferred<AuthCredentialSet>()
+  try {
+    const ref = await a.createConnectionFromCredentials(f.provider, old)
+    const initial = await f.credentials.read(ref)
+    f.provider.refresh = jest
+      .fn()
+      .mockImplementationOnce(async () => {
+        started.resolve()
+        return late.promise
+      })
+      .mockResolvedValue(fresh)
+    const pendingA = a.getCredentials(ref)
+    const rejectedA = expect(pendingA).rejects.toBeInstanceOf(FileLockLostError)
+    await started.promise
+    const pendingB = b.getCredentials(ref)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    expect(f.provider.refresh).toHaveBeenCalledTimes(1)
+    now += 1000
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    expect(f.provider.refresh).toHaveBeenCalledTimes(1)
+    now += 1
+    await expect(pendingB).resolves.toEqual(fresh)
+    late.resolve({ ...fresh, accessToken: "late-A" })
+    await rejectedA
+    const final = await f.credentials.read(ref)
+    expect(final.revision).toBe(initial.revision + 1)
+    expect(final.credentials).toEqual(fresh)
+    expect(f.rows.get(ref)?.credentialRevision).toBe(final.revision)
+  } finally {
+    late.resolve(fresh)
+    clock.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })
 

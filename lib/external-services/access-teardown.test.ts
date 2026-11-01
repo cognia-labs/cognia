@@ -18,6 +18,7 @@ import { purgePluginExternalServices } from "./lifecycle"
 import { createKeyringStore } from "@/lib/credentials/keyring-store"
 import { removeSession } from "@/lib/plugin/auth/auth-provider-registry"
 import { createSession } from "@/lib/db/sessions"
+import { acquireSyncLease } from "./sync-lease"
 
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({
   ...jest.requireActual("@/lib/plugin/auth/auth-provider-registry"),
@@ -86,6 +87,17 @@ async function seed(pluginId: string) {
   await putConnectionBinding(pluginId, "vendor", ref)
   return { account, job }
 }
+
+it("disconnect teardown aborts sync and removes its durable cursor token", async () => {
+  await getDb().authConnections.put({ id: ref, status: "connected" } as never)
+  const lease = (await acquireSyncLease(ref, "ingress"))!
+  await queueAccessTeardown({ kind: "connection", ref })
+  await runAccessTeardown({ kind: "connection", ref })
+  expect(lease.signal.aborted).toBe(true)
+  expect(await getDb().syncLeases.count()).toBe(0)
+  await expect(lease.commit([], async () => "late cursor")).rejects.toThrow("lease")
+  await lease.release()
+})
 
 it("consumer revoke stops and purges only its accounts; a second consumer keeps working", async () => {
   const one = await seed("one")

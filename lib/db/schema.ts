@@ -437,7 +437,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 252
+export const CURRENT_SCHEMA_VERSION = 253
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1097,6 +1097,7 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   ...ACTION_REVIEW_AUTH_SCHEMA,
   authConnections: "&id, &identityKey, lineageId, providerId, status",
   connectionBindings: "&[consumerPluginId+providerId], connectionRef",
+  syncLeases: "&key, connectionRef, expiresAt",
   // One principal can have distinct connections (for example OAuth clients).
   // Legacy remote-account uniqueness is retained by createIntegrationAccount.
   integrationAccounts:
@@ -1729,6 +1730,7 @@ export class CogniaDB extends Dexie {
   // v250 — Host auth metadata; credential material stays in the secret store.
   authConnections!: Table<AuthConnectionRow, string>
   connectionBindings!: Table<ConnectionBindingRow, [string, string]>
+  syncLeases!: Table<import("./sync-leases").SyncLeaseRow, string>
   authAttempts!: Table<{ state: string; expiresAt: number }, string>
 
   messageSyncClock!: Table<MessageSyncClock, "singleton">

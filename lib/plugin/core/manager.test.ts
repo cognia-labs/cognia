@@ -7684,6 +7684,187 @@ describe("PluginManager", () => {
       })
     })
 
+    it.each([
+      "directory",
+      "registry",
+      "github",
+      "bundle",
+      "conflict",
+      "rollback",
+      "dirty",
+      "unload-failure",
+    ])("upgrades a provider through the real manager with consumer fencing (%s)", async (mode) => {
+      const provider = createServicePlugin("upgrade-provider", {
+        providesServices: { "upgrade.service": "1.0.0" },
+      })
+      const consumer = createServicePlugin("upgrade-consumer", {
+        requiresServices: { "upgrade.service": "^1.0.0" },
+      })
+      const disabled = createServicePlugin("disabled-consumer", {
+        requiresServices: { "upgrade.service": "^1.0.0" },
+      })
+      const base = createServiceStore([provider, consumer, disabled])
+      const store = Object.assign(base, {
+        discoverPlugin: jest.fn(
+          (manifest: PluginManifest, source: Plugin["source"], path: string) => {
+            store.plugins[manifest.id] = {
+              manifest,
+              source,
+              path,
+              config: {},
+              status: "discovered",
+            }
+          }
+        ),
+        installPlugin: jest.fn(async (id: string) => {
+          store.plugins[id].status = "installed"
+        }),
+        unloadPlugin: jest.fn(async (id: string) => {
+          store.plugins[id].status = "installed"
+        }),
+      })
+      mockGetState.mockReturnValue(store)
+      ;(usePluginStore.setState as unknown as jest.Mock).mockImplementation((update) =>
+        Object.assign(store, update(store))
+      )
+      const manager = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleFeatures: { runtimeServices: true },
+        serviceRegistry: new PluginServiceRegistry(),
+      })
+      ;(readPolicy as jest.Mock).mockReturnValue({
+        ...DEFAULT_POLICY,
+        trustedFrontendPlugins: [provider.manifest.id],
+      })
+      await manager.setPluginIntent(disabled.manifest.id, "disabled", "manual", {
+        reconcile: false,
+      })
+      await manager.setPluginIntent(consumer.manifest.id, "enabled", "manual", {
+        reconcile: false,
+      })
+      const order: string[] = []
+      const loaded = new Set<string>()
+      const loader = (
+        manager as unknown as {
+          loader: { load: jest.Mock; isLoaded: (id: string) => boolean; unload: jest.Mock }
+        }
+      ).loader
+      loader.load = jest.fn(async (plugin: Plugin) => {
+        loaded.add(plugin.manifest.id)
+        return {
+          manifest: plugin.manifest,
+          activate: () => {
+            order.push(`enable:${plugin.manifest.id}:${plugin.manifest.version}`)
+          },
+        }
+      })
+      loader.isLoaded = (id) => loaded.has(id)
+      loader.unload = jest.fn(async (id: string) => {
+        loaded.delete(id)
+      })
+      jest
+        .spyOn(
+          manager as unknown as { registerPluginContributions: (id: string) => Promise<void> },
+          "registerPluginContributions"
+        )
+        .mockResolvedValue(undefined)
+      jest
+        .spyOn(
+          manager as unknown as { unregisterPluginContributions: (id: string) => Promise<void> },
+          "unregisterPluginContributions"
+        )
+        .mockImplementation(async (id) => {
+          order.push(`stop:${id}`)
+          await manager.getPluginDisposableScope(id).dispose()
+        })
+      await manager.enablePlugin(provider.manifest.id)
+      await manager.enablePlugin(consumer.manifest.id)
+      const previousIntent = (await manager.getPluginLifecycleState(consumer.manifest.id)).intent
+      order.length = 0
+      if (mode === "unload-failure")
+        store.unloadPlugin.mockRejectedValueOnce(new Error("unload projection failed"))
+      if (mode === "dirty")
+        manager.getPluginDisposableScope(consumer.manifest.id).track(async () => {
+          throw new Error("worker alive")
+        }, "worker")
+      const next = {
+        ...provider.manifest,
+        version: "2.0.0",
+        providesServices: { "upgrade.service": mode === "conflict" ? "2.0.0" : "1.1.0" },
+      }
+      const staged = {
+        manifest: next,
+        path: "/plugins/upgrade-provider",
+        transactionId: "upgrade-txn",
+        bundleSha256: "a".repeat(64),
+        repo: "owner/repo",
+        gitRef: "a".repeat(40),
+      }
+      mockInvoke.mockImplementation(async (command) => {
+        if (
+          [
+            "plugin_stage_from_directory",
+            "plugin_install_from_github",
+            "plugin_bundle_install_from_file",
+          ].includes(command)
+        )
+          return staged
+        if (command === "plugin_commit_staged_update") order.push("commit")
+        if (command === "plugin_finalize_staged_update" && mode === "rollback")
+          throw new Error("finalize failed")
+      })
+      const install = () =>
+        mode === "registry"
+          ? manager.installPluginFromRegistry(async () => ({
+              ...staged,
+              pluginId: next.id,
+              version: next.version,
+              stagedPath: staged.path,
+              sizeBytes: 1,
+            }))
+          : mode === "github"
+            ? manager.installPluginFromGithub("owner/repo", "a".repeat(40))
+            : mode === "bundle"
+              ? manager.installPluginBundleFromLocalFile("/tmp/provider.zip")
+              : manager.installPlugin("/tmp/provider")
+      if (mode === "dirty" || mode === "rollback" || mode === "unload-failure")
+        await expect(install()).rejects.toThrow(
+          mode === "dirty"
+            ? "upgrade-consumer"
+            : mode === "unload-failure"
+              ? "unload projection failed"
+              : "finalize failed"
+        )
+      else await install()
+      if (mode === "dirty") {
+        expect(order).not.toContain("commit")
+        expect(order).not.toContain("stop:upgrade-provider")
+        expect(store.plugins[next.id].manifest.version).toBe("1.0.0")
+        expect(store.plugins[next.id].status).toBe("enabled")
+        return
+      }
+      expect(order.indexOf("stop:upgrade-consumer")).toBeLessThan(
+        order.indexOf("stop:upgrade-provider")
+      )
+      if (mode === "unload-failure") expect(order).not.toContain("commit")
+      else expect(order.indexOf("stop:upgrade-provider")).toBeLessThan(order.indexOf("commit"))
+      await expect(manager.getPluginLifecycleState(consumer.manifest.id)).resolves.toMatchObject({
+        intent: previousIntent,
+        actual: mode === "conflict" ? "waiting" : "active",
+      })
+      expect(store.plugins[disabled.manifest.id].status).toBe("installed")
+      await expect(manager.getPluginLifecycleState(disabled.manifest.id)).resolves.toMatchObject({
+        intent: "disabled",
+      })
+      expect(store.plugins[next.id].manifest.version).toBe(
+        mode === "rollback" || mode === "unload-failure" ? "1.0.0" : "2.0.0"
+      )
+      expect(store.plugins[next.id].status).toBe("enabled")
+      if (mode === "conflict")
+        expect(order.filter((item) => item.startsWith("enable:upgrade-consumer"))).toHaveLength(0)
+      if (mode === "rollback") expect(order.at(-1)).toBe("enable:upgrade-consumer:1.0.0")
+    })
+
     it("tears down required consumers before a draining provider", async () => {
       const provider = createServicePlugin("provider", {
         providesServices: { "example.service": "1.0.0" },
