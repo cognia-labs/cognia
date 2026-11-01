@@ -1,4 +1,0 @@
-{
-  "title": "核心架构",
-  "pages": ["architecture", "runtime-and-tauri", "sidecar-and-claude-sdk"]
-}

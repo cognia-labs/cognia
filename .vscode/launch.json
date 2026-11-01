@@ -312,13 +312,6 @@
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"],
       "presentation": { "group": "5-tools", "order": 2 }
-    },
-    {
-      "name": "Docs site: dev server (:3001)",
-      "type": "node-terminal",
-      "request": "launch",
-      "command": "pnpm docs:dev",
-      "presentation": { "group": "5-tools", "order": 3 }
     }
   ],
   "inputs": [

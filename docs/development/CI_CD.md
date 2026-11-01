@@ -541,29 +541,13 @@ change that updates the copies; `pnpm cognia-services:fetch` checks the pinned
 revision out under `.cache/cognia-services` for local runs. The compose suites
 build the signaling and share images from that same checkout.
 
-### Site deployments (`deploy.yml`, manual/opt-in)
+### Documentation and website deployments
 
-`workflow_dispatch` (or a `workflow_call`) only — never on push. This workflow
-deploys the Fumadocs static export (`docs/out`) to Cloudflare Pages. Dispatch
-inputs: `environment` (`staging` / `production`) and `target` (`all`, `docs`).
-The marketing website deploys from [cognia-labs/cognia-website](https://github.com/cognia-labs/cognia-website).
+Public site deployments are owned by [cognia-docs](https://github.com/cognia-labs/cognia-docs) and [cognia-website](https://github.com/cognia-labs/cognia-website). There is no site deploy workflow in the product repository.
 
-Two gates keep forks green with zero configuration: the repository variable
-`DEPLOY_ENABLED` must be the string `true`, and the job requires
-`CLOUDFLARE_API_TOKEN`. A failing gate **skips** the job rather than failing
-it. The GitHub Environments `staging` and `production` hold the same names:
+The docs repository owns independent install, quality checks, static build, browser journeys and the real Pages runtime check. Its manual Deploy docs workflow validates staging/production configuration before publishing. Required environment configuration and rollback instructions live in its README. A dry run reports missing keys without uploading or printing secrets.
 
-| Kind     | Name                    | Notes                              |
-| -------- | ----------------------- | ---------------------------------- |
-| secret   | `CLOUDFLARE_API_TOKEN`  | Pages deploy token                 |
-| variable | `CLOUDFLARE_ACCOUNT_ID` |                                    |
-| variable | `CF_DOCS_PAGES_PROJECT` | Pages project for the docs site    |
-| variable | `DOCS_SITE_URL`         | canonical docs origin (build-time) |
-| variable | `WEB_SITE_URL`          | external website navigation link   |
-
-Give `production` protection rules (required reviewers, branch restriction)
-under **Settings → Environments**. Service deployments (Workers, Fly.io) are
-documented in the cognia-services README.
+The product's docs-build job is now a publication contract check: it checks out the exact docs revision from integrations/cognia-docs.json and compares the committed corpus and URL index byte for byte. Normal application builds perform the same hash checks offline. ADRs and API contracts remain in this repository.
 
 ### Codecov
 

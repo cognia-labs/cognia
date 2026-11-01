@@ -66,7 +66,6 @@ RUN pnpm fetch --frozen-lockfile --fetch-retries=5 --fetch-timeout=300000 --netw
 # postinstall's partial-checkout guard defers the separately staged sidecars.
 COPY package.json ./
 COPY packages ./packages
-COPY docs/package.json ./docs/package.json
 COPY mobile/package.json ./mobile/package.json
 COPY cli/package.json ./cli/package.json
 COPY services/workspace-runtime/package.json ./services/workspace-runtime/package.json

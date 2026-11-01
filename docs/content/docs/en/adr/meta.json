@@ -241,6 +241,7 @@
     "0243-a-run-acts-for-someone-and-says-who",
     "0244-a-remote-run-has-stopped-only-when-its-worker-says-so",
     "0245-a-paired-device-is-granted-workspaces-not-a-host",
-    "0246-a-business-plugin-reaches-a-service-through-a-granted-connection"
+    "0246-a-business-plugin-reaches-a-service-through-a-granted-connection",
+    "0251-macos-screen-off-virtual-display"
   ]
 }

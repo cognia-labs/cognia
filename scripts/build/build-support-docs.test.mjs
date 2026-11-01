@@ -1,89 +1,66 @@
 import assert from "node:assert/strict"
-import { test } from "node:test"
-import {
-  mkdtempSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync,
-  readFileSync,
-  statSync,
-  utimesSync,
-} from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import path from "node:path"
+import { join } from "node:path"
+import { test } from "node:test"
+import { parseArgs, verifyPinnedCorpus, validateCorpus } from "./build-support-docs.mjs"
 
-import {
-  buildCorpus,
-  writeCorpusIfChanged,
-  extractDocument,
-  parseArgs,
-  renderCorpusModule,
-} from "./build-support-docs.mjs"
+function fixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "pinned-docs-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, "integrations"))
+  mkdirSync(join(root, "lib/support-agent"), { recursive: true })
+  const bytes = JSON.stringify({ schemaVersion: 1, locales: { en: [{ path: "index.mdx", title: "Guide", text: "Help" }], zh: [{ path: "index.mdx", title: "指南", text: "帮助" }] } }) + "\n"
+  const pageBytes = JSON.stringify({ schemaVersion: 1, urls: ["/en/docs", "/zh/docs"] }) + "\n"
+  writeFileSync(join(root, "integrations/cognia-docs-pages.json"), pageBytes)
+  const pin = { pagesSha256: createHash("sha256").update(pageBytes).digest("hex"), repository: "cognia-labs/cognia-docs", revision: "a".repeat(40), corpusSha256: createHash("sha256").update(bytes).digest("hex") }
+  writeFileSync(join(root, "integrations/cognia-docs.json"), JSON.stringify(pin))
+  writeFileSync(join(root, "lib/support-agent/support-docs.generated.json"), bytes)
+  return { root, pin, bytes }
+}
 
-test("parseArgs supports check mode and rejects unknown options", () => {
-  assert.deepEqual(parseArgs([]), { check: false })
-  assert.deepEqual(parseArgs(["--check"]), { check: true })
-  assert.throws(() => parseArgs(["--unknown"]), /unknown option/i)
+test("build and check validate a pinned corpus without reading any documentation source", (t) => {
+  const { root, pin, bytes } = fixture(t)
+  assert.equal(verifyPinnedCorpus(root).pin.revision, pin.revision)
+  assert.equal(readFileSync(join(root, "lib/support-agent/support-docs.generated.json"), "utf8"), bytes)
 })
-
-test("extractDocument strips executable MDX and code while retaining user-facing prose", () => {
-  const document = extractDocument(
-    "guide.mdx",
-    `---\ntitle: Guide\ndescription: Configure the app.\n---\nimport X from \"x\"\n# Guide\nUse the **Settings** page.\n\`\`\`bash\nsecret command\n\`\`\`\n<Card title=\"Ignore component props\" />`
-  )
-  assert.equal(document.title, "Guide")
-  assert.match(document.text, /Configure the app/)
-  assert.match(document.text, /Settings/)
-  assert.doesNotMatch(document.text, /secret command|import X|Card title/)
+test("rejects a tampered or missing corpus rather than rebuilding an incomplete ADR-only corpus", (t) => {
+  const { root } = fixture(t)
+  writeFileSync(join(root, "lib/support-agent/support-docs.generated.json"), "{}")
+  assert.throws(() => verifyPinnedCorpus(root), /SHA-256/)
+  rmSync(join(root, "lib/support-agent/support-docs.generated.json"))
+  assert.throws(() => verifyPinnedCorpus(root), /ENOENT/)
 })
-
-test("buildCorpus walks both locales deterministically", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "support-docs-"))
-  try {
-    for (const locale of ["en", "zh"]) {
-      mkdirSync(path.join(root, locale), { recursive: true })
-      writeFileSync(path.join(root, locale, "b.md"), `# B ${locale}\nBody B`)
-      writeFileSync(path.join(root, locale, "a.mdx"), `# A ${locale}\nBody A`)
-      writeFileSync(path.join(root, locale, "meta.json"), "{}")
-    }
-    const corpus = buildCorpus(root)
-    assert.deepEqual(
-      corpus.en.map((doc) => doc.path),
-      ["a.mdx", "b.md"]
-    )
-    assert.deepEqual(
-      corpus.zh.map((doc) => doc.path),
-      ["a.mdx", "b.md"]
-    )
-    assert.equal(renderCorpusModule(corpus), renderCorpusModule(corpus))
-  } finally {
-    rmSync(root, { recursive: true, force: true })
+test("rejects another repository, a floating revision and malformed bilingual data", (t) => {
+  const { root, pin } = fixture(t)
+  for (const change of [{ repository: "someone/other" }, { revision: "main" }]) {
+    writeFileSync(join(root, "integrations/cognia-docs.json"), JSON.stringify({ ...pin, ...change }))
+    assert.throws(() => verifyPinnedCorpus(root), /pinned/)
+  }
+  for (const data of [{ schemaVersion: 2, locales: {} }, { schemaVersion: 1, locales: { en: [], zh: [] } }, { schemaVersion: 1, locales: { en: [{ path: "../secret", title: "x", text: "x" }], zh: [] } }]) {
+    assert.throws(() => validateCorpus(Buffer.from(JSON.stringify(data))), /corpus/)
   }
 })
+test("the optional docs checkout must match the exact published artifact and revision", (t) => {
+  const { root, pin, bytes } = fixture(t)
+  const docs = join(root, "docs-checkout")
+  mkdirSync(join(docs, "artifacts"), { recursive: true })
+  writeFileSync(join(docs, "artifacts/support-docs.json"), bytes)
+  assert.throws(() => verifyPinnedCorpus(root, docs), /checkout|git/i)
+  assert.equal(pin.repository, "cognia-labs/cognia-docs")
+})
+test("argument parsing preserves check mode and accepts an explicit consumer checkout", () => {
+  assert.deepEqual(parseArgs([]), { check: false, docsRoot: undefined })
+  assert.deepEqual(parseArgs(["--check"]), { check: true, docsRoot: undefined })
+  assert.deepEqual(parseArgs(["--docs-root", "/tmp/docs"]), { check: false, docsRoot: "/tmp/docs" })
+  assert.throws(() => parseArgs(["--unknown"]), /unknown option/)
+  assert.throws(() => parseArgs(["--docs-root"]), /requires/)
+})
 
-test("unchanged corpus preserves mtime and changed or damaged output is repaired", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "support-docs-write-"))
-  try {
-    for (const locale of ["en", "zh"]) {
-      mkdirSync(path.join(root, locale))
-      writeFileSync(path.join(root, locale, "guide.md"), "# Guide\nOriginal body")
-    }
-    const output = path.join(root, "corpus.json")
-    assert.equal(writeCorpusIfChanged(root, output), true)
-    utimesSync(output, 1000, 1000)
-    assert.equal(writeCorpusIfChanged(root, output), false)
-    assert.equal(statSync(output).mtimeMs, 1000000)
-    writeFileSync(path.join(root, "en/guide.md"), "# Guide\nUpdated body")
-    assert.equal(writeCorpusIfChanged(root, output), true)
-    assert.match(readFileSync(output, "utf8"), /Updated body/)
-    writeFileSync(output, "tampered")
-    assert.equal(writeCorpusIfChanged(root, output), true)
-    rmSync(output)
-    assert.equal(writeCorpusIfChanged(root, output), true)
-    rmSync(path.join(root, "zh/guide.md"))
-    assert.equal(writeCorpusIfChanged(root, output), true)
-    assert.deepEqual(JSON.parse(readFileSync(output, "utf8")).locales.zh, [])
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
+
+test("a tampered page index fails the same offline pin verification", (t) => {
+  const { root } = fixture(t)
+  writeFileSync(join(root, "integrations/cognia-docs-pages.json"), "{}")
+  assert.throws(() => verifyPinnedCorpus(root), /SHA-256/)
 })

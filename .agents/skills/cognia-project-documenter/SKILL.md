@@ -3,6 +3,9 @@ name: cognia-project-documenter
 description: Inventory, audit, and write implementation-accurate bilingual documentation for every architectural module in the Cognia repository. Use for whole-project architecture surveys, module-by-module introductions, documentation coverage audits, or broad subsystem refreshes; use subsystem-docs for a single already-known subsystem.
 ---
 
+> Repository ownership: public documentation moved to cognia-labs/cognia-docs. Resolve an explicit docs checkout and read its AGENTS.md before editing product pages. Public-page paths below that previously began docs/content/docs/ now mean content/docs/ in that checkout. ADRs, API contracts, research and evidence keep their existing main-repository paths. Do not recreate migrated product pages here. Run pnpm check in cognia-docs; use pnpm docs:check plus ADR/link gates in the product repository.
+
+
 # Cognia Project Documenter
 
 Produce a complete, source-traceable map of a Cognia snapshot and detailed Fumadocs pages for every architectural owner. Renovate good existing pages instead of creating competing descriptions.

@@ -34,25 +34,15 @@ DeepSeek Harness 的托管启动器与配置归属 `packages/agent-dsh/runtime/`
 - [Testing guide / 测试指南](development/TESTING.md)
 - [Contribution guide / 贡献指南](../CONTRIBUTING.md)
 
-`docs/content/docs/` owns the published bilingual Fumadocs content and ADRs.
-`docs/plans/`, `docs/research/`, `docs/reports/`, and `docs/runbooks/` own plans,
-research, verification reports, and operator procedures. Keep contributor
-guides in `docs/development/` instead of adding more root Markdown files.
+`docs/content/docs/{en,zh}/adr/` owns source ADRs. API contracts, plans, research, reports, evidence and runbooks stay here. The public site and product guides live in [cognia-docs](https://github.com/cognia-labs/cognia-docs).
 
-`docs/content/docs/` 存放发布到站点的双语文档和 ADR；方案、研究、验证报告与运维
-手册分别放入 `docs/plans/`、`docs/research/`、`docs/reports/`、`docs/runbooks/`。
-开发协作指南统一放入 `docs/development/`。
+`docs/content/docs/{en,zh}/adr/` 保留 ADR 权威源；API 契约、方案、研究、报告、证据和运维手册也保留在本仓。公开站点及产品指南归属 [cognia-docs](https://github.com/cognia-labs/cognia-docs)。
 
-## Docs workspace dependencies / 文档工作区依赖
+## Versioned documentation publication / 版本化文档发布
 
-The docs site is a member of the root pnpm workspace. Install from the repository
-root with `pnpm install --frozen-lockfile`, then run `pnpm --filter docs typecheck`
-or `pnpm docs:build`. The root `pnpm-lock.yaml` owns its dependency versions;
-there is no independently maintained lockfile under `docs/`. CI also discovers
-the root workspace when it installs from the docs directory.
+The docs site has its own lockfile and CI. It imports committed ADRs and generated reference as read-only publication snapshots. Application builds verify local artifacts and never fetch the docs site. Update the application's corpus and page index explicitly with `pnpm docs:sync --docs-root <committed docs checkout>`, then run `pnpm docs:check`.
 
-文档站属于根 pnpm workspace。请在仓库根目录安装依赖，再运行文档类型检查或构建；
-依赖版本统一由根 `pnpm-lock.yaml` 管理，`docs/` 不再维护独立锁文件。
+文档站独立管理依赖、CI 和部署，并按固定提交导入 ADR 与生成型参考文档。主应用使用已提交的离线语料及页面索引，通过 `pnpm docs:sync --docs-root <已提交的文档仓>` 显式更新，通过 `pnpm docs:check` 离线验证。
 
 ## Container builds / 容器构建
 

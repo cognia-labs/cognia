@@ -1,4 +1,5 @@
 import generatedCorpus from "./support-docs.generated.json"
+import docsPin from "@/integrations/cognia-docs.json"
 
 export interface SupportDocEntry {
   path: string
@@ -72,7 +73,8 @@ export function retrieveSupportDocumentation({
 
   let result = ""
   for (const { document } of selected) {
-    const source = `docs/content/docs/${language}/${document.path}`
+    const path = document.path.split("/").map(encodeURIComponent).join("/")
+    const source = `https://github.com/${docsPin.repository}/blob/${docsPin.revision}/content/docs/${language}/${path}`
     const block = `- [${source}] ${document.title}: ${document.text}\n`
     if (result.length + block.length > maxChars) {
       if (result.length === 0) result = block.slice(0, maxChars)

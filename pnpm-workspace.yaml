@@ -3,7 +3,6 @@ packages:
   # unit (its version lives in the root package.json). pnpm still excludes the
   # root from recursive commands unless --include-workspace-root is passed.
   - .
-  - docs
   - mobile
   - cli
   - packages/*

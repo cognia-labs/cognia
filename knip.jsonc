@@ -68,10 +68,6 @@
         "src/**/fixtures/**/*.{ts,tsx}",
       ],
     },
-    "docs": {
-      // Archived measurements are evidence artifacts, not docs application entries.
-      "ignore": ["reports/**"],
-    },
     "crates/cognia-plugin-template-ts": {
       // The template intentionally predeclares the host libraries available to
       // third-party plugin authors; its starter module need not import all of

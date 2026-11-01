@@ -91,7 +91,7 @@
 | **设备与协作**   | 设备配对与授权、WebRTC 中继、常驻 headless 宿主、远程桌面与共享对话。加密账号同步为实验功能。                                                                                                                                                                |
 | **桌面增强**     | 托盘速览面板、桌面宠物、划词工具栏、语音与 TTS。                                                                                                                                                                                                             |
 
-实际可用的能力取决于宿主能力、设备授权和插件兼容性。实现入口与边界见[子系统文档](./docs/content/docs/zh/subsystems/)。
+实际可用的能力取决于宿主能力、设备授权和插件兼容性。实现入口与边界见[子系统文档](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/zh/subsystems/)。
 
 ### 客户端
 
@@ -208,18 +208,18 @@ flowchart TB
 
 所有命令都在仓库根目录运行，每次只使用一种前端启动方式。
 
-| 任务                | 命令                                                                                                     |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| 应用                | `pnpm dev` · `pnpm build` · `pnpm lint` · `pnpm format` · `pnpm typecheck`                               |
-| 单元测试            | `pnpm test` · `pnpm test:changed` · `pnpm test -- path/to/file.test.ts`                                  |
-| E2E（Playwright）   | `pnpm test:e2e` · `pnpm test:e2e:changed` · `pnpm test:e2e:mobile` · `pnpm test:e2e:tauri`               |
-| 桌面端              | `pnpm tauri dev` · `pnpm tauri build` · `pnpm tauri info`                                                |
-| Headless 宿主       | `pnpm dev:headless` · `pnpm dev:web-headless` · `pnpm dev:workspace-runtime`                             |
-| CLI                 | `pnpm cli:dev chat` · `pnpm cli:build` · `pnpm cli:test`                                                 |
-| Sidecar             | `pnpm sidecars:install` · `pnpm sidecar:test` · `pnpm sidecar:typecheck`                                 |
-| 移动端              | `pnpm mobile:sync:ios` · `pnpm mobile:sync:android` · `pnpm mobile:deploy`                               |
-| 文档站（端口 3001） | `pnpm docs:dev` · `pnpm docs:build`                                                                      |
-| 门禁检查            | `pnpm audit:colocated-tests` · `pnpm lint:i18n` · `pnpm i18n:build:check` · `pnpm cognia-services:check` |
+| 任务              | 命令                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| 应用              | `pnpm dev` · `pnpm build` · `pnpm lint` · `pnpm format` · `pnpm typecheck`                               |
+| 单元测试          | `pnpm test` · `pnpm test:changed` · `pnpm test -- path/to/file.test.ts`                                  |
+| E2E（Playwright） | `pnpm test:e2e` · `pnpm test:e2e:changed` · `pnpm test:e2e:mobile` · `pnpm test:e2e:tauri`               |
+| 桌面端            | `pnpm tauri dev` · `pnpm tauri build` · `pnpm tauri info`                                                |
+| Headless 宿主     | `pnpm dev:headless` · `pnpm dev:web-headless` · `pnpm dev:workspace-runtime`                             |
+| CLI               | `pnpm cli:dev chat` · `pnpm cli:build` · `pnpm cli:test`                                                 |
+| Sidecar           | `pnpm sidecars:install` · `pnpm sidecar:test` · `pnpm sidecar:typecheck`                                 |
+| 移动端            | `pnpm mobile:sync:ios` · `pnpm mobile:sync:android` · `pnpm mobile:deploy`                               |
+| 文档站（独立仓）  | [https://github.com/cognia-labs/cognia-docs](https://github.com/cognia-labs/cognia-docs)                 |
+| 门禁检查          | `pnpm audit:colocated-tests` · `pnpm lint:i18n` · `pnpm i18n:build:check` · `pnpm cognia-services:check` |
 
 完整脚本见 [`package.json`](./package.json)。
 
@@ -249,7 +249,7 @@ cognia/
 ├── plugins/ skills/     第一方插件与内置技能
 ├── services/            随桌面端打包的工作区浏览器运行时
 ├── deploy/              Docker、Compose、Kubernetes、runner 部署
-├── docs/                Fumadocs 文档站、ADR、开发指南
+├── docs/                ADR、API 契约、开发指南与研发资料
 ├── tests/e2e/           Playwright 测试套件
 └── scripts/             构建、门禁与发布工具
 ```
@@ -271,18 +271,17 @@ cognia/
 <details>
 <summary><b>故障排除</b></summary>
 
-| 现象                                               | 处理                                                                                    |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| 端口 3000 被占用                                   | 确认可以安全停止后关闭占用进程，或运行 `pnpm dev --port 3002`                           |
-| Tauri 构建失败                                     | 运行 `pnpm tauri info`，检查平台前置要求                                                |
-| 找不到模块                                         | 在根目录运行 `pnpm install --frozen-lockfile`；sidecar 依赖运行 `pnpm sidecars:install` |
-| 文档提示 `Cannot find module 'collections/server'` | 先运行一次 `pnpm docs:dev` 生成 `docs/.source/`                                         |
-| i18n 检查失败                                      | 运行 `pnpm i18n:build`，再修复报告的键缺失；不要为消除报错而重置基线                    |
-| 缺少 Monaco 资源                                   | 运行 `pnpm monaco:copy`（`predev`、`prebuild` 也会执行）                                |
-| 浏览器或手机无法发送，或提示配对                   | 检查所选宿主、配对状态与聊天授权；`pnpm dev` 只启动界面                                 |
-| 外部智能体无法启动                                 | 检查执行宿主上智能体的安装、版本与登录状态；配对客户端还需 Agent Control 授权           |
-| 插件已发现但无法启用                               | 查看兼容性与权限诊断；原生插件需要宿主                                                  |
-| Android 快速部署拒绝资源                           | 重新运行 `pnpm mobile:build:android` 后再部署                                           |
+| 现象                             | 处理                                                                                    |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| 端口 3000 被占用                 | 确认可以安全停止后关闭占用进程，或运行 `pnpm dev --port 3002`                           |
+| Tauri 构建失败                   | 运行 `pnpm tauri info`，检查平台前置要求                                                |
+| 找不到模块                       | 在根目录运行 `pnpm install --frozen-lockfile`；sidecar 依赖运行 `pnpm sidecars:install` |
+| i18n 检查失败                    | 运行 `pnpm i18n:build`，再修复报告的键缺失；不要为消除报错而重置基线                    |
+| 缺少 Monaco 资源                 | 运行 `pnpm monaco:copy`（`predev`、`prebuild` 也会执行）                                |
+| 浏览器或手机无法发送，或提示配对 | 检查所选宿主、配对状态与聊天授权；`pnpm dev` 只启动界面                                 |
+| 外部智能体无法启动               | 检查执行宿主上智能体的安装、版本与登录状态；配对客户端还需 Agent Control 授权           |
+| 插件已发现但无法启用             | 查看兼容性与权限诊断；原生插件需要宿主                                                  |
+| Android 快速部署拒绝资源         | 重新运行 `pnpm mobile:build:android` 后再部署                                           |
 
 </details>
 
@@ -296,15 +295,15 @@ cognia/
 
 ## 文档
 
-| 主题         | 位置                                                                                                                                         |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 入门         | [`docs/content/docs/zh/getting-started.mdx`](./docs/content/docs/zh/getting-started.mdx)                                                     |
-| 子系统       | [`docs/content/docs/zh/subsystems/`](./docs/content/docs/zh/subsystems/)                                                                     |
-| 架构决策记录 | [`docs/content/docs/zh/adr/`](./docs/content/docs/zh/adr/)（运行 `pnpm docs:dev` 后访问 <http://localhost:3001>）                            |
-| 智能体执行   | [统一智能体执行](./docs/content/docs/zh/subsystems/unified-agent-execution/) · [智能体包](./docs/content/docs/zh/subsystems/agent-packages/) |
-| 插件         | [插件系统](./docs/content/docs/zh/subsystems/plugin-system/) · [插件 SDK](./packages/plugin-sdk/)                                            |
-| 客户端       | [CLI](./cli/README.md) · [移动端](./mobile/README.md)                                                                                        |
-| 开发         | [开发流程](./docs/development/WORKFLOW.md) · [测试](./docs/development/TESTING.md) · [CI/CD](./docs/development/CI_CD.md)                    |
+| 主题         | 位置                                                                                                                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 入门         | [`docs/content/docs/zh/getting-started.mdx`](https://github.com/cognia-labs/cognia-docs/blob/main/content/docs/zh/getting-started.mdx)                                                                                                   |
+| 子系统       | [`docs/content/docs/zh/subsystems/`](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/zh/subsystems/)                                                                                                                   |
+| 架构决策记录 | [`docs/content/docs/zh/adr/`](./docs/content/docs/zh/adr/)（由 [cognia-docs](https://github.com/cognia-labs/cognia-docs) 发布）                                                                                                          |
+| 智能体执行   | [统一智能体执行](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/zh/subsystems/unified-agent-execution/) · [智能体包](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/zh/subsystems/agent-packages/) |
+| 插件         | [插件系统](https://github.com/cognia-labs/cognia-docs/tree/main/content/docs/zh/subsystems/plugin-system/) · [插件 SDK](./packages/plugin-sdk/)                                                                                          |
+| 客户端       | [CLI](./cli/README.md) · [移动端](./mobile/README.md)                                                                                                                                                                                    |
+| 开发         | [开发流程](./docs/development/WORKFLOW.md) · [测试](./docs/development/TESTING.md) · [CI/CD](./docs/development/CI_CD.md)                                                                                                                |
 
 ## 许可证与支持
 

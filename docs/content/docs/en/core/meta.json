@@ -1,4 +1,0 @@
-{
-  "title": "Core Architecture",
-  "pages": ["architecture", "runtime-and-tauri", "sidecar-and-claude-sdk"]
-}

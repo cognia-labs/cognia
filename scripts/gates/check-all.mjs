@@ -404,7 +404,7 @@ const SDK_INPUTS = [...FRONTEND_INPUTS, ...CONTRACT_INPUTS]
 const GATE_INPUTS = {
   typecheck: FRONTEND_INPUTS,
   "typecheck:workspaces": [...FRONTEND_INPUTS, ...CONTRACT_INPUTS, "docs/"],
-  knip: [...FRONTEND_INPUTS, "docs/app/", "docs/lib/"],
+  knip: FRONTEND_INPUTS,
   "sidecar:typecheck": CONTRACT_INPUTS,
   "build:packages": CONTRACT_INPUTS,
   "author-types:check": CONTRACT_INPUTS,
