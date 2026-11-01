@@ -86,6 +86,34 @@ describe("openSqliteBackend", () => {
     expect(loaded.dbs.CogniaDB.rows.sessions).toEqual({ "s:b": { id: "b" } })
   })
 
+  it("lists a table added after the schema row once its first row is committed", async () => {
+    const backend = openSqliteBackend({ root })
+    await backend.compact(state(0))
+    backend.commitSync({
+      sequence: 1,
+      committedAt: 1,
+      mutations: [{ database: "CogniaDB", table: "added", key: "s:k", value: { id: "k" } }],
+    })
+    const loaded = await backend.load()
+    await backend.close()
+    // The journal lists it the same way; a restart re-declares it from this list.
+    expect(loaded.dbs.CogniaDB.schema.tables).toEqual(["added", "messages", "sessions"])
+    expect(loaded.dbs.CogniaDB.rows.added).toEqual({ "s:k": { id: "k" } })
+  })
+
+  it("lists a late table even when its only commit is a delete", async () => {
+    const backend = openSqliteBackend({ root })
+    await backend.compact(state(0))
+    backend.commitSync({
+      sequence: 1,
+      committedAt: 1,
+      mutations: [{ database: "CogniaDB", table: "added", key: "s:k", value: null }],
+    })
+    const loaded = await backend.load()
+    await backend.close()
+    expect(loaded.dbs.CogniaDB.schema.tables).toEqual(["added", "messages", "sessions"])
+  })
+
   it("treats an already-applied sequence as a no-op (dual-write redelivery)", async () => {
     const backend = openSqliteBackend({ root })
     await backend.compact(state(0))

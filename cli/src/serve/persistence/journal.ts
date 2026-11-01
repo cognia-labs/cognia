@@ -228,8 +228,15 @@ export function applyCommits(state: DurabilityState, commits: readonly Durabilit
     for (const mutation of commit.mutations) {
       const db = state.dbs[mutation.database]
       if (!db) continue
-      const table = db.rows[mutation.table]
-      if (!table) continue
+      // A table added after the checkpoint (a plugin's runtime table, one a
+      // schema upgrade created) joins the state with its first commit;
+      // skipping it dropped every row written there since the checkpoint.
+      let table = db.rows[mutation.table]
+      if (!table) {
+        table = db.rows[mutation.table] = {}
+        if (!db.schema.tables.includes(mutation.table))
+          db.schema.tables = [...db.schema.tables, mutation.table].sort()
+      }
       if (mutation.value === null) delete table[mutation.key]
       else table[mutation.key] = mutation.value
     }

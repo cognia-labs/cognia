@@ -437,3 +437,172 @@ describe("the drain gate", () => {
     }
   })
 })
+
+describe("what a real IndexedDB transaction kept", () => {
+  let counter = 0
+  async function open(commits: DurabilityMutation[][]) {
+    await installFakeIndexedDb()
+    counter += 1
+    const db = new Dexie(`CaptureOutcome-${process.pid}-${counter}`)
+    db.version(1).stores({ rows: "id", other: "id" })
+    installTransactionCapture(db as unknown as CaptureDexieLike, {
+      database: "outcome",
+      onCommit: (mutations) => commits.push(mutations),
+    })
+    await db.open()
+    return db
+  }
+
+  it("journals no row for an add IndexedDB refused, even when the caller catches it", async () => {
+    const commits: DurabilityMutation[][] = []
+    const db = await open(commits)
+    try {
+      await db.table("rows").put({ id: "a", v: "original" })
+      commits.length = 0
+      await db.transaction("rw", "rows", async () => {
+        await db
+          .table("rows")
+          .add({ id: "a", v: "PHANTOM" })
+          .catch(() => undefined)
+        await db.table("rows").put({ id: "b", v: "kept" })
+      })
+      expect(await db.table("rows").get("a")).toEqual({ id: "a", v: "original" })
+      expect(commits).toEqual([
+        [
+          {
+            database: "outcome",
+            table: "rows",
+            key: encodeKey("b"),
+            value: { id: "b", v: "kept" },
+          },
+        ],
+      ])
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("journals only the rows of a partly failed bulkAdd", async () => {
+    const commits: DurabilityMutation[][] = []
+    const db = await open(commits)
+    try {
+      await db.table("rows").put({ id: "taken" })
+      commits.length = 0
+      await db.transaction("rw", "rows", async () => {
+        await db
+          .table("rows")
+          .bulkAdd([{ id: "new1" }, { id: "taken", v: "PHANTOM" }, { id: "new2" }])
+          .catch(() => undefined)
+      })
+      expect(commits).toHaveLength(1)
+      expect(commits[0].map((m) => m.key)).toEqual([encodeKey("new1"), encodeKey("new2")])
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("aborts a transaction whose bulk write threw partway, so neither side keeps its first rows", async () => {
+    const commits: DurabilityMutation[][] = []
+    const db = await open(commits)
+    try {
+      const run = db.transaction("rw", "rows", async () => {
+        await db
+          .table("rows")
+          // Issuing the third request throws DataCloneError after the first two went out.
+          .bulkPut([{ id: "ok1" }, { id: "ok2" }, { id: "bad", fn: () => undefined }])
+          .catch(() => undefined)
+      })
+      await expect(run).rejects.toThrow()
+      expect(await db.table("rows").toArray()).toEqual([])
+      expect(commits).toEqual([])
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("leaves the transaction alone when a lower middleware refuses a write before issuing it", async () => {
+    await installFakeIndexedDb()
+    counter += 1
+    const db = new Dexie(`CaptureOutcome-${process.pid}-${counter}`)
+    db.version(1).stores({ rows: "id" })
+    // Below capture, like the account database's cipher middleware when locked.
+    db.use({
+      stack: "dbcore",
+      name: "refuses-locked",
+      level: 2,
+      create: (down) => ({
+        ...down,
+        table: (name) => {
+          const table = down.table(name)
+          return {
+            ...table,
+            mutate: (req) =>
+              req.type === "put" && req.values.some((value: { locked?: boolean }) => value?.locked)
+                ? Promise.reject(new Error("cipher locked"))
+                : table.mutate(req),
+          }
+        },
+      }),
+    })
+    const commits: DurabilityMutation[][] = []
+    installTransactionCapture(db as unknown as CaptureDexieLike, {
+      database: "outcome",
+      onCommit: (mutations) => commits.push(mutations),
+    })
+    await db.open()
+    try {
+      let caught: unknown
+      await db.transaction("rw", "rows", async () => {
+        await db.table("rows").put({ id: "first" })
+        await db
+          .table("rows")
+          .put({ id: "refused", locked: true })
+          .catch((error: unknown) => {
+            caught = error
+          })
+        await db.table("rows").put({ id: "after" })
+      })
+      expect(String(caught)).toContain("cipher locked")
+      expect((await db.table("rows").toArray()).map((row) => row.id)).toEqual(["after", "first"])
+      expect(commits.map((commit) => commit.map((m) => m.key))).toEqual([
+        [encodeKey("first"), encodeKey("after")],
+      ])
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("journals the writes a schema upgrade makes", async () => {
+    const commits: DurabilityMutation[][] = []
+    const db = await open(commits)
+    try {
+      await db.table("rows").put({ id: "a" })
+      commits.length = 0
+      db.close()
+      db.version(2)
+        .stores({ rows: "id", other: "id", added: "id" })
+        .upgrade(async (tx) => {
+          await tx
+            .table("rows")
+            .toCollection()
+            .modify((row) => {
+              row.migrated = true
+            })
+          await tx.table("added").add({ id: "seeded" })
+        })
+      await db.open()
+      expect(commits.flat().map((m) => `${m.table}:${m.key}`)).toEqual([
+        `rows:${encodeKey("a")}`,
+        `added:${encodeKey("seeded")}`,
+      ])
+      expect(commits.flat()[0].value).toEqual({ id: "a", migrated: true })
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+})

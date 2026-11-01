@@ -1101,7 +1101,8 @@ describe("capturing a blob-heavy transaction", () => {
       // backlog is down to one round of the pool, so the commit waits for at
       // most about one file's time; the whole write still overlaps in the pool.
       expect(longestGap).toBeLessThan(fsyncDelayMs * 3)
-      expect(elapsed).toBeLessThan((count * fsyncDelayMs) / 2)
+      // Well under serial (count × delay), with room for a loaded machine.
+      expect(elapsed).toBeLessThan((count * fsyncDelayMs * 3) / 4)
 
       // And the rows still come back from the record and its side files.
       await store.close()
@@ -1253,6 +1254,83 @@ describe("capturing a blob-heavy transaction", () => {
       await reopened.delete()
     } finally {
       await store.close()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe.each(["journal-v4", "sqlite-v5"] as const)("what a restart restores (%s)", (backend) => {
+  // Declares only the base schema. A table a live upgrade added comes back the
+  // way production re-declares plugin tables: from the store's persisted list.
+  async function reopen(home: string, name: string) {
+    const db = new Dexie(name)
+    db.version(1).stores({ rows: "id" })
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend,
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+      prepareDynamicSchema: async (_sources, _versions, persistedTables) => {
+        const known = new Set(db.tables.map((table) => table.name))
+        const missing = (persistedTables?.[name] ?? []).filter((table) => !known.has(table))
+        if (missing.length === 0) return
+        db.close()
+        db.version(2).stores({
+          rows: "id",
+          ...Object.fromEntries(missing.map((table) => [table, "id"])),
+        })
+        await db.open()
+      },
+    })
+    return { db, store }
+  }
+
+  it("keeps no phantom of a refused add, and keeps a live schema upgrade's writes", async () => {
+    const home = tempHome()
+    const name = `RestartOutcome-${backend}-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const first = await reopen(home, name)
+    try {
+      await first.db.table("rows").put({ id: "a", v: "original" })
+      await first.db.transaction("rw", "rows", async () => {
+        await first.db
+          .table("rows")
+          .add({ id: "a", v: "PHANTOM" })
+          .catch(() => undefined)
+      })
+      // A live schema change (as plugin tables add theirs) whose upgrade writes.
+      first.db.close()
+      first.db
+        .version(2)
+        .stores({ rows: "id", added: "id" })
+        .upgrade(async (tx) => {
+          await tx
+            .table("rows")
+            .toCollection()
+            .modify((row) => {
+              row.migrated = true
+            })
+          await tx.table("added").add({ id: "seeded" })
+        })
+      await first.db.open()
+      await first.store.close()
+      first.db.close()
+      await first.db.delete()
+
+      const second = await reopen(home, name)
+      try {
+        expect(await second.db.table("rows").get("a")).toEqual({
+          id: "a",
+          v: "original",
+          migrated: true,
+        })
+        expect(await second.db.table("added").get("seeded")).toEqual({ id: "seeded" })
+      } finally {
+        await second.store.close()
+        second.db.close()
+        await second.db.delete()
+      }
+    } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
   })

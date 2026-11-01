@@ -198,6 +198,10 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
       "ON CONFLICT(database) DO UPDATE SET version = excluded.version, tables = excluded.tables"
   )
   const selectSchemas = db.prepare("SELECT database, version, tables FROM durability_schema")
+  const selectSchemaTables = db.prepare("SELECT tables FROM durability_schema WHERE database = ?")
+  const updateSchemaTables = db.prepare(
+    "UPDATE durability_schema SET tables = ? WHERE database = ?"
+  )
   const selectRows = db.prepare(
     `SELECT database, table_name, row_key, value, value_codec FROM ${SQLITE_ROWS_TABLE}`
   )
@@ -255,6 +259,12 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
       if (!entry) continue
       const tableName = String(raw.table_name)
       const key = String(raw.row_key)
+      // A store written before `listTouchedTables` may hold rows of a table
+      // its schema row never listed. List it, as the journal does, so a
+      // restart re-declares it and the checkpoint writer keeps its rows.
+      if (!entry.rows[tableName] && !entry.schema.tables.includes(tableName)) {
+        entry.schema.tables = [...entry.schema.tables, tableName].sort()
+      }
       const table = (entry.rows[tableName] ??= {})
       let value: unknown
       try {
@@ -286,6 +296,38 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
     return state
   }
 
+  /**
+   * List every table a commit touches, as the journal's `applyCommits` does:
+   * a table added after the schema row was written (a live upgrade, a plugin
+   * table) is listed from its first commit, even one that only deletes, so the
+   * two backends agree on the table set and a restart re-declares it.
+   */
+  function listTouchedTables(commit: DurabilityCommit): void {
+    const touched = new Map<string, Set<string>>()
+    for (const mutation of commit.mutations) {
+      let tables = touched.get(mutation.database)
+      if (!tables) touched.set(mutation.database, (tables = new Set()))
+      tables.add(mutation.table)
+    }
+    for (const [database, tables] of touched) {
+      const row = selectSchemaTables.get(database) as { tables?: string } | undefined
+      if (!row) continue
+      let listed: string[] = []
+      try {
+        const parsed: unknown = JSON.parse(String(row.tables))
+        if (Array.isArray(parsed)) listed = parsed.filter((t): t is string => typeof t === "string")
+      } catch {
+        throw new DurabilityFault(
+          "sqlite-integrity-failure",
+          `sqlite schema row for ${database} has an unreadable table list`
+        )
+      }
+      const missing = [...tables].filter((table) => !listed.includes(table))
+      if (missing.length === 0) continue
+      updateSchemaTables.run(canonicalJson([...listed, ...missing].sort()), database)
+    }
+  }
+
   function commitSync(commit: DurabilityCommit): void {
     if (closed) throw new DurabilityFault("sqlite-integrity-failure", "sqlite backend is closed")
     if (commit.sequence <= sequence) {
@@ -302,6 +344,7 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
     }
     db.exec("BEGIN IMMEDIATE")
     try {
+      listTouchedTables(commit)
       for (const mutation of commit.mutations) {
         if (mutation.value === null) {
           deleteRow.run(mutation.database, mutation.table, mutation.key)

@@ -113,6 +113,30 @@ describe("verifyDurability", () => {
     expect(status.faults.map((f) => f.code)).toContain("parity-mismatch")
   })
 
+  it.each([
+    ["a row that stays", [{ id: "k" }]],
+    ["a row then deleted", [{ id: "k" }, null]],
+    ["only a delete", [null]],
+  ])(
+    "finds the journal and sqlite in parity after %s in a table added since the checkpoint",
+    async (_case, values) => {
+      const commits: DurabilityCommit[] = values.map((value, index) => ({
+        sequence: index + 1,
+        committedAt: index + 1,
+        mutations: [{ database: "CogniaDB", table: "added", key: "s:k", value }],
+      }))
+      await seedJournal(root, commits)
+      const sqlite = openBackend("sqlite-v5", root)
+      await sqlite.compact(state(0))
+      for (const late of commits) sqlite.commitSync(late)
+      await sqlite.close()
+      const status = await verifyDurability(root)
+      // Both list a table from its first commit; before, the journal dropped it and sqlite left it unlisted.
+      expect(status.parity).toMatchObject({ ok: true, mismatches: [] })
+      expect(status.faults).toEqual([])
+    }
+  )
+
   it("tolerates a corrupt manifest rather than refusing to report", async () => {
     fs.mkdirSync(root, { recursive: true })
     fs.writeFileSync(path.join(root, "backend-manifest.json"), "{oops")

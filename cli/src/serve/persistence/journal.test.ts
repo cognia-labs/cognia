@@ -163,7 +163,7 @@ describe("applyCommits", () => {
     expect(state.sequence).toBe(2)
   })
 
-  it("ignores mutations addressed at unknown databases or tables", () => {
+  it("ignores mutations addressed at unknown databases", () => {
     const state = baseState()
     applyCommits(state, [
       {
@@ -171,14 +171,24 @@ describe("applyCommits", () => {
         committedAt: 0,
         mutations: [{ database: "Gone", table: "x", key: "k", value: 1 }],
       },
+    ])
+    expect(state.dbs.Gone).toBeUndefined()
+    expect(state.sequence).toBe(1)
+  })
+
+  it("lets a table added after the checkpoint join the state with its first commit", () => {
+    // A plugin's runtime table, or one a live schema upgrade created: the
+    // sqlite rung keeps such rows, and the journal used to drop them.
+    const state = baseState()
+    applyCommits(state, [
       {
-        sequence: 2,
+        sequence: 1,
         committedAt: 0,
-        mutations: [{ database: "CogniaDB", table: "gone", key: "k", value: 1 }],
+        mutations: [{ database: "CogniaDB", table: "added", key: "k", value: 1 }],
       },
     ])
-    expect(state.dbs.CogniaDB.rows.sessions).toEqual({})
-    expect(state.sequence).toBe(2)
+    expect(state.dbs.CogniaDB.rows.added).toEqual({ k: 1 })
+    expect(state.dbs.CogniaDB.schema.tables).toContain("added")
   })
 })
 
