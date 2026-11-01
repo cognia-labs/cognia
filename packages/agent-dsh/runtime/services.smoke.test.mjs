@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 import {
   copyFileSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -37,7 +38,9 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
     `${channel} uses Cognia gateway and MCP tools with denied-call propagation`,
     { timeout: 30000 },
     async () => {
-      const root = mkdtempSync(join(tmpdir(), "cognia-services-smoke-"))
+      const dataRoot = mkdtempSync(join(tmpdir(), "cognia-services-smoke-"))
+      const root = join(dataRoot, "deepseek-harness")
+      mkdirSync(root)
       let child
       const fixture = await createMockDeepSeek({
         reply: (body, index) => {
@@ -71,7 +74,7 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
             : channel === "sdk-workspace"
               ? "host.sdk-workspace.yml"
               : "host.sdk-readonly.yml"
-        for (const file of ["launcher.mjs", composition])
+        for (const file of ["launcher.mjs", "host.root.yml", composition])
           copyFileSync(join(source, file), join(root, file))
         const bridge = join(root, "mcp-fixture.mjs")
         writeFileSync(bridge, mcpFixture)
@@ -185,7 +188,7 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
       } finally {
         child?.kill("SIGKILL")
         await fixture.close()
-        rmSync(root, { recursive: true, force: true })
+        rmSync(dataRoot, { recursive: true, force: true })
       }
     }
   )

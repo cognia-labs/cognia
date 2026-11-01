@@ -20,7 +20,11 @@ jest.mock("@/lib/ai/agent/external/lifecycle/service", () => ({
 
 import { useDshRuntime } from "./use-dsh-runtime"
 
-const DIGESTS = { lockfileDigest: "1".repeat(64), compositionDigest: "2".repeat(64) }
+const DIGESTS = {
+  installId: "37068f68-41e1-4162-b6d1-8f6462629d57",
+  lockfileDigest: "1".repeat(64),
+  compositionDigest: "2".repeat(64),
+}
 const MANIFEST = buildDshChannelManifest(DIGESTS)
 
 /** Facts a host returns from disk; the verdict is rendered in the hook. */
@@ -220,9 +224,25 @@ describe("useDshRuntime", () => {
     // same channel.
     expect(agentInvoke).toHaveBeenCalledWith(
       "dsh_runtime_finalize",
-      expect.objectContaining({ manifestJson: expect.stringContaining("schemaVersion") })
+      expect.objectContaining({
+        installId: DIGESTS.installId,
+        manifestJson: expect.stringContaining("schemaVersion"),
+      })
     )
     expect(result.current.report?.healthy).toBe(false)
+  })
+
+  it("refuses to finalize an install from a host without an operation identity", async () => {
+    agentInvoke.mockResolvedValueOnce(NOT_INSTALLED)
+    const { result } = renderHook(() => useDshRuntime("cognia-sdk-readonly"))
+    await waitFor(() => expect(result.current.installed).toBe(false))
+    agentInvoke.mockResolvedValueOnce({
+      lockfileDigest: DIGESTS.lockfileDigest,
+      compositionDigest: DIGESTS.compositionDigest,
+    })
+    await act(async () => result.current.install())
+    expect(result.current.error).toContain("installation identity")
+    expect(agentInvoke.mock.calls.some(([name]) => name === "dsh_runtime_finalize")).toBe(false)
   })
 
   it("re-checks after removing", async () => {

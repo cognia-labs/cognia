@@ -577,8 +577,16 @@ pub async fn dsh_runtime_install(
 
 /// Write the renderer-built channel manifest and activate the staged runtime.
 #[tauri::command]
-pub fn dsh_runtime_finalize(app: AppHandle, manifest_json: String) -> Result<(), String> {
-    crate::dsh_runtime::finalize_install(&crate::dsh_runtime::host_data_root(&app)?, &manifest_json)
+pub fn dsh_runtime_finalize(
+    app: AppHandle,
+    manifest_json: String,
+    install_id: String,
+) -> Result<(), String> {
+    crate::dsh_runtime::finalize_install(
+        &crate::dsh_runtime::host_data_root(&app)?,
+        &manifest_json,
+        &install_id,
+    )
 }
 
 #[tauri::command]

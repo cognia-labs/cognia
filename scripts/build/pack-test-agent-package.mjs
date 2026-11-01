@@ -147,7 +147,7 @@ const SPECS = {
       import { createRequire } from "node:module"
       const require = createRequire(import.meta.url)
       const packageRoot = path.dirname(require.resolve("@cognia/agent-dsh/package.json"))
-      for (const file of ["launcher.mjs", "package.json", "host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"]) {
+      for (const file of ["launcher.mjs", "package.json", "host.root.yml", "host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"]) {
         if (!fs.existsSync(path.join(packageRoot, "runtime", file))) throw new Error("missing managed runtime asset: " + file)
       }
       const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"))

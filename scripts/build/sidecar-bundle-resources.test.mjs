@@ -31,6 +31,7 @@ test("stages the package-owned DSH runtime for the desktop installer", async () 
   for (const file of [
     "package.json",
     "launcher.mjs",
+    "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
     "host.acp.yml",

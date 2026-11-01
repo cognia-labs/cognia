@@ -15,6 +15,56 @@ product/runtime dependency closure, including optional and peer dependencies,
 and must be refreshed together on the next supported release upgrade. The installer
 retains a lockfile and validates its digest.
 
+The current Cognia certification is **conformance suite 6**. Earlier channels
+require an updated host and reinstall for boot-scoped ownership and protected
+configuration/module loading. Stop older hosts and restart the system when
+their descendant retirement cannot be established before adopting this channel.
+This does not upgrade the upstream DSH release or enable additional native plugins.
+
+Installers retain `sessions/` and `dsh-home/` when replacing runtime code. Each
+stage has its own `installId`, directory and readiness marker; finalize requires
+that identity, recomputes both digests and validates the complete current channel
+certification before activation. Rust consumes the generated policy in
+`protocol/deepseek-harness-channel-certification.json`; the existing runtime
+catalog generator checks it against the package's channel builder. A failed activation
+restores the old runtime; a sole `.previous` recovery tree is never discarded on
+retry. Durable/control roots and internal links are checked before preservation.
+
+Hosts coordinate installation/removal and pending/live launches through
+`<dataRoot>/.deepseek-harness-control/{maintenance,processes}` ownership records.
+Renderer session counts cannot authorize maintenance. A trusted host sets
+`COGNIA_DSH_PROCESS_LEASE` to its fresh record identity and supplies a per-launch
+`COGNIA_DSH_PROCESS_LEASE_NONCE`. Only the nonce's SHA-256 digest is written to
+the record. The sandboxed launcher validates this proof and waits for child publication before touching profile state
+or loading upstream, then removes both proof variables from the environment.
+It never receives write access to host control records.
+PID liveness is decided in the host namespace, including on Linux. Standalone
+fixture launches without a host token register their own runtime PID instead.
+Writable workspaces cannot include live, staged or recovery runtime code or the control tree;
+native writes remain confined to the workspace plus the two managed state roots.
+
+Process ownership uses schema 2 and a canonical kernel boot UUID. Current local
+launch paths cannot prove complete descendant retirement, so every started
+runtime keeps its maintenance guard for that system boot, including a normal
+exit 0. A verified different system boot expires recognized old guards. Pending
+launch cancellation before child publication may release its own guard; dead
+PIDs, shutdown replies and elapsed time cannot establish retirement. Legacy or
+unreadable observed records receive separate, filename-bound quarantine guards.
+New sessions may still start while maintenance is refused. This is maintenance
+safety, not generic process-tree containment or automatic descendant cleanup.
+
+The official CLI runs with a protected, digest-covered `host.root.yml` and only
+the certified bundle and host overlay. Its managed app-boot facade fixes bare
+module resolution to the installation and ignores mutable profile/home patches
+and dotenv sources. Canonical module selection and load guards reject state-local
+code through ESM and CommonJS, including late symlink changes. Native bindings
+load from installed prebuilds rather than a writable shared cache. Session and
+attachment data remain writable and preserved across admissible reinstalls.
+
+Source-level macOS native text, SDK/ACP and gateway/MCP checks are recorded in
+`docs/evidence/2026-11-01-deepseek-harness-support-audit.md`. They do not establish
+packaged Tauri, Linux, actual reboot or native image-write acceptance.
+
 The Cognia SDK adapter uses `initialize`, `session/prompt`, `session/wait`, and
 `shutdown`. Upstream also supports working-directory get/set and native
 `session/resume`; native SDK resume remains excluded from this integration upgrade.

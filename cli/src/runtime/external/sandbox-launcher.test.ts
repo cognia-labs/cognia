@@ -22,6 +22,79 @@ import {
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
 
 describe("external-agent sandbox launcher", () => {
+  it("grants managed DSH native state writes and host lease reads without control writes", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dsh-sandbox-")))
+    try {
+      const runtimeHome = path.join(root, "deepseek-harness")
+      const workspace = path.join(root, "workspaces", "project")
+      const processes = path.join(root, ".deepseek-harness-control", "processes")
+      for (const dir of [runtimeHome, workspace, processes]) fs.mkdirSync(dir, { recursive: true })
+      const launcher = path.join(runtimeHome, "launcher.mjs")
+      const composition = path.join(runtimeHome, "host.acp.yml")
+      fs.writeFileSync(launcher, "")
+      fs.writeFileSync(composition, "")
+      const config = {
+        id: "dsh",
+        command: process.execPath,
+        cwd: workspace,
+        args: [launcher, composition],
+        env: {
+          COGNIA_DSH_RUNTIME_HOME: runtimeHome,
+          DSH_HOME: path.join(runtimeHome, "dsh-home"),
+          COGNIA_DSH_SESSION_ROOT: path.join(runtimeHome, "sessions"),
+          COGNIA_DSH_PROCESS_LEASE: "11111111-1111-4111-8111-111111111111",
+          COGNIA_DSH_PROCESS_LEASE_NONCE: "22222222-2222-4222-8222-222222222222",
+        },
+        sandboxPolicy: { readableScope: "workspace" as const },
+      }
+      const launch = await resolveSandboxedExternalAgentLaunch(config, {
+        platform: "darwin",
+        homedir: root,
+        candidates: ["/trusted/launcher"],
+        isExecutable: () => true,
+        ensureDir: (dir) => fs.mkdirSync(dir, { recursive: true }),
+      })
+      const writable = launch.args.filter((_, i) => launch.args[i - 1] === "--writable")
+      const readable = launch.args.filter((_, i) => launch.args[i - 1] === "--readable")
+      expect(writable).toEqual(
+        expect.arrayContaining([config.env.DSH_HOME, config.env.COGNIA_DSH_SESSION_ROOT])
+      )
+      expect(readable).toEqual(expect.arrayContaining([runtimeHome, processes]))
+      expect(writable).not.toContain(runtimeHome)
+      expect(writable).not.toContain(path.dirname(processes))
+      expect(writable).not.toContain(processes)
+      expect(() => buildSandboxLauncherArgs({ ...config, env: undefined }, root)).toThrow(
+        /managed|environment|lease/i
+      )
+      expect(() =>
+        buildSandboxLauncherArgs(
+          { ...config, env: { ...config.env, COGNIA_DSH_PROCESS_LEASE: "forged" } },
+          root
+        )
+      ).toThrow(/managed|environment|lease/i)
+      const alternateEnvironments: Record<string, string>[] = [
+        { COGNIA_GATEWAY_TASK_HOME: path.join(root, "tasks", "gateway-task") },
+        { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: path.join(root, "bots", "bot-state") },
+      ]
+      for (const env of alternateEnvironments) {
+        const args = buildSandboxLauncherArgs({ ...config, env: { ...config.env, ...env } }, root)
+        const writes = args.filter((_, i) => args[i - 1] === "--writable")
+        expect(writes).toEqual(
+          expect.arrayContaining([config.env.DSH_HOME, config.env.COGNIA_DSH_SESSION_ROOT])
+        )
+        expect(writes).not.toContain(env.COGNIA_GATEWAY_TASK_HOME ?? env.COGNIA_BOT_STATE_DIR)
+      }
+      expect(() => buildSandboxLauncherArgs({ ...config, cwd: root }, root)).toThrow(
+        /control|runtime|writable/i
+      )
+      fs.rmSync(config.env.DSH_HOME, { recursive: true, force: true })
+      fs.symlinkSync(workspace, config.env.DSH_HOME, "dir")
+      expect(() => buildSandboxLauncherArgs(config, root)).toThrow(/state|symlink|path/i)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("resolves Antigravity's native home and refuses shared-keychain Bot isolation", () => {
     expect(
       antigravityConfigRoot(

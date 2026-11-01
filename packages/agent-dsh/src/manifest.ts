@@ -89,8 +89,9 @@ export const DSH_CAPABILITIES: AgentCapabilityContribution = {
       note: "The SDK transport is observation-rich but cannot carry a mid-turn approval; see `dsh-sdk-client.ts`.",
       capabilities: {
         streaming: {
-          level: "native",
+          level: "unsupported",
           evidence: "protocol-spec",
+          reasonKey: "committedRepliesOnly",
         },
         "session.multi-turn": {
           level: "native",

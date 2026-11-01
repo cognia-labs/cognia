@@ -1267,6 +1267,7 @@ pub fn wrap_with_sandbox(
         .ok_or(SandboxError::MissingCwd)?;
 
     let mut config = config;
+    crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(SandboxError::InvalidPolicy)?;
     super::command_resolver::configure_antigravity_platform_args(
         &config.command, &mut config.args, host.os(),
     );
@@ -1508,7 +1509,20 @@ pub fn wrap_with_sandbox(
         );
     }
 
-    if let Some((runtime, state_roots)) = managed_dsh_sandbox_roots(&config)? {
+    let managed_dsh = managed_dsh_sandbox_roots(&config)?;
+    if let Some((runtime, state_roots)) = &managed_dsh {
+        let data_root = runtime.parent().ok_or_else(|| {
+            SandboxError::InvalidPolicy("DSH runtime has no owning data root".into())
+        })?;
+        let process_leases = crate::dsh_runtime::process_lease_directory(data_root)
+            .map_err(SandboxError::InvalidPolicy)?;
+        args.splice(
+            0..0,
+            [
+                "--readable".into(),
+                process_leases.to_string_lossy().into_owned(),
+            ],
+        );
         args.splice(0..0, ["--readable".into(), runtime.to_string_lossy().into_owned()]);
         for root in state_roots {
             args.splice(0..0, ["--writable".into(), root.to_string_lossy().into_owned()]);
@@ -1722,6 +1736,19 @@ pub fn wrap_with_sandbox(
             env.insert(key.into(), temp.to_string_lossy().into_owned());
         }
     }
+    if let Some((runtime, _)) = &managed_dsh {
+        let target = args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(args.len());
+        for pair in args[..target]
+            .windows(2)
+            .filter(|pair| pair[0] == "--writable")
+        {
+            crate::dsh_runtime::assert_writable_scope(runtime, Path::new(&pair[1]))
+                .map_err(SandboxError::InvalidPolicy)?;
+        }
+    }
     Ok(ExternalAgentSpawnConfig {
         command: launcher.to_string_lossy().into_owned(),
         args,
@@ -1841,6 +1868,34 @@ mod tests {
             assert!(wrapped.args.windows(2).any(|p| p[0] == "--writable" && Path::new(&p[1]) == root.join(name).canonicalize().unwrap()));
         }
         assert!(!wrapped.args.windows(2).any(|p| p[0] == "--writable" && Path::new(&p[1]) == root.canonicalize().unwrap()));
+        let process_leases = temp.path().join(".deepseek-harness-control/processes");
+        let control = process_leases.parent().unwrap().canonicalize().unwrap();
+        assert!(
+            wrapped.args.windows(2).any(|p| p[0] == "--readable"
+                && Path::new(&p[1]) == process_leases.canonicalize().unwrap()),
+            "the production launcher must read host-owned process authority"
+        );
+        assert!(!wrapped.args.windows(2).any(|p| {
+            let writable = Path::new(&p[1]);
+            p[0] == "--writable"
+                && (writable.starts_with(&control) || control.starts_with(writable))
+        }));
+        let mut broad = request.clone();
+        broad.cwd = Some(temp.path().to_string_lossy().into_owned());
+        assert!(
+            wrap_with_sandbox(broad, &FakeHost::new("macos")).is_err(),
+            "workspace cannot grant writes to the control directory or runtime code"
+        );
+        let sibling = temp.path().join("workspaces/project");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let mut sibling_request = request.clone();
+        sibling_request.cwd = Some(sibling.to_string_lossy().into_owned());
+        assert!(wrap_with_sandbox(sibling_request, &FakeHost::new("macos")).is_ok());
+        let mut untagged = request.clone();
+        untagged.env.clear();
+        let derived = wrap_with_sandbox(untagged, &FakeHost::new("macos")).unwrap();
+        assert_eq!(Path::new(&derived.env["COGNIA_DSH_RUNTIME_HOME"]), root.canonicalize().unwrap());
+        assert!(derived.args.windows(2).any(|pair| pair[0] == "--readable" && Path::new(&pair[1]) == process_leases.canonicalize().unwrap()));
         request.env.insert("DSH_HOME".into(), temp.path().to_string_lossy().into_owned());
         assert!(wrap_with_sandbox(request, &FakeHost::new("macos")).is_err());
     }

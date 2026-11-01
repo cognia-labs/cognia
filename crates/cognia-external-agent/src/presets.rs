@@ -289,6 +289,8 @@ pub const TASK_WORKSPACE_EXECUTION_ROOT_ENV: &str = "COGNIA_TASK_WORKSPACE_EXECU
 #[derive(Debug, Clone)]
 pub struct SpawnPolicy {
     workspaces_dir: PathBuf,
+    /// Explicit host installation authority; workspace relocation never changes it.
+    managed_runtime_data_root: Option<PathBuf>,
     /// Where THIS host materializes managed working copies, when it does.
     ///
     /// A managed run does not execute in the workspaces root. Task Workspace
@@ -315,6 +317,7 @@ impl SpawnPolicy {
     pub fn new(workspaces_dir: PathBuf, smoke_agent_enabled: bool) -> Self {
         Self {
             workspaces_dir,
+            managed_runtime_data_root: None,
             managed_execution_dir: None,
             smoke_agent_enabled,
             operator_commands: Vec::new(),
@@ -355,6 +358,12 @@ impl SpawnPolicy {
         self
     }
 
+    /// Bind installed-runtime admission to the host data root, never a request's cwd.
+    pub fn with_managed_runtime_data_root(mut self, data_root: PathBuf) -> Self {
+        self.managed_runtime_data_root = Some(data_root);
+        self
+    }
+
     /// Standard construction: workspaces root from `COGNIA_WORKSPACES_DIR`
     /// (default `<data_dir>/workspaces`), smoke stub gated on
     /// `COGNIA_SMOKE_AGENT=1`, and the managed execution root this same
@@ -375,6 +384,7 @@ impl SpawnPolicy {
             .map(|v| v == "1")
             .unwrap_or(false);
         Self::new(workspaces_dir, smoke)
+            .with_managed_runtime_data_root(data_dir.to_path_buf())
             .with_managed_execution_dir(execution_root.join("executions"))
             .with_operator_allowlists(
                 std::env::var(COMMAND_ALLOWLIST_ENV),
@@ -427,6 +437,7 @@ impl SpawnPolicy {
     ) -> Result<ValidatedSpawn, PolicyViolation> {
         self.validate_sandbox_policy(&config, true)?;
         self.validate_command(&config.command, &config.args)?;
+        crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(PolicyViolation)?;
         crate::native_bridge::validate_network_requirement(&config).map_err(PolicyViolation)?;
         crate::devin_mcp_config::validate_target(&config.command, &config.args, &config.env)
             .map_err(PolicyViolation)?;
@@ -472,6 +483,7 @@ impl SpawnPolicy {
     ) -> Result<ValidatedSpawn, PolicyViolation> {
         self.validate_sandbox_policy(&config, false)?;
         self.validate_command(&config.command, &config.args)?;
+        crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(PolicyViolation)?;
         crate::native_bridge::validate_network_requirement(&config).map_err(PolicyViolation)?;
         crate::devin_mcp_config::validate_target(&config.command, &config.args, &config.env)
             .map_err(PolicyViolation)?;
@@ -522,7 +534,10 @@ impl SpawnPolicy {
             let requested_node = Path::new(trimmed).canonicalize().ok();
             if requested_node.is_some()
                 && requested_node == configured_node
-                && is_dsh_launcher_invocation(args, &self.workspaces_dir)
+                && self
+                    .managed_runtime_data_root
+                    .as_deref()
+                    .is_some_and(|data_root| is_dsh_launcher_invocation(args, data_root))
             {
                 return Ok(());
             }
@@ -556,7 +571,11 @@ impl SpawnPolicy {
             // exception is pinned to a launcher inside Cognia's own runtime
             // home. The launcher then refuses to boot unless DSH_HOME is pinned
             // there too, which is what keeps user-writable patch layers out.
-            if is_dsh_launcher_invocation(args, &self.workspaces_dir) {
+            if self
+                .managed_runtime_data_root
+                .as_deref()
+                .is_some_and(|data_root| is_dsh_launcher_invocation(args, data_root))
+            {
                 return Ok(());
             }
             return Err(PolicyViolation(
@@ -656,46 +675,28 @@ fn is_smoke_stub_invocation(args: &[String]) -> bool {
 
 /// The managed DeepSeek Harness launcher, spawned as `node <launcher> <composition>`.
 ///
-/// Both paths must be absolute and canonicalize under the DSH runtime home, so
+/// Both paths must be absolute and canonicalize to the exact certified root files, so
 /// a caller cannot point `node` at a script of its own choosing. Rooting the
 /// check at the enclosing data root would not do: that root also contains
 /// `workspaces/`, where every agent cwd is confined and therefore where an
 /// agent can write — it could plant its own `launcher.mjs` + `.yml` and turn
 /// the one `node` exception into arbitrary code execution. Canonicalization is
 /// what defeats `..` traversal and a symlink planted inside the runtime home.
-fn is_dsh_launcher_invocation(args: &[String], workspaces_dir: &Path) -> bool {
-    let (launcher, composition) = match (args.first(), args.get(1)) {
-        (Some(launcher), Some(composition)) if args.len() == 2 => (launcher, composition),
-        _ => return false,
+fn is_dsh_launcher_invocation(args: &[String], data_root: &Path) -> bool {
+    let home = crate::dsh_runtime::runtime_home(data_root);
+    let Ok(metadata) = std::fs::symlink_metadata(&home) else {
+        return false;
     };
-    if Path::new(launcher)
-        .file_name()
-        .map(|f| f != "launcher.mjs")
-        .unwrap_or(true)
-    {
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return false;
     }
-    if Path::new(composition)
-        .extension()
-        .map(|e| e != "yml")
-        .unwrap_or(true)
-    {
-        return false;
-    }
-    // The runtime home is a sibling of the workspaces dir under the Cognia data
-    // root; both paths must resolve inside the runtime home itself.
-    let Some(data_root) = workspaces_dir.parent() else {
+    let Ok(root) = home.canonicalize() else {
         return false;
     };
-    let Ok(root) = crate::dsh_runtime::runtime_home(data_root).canonicalize() else {
-        return false;
-    };
-    [launcher, composition].iter().all(|candidate| {
-        Path::new(candidate)
-            .canonicalize()
-            .map(|resolved| resolved.starts_with(&root))
-            .unwrap_or(false)
-    })
+    crate::dsh_runtime::invocation_runtime("node", args)
+        .ok()
+        .flatten()
+        == Some(root)
 }
 
 /// Keep allowlisted env keys; drop everything else (default-deny — this is
@@ -1036,7 +1037,8 @@ mod tests {
 
     fn policy(smoke: bool) -> (tempfile::TempDir, SpawnPolicy) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let policy = SpawnPolicy::new(tmp.path().join("workspaces"), smoke);
+        let policy = SpawnPolicy::new(tmp.path().join("workspaces"), smoke)
+            .with_managed_runtime_data_root(tmp.path().to_path_buf());
         (tmp, policy)
     }
 
@@ -1657,6 +1659,21 @@ mod tests {
             ],
         );
         assert!(p.validate(ok).is_ok());
+        let planted = runtime_home.join("dsh-home");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::write(planted.join("launcher.mjs"), "agent-controlled").unwrap();
+        std::fs::write(planted.join("evil.yml"), "agent-controlled").unwrap();
+        assert!(
+            p.validate(config(
+                "node",
+                &[
+                    planted.join("launcher.mjs").to_str().unwrap(),
+                    planted.join("evil.yml").to_str().unwrap()
+                ]
+            ))
+            .is_err(),
+            "agent-writable nested launchers cannot use the managed node exception"
+        );
         if let Some(node) = crate::command_resolver::resolve_command_path("node") {
             assert!(p
                 .validate(config(
@@ -1734,6 +1751,128 @@ mod tests {
                 ],
             ))
             .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dsh_root_launcher_symlink_cannot_delegate_authority_to_agent_writable_state() {
+        let (tmp, policy) = policy(false);
+        let runtime = tmp.path().join("deepseek-harness");
+        std::fs::create_dir_all(runtime.join("dsh-home")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("workspaces")).unwrap();
+        let planted = runtime.join("dsh-home/launcher.mjs");
+        std::fs::write(&planted, "agent-controlled").unwrap();
+        std::os::unix::fs::symlink(&planted, runtime.join("launcher.mjs")).unwrap();
+        std::fs::write(runtime.join("host.sdk-readonly.yml"), "fixture").unwrap();
+        assert!(policy
+            .validate(config(
+                "node",
+                &[
+                    runtime.join("launcher.mjs").to_str().unwrap(),
+                    runtime.join("host.sdk-readonly.yml").to_str().unwrap()
+                ]
+            ))
+            .is_err());
+    }
+
+    fn dsh_relocated_workspaces_policy() -> (tempfile::TempDir, tempfile::TempDir, SpawnPolicy) {
+        let _lock = HOST_ENV_LOCK.lock().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let volume = tempfile::tempdir().unwrap();
+        let workspaces = volume.path().join("workspaces");
+        std::fs::create_dir_all(&workspaces).unwrap();
+        let previous = [WORKSPACES_DIR_ENV, COMMAND_ALLOWLIST_ENV, ENV_ALLOWLIST_ENV]
+            .map(|key| (key, std::env::var_os(key)));
+        std::env::set_var(WORKSPACES_DIR_ENV, &workspaces);
+        std::env::set_var(COMMAND_ALLOWLIST_ENV, "[]");
+        std::env::set_var(ENV_ALLOWLIST_ENV, "[]");
+        let policy = SpawnPolicy::from_env(data.path());
+        for (key, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        (data, volume, policy)
+    }
+
+    fn dsh_fixture_request(runtime: &Path, cwd: &Path) -> ExternalAgentSpawnConfig {
+        std::fs::create_dir_all(runtime).unwrap();
+        let launcher = runtime.join("launcher.mjs");
+        let composition = runtime.join("host.sdk-readonly.yml");
+        std::fs::write(&launcher, "fixture").unwrap();
+        std::fs::write(&composition, "fixture").unwrap();
+        let mut request = config(
+            "node",
+            &[launcher.to_str().unwrap(), composition.to_str().unwrap()],
+        );
+        request.cwd = Some(cwd.to_string_lossy().into_owned());
+        request
+    }
+
+    #[test]
+    fn dsh_custom_workspaces_admits_the_runtime_owned_by_host_data_root() {
+        let (data, _volume, policy) = dsh_relocated_workspaces_policy();
+        let runtime = crate::dsh_runtime::runtime_home(data.path());
+        let request = dsh_fixture_request(&runtime, policy.workspaces_dir());
+        let remote = policy
+            .validate(request.clone())
+            .expect("headless must admit its installed managed runtime");
+        let desktop = policy
+            .validate_desktop(request)
+            .expect("desktop must admit the same installed managed runtime");
+        let canonical = runtime.canonicalize().unwrap();
+        assert_eq!(
+            Path::new(&remote.config.env["COGNIA_DSH_RUNTIME_HOME"]),
+            canonical
+        );
+        assert_eq!(
+            Path::new(&desktop.config.env["COGNIA_DSH_RUNTIME_HOME"]),
+            canonical
+        );
+    }
+
+    #[test]
+    fn dsh_custom_workspaces_cannot_admit_a_forged_workspace_sibling_runtime() {
+        let (_data, volume, policy) = dsh_relocated_workspaces_policy();
+        let forged = volume.path().join("deepseek-harness");
+        let request = dsh_fixture_request(&forged, policy.workspaces_dir());
+        assert!(
+            policy.validate(request.clone()).is_err(),
+            "a relocated workspace sibling is not the host's installed runtime"
+        );
+        assert!(policy.validate_desktop(request).is_err());
+    }
+
+    #[test]
+    fn dsh_workspace_only_policy_cannot_infer_managed_runtime_authority() {
+        let data = tempfile::tempdir().unwrap();
+        let workspaces = data.path().join("workspaces");
+        std::fs::create_dir_all(&workspaces).unwrap();
+        let request =
+            dsh_fixture_request(&crate::dsh_runtime::runtime_home(data.path()), &workspaces);
+        let unbound = SpawnPolicy::new(workspaces, false);
+        assert!(unbound.validate(request.clone()).is_err());
+        assert!(unbound
+            .with_managed_runtime_data_root(data.path().to_path_buf())
+            .validate(request)
+            .is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dsh_root_symlink_never_delegates_to_workspace_code() {
+        let (data, policy) = policy(false);
+        let workspace = data.path().join("workspaces");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let target = workspace.join("evil/deepseek-harness");
+        let canonical_request = dsh_fixture_request(&target, &workspace);
+        let alias = data.path().join("deepseek-harness");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        let alias_request = dsh_fixture_request(&alias, &workspace);
+        let alias_admitted = policy.validate(alias_request).is_ok();
+        let canonical_admitted = policy.validate(canonical_request).is_ok();
+        assert!(!alias_admitted && !canonical_admitted, "runtime symlink authorized workspace code: alias={alias_admitted}, canonical={canonical_admitted}");
     }
 
     // ── Policy matrix: cwd ───────────────────────────────────────────────────

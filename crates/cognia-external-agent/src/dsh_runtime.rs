@@ -5,12 +5,11 @@
 //! equivalent lives in `cli/src/runtime/external/dsh-installer.ts`; this module
 //! is the Tauri arm.
 //!
-//! **This module deliberately renders no verdict.** Whether an install is
-//! healthy is decided by `doctorDshRuntime()` in
+//! Runtime health is decided by `doctorDshRuntime()` in
 //! `lib/ai/agent/external/dsh-runtime-install.ts`, which is pure TypeScript and
-//! shared by both hosts. Duplicating those rules in Rust is exactly how the
-//! desktop and headless answers would drift apart, so this module only gathers
-//! facts and moves bytes.
+//! shared by both hosts. Install admission compares the complete channel to a
+//! generated snapshot of that package's current certification, avoiding a
+//! second Rust capability table while refusing stale or widened manifests.
 //!
 //! Install is two-phase on purpose: `install` stages and returns the digests,
 //! then the renderer builds the channel manifest (it owns the profile and
@@ -18,6 +17,7 @@
 //! swaps the tree in. Until `finalize` succeeds the previously certified
 //! runtime is still the live one.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 const RUNTIME_ARTIFACTS: &[&str] = &[
     "package.json",
     "launcher.mjs",
+    "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
     "host.acp.yml",
@@ -37,6 +38,7 @@ const RUNTIME_ARTIFACTS: &[&str] = &[
 /// installer, including order.
 const COMPOSITION_DIGEST_FILES: &[&str] = &[
     "launcher.mjs",
+    "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
     "host.acp.yml",
@@ -45,6 +47,8 @@ const COMPOSITION_DIGEST_FILES: &[&str] = &[
 const CHANNEL_MANIFEST_FILE: &str = "cognia-channel.json";
 const RUNTIME_DIR: &str = "deepseek-harness";
 const DSH_HOME_DIR: &str = "dsh-home";
+const INSTALL_MARKER: &str = ".cognia-install.json";
+const CONTROL_DIR: &str = ".deepseek-harness-control";
 
 /// Facts gathered from disk, handed to the shared TypeScript verdict function.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,12 +73,543 @@ pub struct DshRuntimeFacts {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DshInstallDigests {
+    pub install_id: String,
     pub lockfile_digest: String,
     pub composition_digest: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallMarker {
+    schema_version: u32,
+    install_id: String,
+    lockfile_digest: String,
+    composition_digest: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnershipRecord {
+    schema_version: u32,
+    pid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    process_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    child_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retirement_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retired: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    legacy_record: Option<String>,
+}
+
+struct OwnershipLease {
+    id: String,
+    path: PathBuf,
+    record: OwnershipRecord,
+}
+
+fn ensure_owned_directory(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err(format!(
+            "DSH ownership directory is not a real directory: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::create_dir(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let metadata =
+                        std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+                    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                        Ok(())
+                    } else {
+                        Err("DSH ownership directory was replaced during creation".into())
+                    }
+                }
+                Err(error) => Err(format!("cannot create DSH ownership directory: {error}")),
+            }
+        }
+        Err(error) => Err(format!("cannot inspect DSH ownership directory: {error}")),
+    }
+}
+
+fn control_directory(data_root: &Path, kind: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(data_root)
+        .map_err(|error| format!("cannot create DSH data root: {error}"))?;
+    let control = data_root.join(CONTROL_DIR);
+    ensure_owned_directory(&control)?;
+    let directory = control.join(kind);
+    ensure_owned_directory(&directory)?;
+    Ok(directory)
+}
+
+pub(crate) fn process_lease_directory(data_root: &Path) -> Result<PathBuf, String> {
+    control_directory(data_root, "processes")
+}
+
+/// Applies to both native workspace policy and every outer sandbox write grant.
+pub(crate) fn assert_writable_scope(runtime_home: &Path, writable: &Path) -> Result<(), String> {
+    let runtime = cognia_exec_sandbox::paths::safe_canonicalize(runtime_home)
+        .map_err(|error| error.to_string())?;
+    let writable = cognia_exec_sandbox::paths::safe_canonicalize(writable)
+        .map_err(|error| error.to_string())?;
+    let control = runtime
+        .parent()
+        .ok_or("DSH runtime has no owning data root")?
+        .join(CONTROL_DIR);
+    let overlaps_control = writable.starts_with(&control) || control.starts_with(&writable);
+    let overlaps_runtime = writable.starts_with(&runtime) || runtime.starts_with(&writable);
+    let state_root = [runtime.join("sessions"), runtime.join(DSH_HOME_DIR)].contains(&writable);
+    let reserved_sibling = runtime
+        .parent()
+        .and_then(|parent| writable.strip_prefix(parent).ok())
+        .and_then(|relative| relative.components().next())
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|name| {
+            name == "deepseek-harness.previous" || name.starts_with("deepseek-harness.staging-")
+        });
+    if overlaps_control || (overlaps_runtime && !state_root) || reserved_sibling {
+        return Err(
+            "DSH writable scope overlaps protected runtime code or host-owned control records"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn publish_json(path: &Path, record: &impl Serialize) -> Result<(), String> {
+    publish_json_atomically(path, record, true).map(|_| ())
+}
+
+fn publish_json_atomically(
+    path: &Path,
+    record: &impl Serialize,
+    replace: bool,
+) -> Result<bool, String> {
+    let temporary = path.with_file_name(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut created = false;
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("cannot create DSH ownership record: {error}"))?;
+        created = true;
+        file.write_all(&serde_json::to_vec(record).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("cannot write DSH ownership record: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("cannot flush DSH ownership record: {error}"))?;
+        if replace {
+            std::fs::rename(&temporary, path)
+                .map_err(|error| format!("cannot publish DSH ownership record: {error}"))?;
+            Ok(true)
+        } else {
+            // Linking the fully written file publishes without replacing a shadow
+            // another host already attributed to an earlier boot.
+            match std::fs::hard_link(&temporary, path) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(error) => Err(format!("cannot publish DSH ownership record: {error}")),
+            }
+        }
+    })();
+    if created {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+fn current_boot_id() -> Result<String, String> {
+    static BOOT_ID: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    BOOT_ID
+        .get_or_init(|| {
+            #[cfg(target_os = "macos")]
+            let value = {
+                let output = std::process::Command::new("/usr/sbin/sysctl")
+                    .args(["-n", "kern.bootsessionuuid"])
+                    .env_clear()
+                    .output()
+                    .map_err(|error| format!("cannot read DSH kernel boot identity: {error}"))?;
+                if !output.status.success() {
+                    return Err("cannot read DSH kernel boot identity".into());
+                }
+                String::from_utf8(output.stdout)
+                    .map_err(|_| "invalid DSH kernel boot identity".to_string())?
+            };
+            #[cfg(target_os = "linux")]
+            let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+                .map_err(|error| format!("cannot read DSH kernel boot identity: {error}"))?;
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                uuid::Uuid::parse_str(value.trim())
+                    .map(|id| id.to_string())
+                    .map_err(|_| "invalid DSH kernel boot identity".to_string())
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            Err("DSH kernel boot identity is unavailable on this platform".into())
+        })
+        .clone()
+}
+
+pub(crate) fn pid_is_live(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return true;
+        };
+        // EPERM and every unknown result preserve ownership; only ESRCH proves death.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+fn legacy_shadow_path(directory: &Path, legacy_filename: &str) -> PathBuf {
+    directory.join(format!(
+        "legacy-{}.json",
+        hex(Sha256::digest(legacy_filename.as_bytes()))
+    ))
+}
+
+fn read_ownership_record(path: &Path, kind: &str) -> Result<OwnershipRecord, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect DSH ownership record: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("invalid DSH ownership record".into());
+    }
+    let record: OwnershipRecord = serde_json::from_slice(
+        &std::fs::read(path)
+            .map_err(|error| format!("cannot read DSH ownership record: {error}"))?,
+    )
+    .map_err(|_| "malformed DSH ownership record".to_string())?;
+    let invalid_common = record.pid == 0
+        || record.child_pid == Some(0)
+        || record.nonce_digest.as_ref().is_some_and(|digest| {
+            digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+    let invalid_schema = if kind == "maintenance" {
+        record.schema_version != 1
+            || record
+                .operation_id
+                .as_ref()
+                .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+    } else {
+        match record.schema_version {
+            1 => record.legacy_record.is_some(),
+            2 => {
+                record.retirement_required != Some(true)
+                    || record.retired != Some(false)
+                    || record.boot_id.as_ref().is_none_or(|id| {
+                        uuid::Uuid::parse_str(id).map_or(true, |parsed| parsed.to_string() != *id)
+                    })
+                    || match &record.legacy_record {
+                        Some(filename) => {
+                            // A legacy shadow must remain bound to the original
+                            // filename even when its source is updated or deleted.
+                            !filename.ends_with(".json")
+                                || Path::new(filename)
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    != Some(filename.as_str())
+                                || path.parent().is_none_or(|directory| {
+                                    legacy_shadow_path(directory, filename) != path
+                                })
+                        }
+                        None => path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with("legacy-")),
+                    }
+            }
+            _ => true,
+        }
+    };
+    if invalid_common || invalid_schema {
+        return Err("invalid DSH ownership record".into());
+    }
+    Ok(record)
+}
+
+fn quarantine_observed_record(
+    directory: &Path,
+    path: &Path,
+    record: Option<&OwnershipRecord>,
+    boot_id: &str,
+) -> Result<OwnershipRecord, String> {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("invalid legacy DSH ownership filename")?;
+    let shadow = legacy_shadow_path(directory, filename);
+    let quarantine = OwnershipRecord {
+        schema_version: 2,
+        pid: record.map_or_else(std::process::id, |record| record.pid),
+        operation_id: None,
+        process_id: record.and_then(|record| record.process_id.clone()),
+        child_pid: record.and_then(|record| record.child_pid),
+        nonce_digest: None,
+        boot_id: Some(boot_id.to_owned()),
+        retirement_required: Some(true),
+        retired: Some(false),
+        legacy_record: Some(filename.to_owned()),
+    };
+    publish_json_atomically(&shadow, &quarantine, false)?;
+    read_ownership_record(&shadow, "processes")
+}
+
+fn inspect_process_record(
+    directory: &Path,
+    path: &Path,
+    boot_id: &str,
+    read_record: impl FnOnce(&Path) -> Result<OwnershipRecord, String>,
+) -> Result<OwnershipRecord, String> {
+    match read_record(path) {
+        Ok(record) if record.schema_version == 1 => {
+            quarantine_observed_record(directory, path, Some(&record), boot_id)
+        }
+        Ok(record) => Ok(record),
+        Err(error) => {
+            // An old host can remove/update an already enumerated record before
+            // this read. Preserve that observation even when its PID is unknown.
+            quarantine_observed_record(directory, path, None, boot_id)?;
+            Err(error)
+        }
+    }
+}
+
+fn reject_live_owners(data_root: &Path, kind: &str, own_path: Option<&Path>) -> Result<(), String> {
+    let directory = control_directory(data_root, kind)?;
+    let boot_id = (kind == "processes").then(current_boot_id).transpose()?;
+    let entries = std::fs::read_dir(&directory)
+        .map_err(|error| format!("cannot inspect DSH ownership: {error}"))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("cannot inspect DSH ownership entry: {error}"))?
+            .path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json")
+            || own_path == Some(path.as_path())
+        {
+            continue;
+        }
+        let record = if let Some(boot_id) = &boot_id {
+            inspect_process_record(&directory, &path, boot_id, |path| {
+                read_ownership_record(path, kind)
+            })?
+        } else {
+            read_ownership_record(&path, kind)?
+        };
+        if let Some(boot_id) = &boot_id {
+            if record.boot_id.as_ref() != Some(boot_id) {
+                // The kernel boot UUID proves all processes belonging to this
+                // record ended; PID reuse cannot give them current authority.
+                continue;
+            }
+            return Err(
+                "DeepSeek Harness has unsettled processes in this boot; restart the operating system before runtime maintenance"
+                    .into(),
+            );
+        }
+        if pid_is_live(record.pid) || record.child_pid.is_some_and(pid_is_live) {
+            return Err(format!(
+                "DeepSeek Harness has a live {kind} owner; wait for it to stop"
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl OwnershipLease {
+    fn publish(
+        data_root: &Path,
+        kind: &str,
+        process_id: Option<&str>,
+        nonce: Option<&str>,
+    ) -> Result<Self, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = control_directory(data_root, kind)?.join(format!("{id}.json"));
+        let record = OwnershipRecord {
+            schema_version: if kind == "processes" { 2 } else { 1 },
+            pid: std::process::id(),
+            operation_id: (kind == "maintenance").then(|| id.clone()),
+            process_id: process_id.map(str::to_owned),
+            child_pid: None,
+            nonce_digest: nonce.map(|nonce| hex(Sha256::digest(nonce.as_bytes()))),
+            boot_id: (kind == "processes").then(current_boot_id).transpose()?,
+            retirement_required: (kind == "processes").then_some(true),
+            retired: (kind == "processes").then_some(false),
+            legacy_record: None,
+        };
+        publish_json(&path, &record)?;
+        Ok(Self { id, path, record })
+    }
+}
+
+impl Drop for OwnershipLease {
+    fn drop(&mut self) {
+        if self.record.child_pid.is_some() {
+            // Neither primary exit nor a successful SDK shutdown proves every
+            // descendant ended. Only a later kernel boot retires started leases.
+            return;
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_maintenance(data_root: &Path) -> Result<OwnershipLease, String> {
+    let lease = OwnershipLease::publish(data_root, "maintenance", None, None)?;
+    reject_live_owners(data_root, "maintenance", Some(&lease.path))?;
+    reject_live_owners(data_root, "processes", None)?;
+    Ok(lease)
+}
+
+/// The local process host owns admission before any asynchronous launch preparation.
+pub struct DshProcessLease(OwnershipLease, String);
+
+impl DshProcessLease {
+    pub fn lease_id(&self) -> &str {
+        &self.0.id
+    }
+
+    pub fn nonce(&self) -> &str {
+        &self.1
+    }
+
+    pub fn acquire(data_root: &Path, process_id: Option<&str>) -> Result<Self, String> {
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let lease = OwnershipLease::publish(data_root, "processes", process_id, Some(&nonce))?;
+        reject_live_owners(data_root, "maintenance", None)?;
+        Ok(Self(lease, nonce))
+    }
+
+    pub fn update_child_pid(&mut self, child_pid: u32) -> Result<(), String> {
+        if child_pid == 0 {
+            return Err("invalid DSH child PID publication".into());
+        }
+        self.0.record.child_pid = Some(child_pid);
+        publish_json(&self.0.path, &self.0.record)
+    }
+
+    pub fn release_after_exit(self) {
+        // Drop may release an active pending abort, never a started process.
+    }
+}
+
 pub fn runtime_home(data_root: &Path) -> PathBuf {
     data_root.join(RUNTIME_DIR)
+}
+
+/// Identify the executable target, including the host's native sandbox wrapper.
+pub(crate) fn invocation_runtime(
+    command: &str,
+    args: &[String],
+) -> Result<Option<PathBuf>, String> {
+    let (command, args) = if Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("cognia-external-agent-launcher")
+    {
+        let separator = args
+            .iter()
+            .position(|arg| arg == "--")
+            .ok_or("invalid managed sandbox target")?;
+        let target = args
+            .get(separator + 1)
+            .ok_or("missing managed sandbox target")?;
+        (target.as_str(), &args[separator + 2..])
+    } else {
+        (command, args)
+    };
+    if Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("node")
+        || args
+            .first()
+            .and_then(|arg| Path::new(arg).file_name())
+            .is_none_or(|name| name != "launcher.mjs")
+    {
+        return Ok(None);
+    }
+    let invalid = || {
+        "DeepSeek Harness requires its exact managed launcher and certified composition".to_string()
+    };
+    if args.len() != 2 || !Path::new(&args[0]).is_absolute() || !Path::new(&args[1]).is_absolute() {
+        return Err(invalid());
+    }
+    let parent = Path::new(&args[0]).parent().ok_or_else(invalid)?;
+    if parent.file_name().is_none_or(|name| name != RUNTIME_DIR) {
+        return Err(invalid());
+    }
+    let metadata = std::fs::symlink_metadata(parent).map_err(|_| invalid())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(invalid());
+    }
+    let root = parent.canonicalize().map_err(|_| invalid())?;
+    let launcher = Path::new(&args[0]).canonicalize().map_err(|_| invalid())?;
+    let composition = Path::new(&args[1]).canonicalize().map_err(|_| invalid())?;
+    if launcher != root.join("launcher.mjs")
+        || ![
+            "host.sdk-readonly.yml",
+            "host.sdk-workspace.yml",
+            "host.acp.yml",
+        ]
+        .iter()
+        .any(|name| composition == root.join(name))
+    {
+        return Err(invalid());
+    }
+    Ok(Some(root))
+}
+
+/// An environment tag cannot opt into or out of host ownership.
+pub(crate) fn normalize_managed_launch(
+    config: &mut crate::process::ExternalAgentSpawnConfig,
+) -> Result<Option<PathBuf>, String> {
+    let runtime = invocation_runtime(&config.command, &config.args)?;
+    match &runtime {
+        Some(root) => {
+            for (key, expected) in [
+                ("COGNIA_DSH_RUNTIME_HOME", root.clone()),
+                ("DSH_HOME", root.join(DSH_HOME_DIR)),
+                ("COGNIA_DSH_SESSION_ROOT", root.join("sessions")),
+            ] {
+                if let Some(requested) = config.env.get(key) {
+                    let requested =
+                        cognia_exec_sandbox::paths::safe_canonicalize(Path::new(requested))
+                            .map_err(|error| error.to_string())?;
+                    if requested != expected {
+                        return Err(format!(
+                            "managed DSH {key} does not match its certified invocation"
+                        ));
+                    }
+                }
+                config
+                    .env
+                    .insert(key.into(), expected.to_string_lossy().into_owned());
+            }
+        }
+        None if config.env.contains_key("COGNIA_DSH_RUNTIME_HOME") => {
+            return Err("managed DSH environment requires a certified launcher invocation".into())
+        }
+        None => {}
+    }
+    Ok(runtime)
 }
 
 /// The Cognia data root that owns the runtime home on this host.
@@ -151,8 +686,11 @@ pub fn host_source_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
-fn staging_dir(data_root: &Path) -> PathBuf {
-    data_root.join(format!("{RUNTIME_DIR}.staging"))
+fn staging_dir(data_root: &Path, install_id: &str) -> Result<PathBuf, String> {
+    if uuid::Uuid::parse_str(install_id).is_err() || install_id.len() != 36 {
+        return Err("invalid DeepSeek Harness install ID".into());
+    }
+    Ok(data_root.join(format!("{RUNTIME_DIR}.staging-{install_id}")))
 }
 
 fn previous_dir(data_root: &Path) -> PathBuf {
@@ -331,15 +869,16 @@ pub async fn stage_install(
     data_root: &Path,
     source_dir: &Path,
 ) -> Result<DshInstallDigests, String> {
+    let _maintenance = acquire_maintenance(data_root)?;
     for artifact in RUNTIME_ARTIFACTS {
         if !source_dir.join(artifact).exists() {
             return Err(format!("runtime artifact missing from source: {artifact}"));
         }
     }
 
-    let staging = staging_dir(data_root);
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("cannot create staging dir: {e}"))?;
+    let install_id = uuid::Uuid::new_v4().to_string();
+    let staging = staging_dir(data_root, &install_id)?;
+    std::fs::create_dir(&staging).map_err(|e| format!("cannot create staging dir: {e}"))?;
     for artifact in RUNTIME_ARTIFACTS {
         std::fs::copy(source_dir.join(artifact), staging.join(artifact))
             .map_err(|e| format!("cannot copy {artifact}: {e}"))?;
@@ -360,6 +899,7 @@ pub async fn stage_install(
             "--no-fund",
         ])
         .current_dir(&staging)
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| {
@@ -388,45 +928,216 @@ pub async fn stage_install(
         return Err("npm install produced no package-lock.json; refusing to certify".into());
     }
 
-    Ok(DshInstallDigests {
+    let digests = DshInstallDigests {
+        install_id: install_id.clone(),
         lockfile_digest: compute_lockfile_digest(&staging)?,
         composition_digest: compute_composition_digest(&staging)?,
-    })
+    };
+    publish_json(
+        &staging.join(INSTALL_MARKER),
+        &InstallMarker {
+            schema_version: 1,
+            install_id,
+            lockfile_digest: digests.lockfile_digest.clone(),
+            composition_digest: digests.composition_digest.clone(),
+        },
+    )?;
+    Ok(digests)
 }
 
 /// Write the manifest the renderer built and swap the staged tree in.
-pub fn finalize_install(data_root: &Path, manifest_json: &str) -> Result<(), String> {
-    let staging = staging_dir(data_root);
-    if !staging.exists() {
-        return Err("no staged runtime to finalize".into());
+pub fn finalize_install(
+    data_root: &Path,
+    manifest_json: &str,
+    install_id: &str,
+) -> Result<(), String> {
+    let _maintenance = acquire_maintenance(data_root)?;
+    let staging = staging_dir(data_root, install_id)?;
+    let metadata = std::fs::symlink_metadata(&staging)
+        .map_err(|error| format!("no staged runtime to finalize: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("staged runtime must be a real directory".into());
+    }
+    let marker_path = staging.join(INSTALL_MARKER);
+    let marker_metadata = std::fs::symlink_metadata(&marker_path)
+        .map_err(|error| format!("staged runtime is not ready: {error}"))?;
+    if !marker_metadata.is_file() || marker_metadata.file_type().is_symlink() {
+        return Err("invalid staged runtime readiness marker".into());
+    }
+    let marker: InstallMarker =
+        serde_json::from_slice(&std::fs::read(marker_path).map_err(|error| error.to_string())?)
+            .map_err(|_| "invalid staged runtime readiness marker".to_string())?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(manifest_json).map_err(|_| "invalid channel manifest".to_string())?;
+    if marker.schema_version != 1
+        || marker.install_id != install_id
+        || marker.lockfile_digest != compute_lockfile_digest(&staging)?
+        || marker.composition_digest != compute_composition_digest(&staging)?
+        || manifest
+            != certified_channel_manifest(&marker.lockfile_digest, &marker.composition_digest)?
+    {
+        return Err("staged runtime identity or digests do not match the install request".into());
     }
     std::fs::write(staging.join(CHANNEL_MANIFEST_FILE), manifest_json)
         .map_err(|e| format!("cannot write channel manifest: {e}"))?;
+    activate_staging(data_root, &staging, |from, to| std::fs::rename(from, to))
+}
 
+fn certified_channel_manifest(
+    lockfile_digest: &str,
+    composition_digest: &str,
+) -> Result<serde_json::Value, String> {
+    let mut channel: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../protocol/deepseek-harness-channel-certification.json"
+    ))
+    .map_err(|error| format!("invalid bundled DSH certification policy: {error}"))?;
+    channel["lockfileDigest"] = lockfile_digest.into();
+    channel["compositionDigest"] = composition_digest.into();
+    let upstream = channel["upstreamVersion"]
+        .as_str()
+        .ok_or("invalid bundled DSH version")?;
+    channel["channelId"] = format!(
+        "dsh-{upstream}-{}",
+        composition_digest
+            .get(..8)
+            .ok_or("invalid DSH composition digest")?
+    )
+    .into();
+    Ok(channel)
+}
+
+fn copy_durable_tree(source: &Path, target: &Path, runtime: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(source)
+        .map_err(|error| format!("cannot read durable runtime state: {error}"))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let destination = target.join(entry.file_name());
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_symlink() {
+            let resolved = entry
+                .path()
+                .canonicalize()
+                .map_err(|error| format!("cannot validate durable state link: {error}"))?;
+            if !resolved.starts_with(runtime) {
+                return Err("durable runtime state link escapes the runtime home".into());
+            }
+            let link = std::fs::read_link(entry.path()).map_err(|error| error.to_string())?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(link, destination).map_err(|error| error.to_string())?;
+            #[cfg(not(unix))]
+            return Err(format!(
+                "durable runtime symlinks are unsupported: {}",
+                link.display()
+            ));
+        } else if kind.is_dir() {
+            std::fs::create_dir(&destination).map_err(|error| error.to_string())?;
+            copy_durable_tree(&entry.path(), &destination, runtime)?;
+            std::fs::set_permissions(
+                &destination,
+                entry
+                    .metadata()
+                    .map_err(|error| error.to_string())?
+                    .permissions(),
+            )
+            .map_err(|error| error.to_string())?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), destination)
+                .map_err(|error| format!("cannot preserve durable runtime state: {error}"))?;
+        } else {
+            return Err("unsupported durable runtime state entry".into());
+        }
+    }
+    Ok(())
+}
+
+fn activate_staging(
+    data_root: &Path,
+    staging: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
     let home = runtime_home(data_root);
     let previous = previous_dir(data_root);
-    let _ = std::fs::remove_dir_all(&previous);
-    if home.exists() {
-        std::fs::rename(&home, &previous).map_err(|e| format!("cannot archive previous: {e}"))?;
+    if previous.try_exists().map_err(|error| error.to_string())? {
+        ensure_owned_directory(&previous)?;
+        if home.try_exists().map_err(|error| error.to_string())? {
+            return Err(
+                "both live runtime and previous recovery backup exist; refusing to discard either"
+                    .into(),
+            );
+        }
+        rename(&previous, &home)
+            .map_err(|error| format!("cannot recover previous runtime: {error}"))?;
     }
-    if let Err(e) = std::fs::rename(&staging, &home) {
+    if home.exists() {
+        ensure_owned_directory(&home)?;
+        let canonical_home = home.canonicalize().map_err(|error| error.to_string())?;
+        for name in ["sessions", DSH_HOME_DIR] {
+            let source = home.join(name);
+            match std::fs::symlink_metadata(&source) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    let destination = staging.join(name);
+                    if destination
+                        .try_exists()
+                        .map_err(|error| error.to_string())?
+                    {
+                        let metadata = std::fs::symlink_metadata(&destination)
+                            .map_err(|error| error.to_string())?;
+                        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                            return Err("invalid staged durable-state root".into());
+                        }
+                        std::fs::remove_dir_all(&destination).map_err(|error| error.to_string())?;
+                    }
+                    std::fs::create_dir(&destination).map_err(|error| error.to_string())?;
+                    copy_durable_tree(&source, &destination, &canonical_home)?;
+                    std::fs::set_permissions(&destination, metadata.permissions())
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(_) => return Err("durable runtime state root must be a real directory".into()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("cannot inspect durable runtime state: {error}")),
+            }
+        }
+        rename(&home, &previous).map_err(|e| format!("cannot archive previous: {e}"))?;
+    }
+    if let Err(error) = rename(staging, &home) {
         // Put the old runtime back rather than leaving the user with none.
-        let _ = std::fs::rename(&previous, &home);
-        return Err(format!("cannot activate staged runtime: {e}"));
+        if previous.exists() {
+            if let Err(rollback) = rename(&previous, &home) {
+                return Err(format!("cannot activate staged runtime: {error}; previous runtime retained for recovery: {rollback}"));
+            }
+        }
+        return Err(format!("cannot activate staged runtime: {error}"));
     }
     let _ = std::fs::remove_dir_all(&previous);
     Ok(())
 }
 
 pub fn remove_runtime(data_root: &Path, active_session_count: u32) -> Result<(), String> {
+    let _maintenance = acquire_maintenance(data_root)?;
     if active_session_count > 0 {
         return Err(format!(
             "refusing to remove the runtime while {active_session_count} session(s) are still using it"
         ));
     }
-    let _ = std::fs::remove_dir_all(runtime_home(data_root));
-    let _ = std::fs::remove_dir_all(staging_dir(data_root));
-    let _ = std::fs::remove_dir_all(previous_dir(data_root));
+    let mut owned_paths = vec![runtime_home(data_root), previous_dir(data_root)];
+    for entry in std::fs::read_dir(data_root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_prefix("deepseek-harness.staging-"))
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok() && id.len() == 36)
+        {
+            owned_paths.push(entry.path());
+        }
+    }
+    for path in owned_paths {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot remove DeepSeek Harness runtime: {error}")),
+        }
+    }
     Ok(())
 }
 
@@ -516,6 +1227,7 @@ mod tests {
         // documented framing: name \0 length \0 content, per file, in order.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("launcher.mjs"), "a").unwrap();
+        std::fs::write(tmp.path().join("host.root.yml"), "root").unwrap();
         std::fs::write(tmp.path().join("host.sdk-readonly.yml"), "b").unwrap();
         std::fs::write(tmp.path().join("host.sdk-workspace.yml"), "c").unwrap();
         std::fs::write(tmp.path().join("host.acp.yml"), "d").unwrap();
@@ -523,6 +1235,7 @@ mod tests {
         let mut expected = Sha256::new();
         for (name, content) in [
             ("launcher.mjs", "a"),
+            ("host.root.yml", "root"),
             ("host.sdk-readonly.yml", "b"),
             ("host.sdk-workspace.yml", "c"),
             ("host.acp.yml", "d"),
@@ -646,23 +1359,77 @@ mod tests {
     #[test]
     fn finalize_refuses_without_a_staged_tree() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(finalize_install(tmp.path(), "{}").is_err());
+        assert!(finalize_install(tmp.path(), "{}", &uuid::Uuid::new_v4().to_string()).is_err());
+    }
+
+    fn seed_ready_stage(data_root: &Path) -> (String, PathBuf, String) {
+        let install_id = uuid::Uuid::new_v4().to_string();
+        let staging = staging_dir(data_root, &install_id).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        seed_source(&staging);
+        std::fs::write(staging.join("package-lock.json"), "lock").unwrap();
+        let marker = InstallMarker {
+            schema_version: 1,
+            install_id: install_id.clone(),
+            lockfile_digest: compute_lockfile_digest(&staging).unwrap(),
+            composition_digest: compute_composition_digest(&staging).unwrap(),
+        };
+        let manifest =
+            certified_channel_manifest(&marker.lockfile_digest, &marker.composition_digest)
+                .unwrap()
+                .to_string();
+        publish_json(&staging.join(INSTALL_MARKER), &marker).unwrap();
+        (install_id, staging, manifest)
+    }
+
+    #[test]
+    fn finalize_preserves_native_sessions_and_profile_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = runtime_home(tmp.path());
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        std::fs::create_dir_all(home.join("dsh-home/profiles/cognia-acp")).unwrap();
+        std::fs::write(home.join("sessions/conversation.jsonl"), "native-history").unwrap();
+        std::fs::write(
+            home.join("dsh-home/profiles/cognia-acp/package.json"),
+            "profile-state",
+        )
+        .unwrap();
+        let (install_id, _, manifest) = seed_ready_stage(tmp.path());
+        finalize_install(tmp.path(), &manifest, &install_id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("sessions/conversation.jsonl")).unwrap(),
+            "native-history"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("dsh-home/profiles/cognia-acp/package.json"))
+                .unwrap(),
+            "profile-state"
+        );
+    }
+
+    #[test]
+    fn remove_rejects_a_host_owned_pending_process_even_when_renderer_reports_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(runtime_home(tmp.path())).unwrap();
+        let leases = tmp.path().join(".deepseek-harness-control/processes");
+        std::fs::create_dir_all(&leases).unwrap();
+        std::fs::write(leases.join("pending.json"), serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"processId":"pending-spawn"}).to_string()).unwrap();
+        assert!(remove_runtime(tmp.path(), 0).is_err());
+        assert!(runtime_home(tmp.path()).exists());
     }
 
     #[test]
     fn finalize_writes_the_manifest_and_activates_the_staged_tree() {
         let tmp = tempfile::tempdir().unwrap();
-        let staging = staging_dir(tmp.path());
-        std::fs::create_dir_all(&staging).unwrap();
-        std::fs::write(staging.join("launcher.mjs"), "x").unwrap();
+        let (install_id, staging, manifest) = seed_ready_stage(tmp.path());
 
-        finalize_install(tmp.path(), "{\"schemaVersion\":1}").unwrap();
+        finalize_install(tmp.path(), &manifest, &install_id).unwrap();
 
         let home = runtime_home(tmp.path());
         assert!(home.join("launcher.mjs").exists());
         assert_eq!(
             std::fs::read_to_string(home.join(CHANNEL_MANIFEST_FILE)).unwrap(),
-            "{\"schemaVersion\":1}"
+            manifest
         );
         assert!(!staging.exists());
         assert!(!previous_dir(tmp.path()).exists());
@@ -675,11 +1442,9 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(home.join("marker"), "old").unwrap();
 
-        let staging = staging_dir(tmp.path());
-        std::fs::create_dir_all(&staging).unwrap();
-        std::fs::write(staging.join("launcher.mjs"), "new").unwrap();
+        let (install_id, _, manifest) = seed_ready_stage(tmp.path());
 
-        finalize_install(tmp.path(), "{}").unwrap();
+        finalize_install(tmp.path(), &manifest, &install_id).unwrap();
         assert!(!home.join("marker").exists());
         assert!(home.join("launcher.mjs").exists());
     }
@@ -704,5 +1469,585 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(remove_runtime(tmp.path(), 0).is_ok());
         assert!(remove_runtime(tmp.path(), 0).is_ok());
+    }
+
+    #[test]
+    fn finalize_requires_the_exact_ready_install_and_recomputed_digests() {
+        let root = tempfile::tempdir().unwrap();
+        let (id, staging, manifest) = seed_ready_stage(root.path());
+        assert!(finalize_install(root.path(), &manifest, "../escape").is_err());
+        assert!(
+            finalize_install(root.path(), &manifest, &uuid::Uuid::new_v4().to_string()).is_err()
+        );
+        assert!(finalize_install(root.path(), "{}", &id).is_err());
+        let marker = staging.join(INSTALL_MARKER);
+        let original = std::fs::read(&marker).unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+        std::fs::write(&marker, original).unwrap();
+        std::fs::write(staging.join("launcher.mjs"), "tampered").unwrap();
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+        assert!(staging.exists());
+        assert!(!runtime_home(root.path()).exists());
+    }
+
+    #[test]
+    fn finalize_rejects_incomplete_stale_or_widened_channel_certification() {
+        for mutation in ["incomplete", "stale", "unsafe-profile", "extra-field"] {
+            let root = tempfile::tempdir().unwrap();
+            let (id, staging, manifest) = seed_ready_stage(root.path());
+            let mut manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            match mutation {
+                "incomplete" => {
+                    manifest.as_object_mut().unwrap().remove("profiles");
+                }
+                "stale" => manifest["conformanceSuiteVersion"] = "old-suite".into(),
+                "unsafe-profile" => {
+                    manifest["profiles"] = serde_json::json!([{"profileId":"cognia-sdk-readonly","compositionFile":"dsh-home/evil.yml","capabilities":{"transport":"acp","interactiveApproval":true}}])
+                }
+                _ => manifest["unexpectedAuthority"] = true.into(),
+            }
+            assert!(
+                finalize_install(root.path(), &manifest.to_string(), &id).is_err(),
+                "accepted {mutation} channel certification"
+            );
+            assert!(staging.exists());
+            assert!(!runtime_home(root.path()).exists());
+        }
+    }
+
+    #[test]
+    fn explicit_remove_invalidates_ready_installs_before_delayed_finalize() {
+        let root = tempfile::tempdir().unwrap();
+        let (id, _, manifest) = seed_ready_stage(root.path());
+        remove_runtime(root.path(), 0).unwrap();
+        assert!(
+            finalize_install(root.path(), &manifest, &id).is_err(),
+            "a delayed finalize resurrected an explicitly removed runtime"
+        );
+        assert!(!runtime_home(root.path()).exists());
+    }
+
+    #[test]
+    fn writable_scope_protects_staged_dependency_trees_and_previous_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        for relative in [
+            "deepseek-harness.previous/node_modules",
+            "deepseek-harness.staging-550e8400-e29b-41d4-a716-446655440000/node_modules",
+        ] {
+            let writable = root.path().join(relative);
+            std::fs::create_dir_all(&writable).unwrap();
+            assert!(
+                assert_writable_scope(&runtime_home(root.path()), &writable).is_err(),
+                "reserved runtime code was writable: {relative}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dsh_root_symlink_is_rejected_when_deriving_unconfigured_managed_launch() {
+        let data = tempfile::tempdir().unwrap();
+        let target = data.path().join("workspaces/evil/deepseek-harness");
+        std::fs::create_dir_all(&target).unwrap();
+        for name in ["launcher.mjs", "host.sdk-readonly.yml"] {
+            std::fs::write(target.join(name), "fixture").unwrap();
+        }
+        let alias = data.path().join("deepseek-harness");
+        std::os::unix::fs::symlink(target, &alias).unwrap();
+        let args = [
+            alias.join("launcher.mjs"),
+            alias.join("host.sdk-readonly.yml"),
+        ]
+        .map(|path| path.to_string_lossy().into_owned());
+        assert!(invocation_runtime("node", &args).is_err());
+    }
+
+    #[test]
+    fn independent_ready_stages_finalize_by_identity_and_explicit_remove_invalidates_all() {
+        let root = tempfile::tempdir().unwrap();
+        let (first_id, first, first_manifest) = seed_ready_stage(root.path());
+        let (second_id, second, second_manifest) = seed_ready_stage(root.path());
+        std::fs::write(first.join("identity"), "first").unwrap();
+        std::fs::write(second.join("identity"), "second").unwrap();
+        finalize_install(root.path(), &first_manifest, &first_id).unwrap();
+        assert!(second.exists());
+        assert_eq!(
+            std::fs::read_to_string(runtime_home(root.path()).join("identity")).unwrap(),
+            "first"
+        );
+        assert!(finalize_install(root.path(), &first_manifest, &first_id).is_err());
+        assert!(second.exists());
+        finalize_install(root.path(), &second_manifest, &second_id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(runtime_home(root.path()).join("identity")).unwrap(),
+            "second"
+        );
+        let (_, third, _) = seed_ready_stage(root.path());
+        remove_runtime(root.path(), 0).unwrap();
+        assert!(
+            !third.exists(),
+            "explicit removal invalidates all prior staged installs"
+        );
+    }
+
+    #[test]
+    fn activation_failure_restores_runtime_and_durable_state() {
+        let root = tempfile::tempdir().unwrap();
+        let home = runtime_home(root.path());
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        std::fs::write(home.join("sessions/history.jsonl"), "old-history").unwrap();
+        std::fs::write(home.join("identity"), "old-runtime").unwrap();
+        let (_, staging, _) = seed_ready_stage(root.path());
+        let error = activate_staging(root.path(), &staging, |from, to| {
+            if from == staging {
+                return Err(std::io::Error::other("fixture activation failure"));
+            }
+            std::fs::rename(from, to)
+        })
+        .unwrap_err();
+        assert!(error.contains("fixture activation failure"));
+        assert_eq!(
+            std::fs::read_to_string(home.join("identity")).unwrap(),
+            "old-runtime"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("sessions/history.jsonl")).unwrap(),
+            "old-history"
+        );
+        assert!(staging.exists());
+        assert!(!previous_dir(root.path()).exists());
+    }
+
+    #[test]
+    fn failed_rollback_preserves_the_only_backup_and_next_attempt_recovers_it() {
+        let root = tempfile::tempdir().unwrap();
+        let home = runtime_home(root.path());
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        std::fs::write(home.join("sessions/history.jsonl"), "sole-history").unwrap();
+        let (id, staging, manifest) = seed_ready_stage(root.path());
+        assert!(activate_staging(root.path(), &staging, |from, to| {
+            if from == staging || from == previous_dir(root.path()) {
+                return Err(std::io::Error::other("fixture rename failure"));
+            }
+            std::fs::rename(from, to)
+        })
+        .is_err());
+        assert!(!home.exists());
+        assert!(previous_dir(root.path())
+            .join("sessions/history.jsonl")
+            .exists());
+        finalize_install(root.path(), &manifest, &id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("sessions/history.jsonl")).unwrap(),
+            "sole-history"
+        );
+    }
+
+    #[test]
+    fn ambiguous_previous_backup_is_never_deleted_on_retry() {
+        let root = tempfile::tempdir().unwrap();
+        for directory in [runtime_home(root.path()), previous_dir(root.path())] {
+            std::fs::create_dir_all(directory.join("sessions")).unwrap();
+            std::fs::write(directory.join("sessions/history.jsonl"), "preserve-me").unwrap();
+        }
+        let (id, _, manifest) = seed_ready_stage(root.path());
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+        assert!(previous_dir(root.path())
+            .join("sessions/history.jsonl")
+            .exists());
+        assert!(runtime_home(root.path())
+            .join("sessions/history.jsonl")
+            .exists());
+    }
+
+    #[test]
+    fn pending_and_live_process_leases_block_every_maintenance_operation() {
+        let root = tempfile::tempdir().unwrap();
+        let (id, _, manifest) = seed_ready_stage(root.path());
+        let mut lease = DshProcessLease::acquire(root.path(), Some("pending")).unwrap();
+        assert!(remove_runtime(root.path(), 0).is_err());
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+        assert!(tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(stage_install(root.path(), root.path()))
+            .unwrap_err()
+            .contains("unsettled processes"));
+        lease.update_child_pid(std::process::id()).unwrap();
+        assert!(acquire_maintenance(root.path()).is_err());
+        lease.release_after_exit();
+        assert!(acquire_maintenance(root.path()).is_err());
+    }
+
+    #[test]
+    fn maintenance_blocks_process_admission_and_other_operations_without_removing_their_records() {
+        let root = tempfile::tempdir().unwrap();
+        let maintenance = acquire_maintenance(root.path()).unwrap();
+        assert!(DshProcessLease::acquire(root.path(), Some("denied")).is_err());
+        assert!(acquire_maintenance(root.path()).is_err());
+        assert!(maintenance.path.exists());
+        assert_eq!(
+            std::fs::read_dir(control_directory(root.path(), "processes").unwrap())
+                .unwrap()
+                .count(),
+            0
+        );
+        drop(maintenance);
+        assert!(DshProcessLease::acquire(root.path(), None).is_ok());
+    }
+
+    #[test]
+    fn process_lease_proof_keeps_only_a_hash_on_disk_and_rotates_per_launch() {
+        let root = tempfile::tempdir().unwrap();
+        let first = DshProcessLease::acquire(root.path(), Some("first")).unwrap();
+        let second = DshProcessLease::acquire(root.path(), Some("second")).unwrap();
+        assert_ne!(first.lease_id(), second.lease_id());
+        assert_ne!(first.nonce(), second.nonce());
+        let raw = std::fs::read_to_string(
+            root.path()
+                .join(CONTROL_DIR)
+                .join("processes")
+                .join(format!("{}.json", first.lease_id())),
+        )
+        .unwrap();
+        let record: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            record["nonceDigest"],
+            hex(Sha256::digest(first.nonce().as_bytes()))
+        );
+        assert!(!raw.contains(first.nonce()));
+        assert!(!raw.contains(second.nonce()));
+        assert_eq!(record["schemaVersion"], 2);
+        assert_eq!(record["bootId"], current_boot_id().unwrap());
+        assert_eq!(record["retirementRequired"], true);
+        assert_eq!(record["retired"], false);
+    }
+
+    #[cfg(unix)]
+    fn exited_process_pid() -> u32 {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_same_boot_owner_death_does_not_prove_retirement() {
+        let dead_pid = exited_process_pid();
+        for started in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let lease = DshProcessLease::acquire(root.path(), Some("crashed-host")).unwrap();
+            let mut record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&lease.0.path).unwrap()).unwrap();
+            record["pid"] = dead_pid.into();
+            if started {
+                record["childPid"] = dead_pid.into();
+            }
+            std::fs::write(&lease.0.path, record.to_string()).unwrap();
+            std::mem::forget(lease); // A crashed host never runs Drop.
+            assert!(
+                acquire_maintenance(root.path()).is_err(),
+                "dead primary PIDs cannot certify descendants or an interrupted pending spawn"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_release_after_primary_exit_keeps_unsettled_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let mut lease = DshProcessLease::acquire(root.path(), None).unwrap();
+        let path = lease.0.path.clone();
+        lease.update_child_pid(exited_process_pid()).unwrap();
+        lease.release_after_exit();
+        assert!(path.exists(), "primary exit alone must retain the lease");
+        assert!(acquire_maintenance(root.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_verified_previous_boot_can_be_recovered() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        std::fs::write(
+            directory.join("previous-boot.json"),
+            serde_json::json!({
+                "schemaVersion": 2, "pid": std::process::id(),
+                "bootId": uuid::Uuid::new_v4().to_string(),
+                "retirementRequired": true, "retired": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            acquire_maintenance(root.path()).is_ok(),
+            "verified previous-boot records cannot own a process in this boot"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_retirement_claim_is_unsupported_and_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        std::fs::write(
+            directory.join("unproved-retirement.json"),
+            serde_json::json!({
+                "schemaVersion": 2, "pid": exited_process_pid(),
+                "bootId": current_boot_id().unwrap(),
+                "retirementRequired": true, "retired": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            acquire_maintenance(root.path()).is_err(),
+            "this host has no complete-tree retirement proof protocol"
+        );
+    }
+
+    #[test]
+    fn process_lease_pending_abort_removes_only_its_own_record() {
+        let root = tempfile::tempdir().unwrap();
+        let first = DshProcessLease::acquire(root.path(), Some("cancelled")).unwrap();
+        let second = DshProcessLease::acquire(root.path(), Some("pending")).unwrap();
+        let first_path = first.0.path.clone();
+        let second_path = second.0.path.clone();
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(second_path.exists());
+        assert!(acquire_maintenance(root.path()).is_err());
+        drop(second);
+        assert!(acquire_maintenance(root.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_legacy_quarantine_survives_old_host_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        let legacy = directory.join("old-host.json");
+        std::fs::write(
+            &legacy,
+            serde_json::json!({"schemaVersion": 1, "pid": exited_process_pid()}).to_string(),
+        )
+        .unwrap();
+        assert!(acquire_maintenance(root.path()).is_err());
+        std::fs::remove_file(legacy).unwrap();
+        assert!(
+            acquire_maintenance(root.path()).is_err(),
+            "a legacy host's cleanup cannot remove its observed quarantine"
+        );
+    }
+
+    #[test]
+    fn process_lease_observed_record_disappearance_cannot_erase_its_quarantine() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        let observed = directory.join("observed-before-read.json");
+        std::fs::write(&observed, "unknown process record").unwrap();
+        let boot = current_boot_id().unwrap();
+        let result = inspect_process_record(&directory, &observed, &boot, |path| {
+            std::fs::remove_file(path).unwrap();
+            read_ownership_record(path, "processes")
+        });
+        assert!(result.is_err());
+        assert!(!observed.exists());
+        let shadow = legacy_shadow_path(&directory, "observed-before-read.json");
+        assert!(
+            shadow.exists(),
+            "an observed owner must keep its boot guard"
+        );
+        let quarantine = read_ownership_record(&shadow, "processes").unwrap();
+        assert_eq!(quarantine.pid, std::process::id());
+        assert_eq!(quarantine.boot_id.as_deref(), Some(boot.as_str()));
+        assert_eq!(quarantine.retired, Some(false));
+        assert!(acquire_maintenance(root.path()).is_err());
+
+        let mut previous_boot: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&shadow).unwrap()).unwrap();
+        previous_boot["bootId"] = uuid::Uuid::new_v4().to_string().into();
+        std::fs::write(&shadow, previous_boot.to_string()).unwrap();
+        std::fs::write(&observed, "unreadable schema").unwrap();
+        assert!(
+            inspect_process_record(&directory, &observed, &boot, |path| {
+                read_ownership_record(path, "processes")
+            })
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&shadow).unwrap()).unwrap(),
+            previous_boot,
+            "an unreadable original cannot rebase a verified prior-boot shadow"
+        );
+        std::fs::remove_file(observed).unwrap();
+        assert!(acquire_maintenance(root.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_invalid_boot_and_retirement_flags_fail_closed() {
+        for (key, invalid) in [
+            ("schemaVersion", serde_json::json!(3)),
+            ("bootId", serde_json::Value::Null),
+            ("bootId", serde_json::json!("unknown-boot")),
+            ("retirementRequired", serde_json::json!(false)),
+            ("retirementRequired", serde_json::Value::Null),
+            ("retired", serde_json::json!(true)),
+            ("retired", serde_json::Value::Null),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = control_directory(root.path(), "processes").unwrap();
+            let path = directory.join("invalid-proof.json");
+            let mut record = serde_json::json!({
+                "schemaVersion": 2, "pid": exited_process_pid(),
+                "bootId": uuid::Uuid::new_v4().to_string(),
+                "retirementRequired": true, "retired": false
+            });
+            record[key] = invalid;
+            std::fs::write(&path, record.to_string()).unwrap();
+            assert!(acquire_maintenance(root.path()).is_err(), "{record}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_lease_legacy_quarantine_recovers_only_after_verified_boot_change() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        let legacy = directory.join("old-host.json");
+        std::fs::write(
+            &legacy,
+            serde_json::json!({"schemaVersion": 1, "pid": exited_process_pid()}).to_string(),
+        )
+        .unwrap();
+        assert!(acquire_maintenance(root.path()).is_err());
+        let shadow = legacy_shadow_path(&directory, "old-host.json");
+        let mut quarantine: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&shadow).unwrap()).unwrap();
+        quarantine["bootId"] = uuid::Uuid::new_v4().to_string().into();
+        std::fs::write(&shadow, quarantine.to_string()).unwrap();
+        assert!(acquire_maintenance(root.path()).is_ok());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&shadow).unwrap()).unwrap(),
+            quarantine,
+            "a prior-boot shadow is never overwritten by a later legacy observation"
+        );
+        std::fs::write(&shadow, "{}").unwrap();
+        assert!(acquire_maintenance(root.path()).is_err());
+    }
+
+    #[test]
+    fn racing_process_and_maintenance_admission_never_both_acquire_authority() {
+        for _ in 0..12 {
+            let root = tempfile::tempdir().unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+            let maintenance = {
+                let path = root.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    acquire_maintenance(&path)
+                })
+            };
+            let process = {
+                let path = root.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    DshProcessLease::acquire(&path, Some("race"))
+                })
+            };
+            barrier.wait();
+            let maintenance = maintenance.join().unwrap();
+            let process = process.join().unwrap();
+            assert!(!(maintenance.is_ok() && process.is_ok()));
+            drop(maintenance);
+            drop(process);
+            assert!(acquire_maintenance(root.path()).is_ok());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn previous_boot_records_are_ignored_but_malformed_records_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        let directory = control_directory(root.path(), "processes").unwrap();
+        let dead = directory.join("dead.json");
+        std::fs::write(
+            &dead,
+            serde_json::json!({
+                "schemaVersion": 2, "pid": dead_pid, "bootId": uuid::Uuid::new_v4().to_string(),
+                "retirementRequired": true, "retired": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(acquire_maintenance(root.path()).is_ok());
+        assert!(
+            dead.exists(),
+            "a different owner never reclaims unique records"
+        );
+        let malformed = directory.join("malformed.json");
+        std::fs::write(&malformed, "{").unwrap();
+        assert!(acquire_maintenance(root.path()).is_err());
+        std::fs::remove_file(malformed).unwrap();
+        std::fs::write(
+            &dead,
+            serde_json::json!({
+                "schemaVersion": 2, "pid": dead_pid, "childPid": std::process::id(),
+                "bootId": current_boot_id().unwrap(), "retirementRequired": true, "retired": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            acquire_maintenance(root.path()).is_err(),
+            "a live child outlives its dead parent owner"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_internal_module_links_survive_but_root_and_external_links_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let home = runtime_home(root.path());
+        std::fs::create_dir_all(home.join("dsh-home/profiles")).unwrap();
+        std::fs::create_dir_all(home.join("node_modules")).unwrap();
+        std::os::unix::fs::symlink(
+            home.join("node_modules"),
+            home.join("dsh-home/profiles/node_modules"),
+        )
+        .unwrap();
+        let (id, staging, manifest) = seed_ready_stage(root.path());
+        std::fs::create_dir_all(staging.join("node_modules")).unwrap();
+        finalize_install(root.path(), &manifest, &id).unwrap();
+        assert!(
+            std::fs::symlink_metadata(home.join("dsh-home/profiles/node_modules"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        std::os::unix::fs::symlink(root.path(), home.join("dsh-home/unsafe-link")).unwrap();
+        let (id, _, manifest) = seed_ready_stage(root.path());
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+        std::fs::remove_file(home.join("dsh-home/unsafe-link")).unwrap();
+        std::os::unix::fs::symlink(root.path(), home.join("sessions")).unwrap();
+        assert!(finalize_install(root.path(), &manifest, &id).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_control_roots_cannot_redirect_ownership() {
+        let root = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), root.path().join(CONTROL_DIR)).unwrap();
+        assert!(DshProcessLease::acquire(root.path(), None).is_err());
+        assert!(remove_runtime(root.path(), 0).is_err());
+        assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
     }
 }

@@ -11,11 +11,20 @@ manifest, and Node launcher/smoke tests. Its dependencies are installed into an
 isolated runtime home, never into the pnpm workspace. The package includes the
 launcher and profiles as assets; they are not imported by the browser adapter.
 
-The managed release is `0.2.1-rc.2` (conformance suite 4). SDK prompt
+The managed release is `0.2.1-rc.2` (conformance suite 6). SDK prompt
 admission is followed by `session/wait`: root idle alone does not complete a
 Cognia turn while managed descendants are still progressing. Job lifecycle and
 working-directory events remain progress observations. Native SDK resume remains
 unsupported by this adapter and is reserved for a separate integration.
+
+Conformance suite 6 requires boot-scoped host ownership and protected plugin,
+configuration and environment loading. Older
+channels must be reinstalled; reinstall preserves native sessions and attachments.
+Staged installations carry an opaque install identity and verified dependency and
+composition digests before activation. Current local launches retain their maintenance guard until a verified
+system reboot when descendant retirement cannot be proved, including exit 0;
+new sessions may continue during that quarantine. SDK output remains committed-message
+streaming, without live token deltas.
 
 DeepSeek Harness has no wire cancel: stopping a turn retires the session's own
 process, so the manifest declares a `process`-scoped cancel that needs a

@@ -15,11 +15,13 @@
  */
 
 import { join } from "node:path"
+import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 import { loadTsExports, readText, renderJson, REPO_ROOT, writeOrCheck } from "./lib/generated-json.mjs"
 
 const CATALOG = join(REPO_ROOT, "protocol/external-agent-runtimes.json")
+const DSH_CERTIFICATION = join(REPO_ROOT, "protocol/deepseek-harness-channel-certification.json")
 
 export async function renderCatalog() {
   const { mergeIntegrationRuntimeRows, INTEGRATION_MANIFESTS } = await loadTsExports(`
@@ -31,11 +33,31 @@ export async function renderCatalog() {
   return { current, next: await renderJson(CATALOG, merged) }
 }
 
+/** Rust cannot import the package's TypeScript channel policy at activation. */
+export async function renderDshChannelCertification() {
+  const { buildDshChannelManifest } = await loadTsExports(`
+    export { buildDshChannelManifest } from "@cognia/agent-dsh/install"
+  `)
+  const current = existsSync(DSH_CERTIFICATION) ? readText(DSH_CERTIFICATION) : ""
+  const manifest = buildDshChannelManifest({
+    lockfileDigest: "0".repeat(64),
+    compositionDigest: "0".repeat(64),
+  })
+  return { current, next: await renderJson(DSH_CERTIFICATION, manifest) }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { current, next } = await renderCatalog()
-  process.exitCode = writeOrCheck(CATALOG, current, next, {
+  const catalogResult = writeOrCheck(CATALOG, current, next, {
     check: process.argv.includes("--check"),
     label: "gen-external-agent-runtimes",
     hint: "Edit package-owned rows in packages/agent-<id>/src/manifest.ts, then run: pnpm gen:external-agent-runtimes",
   })
+  const certification = await renderDshChannelCertification()
+  const certificationResult = writeOrCheck(DSH_CERTIFICATION, certification.current, certification.next, {
+    check: process.argv.includes("--check"),
+    label: "gen-deepseek-harness-channel-certification",
+    hint: "Edit the channel builder in packages/agent-dsh/src/install.ts, then run: pnpm gen:external-agent-runtimes",
+  })
+  process.exitCode = catalogResult || certificationResult
 }

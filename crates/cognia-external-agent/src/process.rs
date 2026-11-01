@@ -368,7 +368,36 @@ impl ExternalAgentProcessManager {
             || std::env::var("COGNIA_DEPLOYMENT_MODE").is_ok_and(|mode| mode == "multi-tenant") {
             return Err("execution_isolation_unavailable: multi-tenant execution cannot use a Host process".into());
         }
+        crate::dsh_runtime::normalize_managed_launch(&mut config)?;
         let id = config.id.clone();
+        // Register pending authority before the first await. Both desktop and
+        // unwrapped headless local spawns pass this ownership boundary.
+        let mut dsh_lease = config
+            .env
+            .get("COGNIA_DSH_RUNTIME_HOME")
+            .map(|home| {
+                let home = Path::new(home);
+                if !home.is_absolute() {
+                    return Err("DSH runtime home must be absolute".to_string());
+                }
+                let cwd = if let Some(cwd) = &config.cwd {
+                    std::path::PathBuf::from(cwd)
+                } else {
+                    std::env::current_dir()
+                        .map_err(|error| format!("cannot resolve DSH process cwd: {error}"))?
+                };
+                crate::dsh_runtime::assert_writable_scope(home, &cwd)?;
+                if let Some(workspace) = config.env.get("COGNIA_DSH_WORKSPACE") {
+                    crate::dsh_runtime::assert_writable_scope(home, Path::new(workspace))?;
+                }
+                let data_root = home
+                    .parent()
+                    .ok_or("DSH runtime home has no owning data root")?;
+                crate::dsh_runtime::DshProcessLease::acquire(data_root, Some(&id))
+            })
+            .transpose()?;
+        config.env.remove("COGNIA_DSH_PROCESS_LEASE");
+        config.env.remove("COGNIA_DSH_PROCESS_LEASE_NONCE");
 
         // Check if already running
         {
@@ -566,6 +595,13 @@ impl ExternalAgentProcessManager {
         // Resolve after all request filtering, including the env_clear gateway
         // and DSH paths. Allocation failure refuses the process creation.
         apply_workspace_command_env(&mut cmd, config.cwd.as_deref()).await?;
+        // This authority is minted by the process owner after every other env overlay.
+        cmd.env_remove("COGNIA_DSH_PROCESS_LEASE");
+        cmd.env_remove("COGNIA_DSH_PROCESS_LEASE_NONCE");
+        if let Some(lease) = &dsh_lease {
+            cmd.env("COGNIA_DSH_PROCESS_LEASE", lease.lease_id());
+            cmd.env("COGNIA_DSH_PROCESS_LEASE_NONCE", lease.nonce());
+        }
         if config.env.contains_key("COGNIA_DSH_RUNTIME_HOME") {
             // The child gets the key; retained process metadata must not.
             config.env.remove("DEEPSEEK_API_KEY");
@@ -599,12 +635,30 @@ impl ExternalAgentProcessManager {
 
         // Spawn the process
         crate::native_bridge::validate_final_process_launch(&program, &config.args)?;
+        // Reserve registration before spawning: cancellation must not land
+        // between child creation and publication of its supervisor/lease.
+        let mut registered_processes = self.processes.write().await;
+        if registered_processes.contains_key(&id) {
+            return Err(format!("Agent {} is already running", id));
+        }
         let mut child = cmd.spawn().map_err(|e| {
             log::error!("Failed to spawn external agent {}: {}", id, e);
             format!("Failed to spawn process: {}", e)
         })?;
 
         let pid = child.id();
+        if let (Some(lease), Some(pid)) = (dsh_lease.as_mut(), pid) {
+            if let Err(error) = lease.update_child_pid(pid) {
+                super::proc_group::kill_process_group(Some(pid));
+                let _ = child.kill().await;
+                if child.wait().await.is_ok() {
+                    if let Some(lease) = dsh_lease.take() {
+                        lease.release_after_exit();
+                    }
+                }
+                return Err(error);
+            }
+        }
         log::info!("External agent {} spawned with PID: {:?}", id, pid);
 
         // Get stdio handles
@@ -687,10 +741,8 @@ impl ExternalAgentProcessManager {
             exit_rx,
             runtime: runtime.clone(),
         }));
-        {
-            let mut processes = self.processes.write().await;
-            processes.insert(id.clone(), Arc::clone(&process));
-        }
+        registered_processes.insert(id.clone(), Arc::clone(&process));
+        drop(registered_processes);
 
         // Supervisor task: owns the child, awaits its exit (or a kill request),
         // removes the exact registered generation, records the final status,
@@ -753,6 +805,13 @@ impl ExternalAgentProcessManager {
             // Exit observers may immediately restart this task. Release its
             // private files and lock before publishing that lifecycle barrier.
             drop(task_files);
+            if let Some(lease) = dsh_lease {
+                // child.wait() is the exit authority. An unknown wait failure
+                // retains the record conservatively while a PID is still live.
+                if !supervisor_pid.is_some_and(crate::dsh_runtime::pid_is_live) {
+                    lease.release_after_exit();
+                }
+            }
             supervisor_sink.exited(&supervisor_id, code, signal);
             let _ = exit_tx.send(true);
         });
@@ -1055,17 +1114,27 @@ mod tests {
         for isolated in [false, true] {
             for kind in ["some", "none", "error"] {
                 let cwd = crate::workspace_env_fixture(kind);
+                let runtime_data = tempfile::tempdir().unwrap();
                 let manager = ExternalAgentProcessManager::new();
                 let sink = Arc::new(CollectorSink::default());
-                let mut config = echo_config("port-env");
-                config.command = "/usr/bin/env".into();
-                config.args.clear();
+                let mut config = if isolated {
+                    dsh_fixture_config(runtime_data.path(), "port-env", "for (const [k,v] of Object.entries(process.env)) console.log(k+'='+v)")
+                } else {
+                    let mut config = echo_config("port-env");
+                    config.command = "/usr/bin/env".into();
+                    config.args.clear();
+                    config
+                };
                 config.cwd = Some(cwd.path().to_string_lossy().into_owned());
                 config.env.insert("PORT".into(), "user-port".into());
                 if isolated {
                     config.env.insert(
                         "COGNIA_DSH_RUNTIME_HOME".into(),
-                        cwd.path().to_string_lossy().into_owned(),
+                        runtime_data
+                            .path()
+                            .join("deepseek-harness")
+                            .to_string_lossy()
+                            .into_owned(),
                     );
                 }
                 let result = manager.spawn(config, sink.clone()).await;
@@ -1323,6 +1392,20 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn dsh_fixture_config(data_root: &Path, id: &str, script: &str) -> ExternalAgentSpawnConfig {
+        let runtime = data_root.join("deepseek-harness");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let launcher = runtime.join("launcher.mjs");
+        let composition = runtime.join("host.sdk-readonly.yml");
+        std::fs::write(&launcher, script).unwrap();
+        std::fs::write(&composition, "fixture").unwrap();
+        let mut config = echo_config(id);
+        config.command = crate::command_resolver::resolve_command_path("node").expect("managed DSH process tests require Node").to_string_lossy().into_owned();
+        config.args = vec![launcher.to_string_lossy().into_owned(), composition.to_string_lossy().into_owned()];
+        config
+    }
+
     /// The process table refuses a state key it cannot honour instead of
     /// launching the agent on the user's own login. Both refusals happen
     /// before any directory is created or any child starts.
@@ -1413,14 +1496,165 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn dsh_unwrapped_local_spawn_rejects_workspace_overlap_with_host_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let sibling = root.path().join("workspaces/project");
+        std::fs::create_dir_all(&sibling).unwrap();
+        for (cwd, workspace) in [
+            (root.path(), sibling.as_path()),
+            (sibling.as_path(), root.path()),
+        ] {
+            let manager = ExternalAgentProcessManager::new();
+            let mut config = dsh_fixture_config(root.path(), "dsh-unwrapped-scope", "process.stdin.resume()");
+            config.cwd = Some(cwd.to_string_lossy().into_owned());
+            config.env.insert(
+                "COGNIA_DSH_RUNTIME_HOME".into(),
+                root.path()
+                    .join("deepseek-harness")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            config.env.insert(
+                "COGNIA_DSH_WORKSPACE".into(),
+                workspace.to_string_lossy().into_owned(),
+            );
+            let result = manager.spawn(config, noop_sink()).await;
+            if result.is_ok() {
+                manager.kill("dsh-unwrapped-scope").await.unwrap();
+            }
+            assert!(
+                result.is_err(),
+                "unwrapped local launches cannot grant workspace writes over host authority"
+            );
+            assert!(manager.list().await.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dsh_started_and_killed_spawns_keep_maintenance_blocked_until_next_boot() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ExternalAgentProcessManager::new();
+        let config =
+            dsh_fixture_config(root.path(), "dsh-lease-lifecycle", "process.stdin.resume()");
+        assert!(
+            config.env.is_empty(),
+            "the real invocation must establish managed ownership without tags"
+        );
+        let registration = manager.processes.write().await;
+        let mut spawning = Box::pin(manager.spawn(config.clone(), noop_sink()));
+        std::future::poll_fn(|context| {
+            assert!(std::future::Future::poll(spawning.as_mut(), context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert!(
+            crate::dsh_runtime::remove_runtime(root.path(), 0).is_err(),
+            "pending preparation already owns a lease"
+        );
+        drop(registration);
+        spawning.await.unwrap();
+        let leases = root.path().join(".deepseek-harness-control/processes");
+        let records = std::fs::read_dir(&leases)
+            .unwrap()
+            .map(|entry| {
+                serde_json::from_slice::<serde_json::Value>(
+                    &std::fs::read(entry.unwrap().path()).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["schemaVersion"], 2);
+        assert!(uuid::Uuid::parse_str(records[0]["bootId"].as_str().unwrap()).is_ok());
+        assert_eq!(records[0]["retirementRequired"], true);
+        assert_eq!(records[0]["retired"], false);
+        assert!(records[0]["childPid"].as_u64().is_some_and(|pid| pid > 0));
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_err());
+        manager.kill("dsh-lease-lifecycle").await.unwrap();
+        assert_eq!(std::fs::read_dir(&leases).unwrap().count(), 1);
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_err());
+        manager.spawn(config, noop_sink()).await.unwrap();
+        manager.kill("dsh-lease-lifecycle").await.unwrap();
+        assert_eq!(std::fs::read_dir(leases).unwrap().count(), 2);
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dsh_successful_primary_exit_keeps_quarantine_but_allows_a_new_session() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ExternalAgentProcessManager::new();
+        let sink = Arc::new(CollectorSink::default());
+        let config = dsh_fixture_config(root.path(), "dsh-natural-exit", "process.exit(0)");
+        manager.spawn(config, sink.clone()).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if sink.exited.lock().unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the local Node fixture must exit");
+        assert_eq!(*sink.exited.lock().unwrap(), Some((Some(0), None)));
+        let leases = root.path().join(".deepseek-harness-control/processes");
+        assert_eq!(std::fs::read_dir(&leases).unwrap().count(), 1);
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_err());
+        let next = dsh_fixture_config(root.path(), "dsh-next-session", "process.stdin.resume()");
+        manager.spawn(next, noop_sink()).await.unwrap();
+        manager.kill("dsh-next-session").await.unwrap();
+        assert_eq!(std::fs::read_dir(leases).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dsh_cancelled_pending_spawn_and_failed_spawn_release_only_their_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ExternalAgentProcessManager::new();
+        let mut config = dsh_fixture_config(root.path(), "dsh-cancel-pending", "process.stdin.resume()");
+        config.env.insert(
+            "COGNIA_DSH_RUNTIME_HOME".into(),
+            root.path()
+                .join("deepseek-harness")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let registration = manager.processes.write().await;
+        let mut spawning = Box::pin(manager.spawn(config.clone(), noop_sink()));
+        std::future::poll_fn(|context| {
+            assert!(std::future::Future::poll(spawning.as_mut(), context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_err());
+        drop(spawning);
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_ok());
+        drop(registration);
+        let mut failed = dsh_fixture_config(root.path(), "dsh-failed-spawn", "process.stdin.resume()");
+        failed.command = root.path().join("missing/node").to_string_lossy().into_owned();
+        assert!(manager.spawn(failed, noop_sink()).await.unwrap_err().contains("Command not found"));
+        assert!(crate::dsh_runtime::remove_runtime(root.path(), 0).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn dsh_process_environment_is_isolated_from_host_and_other_providers() {
+        let data_root = tempfile::tempdir().unwrap();
+        let runtime_home = data_root.path().join("deepseek-harness");
         let mgr = ExternalAgentProcessManager::new();
         let sink = Arc::new(CollectorSink::default());
-        let mut cfg = echo_config("dsh-env-isolation");
-        cfg.command = "env".into();
+        let mut cfg = dsh_fixture_config(data_root.path(), "dsh-env-isolation", "for (const [k,v] of Object.entries(process.env)) console.log(k+'='+v)");
         cfg.env = HashMap::from([
-            ("COGNIA_DSH_RUNTIME_HOME".into(), "/isolated-runtime".into()),
-            ("DSH_HOME".into(), "/isolated-runtime/dsh-home".into()),
+            (
+                "COGNIA_DSH_RUNTIME_HOME".into(),
+                runtime_home.to_string_lossy().into_owned(),
+            ),
+            (
+                "DSH_HOME".into(),
+                runtime_home.join("dsh-home").to_string_lossy().into_owned(),
+            ),
             ("DEEPSEEK_API_KEY".into(), "fixture-only".into()),
             (
                 "COGNIA_DSH_GATEWAY_TOKEN".into(),
@@ -1436,6 +1670,8 @@ mod tests {
             ("TERM".into(), "xterm-256color".into()),
             ("NO_COLOR".into(), "1".into()),
             ("FORCE_COLOR".into(), "0".into()),
+            ("COGNIA_DSH_PROCESS_LEASE".into(), "caller-override".into()),
+            ("COGNIA_DSH_PROCESS_LEASE_NONCE".into(), "caller-nonce".into()),
             ("NODE_OPTIONS".into(), "--require=injected.js".into()),
         ]);
         mgr.spawn(cfg, sink.clone()).await.unwrap();
@@ -1443,7 +1679,14 @@ mod tests {
         assert!(!metadata.to_string().contains("fixture-only"));
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
-                if sink.exited.lock().unwrap().is_some() {
+                if sink.exited.lock().unwrap().is_some()
+                    && sink
+                        .stdout
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|line| line.starts_with("COGNIA_DSH_PROCESS_LEASE="))
+                {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1452,7 +1695,19 @@ mod tests {
         .await
         .unwrap();
         let lines = sink.stdout.lock().unwrap();
-        assert!(lines.iter().any(|line| line == "HOME=/isolated-runtime"));
+        let lease_id = lines
+            .iter()
+            .find_map(|line| line.strip_prefix("COGNIA_DSH_PROCESS_LEASE="))
+            .unwrap_or_else(|| panic!("missing host lease token in child environment: {lines:?}"));
+        assert!(uuid::Uuid::parse_str(lease_id).is_ok());
+        assert_ne!(lease_id, "caller-override");
+        let nonce = lines.iter().find_map(|line| line.strip_prefix("COGNIA_DSH_PROCESS_LEASE_NONCE=")).unwrap();
+        assert!(uuid::Uuid::parse_str(nonce).is_ok());
+        assert_ne!(nonce, "caller-nonce");
+        assert!(!metadata.to_string().contains(nonce));
+        assert!(lines
+            .iter()
+            .any(|line| line == &format!("HOME={}", runtime_home.canonicalize().unwrap().display())));
         assert!(lines
             .iter()
             .any(|line| line == "DEEPSEEK_API_KEY=fixture-only"));
@@ -1475,6 +1730,9 @@ mod tests {
                     "HOME"
                         | "DSH_HOME"
                         | "COGNIA_DSH_RUNTIME_HOME"
+                        | "COGNIA_DSH_PROCESS_LEASE"
+                        | "COGNIA_DSH_PROCESS_LEASE_NONCE"
+                        | "COGNIA_DSH_SESSION_ROOT"
                         | "DEEPSEEK_API_KEY"
                         | "COGNIA_DSH_GATEWAY_TOKEN"
                         | "COGNIA_DSH_MCP_SERVERS"
@@ -1483,7 +1741,7 @@ mod tests {
                         | "TERM"
                         | "NO_COLOR"
                         | "FORCE_COLOR"
-                ),
+                ) || (cfg!(target_os = "macos") && key == "__CF_USER_TEXT_ENCODING"),
                 "unexpected inherited key: {key}"
             );
         }

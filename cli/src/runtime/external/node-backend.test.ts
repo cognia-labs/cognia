@@ -2,8 +2,10 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { resolveWorkspacePortEnv } from "../workspace-port-env"
+import { removeDshRuntime } from "./dsh-installer"
 import * as nativeBridges from "./native-bridges"
 import * as sandboxLauncher from "./sandbox-launcher"
 
@@ -37,6 +39,23 @@ it("admits Antigravity's file-storage control without trusting a caller-selected
   )
   expect(env.AGY_ACP_FORCE_FILE_STORAGE).toBe("1")
   expect(env.ANTIGRAVITY_HARNESS_PATH).toBeUndefined()
+})
+
+it("strips DSH host lease identity and secret from every non-DSH environment", () => {
+  const proof = {
+    COGNIA_DSH_PROCESS_LEASE: "fixture-id",
+    COGNIA_DSH_PROCESS_LEASE_NONCE: "fixture-secret",
+  }
+  const variants: Record<string, string>[] = [{}, { COGNIA_GATEWAY_TASK_HOME: "/fixture/task" }]
+  for (const extra of variants) {
+    const env = buildExternalAgentChildEnv(
+      { NODE_ENV: "test", ...proof },
+      { ...proof, ...extra },
+      false
+    )
+    expect(env.COGNIA_DSH_PROCESS_LEASE).toBeUndefined()
+    expect(env.COGNIA_DSH_PROCESS_LEASE_NONCE).toBeUndefined()
+  }
 })
 import {
   EXTERNAL_AGENT_BINARY_ALLOWLIST,
@@ -1054,6 +1073,367 @@ describe("isDshLauncherInvocation", () => {
     fs.rmSync(dataRoot, { recursive: true, force: true })
   })
 
+  it("uses the host runtime root independently of an ordinary project workspace", async () => {
+    const project = path.join(dataRoot, "projects", "ordinary-project")
+    fs.mkdirSync(project, { recursive: true })
+    const backend = new NodeExternalAgentBackend({
+      dataRoot,
+      workspacesRoot: project,
+      resolveLaunch: async (config) => ({ command: config.command, args: config.args ?? [] }),
+    })
+    const facts = await backend.invoke<{ runtimeHome: string }>("dsh_runtime_facts", {})
+    expect(facts.runtimeHome).toBe(path.dirname(launcher))
+    const exited = nextEvent(backend, "external-agent://exit")
+    await expect(
+      backend.invoke("spawn_external_agent", {
+        config: {
+          id: "ordinary-project-dsh",
+          command: process.execPath,
+          args: [launcher, composition],
+          cwd: project,
+        },
+      })
+    ).resolves.toBe("ordinary-project-dsh")
+    await exited
+  })
+
+  it("derives managed runtime state and host proof when caller environment is absent", async () => {
+    const resolveLaunch = jest.fn(
+      async (config: { command: string; args?: string[]; env?: Record<string, string> }) => {
+        expect(config.env).toMatchObject({
+          COGNIA_DSH_RUNTIME_HOME: fs.realpathSync(path.dirname(launcher)),
+          DSH_HOME: path.join(fs.realpathSync(path.dirname(launcher)), "dsh-home"),
+          COGNIA_DSH_SESSION_ROOT: path.join(fs.realpathSync(path.dirname(launcher)), "sessions"),
+          COGNIA_DSH_PROCESS_LEASE: expect.any(String),
+          COGNIA_DSH_PROCESS_LEASE_NONCE: expect.any(String),
+        })
+        throw new Error("proof observed before spawn")
+      }
+    )
+    const backend = new NodeExternalAgentBackend({ dataRoot, workspacesRoot, resolveLaunch })
+    await expect(
+      backend.invoke("spawn_external_agent", {
+        config: {
+          id: "derive-env",
+          command: process.execPath,
+          args: [launcher, composition],
+          cwd: workspacesRoot,
+        },
+      })
+    ).rejects.toThrow("proof observed before spawn")
+  })
+
+  it.each(["COGNIA_DSH_RUNTIME_HOME", "DSH_HOME", "COGNIA_DSH_SESSION_ROOT"])(
+    "rejects forged managed %s before resolving a launch",
+    async (key) => {
+      const resolveLaunch = jest.fn(async () => {
+        throw new Error("must not resolve")
+      })
+      const backend = new NodeExternalAgentBackend({ dataRoot, workspacesRoot, resolveLaunch })
+      await expect(
+        backend.invoke("spawn_external_agent", {
+          config: {
+            id: "forged-env",
+            command: process.execPath,
+            args: [launcher, composition],
+            cwd: workspacesRoot,
+            env: { [key]: workspacesRoot },
+          },
+        })
+      ).rejects.toThrow(/Invalid managed DeepSeek Harness/)
+      expect(resolveLaunch).not.toHaveBeenCalled()
+      expect(fs.readdirSync(path.join(dataRoot, ".deepseek-harness-control", "processes"))).toEqual(
+        []
+      )
+    }
+  )
+
+  it("refuses nested writable-state launchers and unapproved compositions", () => {
+    const nested = path.join(path.dirname(launcher), "dsh-home", "payload")
+    fs.mkdirSync(nested, { recursive: true })
+    const evilLauncher = path.join(nested, "launcher.mjs")
+    const evilComposition = path.join(nested, "evil.yml")
+    fs.writeFileSync(evilLauncher, "")
+    fs.writeFileSync(evilComposition, "")
+    expect(isDshLauncherInvocation([evilLauncher, evilComposition], dataRoot)).toBe(false)
+    expect(isDshLauncherInvocation([launcher, evilComposition], dataRoot)).toBe(false)
+  })
+
+  it.each(["launcher", "composition"])(
+    "refuses trusted %s files symlinked into writable state",
+    (kind) => {
+      const nested = path.join(path.dirname(launcher), "dsh-home")
+      fs.mkdirSync(nested, { recursive: true })
+      const target = path.join(
+        nested,
+        kind === "launcher" ? "launcher.mjs" : "host.sdk-readonly.yml"
+      )
+      fs.writeFileSync(target, "")
+      const trusted = kind === "launcher" ? launcher : composition
+      fs.rmSync(trusted)
+      fs.symlinkSync(target, trusted)
+      expect(isDshLauncherInvocation([launcher, composition], dataRoot)).toBe(false)
+    }
+  )
+
+  it("blocks maintenance during asynchronous launch preparation", async () => {
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const preparing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const backend = new NodeExternalAgentBackend({
+      dataRoot,
+      workspacesRoot,
+      resolveLaunch: async (config) => {
+        entered()
+        await waiting
+        return { command: config.command, args: config.args ?? [] }
+      },
+    })
+    const exited = nextEvent(backend, "external-agent://exit")
+    const started = backend.invoke("spawn_external_agent", {
+      config: {
+        id: "starting-dsh",
+        command: process.execPath,
+        args: [launcher, composition],
+        cwd: workspacesRoot,
+      },
+    })
+    await preparing
+    try {
+      expect(() => removeDshRuntime({ dataRoot, activeSessionCount: 0 })).toThrow(
+        /process|using|lease/i
+      )
+    } finally {
+      release()
+      await started.catch(() => undefined)
+    }
+    if (fs.existsSync(launcher)) await exited
+  })
+
+  it("keeps an actual child lease visible after exit until retirement is proven", async () => {
+    fs.writeFileSync(
+      launcher,
+      "console.log(JSON.stringify({id:process.env.COGNIA_DSH_PROCESS_LEASE,nonce:process.env.COGNIA_DSH_PROCESS_LEASE_NONCE})); setInterval(() => {}, 1000)"
+    )
+    let preparedLease: string | undefined
+    let preparedNonce: string | undefined
+    const backend = new NodeExternalAgentBackend({
+      dataRoot,
+      workspacesRoot,
+      resolveLaunch: async (config) => {
+        preparedLease = config.env?.COGNIA_DSH_PROCESS_LEASE
+        preparedNonce = config.env?.COGNIA_DSH_PROCESS_LEASE_NONCE
+        return {
+          command: config.command,
+          args: config.args ?? [],
+          env: {
+            COGNIA_DSH_PROCESS_LEASE: "resolver-spoof",
+            COGNIA_DSH_PROCESS_LEASE_NONCE: "resolver-nonce-spoof",
+          },
+        }
+      },
+    })
+    const otherHost = new NodeExternalAgentBackend({ dataRoot, workspacesRoot })
+    const output = nextEvent<{ data: string }>(backend, "external-agent://stdout")
+    await backend.invoke("spawn_external_agent", {
+      config: {
+        id: "leased-child",
+        command: process.execPath,
+        args: [launcher, composition],
+        cwd: workspacesRoot,
+        env: {
+          COGNIA_DSH_PROCESS_LEASE: "caller-spoof",
+          COGNIA_DSH_PROCESS_LEASE_NONCE: "caller-nonce-spoof",
+        },
+      },
+    })
+    try {
+      await expect(
+        otherHost.invoke("dsh_runtime_remove", { activeSessionCount: 0 })
+      ).rejects.toThrow(/process leases/)
+      const records = fs.readdirSync(path.join(dataRoot, ".deepseek-harness-control", "processes"))
+      expect(records).toHaveLength(1)
+      const leaseId = records[0].slice(0, -".json".length)
+      expect(preparedLease).toBe(leaseId)
+      const proof = JSON.parse((await output).data)
+      expect(proof.id).toBe(leaseId)
+      expect(proof.nonce).toBe(preparedNonce)
+      expect(proof.nonce).not.toBe("caller-nonce-spoof")
+      expect(proof.nonce).not.toBe("resolver-nonce-spoof")
+      const record = JSON.parse(
+        fs.readFileSync(
+          path.join(dataRoot, ".deepseek-harness-control", "processes", records[0]),
+          "utf8"
+        )
+      )
+      expect(record.childPid).toBeGreaterThan(0)
+      expect(record.nonceDigest).toBe(createHash("sha256").update(proof.nonce).digest("hex"))
+      expect(record).not.toHaveProperty("nonce")
+    } finally {
+      await backend.invoke("kill_external_agent", { agentId: "leased-child" })
+    }
+    await expect(otherHost.invoke("dsh_runtime_remove", {})).rejects.toThrow(/process leases/)
+  })
+
+  it.each([
+    [false, "exit0"],
+    [false, "SIGKILL"],
+    [true, "exit0"],
+    [true, "SIGKILL"],
+  ] as const)(
+    "refuses maintenance with a surviving child (detached=%s, leader=%s)",
+    async (detached, exitMode) => {
+      const pidFile = path.join(workspacesRoot, "owned-child.pid")
+      const state = path.join(dataRoot, "deepseek-harness", "sessions", "owned-child-state")
+      fs.mkdirSync(path.dirname(state), { recursive: true })
+      const childCode = `
+      const fs = require('node:fs');
+      fs.writeFileSync(${JSON.stringify(state)}, 'owned state');
+      fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `
+      fs.writeFileSync(
+        launcher,
+        `
+      import fs from 'node:fs';
+      import { spawn } from 'node:child_process';
+      spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], { detached: ${detached}, stdio: 'ignore' });
+      const ready = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(pidFile)})) return;
+        clearInterval(ready);
+        ${exitMode === "exit0" ? "process.exit(0)" : "process.kill(process.pid, 'SIGKILL')"};
+      }, 10);
+    `
+      )
+      const backend = new NodeExternalAgentBackend({
+        dataRoot,
+        workspacesRoot,
+        resolveLaunch: async (config) => ({ command: config.command, args: config.args ?? [] }),
+      })
+      const otherHost = new NodeExternalAgentBackend({ dataRoot, workspacesRoot })
+      const exited = nextEvent(backend, "external-agent://exit")
+      let childPid: number | undefined
+      try {
+        await backend.invoke("spawn_external_agent", {
+          config: {
+            id: `retirement-${detached}-${exitMode}`,
+            command: process.execPath,
+            args: [launcher, composition],
+            cwd: workspacesRoot,
+          },
+        })
+        await exited
+        childPid = Number(fs.readFileSync(pidFile, "utf8"))
+        expect(process.kill(childPid, 0)).toBe(true)
+        await expect(otherHost.invoke("dsh_runtime_remove", {})).rejects.toThrow(/process leases/)
+        expect(process.kill(childPid, 0)).toBe(true)
+        expect(fs.readFileSync(state, "utf8")).toBe("owned state")
+      } finally {
+        if (childPid !== undefined) {
+          try {
+            process.kill(childPid, "SIGKILL")
+          } catch {
+            /* Fixture child already exited. */
+          }
+        }
+        await backend
+          .invoke("kill_external_agent", { agentId: `retirement-${detached}-${exitMode}` })
+          .catch(() => undefined)
+      }
+    }
+  )
+
+  it("releases a pending lease when launch preparation fails", async () => {
+    const backend = new NodeExternalAgentBackend({
+      dataRoot,
+      workspacesRoot,
+      resolveLaunch: async () => {
+        throw new Error("preparation refused")
+      },
+    })
+    await expect(
+      backend.invoke("spawn_external_agent", {
+        config: {
+          id: "failed-start",
+          command: process.execPath,
+          args: [launcher, composition],
+          cwd: workspacesRoot,
+        },
+      })
+    ).rejects.toThrow("preparation refused")
+    const otherHost = new NodeExternalAgentBackend({ dataRoot, workspacesRoot })
+    await expect(otherHost.invoke("dsh_runtime_remove", {})).resolves.toBeUndefined()
+  })
+
+  it.each(["cwd", "declared-workspace", "additional-root"])(
+    "rejects protected managed DSH %s even with an unwrapped host resolver",
+    async (scope) => {
+      const resolveLaunch = jest.fn(async (config: { command: string; args?: string[] }) => ({
+        command: config.command,
+        args: config.args ?? [],
+      }))
+      const backend = new NodeExternalAgentBackend({
+        dataRoot,
+        workspacesRoot: dataRoot,
+        resolveLaunch,
+      })
+      try {
+        await expect(
+          backend.invoke("spawn_external_agent", {
+            config: {
+              id: "unsafe-direct-scope",
+              command: process.execPath,
+              args: [launcher, composition],
+              cwd: scope === "cwd" ? dataRoot : workspacesRoot,
+              env: {
+                COGNIA_DSH_WORKSPACE:
+                  scope === "declared-workspace" ? path.dirname(launcher) : workspacesRoot,
+                ...(scope === "additional-root"
+                  ? { COGNIA_DSH_ADDITIONAL_DIRECTORIES: JSON.stringify([dataRoot]) }
+                  : {}),
+              },
+            },
+          })
+        ).rejects.toThrow(/control|runtime code|writable/i)
+        expect(resolveLaunch).not.toHaveBeenCalled()
+      } finally {
+        await backend
+          .invoke("kill_external_agent", { agentId: "unsafe-direct-scope" })
+          .catch(() => undefined)
+      }
+    }
+  )
+
+  it("rechecks resolver workspace overrides and releases the failed launch lease", async () => {
+    const backend = new NodeExternalAgentBackend({
+      dataRoot,
+      workspacesRoot,
+      resolveLaunch: async (config) => ({
+        command: config.command,
+        args: config.args ?? [],
+        env: { COGNIA_DSH_WORKSPACE: dataRoot },
+      }),
+    })
+    await expect(
+      backend.invoke("spawn_external_agent", {
+        config: {
+          id: "unsafe-resolver-scope",
+          command: process.execPath,
+          args: [launcher, composition],
+          cwd: workspacesRoot,
+        },
+      })
+    ).rejects.toThrow(/control|runtime code|writable/i)
+    expect(fs.readdirSync(path.join(dataRoot, ".deepseek-harness-control", "processes"))).toEqual(
+      []
+    )
+  })
+
   it("injects trusted ports after the DSH-specific env filter", async () => {
     const trusted = { COGNIA_PORT: "41040", COGNIA_PORT_COUNT: "10", PORT: "41040" }
     jest.mocked(resolveWorkspacePortEnv).mockResolvedValueOnce(trusted)
@@ -1063,6 +1443,7 @@ describe("isDshLauncherInvocation", () => {
     )
     const backend = new NodeExternalAgentBackend({
       workspacesRoot,
+      dataRoot,
       resolveLaunch: async (config) => ({
         command: config.command,
         args: config.args ?? [],
@@ -1087,6 +1468,7 @@ describe("isDshLauncherInvocation", () => {
   it("admits the canonical host Node path only with a managed composition", async () => {
     const backend = new NodeExternalAgentBackend({
       workspacesRoot,
+      dataRoot,
       resolveLaunch: async (config) => ({ command: config.command, args: config.args ?? [] }),
     })
     const exited = nextEvent(backend, "external-agent://exit")
@@ -1114,8 +1496,20 @@ describe("isDshLauncherInvocation", () => {
   })
 
   it("admits the managed launcher inside the runtime home", () => {
-    expect(isDshLauncherInvocation([launcher, composition], workspacesRoot)).toBe(true)
+    expect(isDshLauncherInvocation([launcher, composition], dataRoot)).toBe(true)
   })
+
+  it.each(["launcher", "composition", "both"])(
+    "rejects relative %s arguments before a child cwd can reinterpret them",
+    (kind) => {
+      const args = [
+        kind === "composition" ? launcher : path.relative(process.cwd(), launcher),
+        kind === "launcher" ? composition : path.relative(process.cwd(), composition),
+      ]
+      expect(isDshLauncherInvocation(args, dataRoot)).toBe(false)
+      expect(() => validateCommand({ command: "node", args }, false, dataRoot)).toThrow(/allowlist/)
+    }
+  )
 
   it("rejects a launcher an agent planted in its own workspace", () => {
     // The workspaces dir sits under the same data root as the runtime home, and
@@ -1128,7 +1522,7 @@ describe("isDshLauncherInvocation", () => {
     const plantedYml = path.join(workspace, "host.acp.yml")
     fs.writeFileSync(planted, "")
     fs.writeFileSync(plantedYml, "")
-    expect(isDshLauncherInvocation([planted, plantedYml], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([planted, plantedYml], dataRoot)).toBe(false)
   })
 
   it("rejects a composition an agent planted in its own workspace", () => {
@@ -1137,7 +1531,7 @@ describe("isDshLauncherInvocation", () => {
     fs.mkdirSync(workspace, { recursive: true })
     const plantedYml = path.join(workspace, "host.acp.yml")
     fs.writeFileSync(plantedYml, "")
-    expect(isDshLauncherInvocation([launcher, plantedYml], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([launcher, plantedYml], dataRoot)).toBe(false)
   })
 
   it("rejects a launcher outside the data root", () => {
@@ -1145,33 +1539,31 @@ describe("isDshLauncherInvocation", () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-evil-"))
     const evil = path.join(outside, "launcher.mjs")
     fs.writeFileSync(evil, "")
-    expect(isDshLauncherInvocation([evil, composition], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([evil, composition], dataRoot)).toBe(false)
     fs.rmSync(outside, { recursive: true, force: true })
   })
 
   it("rejects a differently named script", () => {
     const other = path.join(path.dirname(launcher), "evil.mjs")
     fs.writeFileSync(other, "")
-    expect(isDshLauncherInvocation([other, composition], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([other, composition], dataRoot)).toBe(false)
   })
 
   it("rejects a non-yml second argument", () => {
     const notYml = path.join(path.dirname(launcher), "payload.js")
     fs.writeFileSync(notYml, "")
-    expect(isDshLauncherInvocation([launcher, notYml], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([launcher, notYml], dataRoot)).toBe(false)
   })
 
   it("rejects extra arguments", () => {
     // Exactly two: anything more could carry a flag the launcher does not vet.
-    expect(isDshLauncherInvocation([launcher, composition, "--inspect"], workspacesRoot)).toBe(
-      false
-    )
-    expect(isDshLauncherInvocation([launcher], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([launcher, composition, "--inspect"], dataRoot)).toBe(false)
+    expect(isDshLauncherInvocation([launcher], dataRoot)).toBe(false)
   })
 
   it("rejects a path that does not exist", () => {
     const missing = path.join(path.dirname(launcher), "launcher.mjs.missing")
-    expect(isDshLauncherInvocation([missing, composition], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([missing, composition], dataRoot)).toBe(false)
   })
 
   it("rejects a symlink escaping the data root", () => {
@@ -1186,7 +1578,7 @@ describe("isDshLauncherInvocation", () => {
     fs.mkdirSync(staged)
     const linked = path.join(staged, "launcher.mjs")
     fs.symlinkSync(target, linked)
-    expect(isDshLauncherInvocation([linked, composition], workspacesRoot)).toBe(false)
+    expect(isDshLauncherInvocation([linked, composition], dataRoot)).toBe(false)
     fs.rmSync(outside, { recursive: true, force: true })
   })
 })
