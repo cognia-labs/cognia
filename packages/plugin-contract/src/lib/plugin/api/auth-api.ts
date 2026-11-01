@@ -40,6 +40,8 @@ export interface ConfidentialExchangeRequest {
   /** Additional parameters; collisions with Host-injected credential names are refused. */
   params: Record<string, string>
   clientId: string
+  /** Required when the provider declares several issuers/deployments. Use the attempt/lineage issuer. */
+  issuer?: string
   placement: "none" | "form" | "json" | "basic"
 }
 

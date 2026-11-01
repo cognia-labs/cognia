@@ -261,6 +261,8 @@ describe("Host-managed provider session adapter", () => {
     expect(session?.accessToken).toBe("host-secret")
     expect(invokePluginApi).toHaveBeenCalledWith("host-owner", "auth:setClientSecret", {
       providerId,
+      clientId: "client",
+      issuer: "https://issuer.test",
       value: configuration.clientSecret,
     })
     expect(JSON.stringify(jest.mocked(provider.authorize!).mock.calls)).not.toContain(
@@ -272,6 +274,85 @@ describe("Host-managed provider session adapter", () => {
     expect(JSON.stringify(await getAuthConnection(session!.id))).not.toContain(
       configuration.clientSecret
     )
+  })
+
+  it("refreshes two connections with each stored client binding and its own Host secret", async () => {
+    __resetAuthRegistryForTesting()
+    const owner = createAuthAPI("host-owner", allow)
+    const secrets = new Map<string, string>()
+    const sent: Array<{ clientId: string; secret: string }> = []
+    jest.mocked(invokePluginApi).mockImplementation(async (_pluginId, operation, input) => {
+      const payload = input as {
+        clientId: string
+        issuer: string
+        value: string
+        params: Record<string, string>
+        knownClients?: Array<{ clientId: string; issuer: string }>
+      }
+      const key = JSON.stringify([payload.issuer, payload.clientId])
+      if (operation === "auth:setClientSecret") {
+        secrets.set(key, payload.value)
+        return undefined
+      }
+      expect(operation).toBe("auth:exchange")
+      expect(payload.knownClients).toEqual(
+        expect.arrayContaining([
+          { clientId: "one", issuer: "https://issuer.test" },
+          { clientId: "two", issuer: "https://issuer.test" },
+        ])
+      )
+      sent.push({ clientId: payload.clientId, secret: secrets.get(key)! })
+      return { status: 200, body: { access_token: `refreshed-${payload.clientId}` } }
+    })
+    owner.registerProvider({
+      management: "host",
+      id: providerId,
+      label: "Acme",
+      authorize: provider.authorize,
+      exchange: async (attempt) => ({
+        accessToken: attempt.clientId,
+        refreshToken: `refresh-${attempt.clientId}`,
+        scopes: ["read"],
+        expiresAt: "2000-01-01T00:00:00Z",
+      }),
+      describe: async (credentials) => ({
+        clientId: credentials.accessToken,
+        issuer: "https://issuer.test",
+        principal: { id: "same-user", kind: "user" },
+        accountLabel: "User",
+        scopes: credentials.scopes,
+      }),
+      refresh: async (lineage) => {
+        const response = await owner.exchangeConfidential({
+          providerId,
+          tokenUrl: "https://issuer.test/token",
+          placement: "basic",
+          clientId: lineage.identity.clientId,
+          issuer: lineage.identity.issuer,
+          params: { grant_type: "refresh_token", refresh_token: lineage.credentials.refreshToken! },
+        })
+        return { accessToken: String(response.body.access_token), scopes: ["read"] }
+      },
+    })
+    const refs = []
+    for (const clientId of ["one", "two"]) {
+      refs.push(
+        await connectProvider({
+          providerId,
+          scopes: ["read"],
+          configuration: { clientId, clientSecret: `secret-${clientId}` },
+        })
+      )
+    }
+    await Promise.all(refs.map((ref) => getConnectionManager().getCredentials(ref)))
+    expect(sent).toEqual(
+      expect.arrayContaining([
+        { clientId: "one", secret: "secret-one" },
+        { clientId: "two", secret: "secret-two" },
+      ])
+    )
+    expect(sent).toHaveLength(2)
+    jest.mocked(invokePluginApi).mockReset()
   })
 
   it("tombstones before revoking and removes the legacy session", async () => {
@@ -411,6 +492,7 @@ describe("confidential exchange", () => {
     tokenUrl: "https://acme.test/token",
     params: { grant_type: "client_credentials" },
     clientId: "client",
+    issuer: "https://acme.test",
     placement: "basic" as const,
   }
   beforeEach(() => {

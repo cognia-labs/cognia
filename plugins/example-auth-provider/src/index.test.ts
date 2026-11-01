@@ -152,6 +152,7 @@ beforeEach(async () => {
       expect(request.payload).toMatchObject({
         tokenUrl: "https://api.example-tracker.test/oauth/token",
         clientId: "cognia-example-public-client",
+        issuer: "https://api.example-tracker.test",
         placement: "none",
       })
       expect(request.payload.params).not.toHaveProperty("client_secret")
@@ -351,6 +352,13 @@ it("refreshes once through auth:exchange under the Host lock and stores rotated 
     exchanges.filter((entry) => entry.payload.params.grant_type === "refresh_token")
   ).toHaveLength(1)
   expect(exchanges[1].payload.params.refresh_token).toBe("host-only-refresh")
+  expect(exchanges[1].payload).toMatchObject({
+    clientId: "cognia-example-public-client",
+    issuer: "https://api.example-tracker.test",
+    knownClients: [
+      { clientId: "cognia-example-public-client", issuer: "https://api.example-tracker.test" },
+    ],
+  })
   expect(await getConnectionManager().getCredentials(ref)).toMatchObject({
     refreshToken: "rotated-refresh-token",
   })

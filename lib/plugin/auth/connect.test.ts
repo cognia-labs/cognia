@@ -14,6 +14,7 @@ import { acceptCallback } from "./callback-acceptor"
 import { AuthConnectionManager, getConnectionManager } from "./connection-manager"
 import { setHostAuthBackend } from "./connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
+import { PluginGatewayError } from "@/lib/plugin/core/transport"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn() }))
@@ -150,6 +151,47 @@ it("requires a declared manifest authorization binding for Host-managed provider
     reason: "authorization-configuration-missing",
   })
   expect(provider.exchange).not.toHaveBeenCalled()
+})
+
+it("binds Host form client selection to the attempt and connection", async () => {
+  provider.management = "host"
+  provider.describe = async (credentials) => ({
+    issuer: "https://issuer.test",
+    clientId: "second-client",
+    principal: { id: "user", kind: "user" },
+    accountLabel: "Account",
+    scopes: credentials.scopes,
+  })
+  const ref = await connectProvider({
+    providerId: "acme",
+    scopes: [],
+    configuration: { clientId: "second-client", issuer: "https://issuer.test" },
+  })
+  expect(provider.exchange).toHaveBeenCalledWith(
+    expect.objectContaining({ clientId: "second-client", issuer: "https://issuer.test" }),
+    expect.anything()
+  )
+  expect(await getAuthConnection(ref)).toMatchObject({
+    clientId: "second-client",
+    issuer: "https://issuer.test",
+  })
+})
+
+it("asks for client-secret re-entry when legacy ownership is ambiguous", async () => {
+  provider.exchange = async () => {
+    throw new PluginGatewayError({
+      code: "NOT_FOUND",
+      message: "client-secret-ambiguous",
+      details: { reason: "client-secret-ambiguous" },
+      api: "auth:exchange",
+      pluginId: "owner",
+      requestId: "request",
+    })
+  }
+  await expect(connectProvider({ providerId: "acme", scopes: [] })).rejects.toMatchObject({
+    code: "CLIENT_SECRET_REQUIRED",
+    reason: "client-secret-reentry-required",
+  })
 })
 
 it.each([null, 42, ""])(

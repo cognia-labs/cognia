@@ -413,6 +413,9 @@
         "type": "object",
         "required": ["id", "idempotent", "resourceEffect"],
         "properties": {
+          "params": {
+            "type": "object"
+          },
           "id": {
             "type": "string"
           },

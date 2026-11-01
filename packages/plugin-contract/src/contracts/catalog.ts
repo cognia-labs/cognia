@@ -141,6 +141,8 @@ export interface PluginApiNamespaceContract {
 export interface PluginApiWireOpContract {
   /** The exact `namespace:method` string the transport sends. */
   id: string
+  /** Additive JSON Schema metadata for Host wire-operation parameters. */
+  params?: Readonly<Record<string, unknown>>
   idempotent: boolean
   resourceEffect: PluginApiResourceEffect
   requiredPermissions?: readonly string[]

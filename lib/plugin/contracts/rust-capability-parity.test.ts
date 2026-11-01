@@ -192,4 +192,18 @@ describe("Rust CLI ↔ TS validator parity", () => {
     }
     expect(auth.transport).toBe("direct")
   })
+
+  it("binds Host client-secret configuration to the OAuth client", () => {
+    for (const op of ["setClientSecret", "clearClientSecret", "hasClientSecret"]) {
+      const wire = PLUGIN_API_WIRE_OP_CONTRACTS[`auth:${op}`]
+      expect(wire).toMatchObject({
+        params: {
+          required: expect.arrayContaining(["providerId", "clientId"]),
+          properties: { clientId: { type: "string" }, issuer: { type: "string" } },
+        },
+      })
+    }
+    expect(API_BRIDGE).toContain('"client-secret-ambiguous"')
+    expect(API_BRIDGE).toContain('"issuer"')
+  })
 })

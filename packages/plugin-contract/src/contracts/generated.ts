@@ -3323,6 +3323,27 @@ export const PLUGIN_API_WIRE_OPS = {
   },
   "auth:setClientSecret": {
     id: "auth:setClientSecret",
+    params: {
+      type: "object",
+      required: ["providerId", "clientId", "value"],
+      properties: {
+        providerId: {
+          type: "string",
+        },
+        clientId: {
+          type: "string",
+          minLength: 1,
+        },
+        issuer: {
+          type: "string",
+          description: "Required for providers with multiple issuers or deployments.",
+        },
+        value: {
+          type: "string",
+          minLength: 1,
+        },
+      },
+    },
     idempotent: false,
     resourceEffect: {
       kind: "none",
@@ -3334,6 +3355,22 @@ export const PLUGIN_API_WIRE_OPS = {
   },
   "auth:clearClientSecret": {
     id: "auth:clearClientSecret",
+    params: {
+      type: "object",
+      required: ["providerId", "clientId"],
+      properties: {
+        providerId: {
+          type: "string",
+        },
+        clientId: {
+          type: "string",
+          minLength: 1,
+        },
+        issuer: {
+          type: "string",
+        },
+      },
+    },
     idempotent: false,
     resourceEffect: {
       kind: "none",
@@ -3345,6 +3382,22 @@ export const PLUGIN_API_WIRE_OPS = {
   },
   "auth:hasClientSecret": {
     id: "auth:hasClientSecret",
+    params: {
+      type: "object",
+      required: ["providerId", "clientId"],
+      properties: {
+        providerId: {
+          type: "string",
+        },
+        clientId: {
+          type: "string",
+          minLength: 1,
+        },
+        issuer: {
+          type: "string",
+        },
+      },
+    },
     idempotent: true,
     resourceEffect: {
       kind: "none",

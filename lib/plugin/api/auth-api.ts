@@ -181,7 +181,20 @@ export function createAuthAPI(
           pluginId,
         })
       }
-      return invokePluginApi(pluginId, "auth:exchange", request)
+      // Include the Host's complete client inventory even when credentials live
+      // in a CLI backend, so legacy adoption cannot guess between connections.
+      const clients = (await listAuthConnections(request.providerId))
+        .filter(
+          (row) =>
+            row.ownerPluginId === pluginId &&
+            row.status !== "revoked" &&
+            row.status !== "tombstoned"
+        )
+        .map(({ clientId, issuer }) => ({ clientId, issuer }))
+      return invokePluginApi(pluginId, "auth:exchange", {
+        ...request,
+        ...(clients.length ? { knownClients: clients } : {}),
+      })
     },
     registerProvider(provider) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.registerProvider")

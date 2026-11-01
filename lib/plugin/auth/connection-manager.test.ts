@@ -129,6 +129,55 @@ function fixture() {
   }
 }
 
+it("refreshes each connection with its stored OAuth client and issuer", async () => {
+  const f = fixture()
+  const requests: Array<{ clientId: string; issuer: string; secret: string }> = []
+  const secrets = new Map([
+    [JSON.stringify(["https://issuer", "one"]), "secret-one"],
+    [JSON.stringify(["https://other-issuer", "two"]), "secret-two"],
+  ])
+  f.provider.describe = async (credentials) => ({
+    issuer: credentials.accessToken === "one" ? "https://issuer" : "https://other-issuer",
+    clientId: credentials.accessToken,
+    principal: { id: "same-user", kind: "user" },
+    accountLabel: "Account",
+    scopes: credentials.scopes,
+  })
+  f.provider.refresh = async ({ identity: { clientId, issuer } }) => {
+    requests.push({ clientId, issuer, secret: secrets.get(JSON.stringify([issuer, clientId]))! })
+    return fresh
+  }
+  const one = await f.manager.createConnectionFromCredentials(f.provider, {
+    ...old,
+    accessToken: "one",
+  })
+  const two = await f.manager.createConnectionFromCredentials(f.provider, {
+    ...old,
+    accessToken: "two",
+  })
+  await Promise.all([f.manager.getCredentials(one), f.manager.getCredentials(two)])
+  expect(requests).toEqual(
+    expect.arrayContaining([
+      { clientId: "one", issuer: "https://issuer", secret: "secret-one" },
+      { clientId: "two", issuer: "https://other-issuer", secret: "secret-two" },
+    ])
+  )
+  expect(requests).toHaveLength(2)
+})
+
+it("requires reauthentication when legacy client-secret ownership is ambiguous", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
+  f.provider.refresh = async () => {
+    throw { code: "NOT_FOUND", details: { reason: "client-secret-ambiguous" } }
+  }
+  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({
+    code: "NOT_FOUND",
+    details: { reason: "client-secret-ambiguous" },
+  })
+  expect(f.rows.get(ref)?.status).toBe("needs-reauth")
+})
+
 it("reconciles Rust-owned credentials without copying them into the connection keyring", async () => {
   const f = fixture()
   f.provider.pluginId = null

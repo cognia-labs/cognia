@@ -720,8 +720,197 @@ pub(crate) fn client_secret_namespace(plugin_id: &str) -> String {
     format!("plugin-auth-client:{plugin_id}")
 }
 
+// Keep adoption and explicit replacement serialized. This guard is used only
+// for synchronous store I/O and is never held during a network await.
+static CLIENT_SECRET_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClientSecretBinding {
+    client_id: String,
+    issuer: String,
+}
+
+fn client_secret_key(provider_id: &str, binding: &ClientSecretBinding) -> String {
+    // A length-delimited JSON tuple prevents separator collisions. Hashing also
+    // keeps client identifiers out of the secret store's account names.
+    let tuple = serde_json::to_vec(&(provider_id, &binding.client_id, &binding.issuer))
+        .expect("string tuple serialization cannot fail");
+    format!("client-v2:{}", hex::encode(Sha256::digest(tuple)))
+}
+
+fn client_secret_binding(
+    provider: &Value,
+    payload: &Value,
+) -> std::result::Result<ClientSecretBinding, PluginApiError> {
+    let client_id = payload_str(payload, "clientId")?;
+    if client_id.trim().is_empty() {
+        return Err(PluginApiError::invalid("OAuth clientId must not be empty"));
+    }
+    let issuers = provider.get("issuers").and_then(Value::as_array);
+    let issuer = match payload.get("issuer").filter(|value| !value.is_null()) {
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| PluginApiError::invalid("invalid OAuth issuer"))?
+            .to_owned(),
+        None if issuers.is_some_and(|values| values.len() > 1) => {
+            return Err(PluginApiError::invalid(
+                "OAuth issuer is required for a provider with multiple issuers",
+            ));
+        }
+        None => issuers
+            .and_then(|values| values.first())
+            .and_then(Value::as_str)
+            .or_else(|| {
+                provider
+                    .pointer("/authorization/issuer")
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("")
+            .to_owned(),
+    };
+    if !issuer.is_empty() {
+        let url = url::Url::parse(&issuer)
+            .map_err(|_| PluginApiError::invalid("invalid OAuth issuer"))?;
+        if url.scheme() != "https" || url.origin().ascii_serialization() != issuer {
+            return Err(PluginApiError::invalid("invalid OAuth issuer"));
+        }
+    } else if payload.get("issuer").is_some_and(|value| !value.is_null()) {
+        return Err(PluginApiError::invalid("invalid OAuth issuer"));
+    }
+    if issuers.is_some_and(|values| !values.iter().any(|value| value.as_str() == Some(&issuer))) {
+        return Err(PluginApiError::permission_denied(
+            "OAuth issuer is not declared",
+        ));
+    }
+    Ok(ClientSecretBinding { client_id, issuer })
+}
+
+fn client_secret_required(ambiguous: bool) -> PluginApiError {
+    PluginApiError {
+        code: "NOT_FOUND".into(),
+        message: if ambiguous {
+            "OAuth client secret ownership is ambiguous; re-enter this client's secret"
+        } else {
+            "OAuth client secret is not configured for this client; enter its secret"
+        }
+        .into(),
+        details: Some(
+            json!({"reason": if ambiguous { "client-secret-ambiguous" } else { "client-secret-missing" }}),
+        ),
+    }
+}
+
+fn read_client_secret(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    provider_id: &str,
+    provider: &Value,
+    binding: &ClientSecretBinding,
+    payload: &Value,
+) -> std::result::Result<String, PluginApiError> {
+    use cognia_secrets::{keyring_secrets, secret_store};
+    let _guard = CLIENT_SECRET_LOCK.lock();
+    let namespace = client_secret_namespace(plugin_id);
+    let key = client_secret_key(provider_id, binding);
+    let store_error = |error| PluginApiError::from_secret_store("auth client secret", error);
+    if let Some(secret) = keyring_secrets::get(&namespace, &key).map_err(store_error)? {
+        return Ok(secret);
+    }
+    let legacy = keyring_secrets::get(&namespace, provider_id)
+        .map_err(store_error)?
+        .ok_or_else(|| client_secret_required(false))?;
+    // The current configuration names a client even before its first connection
+    // exists. Any different installed/stored client makes legacy ownership ambiguous.
+    let mut clients = std::collections::HashSet::from([binding.clone()]);
+    if let Some(configuration) = provider.get("authorization") {
+        clients.insert(
+            client_secret_binding(provider, configuration)
+                .map_err(|_| client_secret_required(true))?,
+        );
+    }
+    // The renderer/CLI includes its metadata inventory. It can only make
+    // adoption more restrictive, never select another client's secret.
+    if let Some(known) = payload.get("knownClients") {
+        let known: Vec<ClientSecretBinding> = serde_json::from_value(known.clone())
+            .map_err(|_| PluginApiError::invalid("invalid Host OAuth client inventory"))?;
+        for client in known {
+            clients.insert(client_secret_binding(
+                provider,
+                &json!({
+                    "clientId": client.client_id, "issuer": client.issuer
+                }),
+            )?);
+        }
+    }
+    // Native/headless connections keep protected identity metadata alongside
+    // their credentials. Enumerate it as well, including inactive providers.
+    let account = state
+        .active_account_id()
+        .map_err(|_| client_secret_required(true))?;
+    let connection_namespace = format!("auth-connections:{account}");
+    let connection_service = format!("com.cognia.{connection_namespace}/v1");
+    for account in secret_store::list_accounts(&connection_service).map_err(store_error)? {
+        if account == "__host_auth_keys__" {
+            continue;
+        }
+        let Some(raw) =
+            keyring_secrets::get(&connection_namespace, &account).map_err(store_error)?
+        else {
+            continue;
+        };
+        let record: Value = serde_json::from_str(&raw).map_err(|_| client_secret_required(true))?;
+        if record.get("tombstoned").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let identity = record
+            .pointer("/lineage/identity")
+            .ok_or_else(|| client_secret_required(true))?;
+        if identity
+            .pointer("/provider/ownerPluginId")
+            .and_then(Value::as_str)
+            != Some(plugin_id)
+            || identity
+                .pointer("/provider/providerId")
+                .and_then(Value::as_str)
+                != Some(provider_id)
+        {
+            continue;
+        }
+        clients.insert(
+            client_secret_binding(provider, identity).map_err(|_| client_secret_required(true))?,
+        );
+    }
+    if clients.len() != 1 || !clients.contains(binding) {
+        return Err(client_secret_required(true));
+    }
+    let service = format!("com.cognia.{namespace}/v1");
+    // The old key is consumed once, atomically with creating the client key.
+    secret_store::apply_batch_if(
+        &[
+            secret_store::SecretMutation::Set {
+                service: &service,
+                account: &key,
+                value: &legacy,
+            },
+            secret_store::SecretMutation::Delete {
+                service: &service,
+                account: provider_id,
+            },
+        ],
+        secret_store::SecretCondition {
+            service: &service,
+            account: provider_id,
+            expected: Some(&legacy),
+        },
+    )
+    .map_err(store_error)?;
+    Ok(legacy)
+}
+
 /// Enumerate the Host namespace, including providers removed by an upgrade.
 pub(crate) fn clear_client_secrets(plugin_id: &str) -> std::result::Result<(), String> {
+    let _guard = CLIENT_SECRET_LOCK.lock();
     let namespace = client_secret_namespace(plugin_id);
     let service = format!("com.cognia.{namespace}/v1");
     for key in cognia_secrets::secret_store::list_accounts(&service)? {
@@ -839,21 +1028,61 @@ async fn handle_auth(
     let store_error = |error| PluginApiError::from_secret_store("auth client secret", error);
     match op {
         "setClientSecret" => {
+            let binding = client_secret_binding(&provider, payload)?;
+            let key = client_secret_key(&provider_id, &binding);
             let value = payload_str(payload, "value")?;
-            cognia_secrets::keyring_secrets::set(&namespace, &provider_id, &value)
-                .map_err(store_error)?;
+            if value.is_empty() {
+                return Err(PluginApiError::invalid(
+                    "OAuth client secret must not be empty",
+                ));
+            }
+            let _guard = CLIENT_SECRET_LOCK.lock();
+            // Explicit re-entry invalidates the unbound legacy value, so it
+            // cannot subsequently be guessed for another client.
+            cognia_secrets::keyring_secrets::set_if(
+                &namespace,
+                &key,
+                &value,
+                &cognia_secrets::keyring_secrets::SecretStoreSetCondition {
+                    expected: cognia_secrets::keyring_secrets::get(&namespace, &key)
+                        .map_err(store_error)?,
+                    changes: vec![cognia_secrets::keyring_secrets::SecretStoreChange {
+                        key: provider_id.clone(),
+                        value: None,
+                    }],
+                },
+            )
+            .map_err(store_error)?;
             Ok(Value::Null)
         }
         "clearClientSecret" => {
-            cognia_secrets::keyring_secrets::clear(&namespace, &provider_id)
-                .map_err(store_error)?;
+            let binding = client_secret_binding(&provider, payload)?;
+            let _guard = CLIENT_SECRET_LOCK.lock();
+            let service = format!("com.cognia.{namespace}/v1");
+            cognia_secrets::secret_store::apply_batch(&[
+                cognia_secrets::secret_store::SecretMutation::Delete {
+                    service: &service,
+                    account: &client_secret_key(&provider_id, &binding),
+                },
+                cognia_secrets::secret_store::SecretMutation::Delete {
+                    service: &service,
+                    account: &provider_id,
+                },
+            ])
+            .map_err(store_error)?;
             Ok(Value::Null)
         }
-        "hasClientSecret" => Ok(Value::Bool(
-            cognia_secrets::keyring_secrets::get(&namespace, &provider_id)
+        "hasClientSecret" => {
+            let binding = client_secret_binding(&provider, payload)?;
+            Ok(Value::Bool(
+                cognia_secrets::keyring_secrets::get(
+                    &namespace,
+                    &client_secret_key(&provider_id, &binding),
+                )
                 .map_err(store_error)?
                 .is_some(),
-        )),
+            ))
+        }
         "exchange" => {
             if !state.has_permission(plugin_id, "network:fetch") {
                 return Err(PluginApiError::permission_denied(
@@ -862,8 +1091,16 @@ async fn handle_auth(
             }
             if payload.as_object().is_none_or(|object| {
                 object.keys().any(|key| {
-                    !["providerId", "tokenUrl", "params", "clientId", "placement"]
-                        .contains(&key.as_str())
+                    ![
+                        "providerId",
+                        "tokenUrl",
+                        "params",
+                        "clientId",
+                        "issuer",
+                        "placement",
+                        "knownClients",
+                    ]
+                    .contains(&key.as_str())
                 })
             }) {
                 return Err(PluginApiError::invalid("unexpected OAuth exchange field"));
@@ -884,19 +1121,19 @@ async fn handle_auth(
                     "token params collide with injected credentials",
                 ));
             }
-            let client_id = payload_str(payload, "clientId")?;
+            let binding = client_secret_binding(&provider, payload)?;
+            let client_id = binding.client_id.clone();
             let client_secret = if placement == ClientSecretPlacement::None {
                 None
             } else {
-                Some(
-                    cognia_secrets::keyring_secrets::get(&namespace, &provider_id)
-                        .map_err(store_error)?
-                        .ok_or_else(|| PluginApiError {
-                            code: "NOT_FOUND".into(),
-                            message: "OAuth client secret is not configured".into(),
-                            details: Some(json!({"reason": "client-secret-missing"})),
-                        })?,
-                )
+                Some(read_client_secret(
+                    state,
+                    plugin_id,
+                    &provider_id,
+                    &provider,
+                    &binding,
+                    payload,
+                )?)
             };
             let response = confidential_token_exchange(ConfidentialExchangeRequest {
                 token_url,
@@ -2366,6 +2603,305 @@ mod tests {
         state
     }
 
+    fn client_secret_state(tmp: &TempDir, plugin_id: &str) -> PluginRuntimeState {
+        let state = auth_state(tmp);
+        let mut record = state.plugins.read().get("demo").unwrap().clone();
+        record.snapshot.plugin_id = plugin_id.into();
+        record.snapshot.install_path = state.plugin_dir(plugin_id).to_string_lossy().into_owned();
+        state.plugins.write().insert(plugin_id.into(), record);
+        std::fs::create_dir_all(state.plugin_dir(plugin_id)).unwrap();
+        std::fs::copy(
+            state.plugin_dir("demo").join("manifest.json"),
+            state.plugin_dir(plugin_id).join("manifest.json"),
+        )
+        .unwrap();
+        let grants = state.permissions.read().get("demo").unwrap().clone();
+        state.permissions.write().insert(plugin_id.into(), grants);
+        state.set_network_allowlist(plugin_id, vec!["vendor.test".into()]);
+        state
+    }
+
+    #[tokio::test]
+    async fn client_secret_is_selected_by_client_not_provider() {
+        let tmp = TempDir::new().unwrap();
+        let state = client_secret_state(&tmp, "isolated-clients");
+        for client in ["one", "two"] {
+            dispatch(
+                None,
+                &state,
+                "isolated-clients",
+                "auth:setClientSecret",
+                &json!({
+                    "providerId": "oauth", "clientId": client, "value": format!("secret-{client}")
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        for client in ["one", "two"] {
+            let binding = ClientSecretBinding {
+                client_id: client.into(),
+                issuer: "".into(),
+            };
+            assert_eq!(
+                read_client_secret(
+                    &state,
+                    "isolated-clients",
+                    "oauth",
+                    &json!({}),
+                    &binding,
+                    &json!({})
+                )
+                .unwrap(),
+                format!("secret-{client}")
+            );
+        }
+        assert_eq!(
+            dispatch(
+                None,
+                &state,
+                "isolated-clients",
+                "auth:hasClientSecret",
+                &json!({
+                    "providerId": "oauth", "clientId": "unconfigured"
+                })
+            )
+            .await
+            .unwrap(),
+            false
+        );
+        dispatch(
+            None,
+            &state,
+            "isolated-clients",
+            "auth:clearClientSecret",
+            &json!({
+                "providerId": "oauth", "clientId": "one"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            dispatch(
+                None,
+                &state,
+                "isolated-clients",
+                "auth:hasClientSecret",
+                &json!({
+                    "providerId": "oauth", "clientId": "two"
+                })
+            )
+            .await
+            .unwrap(),
+            true
+        );
+        let error = dispatch(
+            None,
+            &state,
+            "isolated-clients",
+            "auth:exchange",
+            &json!({
+                "providerId": "oauth", "clientId": "one", "placement": "basic",
+                "tokenUrl": "https://vendor.test/token", "params": {"grant_type": "refresh_token"}
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
+        clear_client_secrets("isolated-clients").unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_secret_requires_client_id_and_separates_deployments() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = "client-deployments";
+        let state = client_secret_state(&tmp, plugin);
+        std::fs::write(state.plugin_dir(plugin).join("manifest.json"), json!({
+            "authProviders": [{"id": "oauth", "issuers": ["https://one.test", "https://two.test"]}]
+        }).to_string()).unwrap();
+        for payload in [
+            json!({"providerId": "oauth", "value": "secret"}),
+            json!({"providerId": "oauth", "clientId": "same", "value": "secret"}),
+        ] {
+            assert_eq!(
+                dispatch(None, &state, plugin, "auth:setClientSecret", &payload)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "INVALID_REQUEST"
+            );
+        }
+        for (issuer, value) in [
+            ("https://one.test", "first"),
+            ("https://two.test", "second"),
+        ] {
+            dispatch(
+                None,
+                &state,
+                plugin,
+                "auth:setClientSecret",
+                &json!({
+                    "providerId": "oauth", "clientId": "same", "issuer": issuer, "value": value
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        dispatch(
+            None,
+            &state,
+            plugin,
+            "auth:clearClientSecret",
+            &json!({
+                "providerId": "oauth", "clientId": "same", "issuer": "https://one.test"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            dispatch(
+                None,
+                &state,
+                plugin,
+                "auth:hasClientSecret",
+                &json!({
+                    "providerId": "oauth", "clientId": "same", "issuer": "https://two.test"
+                })
+            )
+            .await
+            .unwrap(),
+            true
+        );
+        clear_client_secrets(plugin).unwrap();
+    }
+
+    #[test]
+    fn client_secret_keys_are_opaque_and_separator_safe() {
+        let binding = |client_id: &str, issuer: &str| ClientSecretBinding {
+            client_id: client_id.into(),
+            issuer: issuer.into(),
+        };
+        let one = client_secret_key("provider:one", &binding("two", "https://issuer"));
+        let two = client_secret_key("provider", &binding("one:two", "https://issuer"));
+        assert_ne!(one, two);
+        assert_ne!(
+            one,
+            client_secret_key("provider:one", &binding("two", "https://other"))
+        );
+        assert!(!one.contains("provider"));
+        assert!(!one.contains("issuer"));
+    }
+
+    #[test]
+    fn client_secret_adopts_legacy_configuration_once_and_removes_old_key() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = "legacy-config-client";
+        let state = client_secret_state(&tmp, plugin);
+        let provider =
+            json!({"authorization": {"clientId": "configured", "issuer": "https://issuer.test"}});
+        let namespace = client_secret_namespace(plugin);
+        cognia_secrets::keyring_secrets::set(&namespace, "oauth", "legacy-secret").unwrap();
+        let request = json!({"clientId": "configured", "issuer": "https://issuer.test"});
+        let binding = client_secret_binding(&provider, &request).unwrap();
+        assert_eq!(
+            read_client_secret(&state, plugin, "oauth", &provider, &binding, &request).unwrap(),
+            "legacy-secret"
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&namespace, "oauth").unwrap(),
+            None
+        );
+        let other = ClientSecretBinding {
+            client_id: "another".into(),
+            issuer: binding.issuer,
+        };
+        assert_eq!(
+            read_client_secret(&state, plugin, "oauth", &provider, &other, &request)
+                .unwrap_err()
+                .code,
+            "NOT_FOUND"
+        );
+        clear_client_secrets(plugin).unwrap();
+    }
+
+    #[test]
+    fn client_secret_adopts_existing_connection_but_refuses_ambiguous_clients() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = "legacy-connection-clients";
+        let state = client_secret_state(&tmp, plugin);
+        let namespace = client_secret_namespace(plugin);
+        let connection_namespace = "auth-connections:acct_test";
+        let binding = ClientSecretBinding {
+            client_id: "one".into(),
+            issuer: "https://issuer.test".into(),
+        };
+        let provider = json!({});
+        for (key, client) in [
+            ("legacy-connection-one", "one"),
+            ("legacy-connection-two", "two"),
+        ] {
+            cognia_secrets::keyring_secrets::set(connection_namespace, key, &json!({
+                "lineage": {"identity": {"provider": {"providerId": "oauth", "ownerPluginId": plugin},
+                    "clientId": client, "issuer": "https://issuer.test"}}
+            }).to_string()).unwrap();
+        }
+        cognia_secrets::keyring_secrets::set(&namespace, "oauth", "unbound-secret").unwrap();
+        let error = read_client_secret(&state, plugin, "oauth", &provider, &binding, &json!({}))
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
+        assert_eq!(
+            error.details,
+            Some(json!({"reason": "client-secret-ambiguous"}))
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&namespace, "oauth")
+                .unwrap()
+                .as_deref(),
+            Some("unbound-secret")
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&namespace, &client_secret_key("oauth", &binding))
+                .unwrap(),
+            None
+        );
+        cognia_secrets::keyring_secrets::clear(connection_namespace, "legacy-connection-two")
+            .unwrap();
+        assert_eq!(
+            read_client_secret(&state, plugin, "oauth", &provider, &binding, &json!({})).unwrap(),
+            "unbound-secret"
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&namespace, "oauth").unwrap(),
+            None
+        );
+        cognia_secrets::keyring_secrets::clear(connection_namespace, "legacy-connection-one")
+            .unwrap();
+        clear_client_secrets(plugin).unwrap();
+    }
+
+    #[test]
+    fn client_secret_host_inventory_prevents_ambiguous_cli_adoption() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = "legacy-cli-clients";
+        let state = client_secret_state(&tmp, plugin);
+        let namespace = client_secret_namespace(plugin);
+        let provider =
+            json!({"authorization": {"clientId": "one", "issuer": "https://issuer.test"}});
+        let request = json!({"clientId": "one", "issuer": "https://issuer.test", "knownClients": [
+            {"clientId": "one", "issuer": "https://issuer.test"},
+            {"clientId": "two", "issuer": "https://issuer.test"}
+        ]});
+        let binding = client_secret_binding(&provider, &request).unwrap();
+        cognia_secrets::keyring_secrets::set(&namespace, "oauth", "unbound-secret").unwrap();
+        assert_eq!(
+            read_client_secret(&state, plugin, "oauth", &provider, &binding, &request)
+                .unwrap_err()
+                .code,
+            "NOT_FOUND"
+        );
+        clear_client_secrets(plugin).unwrap();
+    }
+
     #[tokio::test]
     async fn confidential_auth_permissions_and_missing_secret_are_typed() {
         let tmp = TempDir::new().unwrap();
@@ -2412,7 +2948,15 @@ mod tests {
     async fn confidential_auth_secret_is_write_only_and_uninstall_clears_removed_providers() {
         let tmp = TempDir::new().unwrap();
         let state = auth_state(&tmp);
-        let input = json!({"providerId": "oauth", "value": "private-client-secret"});
+        let input =
+            json!({"providerId": "oauth", "clientId": "app", "value": "private-client-secret"});
+        let key = client_secret_key(
+            "oauth",
+            &ClientSecretBinding {
+                client_id: "app".into(),
+                issuer: "".into(),
+            },
+        );
         assert!(
             dispatch(None, &state, "demo", "auth:setClientSecret", &input)
                 .await
@@ -2429,7 +2973,7 @@ mod tests {
             .unwrap()
             .is_null());
         assert_eq!(
-            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), "oauth")
+            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), &key)
                 .unwrap()
                 .as_deref(),
             Some("private-client-secret")
@@ -2461,6 +3005,17 @@ mod tests {
         dispatch(None, &state, "demo", "auth:setClientSecret", &input)
             .await
             .unwrap();
+        dispatch(
+            None,
+            &state,
+            "demo",
+            "auth:setClientSecret",
+            &json!({
+                "providerId": "oauth", "clientId": "other-app", "value": "second-client-secret"
+            }),
+        )
+        .await
+        .unwrap();
         // A removed provider is still erased, while another plugin is untouched.
         cognia_secrets::keyring_secrets::set(
             &client_secret_namespace("demo"),
@@ -2478,8 +3033,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), "oauth")
-                .unwrap(),
+            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), &key).unwrap(),
             None
         );
         assert_eq!(
@@ -2490,6 +3044,12 @@ mod tests {
             .unwrap(),
             None
         );
+        assert!(cognia_secrets::secret_store::list_accounts(&format!(
+            "com.cognia.{}/v1",
+            client_secret_namespace("demo")
+        ))
+        .unwrap()
+        .is_empty());
         assert_eq!(
             cognia_secrets::keyring_secrets::get(&client_secret_namespace("other"), "oauth")
                 .unwrap()
@@ -2643,7 +3203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exchange_uses_installed_mapping() {
+    async fn exchange_uses_installed_mapping_and_each_clients_secret_on_refresh() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         init_proxy();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2672,13 +3232,24 @@ mod tests {
         )
         .unwrap();
         let payload = json!({"providerId": "oauth", "tokenUrl": token_url,
-            "params": {"grant_type": "client_credentials"}, "clientId": "app", "placement": "json"});
+            "params": {"grant_type": "refresh_token", "refresh_token": "refresh-app"}, "clientId": "app", "placement": "json"});
         dispatch(
             None,
             &state,
             plugin_id,
             "auth:setClientSecret",
-            &json!({"providerId": "oauth", "value": "host-secret"}),
+            &json!({"providerId": "oauth", "clientId": "app", "value": "host-secret"}),
+        )
+        .await
+        .unwrap();
+        dispatch(
+            None,
+            &state,
+            plugin_id,
+            "auth:setClientSecret",
+            &json!({
+                "providerId": "oauth", "clientId": "second-app", "value": "second-host-secret"
+            }),
         )
         .await
         .unwrap();
@@ -2693,6 +3264,8 @@ mod tests {
         }
         let server = tokio::spawn(async move {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let mut bodies = Vec::new();
+                for _ in 0..2 {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
                 let mut chunk = [0; 1024];
@@ -2706,16 +3279,23 @@ mod tests {
                             line.strip_prefix("content-length: ")).unwrap().parse().unwrap();
                         if bytes.len() >= end + 4 + length {
                             let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
-                            let response = br#"{"ok":true,"echo":"host-secret"}"#;
+                            let response = json!({"ok": true, "echo": body["app_secret"]}).to_string();
                             stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).as_bytes()).await.unwrap();
-                            stream.write_all(response).await.unwrap();
-                            return body;
+                            stream.write_all(response.as_bytes()).await.unwrap();
+                            bodies.push(body);
+                            break;
                         }
                     }
                 }
+                }
+                bodies
             }).await.unwrap()
         });
         let result = dispatch(None, &state, plugin_id, "auth:exchange", &payload).await;
+        let mut second = payload.clone();
+        second["clientId"] = json!("second-app");
+        second["params"]["refresh_token"] = json!("refresh-second-app");
+        let second_result = dispatch(None, &state, plugin_id, "auth:exchange", &second).await;
         let body = server.await.unwrap();
         clear_client_secrets(plugin_id).unwrap();
         assert_eq!(
@@ -2723,8 +3303,15 @@ mod tests {
             json!({"status": 200, "body": {"ok": true, "echo": "[REDACTED]"}})
         );
         assert_eq!(
+            second_result.unwrap(),
+            json!({"status": 200, "body": {"ok": true, "echo": "[REDACTED]"}})
+        );
+        assert_eq!(
             body,
-            json!({"app_id": "app", "app_secret": "host-secret", "grant_type": "client_credentials"})
+            vec![
+                json!({"app_id": "app", "app_secret": "host-secret", "grant_type": "refresh_token", "refresh_token": "refresh-app"}),
+                json!({"app_id": "second-app", "app_secret": "second-host-secret", "grant_type": "refresh_token", "refresh_token": "refresh-second-app"})
+            ]
         );
     }
 

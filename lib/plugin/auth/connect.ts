@@ -9,7 +9,7 @@ import { getAuthConnection } from "@/lib/db/auth-connections"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import { getProvider } from "./auth-provider-registry"
-import { setProviderClientSecret } from "./client-secrets"
+import { isClientSecretRequired, setProviderClientSecret } from "./client-secrets"
 import {
   createAttempt,
   consumeAttempt,
@@ -36,6 +36,7 @@ export class AuthConnectError extends Error {
       | "CANCELLED"
       | "TIMEOUT"
       | "INTERNAL"
+      | "CLIENT_SECRET_REQUIRED"
       | "UNAVAILABLE",
     readonly reason: string
   ) {
@@ -126,11 +127,22 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     const method = requestedMethod ?? declared.find(supported)
     if (!method || !declared.includes(method) || !supported(method))
       throw new AuthConnectError("NOT_SUPPORTED", "auth-method-unavailable")
-    const configuration =
+    const defaults =
       provider.management === "host" && provider.pluginId !== null
         ? definition?.authorization
         : (definition?.authorization ?? provider.authorization)
-    if (!configuration?.clientId || !configuration.issuer)
+    const configuration = {
+      ...defaults,
+      ...(original ? { clientId: original.clientId, issuer: original.issuer } : {}),
+    }
+    for (const key of ["clientId", "issuer"] as const) {
+      const value = request.configuration?.[key]
+      if (value === undefined) continue
+      if (typeof value !== "string" || !value.trim())
+        throw new AuthConnectError("INVALID_REQUEST", "invalid-authorization-configuration")
+      configuration[key] = value
+    }
+    if (!configuration.clientId || !configuration.issuer)
       throw new AuthConnectError("INVALID_REQUEST", "authorization-configuration-missing")
     const issuer = new URL(configuration.issuer)
     if (
@@ -159,7 +171,13 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       const secret = request.configuration.clientSecret
       if (typeof secret !== "string" || !secret || provider.pluginId === null)
         throw new AuthConnectError("INVALID_REQUEST", "invalid-client-secret-configuration")
-      await setProviderClientSecret(provider.pluginId, providerId, secret)
+      await setProviderClientSecret(
+        provider.pluginId,
+        providerId,
+        configuration.clientId,
+        secret,
+        issuer.origin
+      )
       active()
     }
     const binding = { providerId, clientId: configuration.clientId, issuer: issuer.origin }
@@ -241,6 +259,8 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       })
     )
   } catch (error) {
+    if (isClientSecretRequired(error))
+      throw new AuthConnectError("CLIENT_SECRET_REQUIRED", "client-secret-reentry-required")
     if (
       error instanceof AuthConnectError ||
       error instanceof ReconnectIdentityMismatch ||

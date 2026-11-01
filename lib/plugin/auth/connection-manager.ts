@@ -15,6 +15,7 @@ import {
 } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 import { getDb } from "@/lib/db/schema"
 import { getPlugin } from "@/lib/db/plugins"
+import { isClientSecretRequired } from "./client-secrets"
 import {
   queueAccessTeardown,
   runAccessTeardown,
@@ -221,7 +222,11 @@ function needsRefresh(credentials: AuthCredentialSet, minValidityMs: number, now
 function invalidGrant(error: unknown): boolean {
   if (error instanceof AuthRefreshRejected) return true
   const value = error as { code?: unknown; error?: unknown } | null
-  return value?.code === "invalid_grant" || value?.error === "invalid_grant"
+  return (
+    value?.code === "invalid_grant" ||
+    value?.error === "invalid_grant" ||
+    isClientSecretRequired(error)
+  )
 }
 
 /** Host authority. Each instance may be a different tab; only storage CAS decides commits. */

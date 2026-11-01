@@ -15,13 +15,15 @@ const CLIENT_ID = "cognia-example-public-client"
 /** Tokens are returned only to the Host's coordinated callbacks, never persisted here. */
 export function createProvider(ctx: Pick<PluginContext, "auth" | "network">) {
   async function exchange(
+    client: { clientId: string; issuer: string },
     params: Record<string, string>,
     scopes: string[]
   ): Promise<AuthCredentialSet> {
     const { status, body } = await ctx.auth.exchangeConfidential({
       providerId: "example-tracker",
       tokenUrl: `${ORIGIN}/oauth/token`,
-      clientId: CLIENT_ID,
+      clientId: client.clientId,
+      issuer: client.issuer,
       placement: "none",
       params,
     })
@@ -71,6 +73,7 @@ export function createProvider(ctx: Pick<PluginContext, "auth" | "network">) {
       if (!callback.code || !attempt.codeVerifier || !attempt.redirectUri)
         throw new Error("Accepted PKCE callback required")
       return exchange(
+        attempt,
         {
           grant_type: "authorization_code",
           code: callback.code,
@@ -84,6 +87,7 @@ export function createProvider(ctx: Pick<PluginContext, "auth" | "network">) {
       lineage.signal?.throwIfAborted()
       if (!lineage.credentials.refreshToken) throw new AuthRefreshRejected()
       const refreshed = await exchange(
+        lineage.identity,
         {
           grant_type: "refresh_token",
           refresh_token: lineage.credentials.refreshToken,

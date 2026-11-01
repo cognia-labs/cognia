@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "sha256": "a3415c464f7cdf076c0dd366e992acc7c1634dbcbd360efc00dfbdf4ed9db34a",
+  "sha256": "467187772b74aba279cb2298398e7fa5d72c87cc6441adff0e9bb5e4d11f3cca",
   "authoring": {
     "sdkVersion": "0.3.0",
     "uiVersion": "0.2.0",
     "contractVersion": "1.7.0",
-    "catalogSha256": "97ce685fbc7ea0902fbb013024361a303b37a526a535a9a93c86d68eca30ba69",
+    "catalogSha256": "e13184989e28b4b71eb7d15bf9e3021b72df016fa66fa9295bd2b985ae88a5b7",
     "sharedModulesSha256": "a3c8a3e45f427edca30f76d8aad17f3f13dfaea9b5b1ad0a9613a47eb2a22387",
     "styleContractSha256": "9f5d3d75fdefff6b8449bbfe31814bf4c3aad7b78ec24e4cbd909797b8625fa0",
     "compilerContractSha256": "daaee8f417e049fc6a8cdb5b65914bf5c1662bf07017cee148efc3c1f214aaa0",
