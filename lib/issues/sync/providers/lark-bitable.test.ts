@@ -10,6 +10,19 @@ import {
   mappedFields,
 } from "./lark-bitable"
 
+it("describes its built-in resource without migrating its account binding", () => {
+  const descriptor = createLarkBitableSyncProvider().resource!
+  expect(descriptor).toMatchObject({ kind: "lark-bitable", schemaVersion: 1 })
+  expect(
+    descriptor.describe({
+      adapterId: "account",
+      appToken: "app",
+      tableId: "table",
+      name: "Backlog",
+    })
+  ).toEqual({ key: "account:app:table", label: "Backlog" })
+})
+
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))

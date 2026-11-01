@@ -26,7 +26,19 @@
  * board every time.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react"
+import {
+  getIssueSyncProvidersRevision,
+  subscribeIssueSyncProviders,
+} from "@/lib/issues/sync/registry"
 import { useTranslations } from "next-intl"
 import { CircleDotIcon, PanelLeftIcon, RefreshCwIcon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -145,6 +157,11 @@ export function IssueConsole({
   initialAssignee,
 }: IssueConsoleProps) {
   const t = useTranslations("issues")
+  useSyncExternalStore(
+    subscribeIssueSyncProviders,
+    getIssueSyncProvidersRevision,
+    getIssueSyncProvidersRevision
+  )
   const projectId = useProjectStore((s) => s.activeProjectId)
 
   const viewId = useIssueViewStore((s) => s.viewId)
@@ -458,9 +475,8 @@ export function IssueConsole({
   const [importOpen, setImportOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   /** Any container bound to something the sync engine or the mirror refreshes. */
-  const hasSyncedBinding = useMemo(
-    () => (projects ?? []).some((project) => project.resources.some(isSyncedResource)),
-    [projects]
+  const hasSyncedBinding = (projects ?? []).some((project) =>
+    project.resources.some(isSyncedResource)
   )
   /** Local issue id to its printed identifier, for the conflicts panel. */
   const identifiersById = useMemo(

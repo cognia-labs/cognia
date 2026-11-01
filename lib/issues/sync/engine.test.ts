@@ -2,6 +2,19 @@
  * @jest-environment jsdom
  */
 
+const mockAfterCycleRead = jest.fn()
+jest.mock("@/lib/db/issue-cycles", () => {
+  const actual = jest.requireActual("@/lib/db/issue-cycles")
+  return {
+    ...actual,
+    listIssueCycles: async (...args: unknown[]) => {
+      const rows = await actual.listIssueCycles(...args)
+      mockAfterCycleRead()
+      return rows
+    },
+  }
+})
+
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import {
@@ -32,12 +45,30 @@ import type {
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
 beforeEach(async () => {
+  mockAfterCycleRead.mockReset()
   await dbFixture.restore()
   __resetIssueEventClockForTesting()
 })
 afterAll(dbFixture.dispose)
 
 const HUMAN: IssueActor = { kind: "human" }
+
+it("stops cycle/import writes when disposed during local reads after a pull", async () => {
+  const controller = new AbortController()
+  mockAfterCycleRead.mockImplementationOnce(() => controller.abort())
+  const { provider } = fake({
+    pull: {
+      items: [remote()],
+      notModified: false,
+      cycles: [{ externalId: "cycle", kind: "cycle", name: "Remote cycle" }],
+    },
+  })
+  await expect(
+    reconcileBinding(binding(), provider, { signal: controller.signal })
+  ).rejects.toThrow()
+  expect(await getDb().issueCycles.count()).toBe(0)
+  expect(await getDb().issues.count()).toBe(0)
+})
 
 let container: IssueProject
 beforeEach(async () => {

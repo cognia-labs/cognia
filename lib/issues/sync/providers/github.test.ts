@@ -13,6 +13,15 @@ import {
   toUpdateIssueInput,
 } from "./github"
 
+it("describes its built-in resource through the shared descriptor", () => {
+  const descriptor = createGithubSyncProvider().resource!
+  expect(descriptor).toMatchObject({ kind: "github-repo", schemaVersion: 1, label: "GitHub" })
+  expect(descriptor.describe({ repoFullName: "org/repo" })).toEqual({
+    key: "org/repo",
+    label: "org/repo",
+  })
+})
+
 jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
   createResolveOctokit: () => async () => null,
 }))

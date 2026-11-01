@@ -11,6 +11,8 @@ import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import { allocateIssueNumber } from "./issue-counters"
 import { createIssue } from "./issues"
+import { registerIssueSyncProvider, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
+import type { IssueProjectResource } from "@/types/issues"
 import { listIssueEvents } from "./issue-events"
 import {
   addIssueProjectResource,
@@ -30,8 +32,78 @@ const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
 beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
+afterEach(resetIssueSyncRegistry)
 
 const HUMAN = { kind: "human" } as const
+
+describe("plugin resource persistence", () => {
+  const resource: Extract<IssueProjectResource, { kind: "plugin" }> = {
+    kind: "plugin",
+    providerId: "plugin:db-test/tracker",
+    schemaVersion: 1,
+    config: { project: "remote", filter: { a: 1, b: 2 } },
+  }
+  it("uses canonical config while unavailable and descriptor identity while registered, including removal", async () => {
+    const project = await createIssueProject({
+      projectId: "w1",
+      name: "Plugins",
+      resources: [resource],
+    })
+    await addIssueProjectResource(project.id, {
+      ...resource,
+      config: { filter: { b: 2, a: 1 }, project: "remote" },
+    })
+    expect((await getIssueProject(project.id))!.resources).toHaveLength(1)
+    registerIssueSyncProvider({
+      id: resource.providerId,
+      label: "Tracker",
+      pullFields: [],
+      pushFields: [],
+      resolveBindings: () => [],
+      pull: async () => ({ items: [], notModified: true }),
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object", properties: {} },
+        describe: (config) => ({ key: String(config.project), label: String(config.project) }),
+      },
+    })
+    await addIssueProjectResource(project.id, {
+      ...resource,
+      config: { project: "remote", filter: "different but same identity" },
+    })
+    expect((await getIssueProject(project.id))!.resources).toHaveLength(1)
+    await removeIssueProjectResource(project.id, resource)
+    expect((await getIssueProject(project.id))!.resources).toEqual([])
+  })
+
+  it("saves a migration only explicitly, strips extra properties and refuses private config", async () => {
+    const project = await createIssueProject({
+      projectId: "w1",
+      name: "Plugins",
+      resources: [{ ...resource, connectionRef: "do-not-store" } as typeof resource],
+    })
+    expect((await getIssueProject(project.id))!.resources).toEqual([resource])
+    await addIssueProjectResource(
+      project.id,
+      { ...resource, schemaVersion: 2, config: { ...resource.config, migrated: true } },
+      resource
+    )
+    expect((await getIssueProject(project.id))!.resources).toEqual([
+      expect.objectContaining({ schemaVersion: 2 }),
+    ])
+    await expect(
+      addIssueProjectResource(project.id, { ...resource, config: { connectionRef: "private" } })
+    ).rejects.toThrow(/portable/)
+    await expect(
+      createIssueProject({
+        projectId: "w1",
+        name: "Unsafe",
+        resources: [{ ...resource, config: { accountId: "private" } }],
+      })
+    ).rejects.toThrow(/portable/)
+  })
+})
 
 describe("createIssueProject", () => {
   it("derives a key from the name and defaults the rest", async () => {

@@ -34,6 +34,12 @@ describe("resourceKey / resourceLabel", () => {
 })
 
 describe("classification", () => {
+  it("explicitly marks future resource kinds unavailable", () => {
+    const future = { kind: "future" } as unknown as IssueProjectResource
+    expect(resourceKey(future)).toBe("unavailable")
+    expect(resourceLabel(future)).toBe("unavailable")
+    expect(isSyncedResource(future)).toBe(false)
+  })
   it("knows which resources feed the engine and which repos import", () => {
     expect(isSyncedResource(root)).toBe(false)
     expect(isSyncedResource(repo)).toBe(true)

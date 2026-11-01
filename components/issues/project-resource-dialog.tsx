@@ -25,7 +25,7 @@
  * account", not "sync broke".
  */
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
@@ -53,6 +53,18 @@ import { addIssueProjectResource } from "@/lib/db/issue-projects"
 import { syncGithubIssueSchedule } from "@/lib/issues/github-sync-schedule"
 import { isSyncedResource } from "@/lib/issues/sync/bindings"
 import {
+  getIssueSyncRegistry,
+  getIssueSyncProvidersRevision,
+  subscribeIssueSyncProviders,
+} from "@/lib/issues/sync/registry"
+import type { IssueSyncProvider } from "@/lib/issues/sync/types"
+import {
+  ConfigSchemaFields,
+  useConfigSchemaForm,
+} from "@/components/plugins/detail/plugin-config-form"
+import { assertPortableIssueSyncConfig } from "@cognia/plugin-contract/lib/issues/sync/resources"
+import { pluginResourceState } from "@/lib/issues/sync/plugin-resources"
+import {
   listBitableFields,
   listBitableTables,
   listLarkTasklists,
@@ -68,7 +80,7 @@ import type { WorkspaceRoot } from "@/types/workspace"
 /** `owner/name`, the only form the GitHub API accepts for a repo path. */
 export const REPO_FULL_NAME_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 
-export type ResourceKind = IssueProjectResource["kind"]
+export type ResourceKind = Exclude<IssueProjectResource["kind"], "plugin"> | `plugin:${string}`
 
 /** The Bitable columns the map can name, beyond the required title. */
 const OPTIONAL_BITABLE_FIELDS = [
@@ -111,6 +123,7 @@ export interface ProjectResourceDialogProps {
   /** Root ids already referenced by THIS container. */
   boundRootIds?: ReadonlySet<string>
   onAdded?: (resource: IssueProjectResource) => void
+  initialResource?: Extract<IssueProjectResource, { kind: "plugin" }>
 }
 
 export function ProjectResourceDialog({
@@ -121,10 +134,23 @@ export function ProjectResourceDialog({
   boundRepos,
   boundRootIds,
   onAdded,
+  initialResource,
 }: ProjectResourceDialogProps) {
   const t = useTranslations("issues")
+  useSyncExternalStore(
+    subscribeIssueSyncProviders,
+    getIssueSyncProvidersRevision,
+    getIssueSyncProvidersRevision
+  )
+  const providers = getIssueSyncRegistry()
+    .list()
+    .filter((provider) => provider.resource)
 
-  const [kind, setKind] = useState<ResourceKind>("github-repo")
+  const [kind, setKind] = useState<ResourceKind>(
+    (initialResource?.providerId as ResourceKind) ?? "github-repo"
+  )
+  const pluginSelected = kind.startsWith("plugin:")
+  const pluginProvider = pluginSelected ? getIssueSyncRegistry().get(kind) : undefined
   const [repo, setRepo] = useState("")
   const [syncMode, setSyncMode] = useState<"mirror" | "import">("mirror")
   const [projectV2, setProjectV2] = useState("")
@@ -220,7 +246,8 @@ export function ProjectResourceDialog({
         ? selectedRootId.length > 0
         : kind === "lark-tasklist"
           ? Boolean(selectedAccountId && selectedTasklist)
-          : Boolean(selectedAccountId && appToken && selectedTable && fieldMap.title))
+          : kind === "lark-bitable" &&
+            Boolean(selectedAccountId && appToken && selectedTable && fieldMap.title))
 
   async function loadWith<T>(run: () => Promise<T>, apply: (value: T) => void) {
     setLoading(true)
@@ -332,15 +359,18 @@ export function ProjectResourceDialog({
           addedAt,
         }
       }
+      default:
+        throw new Error(t("projects.providerUnavailable"))
     }
   }
 
-  async function submit() {
+  async function submit(resourceInput?: IssueProjectResource) {
     setBusy(true)
     setError(null)
     try {
-      const resource = buildResource()
-      await addIssueProjectResource(issueProjectId, resource)
+      const resource = resourceInput ?? buildResource()
+      if (initialResource) await addIssueProjectResource(issueProjectId, resource, initialResource)
+      else await addIssueProjectResource(issueProjectId, resource)
       // Adding the first synced resource is what brings the background refresh
       // into existence. Doing it here rather than at boot means a user who
       // binds one sees the board stay fresh without restarting.
@@ -381,18 +411,50 @@ export function ProjectResourceDialog({
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="resource-kind">{t("projects.resourceKind")}</Label>
-            <Select value={kind} onValueChange={(value) => setKind(value as ResourceKind)}>
+            <Select
+              value={kind}
+              disabled={Boolean(initialResource)}
+              onValueChange={(value) => setKind(value as ResourceKind)}
+            >
               <SelectTrigger id="resource-kind" data-testid="resource-kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="github-repo">{t("projects.resourceRepo")}</SelectItem>
-                <SelectItem value="lark-tasklist">{t("projects.resourceTasklist")}</SelectItem>
-                <SelectItem value="lark-bitable">{t("projects.resourceBitable")}</SelectItem>
+                {providers.map((provider) => (
+                  <SelectItem
+                    key={provider.id}
+                    value={
+                      provider.id.startsWith("plugin:") ? provider.id : provider.resource!.kind!
+                    }
+                  >
+                    {provider.id === "github"
+                      ? t("projects.resourceRepo")
+                      : provider.id === "lark-task"
+                        ? t("projects.resourceTasklist")
+                        : provider.id === "lark-bitable"
+                          ? t("projects.resourceBitable")
+                          : provider.resource!.label}
+                  </SelectItem>
+                ))}
                 <SelectItem value="workspace-root">{t("projects.resourceDirectory")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {pluginSelected ? (
+            pluginProvider?.resource ? (
+              <PluginResourceForm
+                key={`${kind}:${pluginProvider.resource.schemaVersion}`}
+                provider={pluginProvider}
+                busy={busy}
+                initialResource={initialResource}
+                onSave={submit}
+                onCancel={close}
+              />
+            ) : (
+              <p role="status">{t("projects.providerUnavailable")}</p>
+            )
+          ) : null}
 
           {kind === "github-repo" ? (
             <>
@@ -691,16 +753,108 @@ export function ProjectResourceDialog({
           ) : null}
         </div>
 
-        <DialogFooter>
-          <Button variant="ghost" onClick={close} disabled={busy}>
-            {t("create.cancel")}
-          </Button>
-          <Button onClick={submit} disabled={!canSubmit} data-testid="resource-submit">
-            {t("projects.addResource")}
-          </Button>
-        </DialogFooter>
+        {!pluginSelected ? (
+          <DialogFooter>
+            <Button variant="ghost" onClick={close} disabled={busy}>
+              {t("create.cancel")}
+            </Button>
+            <Button
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              data-testid="resource-submit"
+            >
+              {t("projects.addResource")}
+            </Button>
+          </DialogFooter>
+        ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Plugins supply data schemas, never renderers. Built-in panels above remain Host-owned. */
+function PluginResourceForm({
+  provider,
+  busy,
+  onSave,
+  onCancel,
+  initialResource,
+}: {
+  provider: IssueSyncProvider
+  busy: boolean
+  onSave: (resource: IssueProjectResource) => Promise<void>
+  onCancel: () => void
+  initialResource?: Extract<IssueProjectResource, { kind: "plugin" }>
+}) {
+  const t = useTranslations("issues")
+  const descriptor = provider.resource!
+  const state = initialResource ? pluginResourceState(initialResource) : undefined
+  const initialConfig = state?.status === "ready" ? state.resource.config : initialResource?.config
+  const form = useConfigSchemaForm(descriptor.schema, initialConfig)
+  const mapping = useConfigSchemaForm(
+    descriptor.schema.mapping,
+    initialConfig?.mapping as Record<string, unknown> | undefined
+  )
+  const config = {
+    ...form.values,
+    ...(descriptor.schema.mapping ? { mapping: mapping.values } : {}),
+  }
+  let invalid = form.hasErrors || mapping.hasErrors
+  try {
+    assertPortableIssueSyncConfig(config)
+    invalid ||= Boolean(descriptor.validate?.(config).length)
+    if (!descriptor.describe(config).key) invalid = true
+  } catch {
+    invalid = true
+  }
+  return (
+    <div className="space-y-4">
+      {state?.status === "needs-attention" ? (
+        <p role="status">{t("projects.resourceNeedsAttention")}</p>
+      ) : null}
+      <ConfigSchemaFields
+        fields={form.schema.fields}
+        values={form.values}
+        errors={form.errors}
+        onChange={form.setField}
+        idPrefix="issue-resource"
+      />
+      {descriptor.schema.mapping ? (
+        <fieldset className="space-y-3">
+          <legend>{t("projects.resourceMapping")}</legend>
+          <ConfigSchemaFields
+            fields={mapping.schema.fields}
+            values={mapping.values}
+            errors={mapping.errors}
+            onChange={mapping.setField}
+            idPrefix="issue-resource-mapping"
+          />
+        </fieldset>
+      ) : null}
+      {invalid && !form.hasErrors && !mapping.hasErrors ? (
+        <p role="status">{t("projects.resourceConfigInvalid")}</p>
+      ) : null}
+      <DialogFooter>
+        <Button variant="ghost" disabled={busy} onClick={onCancel}>
+          {t("create.cancel")}
+        </Button>
+        <Button
+          disabled={busy || invalid}
+          onClick={() => {
+            const description = descriptor.describe(config)
+            void onSave({
+              kind: "plugin",
+              providerId: provider.id,
+              schemaVersion: descriptor.schemaVersion,
+              config,
+              name: description.label,
+            })
+          }}
+        >
+          {t(initialResource ? "projects.saveResource" : "projects.addResource")}
+        </Button>
+      </DialogFooter>
+    </div>
   )
 }
 

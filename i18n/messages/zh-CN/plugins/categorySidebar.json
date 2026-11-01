@@ -56,6 +56,7 @@
     "im-rate-source": "即时通讯速率来源",
     "importers": "导入器",
     "integrations": "集成",
+    "issue-sync-provider": "议题同步提供方",
     "limits-source": "用量限额来源",
     "link-matcher": "链接匹配器",
     "lsp-server": "语言服务器",

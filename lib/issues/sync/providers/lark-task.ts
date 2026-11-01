@@ -109,6 +109,16 @@ export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): Iss
   return {
     id: LARK_TASK_PROVIDER_ID,
     label: "Lark tasks",
+    resource: {
+      label: "Lark tasks",
+      kind: "lark-tasklist",
+      schemaVersion: 1,
+      schema: { type: "object", properties: {} },
+      describe: (config) => ({
+        key: `${config.adapterId}:${config.tasklistGuid}`,
+        label: String(config.name),
+      }),
+    },
     pullFields: LARK_TASK_PULL_FIELDS,
     pushFields: LARK_TASK_PUSH_FIELDS,
 

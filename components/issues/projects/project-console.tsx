@@ -25,7 +25,11 @@
  * truth and bypass `lib/workspace/trust-gate.ts`.
  */
 
-import { useMemo, useState } from "react"
+import { useMemo, useState, useSyncExternalStore } from "react"
+import {
+  getIssueSyncProvidersRevision,
+  subscribeIssueSyncProviders,
+} from "@/lib/issues/sync/registry"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import { FolderIcon, RefreshCwIcon } from "lucide-react"
@@ -50,7 +54,7 @@ import { isSyncedResource } from "@/lib/issues/sync/bindings"
 import { summarizeSync, syncSummaryMessage } from "@/lib/issues/sync/describe"
 import { runWorkspaceIssueSync } from "@/lib/issues/sync/runner"
 import { useProjectStore } from "@/stores/project/project-store"
-import type { IssueProject } from "@/types/issues"
+import type { IssueProject, IssueProjectResource } from "@/types/issues"
 import { ProjectResourceDialog } from "../project-resource-dialog"
 import { CreateProjectDialog } from "./create-project-dialog"
 import { DeleteProjectDialog } from "./delete-project-dialog"
@@ -64,11 +68,19 @@ export interface ProjectConsoleProps {
 
 export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
   const t = useTranslations("issues")
+  useSyncExternalStore(
+    subscribeIssueSyncProviders,
+    getIssueSyncProvidersRevision,
+    getIssueSyncProvidersRevision
+  )
   const router = useRouter()
   const workspaceId = useProjectStore((s) => s.activeProjectId)
   const workspaces = useProjectStore((s) => s.projects)
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId)
   const [resourceForId, setResourceForId] = useState<string | null>(null)
+  const [editingResource, setEditingResource] = useState<
+    Extract<IssueProjectResource, { kind: "plugin" }> | undefined
+  >()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<IssueProject | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -124,9 +136,8 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
   )
   const resourceTarget = (projects ?? []).find((project) => project.id === resourceForId)
   /** Anything the mirror or the sync engine refreshes: repos, tasklists, Bitables. */
-  const hasSyncedBinding = useMemo(
-    () => (projects ?? []).some((project) => project.resources.some(isSyncedResource)),
-    [projects]
+  const hasSyncedBinding = (projects ?? []).some((project) =>
+    project.resources.some(isSyncedResource)
   )
 
   /**
@@ -232,7 +243,17 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
                   progress={progressById.get(selected.id)}
                   onPatch={(patch) => void patchProject(selected.id, patch)}
                   onClose={() => setSelectedId(undefined)}
-                  onAddResource={() => setResourceForId(selected.id)}
+                  onAddResource={() => {
+                    setEditingResource(undefined)
+                    setResourceForId(selected.id)
+                  }}
+                  onEditResource={(index) => {
+                    const resource = selected.resources[index]
+                    if (resource?.kind === "plugin") {
+                      setEditingResource(resource)
+                      setResourceForId(selected.id)
+                    }
+                  }}
                   onRemoveResource={(index) => void removeResource(selected.id, index)}
                   onRequestDelete={() => setDeleteTarget(selected)}
                   onOpenIssues={() =>
@@ -285,6 +306,8 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
 
       {resourceTarget ? (
         <ProjectResourceDialog
+          key={editingResource ? JSON.stringify(editingResource) : "new"}
+          initialResource={editingResource}
           open
           onOpenChange={(next) => {
             if (!next) setResourceForId(null)

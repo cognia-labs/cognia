@@ -56,6 +56,7 @@
     "im-rate-source": "IM rate sources",
     "importers": "Importers",
     "integrations": "Integrations",
+    "issue-sync-provider": "Issue sync providers",
     "limits-source": "Usage limit sources",
     "link-matcher": "Link matchers",
     "lsp-server": "Language servers",

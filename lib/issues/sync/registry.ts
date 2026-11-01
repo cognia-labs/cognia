@@ -8,16 +8,44 @@ import type { IssueSyncProvider } from "./types"
 
 export class IssueSyncRegistry {
   private readonly providers = new Map<string, IssueSyncProvider>()
+  private readonly controllers = new Map<string, AbortController>()
+  private readonly listeners = new Set<() => void>()
+  private revision = 0
+
+  getRevision = (): number => this.revision
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  private changed(): void {
+    this.revision += 1
+    for (const listener of [...this.listeners]) listener()
+  }
+
+  signal(id: string, provider: IssueSyncProvider): AbortSignal {
+    if (this.providers.get(id) !== provider) return AbortSignal.abort()
+    return this.controllers.get(id)!.signal
+  }
 
   register(provider: IssueSyncProvider): () => void {
+    this.unregister(provider.id)
     this.providers.set(provider.id, provider)
+    const controller = new AbortController()
+    this.controllers.set(provider.id, controller)
+    this.changed()
     return () => {
-      if (this.providers.get(provider.id) === provider) this.providers.delete(provider.id)
+      if (this.controllers.get(provider.id) === controller) this.unregister(provider.id)
     }
   }
 
   unregister(id: string): void {
-    this.providers.delete(id)
+    if (!this.providers.delete(id)) return
+    this.controllers.get(id)?.abort()
+    this.controllers.delete(id)
+    this.changed()
   }
 
   get(id: string): IssueSyncProvider | undefined {
@@ -37,8 +65,12 @@ export function getIssueSyncRegistry(): IssueSyncRegistry {
 }
 
 export function resetIssueSyncRegistry(): void {
-  singleton = null
+  if (singleton) for (const provider of singleton.list()) singleton.unregister(provider.id)
 }
+
+export const subscribeIssueSyncProviders = (listener: () => void): (() => void) =>
+  getIssueSyncRegistry().subscribe(listener)
+export const getIssueSyncProvidersRevision = (): number => getIssueSyncRegistry().getRevision()
 
 export function registerIssueSyncProvider(
   provider: IssueSyncProvider,

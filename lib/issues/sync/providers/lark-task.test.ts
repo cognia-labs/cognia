@@ -10,6 +10,14 @@ import {
   toLarkTaskPatch,
 } from "./lark-task"
 
+it("describes its built-in resource without migrating its account binding", () => {
+  const descriptor = createLarkTaskSyncProvider().resource!
+  expect(descriptor).toMatchObject({ kind: "lark-tasklist", schemaVersion: 1 })
+  expect(
+    descriptor.describe({ adapterId: "account", tasklistGuid: "list", name: "Tasks" })
+  ).toEqual({ key: "account:list", label: "Tasks" })
+})
+
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))

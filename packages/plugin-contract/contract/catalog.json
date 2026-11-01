@@ -207,6 +207,13 @@
       "minimumHostVersion": "0.1.0"
     },
     {
+      "id": "issue-sync-provider",
+      "support": "supported",
+      "manifestFields": ["issueSyncProviders"],
+      "introducedIn": "0.1.0",
+      "minimumHostVersion": "0.1.0"
+    },
+    {
       "id": "decision-provider",
       "support": "supported",
       "manifestFields": ["decisionProviders"],
@@ -1130,6 +1137,12 @@
     {
       "field": "docsProviders",
       "capabilities": ["docs-provider"],
+      "execution": "javascript",
+      "pythonExecution": "unsupported"
+    },
+    {
+      "field": "issueSyncProviders",
+      "capabilities": ["issue-sync-provider"],
       "execution": "javascript",
       "pythonExecution": "unsupported"
     },

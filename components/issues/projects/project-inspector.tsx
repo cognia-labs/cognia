@@ -16,6 +16,13 @@
 
 import { FolderGitIcon, FolderIcon, PlusIcon, RefreshCwIcon, Trash2Icon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { useSyncExternalStore } from "react"
+import {
+  getIssueSyncRegistry,
+  getIssueSyncProvidersRevision,
+  subscribeIssueSyncProviders,
+} from "@/lib/issues/sync/registry"
+import { pluginResourceState } from "@/lib/issues/sync/plugin-resources"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -45,6 +52,7 @@ export interface ProjectInspectorProps {
   onClose: () => void
   onAddResource: () => void
   onRemoveResource: (index: number) => void
+  onEditResource?: (index: number) => void
   onRequestDelete: () => void
   /** Jumps to `/issues` pre-filtered to this container. */
   onOpenIssues: () => void
@@ -57,10 +65,16 @@ export function ProjectInspector({
   onClose,
   onAddResource,
   onRemoveResource,
+  onEditResource,
   onRequestDelete,
   onOpenIssues,
 }: ProjectInspectorProps) {
   const t = useTranslations("issues")
+  useSyncExternalStore(
+    subscribeIssueSyncProviders,
+    getIssueSyncProvidersRevision,
+    getIssueSyncProvidersRevision
+  )
   // One fallback, so the four read sites below cannot drift apart on what
   // "no progress yet" means.
   const tally = progress ?? EMPTY_ISSUE_PROJECT_PROGRESS
@@ -269,10 +283,31 @@ export function ProjectInspector({
                         variant="outline"
                         className="h-5 shrink-0 px-1.5 text-[10px] font-normal"
                       >
-                        {t(`projects.resourceKindLabel.${resource.kind}`)}
+                        {resource.kind === "plugin"
+                          ? (() => {
+                              const state = pluginResourceState(resource)
+                              return state.status === "ready"
+                                ? getIssueSyncRegistry().get(resource.providerId)?.resource?.label
+                                : t(
+                                    state.status === "unavailable"
+                                      ? "projects.providerUnavailable"
+                                      : "projects.resourceNeedsAttention"
+                                  )
+                            })()
+                          : t(`projects.resourceKindLabel.${resource.kind}`)}
                       </Badge>
                     </>
                   )}
+                  {resource.kind === "plugin" && onEditResource ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t("projects.editResource")}
+                      onClick={() => onEditResource(index)}
+                    >
+                      {t("projects.editResource")}
+                    </Button>
+                  ) : null}
                   <Button
                     size="icon"
                     variant="ghost"

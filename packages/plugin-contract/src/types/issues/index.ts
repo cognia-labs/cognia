@@ -170,6 +170,15 @@ export interface LarkBitableFieldMap {
 
 /** A resource attached to an issue-project. Reference-only — see below. */
 export type IssueProjectResource =
+  /** Portable resource data only. Resolve device-local connections at pull/push time. */
+  | {
+      kind: "plugin"
+      /** Host-assigned `plugin:<pluginId>/<id>`. */
+      providerId: string
+      schemaVersion: number
+      config: Record<string, unknown>
+      name?: string
+    }
   | { kind: "github-repo"; repoFullName: string; addedAt: number; sync?: GithubRepoSyncSettings }
   /** A Feishu/Lark tasklist (Task v2), synced both ways through the bound adapter. */
   | {

@@ -12,7 +12,12 @@
  */
 
 import { ExternalLinkIcon, XIcon } from "lucide-react"
-import { useMemo } from "react"
+import { useMemo, useSyncExternalStore } from "react"
+import {
+  getIssueSyncRegistry,
+  getIssueSyncProvidersRevision,
+  subscribeIssueSyncProviders,
+} from "@/lib/issues/sync/registry"
 import { useTranslations } from "next-intl"
 
 import { Badge } from "@/components/ui/badge"
@@ -69,6 +74,11 @@ export function IssuePlanningSection({
   onCreateSubIssue,
 }: IssuePlanningSectionProps) {
   const t = useTranslations("issues")
+  useSyncExternalStore(
+    subscribeIssueSyncProviders,
+    getIssueSyncProvidersRevision,
+    getIssueSyncProvidersRevision
+  )
   const editable = Boolean(onAction) && item.capabilities.canEdit && item.kind === "local"
   const localId = item.kind === "local" ? item.sourceId : undefined
 
@@ -373,7 +383,10 @@ export function IssuePlanningSection({
             {refs.map((ref) => (
               <li key={`${ref.provider}:${ref.externalId}`} className="flex items-center gap-1">
                 <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] font-normal">
-                  {t(`planning.provider.${providerKey(ref.provider)}`)}
+                  {ref.provider.startsWith("plugin:")
+                    ? (getIssueSyncRegistry().get(ref.provider)?.resource?.label ??
+                      t("planning.provider.other"))
+                    : t(`planning.provider.${providerKey(ref.provider)}`)}
                 </Badge>
                 {ref.url ? (
                   <a

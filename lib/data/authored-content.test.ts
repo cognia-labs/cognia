@@ -431,3 +431,49 @@ it("sessions-only selection carries only referenced workspace/folder parents", a
     { section: "sessionFolders", rows: [expect.objectContaining({ id: "f" })] },
   ])
 })
+
+const pluginResource = {
+  kind: "plugin" as const,
+  providerId: "plugin:portable/tracker",
+  schemaVersion: 1,
+  config: { projectId: "p", nested: { issueId: "issue", labelIds: ["label"] } },
+}
+
+it.each(["v3", "v4"])(
+  "keeps remote plugin config opaque during duplicate %s restore",
+  async (format) => {
+    await seedGraph()
+    await getDb().issueProjects.update("ip", { resources: [pluginResource] })
+    const pkg = await exportGraph(format)
+    expect(pkg.payload.issueProjects![0].resources).toEqual([pluginResource])
+    await applyBackupPackage(pkg, {
+      mergeStrategy: "duplicate",
+      includeSessions: true,
+      includeApiKey: false,
+    })
+    const copy = (await getDb().issueProjects.toArray()).find((row) => row.id !== "ip")!
+    expect(copy.projectId).not.toBe("p")
+    expect(copy.resources).toEqual([pluginResource])
+  }
+)
+
+it.each(["connectionRef", "accountId", "accessToken", "deviceId"])(
+  "rejects plugin %s at restore even when secret export is enabled",
+  async (field) => {
+    await seedGraph()
+    const pkg = await exportGraph("v3")
+    pkg.payload.issueProjects![0].resources = [
+      { ...pluginResource, config: { nested: { [field]: "private" } } },
+    ]
+    await fixture.restore()
+    await expect(
+      applyBackupPackage(pkg, {
+        mergeStrategy: "overwrite",
+        includeSessions: true,
+        includeApiKey: true,
+      })
+    ).rejects.toThrow(/portable/)
+    expect(await getDb().issueProjects.count()).toBe(0)
+    expect(await getDb().projects.count()).toBe(0)
+  }
+)

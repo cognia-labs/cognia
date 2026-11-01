@@ -59,8 +59,12 @@ jest.mock("./delete-project-dialog", () => ({
     return props.open ? <div data-testid="delete-stub" /> : null
   },
 }))
+let resourceProps: Record<string, unknown> = {}
 jest.mock("../project-resource-dialog", () => ({
-  ProjectResourceDialog: () => <div data-testid="resource-stub" />,
+  ProjectResourceDialog: (props: Record<string, unknown>) => {
+    resourceProps = props
+    return <div data-testid="resource-stub" />
+  },
 }))
 
 const mockUpdate = jest.fn().mockResolvedValue(undefined)
@@ -142,6 +146,7 @@ beforeEach(() => {
   inspectorProps = {}
   createProps = {}
   deleteProps = {}
+  resourceProps = {}
   toastCalls.length = 0
   activeProjectId = "w1"
   projectsForTest = []
@@ -150,6 +155,19 @@ beforeEach(() => {
 })
 
 describe("ProjectConsole", () => {
+  it("opens the selected plugin resource in the edit dialog", () => {
+    const resource = {
+      kind: "plugin" as const,
+      providerId: "plugin:console/tracker",
+      schemaVersion: 1,
+      config: { project: "remote" },
+    }
+    projectsForTest = [project({ resources: [resource] })]
+    render(<ProjectConsole initialSelectedId="p1" />)
+    callProp(inspectorProps, "onEditResource", 0)
+    expect(resourceProps.initialResource).toEqual(resource)
+    expect(resourceProps.issueProjectId).toBe("p1")
+  })
   describe("empty", () => {
     it("shows the shared empty state rather than a bare paragraph", () => {
       render(<ProjectConsole />)

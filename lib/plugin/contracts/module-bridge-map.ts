@@ -32,6 +32,10 @@
  */
 
 import {
+  registerIssueSyncProvidersForPlugin,
+  unregisterIssueSyncProvidersForPlugin,
+} from "@/lib/plugin/bridge/issue-sync-providers-bridge"
+import {
   registerDocsProvidersForPlugin,
   unregisterDocsProvidersForPlugin,
 } from "@/lib/plugin/bridge/docs-providers-bridge"
@@ -183,6 +187,14 @@ export interface ModuleBridgeCapabilityDescriptor {
  * registration stays compatible with declarative contribution arrays.
  */
 export const MODULE_BRIDGE_CAPABILITIES = {
+  "issue-sync-provider": {
+    key: "issue-sync-provider",
+    manifestField: "issueSyncProviders",
+    register: async (ctx) => {
+      registerIssueSyncProvidersForPlugin(ctx.manifest)
+    },
+    unregister: unregisterIssueSyncProvidersForPlugin,
+  },
   "docs-provider": {
     key: "docs-provider",
     manifestField: "docsProviders",

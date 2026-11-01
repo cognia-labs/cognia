@@ -43,7 +43,9 @@ jest.mock("@/lib/issues/sync/registry", () => ({
   registerIssueSyncProvider: (p: unknown) => mockRegister(p),
 }))
 const guarded = jest.fn()
+const mockHasWrite = jest.fn(() => true)
 jest.mock("@/lib/plugin/security/permission-guard", () => ({
+  getPermissionGuard: () => ({ check: (...args: unknown[]) => mockHasWrite(...(args as [])) }),
   createGuardedAPI: (_id: string, api: unknown, map: Record<string, string>) => {
     guarded(map)
     return api
@@ -58,6 +60,7 @@ const issue = { id: "i1", identifier: "MERC-1", projectId: "w1", externalKeys: [
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockHasWrite.mockReturnValue(true)
   mockResolve.mockResolvedValue(issue)
 })
 
@@ -125,7 +128,10 @@ describe("createIssuesAPI", () => {
   })
 
   it("labels by name, reads the trail newest first, and registers a sync provider", async () => {
-    const api = createIssuesAPI("p")
+    const api = createIssuesAPI("p", {
+      id: "p",
+      issueSyncProviders: [{ id: "acme-tracker", label: "Acme", schemaVersion: 1 }],
+    })
     await api.label("MERC-1", { add: ["Docs"], remove: ["bug"] })
     expect(mockApply.mock.calls.map((c) => c[1])).toEqual([
       { kind: "addLabel", labelId: "l:Docs" },
@@ -133,10 +139,46 @@ describe("createIssuesAPI", () => {
     ])
     await api.listEvents("MERC-1", 5)
     expect(mockListEvents).toHaveBeenCalledWith({ issueId: "i1", descending: true, limit: 5 })
-    const provider = { id: "acme-tracker" }
-    api.registerSyncProvider(provider as never)
-    expect(mockRegister).toHaveBeenCalledWith(provider)
+    const provider = {
+      id: "acme-tracker",
+      label: "Acme",
+      pullFields: [],
+      pushFields: [],
+      resource: {
+        label: "Acme",
+        schemaVersion: 1,
+        schema: { type: "object" as const, properties: {} },
+        describe: () => ({ key: "a", label: "a" }),
+      },
+      pull: async () => ({ items: [], notModified: true }),
+    }
+    api.registerSyncProvider(provider)
+    expect(mockRegister).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "plugin:p/acme-tracker",
+        resource: expect.objectContaining({ kind: "plugin" }),
+      })
+    )
+    expect(() => api.registerSyncProvider({ ...provider, id: "undeclared" })).toThrow(/declared/)
     expect(() => api.registerSyncProvider({ id: " " } as never)).toThrow(/id/)
+    mockHasWrite.mockReturnValue(false)
+    expect(() => api.registerSyncProvider(provider)).toThrow(/issue:write/)
+    mockHasWrite.mockReturnValue(true)
+    expect(() =>
+      api.registerSyncProvider({
+        ...provider,
+        resource: { ...provider.resource, schemaVersion: 2 },
+      })
+    ).toThrow(/manifest/)
+    expect(() =>
+      api.registerSyncProvider({
+        ...provider,
+        resource: {
+          ...provider.resource,
+          schema: { type: "object", properties: { connectionRef: { type: "string" } } },
+        },
+      })
+    ).toThrow(/portable/)
   })
 
   it("delivers bus events to a subscriber until disposed", () => {
@@ -155,5 +197,47 @@ describe("createIssuesAPI", () => {
     off()
     emitIssueEvent({ ...event, id: "e3" })
     expect(seen).toEqual(["e1"])
+  })
+
+  it("drops results when issue:write is revoked during pull or push", async () => {
+    const api = createIssuesAPI("revoked", {
+      id: "revoked",
+      issueSyncProviders: [{ id: "tracker", label: "Tracker", schemaVersion: 1 }],
+    })
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    api.registerSyncProvider({
+      id: "tracker",
+      label: "Tracker",
+      pullFields: [],
+      pushFields: [],
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object", properties: {} },
+        describe: () => ({ key: "a", label: "A" }),
+      },
+      pull: async () => {
+        await pending
+        return { items: [], notModified: true }
+      },
+      push: async () => {
+        await pending
+        return { status: "applied", remoteUpdatedAt: 9999 }
+      },
+    })
+    const registered = mockRegister.mock
+      .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+    const pulled = registered.pull({} as never, {})
+    const pushed = registered.push!({} as never, {} as never, {}, {} as never, {
+      idempotencyKey: "test",
+      by: { kind: "human" },
+    })
+    mockHasWrite.mockReturnValue(false)
+    finish()
+    await expect(pulled).rejects.toThrow(/issue:write/)
+    await expect(pushed).rejects.toThrow(/issue:write/)
   })
 })

@@ -69,6 +69,21 @@ describe("resolveWorkspaceSyncBindings", () => {
 })
 
 describe("runWorkspaceIssueSync", () => {
+  it("defers remaining snapshot bindings when a provider is replaced mid-sweep", async () => {
+    const registry = new IssueSyncRegistry()
+    registry.register(provider("a", [binding("a", "p1"), binding("a", "p2")]))
+    const reconcile = jest.fn(async (b: IssueSyncBinding) => {
+      registry.register(provider("a", [binding("a", "p2")]))
+      return outcome(b)
+    })
+    const result = await runWorkspaceIssueSync(
+      { mirror: false },
+      { registry, reconcile, listContainers: async () => [] }
+    )
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(result.outcomes).toEqual([])
+    expect(result.failures).toEqual([])
+  })
   it("runs the mirror, then every binding, isolating failures", async () => {
     const registry = new IssueSyncRegistry()
     const good = binding("a", "p1")
@@ -97,7 +112,7 @@ describe("runWorkspaceIssueSync", () => {
     )
     expect(runMirror).toHaveBeenCalledWith({ projectId: "w1", full: true })
     expect(reconcile).toHaveBeenCalledTimes(2)
-    expect(reconcile.mock.calls[0][2]).toEqual({ full: true })
+    expect(reconcile.mock.calls[0][2]).toEqual({ full: true, signal: expect.any(AbortSignal) })
     expect(result.bindingCount).toBe(4)
     expect(result.outcomes).toHaveLength(1)
     expect(result.failures).toEqual([{ binding: bad, error: expect.any(Error) }])

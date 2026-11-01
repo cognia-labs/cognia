@@ -10,7 +10,7 @@ import type {
 } from "../../../types/issues/index"
 import type { IssueBulkOutcome } from "../../issues/bulk-actions"
 import type { IssueEventListener } from "../../issues/event-bus"
-import type { IssueSyncProvider } from "../../issues/sync/types"
+import type { PluginIssueSyncProvider } from "../../issues/sync/types"
 
 export type PluginIssueCreateInput = Omit<CreateIssueRequest, "by" | "origin">
 
@@ -54,6 +54,6 @@ export interface PluginIssuesAPI {
   ): Promise<IssueBulkOutcome>
   /** Subscribe to committed trail entries. Returns the disposer. */
   onEvent(handler: IssueEventListener, options?: PluginIssueEventOptions): () => void
-  /** Register an external tracker as a sync source. Returns the disposer. */
-  registerSyncProvider(provider: IssueSyncProvider): () => void
+  /** Declared in manifest.issueSyncProviders; Host namespaces its id and owns binding resolution. */
+  registerSyncProvider(provider: PluginIssueSyncProvider): () => void
 }

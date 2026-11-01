@@ -4,10 +4,13 @@
  */
 
 import type { IssueProjectResource } from "@/types/issues"
+import { pluginResourceState } from "./plugin-resources"
 
 /** A stable identity for a resource within its container (React keys, dedup). */
 export function resourceKey(resource: IssueProjectResource): string {
   switch (resource.kind) {
+    case "plugin":
+      return pluginResourceState(resource).key
     case "github-repo":
       return `github-repo:${resource.repoFullName}`
     case "workspace-root":
@@ -16,12 +19,18 @@ export function resourceKey(resource: IssueProjectResource): string {
       return `lark-tasklist:${resource.adapterId}:${resource.tasklistGuid}`
     case "lark-bitable":
       return `lark-bitable:${resource.adapterId}:${resource.appToken}:${resource.tableId}`
+    default:
+      return "unavailable"
   }
 }
 
 /** What a row prints for the resource. Never localised: these are identifiers. */
 export function resourceLabel(resource: IssueProjectResource): string {
   switch (resource.kind) {
+    case "plugin": {
+      const state = pluginResourceState(resource)
+      return state.status === "ready" ? state.label : (resource.name ?? resource.providerId)
+    }
     case "github-repo":
       return resource.repoFullName
     case "workspace-root":
@@ -30,18 +39,24 @@ export function resourceLabel(resource: IssueProjectResource): string {
       return resource.name
     case "lark-bitable":
       return resource.name
+    default:
+      return "unavailable"
   }
 }
 
 /** Whether the resource feeds the sync engine (as opposed to a directory reference). */
 export function isSyncedResource(resource: IssueProjectResource): boolean {
   switch (resource.kind) {
+    case "plugin":
+      return pluginResourceState(resource).status === "ready"
     case "github-repo":
       return true
     case "lark-tasklist":
     case "lark-bitable":
       return true
     case "workspace-root":
+      return false
+    default:
       return false
   }
 }

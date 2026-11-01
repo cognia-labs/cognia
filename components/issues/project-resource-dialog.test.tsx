@@ -2,7 +2,10 @@
  * @jest-environment jsdom
  */
 
-jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
+jest.mock("next-intl", () => ({
+  useLocale: () => "en",
+  useTranslations: () => (key: string) => key,
+}))
 
 const mockAddResource = jest.fn()
 jest.mock("@/lib/db/issue-projects", () => ({
@@ -42,6 +45,10 @@ import {
   parseBitableAppToken,
 } from "./project-resource-dialog"
 import type { WorkspaceRoot } from "@/types/workspace"
+import { registerIssueSyncProvider, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
+import { createGithubSyncProvider } from "@/lib/issues/sync/providers/github"
+import { createLarkTaskSyncProvider } from "@/lib/issues/sync/providers/lark-task"
+import { createLarkBitableSyncProvider } from "@/lib/issues/sync/providers/lark-bitable"
 
 const ROOTS: WorkspaceRoot[] = [
   { id: "root-1", path: "/src/app", label: "app", isPrimary: true },
@@ -60,6 +67,10 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof ProjectReso
 }
 
 beforeEach(() => {
+  resetIssueSyncRegistry()
+  registerIssueSyncProvider(createGithubSyncProvider())
+  registerIssueSyncProvider(createLarkTaskSyncProvider())
+  registerIssueSyncProvider(createLarkBitableSyncProvider())
   jest.clearAllMocks()
   mockAddResource.mockResolvedValue(undefined)
   mockSyncSchedule.mockResolvedValue({ action: "created", bindingCount: 1 })

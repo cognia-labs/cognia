@@ -226,6 +226,28 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     ],
   },
   {
+    id: "issue-sync-provider",
+    support: "supported",
+    manifestFields: ["issueSyncProviders"],
+    runtimeBinding:
+      "ctx.issues.registerSyncProvider + Host issue registry; disposed on plugin disable",
+    hostBindings: [
+      "lib/plugin/api/issues-api.ts",
+      "lib/plugin/bridge/issue-sync-providers-bridge.ts",
+      "lib/plugin/core/context.ts",
+    ],
+    typescriptSdk: [
+      "packages/plugin-sdk/src/define/define-issue-sync-provider.ts",
+      "packages/plugin-sdk/src/api/issues.ts",
+    ],
+    pythonSdk: [],
+    docs: "docs/content/docs/plugin-dev/api-reference.generated.mdx",
+    requiredTests: [
+      "lib/plugin/api/issues-api.test.ts",
+      "lib/plugin/bridge/issue-sync-providers-bridge.test.ts",
+    ],
+  },
+  {
     id: "decision-provider",
     support: "supported",
     manifestFields: ["decisionProviders"],

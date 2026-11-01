@@ -12,6 +12,9 @@ import type { IssueSyncBinding } from "@cognia/plugin-contract/lib/issues/sync/t
 export type {
   IssueSyncBinding,
   IssueSyncProvider,
+  IssueSyncResourceDescriptor,
+  IssueSyncResourceSchema,
+  PluginIssueSyncProviderDef,
   PullOptions,
   PullResult,
   PushOutcome,

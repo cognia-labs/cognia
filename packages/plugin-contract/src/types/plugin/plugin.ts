@@ -176,6 +176,7 @@ export type PluginCapability =
   | "canvas" // Provides canvas editing and selection workflows
   | "ai-provider" // Provides AI provider fallback and routing helpers
   | "docs-provider"
+  | "issue-sync-provider"
   | "decision-provider" // Provides System-1 decision providers for ctx.decisions (ADR-0194)
   | "themes" // Provides UI themes
   | "commands" // Provides slash commands
@@ -1150,6 +1151,8 @@ export interface PluginManifest {
   decisionProviders?: PluginDecisionProviderDef[]
   /** Credential-free document implementations register through ctx.docsProviders. */
   docsProviders?: PluginDocsProviderDef[]
+  /** Portable issue resources, contributed through ctx.issues.registerSyncProvider. */
+  issueSyncProviders?: import("../../lib/issues/sync/types").PluginIssueSyncProviderDef[]
 
   /**
    * Workspace execution backends contributed by this plugin (issue-loop /

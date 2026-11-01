@@ -374,7 +374,13 @@
     "larkDesktopOnly": "只有桌面应用能访问飞书。",
     "larkNotAuthorized": "{account} 未授权。请在 设置 → 连接 中重新连接。",
     "childrenDoneInstruction": "子议题完成时",
-    "childrenDoneInstructionHint": "父议题的子议题全部完成时要让智能体做什么。留空则使用内置说明；父议题可以单独覆盖。"
+    "childrenDoneInstructionHint": "父议题的子议题全部完成时要让智能体做什么。留空则使用内置说明；父议题可以单独覆盖。",
+    "providerUnavailable": "提供方不可用",
+    "resourceNeedsAttention": "资源需要处理",
+    "resourceMapping": "字段与状态映射",
+    "resourceConfigInvalid": "请检查资源配置",
+    "editResource": "编辑资源",
+    "saveResource": "保存资源"
   },
   "workspace": {
     "title": "工作区",

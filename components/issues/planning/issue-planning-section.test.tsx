@@ -7,7 +7,8 @@ jest.mock("next-intl", () => ({
     values ? `${key}:${JSON.stringify(values)}` : key,
 }))
 
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
+import { registerIssueSyncProvider, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
 import { statusCategoryOf } from "@/types/issues"
 import type { IssueCycle, IssueStatus } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
@@ -51,6 +52,33 @@ const cycle: IssueCycle = {
 }
 
 describe("IssuePlanningSection", () => {
+  afterEach(resetIssueSyncRegistry)
+  it("updates external-ref labels when a plugin provider registers and is disposed", () => {
+    const id = "plugin:planning/tracker"
+    const item = local({ externalRefs: [{ provider: id, externalId: "remote" }] })
+    render(<IssuePlanningSection item={item} items={[item]} cycles={[]} />)
+    expect(screen.getByText("planning.provider.other")).toBeInTheDocument()
+    let dispose!: () => void
+    act(() => {
+      dispose = registerIssueSyncProvider({
+        id,
+        label: "Tracker",
+        pullFields: [],
+        pushFields: [],
+        resolveBindings: () => [],
+        pull: async () => ({ items: [], notModified: true }),
+        resource: {
+          label: "Tracker",
+          schemaVersion: 1,
+          schema: { type: "object", properties: {} },
+          describe: () => ({ key: "remote", label: "Remote" }),
+        },
+      })
+    })
+    expect(screen.getByText("Tracker")).toBeInTheDocument()
+    act(() => dispose())
+    expect(screen.getByText("planning.provider.other")).toBeInTheDocument()
+  })
   beforeEach(() => {
     seq = 0
   })
