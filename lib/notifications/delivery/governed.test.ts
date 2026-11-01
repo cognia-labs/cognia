@@ -17,10 +17,17 @@ import {
 } from "./governed"
 import type { NotificationRenderedPayload } from "@/types/notifications/result"
 import type { NotificationScope } from "@/types/notifications/scope"
+jest.mock("@/lib/policy/action-review/plan-context", () => ({
+  readAppSettings: jest.fn(async () => ({})),
+}))
+import { readAppSettings } from "@/lib/policy/action-review/plan-context"
 
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
-beforeEach(async () => await dbFixture.restore())
+beforeEach(async () => {
+  await dbFixture.restore()
+  jest.mocked(readAppSettings).mockResolvedValue({})
+})
 afterAll(async () => await dbFixture.dispose())
 
 const scope: NotificationScope = {
@@ -180,6 +187,18 @@ describe("persistGovernedNotificationInsideTransaction", () => {
     )
   }
 
+  it("records the current enforce mode while retaining target-consent authority", async () => {
+    const target = await connectorTarget()
+    const prepared = await prep(target.id)
+    jest
+      .mocked(readAppSettings)
+      .mockResolvedValue({ agentPermissions: { outboundAuthorization: "enforce" } })
+    const { outboundJobId } = await commit(prepared)
+    expect((await getDb().outboundQueue.get(outboundJobId))?.authorizationProvenance).toMatchObject(
+      { mode: "enforce", plan: "allow" }
+    )
+  })
+
   it("commits the outbound job + intent atomically", async () => {
     const t = await connectorTarget()
     const p = await prep(t.id)
@@ -190,6 +209,13 @@ describe("persistGovernedNotificationInsideTransaction", () => {
     expect(intent?.outboundJobId).toBe(outboundJobId)
     expect(job?.notificationOperationKey).toBe("op-1")
     expect(job?.source).toBe("notification")
+    expect(job?.authorizationProvenance).toEqual({
+      schemaVersion: 1,
+      mode: "shadow",
+      plan: "allow",
+      policyVersion: "adr-0239.delivery.v1",
+      plannedAt: job?.createdAt,
+    })
     expect(job?.orderSeq).toBe(1)
     // A target a person configured grants its conversation (ADR-0239).
     expect(job?.authorizedBy).toEqual({

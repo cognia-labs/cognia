@@ -47,6 +47,8 @@ import {
   markSending,
   markSent,
   markAwaitingDeliveryReceipt,
+  deferUnclaimed,
+  holdOutboundForAuthorization,
   markFailed,
   markDeliveryUnknown,
   markDeadlettered,
@@ -57,8 +59,12 @@ import {
   findNextActiveOutboundSibling,
   isOutboundTerminal,
   OUTBOUND_DUE_BATCH_SIZE,
+  updateOutboundAuthorization,
 } from "@/lib/db/outbound-jobs"
-import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
+import {
+  ConnectorDeliveryDeniedError,
+  enqueueGoverned as enqueueOutbound,
+} from "@/lib/connectors/delivery-gateway"
 import { getDb } from "@/lib/db/schema"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import type {
@@ -84,7 +90,17 @@ import type { MessageSegment } from "@/types/connectors/segment"
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker"
 import { createTokenBucket, type TokenBucket } from "./rate-limit"
 import { recordDeliveredMessage } from "./delivered-messages"
-import { createDraft } from "@/lib/db/connector-drafts"
+import { createDraft, prepareDraftRow } from "@/lib/db/connector-drafts"
+import type {
+  DeliveryDecision,
+  DeliveryPlanInput,
+  OutboundAuthorization,
+} from "@/lib/policy/action-review/plan-delivery"
+import type { OutboundSettingsLike } from "@/lib/policy/action-review/plan-context"
+import {
+  ACTION_REVIEW_AUTHORITIES,
+  ACTION_REVIEW_GRANT_SCOPES,
+} from "@cognia/agent-config-types/action-review"
 import type { AdapterRuntimeStateSnapshot } from "@cognia/plugin-contract/lib/connectors/outbound-runner"
 export type { AdapterRuntimeStateSnapshot } from "@cognia/plugin-contract/lib/connectors/outbound-runner"
 
@@ -347,6 +363,10 @@ class PlatformSendSemaphore {
 // ── Runner options ────────────────────────────────────────────────────────────
 
 export interface OutboundRunnerOptions {
+  /** Current authorization mode; default reads the settings store lazily. */
+  settings?: () => OutboundSettingsLike | Promise<OutboundSettingsLike>
+  /** Default loads the real planner lazily, avoiding the gateway/runtime cycle. */
+  planDelivery?: (input: DeliveryPlanInput) => Promise<DeliveryDecision>
   /**
    * Live adapter lookup. Structurally satisfied by a `Map`, but production
    * callers should pass a getter backed by the bus registry so adapters
@@ -387,6 +407,95 @@ export interface OutboundRunnerOptions {
     laneCount: number
     dueBatchSize: number
   }) => void
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+/** Persisted host claims are unknown at the package boundary. Never cast unchecked. */
+function readStoredAuthorization(value: unknown): OutboundAuthorization | undefined {
+  if (!isRecord(value)) return undefined
+  const optionalString = (record: Record<string, unknown>, key: string) =>
+    record[key] === undefined || typeof record[key] === "string"
+  let valid = false
+  switch (value.kind) {
+    case "human":
+      valid = ["local-user", "device", "connector-user"].includes(value.actor as string)
+      break
+    case "origin-reply":
+    case "system-notice":
+      valid = typeof value.inboundConversationKey === "string"
+      break
+    case "tool-call":
+      valid =
+        typeof value.sessionId === "string" &&
+        typeof value.toolUseId === "string" &&
+        (value.createdConversation === undefined || typeof value.createdConversation === "boolean")
+      break
+    case "plugin":
+      valid = typeof value.pluginId === "string" && optionalString(value, "botRunId")
+      break
+    case "unattended": {
+      const origin = value.origin
+      const target = isRecord(origin) ? origin.originThread : undefined
+      valid =
+        typeof value.ownerRef === "string" &&
+        optionalString(value, "sessionId") &&
+        (origin === undefined ||
+          (isRecord(origin) &&
+            optionalString(origin, "rootSessionId") &&
+            optionalString(origin, "instructionEpoch") &&
+            (target === undefined ||
+              (isRecord(target) &&
+                [
+                  "conversation",
+                  "person",
+                  "mail",
+                  "repository",
+                  "site",
+                  "public",
+                  "unknown",
+                ].includes(target.kind as string) &&
+                typeof target.channel === "string" &&
+                typeof target.recipient === "string" &&
+                optionalString(target, "thread"))))) &&
+        (value.policyGrants === undefined ||
+          (Array.isArray(value.policyGrants) &&
+            value.policyGrants.every(
+              (grant) =>
+                isRecord(grant) &&
+                typeof grant.policyRef === "string" &&
+                (Array.isArray(grant.fingerprints) || grant.fingerprints instanceof Set) &&
+                [...grant.fingerprints].every((fp) => typeof fp === "string")
+            )))
+      break
+    }
+    case "rerouted": {
+      const from = value.from
+      if (!isRecord(from) || typeof from.conversationKey !== "string") break
+      const by = from.authorizedBy
+      const provenance = from.provenance
+      valid =
+        (by === undefined ||
+          (isRecord(by) &&
+            ACTION_REVIEW_AUTHORITIES.some((authority) => authority === by.authority) &&
+            optionalString(by, "receiptId") &&
+            optionalString(by, "policyRef") &&
+            (by.grantScope === undefined ||
+              ACTION_REVIEW_GRANT_SCOPES.some((scope) => scope === by.grantScope)))) &&
+        (provenance === undefined ||
+          (isRecord(provenance) &&
+            provenance.schemaVersion === 1 &&
+            ["shadow", "enforce"].includes(provenance.mode as string) &&
+            ["allow", "draft", "deny", "unplanned", "exempt"].includes(provenance.plan as string) &&
+            typeof provenance.policyVersion === "string" &&
+            typeof provenance.plannedAt === "number" &&
+            optionalString(provenance, "receiptId")))
+      break
+    }
+  }
+  return valid ? (value as unknown as OutboundAuthorization) : undefined
 }
 
 // ── Per-adapter state ────────────────────────────────────────────────────────
@@ -568,8 +677,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
    *     qualifies when its breaker can pass AND its bucket still has send
    *     capacity (an untracked sibling counts as fresh = full bucket).
    *
-   * Returns the new job id, or `null` when no sibling qualifies — the
-   * caller then falls back to its normal path (dead-letter / defer).
+   * Returns true when handled (rerouted or held by authorization), false
+   * when no sibling qualifies and the caller should defer normally.
    *
    * The re-enqueued job carries a derived idempotency key (`…:fo:<id>` /
    * `…:lb:<id>`) so it can never collide with the original in the runner's
@@ -580,11 +689,14 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     job: OutboundJobRow,
     fromRow: AdapterInstanceRow,
     mechanism: "failover" | "balanced",
-    adapterCache?: Map<string, AdapterInstanceRow | undefined>
-  ): Promise<string | null> {
+    request: OutboundJobRow["request"],
+    adapterCache?: Map<string, AdapterInstanceRow | undefined>,
+    /** This runner already holds the `sending` claim on `job`. */
+    claimed = false
+  ): Promise<boolean> {
     const candidates =
       (mechanism === "failover" ? fromRow.failoverAdapterIds : fromRow.balanceAdapterIds) ?? []
-    if (candidates.length === 0) return null
+    if (candidates.length === 0) return false
     const now = clock()
 
     const persistedAddress = job.request.deliveryTarget?.address
@@ -594,7 +706,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         parsedKey = parseConversationKey(job.conversationKey)
       } catch {
         // Legacy row without a complete target and with a malformed key.
-        return null
+        return false
       }
     }
 
@@ -620,6 +732,29 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         continue
       }
 
+      // A sibling is ready to take this work. Own the original first: another
+      // runner may be sending it, and copying it now would send it twice.
+      // A claim lost to another runner is that runner's job to finish.
+      if (!claimed && !(await markSending(job.id, now))) return true
+      const releaseClaim = () =>
+        unclaimSending(
+          job.id,
+          mechanism === "failover" ? "circuit_open" : "rate_limited",
+          "Reroute refused; the original is retried",
+          now + 1_000
+        )
+      // Then authorize it: otherwise an unknown legacy row would acquire
+      // enforce/unplanned provenance from the reroute wrapper and escape the
+      // legacy recheck. A held job is handled, so callers must not defer/revive it.
+      try {
+        if (!(await authorizeJob(job, request, true))) return true
+      } catch (error) {
+        // A failed receipt or draft write rolled its own transaction back; the
+        // claim must not outlive it, or the unsent job reads as in flight.
+        await releaseClaim()
+        throw error
+      }
+
       const keySuffix = mechanism === "failover" ? "fo" : "lb"
       const newConversationKey = buildConversationKey(
         persistedAddress?.platform ?? parsedKey!.platform,
@@ -639,35 +774,46 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             conversationRef: reroutedRef,
           }
         : undefined
-      const newJob = await enqueueOutbound({
-        adapterId: targetId,
-        conversationKey: newConversationKey,
-        request: {
-          ...job.request,
-          conversationRef: reroutedRef,
-          ...(reroutedTarget ? { deliveryTarget: reroutedTarget } : {}),
-          metadata: {
-            ...job.request.metadata,
-            idempotencyKey: `${job.request.metadata.idempotencyKey}:${keySuffix}:${targetId}`,
-            ...(mechanism === "failover"
-              ? { failoverFromAdapterId: job.adapterId }
-              : { balancedFromAdapterId: job.adapterId }),
+      let newJob: Awaited<ReturnType<typeof enqueueOutbound>>
+      try {
+        newJob = await enqueueOutbound({
+          adapterId: targetId,
+          conversationKey: newConversationKey,
+          request: {
+            ...job.request,
+            conversationRef: reroutedRef,
+            ...(reroutedTarget ? { deliveryTarget: reroutedTarget } : {}),
+            metadata: {
+              ...job.request.metadata,
+              idempotencyKey: `${job.request.metadata.idempotencyKey}:${keySuffix}:${targetId}`,
+              ...(mechanism === "failover"
+                ? { failoverFromAdapterId: job.adapterId }
+                : { balancedFromAdapterId: job.adapterId }),
+            },
           },
-        },
-        source: job.source,
-        ...(job.source === "workflow" && job.sourceWorkflow
-          ? { sourceWorkflow: job.sourceWorkflow }
-          : {}),
-        // The same chat through a sibling bot: what authorized the original
-        // job carries over, it is not planned again (ADR-0239).
-        authorization: {
-          kind: "rerouted",
-          from: {
-            conversationKey: job.conversationKey,
-            ...(job.authorizedBy ? { authorizedBy: job.authorizedBy } : {}),
+          source: job.source,
+          ...(job.source === "workflow" && job.sourceWorkflow
+            ? { sourceWorkflow: job.sourceWorkflow }
+            : {}),
+          // The same chat through a sibling bot: what authorized the original
+          // job carries over, it is not planned again (ADR-0239).
+          authorization: {
+            kind: "rerouted",
+            from: {
+              conversationKey: job.conversationKey,
+              ...(job.authorizedBy ? { authorizedBy: job.authorizedBy } : {}),
+              ...(job.authorizationProvenance ? { provenance: job.authorizationProvenance } : {}),
+            },
           },
-        },
-      })
+        })
+      } catch (error) {
+        // The copy was refused (the mode turned to enforce after the original
+        // was authorized). The original goes back to the queue, unsent, and is
+        // planned next pass.
+        await releaseClaim()
+        if (error instanceof ConnectorDeliveryDeniedError) return true
+        throw error
+      }
       const reasonText = mechanism === "failover" ? "circuit open" : "rate limited"
       // Point the dead-lettered original at the sibling job that now carries
       // the delivery, so `waitForOutboundTerminal` (plugin waitForDelivery /
@@ -697,9 +843,171 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         fields: { toAdapterId: targetId, newJobId: newJob.id },
         at: now,
       })
-      return newJob.id
+      return true
     }
-    return null
+    return false
+  }
+
+  /** Re-plan only shadow-held, unplanned or unknown legacy automation before a claim. */
+  async function authorizeJob(
+    job: OutboundJobRow,
+    request: OutboundJobRow["request"],
+    /** This runner holds the job's `sending` claim (a reroute between claim and send). */
+    claimed = false
+  ): Promise<boolean> {
+    if (job.source === "manual" || job.source === "draft-approved") return true
+    const previous = job.authorizationProvenance
+    const needsPlan = previous
+      ? previous.plan === "unplanned" ||
+        (previous.mode === "shadow" && previous.plan !== "allow" && previous.plan !== "exempt")
+      : !job.authorizedBy
+    if (!needsPlan) return true
+
+    const { readAppSettings } = await import("@/lib/policy/action-review/plan-context")
+    const { readOutboundAuthorizationMode } = await import("@/lib/policy/action-review/policy")
+    const settings = await (opts.settings ?? readAppSettings)()
+    if (readOutboundAuthorizationMode(settings) !== "enforce") return true
+
+    const { planDelivery, OUTBOUND_DELIVERY_POLICY_VERSION, sameChat } =
+      await import("@/lib/policy/action-review/plan-delivery")
+    let authorization = readStoredAuthorization(previous?.authorization)
+    // Rerouting itself plans nothing. Revisit the original claim, not the
+    // wrapper that would merely return the old shadow decision again.
+    const visited = new Set<OutboundAuthorization>()
+    while (
+      authorization?.kind === "rerouted" &&
+      sameChat(authorization.from.conversationKey, job.conversationKey)
+    ) {
+      if (visited.has(authorization)) {
+        authorization = undefined
+        break
+      }
+      visited.add(authorization)
+      authorization = readStoredAuthorization(authorization.from.provenance?.authorization)
+    }
+    let decision: DeliveryDecision
+    try {
+      const input: DeliveryPlanInput = {
+        adapterId: job.adapterId,
+        conversationKey: job.conversationKey,
+        source: job.source,
+        ...(request.sendOptions?.mode ? { deliveryMode: request.sendOptions.mode } : {}),
+        ...(authorization ? { authorization } : {}),
+      }
+      decision = await (opts.planDelivery
+        ? opts.planDelivery(input)
+        : planDelivery(input, { settings: () => settings }))
+    } catch (error) {
+      console.warn("[outbound-runner] authorization re-planning failed; holding a draft", error)
+      const { outboundReceipt } = await import("@/lib/policy/action-review/outbound-receipt")
+      const { conversationTarget, toReviewTarget } =
+        await import("@/lib/policy/action-review/outbound-targets")
+      const target = conversationTarget(job.conversationKey) ?? {
+        kind: "unknown" as const,
+        channel: job.adapterId,
+        recipient: "*",
+      }
+      const sessionId =
+        authorization && "sessionId" in authorization ? authorization.sessionId : undefined
+      const ownerRef =
+        authorization?.kind === "unattended" ? authorization.ownerRef : `source:${job.source}`
+      const origin = authorization?.kind === "unattended" ? authorization.origin : undefined
+      decision = {
+        action: "draft",
+        draftSessionId: sessionId ?? origin?.rootSessionId ?? ownerRef,
+        receipt: outboundReceipt({
+          requestId: `delivery:${crypto.randomUUID()}`,
+          origin: {
+            channel: "connector-delivery",
+            scope: "connector",
+            headless: true,
+            ...(sessionId ? { sessionId } : {}),
+            ...(origin?.rootSessionId ? { rootSessionId: origin.rootSessionId } : {}),
+            ...(origin?.instructionEpoch ? { instructionEpoch: origin.instructionEpoch } : {}),
+          },
+          subject: {
+            kind: "connector-delivery",
+            ref: ownerRef,
+            targets: [toReviewTarget(target)],
+          },
+          plan: "draft",
+          enforced: true,
+          outcome: "deny",
+          authority: "policy-default",
+          reason: "held as a draft for a person to approve: delivery planning failed",
+          now: clock(),
+        }),
+      }
+    }
+
+    if (decision.action === "send") {
+      const { toDeliveryReceiptRow } = await import("@/lib/policy/action-review/projection")
+      const provenance = {
+        schemaVersion: 1 as const,
+        ...decision.provenance,
+        mode: "enforce" as const,
+        policyVersion: OUTBOUND_DELIVERY_POLICY_VERSION,
+        plannedAt: clock(),
+        ...(authorization ? { authorization: structuredClone(authorization) } : {}),
+      }
+      const updated = await updateOutboundAuthorization(
+        job.id,
+        provenance,
+        decision.authorizedBy,
+        decision.receipt ? await toDeliveryReceiptRow(decision.receipt) : undefined,
+        { claimed }
+      )
+      if (updated) {
+        job.authorizationProvenance = provenance
+        job.authorizedBy = decision.authorizedBy
+      }
+      return updated
+    }
+
+    const draft =
+      decision.action === "draft"
+        ? await prepareDraftRow({
+            conversationKey: job.conversationKey,
+            sessionId: decision.draftSessionId,
+            segments: request.segments,
+            outboundPreview: {
+              ...request,
+              conversationRef: { ...request.conversationRef, adapterId: job.adapterId },
+            },
+          })
+        : undefined
+    // Not yet claimed: another runner may have held (or claimed) the row
+    // since it was read. Only the one that holds it records the outcome.
+    const held = await holdOutboundForAuthorization(job.id, {
+      errorCode: draft ? "authorization" : "authorization_denied",
+      message: draft
+        ? `Delivery held as draft ${draft.id} for a person to approve`
+        : `Delivery authorization denied: ${decision.action === "deny" ? decision.reason : "unapproved"}`,
+      ...(draft ? { draft } : {}),
+      claimed,
+    })
+    if (!held) return false
+    // There is no send to pair with these observer writes, just as in the
+    // gateway's draft/deny paths. Their failure must never revive the job.
+    const { projectActionReviewSettled } = await import("@/lib/policy/action-review/projection")
+    await projectActionReviewSettled(decision.receipt.request, decision.receipt.decision)
+    await Promise.resolve(
+      appendAudit({
+        adapterId: job.adapterId,
+        kind: draft ? "outbound.drafted" : "outbound.denied",
+        at: clock(),
+        conversationKey: job.conversationKey,
+        idempotencyKey: request.metadata.idempotencyKey,
+        fields: {
+          source: job.source,
+          receiptId: decision.receipt.request.requestId,
+          ...(draft
+            ? { draftId: draft.id }
+            : { reason: decision.action === "deny" ? decision.reason : "unapproved" }),
+        },
+      })
+    ).catch(() => undefined)
+    return false
   }
 
   /**
@@ -1026,8 +1334,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         request.metadata.failoverFromAdapterId === undefined &&
         request.metadata.balancedFromAdapterId === undefined
       ) {
-        const newJobId = await rerouteJob(job, adapterRow, "failover", adapterCache)
-        if (newJobId !== null) return
+        if (await rerouteJob(job, adapterRow, "failover", request, adapterCache)) return
       }
       // An open breaker is a TRANSIENT adapter condition, not a property of
       // this job: DEFER until the cooldown ends (plus jitter so the whole
@@ -1068,18 +1375,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       return
     }
 
-    // ── Send ──────────────────────────────────────────────────────────────
-    // Atomic claim: if another runner already moved this job out of
-    // pending/failed, yield rather than double-send the same message.
-    // Claimed BEFORE the token bucket so a lost claim never consumes a
-    // rate-limit token.
-    const claimed = await markSending(job.id, now)
-    if (!claimed) {
-      return
-    }
-
-    // ── Rate limit (post-claim) ───────────────────────────────────────────
-    if (!bucket.tryAcquire()) {
+    const deferRateLimit = async (claimed: boolean): Promise<void> => {
       // Multi-bot load balancing: before deferring behind the exhausted
       // bucket, try to spill the job onto a same-platform sibling from this
       // bot's `balanceAdapterIds` that still has send capacity. Single hop
@@ -1092,15 +1388,18 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         request.metadata.failoverFromAdapterId === undefined &&
         request.metadata.balancedFromAdapterId === undefined
       ) {
-        const newJobId = await rerouteJob(job, adapterRow, "balanced", adapterCache)
-        if (newJobId !== null) return
+        if (await rerouteJob(job, adapterRow, "balanced", request, adapterCache, claimed)) return
       }
       // Defer retry by 1 second (the lane-completion wake re-tightens the
       // loop's sleep so the runner re-picks once the deferral elapses).
       // `unclaimSending` refunds the attempt `markSending` charged — a
       // rate-limit deferral is not a delivery attempt.
       const nextAt = now + 1_000
-      await unclaimSending(job.id, "rate_limited", "Token bucket exhausted", nextAt)
+      if (claimed) await unclaimSending(job.id, "rate_limited", "Token bucket exhausted", nextAt)
+      // Unclaimed, another runner may hold the row by now: defer it only while
+      // it is still waiting, never by rewriting that runner's `sending` claim.
+      else if (!(await deferUnclaimed(job.id, "rate_limited", "Token bucket exhausted", nextAt)))
+        return
       await appendAudit({
         adapterId,
         kind: "rate_limit.tripped",
@@ -1108,6 +1407,29 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         conversationKey,
         idempotencyKey,
       })
+    }
+
+    // Check capacity without spending a token before planning. Deferred jobs
+    // must not mint a new authorization receipt every runner cycle.
+    if (bucket.snapshot().available < 1) {
+      await deferRateLimit(false)
+      return
+    }
+    if (!(await authorizeJob(job, request))) return
+
+    // ── Send ──────────────────────────────────────────────────────────────
+    // Atomic claim: if another runner already moved this job out of
+    // pending/failed, yield rather than double-send the same message.
+    // Claimed BEFORE the token bucket so a lost claim never consumes a
+    // rate-limit token.
+    const claimed = await markSending(job.id, now)
+    if (!claimed) {
+      return
+    }
+
+    // A different lane may consume capacity while authorization is awaited.
+    if (!bucket.tryAcquire()) {
+      await deferRateLimit(true)
       return
     }
 

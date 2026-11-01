@@ -725,6 +725,33 @@ export interface OutboundJobRow {
    * policy existed. Non-indexed JSON column — no schema version bump.
    */
   authorizedBy?: OutboundJobAuthorization
+  /**
+   * ADR-0239 / ADR-0250 §10: an authorization decision is persisted with the
+   * work it authorizes. Non-indexed JSON column; no Dexie schema bump.
+   */
+  authorizationProvenance?: OutboundJobAuthorizationProvenance
+}
+
+export interface OutboundJobAuthorizationProvenance {
+  schemaVersion: 1
+  /** The outbound-authorization mode the delivery was planned under. */
+  mode: "shadow" | "enforce"
+  /**
+   * allow: authorized; draft/deny: queued only because the mode was shadow;
+   * unplanned: shadow planning failed or no tool-call/reroute authority was
+   * recorded; exempt: a person's own manual/draft-approved send needs no plan.
+   */
+  plan: "allow" | "draft" | "deny" | "unplanned" | "exempt"
+  /** OUTBOUND_DELIVERY_POLICY_VERSION at planning time. */
+  policyVersion: string
+  plannedAt: number
+  /** The receipt recording the plan, when one was written. */
+  receiptId?: string
+  /**
+   * The caller's OutboundAuthorization, kept verbatim for re-planning.
+   * Host types cannot be imported here; validate this value on read.
+   */
+  authorization?: unknown
 }
 
 /**

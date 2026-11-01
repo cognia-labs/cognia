@@ -55,7 +55,10 @@ import {
 } from "./outbound-runner"
 import type { PlatformAdapter, OutboundResult } from "@/types/connectors"
 import { builtInConnectorRuntimeCapabilities } from "@/types/connectors/runtime-capability"
+import type { OutboundJobAuthorizationProvenance } from "@cognia/plugin-contract/lib/db/connector-types"
 import type { AdapterInstanceRow, OutboundJobRow } from "@/lib/db/connector-types"
+import { planDelivery, type DeliveryPlanInput } from "@/lib/policy/action-review/plan-delivery"
+import { ConnectorDeliveryGateway, queuedJob } from "./delivery-gateway"
 
 // Plugin connector hook + PII gate mocked so the outbound block/transform path
 // is deterministic. Default: allow + PII-clean (so the Task 38/39 tests are
@@ -193,6 +196,8 @@ function createRunner(
     jitter?: () => number
     onDelivered?: (conversationKey: string) => void
     onSchedulerState?: OutboundRunnerOptions["onSchedulerState"]
+    settings?: OutboundRunnerOptions["settings"]
+    planDelivery?: OutboundRunnerOptions["planDelivery"]
   }
 ): { promise: Promise<void>; stop: () => void } {
   const controller = new AbortController()
@@ -205,6 +210,8 @@ function createRunner(
     now: options?.now,
     jitter: options?.jitter ?? (() => 0),
     onDelivered: options?.onDelivered,
+    settings: options?.settings ?? (() => ({ agentPermissions: {} })),
+    planDelivery: options?.planDelivery,
     onSchedulerState: (state) => {
       laneCount = state.laneCount
       if (laneCount === 0) settleLanes?.()
@@ -242,6 +249,8 @@ async function runOnce(
     now?: () => number
     jitter?: () => number
     onDelivered?: (conversationKey: string) => void
+    settings?: OutboundRunnerOptions["settings"]
+    planDelivery?: OutboundRunnerOptions["planDelivery"]
   }
 ): Promise<void> {
   let sawLane = false
@@ -286,6 +295,405 @@ beforeEach(async () => {
   mockPiiDeep.mockReset()
   mockPiiDeep.mockReturnValue(true)
   mockTrackEvent.mockClear()
+})
+
+describe("outbound-runner — authorization mode transitions", () => {
+  const enforceSettings = () => ({ agentPermissions: { outboundAuthorization: "enforce" } })
+  const shadowProvenance = (
+    plan: OutboundJobAuthorizationProvenance["plan"] = "draft",
+    authorization: unknown = { kind: "unattended", ownerRef: "workflow:w1" }
+  ): OutboundJobAuthorizationProvenance => ({
+    schemaVersion: 1,
+    mode: "shadow",
+    plan,
+    policyVersion: "adr-0239.delivery.v1",
+    plannedAt: 1,
+    authorization,
+  })
+  const realPlanner = (settings = enforceSettings) =>
+    jest.fn((value: DeliveryPlanInput) =>
+      planDelivery(value, {
+        settings,
+        configuredGrants: async () => [],
+        listAuthKeys: async () => [],
+      })
+    )
+  async function legacyJob(overrides: Partial<OutboundJobRow> = {}) {
+    const row = await enqueue("auth", "telegram:auth:chat")
+    await getDb().outboundQueue.update(row.id, { source: "workflow", ...overrides })
+    return (await getDb().outboundQueue.get(row.id))!
+  }
+  const authAdapter = () =>
+    makeAdapter("auth", async () => ({ ok: true, platformMessageId: "safe" }))
+
+  it.each([
+    ["shadow draft while still shadow", "shadow", { authorizationProvenance: shadowProvenance() }],
+    ["legacy allowed", "enforce", { authorizedBy: { authority: "policy-default" } }],
+    ["shadow allow", "enforce", { authorizationProvenance: shadowProvenance("allow") }],
+    ["manual", "enforce", { source: "manual" }],
+    ["draft-approved", "enforce", { source: "draft-approved" }],
+    ["shadow exempt", "enforce", { authorizationProvenance: shadowProvenance("exempt") }],
+  ] as const)("sends %s without re-planning", async (_name, mode, overrides) => {
+    const job = await legacyJob(overrides)
+    const adapter = authAdapter()
+    const planner = realPlanner()
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: () => ({ agentPermissions: { outboundAuthorization: mode } }),
+      planDelivery: planner,
+    })
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    expect(planner).not.toHaveBeenCalled()
+    expect((await getDb().outboundQueue.get(job.id))?.status).toBe("sent")
+  })
+
+  it.each([
+    ["legacy unknown", undefined],
+    ["shadow denied", shadowProvenance("deny")],
+    ["shadow unplanned", shadowProvenance("unplanned")],
+    ["enforce unplanned", { ...shadowProvenance("unplanned"), mode: "enforce" as const }],
+    ["malformed authorization", shadowProvenance("draft", { kind: "human", actor: 7 })],
+    [
+      "malformed nested origin",
+      shadowProvenance("draft", {
+        kind: "unattended",
+        ownerRef: "x",
+        origin: { originThread: { kind: "conversation", channel: 7, recipient: "bad" } },
+      }),
+    ],
+    [
+      "rerouted shadow draft",
+      shadowProvenance("draft", {
+        kind: "rerouted",
+        from: { conversationKey: "telegram:other:chat", provenance: shadowProvenance() },
+      }),
+    ],
+  ] as const)("parks %s under enforcement", async (_name, authorizationProvenance) => {
+    const job = await legacyJob({ authorizationProvenance })
+    const adapter = authAdapter()
+    const planner = realPlanner()
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: planner,
+    })
+    expect(adapter.send).not.toHaveBeenCalled()
+    expect(planner).toHaveBeenCalledTimes(1)
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+      status: "deadlettered",
+      lastErrorCode: "authorization",
+    })
+    expect(await getDb().connectorDrafts.count()).toBe(1)
+  })
+
+  it("persists newly allowed authority and receipt before sending", async () => {
+    const authorization = { kind: "human", actor: "local-user" }
+    const job = await legacyJob({
+      authorizationProvenance: shadowProvenance("unplanned", authorization),
+    })
+    const adapter = authAdapter()
+    ;(adapter.send as jest.Mock).mockImplementation(async () => {
+      const updated = await getDb().outboundQueue.get(job.id)
+      expect(updated?.authorizationProvenance).toMatchObject({
+        mode: "enforce",
+        plan: "allow",
+        policyVersion: "adr-0239.delivery.v1",
+        authorization,
+      })
+      expect(updated?.authorizedBy).toMatchObject({ authority: "human" })
+      expect(
+        await getDb().actionReviewReceipts.get(updated!.authorizationProvenance!.receiptId!)
+      ).toBeDefined()
+      return { ok: true, platformMessageId: "safe" }
+    })
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: realPlanner(),
+    })
+    expect((await getDb().outboundQueue.get(job.id))?.status).toBe("sent")
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+  })
+
+  it("deadletters a newly denied job with its receipt and audit", async () => {
+    const job = await legacyJob({
+      authorizationProvenance: shadowProvenance("deny", {
+        kind: "origin-reply",
+        inboundConversationKey: "telegram:auth:other",
+      }),
+    })
+    const adapter = authAdapter()
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: realPlanner(),
+    })
+    expect(adapter.send).not.toHaveBeenCalled()
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+      status: "deadlettered",
+      lastErrorCode: "authorization_denied",
+    })
+    expect(await getDb().connectorDrafts.count()).toBe(0)
+    expect(await getDb().actionReviewReceipts.count()).toBe(1)
+    expect(await listRecent("auth")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "outbound.denied" })])
+    )
+  })
+
+  it("parks as a draft if re-planning throws", async () => {
+    const job = await legacyJob()
+    const adapter = authAdapter()
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: async () => {
+        throw new Error("planner unavailable")
+      },
+    })
+    expect(adapter.send).not.toHaveBeenCalled()
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+      status: "deadlettered",
+      lastErrorCode: "authorization",
+    })
+    expect(await getDb().connectorDrafts.count()).toBe(1)
+    expect(await getDb().actionReviewReceipts.count()).toBe(1)
+  })
+
+  it("does not re-plan a job deferred by mute or an empty token bucket", async () => {
+    await seedInstance("auth", { outboundTuning: { rateCapacity: 1, rateRefillPerSec: 0.001 } })
+    const first = await legacyJob({ source: "manual" })
+    const second = await legacyJob({ authorizationProvenance: shadowProvenance() })
+    const adapter = authAdapter()
+    const planner = realPlanner()
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: planner,
+    })
+    expect((await getDb().outboundQueue.get(first.id))?.status).toBe("sent")
+    expect((await getDb().outboundQueue.get(second.id))?.lastErrorCode).toBe("rate_limited")
+    expect(planner).not.toHaveBeenCalled()
+    await seedInstance("auth", { muted: true })
+    await getDb().outboundQueue.update(second.id, { nextAttemptAt: Date.now() })
+    await runOnce(new Map([["auth", adapter]]), {
+      settings: enforceSettings,
+      planDelivery: planner,
+    })
+    expect((await getDb().outboundQueue.get(second.id))?.lastErrorCode).toBe("muted")
+    expect(planner).not.toHaveBeenCalled()
+  })
+
+  it.each(["balanced", "failover"] as const)(
+    "re-plans unknown legacy automation before %s can mint a trusted sibling",
+    async (mechanism) => {
+      await seedInstance(
+        "auth",
+        mechanism === "balanced"
+          ? {
+              outboundTuning: { rateCapacity: 1, rateRefillPerSec: 0.001 },
+              balanceAdapterIds: ["sibling"],
+            }
+          : { outboundTuning: { breakerMinEvents: 1 }, failoverAdapterIds: ["sibling"] }
+      )
+      await seedInstance("sibling")
+      await legacyJob({ source: "manual" })
+      const job = await legacyJob()
+      const primary = makeAdapter("auth", async () =>
+        mechanism === "balanced"
+          ? { ok: true, platformMessageId: "first" }
+          : { ok: false, error: { code: "platform_5xx", message: "broken", retryable: false } }
+      )
+      const sibling = makeAdapter("sibling", async () => ({
+        ok: true,
+        platformMessageId: "unsafe",
+      }))
+      await runOnce(
+        new Map([
+          ["auth", primary],
+          ["sibling", sibling],
+        ]),
+        { settings: enforceSettings, planDelivery: realPlanner() }
+      )
+      expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+        status: "deadlettered",
+        lastErrorCode: "authorization",
+      })
+      expect(sibling.send).not.toHaveBeenCalled()
+      expect(await getDb().connectorDrafts.count()).toBe(1)
+    }
+  )
+
+  it.each(["balanced", "failover"] as const)(
+    "does not %s a job another runner claimed first",
+    async (mechanism) => {
+      await seedInstance(
+        "auth",
+        mechanism === "balanced"
+          ? {
+              outboundTuning: { rateCapacity: 1, rateRefillPerSec: 0.001 },
+              balanceAdapterIds: ["sibling"],
+            }
+          : { outboundTuning: { breakerMinEvents: 1 }, failoverAdapterIds: ["sibling"] }
+      )
+      await seedInstance("sibling")
+      await legacyJob({ source: "manual" })
+      const job = await legacyJob({ authorizedBy: { authority: "policy-default" } })
+      const realMarkSending = jest.requireActual("@/lib/db/outbound-jobs").markSending
+      // The first job's claim succeeds; the reroute's claim on the second is
+      // lost to a runner that is already sending it.
+      ;(markSending as jest.Mock).mockImplementation((id: string) =>
+        id === job.id ? Promise.resolve(false) : realMarkSending(id)
+      )
+      const primary = makeAdapter("auth", async () =>
+        mechanism === "balanced"
+          ? { ok: true, platformMessageId: "first" }
+          : { ok: false, error: { code: "platform_5xx", message: "broken", retryable: false } }
+      )
+      const sibling = makeAdapter("sibling", async () => ({ ok: true, platformMessageId: "copy" }))
+      try {
+        await runOnce(
+          new Map([
+            ["auth", primary],
+            ["sibling", sibling],
+          ]),
+          { settings: enforceSettings, planDelivery: realPlanner() }
+        )
+      } finally {
+        ;(markSending as jest.Mock).mockImplementation((id: string) => realMarkSending(id))
+      }
+      expect(sibling.send).not.toHaveBeenCalled()
+      expect(
+        (await getDb().outboundQueue.toArray()).filter((row) => row.adapterId === "sibling")
+      ).toEqual([])
+      expect((await getDb().outboundQueue.get(job.id))?.status).not.toBe("deadlettered")
+    }
+  )
+
+  it("releases the reroute claim when authorizing the original fails to persist", async () => {
+    await seedInstance("auth", {
+      outboundTuning: { rateCapacity: 1, rateRefillPerSec: 0.001 },
+      balanceAdapterIds: ["sibling"],
+    })
+    await seedInstance("sibling")
+    await legacyJob({ source: "manual" })
+    const job = await legacyJob()
+    const fail = () => {
+      throw new Error("draft write failed")
+    }
+    getDb().connectorDrafts.hook("creating", fail)
+    const primary = makeAdapter("auth", async () => ({ ok: true, platformMessageId: "first" }))
+    const sibling = makeAdapter("sibling", async () => ({ ok: true, platformMessageId: "copy" }))
+    try {
+      await runOnce(
+        new Map([
+          ["auth", primary],
+          ["sibling", sibling],
+        ]),
+        { settings: enforceSettings, planDelivery: realPlanner() }
+      )
+    } finally {
+      getDb().connectorDrafts.hook("creating").unsubscribe(fail)
+    }
+    expect(sibling.send).not.toHaveBeenCalled()
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+      status: "failed",
+      attempts: 0,
+    })
+    expect(await getDb().connectorDrafts.count()).toBe(0)
+  })
+
+  it("keeps the original queued when enforce refuses its reroute after a shadow read", async () => {
+    // The runner read shadow; the gateway planning the sibling copy reads
+    // enforce. The copy must not go out as `enforce/unplanned`.
+    await seedInstance("auth", {
+      outboundTuning: { rateCapacity: 1, rateRefillPerSec: 0.001 },
+      balanceAdapterIds: ["sibling"],
+    })
+    await seedInstance("sibling")
+    await legacyJob({ source: "manual" })
+    const job = await legacyJob()
+    const { useSettingsStore } = await import("@/stores/settings")
+    const state = useSettingsStore.getState()
+    // The gateway reads its settings from the store; this test needs only the mode.
+    const spy = jest.spyOn(useSettingsStore, "getState").mockReturnValue({
+      ...state,
+      settings: { agentPermissions: { outboundAuthorization: "enforce" } },
+    } as unknown as ReturnType<typeof useSettingsStore.getState>)
+    const primary = makeAdapter("auth", async () => ({ ok: true, platformMessageId: "first" }))
+    const sibling = makeAdapter("sibling", async () => ({ ok: true, platformMessageId: "unsafe" }))
+    try {
+      await runOnce(
+        new Map([
+          ["auth", primary],
+          ["sibling", sibling],
+        ]),
+        { settings: () => ({ agentPermissions: { outboundAuthorization: "shadow" } }) }
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(sibling.send).not.toHaveBeenCalled()
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+      status: "failed",
+      lastErrorCode: "rate_limited",
+    })
+    expect(
+      (await getDb().outboundQueue.toArray()).filter((row) => row.adapterId === "sibling")
+    ).toEqual([])
+  })
+
+  it("parks work queued as a shadow draft when settings switch to enforce", async () => {
+    let mode = "shadow"
+    const settings = () => ({ agentPermissions: { outboundAuthorization: mode } })
+    const planner = jest.fn((value: DeliveryPlanInput) =>
+      planDelivery(value, {
+        settings,
+        configuredGrants: async () => [],
+        listAuthKeys: async () => [],
+      })
+    )
+    const gateway = new ConnectorDeliveryGateway({ planDelivery: planner })
+    const job = queuedJob(
+      await gateway.enqueueAuthorized({
+        adapterId: "auth",
+        conversationKey: "telegram:auth:chat",
+        source: "workflow",
+        authorization: { kind: "unattended", ownerRef: "workflow:w1" },
+        request: {
+          conversationRef: { platform: "telegram", adapterId: "auth" },
+          segments: [{ type: "text", text: "wait for approval" }],
+          metadata: { idempotencyKey: "auth-transition" },
+        },
+      })
+    )!
+    mode = "enforce"
+    const adapter = makeAdapter("auth", async () => ({ ok: true, platformMessageId: "unsafe" }))
+    await runOnce(new Map([["auth", adapter]]), { settings, planDelivery: planner })
+    expect(adapter.send).not.toHaveBeenCalled()
+    const parked = await getDb().outboundQueue.get(job.id)
+    expect(parked).toMatchObject({
+      status: "deadlettered",
+      lastErrorCode: "authorization",
+      attempts: 0,
+    })
+    const [draft] = await getDb().connectorDrafts.toArray()
+    expect(draft).toMatchObject({
+      sessionId: "workflow:w1",
+      segments: job.request.segments,
+      outboundPreview: job.request,
+    })
+    expect(parked?.lastError).toContain(draft.id)
+    const receipts = await getDb().actionReviewReceipts.toArray()
+    expect(receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          request: expect.objectContaining({ plan: { outcome: "draft", enforced: true } }),
+        }),
+      ])
+    )
+    expect(await listRecent("auth")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "outbound.drafted",
+          fields: expect.objectContaining({ draftId: draft.id }),
+        }),
+      ])
+    )
+  })
 })
 
 describe("outbound-runner — plugin onConnectorOutbound", () => {
@@ -1793,7 +2201,17 @@ describe("outbound-runner — rate-limit load balancing", () => {
       [sibling, spare],
     ])
     await enqueue(primary, `telegram:${primary}:chat`, "k_lb_1")
-    await enqueue(primary, `telegram:${primary}:chat`, "k_lb_2")
+    const original = await enqueue(primary, `telegram:${primary}:chat`, "k_lb_2")
+    const provenance = {
+      schemaVersion: 1 as const,
+      mode: "shadow" as const,
+      plan: "draft" as const,
+      policyVersion: "adr-0239.delivery.v1",
+      plannedAt: 1,
+      receiptId: "shadow-original",
+      authorization: { kind: "unattended", ownerRef: "task:original" },
+    }
+    await getDb().outboundQueue.update(original.id, { authorizationProvenance: provenance })
 
     const { promise, stop } = createRunner(adapters)
     const jobs = await waitForJobs((rows) =>
@@ -1809,6 +2227,15 @@ describe("outbound-runner — rate-limit load balancing", () => {
     expect(rerouted).toBeDefined()
     expect(rerouted!.status).toBe("sent")
     expect(rerouted!.conversationKey).toBe(`telegram:${sibling}:chat`)
+    expect(rerouted!.authorizationProvenance).toMatchObject({
+      mode: "shadow",
+      plan: "draft",
+      receiptId: "shadow-original",
+      authorization: {
+        kind: "rerouted",
+        from: { conversationKey: original.conversationKey, provenance },
+      },
+    })
     expect(rerouted!.request.conversationRef.adapterId).toBe(sibling)
     expect(rerouted!.request.metadata.balancedFromAdapterId).toBe(primary)
     // Derived idempotency key — never collides with the original.

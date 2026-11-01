@@ -21,6 +21,7 @@ import {
 } from "./outbound-targets"
 import {
   planDelivery,
+  OUTBOUND_DELIVERY_POLICY_VERSION,
   planUnplannedStream,
   sameChat,
   type DeliveryPlanInput,
@@ -122,7 +123,7 @@ describe("planDelivery", () => {
   it("sends a person's own message with no authorization and no receipt", async () => {
     await expect(
       planDelivery(delivery(OTHER_KEY, undefined, "manual"), deps(enforce))
-    ).resolves.toEqual({ action: "send" })
+    ).resolves.toEqual({ action: "send", provenance: { mode: "enforce", plan: "exempt" } })
   })
 
   describe("origin-reply and system-notice", () => {
@@ -134,7 +135,11 @@ describe("planDelivery", () => {
             delivery("lark:bot-b:oc_origin", { kind, inboundConversationKey: ORIGIN_KEY }),
             deps(enforce)
           )
-        ).resolves.toEqual({ action: "send", authorizedBy: { authority: "policy-default" } })
+        ).resolves.toEqual({
+          action: "send",
+          authorizedBy: { authority: "policy-default" },
+          provenance: { mode: "enforce", plan: "allow" },
+        })
       }
     )
 
@@ -170,7 +175,11 @@ describe("planDelivery", () => {
           delivery(ORIGIN_KEY, { kind: "unattended", ownerRef: "task:t1", sessionId: "s1" }),
           deps(enforce)
         )
-      ).resolves.toEqual({ action: "send", authorizedBy: { authority: "policy-default" } })
+      ).resolves.toEqual({
+        action: "send",
+        authorizedBy: { authority: "policy-default" },
+        provenance: { mode: "enforce", plan: "allow" },
+      })
     })
 
     it("drafts a delivery nothing authorized, keyed to its session, with a valid receipt", async () => {
@@ -270,7 +279,7 @@ describe("planDelivery", () => {
           delivery(OTHER_KEY, { kind: "unattended", ownerRef: "x", sessionId: "s1" }),
           deps(shadow, {}, failing)
         )
-      ).resolves.toEqual({ action: "send" })
+      ).resolves.toEqual({ action: "send", provenance: { mode: "shadow", plan: "unplanned" } })
       // Enforcement does not send on a failure.
       await expect(
         planDelivery(
@@ -308,6 +317,7 @@ describe("planDelivery", () => {
       ).resolves.toEqual({
         action: "send",
         authorizedBy: { receiptId: "req_1", authority: "human", grantScope: "once" },
+        provenance: { mode: "enforce", plan: "allow", receiptId: "req_1" },
       })
     })
 
@@ -351,6 +361,7 @@ describe("planDelivery", () => {
       await expect(planDelivery(delivery(OTHER_KEY, call, "skill"), deps(shadow))).resolves.toEqual(
         {
           action: "send",
+          provenance: { mode: "shadow", plan: "unplanned" },
         }
       )
     })
@@ -664,7 +675,11 @@ describe("planDelivery", () => {
           ),
           deps(enforce)
         )
-      ).resolves.toEqual({ action: "send", authorizedBy })
+      ).resolves.toEqual({
+        action: "send",
+        authorizedBy,
+        provenance: { mode: "enforce", plan: "allow", receiptId: "req_9" },
+      })
       await expect(
         planDelivery(
           delivery(
@@ -759,4 +774,126 @@ describe("planUnplannedStream (ADR-0239)", () => {
     expect(receipt.decision).toMatchObject({ outcome: "allow", authority: "policy-default" })
     expect(receipt.decision.reason).toContain("would not have let it stream")
   })
+})
+
+describe("delivery authorization provenance", () => {
+  it("names the delivery policy version", () => {
+    expect(OUTBOUND_DELIVERY_POLICY_VERSION).toBe("adr-0239.delivery.v1")
+  })
+
+  it.each(["manual", "draft-approved"] as const)(
+    "records a human %s as exempt in the current mode",
+    async (source) => {
+      await expect(
+        planDelivery(delivery(OTHER_KEY, undefined, source), deps(shadow))
+      ).resolves.toEqual({
+        action: "send",
+        provenance: { mode: "shadow", plan: "exempt" },
+      })
+    }
+  )
+
+  it.each(["shadow", "enforce"] as const)(
+    "records allowed human confirmation in %s",
+    async (mode) => {
+      const decision = await planDelivery(
+        delivery(OTHER_KEY, { kind: "human", actor: "local-user" }),
+        deps({ agentPermissions: { outboundAuthorization: mode } })
+      )
+      expect(decision).toMatchObject({
+        action: "send",
+        provenance: {
+          mode,
+          plan: "allow",
+          ...(mode === "enforce" ? { receiptId: "delivery:n1" } : {}),
+        },
+      })
+    }
+  )
+
+  it.each(["draft", "deny"] as const)(
+    "retains the shadow %s outcome with its receipt",
+    async (plan) => {
+      const decision = await planDelivery(
+        delivery(
+          OTHER_KEY,
+          plan === "draft"
+            ? { kind: "unattended", ownerRef: "task:x" }
+            : { kind: "origin-reply", inboundConversationKey: ORIGIN_KEY }
+        ),
+        deps(shadow)
+      )
+      expect(decision).toMatchObject({
+        action: "send",
+        provenance: { mode: "shadow", plan, receiptId: "delivery:n1" },
+      })
+    }
+  )
+
+  it("records an unplanned reroute under shadow when no original authorization survived", async () => {
+    await expect(
+      planDelivery(
+        delivery(OTHER_KEY, { kind: "rerouted", from: { conversationKey: OTHER_KEY } }),
+        deps(shadow)
+      )
+    ).resolves.toEqual({ action: "send", provenance: { mode: "shadow", plan: "unplanned" } })
+  })
+
+  it.each(["manual", "draft-approved"] as const)(
+    "keeps a legacy %s send exempt when it is rerouted under enforce",
+    async (source) => {
+      await expect(
+        planDelivery(
+          delivery(OTHER_KEY, { kind: "rerouted", from: { conversationKey: OTHER_KEY } }, source),
+          deps(enforce)
+        )
+      ).resolves.toEqual({ action: "send", provenance: { mode: "enforce", plan: "exempt" } })
+    }
+  )
+
+  it("refuses an unauthorized reroute under enforce instead of sending it unplanned", async () => {
+    await expect(
+      planDelivery(
+        delivery(OTHER_KEY, { kind: "rerouted", from: { conversationKey: OTHER_KEY } }),
+        deps(enforce)
+      )
+    ).resolves.toMatchObject({ action: "deny", reason: "unapproved" })
+  })
+
+  it("carries the original reroute provenance unchanged across a mode switch", async () => {
+    const provenance = {
+      schemaVersion: 1 as const,
+      mode: "shadow" as const,
+      plan: "draft" as const,
+      policyVersion: "old",
+      plannedAt: 1,
+      receiptId: "original",
+    }
+    await expect(
+      planDelivery(
+        delivery("lark:bot-b:oc_other", {
+          kind: "rerouted",
+          from: { conversationKey: OTHER_KEY, provenance },
+        }),
+        deps(enforce)
+      )
+    ).resolves.toEqual({
+      action: "send",
+      provenance: { mode: "shadow", plan: "draft", receiptId: "original" },
+    })
+  })
+
+  it.each(["proactive", "reengagement"] as const)(
+    "records forced enforcement for an allowed %s send",
+    async (deliveryMode) => {
+      const decision = await planDelivery(
+        { ...delivery(OTHER_KEY, { kind: "human", actor: "local-user" }), deliveryMode },
+        deps(shadow)
+      )
+      expect(decision).toMatchObject({
+        action: "send",
+        provenance: { mode: "enforce", plan: "allow", receiptId: "delivery:n1" },
+      })
+    }
+  )
 })

@@ -25,6 +25,7 @@ import type {
 } from "@cognia/agent-config-types/action-review"
 import type { ExecutionRunInterrupt } from "@/types/execution/run"
 import { getActionReviewChannelAdapter } from "./registry"
+import type { ActionReviewReceiptRow } from "@/lib/db/action-review-receipts"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -112,6 +113,23 @@ function receiptFrom(
     ...(effect ? { effect } : {}),
     expiresAt: decision.decidedAt + retentionDays * DAY_MS,
   }
+}
+
+/**
+ * The settled projection's mapping, for a delivery persisted with its work.
+ * Delivery plans never park a run, so there is no interrupt to resolve.
+ * Unlike the observer projection, mapping/persistence failures must propagate.
+ */
+export async function toDeliveryReceiptRow(receipt: {
+  request: ActionReviewRequest
+  decision: ActionReviewDecision
+}): Promise<ActionReviewReceiptRow> {
+  if (receipt.request.origin.channel !== "connector-delivery" || receipt.request.origin.runId) {
+    throw new Error("A delivery receipt must not resolve a run interrupt")
+  }
+  const { toReceiptRow, ACTION_REVIEW_RETENTION_DAYS } =
+    await import("@/lib/db/action-review-receipts")
+  return toReceiptRow(receiptFrom(receipt.request, receipt.decision, ACTION_REVIEW_RETENTION_DAYS))
 }
 
 /**
