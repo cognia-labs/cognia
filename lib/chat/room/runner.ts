@@ -868,7 +868,11 @@ export class RoomRunner {
       return teamBranchGroupId(anchor.id, senderId, ord)
     })
     this.sinks.messages.commit(sessionId, merged)
-    await this.deps.db.persistMessages(sessionId, merged)
+    await this.deps.db.persistMessages(sessionId, merged, {
+      deleteIds: messages
+        .filter((message) => !merged.some((kept) => kept.id === message.id))
+        .map((message) => message.id),
+    })
 
     this.pendingBranchTags.set(sessionId, {
       anchorId: anchor.id,
@@ -1833,7 +1837,7 @@ export class RoomRunner {
           )
           this.streams.fold(teamSessionId, sub, tagged)
           const persisted = this.streams.compose(teamSessionId)
-          await deps.db.persistMessages(teamSessionId, persisted)
+          await deps.db.persistMessages(teamSessionId, persisted, { deleteIds: [...duplicateIds] })
           if (isOpen) sinks.messages.commit(teamSessionId, persisted)
           this.coalescing.release(sub)
         } else {
@@ -1842,7 +1846,15 @@ export class RoomRunner {
           // base correct.
           this.streams.applySubResult(teamSessionId, sub, tagged, baseLength)
           if (isOpen) coalesce.commit.call(tagged)
-          coalesce.persist.call(tagged)
+          const deleteIds = teamMsgs
+            .filter((message) => !nextMessages.some((kept) => kept.id === message.id))
+            .map((message) => message.id)
+          if (deleteIds.length) {
+            coalesce.persist.cancel()
+            await deps.db.persistMessages(teamSessionId, this.streams.compose(teamSessionId), {
+              deleteIds,
+            })
+          } else coalesce.persist.call(tagged)
         }
         if (
           !isOpen &&

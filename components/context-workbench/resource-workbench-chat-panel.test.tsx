@@ -314,6 +314,22 @@ describe("ResourceWorkbenchChatPanel", () => {
     )
   })
 
+  it("settles a busy-refused sample send without an unhandled rejection", async () => {
+    const user = userEvent.setup()
+    const unhandled = jest.fn()
+    process.on("unhandledRejection", unhandled)
+    send.mockRejectedValueOnce(new Error("session_turn_busy"))
+    try {
+      render(<ResourceWorkbenchChatPanel />)
+      await user.click(screen.getByRole("button", { name: "sample" }))
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(send).toHaveBeenCalledWith("sample", undefined, expect.any(Object))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off("unhandledRejection", unhandled)
+    }
+  })
+
   it("clears a pending artifact target when context assembly fails", async () => {
     mockResource = { kind: "artifact", artifactId: "artifact-1" }
     render(

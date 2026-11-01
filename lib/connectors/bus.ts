@@ -3944,7 +3944,7 @@ export class ConnectorBus {
             Array.isArray(execution) ||
             typeof (execution as Record<string, unknown>).sessionId !== "string" ||
             !(execution as Record<string, string>).sessionId.trim() ||
-            ["workspaceRoot", "projectId", "characterId"].some(
+            ["workspaceRoot", "projectId", "characterId", "originRunId"].some(
               (key) =>
                 (execution as Record<string, unknown>)[key] !== undefined &&
                 typeof (execution as Record<string, unknown>)[key] !== "string"
@@ -3954,40 +3954,69 @@ export class ConnectorBus {
         const invoking = execution as
           | {
               sessionId: string
+              originRunId?: string
               workspaceRoot?: string
               projectId?: string
               characterId?: string
             }
           | undefined
-        await runBuiltInSkill(skillId, skillArgs, {
-          ...hydrated,
-          ...(invoking
-            ? {
-                sessionId: invoking.sessionId,
-                workspaceRoot: invoking.workspaceRoot,
-                projectId: invoking.projectId,
-                characterId: invoking.characterId,
-              }
-            : {}),
-          imAuthoritySessionId: sessionId,
-          actingSenders: (() => {
-            const scope = event.identityScope as { unionId?: unknown } | undefined
-            return event.user.remoteUserId?.trim() &&
-              (!event.user.kind || event.user.kind === "human")
-              ? [
-                  {
-                    remoteUserId: event.user.remoteUserId,
-                    ...(typeof scope?.unionId === "string" && scope.unionId.trim()
-                      ? { unionId: scope.unionId }
-                      : {}),
-                  },
-                ]
-              : ("unknown" as const)
-          })(),
-          hitlBypass: true,
-          // The person in the chat confirmed this very invocation (ADR-0239).
-          outboundAuthorization: { kind: "human", actor: "connector-user" },
+        const { startToolExecutionRun, finishToolExecutionRun } =
+          await import("@/lib/execution/acting-authority")
+        const { getRuntimeTranslator } = await import("@/lib/i18n/runtime-translator")
+        const t = await getRuntimeTranslator("skills.actingIdentity")
+        if (!event.user.remoteUserId?.trim() || (event.user.kind && event.user.kind !== "human"))
+          throw new Error("Skill confirmation requires a human requester")
+        const replay = await startToolExecutionRun(invoking?.sessionId ?? sessionId, {
+          title: t("confirmedSkillTitle", { skillId }),
+          confirmedSkill: {
+            ...(typeof invoking?.originRunId === "string"
+              ? { originRunId: invoking.originRunId }
+              : {}),
+            rootSessionId: sessionId,
+            requester: {
+              kind: "platform",
+              platform: event.platform,
+              adapterId: event.adapterId,
+              remoteUserId: event.user.remoteUserId,
+            },
+          },
         })
+        try {
+          const result = await runBuiltInSkill(skillId, skillArgs, {
+            ...hydrated,
+            ...(invoking
+              ? {
+                  sessionId: invoking.sessionId,
+                  workspaceRoot: invoking.workspaceRoot,
+                  projectId: invoking.projectId,
+                  characterId: invoking.characterId,
+                }
+              : {}),
+            imAuthoritySessionId: sessionId,
+            executionRunId: replay.id,
+            actingSenders: (() => {
+              const scope = event.identityScope as { unionId?: unknown } | undefined
+              return event.user.remoteUserId?.trim() &&
+                (!event.user.kind || event.user.kind === "human")
+                ? [
+                    {
+                      remoteUserId: event.user.remoteUserId,
+                      ...(typeof scope?.unionId === "string" && scope.unionId.trim()
+                        ? { unionId: scope.unionId }
+                        : {}),
+                    },
+                  ]
+                : ("unknown" as const)
+            })(),
+            hitlBypass: true,
+            // The person in the chat confirmed this very invocation (ADR-0239).
+            outboundAuthorization: { kind: "human", actor: "connector-user" },
+          })
+          await finishToolExecutionRun(replay.id, result.status !== "ok")
+        } catch (error) {
+          await finishToolExecutionRun(replay.id, true)
+          throw error
+        }
       } catch (err) {
         decide({ status: "failed" })
         await appendAudit({

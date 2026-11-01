@@ -147,6 +147,51 @@ describe("execution source control handlers", () => {
     jest.clearAllMocks()
   })
 
+  it("attaches an opaque human credential only through the agent approval control", async () => {
+    const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
+    const { isHumanParkControlDecision } =
+      await import("@/lib/claude/unattended-permission-responder")
+    await createExecutionRun({
+      id: "park-proof",
+      kind: "agent-turn",
+      sourceId: "park-proof",
+      sessionId: "proof-session",
+      title: "Park",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().executionRunInterrupts.put({
+      id: "proof-interrupt",
+      runId: "park-proof",
+      type: "tool_approval",
+      status: "pending",
+      title: "Approve",
+      requestDigest: "proof-request",
+      createdAt: 1,
+      expiresAt: Date.now() + 10000,
+    })
+    const answer = awaitApproval("proof-session", "proof-request", { ttlMs: 10000 })
+    const installed = installExecutionRunControlHandlers()
+    try {
+      await installed.agent({
+        runId: "park-proof",
+        action: "approve",
+        interruptId: "proof-interrupt",
+        idempotencyKey: "human",
+        expectedRevision: 0,
+        actor: { remoteUserId: "person" },
+      })
+      expect(isHumanParkControlDecision(await answer)).toBe(true)
+      expect(
+        isHumanParkControlDecision({ decision: "allow", attribution: { authority: "human" } })
+      ).toBe(false)
+    } finally {
+      installed.dispose()
+    }
+  })
+
   it("stops only the addressed agent run", async () => {
     const first = new AbortController()
     const second = new AbortController()

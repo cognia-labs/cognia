@@ -59,49 +59,27 @@ import { bindImPresentationForBotDelivery } from "./im-presentation"
 import { beginBotOutboundRun } from "@/lib/policy/action-review/configured-grants"
 import { parseBotDefinitionId } from "@/lib/plugin/registries/bot-registry"
 import { recordedRunMetadata, recordRunAuthority } from "@/lib/execution/acting-authority"
-import type { RunAuthorityV1, PrincipalRefV1 } from "@/types/execution/run"
+import type { RunAuthorityV1 } from "@/types/execution/run"
 
 export function recordedBotRunMetadata(delivery: BotEventDeliveryRow) {
   const { envelope } = delivery
   const actor = envelope.actor
-  const payload = envelope.payload as { platform?: unknown } | undefined
-  const requester: PrincipalRefV1 | undefined =
-    envelope.source === "connector" &&
-    actor?.kind === "human" &&
-    actor.id &&
-    envelope.binding?.adapterId &&
-    typeof payload?.platform === "string"
+  return recordedRunMetadata(envelope.source === "schedule" ? "schedule" : "external-event", {
+    runId: botRunId(delivery.id),
+    requesters: [],
+    ...(actor
       ? {
-          kind: "platform",
-          platform: payload.platform,
-          adapterId: envelope.binding.adapterId,
-          remoteUserId: actor.id,
-          ...(actor.principalId ? { principalId: actor.principalId } : {}),
+          eventActors: [
+            {
+              kind: "event-actor" as const,
+              source: envelope.source,
+              ...(actor.id ? { externalId: actor.id } : {}),
+              ...(actor.displayName ? { displayName: actor.displayName } : {}),
+            },
+          ],
         }
-      : undefined
-  return recordedRunMetadata(
-    envelope.source === "schedule"
-      ? "schedule"
-      : envelope.source === "connector"
-        ? "requester"
-        : "external-event",
-    {
-      runId: botRunId(delivery.id),
-      requesters: requester ? [requester] : [],
-      ...(envelope.source !== "connector" && envelope.source !== "schedule" && actor
-        ? {
-            eventActors: [
-              {
-                kind: "event-actor" as const,
-                source: envelope.source,
-                ...(actor.id ? { externalId: actor.id } : {}),
-                ...(actor.displayName ? { displayName: actor.displayName } : {}),
-              },
-            ],
-          }
-        : {}),
-    }
-  )
+      : {}),
+  })
 }
 
 /**
@@ -669,7 +647,13 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     // A stopped lease holder must not settle a delivery now owned by another
     // attempt, or undo a cancellation already committed by the control gate.
     if (!(await stillOwnsDelivery())) return { status: "cancelled", runId }
-    if (error instanceof BotRunCancelledError || controller.signal.aborted) {
+    if (
+      error instanceof BotRunCancelledError ||
+      controller.signal.aborted ||
+      (error instanceof Error &&
+        "terminalCancellation" in error &&
+        error.terminalCancellation === true)
+    ) {
       await runEventJournal
         .append(
           runId,

@@ -2,7 +2,17 @@ jest.mock("@/lib/audio/transcode", () => ({
   ...jest.requireActual("@/lib/audio/transcode"),
   transcodeAudio: jest.fn(),
 }))
+// Production next-intl exports createTranslator. The global Jest replacement
+// omits it; this adapter suite needs the runtime translator for replay titles.
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  ...jest.requireActual("@/lib/i18n/runtime-translator"),
+  getRuntimeTranslator: async () => (key: string, values: { skillId: string }) => {
+    const messages = jest.requireActual("@/i18n/messages/en/skills.json").actingIdentity
+    return messages[key].replace("{skillId}", values.skillId)
+  },
+}))
 import { invoke } from "@tauri-apps/api/core"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import Dexie from "dexie"
 import { listen } from "@tauri-apps/api/event"
 import type { AdapterContext } from "@/types/connectors/adapter"
@@ -926,9 +936,13 @@ describe("createQQOfficialAdapter", () => {
       await a.stop()
     }
   })
-  it.each(["approve", "cancel"] as const)(
-    "routes shared skill confirmation %s through a queued native QQ card",
-    async (choice) => {
+  it.each(
+    [false, true].flatMap((provenance) =>
+      (["approve", "cancel"] as const).map((choice) => ({ choice, provenance }))
+    )
+  )(
+    "routes shared skill confirmation $choice through a queued native QQ card (provenance: $provenance)",
+    async ({ choice, provenance }) => {
       const { z } = await import("zod")
       const { registerBuiltInSkill } = await import("@/lib/skills/built-in/registry")
       const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
@@ -937,6 +951,8 @@ describe("createQQOfficialAdapter", () => {
         await import("@/lib/connectors/hitl/im-elicitation-context")
       const { buildConfirmSurface } = await import("@/lib/skills/built-in/_shared/confirm-surface")
       const { upsertByConversationKey } = await import("@/lib/db/conversation-overrides")
+      const { startToolExecutionRun, finishToolExecutionRun } =
+        await import("@/lib/execution/acting-authority")
       const id = `im.g8_confirmation_${choice}`,
         key = "qq-official:qq-1:UO",
         sessionId = `skill-session-${choice}`
@@ -994,10 +1010,14 @@ describe("createQQOfficialAdapter", () => {
       const a = adapter(),
         bus = getBus()
       bus.registerAdapter(a)
+      const original = provenance
+        ? await startToolExecutionRun(sessionId, { localAuthorization: LOCAL_PERSON_RUN })
+        : undefined
       try {
         expect(
           await runBuiltInSkill(id, {}, await resolveBuiltInSkillContext(sessionId))
         ).toMatchObject({ status: "pending_hitl" })
+        if (original) await finishToolExecutionRun(original.id)
         const [job] = await getDb().outboundQueue.toArray()
         expect(job.request.segments[0]).toMatchObject({ type: "a2ui" })
         mockInvoke.mockResolvedValue(httpResp(200, { id: "card" }))
@@ -1016,6 +1036,11 @@ describe("createQQOfficialAdapter", () => {
         })
         expect(callback).not.toBeNull()
         await bus.dispatchConnectorCallback(callback!)
+        expect(
+          (await getDb().connectorAudit.toArray()).filter(
+            (row) => row.kind === "builtin_skill_failed"
+          )
+        ).toEqual([])
         expect(execute).toHaveBeenCalledTimes(choice === "approve" ? 1 : 0)
         expect(
           await resolveQQInteraction("qq-1", "bot", {

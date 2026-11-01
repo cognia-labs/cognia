@@ -157,6 +157,46 @@ function providerMetadataPart(block: {
   return block.providerMetadata ? { providerMetadata: block.providerMetadata } : {}
 }
 
+/** The same media acceptance/conversion for transcript rendering and capture settlement. */
+export function sdkMediaPart(block: BetaContentBlock): Part | null {
+  if (block?.type !== "file" && block?.type !== "image") return null
+  const media = block as BetaFileBlock
+  if (
+    typeof media.url === "string" &&
+    media.url.trim() &&
+    typeof media.media_type === "string" &&
+    media.media_type.trim()
+  ) {
+    if (
+      media.url.startsWith("data:") &&
+      (media.url.indexOf(",") < 0 || !media.url.slice(media.url.indexOf(",") + 1).trim())
+    )
+      return null
+    return {
+      type: "file",
+      url: media.url,
+      mediaType: media.media_type,
+      ...(media.filename ? { filename: media.filename } : {}),
+    } as Part
+  }
+  const source = media.source
+  if (
+    !source ||
+    source.type !== "base64" ||
+    typeof source.media_type !== "string" ||
+    !source.media_type.trim() ||
+    typeof source.data !== "string" ||
+    !source.data.trim()
+  )
+    return null
+  return {
+    type: "file",
+    url: `data:${source.media_type};base64,${source.data}`,
+    mediaType: source.media_type,
+    ...(media.filename ? { filename: media.filename } : {}),
+  } as Part
+}
+
 function blockToPart(block: BetaContentBlock): Part | null {
   switch (block.type) {
     case "data-commentary": {
@@ -183,32 +223,9 @@ function blockToPart(block: BetaContentBlock): Part | null {
         ...providerMetadataPart(b),
       } as unknown as Part
     }
-    case "file": {
-      const b = block as BetaFileBlock
-      const source = b.source
-      if (typeof b.url === "string" && typeof b.media_type === "string") {
-        return {
-          type: "file",
-          url: b.url,
-          mediaType: b.media_type,
-          ...(b.filename ? { filename: b.filename } : {}),
-        } as unknown as Part
-      }
-      if (
-        !source ||
-        source.type !== "base64" ||
-        typeof source.media_type !== "string" ||
-        typeof source.data !== "string"
-      ) {
-        return null
-      }
-      return {
-        type: "file",
-        url: `data:${source.media_type};base64,${source.data}`,
-        mediaType: source.media_type,
-        ...(b.filename ? { filename: b.filename } : {}),
-      } as unknown as Part
-    }
+    case "image":
+    case "file":
+      return sdkMediaPart(block)
     case "tool_use": {
       const b = block as BetaToolUseBlock
       // Deliberately NOT the place an artifact part is emitted: the call has

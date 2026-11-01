@@ -61,6 +61,13 @@ function harness(answer: (options: { onExpire: () => void }) => CapturePermissio
 }
 
 describe("unattended park", () => {
+  it("does not open another approval after its owner has finished", async () => {
+    const { deps } = harness(() => ({ decision: "allow" }))
+    const park = createUnattendedPark({ origin: "bot", sessionId: "s1", label: "Bot", deps })
+    await park.finish("completed")
+    await expect(park.park(request())).resolves.toEqual({ kind: "withdrawn" })
+    expect(deps.openRun).not.toHaveBeenCalled()
+  })
   it("leaves the sidecar's own ceiling a little past the park's", () => {
     expect(UNATTENDED_SIDECAR_APPROVAL_TTL_MS).toBeGreaterThan(UNATTENDED_PARK_TTL_MS)
   })

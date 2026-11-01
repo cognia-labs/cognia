@@ -180,7 +180,7 @@ describe("runBotDelivery", () => {
     ).toBe("external-event")
   })
 
-  it("records a connector sender as a requester using the existing envelope projection", async () => {
+  it("records a connector sender as an event actor, never a requester", async () => {
     const { delivery } = await seed()
     const metadata = recordedBotRunMetadata({
       ...delivery,
@@ -192,12 +192,17 @@ describe("runBotDelivery", () => {
       },
     })
     expect(metadata.actingIdentity).toMatchObject({
-      trigger: "requester",
-      requesters: [
-        { kind: "platform", platform: "lark", adapterId: "adapter", remoteUserId: "octocat" },
+      trigger: "external-event",
+      requesters: [],
+      eventActors: [
+        expect.objectContaining({
+          kind: "event-actor",
+          source: "connector",
+          externalId: "octocat",
+        }),
       ],
     })
-    expect(metadata.actingIdentity?.eventActors).toBeUndefined()
+    expect(metadata.actingIdentity?.authorizingPrincipal).toBeUndefined()
   })
 
   it("keeps cancellation terminal when startup resumes after a checkpoint barrier", async () => {
@@ -679,6 +684,29 @@ describe("runBotDelivery", () => {
     expect(outcome).toEqual({ status: "cancelled", runId })
     expect((await getExecutionRun(runId))?.status).toBe("cancelled")
     expect((await getDb().botEventDeliveries.get(delivery.id))?.status).toBe("dismissed")
+  })
+
+  it("does not retry a terminal transcript cancellation from an agent turn", async () => {
+    const { delivery, resolved } = await seed()
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: {
+        handler: async () => {
+          throw Object.assign(new Error("operation transcript deleted"), {
+            code: "aborted",
+            terminalCancellation: true,
+          })
+        },
+      },
+    })
+    expect(outcome.status).toBe("cancelled")
+    expect((await getExecutionRun(outcome.runId))?.status).toBe("cancelled")
+    expect(await getDb().botEventDeliveries.get(delivery.id)).toMatchObject({
+      status: "dismissed",
+      attempts: 0,
+    })
   })
 
   it("reuses the run on a re-entry, so completed steps stay memoized", async () => {

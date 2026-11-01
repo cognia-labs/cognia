@@ -353,9 +353,11 @@ export function discardPendingSteer(sessionId: string, entryId: string): void {
   const next = messages.filter((message) => steerMetaOf(message.metadata)?.entryId !== entryId)
   if (next.length === messages.length) return
   store.replaceSessionMessages(sessionId, next)
-  void persistMessages(sessionId, next).catch((err) =>
-    console.error("steer discard persist failed", err)
-  )
+  void persistMessages(sessionId, next, {
+    deleteIds: messages
+      .filter((message) => steerMetaOf(message.metadata)?.entryId === entryId)
+      .map((message) => message.id),
+  }).catch((err) => console.error("steer discard persist failed", err))
 }
 
 /** The composer-restore payload of one queued follow-up, from whatever survives of it. */
@@ -456,9 +458,11 @@ export async function putBackPendingSteers(
     )
     if (next.length !== messages.length) {
       store.replaceSessionMessages(sessionId, next)
-      void persistMessages(sessionId, next).catch((err) =>
-        console.error("steer put-back persist failed", err)
-      )
+      void persistMessages(sessionId, next, {
+        deleteIds: messages
+          .filter((message) => drop.has(steerMetaOf(message.metadata)?.entryId ?? ""))
+          .map((message) => message.id),
+      }).catch((err) => console.error("steer put-back persist failed", err))
     }
   }
   return restored.length

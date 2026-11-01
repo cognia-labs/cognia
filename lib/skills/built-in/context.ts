@@ -8,8 +8,8 @@
  * invocations from IM-bound sessions silently bypassed the entire pipeline —
  * write skills executed without confirm cards.
  *
- * `resolveBuiltInSkillContext` loads the session, and when it carries a
- * `platformBinding`, populates `imBinding` + the conversation's override row
+ * `resolveBuiltInSkillContext` loads the root session's delivery binding or
+ * authority-only `imAuthorityBinding`, populating `imBinding` + its override row
  * (same lookup `enqueueOutbound` uses). Unbound sessions carry a separate
  * personal-lane proof; absence of IM gates never grants personal credentials.
  */
@@ -20,12 +20,26 @@ import type {
   BuiltInSkillContext,
 } from "./types"
 import type { PlatformIdentity } from "@/types/connectors/event"
+import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import { primaryRootOf } from "@/lib/workspace/roots"
-import { getTeamDispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
+import {
+  getTeamDispatchContext,
+  getDispatchContext,
+} from "@/lib/claude/agents/dispatch-context-registry"
 import { decodeSubSession } from "@/lib/claude/team-session-id"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 
 const MAX_SESSION_PARENT_DEPTH = 32
+
+/** Correlate host-registered child execution ids to their recorded session. */
+export function resolveBuiltInSkillRunScope(ctx: BuiltInSkillContext) {
+  const route = getSubagentApprovalRoute(ctx.sessionId)
+  const childId = getDispatchContext(ctx.sessionId)?.selfRunId ?? route?.runId
+  const runId = ctx.executionRunId ?? (childId ? `execution:job:${childId}` : undefined)
+  const executionSessionId =
+    route && runId === `execution:job:${route.runId}` ? route.parentSessionId : ctx.sessionId
+  return { sessionId: executionSessionId, runId }
+}
 
 /**
  * Resolve IM authority from the root, never a child's copied binding. A broken
@@ -111,17 +125,20 @@ export async function resolveBuiltInSkillSessionBinding(sessionId: string) {
         throw new Error("Built-in skill session parent missing")
       if (declaredRoot !== undefined && currentId !== declaredRoot)
         throw new Error("Built-in skill session parent ambiguous")
+      const binding =
+        (current as typeof current & SessionImAuthority)?.imAuthorityBinding ??
+        current?.platformBinding
       return {
         session: session ?? current,
         rootSessionId: currentId,
-        binding: sessionlessTeam ? undefined : current?.platformBinding,
+        binding: sessionlessTeam ? undefined : binding,
         // A session-less Squad has a run root instead of a chat root. Its host
         // registry route permits a run lookup; it never proves personal authority.
         personalRunOnly: sessionlessTeam,
         personalLane:
           personalLineageVerified &&
           current &&
-          !current.platformBinding &&
+          !binding &&
           !current.agentTurnOwner &&
           current.programmaticCreator === undefined &&
           !current.origin &&

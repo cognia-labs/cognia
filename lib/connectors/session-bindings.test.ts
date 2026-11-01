@@ -549,3 +549,42 @@ it("initializes real inbound unread for a legacy IM session without any override
   await migrateLegacyConversationListState()
   expect(await db.sessionState.get("no-override")).toMatchObject({ unreadCount: 1 })
 })
+
+// Bot bindings supply tool authority, never connector routing ownership.
+it.each([true, false])("ignores caller-owned topic sessions (indexed=%s)", async (indexed) => {
+  const connector = imSession("connector", 1)
+  const bot = {
+    ...imSession("bot", 100),
+    agentTurnOwner: { kind: "bot" as const, id: "b", key: "installation:topic" },
+  }
+  if (!indexed) {
+    delete connector.platformConversationKey
+    delete bot.platformConversationKey
+  }
+  await getDb().sessions.bulkPut([connector, bot])
+  expect((await findSessionByConversationKey(KEY))?.id).toBe("connector")
+  expect((await listSessionsByConversationKey(KEY)).map((s) => s.id)).toEqual(["connector"])
+  expect((await findActiveSessionForConversation(KEY, { activeSessionId: "bot" }))?.id).toBe(
+    "connector"
+  )
+  expect(await resolveConversationLinkSession(KEY, { sessionId: "bot" })).toBeUndefined()
+})
+
+it("does not adopt a Bot-only binding through the index or a private Lark override", async () => {
+  const key = "lark:lark-1:chat:topic"
+  const bot = imSession("bot", 100, key)
+  bot.agentTurnOwner = { kind: "bot", id: "b" }
+  bot.platformBinding = {
+    ...bot.platformBinding!,
+    platform: "lark",
+    adapterId: "lark-1",
+    conversationRef: { platform: "lark", adapterId: "lark-1", channelKind: "private" },
+  }
+  await getDb().sessions.put(bot)
+  expect(await findSessionByConversationKey(key)).toBeUndefined()
+  expect(await listSessionsByConversationChat("lark:lark-1:chat")).toEqual([])
+  expect(
+    await findActiveSessionForConversation("lark:lark-1:chat:other", { activeSessionId: "bot" })
+  ).toBeUndefined()
+  expect(await listSiblingConversations("lark:other:chat")).toEqual([])
+})

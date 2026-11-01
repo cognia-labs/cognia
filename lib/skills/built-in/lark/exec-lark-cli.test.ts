@@ -1,3 +1,6 @@
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  currentLocale: jest.fn(async () => "en"),
+}))
 /**
  * Tests for lib/skills/built-in/lark/exec-lark-cli.ts.
  *
@@ -269,3 +272,25 @@ it.each(["# Partial document", '{"content":"partial'])(
     ).resolves.toMatchObject({ status: "error", reason: "output_truncated" })
   }
 )
+
+it.each([
+  ["base", "+title-resolve"],
+  ["calendar", "+search-event"],
+  ["docs", "+search"],
+  ["task", "+get-my-tasks"],
+  ["task", "+tasklist-search"],
+])("requires the personal refusal for user-only command %s %s", async (...args) => {
+  jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
+    ok: false,
+    reason: "sender_not_token_owner",
+    adapterId: "lark-1",
+    message: "Personal access requires ADR-0243 phases 4 and 5.",
+  })
+  await expect(execLarkCli({ args, context: { sessionId: "bot-topic" } })).resolves.toMatchObject({
+    status: "error",
+    reason: "auth_unavailable",
+    message: expect.stringContaining("phases 4 and 5"),
+  })
+  expect(resolveLarkAuth).toHaveBeenLastCalledWith(expect.objectContaining({ identity: "user" }))
+  expect(mockProcessRunner).not.toHaveBeenCalled()
+})

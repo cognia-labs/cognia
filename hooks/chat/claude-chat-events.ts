@@ -201,6 +201,16 @@ export interface StreamCoalescing {
   registry: SessionCoalescingRegistry
   getExecutionHandle: (sessionId: string) => AgentExecutionHandle | undefined
   transcriptFence?: TranscriptRuntimeFence
+  /**
+   * Continuations decided while the emitting turn settles (steer drain, the
+   * next plan/goal/loop step) go through this ref, bound to the lease that held
+   * the session when the frame was handled: they join it only while it is still
+   * the owner and no Stop is pending. Deferred ones (timers, manual "Continue")
+   * re-enter admission through `sendRef`.
+   */
+  ownedContinuationRef?: React.MutableRefObject<SendFn | null>
+  /** Keeps that lease registered across a synchronous drain (never an await). */
+  holdTurnLease?: (work: () => void) => void
 }
 
 /**
@@ -409,10 +419,11 @@ export async function handleEvent(
   sendRef: React.MutableRefObject<SendFn | null>,
   coalescing: StreamCoalescing
 ) {
-  // A headless capture owns these response commands for its turn, even when
-  // a local pane is open. Other event observers and transcript ingestion stay live.
+  // Captures own response commands; durable Bot/plugin drivers also claim
+  // transcript ingestion so an open desktop pane cannot persist it twice.
   if (hasCaptureResponder(evt)) return
   const { messagesMirrorRef, registry, getExecutionHandle } = coalescing
+  const continuationRef = coalescing.ownedContinuationRef ?? sendRef
   const frame = evt as ClaudeEvent & {
     sessionId?: string
     turnId?: string
@@ -785,7 +796,8 @@ export async function handleEvent(
         // always drains; an errored end drains only when an explicit
         // "interrupt & steer" armed it (a natural error keeps the queue).
         if (!evt.error || steerArmed.has(evt.sessionId)) {
-          drainSteerVia(evt.sessionId, sendRef)
+          const holdTurnLease = coalescing.holdTurnLease ?? ((work: () => void) => work())
+          holdTurnLease(() => drainSteerVia(evt.sessionId, continuationRef))
         } else {
           // Errored end with nothing armed: the queue is deliberately preserved,
           // but no settle is coming to deliver it. Say so on the bubbles so the
@@ -1173,6 +1185,9 @@ export async function handleEvent(
         turnComplete,
         result: sdkResult,
       } = applySdkEvent(current, env.event)
+      const deleteIds = current
+        .filter((message) => !appliedMessages.some((kept) => kept.id === message.id))
+        .map((message) => message.id)
 
       // Emit `execute_tool` child spans for every `tool_use` / `tool_result`
       // pair in this SDK event. The parent invoke_agent span was opened by
@@ -1501,7 +1516,10 @@ export async function handleEvent(
             // Mid-stream: coalesce the React commit to ≤1/frame and debounce
             // the Dexie write. The mirror keeps the read path correct.
             coalesce.commit.call(nextMessages, writeOptions)
-            coalesce.persist.call(nextMessages, writeOptions)
+            if (deleteIds.length) {
+              coalesce.persist.cancel()
+              await persistMessages(sessionId, nextMessages, { ...writeOptions, deleteIds })
+            } else coalesce.persist.call(nextMessages, writeOptions)
           }
         } else {
           // No open pane — no live slice to feed, but the Dexie write is still
@@ -1525,7 +1543,10 @@ export async function handleEvent(
             messagesMirrorRef.current.delete(sessionId)
             registry.release(sessionId)
           } else {
-            coalesce.persist.call(nextMessages, writeOptions)
+            if (deleteIds.length) {
+              coalesce.persist.cancel()
+              await persistMessages(sessionId, nextMessages, { ...writeOptions, deleteIds })
+            } else coalesce.persist.call(nextMessages, writeOptions)
           }
         }
         // A reply landing for any *non-focused* session (open background pane
@@ -1952,7 +1973,8 @@ export async function handleEvent(
                   sessionId,
                   outcome.userMessage,
                   sendRef,
-                  activeRef
+                  activeRef,
+                  continuationRef
                 )
               }
               // aborted | stale | no_loop → no-op; a pause/stop owns the next step.
@@ -2063,7 +2085,8 @@ export async function handleEvent(
                     outcome.userMessage,
                     sendRef,
                     activeRef,
-                    suggested?.ms
+                    suggested?.ms,
+                    continuationRef
                   )
                 }
                 // aborted | stale | no_goal → no-op: a pause/stop/update owns
@@ -2092,7 +2115,9 @@ export async function handleEvent(
               lastResponse: extractAssistantText(lastAssistant),
               isActiveSession: () => sessionId === activeRef.current,
               dispatchNextStep: (userMessage) =>
-                void sendRef.current?.(userMessage, undefined, { skipUserAppend: true }),
+                void continuationRef
+                  .current?.(userMessage, undefined, { skipUserAppend: true })
+                  ?.catch(() => undefined),
             })
           }
         }

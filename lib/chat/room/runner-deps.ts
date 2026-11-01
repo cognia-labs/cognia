@@ -58,7 +58,11 @@ export interface RoomRunnerDb {
   getTeam: (id: string) => Promise<Team | undefined | null>
   listCharactersByIds: (ids: string[]) => Promise<Character[]>
   listMessages: (sessionId: string) => Promise<UIMessage[]>
-  persistMessages: (sessionId: string, messages: UIMessage[]) => Promise<void>
+  persistMessages: (
+    sessionId: string,
+    messages: UIMessage[],
+    options?: import("@/lib/db/messages").MessagePersistOptions
+  ) => Promise<void>
   bumpUnread: (sessionId: string) => Promise<void>
   recordResultUsage: (input: {
     sessionId: string

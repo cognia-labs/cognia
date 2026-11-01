@@ -17,6 +17,10 @@ import { resolveLarkAdapter } from "./auth-bridge"
 import { execLarkCli, type ExecLarkCliInput, type LarkCliResult } from "./exec-lark-cli"
 import { assertLarkCliCommandAvailable } from "./capabilities"
 
+// One context per registered skill invocation: internal CLI consumers receive
+// raw data, while the final model/audit result names the chosen service lane.
+const serviceIdentities = new WeakMap<BuiltInSkillContext, { adapterId: string }>()
+
 // The confirm card moved to the shared tier when the platform-neutral `im.*`
 // family landed (W2) — re-exported here so every lark skill file keeps its
 // original import path.
@@ -65,9 +69,14 @@ export function registerLarkSkill<S extends z.ZodObject>(skill: BuiltInSkill<S>)
   const routedSkill: BuiltInSkill<typeof schema> = {
     ...skill,
     inputSchema: schema,
-    execute: (args, ctx) => {
+    execute: async (args, ctx) => {
       const { adapterId, body } = splitRoute(args)
-      return skill.execute(body, routedContext(ctx, adapterId))
+      const invocation = routedContext(ctx, adapterId)
+      const data = await skill.execute(body, invocation)
+      const service = serviceIdentities.get(invocation)
+      return service
+        ? { identity: "bot", lane: "service", adapterId: service.adapterId, data }
+        : data
     },
     preflight: async (args, ctx) => {
       const selected = await resolveLarkAdapter({
@@ -192,7 +201,11 @@ export function capLarkData(data: unknown): unknown {
 export async function runLarkCli(input: ExecLarkCliInput): Promise<unknown> {
   await assertLarkCliCommandAvailable(input.args)
   const result = await execLarkCli(input)
-  if (result.status === "ok") return capLarkData(result.data)
+  if (result.status === "ok") {
+    if (result.identity === "bot" && input.context)
+      serviceIdentities.set(input.context, { adapterId: result.adapterId })
+    return capLarkData(result.data)
+  }
   throw new Error(formatExecError(result))
 }
 

@@ -1,3 +1,9 @@
+import {
+  createUnattendedPermissionResponder,
+  isVerifiedHumanApproval,
+} from "@/lib/claude/unattended-permission-responder"
+import { createUnattendedPark, type UnattendedPark } from "@/lib/claude/unattended-park"
+import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 /**
  * Built-in skill dispatcher (ADR-0026).
  *
@@ -38,7 +44,8 @@ import { append as appendAudit } from "@/lib/db/connector-audit"
 import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getSharedBuiltInSkillRegistry } from "./registry"
-import { resolveBuiltInSkillTurnActors } from "./context"
+import { resolveBuiltInSkillRunScope, resolveBuiltInSkillTurnActors } from "./context"
+import { resolveExecutingRun } from "@/lib/execution/acting-authority"
 import type { BuiltInSkill, BuiltInSkillContext, BuiltInSkillResult } from "./types"
 import {
   adapterAllowsBuiltInSkill,
@@ -257,6 +264,7 @@ export async function runBuiltInSkill(
 
   if (ctx.signal?.aborted) return { status: "error", message: "Skill invocation was cancelled" }
   let desktopApproved = false
+  let parkedApproved = false
   // Only an explicit click on THIS request counts; a remembered session grant
   // approves the call without a person having looked at it.
   let desktopConfirmedByUser = false
@@ -270,7 +278,94 @@ export async function runBuiltInSkill(
         message: `Skill "${skill.id}" requires HITL but defines no hitlSurface.`,
       }
     }
-    if (ctx.imBinding) {
+    const { capturedTurnOf } = await import("@/lib/policy/action-review/captured-turns")
+    let captured = capturedTurnOf(ctx.sessionId)
+    const route = getSubagentApprovalRoute(ctx.sessionId)
+    const inheritedOrigin = route?.approvalOrigin
+    let approvalSessionId = ctx.sessionId
+    let detachedPark: UnattendedPark | undefined
+    {
+      // A hidden child inherits its root's entire approval route even when
+      // webhook/schedule/plugin authority has no IM delivery binding.
+      // Its own capture may carry default interactive options; those cannot
+      // override the root's interactive card or unattended durable park.
+      const { resolveBuiltInSkillSessionBinding } = await import("./context")
+      try {
+        const { rootSessionId } = await resolveBuiltInSkillSessionBinding(ctx.sessionId)
+        const rootCapture = capturedTurnOf(rootSessionId)
+        if (inheritedOrigin) {
+          if (inheritedOrigin.unattended) {
+            const runScope = resolveBuiltInSkillRunScope(ctx)
+            const { getExecutionRun } = await import("@/lib/db/execution-runs")
+            const executing = runScope.runId ? await getExecutionRun(runScope.runId) : undefined
+            if (!executing || executing.sessionId !== runScope.sessionId)
+              return {
+                status: "denied",
+                reason: "hitl_rejected",
+                message: "Confirmation run could not be resolved",
+              }
+            const rootRun = executing?.actingIdentity?.rootRunId
+              ? await getExecutionRun(executing.actingIdentity.rootRunId)
+              : undefined
+            detachedPark = createUnattendedPark({
+              origin: rootRun?.kind === "bot" ? "bot" : "plugin",
+              sessionId: ctx.sessionId,
+              label: `Subagent: ${route.subagentId}`,
+              ...(executing ? { parentRunId: executing.id } : {}),
+              ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            })
+            const responder = createUnattendedPermissionResponder("subagent", {
+              park: detachedPark,
+            })
+            captured = {
+              turnId: captured?.turnId ?? route.runId,
+              outboundPolicy: { unattended: true },
+              respond: responder.onPermissionRequest,
+              holdWallClock: captured?.holdWallClock,
+            }
+          } else {
+            captured = undefined
+            approvalSessionId = route.rootSessionId ?? rootSessionId
+          }
+        } else if (rootCapture) {
+          captured = rootCapture
+          approvalSessionId = rootSessionId
+        }
+      } catch {
+        return { status: "error", message: "Confirmation session binding could not be resolved" }
+      }
+    }
+    if (captured?.outboundPolicy.unattended) {
+      // A bound Bot is still unattended. Ask through its durable park rather
+      // than send a second confirmation path into the source conversation.
+      const releaseClock = captured.holdWallClock?.()
+      try {
+        const requestId = `builtin-skill:${skill.id}:${cryptoRandomId()}`
+        const approvalRequest = {
+          type: "permission_request",
+          sessionId: approvalSessionId,
+          requestId,
+          toolUseID: requestId,
+          toolName: skill.mcpToolName,
+          input: (validArgs ?? {}) as Record<string, unknown>,
+        } as const
+        const decision = await captured.respond?.(approvalRequest)
+        if (!isVerifiedHumanApproval(decision, approvalRequest))
+          return {
+            status: "denied",
+            reason: "hitl_rejected",
+            message: decision?.message ?? "needs_approval",
+          }
+        parkedApproved = true
+        desktopConfirmedByUser = true
+      } finally {
+        releaseClock?.()
+        await detachedPark?.finish(
+          parkedApproved ? "completed" : ctx.signal?.aborted ? "cancelled" : "failed"
+        )
+      }
+    } else if (ctx.imBinding) {
       const { getImElicitationContext } =
         await import("@/lib/connectors/hitl/im-elicitation-context")
       const { getDb } = await import("@/lib/db/schema")
@@ -332,6 +427,8 @@ export async function runBuiltInSkill(
       }
       try {
         if (signal?.aborted) throw new Error("Confirmation request was cancelled")
+        const runScope = resolveBuiltInSkillRunScope(ctx)
+        const originalRun = await resolveExecutingRun(runScope.sessionId, runScope.runId)
         for (const [value, componentId, action] of [
           [actionId, "btn_confirm", "approve"],
           [cancelId, "btn_cancel", "cancel"],
@@ -351,6 +448,7 @@ export async function runBuiltInSkill(
               sessionId: rootSessionId,
               executionContext: {
                 sessionId: ctx.sessionId,
+                ...(originalRun ? { originRunId: originalRun.id } : {}),
                 ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
                 ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
                 ...(ctx.characterId ? { characterId: ctx.characterId } : {}),
@@ -406,43 +504,47 @@ export async function runBuiltInSkill(
         surfaceId: surface.rootId,
       }
     }
-    // Desktop consent (W2 dual-channel HITL): suspend on the chat pane's
-    // tool-approval dialog. The sidecar is already awaiting the
-    // `plugin_tool_exec` response, so blocking here suspends the turn.
-    const { requestDesktopSkillApproval } = await import("./desktop-hitl")
-    const outcome = await requestDesktopSkillApproval({
-      sessionId: ctx.sessionId,
-      skill,
-      args: validArgs,
-    })
-    if (!outcome.approved) {
-      const reason = outcome.reason === "expired" ? "expired" : "user_cancelled"
-      await safeAppendAudit({
-        adapterId: "<desktop>",
-        kind: "builtin_skill_hitl_rejected",
-        at: now,
-        reason,
-        message: `Desktop consent ${reason} for ${skill.id}`,
-        fields: { skillId: skill.id, mutation: skill.mutation },
+    if (!parkedApproved) {
+      // Desktop consent (W2 dual-channel HITL): suspend on the chat pane's
+      // tool-approval dialog. The sidecar is already awaiting the
+      // `plugin_tool_exec` response, so blocking here suspends the turn.
+      const { requestDesktopSkillApproval } = await import("./desktop-hitl")
+      const outcome = await requestDesktopSkillApproval({
+        sessionId: approvalSessionId,
+        skill,
+        args: validArgs,
       })
-      return {
-        status: "denied",
-        reason: "hitl_rejected",
-        message:
-          outcome.reason === "expired"
-            ? `Confirmation for "${skill.id}" timed out — re-run the tool and approve the dialog.`
-            : `The user declined "${skill.id}".`,
+      if (!outcome.approved) {
+        const reason = outcome.reason === "expired" ? "expired" : "user_cancelled"
+        await safeAppendAudit({
+          adapterId: "<desktop>",
+          kind: "builtin_skill_hitl_rejected",
+          at: now,
+          reason,
+          message: `Desktop consent ${reason} for ${skill.id}`,
+          fields: { skillId: skill.id, mutation: skill.mutation },
+        })
+        return {
+          status: "denied",
+          reason: "hitl_rejected",
+          message:
+            outcome.reason === "expired"
+              ? `Confirmation for "${skill.id}" timed out — re-run the tool and approve the dialog.`
+              : `The user declined "${skill.id}".`,
+        }
       }
+      desktopApproved = true
+      desktopConfirmedByUser = outcome.reason === "user"
     }
-    desktopApproved = true
-    desktopConfirmedByUser = outcome.reason === "user"
   }
 
   // Audit pending → execute → audit done.
   await safeAppendAudit({
     adapterId: ctx.imBinding?.adapterId ?? "<no-adapter>",
     kind:
-      ctx.hitlBypass || desktopApproved ? "builtin_skill_hitl_approved" : "builtin_skill_invoked",
+      ctx.hitlBypass || desktopApproved || parkedApproved
+        ? "builtin_skill_hitl_approved"
+        : "builtin_skill_invoked",
     at: now,
     conversationKey: ctx.imBinding?.conversationKey,
     message: `Invoking ${skill.id}`,
@@ -451,6 +553,7 @@ export async function runBuiltInSkill(
       mutation: skill.mutation,
       hitlBypass: ctx.hitlBypass === true,
       ...(desktopApproved ? { desktopApproved: true } : {}),
+      ...(parkedApproved ? { unattendedApproved: true } : {}),
     },
   })
 
@@ -458,6 +561,7 @@ export async function runBuiltInSkill(
     ctx.signal?.throwIfAborted()
     const data = await skill.execute(validArgs as never, {
       ...ctx,
+      ...(parkedApproved ? { hitlBypass: true } : {}),
       humanConfirmed: ctx.hitlBypass === true || desktopConfirmedByUser,
     })
     return { status: "ok", data }

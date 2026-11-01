@@ -248,3 +248,39 @@ describe("capture response ownership", () => {
     releaseNext()
   })
 })
+
+it("lets an explicit transcript owner suppress only its own turn's ingestion", () => {
+  const release = registerCaptureResponder("bot-topic", "turn", false, true)
+  for (const type of ["event", "sdk_session_id", "session_ended", "error"]) {
+    expect(hasCaptureResponder({ type, sessionId: "bot-topic", turnId: "turn" })).toBe(true)
+    expect(hasCaptureResponder({ type, sessionId: "bot-topic", turnId: "other" })).toBe(false)
+  }
+  expect(
+    hasCaptureResponder({ type: "permission_request", sessionId: "bot-topic", turnId: "turn" })
+  ).toBe(false)
+  release()
+  expect(hasCaptureResponder({ type: "event", sessionId: "bot-topic", turnId: "turn" })).toBe(false)
+})
+
+it("publishes capture occupancy until every owner releases and excludes other turns", async () => {
+  const {
+    isSessionCaptured,
+    isSessionCapturedByOtherTurn,
+    captureOwnedSessionIds,
+    subscribeCaptureOccupancy,
+  } = await import("./approval-registry")
+  const changed = jest.fn()
+  const unsubscribe = subscribeCaptureOccupancy(changed)
+  const first = registerCaptureResponder("capture", "turn", true, true)
+  const second = registerCaptureResponder("capture", "turn", false)
+  expect(isSessionCaptured("capture")).toBe(true)
+  expect(captureOwnedSessionIds()).toContain("capture")
+  expect(isSessionCapturedByOtherTurn("capture", "turn")).toBe(false)
+  expect(isSessionCapturedByOtherTurn("capture", "desktop")).toBe(true)
+  first()
+  expect(isSessionCaptured("capture")).toBe(true)
+  second()
+  expect(isSessionCaptured("capture")).toBe(false)
+  expect(changed).toHaveBeenLastCalledWith("capture", false)
+  unsubscribe()
+})

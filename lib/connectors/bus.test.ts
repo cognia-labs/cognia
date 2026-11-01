@@ -1,6 +1,11 @@
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   recordAbsorbedRequester: jest.fn(async () => undefined),
+  startToolExecutionRun: jest.fn(async () => ({ id: "callback-entry" })),
+  finishToolExecutionRun: jest.fn(async () => {}),
+}))
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator: async () => (key: string) => key,
 }))
 import { recordAbsorbedRequester } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/connector-inbound-jobs", () => ({
@@ -815,7 +820,11 @@ describe("ConnectorBus — passive callback observers", () => {
     expect(runBuiltInSkill).toHaveBeenCalledWith(
       "test.skill",
       {},
-      expect.objectContaining({ hitlBypass: true, actingSenders: [{ remoteUserId: "u_1" }] })
+      expect.objectContaining({
+        hitlBypass: true,
+        actingSenders: [{ remoteUserId: "u_1" }],
+        executionRunId: "callback-entry",
+      })
     )
   })
   it("notifies each resolved callback with the bound conversation key and disposes", async () => {

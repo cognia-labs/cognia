@@ -1,3 +1,6 @@
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  currentLocale: jest.fn(async () => "en"),
+}))
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   snapshotActingAuthority: jest.fn(async () => undefined),
@@ -63,7 +66,11 @@ beforeEach(() => {
   jest
     .mocked(getDb)
     .mockReturnValue({ sessions: { get: sessionGet }, executionRuns: { get: runGet } } as never)
-  jest.mocked(listExecutionRuns).mockResolvedValue([localRun] as never)
+  jest
+    .mocked(listExecutionRuns)
+    .mockImplementation(
+      async (options) => [{ ...localRun, sessionId: options?.sessionId ?? "s1" }] as never
+    )
   jest.mocked(getExecutionRun).mockImplementation(async (id) => runGet(id))
   runGet.mockImplementation(async (id) => (id === localRun.id ? localRun : undefined))
   sessionGet.mockResolvedValue({ platformBinding: binding })
@@ -354,6 +361,14 @@ it("checks the root owner for a row-less foreground child with host lineage", as
   sessionGet.mockImplementation(async (id) =>
     id === "s1" ? { platformBinding: binding } : undefined
   )
+  // Host lineage names the exact admitted child run; it inherits the root.
+  runGet.mockImplementation(async (id) =>
+    id === "execution:job:run"
+      ? { ...localRun, id, sessionId: "s1" }
+      : id === localRun.id
+        ? localRun
+        : undefined
+  )
   await expect(assertLarkActingIdentity("a1", { sessionId: "foreground" })).resolves.toMatchObject({
     accessToken: "owner-token",
   })
@@ -458,4 +473,61 @@ it("checks the root authority on a confirmed child replay after child cleanup", 
       actingSenders: [{ remoteUserId: "owner" }],
     })
   ).rejects.toMatchObject({ reason: "sender_not_token_owner" })
+})
+
+it.each(["bot", "plugin"])(
+  "refuses an IM-bound %s external event even when the sender owns the token",
+  async (kind) => {
+    const run = {
+      ...localRun,
+      actingIdentity: {
+        ...localRun.actingIdentity,
+        trigger: "external-event",
+        authorizingPrincipal: undefined,
+      },
+    }
+    // The decision comes from the run, independent of session creator markers.
+    jest.mocked(listExecutionRuns).mockResolvedValue([run] as never)
+    runGet.mockResolvedValue(run)
+    const context = {
+      sessionId: "s1",
+      ...(kind === "plugin"
+        ? { outboundAuthorization: { kind: "plugin" as const, pluginId: "review-plugin" } }
+        : {}),
+    }
+    await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow(/phases 4 and 5/i)
+    await expect(
+      larkUserRequest(
+        "a1",
+        { appId: "app", appSecret: "secret" },
+        "GET",
+        "/search",
+        undefined,
+        context
+      )
+    ).rejects.toThrow(/phases 4 and 5/i)
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+    expect(connectorsHttpRequest).not.toHaveBeenCalled()
+  }
+)
+
+it.each([[], [localRun, { ...localRun, id: "ambiguous" }]].map((runs) => ({ runs })))(
+  "refuses IM personal access without an unambiguous recorded run: %j",
+  async ({ runs }) => {
+    jest.mocked(listExecutionRuns).mockResolvedValue(runs as never)
+    await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).rejects.toMatchObject({
+      name: "LarkActingIdentityError",
+    })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  }
+)
+
+it("uses the shared Chinese refusal catalog when the runtime translator selects it", async () => {
+  const { currentLocale } = await import("@/lib/i18n/runtime-translator")
+  jest.mocked(currentLocale).mockResolvedValueOnce("zh-CN")
+  jest.mocked(listExecutionRuns).mockResolvedValue([])
+  await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).rejects.toThrow(
+    "个人访问需要 phase 4"
+  )
+  expect(currentLocale).toHaveBeenCalled()
 })

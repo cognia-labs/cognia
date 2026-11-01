@@ -24,6 +24,12 @@ import {
   activeToolExecutionRunId,
 } from "@/lib/execution/acting-authority"
 import { activeDirectChatExecutionRunId } from "@/lib/execution/direct-chat-run"
+import { capturedTurnOf } from "@/lib/policy/action-review/captured-turns"
+import {
+  getSubagentApprovalRoute,
+  type SubagentApprovalOrigin,
+  type SubagentApprovalRoute,
+} from "./subagent-approval-routes"
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
@@ -253,6 +259,7 @@ function newRunId(): string {
 /** Dispatch-owned provenance, persisted alongside the frozen recovery inputs. */
 export interface DispatchParentProvenance {
   parentExecutionRunId?: string
+  approvalOrigin?: SubagentApprovalOrigin
 }
 
 export interface StartDispatchRunParams {
@@ -303,6 +310,16 @@ export interface DispatchRunHandle {
  */
 export async function startDispatchRun(p: StartDispatchRunParams): Promise<DispatchRunHandle> {
   let effectiveCaller = structuredClone(p.caller)
+  const rootSessionId = p.rootSessionId ?? resolveRootSessionId(p.parentSessionId)
+  let approvalOrigin: SubagentApprovalOrigin = structuredClone(
+    p.recovery || p.resumeOfRunId
+      ? (p.recovery?.approvalOrigin ?? { unattended: true })
+      : (getSubagentApprovalRoute(p.parentSessionId)?.approvalOrigin ?? {
+          unattended:
+            (capturedTurnOf(rootSessionId) ?? capturedTurnOf(p.parentSessionId))?.outboundPolicy
+              .unattended ?? false,
+        })
+  )
   // Snapshot before any asynchronous work: admission must never borrow a later turn.
   // Recovery/resume deliberately skip live lookup, including for legacy records.
   let parentExecutionRunId = p.recovery
@@ -353,6 +370,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     const prior = await getBackgroundTaskRecord(p.resumeOfRunId).catch(() => undefined)
     const provenance = (prior?.recovery ?? prior) as DispatchParentProvenance | undefined
     parentExecutionRunId = provenance?.parentExecutionRunId
+    approvalOrigin = structuredClone(provenance?.approvalOrigin ?? { unattended: true })
   }
   // Prefer the inline def (projected ids like `template:x` / `pluginId:y` are
   // not resolvable by the registry's `getSubagent`); fall back to the raw id.
@@ -369,7 +387,6 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     }
   }
   // Resolved now, while the parent's own route (if it is a subagent) is live.
-  const rootSessionId = p.rootSessionId ?? resolveRootSessionId(p.parentSessionId)
   let target = resolved
     ? structuredClone(p.model ? { ...resolved, model: p.model } : resolved)
     : p.subagentId
@@ -392,6 +409,15 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
             return observeActingAuthority(snapshot.runId, snapshot.revision, "child-launch")
         })
         .catch(() => undefined)
+    // Typed separately: the SDK option type omits the host-only approval origin.
+    const approvalRoute: SubagentApprovalRoute = {
+      parentSessionId: p.parentSessionId,
+      rootSessionId,
+      runId: childRunId,
+      subagentId: p.subagentId,
+      backgrounded: p.background,
+      approvalOrigin,
+    }
     return dispatchSubagent(target, p.prompt, {
       ...(seen ? { _actingAuthority: seen } : {}),
       toolsEnabled: p.toolsEnabled,
@@ -404,13 +430,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
       _budgetRootRunId: effectiveCaller.budgetRoot,
       _onEvent: tracker.sink,
       abortSignal: abort.signal,
-      _approvalRoute: {
-        parentSessionId: p.parentSessionId,
-        rootSessionId,
-        runId: childRunId,
-        subagentId: p.subagentId,
-        backgrounded: p.background,
-      },
+      _approvalRoute: approvalRoute,
       ...(effectiveCaller.deadlineMs ? { _deadlineMs: effectiveCaller.deadlineMs } : {}),
       ...(effectiveCaller.parentCeiling
         ? { _permissionCeiling: effectiveCaller.parentCeiling }
@@ -539,6 +559,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     startedAt: Date.now(),
     toolsEnabled: p.toolsEnabled,
     ...(parentExecutionRunId ? { parentExecutionRunId } : {}),
+    approvalOrigin,
     ...(p.model ? { model: p.model } : {}),
     ...(p.resumeOfRunId ? { resumeOfRunId: p.resumeOfRunId } : {}),
     ...(p.resumeAttempt !== undefined ? { resumeAttempt: p.resumeAttempt } : {}),
@@ -582,6 +603,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
       recovery = {
         ...recovery,
         ...(parentExecutionRunId ? { parentExecutionRunId } : {}),
+        approvalOrigin,
         phase: "accepted",
       }
       effectiveCaller = recovery.caller

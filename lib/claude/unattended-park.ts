@@ -52,6 +52,8 @@ export interface UnattendedParkOptions {
   /** What the run is, for its title ("Bot: Release notes"). */
   label: string
   projectId?: string
+  /** Fixed executing run; approval confirms the operation, never a new identity. */
+  parentRunId?: string
   ttlMs?: number
   /** The turn's abort signal: an ended turn withdraws its questions. */
   signal?: AbortSignal
@@ -83,6 +85,7 @@ export interface UnattendedParkDeps {
     projectId?: string
     startedAt: number
     trigger?: "schedule" | "child"
+    parentRunId?: string
   }): Promise<void>
   finishRun(
     runId: string,
@@ -142,9 +145,14 @@ function defaultDeps(): UnattendedParkDeps {
       const { createExecutionRun, getExecutionRun } = await import("@/lib/db/execution-runs")
       const { AgentRunEventProducer } = await import("@/lib/execution/sources/agent-turn")
       if (!(await getExecutionRun(input.runId))) {
+        const parent = input.parentRunId ? await getExecutionRun(input.parentRunId) : undefined
         await createExecutionRun({
           id: input.runId,
-          ...recordedRunMetadata(input.trigger ?? "schedule", { runId: input.runId }),
+          ...recordedRunMetadata(input.trigger ?? "schedule", {
+            runId: input.runId,
+            ...(parent ? { parent } : {}),
+          }),
+          ...(parent ? { parentRunId: parent.id } : {}),
           kind: "agent-turn",
           sourceId: input.runId,
           sessionId: input.sessionId,
@@ -197,7 +205,11 @@ function defaultDeps(): UnattendedParkDeps {
     },
     awaitDecision: async (sessionId, requestId, options) => {
       const { awaitApproval } = await import("@/lib/connectors/hitl/approval-registry")
-      return awaitApproval(sessionId, requestId, options)
+      const { isHumanParkControlDecision } = await import("./unattended-permission-responder")
+      const decision = await awaitApproval(sessionId, requestId, options)
+      return decision.decision === "allow" && !isHumanParkControlDecision(decision)
+        ? { decision: "deny", message: "needs_approval", attribution: { authority: "system" } }
+        : decision
     },
     newId: () => crypto.randomUUID(),
   }
@@ -221,6 +233,7 @@ export function createUnattendedPark(options: UnattendedParkOptions): Unattended
         ...(options.projectId ? { projectId: options.projectId } : {}),
         startedAt: now(),
         trigger: options.origin === "scheduler" ? "schedule" : "child",
+        ...(options.parentRunId ? { parentRunId: options.parentRunId } : {}),
       })
       runId = id
       return id
@@ -231,6 +244,7 @@ export function createUnattendedPark(options: UnattendedParkOptions): Unattended
   return {
     runId: () => runId,
     async park(request) {
+      if (finished || options.signal?.aborted) return { kind: "withdrawn" }
       const run = await ensureRun()
       const authoritySnapshot = snapshotActingAuthority(options.sessionId, run)
       const interruptId = parkedInterruptId(run, request.requestId)

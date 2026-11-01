@@ -33,6 +33,7 @@ export const CONNECTOR_INBOUND_EVENT_TYPE = "connector.inbound"
  * because they are what the message SAYS, which is the point.
  */
 function payloadOf(event: NormalizedInboundEvent) {
+  const deliveryTarget = deliveryTargetFromEvent(event)
   return {
     platform: event.platform,
     conversationKey: event.conversationKey,
@@ -41,12 +42,15 @@ function payloadOf(event: NormalizedInboundEvent) {
     segments: event.segments,
     channelKind: event.channel.kind,
     selfMentioned: event.mentions.selfMentioned,
+    // Preserve the adapter's address convention. A conversation key is an
+    // opaque routing identity, not a portable encoding of container/topic ids.
+    conversationAddress: deliveryTarget.address,
     ...(event.replyTo ? { replyToMessageId: event.replyTo.messageId } : {}),
     // The sendable target for THIS conversation at ingress time, so a Bot run
     // can bind the run-presentation plane (progress card, COT, approvals) and
     // reply without re-resolving the session's binding — which may have moved
     // topics by the time the delivery runs.
-    deliveryTarget: deliveryTargetFromEvent(event),
+    deliveryTarget,
   }
 }
 

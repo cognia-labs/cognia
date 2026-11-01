@@ -47,6 +47,7 @@ import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-even
 import { sessionControl } from "@/lib/claude/ipc"
 import type { RuntimeSessionStatus } from "@cognia/agent-config-types"
 import { renderBranchSeed } from "@/lib/chat/branch-session"
+import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
 
 /** Rehydrate a replaced AI-SDK session from surviving canonical message parts. */
 export async function buildAiSdkInitialConversation(
@@ -84,9 +85,10 @@ export async function prepareTranscriptRuntimeSend(
   let session = await getSession(sessionId)
   assertDatabaseCurrent()
   const usesAiSdk =
+    !isExternalAgentProviderId(options.provider) &&
     (options.execution?.runtimeAdapter ??
       (options.provider === "anthropic" || !options.provider ? "claude-agent-sdk" : "ai-sdk")) ===
-    "ai-sdk"
+      "ai-sdk"
   let prepared = options
   let lostRetainedContext = false
   if (!usesAiSdk && !preparation.skipHydration && session?.runtimeTranscriptInvalidated) {

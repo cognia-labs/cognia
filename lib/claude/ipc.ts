@@ -48,6 +48,7 @@ import {
 } from "@/lib/policy/action-review/authorized-tool-calls"
 import { isRemoteExecutionContext, type RemoteExecutionContext } from "./remote-execution"
 import {
+  isSessionCapturedByOtherTurn,
   awaitApproval as awaitLocalApproval,
   hasPendingApproval,
   resolveApproval as resolveLocalApproval,
@@ -259,7 +260,11 @@ export async function sendPrompt(
       return sendPromptToTransport(sessionId, prompt, options, delivery)
     }
     const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
-    const prepared = await prepareTranscriptRuntimeSend(sessionId, options ?? {})
+    const prepared = await prepareTranscriptRuntimeSend(
+      sessionId,
+      options ?? {},
+      delivery?.messageId ? { currentMessageId: delivery.messageId } : undefined
+    )
     return sendPromptToTransport(
       sessionId,
       prompt,
@@ -278,7 +283,11 @@ async function sendPromptToTransport(
   delivery?: PromptDelivery,
   route: { pairedHost?: boolean } = {}
 ): Promise<void> {
+  if (isSessionCapturedByOtherTurn(sessionId, options?.turnId))
+    throw new TranscriptRuntimeRecoveryError("session_turn_busy")
   await delivery?.beforeSend?.()
+  if (isSessionCapturedByOtherTurn(sessionId, options?.turnId))
+    throw new TranscriptRuntimeRecoveryError("session_turn_busy")
   const sdk = options?.claudeAgentSdk
   if (
     !hasNoLeakingPiiDeep({

@@ -6,6 +6,32 @@
  */
 
 const getSession = jest.fn()
+const mockCreatedSessions = new Map<string, Record<string, unknown>>()
+async function mockReadSession(id: string) {
+  const supplied = await getSession(id)
+  if (supplied) return supplied
+  const created = mockCreatedSessions.get(id)
+  if (created) return created
+  const listed = await listSessions.mock.results.at(-1)?.value
+  return listed?.find((session: Record<string, unknown>) => session.id === id) ?? null
+}
+// Rows the turn wrote through the (mocked) writer, as the real writer stores them.
+const mockWrittenMessages = new Map<string, Record<string, unknown>>()
+const mockTurnDb = {
+  sessions: { get: async (id: string) => (await mockReadSession(id)) ?? {} },
+  messages: {
+    get: async (id: string) => mockWrittenMessages.get(id),
+    bulkGet: async (ids: string[]) => ids.map((id) => mockWrittenMessages.get(id)),
+  },
+  messageMediaRefs: {},
+  sharedRunJournals: {
+    get: async () => undefined,
+    add: async () => undefined,
+    put: async () => undefined,
+  },
+  transaction: async (...args: unknown[]) => (args.at(-1) as () => Promise<unknown>)(),
+}
+jest.mock("@/lib/db/schema", () => ({ getDb: () => mockTurnDb }))
 const listSessions = jest.fn(async () => [] as Array<Record<string, unknown>>)
 const createSession = jest.fn(async () => ({ id: "sess-new" }))
 const updateSession = jest.fn(async () => undefined)
@@ -13,6 +39,29 @@ const resolveCharacterById = jest.fn(async () => ({ id: "char-1" }))
 const getSettings = jest.fn(async () => ({ theme: "dark" }))
 const resolveSendOptions = jest.fn(async () => ({ cwd: "/repo" }) as Record<string, unknown>)
 const runAndCaptureAssistantReply = jest.fn(async () => ({ text: "done", messageId: "m1" }))
+const commitMessageDelta = jest.fn(async (..._args: unknown[]) => undefined)
+const stampSessionLastMessage = jest.fn(async (..._args: unknown[]) => undefined)
+const setSdkSessionId = jest.fn(async (..._args: unknown[]) => undefined)
+const acknowledgeTranscriptRuntime = jest.fn(async (..._args: unknown[]) => undefined)
+const startToolExecutionRun = jest.fn(async () => ({ id: "entry-run" }))
+jest.mock("@/lib/execution/acting-authority", () => ({
+  startToolExecutionRun: () => startToolExecutionRun(),
+  finishToolExecutionRun: jest.fn(),
+}))
+jest.mock("@/lib/db/messages", () => ({
+  prepareMessageDelta: async (_sessionId: string, delta: unknown) => delta,
+  commitMessageDelta: (...args: unknown[]) => {
+    const [sessionId, delta] = args as [string, { upserts?: Array<{ id: string }> }]
+    for (const row of delta?.upserts ?? []) mockWrittenMessages.set(row.id, { ...row, sessionId })
+    return commitMessageDelta(...args)
+  },
+  stampSessionLastMessage: (...args: unknown[]) => stampSessionLastMessage(...args),
+}))
+jest.mock("@/lib/chat/transcript/revision-events", () => ({
+  acknowledgeTranscriptRuntime: (...args: unknown[]) => acknowledgeTranscriptRuntime(...args),
+  invalidateTranscriptRuntime: async () => undefined,
+  withTranscriptRuntimeLock: (_sessionId: string, action: () => Promise<unknown>) => action(),
+}))
 const parkOutcome = jest.fn(async (): Promise<Record<string, unknown>> => ({ kind: "expired" }))
 const parkFinish = jest.fn(async () => undefined)
 const createUnattendedPark = jest.fn((_options: Record<string, unknown>) => ({
@@ -22,9 +71,14 @@ const createUnattendedPark = jest.fn((_options: Record<string, unknown>) => ({
 }))
 
 jest.mock("@/lib/db/sessions", () => ({
-  getSession: (...a: unknown[]) => (getSession as (...args: unknown[]) => unknown)(...a),
+  getSession: (id: string) => mockReadSession(id),
   listSessions: () => listSessions(),
-  createSession: (...a: unknown[]) => (createSession as (...args: unknown[]) => unknown)(...a),
+  setSdkSessionId: (...args: unknown[]) => setSdkSessionId(...args),
+  createSession: async (...a: unknown[]) => {
+    const created = await (createSession as (...args: unknown[]) => Promise<{ id: string }>)(...a)
+    mockCreatedSessions.set(created.id, { ...(a[0] as Record<string, unknown>), ...created })
+    return created
+  },
   updateSession: (...a: unknown[]) => (updateSession as (...args: unknown[]) => unknown)(...a),
 }))
 jest.mock("@/lib/db/characters", () => ({
@@ -45,8 +99,12 @@ jest.mock("@/lib/db/session-usage", () => ({
   recordSurfaceUsage: (...a: unknown[]) => recordSurfaceUsage(...a),
 }))
 jest.mock("@/lib/claude/run-and-capture", () => ({
-  runAndCaptureAssistantReply: (...a: unknown[]) =>
-    (runAndCaptureAssistantReply as (...args: unknown[]) => unknown)(...a),
+  RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
+  // Both real dispatch paths call beforeSend before the engine receives the turn.
+  runAndCaptureAssistantReply: async (...a: unknown[]) => {
+    await (a[3] as { beforeSend?: () => Promise<void> } | undefined)?.beforeSend?.()
+    return (runAndCaptureAssistantReply as (...args: unknown[]) => unknown)(...a)
+  },
 }))
 
 import { PluginAgentTurnError, runPluginAgentTurn } from "./agent-turn"
@@ -74,7 +132,9 @@ function runTurn(
 const base = { characterId: "char-1", prompt: "go", cwd: "/repo" }
 
 beforeEach(() => {
+  mockWrittenMessages.clear()
   jest.clearAllMocks()
+  mockCreatedSessions.clear()
   getSession.mockResolvedValue(null)
   listSessions.mockResolvedValue([])
   createSession.mockResolvedValue({ id: "sess-new" })
@@ -210,7 +270,9 @@ describe("runPluginAgentTurn", () => {
         characterId: "char-1",
         workingDir: "/repo",
         agentTurnOwner: owner,
-      })
+      }),
+      undefined,
+      { id: expect.stringMatching(/^s_agent_turn_[a-f0-9]{64}$/) }
     )
     expect(updateSession).not.toHaveBeenCalled()
     expect(runAndCaptureAssistantReply).toHaveBeenCalledWith(
@@ -221,6 +283,32 @@ describe("runPluginAgentTurn", () => {
     )
     expect(interactive.workingDir).toBe("/user-repo")
   })
+
+  it.each([false, true])(
+    "handles a losing deterministic create without overwriting the winner (foreign: %s)",
+    async (foreign) => {
+      createSession.mockRejectedValue(
+        Object.assign(new Error("duplicate"), { name: "ConstraintError" })
+      )
+      getSession.mockImplementation(async (id: string) => ({
+        ...ownedSession,
+        id,
+        sdkSessionId: "winner-runtime",
+        agentTurnOwner: foreign ? { ...owner, id: "someone-else" } : owner,
+      }))
+      if (foreign) {
+        await expect(runTurn(base)).rejects.toThrow(/owned by another caller/)
+        expect(runAndCaptureAssistantReply).not.toHaveBeenCalled()
+      } else {
+        const result = await runTurn(base)
+        expect(result.sessionId).toMatch(/^s_agent_turn_[a-f0-9]{64}$/)
+        expect((await getSession(result.sessionId)).sdkSessionId).toBe("winner-runtime")
+      }
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(updateSession).not.toHaveBeenCalled()
+      expect(setSdkSessionId).not.toHaveBeenCalled()
+    }
+  )
 
   it("rejects an unknown explicit sessionId without falling back or creating a session", async () => {
     listSessions.mockResolvedValue([
@@ -320,7 +408,9 @@ describe("runPluginAgentTurn", () => {
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         agentTurnOwner: { ...botSource, key: "installation-b" },
-      })
+      }),
+      undefined,
+      { id: expect.stringMatching(/^s_agent_turn_[a-f0-9]{64}$/) }
     )
     await expect(
       runTurn(base, { grantSource: botSource, sessionKey: "installation-a" })
@@ -434,10 +524,10 @@ describe("runPluginAgentTurn usage booking", () => {
     durationMs: 900,
   }
 
-  it("books nothing and leaves the send untouched when the caller asked for no booking", async () => {
+  it("books nothing but still identifies the durable turn when no usage booking was requested", async () => {
     await runTurn(base)
     const [, , sendOptions, opts] = runAndCaptureAssistantReply.mock.calls[0] as unknown[]
-    expect(sendOptions).not.toHaveProperty("turnId")
+    expect(sendOptions).toHaveProperty("turnId", expect.any(String))
     expect(opts).not.toHaveProperty("onEvent")
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
   })
@@ -545,5 +635,52 @@ describe("runPluginAgentTurn usage booking", () => {
   it("books nothing when the turn reported no usage at all", async () => {
     await runTurn(base, { ...botCaller, usage: booking })
     expect(recordSurfaceUsage).not.toHaveBeenCalled()
+  })
+})
+
+describe("durable unattended transcript", () => {
+  it("stores the user before sending, saves the resume id, and appends the reply", async () => {
+    getSession.mockResolvedValue({ ...ownedSession, runtimeTranscriptInvalidated: "generation" })
+    runAndCaptureAssistantReply.mockImplementation(async (...args: unknown[]) => {
+      expect(commitMessageDelta).toHaveBeenCalledTimes(1)
+      const send = args[2] as { turnId: string }
+      const cap = args[3] as { onSdkSessionId: (id: string) => Promise<void> }
+      expect(commitMessageDelta.mock.calls[0]).toEqual([
+        "sess-new",
+        {
+          upserts: [
+            expect.objectContaining({
+              id: send.turnId,
+              role: "user",
+              parts: [{ type: "text", text: "go" }],
+            }),
+          ],
+        },
+      ])
+      await cap.onSdkSessionId("native-resume")
+      return { text: "done", messageId: "m1" }
+    })
+    await runTurn(base)
+    expect(setSdkSessionId).toHaveBeenCalledWith("sess-new", "native-resume")
+    expect(commitMessageDelta.mock.calls[1]).toEqual([
+      "sess-new",
+      {
+        upserts: [
+          expect.objectContaining({
+            id: "m1",
+            role: "assistant",
+            parts: [{ type: "text", text: "done", state: "done" }],
+          }),
+        ],
+      },
+    ])
+    expect(acknowledgeTranscriptRuntime).toHaveBeenCalledWith("sess-new", "generation")
+  })
+
+  it("keeps the admitted user row after a crash and does not acknowledge the transcript", async () => {
+    runAndCaptureAssistantReply.mockRejectedValueOnce(new Error("crashed"))
+    await expect(runTurn(base)).rejects.toThrow("crashed")
+    expect(commitMessageDelta).toHaveBeenCalledTimes(1)
+    expect(acknowledgeTranscriptRuntime).not.toHaveBeenCalled()
   })
 })

@@ -278,7 +278,9 @@ export function scheduleGoalContinuation(
   userMessage: string,
   sendRef: React.MutableRefObject<SendFn | null>,
   activeRef: React.MutableRefObject<string | null>,
-  suggestedDelayMs?: number
+  suggestedDelayMs?: number,
+  /** The settling turn's lease; only an immediate send may join it. */
+  ownedRef?: React.MutableRefObject<SendFn | null>
 ): void {
   clearPendingContinuation(goalId)
   void (async () => {
@@ -297,13 +299,17 @@ export function scheduleGoalContinuation(
     void getGoalRuntime().recordPacingDecision(goalId, gate, suggestedDelayMs)
     if (gate.kind === "send") {
       goalLastContinuationAt.set(goalId, Date.now())
-      void sendRef.current?.(userMessage, undefined, { skipUserAppend: true })
+      void (ownedRef ?? sendRef)
+        .current?.(userMessage, undefined, { skipUserAppend: true })
+        ?.catch(() => undefined)
     } else if (gate.kind === "hold") {
       // Wait for the user to click "Continue" on the status pill.
       const unsub = getGoalRuntime().onManualContinue(goalId, () => {
         clearPendingContinuation(goalId)
         goalLastContinuationAt.set(goalId, Date.now())
-        void sendRef.current?.(userMessage, undefined, { skipUserAppend: true })
+        void sendRef
+          .current?.(userMessage, undefined, { skipUserAppend: true })
+          ?.catch(() => undefined)
       })
       goalManualUnsub.set(goalId, unsub)
     } else {
@@ -350,7 +356,9 @@ export function scheduleLoopContinuation(
   sessionId: string,
   userMessage: string,
   sendRef: React.MutableRefObject<SendFn | null>,
-  activeRef: React.MutableRefObject<string | null>
+  activeRef: React.MutableRefObject<string | null>,
+  /** The settling turn's lease; only an immediate send may join it. */
+  ownedRef?: React.MutableRefObject<SendFn | null>
 ): void {
   clearPendingLoopContinuation(loopId)
   void (async () => {
@@ -360,7 +368,9 @@ export function scheduleLoopContinuation(
 
     const gate = gateLoopContinuation(loop, Date.now())
     if (gate.kind === "send") {
-      void sendRef.current?.(userMessage, undefined, { skipUserAppend: true })
+      void (ownedRef ?? sendRef)
+        .current?.(userMessage, undefined, { skipUserAppend: true })
+        ?.catch(() => undefined)
     } else {
       const delay = Math.max(0, gate.untilMs - Date.now())
       const timer = setTimeout(() => {

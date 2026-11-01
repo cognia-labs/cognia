@@ -4,6 +4,7 @@ import {
   runEventJournal,
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
+import { recordHumanParkControlDecision } from "@/lib/claude/unattended-permission-responder"
 import { getDb } from "@/lib/db/schema"
 import {
   fusionApprovalRunIdOf,
@@ -200,7 +201,10 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
           interrupt.requestDigest,
           command.action === "approve"
             ? // The outbound policy validates "for this request" (ADR-0239).
-              { decision: "allow", ...(command.forRequest ? { forRequest: true } : {}) }
+              recordHumanParkControlDecision({
+                decision: "allow",
+                ...(command.forRequest ? { forRequest: true } : {}),
+              })
             : { decision: "deny" }
         )
       ) {

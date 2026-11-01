@@ -379,6 +379,20 @@ async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 }
 
 describe("createSession — without default preset", () => {
+  it("atomically creates a caller-keyed session without replacing the winning row", async () => {
+    const results = await Promise.allSettled([
+      createSession({ title: "First" }, undefined, { id: "s_agent_turn_shared" }),
+      createSession({ title: "Second" }, undefined, { id: "s_agent_turn_shared" }),
+    ])
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { name: "ConstraintError" },
+    })
+    const winner = results.find((result) => result.status === "fulfilled")!
+    if (winner.status !== "fulfilled") throw new Error("Missing winning session")
+    expect(await getSession("s_agent_turn_shared")).toEqual(winner.value)
+  })
+
   it("creates a row with caller-supplied fields", async () => {
     const session = await createSession({
       title: "Test",

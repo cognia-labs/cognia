@@ -1,3 +1,6 @@
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  currentLocale: jest.fn(async () => "en"),
+}))
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   observeTenantServiceData: jest.fn(),
@@ -38,11 +41,7 @@ jest.mock("@/lib/db/schema", () => ({
   }),
 }))
 // The personal lane needs the executing run's recorded local identity (ADR-0243 phase 2-0).
-const mockRunIdentity = jest.fn(async (sessionId: string): Promise<unknown> =>
-  sessionId === "desktop" || sessionId === "local"
-    ? { trigger: "local", authorizingPrincipal: { kind: "local-person" } }
-    : undefined
-)
+const mockRunIdentity = jest.fn<Promise<unknown>, [string]>()
 jest.mock("../context", () => ({
   ...jest.requireActual("../context"),
   resolveBuiltInSkillSessionBinding: jest.fn(),
@@ -81,6 +80,13 @@ function mkAdapter(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  mockRunIdentity
+    .mockReset()
+    .mockImplementation(async (sessionId) =>
+      sessionId === "desktop" || sessionId === "local"
+        ? { trigger: "local", authorizingPrincipal: { kind: "local-person" } }
+        : { trigger: "requester" }
+    )
   jest
     .mocked(resolveBuiltInSkillSessionBinding)
     .mockReset()
@@ -107,13 +113,157 @@ beforeEach(() => {
 })
 
 describe("resolveLarkAuth", () => {
+  it.each([
+    ["plugin", "external-event"],
+    ["webhook", "external-event"],
+    ["schedule", "schedule"],
+    ["requester", "requester"],
+  ] as const)("selects service data for an unbound %s run", async (source, trigger) => {
+    jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
+      rootSessionId: source,
+      binding: undefined,
+      personalLane: "local-session",
+    } as never)
+    mockRunIdentity.mockResolvedValue({ trigger })
+    mockListByType.mockResolvedValue([mkAdapter()])
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "appId" ? "app" : key === "appSecret" ? "secret" : "personal-token"
+    )
+    mockTenantToken.mockResolvedValue("tenant-token")
+    const context = { sessionId: source }
+
+    await expect(resolveLarkAuth({ context })).resolves.toMatchObject({
+      ok: true,
+      identity: "bot",
+      lane: "service",
+      env: {
+        LARKSUITE_CLI_USER_ACCESS_TOKEN: "",
+        LARKSUITE_CLI_TENANT_ACCESS_TOKEN: "tenant-token",
+      },
+    })
+    expect(mockRunIdentity).toHaveBeenCalledWith(source)
+    expect(mockTenantToken).toHaveBeenCalledWith(
+      { appId: "app", appSecret: "secret" },
+      "service-data"
+    )
+    await expect(resolveLarkAuth({ context, identity: "user" })).resolves.toMatchObject({
+      ok: false,
+      reason: "sender_not_token_owner",
+      message: expect.stringMatching(/phases 4 and 5/i),
+    })
+    expect(mockKeyring).not.toHaveBeenCalledWith("lark-1", "user_token")
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  })
+
+  it("keeps a bound IM requester on the delegated owner path by default", async () => {
+    const binding = { platform: "lark" as const, adapterId: "lark-1", conversationKey: "chat" }
+    jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
+      rootSessionId: "im",
+      session: {},
+      rootSession: {},
+      binding,
+    } as never)
+    mockRunIdentity.mockResolvedValue({ trigger: "requester" })
+    mockGetAdapter.mockResolvedValue(
+      mkAdapter({
+        settings: {
+          connectedUser: { openId: "alice", name: "Alice", authorizationEpoch: "epoch" },
+        },
+      })
+    )
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "appId" ? "app" : "secret"
+    )
+    jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+      configured: true,
+      accessToken: "owner-token",
+      authorizationEpoch: "epoch",
+    } as never)
+    await expect(
+      resolveLarkAuth({
+        context: {
+          sessionId: "im",
+          imBinding: binding,
+          actingSenders: [{ remoteUserId: "alice" }],
+        },
+      })
+    ).resolves.toMatchObject({ ok: true, identity: "user" })
+    expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(1)
+    expect(mockTenantToken).not.toHaveBeenCalled()
+  })
+
+  it("keeps the unbound local desktop run on its personal identity", async () => {
+    mockListByType.mockResolvedValue([mkAdapter()])
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "user_token" ? "personal-token" : "app-credential"
+    )
+    await expect(resolveLarkAuth({ context: localContext })).resolves.toMatchObject({
+      ok: true,
+      identity: "user",
+      env: { LARKSUITE_CLI_USER_ACCESS_TOKEN: "personal-token" },
+    })
+    expect(mockTenantToken).not.toHaveBeenCalled()
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  })
+
+  it.each(["requester", "external-event"])(
+    "authenticates a deleted-child confirmation through its root (%s)",
+    async (trigger) => {
+      const binding = { platform: "lark" as const, adapterId: "lark-1", conversationKey: "chat" }
+      jest
+        .mocked(resolveBuiltInSkillSessionBinding)
+        .mockImplementation(
+          async (id) =>
+            ({ rootSessionId: id, binding: id === "root" ? binding : undefined }) as never
+        )
+      const previous = mockRunIdentity.getMockImplementation()
+      mockRunIdentity.mockImplementation(async () => ({ trigger }))
+      mockGetAdapter.mockResolvedValue(
+        mkAdapter({
+          settings: {
+            connectedUser: { openId: "alice", name: "Alice", authorizationEpoch: "epoch" },
+          },
+        })
+      )
+      mockKeyring.mockImplementation(async (_id: string, key: string) =>
+        key === "appId" ? "app" : "secret"
+      )
+      mockTenantToken.mockResolvedValue("tenant")
+      jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+        configured: true,
+        accessToken: "owner-token",
+        authorizationEpoch: "epoch",
+      } as never)
+      try {
+        await expect(
+          resolveLarkAuth({
+            ...(trigger === "requester" ? { identity: "user" as const } : {}),
+            context: {
+              sessionId: "gone-child",
+              imAuthoritySessionId: "root",
+              executionRunId: "replay",
+              imBinding: binding,
+              hitlBypass: true,
+              actingSenders: [{ remoteUserId: "alice" }],
+            },
+          })
+        ).resolves.toMatchObject({ ok: true, identity: trigger === "requester" ? "user" : "bot" })
+        expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(trigger === "requester" ? 1 : 0)
+        expect(mockKeyring).not.toHaveBeenCalledWith("lark-1", "user_token")
+      } finally {
+        mockRunIdentity.mockImplementation(previous!)
+      }
+    }
+  )
   it("refuses a local session whose executing run is not a local person's", async () => {
-    mockRunIdentity.mockResolvedValueOnce({ trigger: "external-event" })
+    mockRunIdentity.mockResolvedValue({ trigger: "external-event" })
     mockListByType.mockResolvedValue([mkAdapter()])
     mockKeyring.mockImplementation(async (_id: string, key: string) =>
       key === "user_token" ? "owner-token" : "app-credential"
     )
-    await expect(resolveLarkAuth({ context: localContext })).resolves.toMatchObject({
+    await expect(
+      resolveLarkAuth({ context: localContext, identity: "user" })
+    ).resolves.toMatchObject({
       ok: false,
       reason: "sender_not_token_owner",
     })
@@ -284,7 +434,7 @@ describe("resolveLarkAuth", () => {
       authorizationEpoch: "auth-alice",
       accountLabel: "Alice",
     } as never)
-    const result = await resolveLarkAuth({ context: { sessionId: "s1" } })
+    const result = await resolveLarkAuth({ context: { sessionId: "s1" }, identity: "user" })
     expect(result).toMatchObject({
       ok: true,
       env: { LARKSUITE_CLI_USER_ACCESS_TOKEN: "alice-snapshot-token" },
@@ -309,7 +459,9 @@ describe("resolveLarkAuth", () => {
       authorizationEpoch: "auth-bob",
       accountLabel: "Bob",
     } as never)
-    await expect(resolveLarkAuth({ context: { sessionId: "s1" } })).resolves.toMatchObject({
+    await expect(
+      resolveLarkAuth({ context: { sessionId: "s1" }, identity: "user" })
+    ).resolves.toMatchObject({
       ok: false,
       reason: "sender_not_token_owner",
     })
@@ -507,5 +659,56 @@ it("labels explicit CLI bot credentials as service data and forwards existing se
     { appId: "cli_app", appSecret: "secret" },
     "service-data"
   )
-  expect(observeTenantServiceData).toHaveBeenCalledWith("im-session", "lark-1", "lark-cli")
+  expect(observeTenantServiceData).toHaveBeenCalledWith("im-session", "lark-1", "lark-cli", {
+    authoritySessionId: "s1",
+  })
+})
+
+it("selects the external-event service lane without reading user credentials, and refuses explicit user identity", async () => {
+  mockRunIdentity.mockResolvedValue({ trigger: "external-event" })
+  mockGetAdapter.mockResolvedValue(mkAdapter())
+  mockKeyring.mockImplementation(async (_id: string, key: string) =>
+    key === "appId" ? "app" : key === "appSecret" ? "secret" : "personal-token"
+  )
+  mockTenantToken.mockResolvedValue("tenant-token")
+  const context = { sessionId: "bot-topic" }
+  await expect(resolveLarkAuth({ context })).resolves.toMatchObject({
+    ok: true,
+    identity: "bot",
+    lane: "service",
+    env: { LARKSUITE_CLI_USER_ACCESS_TOKEN: "", LARKSUITE_CLI_TENANT_ACCESS_TOKEN: "tenant-token" },
+  })
+  expect(mockKeyring).not.toHaveBeenCalledWith(expect.anything(), "user_token")
+  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  expect(mockTenantToken).toHaveBeenCalledWith(
+    { appId: "app", appSecret: "secret" },
+    "service-data"
+  )
+  await expect(resolveLarkAuth({ context, identity: "user" })).resolves.toMatchObject({
+    ok: false,
+    reason: "sender_not_token_owner",
+    message: expect.stringMatching(/phases 4 and 5/i),
+  })
+})
+
+it("returns the personal refusal from a user-only Bot skill before touching any personal credential", async () => {
+  mockRunIdentity.mockResolvedValue({ trigger: "external-event" })
+  mockGetAdapter.mockResolvedValue(mkAdapter())
+  mockKeyring.mockImplementation(async (_id: string, key: string) =>
+    key === "appId" ? "app" : "secret"
+  )
+  const { execLarkCli } = await import("./exec-lark-cli")
+  await expect(
+    execLarkCli({
+      args: ["docs", "+search", "--query", "review"],
+      context: { sessionId: "bot-topic" },
+    })
+  ).resolves.toMatchObject({
+    status: "error",
+    reason: "auth_unavailable",
+    message: expect.stringContaining("phases 4 and 5"),
+  })
+  expect(mockTenantToken).not.toHaveBeenCalled()
+  expect(mockKeyring).not.toHaveBeenCalledWith(expect.anything(), "user_token")
+  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
 })

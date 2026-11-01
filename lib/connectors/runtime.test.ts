@@ -5397,6 +5397,79 @@ function storedMsgRow(
 }
 
 describe("recentGroupContextBlock", () => {
+  it.each([false, true])(
+    "never imports a Bot topic's prompt into connector group context (authority-only: %s)",
+    async (authorityOnly) => {
+      const now = Date.now()
+      await seedGroupSession("connector-context")
+      await seedGroupSession("bot-context")
+      const binding = (await getDb().sessions.get("bot-context"))!.platformBinding
+      const patch = {
+        agentTurnOwner: { kind: "bot", id: "lecturer", key: "topic" },
+        updatedAt: now,
+        ...(authorityOnly
+          ? {
+              imAuthorityBinding: binding,
+              platformBinding: undefined,
+              platformConversationKey: undefined,
+            }
+          : {}),
+      } as const
+      await getDb().sessions.update("bot-context", patch)
+      await getDb().messages.bulkPut([
+        storedMsgRow(
+          "connector-ambient",
+          "connector-context",
+          "user",
+          "Visible group context",
+          now - 10
+        ),
+        storedMsgRow("bot-material", "bot-context", "user", "Private Bot review material", now - 5),
+      ])
+      const seen = jest.fn()
+      const block = await recentGroupContextBlock({
+        event: groupEvent(),
+        excludeMessageId: "current",
+        now,
+        onRowsRead: seen,
+      })
+      expect(block).toContain("Visible group context")
+      expect(block).not.toContain("Private Bot review material")
+      expect(
+        seen.mock.calls.flatMap(([rows]) => rows).every((row) => row.sessionId !== "bot-context")
+      ).toBe(true)
+    }
+  )
+
+  it.each([false, true])(
+    "routes inbound traffic into a connector session when only a Bot topic session exists (authority-only: %s)",
+    async (authorityOnly) => {
+      await seedGroupSession("bot-only")
+      const binding = (await getDb().sessions.get("bot-only"))!.platformBinding
+      const patch = {
+        agentTurnOwner: { kind: "bot", id: "lecturer", key: "topic" },
+        ...(authorityOnly
+          ? {
+              imAuthorityBinding: binding,
+              platformBinding: undefined,
+              platformConversationKey: undefined,
+            }
+          : {}),
+      } as const
+      await getDb().sessions.update("bot-only", patch)
+      await callHandler(groupEvent({ messageId: "new-inbound" }), "manual-store")
+      const sessions = await getDb().sessions.toArray()
+      expect(sessions).toHaveLength(2)
+      const connector = sessions.find((s) => !s.agentTurnOwner)!
+      expect(
+        (await getDb().messages.where("sessionId").equals(connector.id).toArray()).map(
+          (m) => m.role
+        )
+      ).toEqual(["user"])
+      expect(await getDb().messages.where("sessionId").equals("bot-only").count()).toBe(0)
+    }
+  )
+
   it("scrubs legacy inline image markers before projecting group context", async () => {
     await seedGroupSession("s_ctx")
     const now = Date.now()

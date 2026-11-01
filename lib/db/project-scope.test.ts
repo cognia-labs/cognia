@@ -147,6 +147,49 @@ describe("project-scope helper", () => {
   })
 
   describe("deleteProjectCascade", () => {
+    it("leaves only content-free tombstones of the workspace's operation completions", async () => {
+      const db = getDb()
+      await db.sessions.put({
+        id: "bot-chat",
+        projectId: "A",
+        title: "Bot",
+        createdAt: 1,
+        updatedAt: 1,
+      } as never)
+      await db.sessions.put({
+        id: "other-chat",
+        projectId: "B",
+        title: "Other",
+        createdAt: 1,
+        updatedAt: 1,
+      } as never)
+      const completion = (sessionId: string) => ({
+        version: 1 as const,
+        operationId: `op-${sessionId}`,
+        requestFingerprint: "digest",
+        sessionId,
+        result: { sessionId, text: "the deleted reply", status: "completed" as const },
+      })
+      await db.sharedRunJournals.bulkPut([
+        { id: "op-bot", agentTurnOperation: completion("bot-chat") },
+        { id: "op-other", agentTurnOperation: completion("other-chat") },
+      ] as never)
+      await deleteProjectCascade("A")
+      expect((await db.sharedRunJournals.get("op-bot"))?.agentTurnOperation).toEqual({
+        version: 1,
+        operationId: "op-bot-chat",
+        requestFingerprint: "digest",
+        sessionId: "bot-chat",
+        deleted: true,
+      })
+      expect(JSON.stringify(await db.sharedRunJournals.get("op-bot"))).not.toContain(
+        "deleted reply"
+      )
+      expect((await db.sharedRunJournals.get("op-other"))?.agentTurnOperation?.result?.text).toBe(
+        "the deleted reply"
+      )
+    })
+
     it("cleans the gateway tasks a conversation retained across model switches", async () => {
       const db = getDb()
       mockDeleteExternalSession.mockClear()

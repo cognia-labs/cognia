@@ -36,24 +36,58 @@ interface PendingEntry extends PendingApproval {
 interface CaptureResponder {
   turnId: string
   permissionRequests: boolean
+  transcript: boolean
 }
 const captureResponders = new Map<string, Set<CaptureResponder>>()
+
+const captureListeners = new Set<(sessionId: string, occupied: boolean) => void>()
+function notifyCapture(sessionId: string): void {
+  for (const listener of captureListeners) {
+    try {
+      listener(sessionId, isSessionCaptured(sessionId))
+    } catch (error) {
+      console.warn("[approval-registry] capture listener threw", error)
+    }
+  }
+}
+
+/** Capture occupancy is separate from event ingestion/permission ownership. */
+export function isSessionCaptured(sessionId: string): boolean {
+  return Boolean(captureResponders.get(sessionId)?.size)
+}
+export function captureOwnedSessionIds(): string[] {
+  return [...captureResponders.keys()]
+}
+export function subscribeCaptureOccupancy(
+  listener: (sessionId: string, occupied: boolean) => void
+): () => void {
+  captureListeners.add(listener)
+  return () => {
+    captureListeners.delete(listener)
+  }
+}
+export function isSessionCapturedByOtherTurn(sessionId: string, turnId?: string): boolean {
+  return [...(captureResponders.get(sessionId) ?? [])].some((owner) => owner.turnId !== turnId)
+}
 
 /** Register before subscribing/sending so the UI cannot answer a capture-owned ask. */
 export function registerCaptureResponder(
   sessionId: string,
   turnId: string,
-  permissionRequests: boolean
+  permissionRequests: boolean,
+  transcript = false
 ): () => void {
-  const owner = { turnId, permissionRequests }
+  const owner = { turnId, permissionRequests, transcript }
   const owners = captureResponders.get(sessionId) ?? new Set<CaptureResponder>()
   owners.add(owner)
   captureResponders.set(sessionId, owners)
+  notifyCapture(sessionId)
   return () => {
     owners.delete(owner)
     if (owners.size === 0 && captureResponders.get(sessionId) === owners) {
       captureResponders.delete(sessionId)
     }
+    notifyCapture(sessionId)
   }
 }
 
@@ -62,20 +96,28 @@ export function hasCaptureResponder(event: {
   sessionId?: string
   turnId?: string
 }): boolean {
-  if (
-    event.type !== "permission_request" &&
-    event.type !== "tool_result_review" &&
-    // ADR-0239: the capture that answers a session's asks also records its
-    // shadow-mode outbound observations, in the run's own origin.
-    event.type !== "explicit_tool_allowed"
+  const response = ["permission_request", "tool_result_review", "explicit_tool_allowed"].includes(
+    event.type
   )
-    return false
+  const transcript = [
+    "event",
+    "sdk_session_id",
+    "session_ended",
+    "error",
+    "permission_interrupted",
+  ].includes(event.type)
+  if (!response && !transcript) return false
   if (!event.sessionId) return false
   const owners = captureResponders.get(event.sessionId)
   if (!owners) return false
   for (const owner of owners) {
     if (event.turnId !== undefined && owner.turnId !== event.turnId) continue
-    if (event.type === "tool_result_review" || owner.permissionRequests) return true
+    if (
+      transcript
+        ? owner.transcript
+        : event.type === "tool_result_review" || owner.permissionRequests
+    )
+      return true
   }
   return false
 }
@@ -253,6 +295,7 @@ export function __resetApprovalRegistryForTesting(): void {
   }
   pending.clear()
   captureResponders.clear()
+  captureListeners.clear()
   sessionBypass.clear()
   listeners.clear()
 }

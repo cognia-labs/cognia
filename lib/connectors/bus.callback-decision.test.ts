@@ -21,6 +21,17 @@ import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import { handleIssueActionCallback } from "@/lib/issues/im/callback-handler"
 import { handleNotificationActionCallback } from "@/lib/notifications/im-callback-handler"
 
+// Admission storage/translation are covered by the real callback suite; this
+// suite isolates the ordering of the early callback decision and its handler.
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "decision-replay" })),
+  finishToolExecutionRun: jest.fn(async () => {}),
+}))
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator: async () => (key: string) => key,
+}))
+
 jest.mock("@/lib/skills/built-in/context", () => ({
   resolveBuiltInSkillContext: jest.fn(async () => ({
     imBinding: { adapterId: "lark-bot", conversationKey: "lark:lark-bot:chat" },
@@ -370,9 +381,11 @@ describe("ConnectorBus callback decisions", () => {
       const handler = async () => {
         entered.resolve()
         await finish.promise
-        return undefined as never
+        return { status: "ok", data: {} } as const
       }
-      jest.mocked(handleWorkflowApprovalCallback).mockImplementation(handler)
+      jest.mocked(handleWorkflowApprovalCallback).mockImplementation(async () => {
+        await handler()
+      })
       jest.mocked(runBuiltInSkill).mockImplementation(handler)
       const dispatch = getBus().dispatchConnectorCallback(event(), { onDecision })
       await entered.promise

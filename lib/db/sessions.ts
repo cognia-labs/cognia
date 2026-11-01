@@ -1,3 +1,4 @@
+import { tombstoneAgentTurnOperations } from "./shared-run-journal"
 import { measureOperation } from "@/lib/perf/operation-performance"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
 import Dexie from "dexie"
@@ -289,7 +290,8 @@ export async function getSessionsByIds(ids: readonly string[]): Promise<ChatSess
  */
 export async function createSession(
   partial?: Partial<Omit<ChatSession, "id" | "createdAt" | "updatedAt" | "workingSet">>,
-  scope?: SessionPersistenceScope
+  scope?: SessionPersistenceScope,
+  creation?: { id: string }
 ): Promise<ChatSession> {
   scope?.assertActive()
   await waitForModelSelection(null)
@@ -429,7 +431,7 @@ export async function createSession(
     // reference for which columns constitute a session's configuration.
     ...(partial ?? {}),
     // Owned by this function, so they always win over the spread above.
-    id: newId(),
+    id: creation?.id ?? newId(),
     projectId,
     title: partial?.title ?? "New chat",
     kind: partial?.kind ?? "direct",
@@ -447,7 +449,11 @@ export async function createSession(
     updatedAt: now,
   }
   scope?.assertActive()
-  await (scope?.db ?? getDb()).sessions.put(session)
+  // A host-derived identity is insert-only: concurrent creators must never
+  // overwrite the winner's transcript/runtime fields or publish another create.
+  const table = (scope?.db ?? getDb()).sessions
+  if (creation) await table.add(session)
+  else await table.put(session)
   scope?.assertActive()
   publishChatLifecycleEvent(
     { type: "session-created", sessionId: session.id },
@@ -1234,6 +1240,7 @@ export async function bulkDeleteSessions(
       [
         db.sessions,
         db.messages,
+        db.sharedRunJournals,
         db.messageMediaRefs,
         db.messageMedia,
         db.sessionState,
@@ -1275,6 +1282,7 @@ export async function bulkDeleteSessions(
         await desktopDeletion.commitInsideTransaction(deletedIds)
         await deleteManagedDesktopRunProjections(db, deletedIds)
         const doomedIds = new Set(deletedIds)
+        await tombstoneAgentTurnOperations(doomedIds, db)
         const doomedRows = await db.sessions.where("id").anyOf(deletedIds).toArray()
         const doomedById = new Map(doomedRows.map((row) => [row.id, row]))
 

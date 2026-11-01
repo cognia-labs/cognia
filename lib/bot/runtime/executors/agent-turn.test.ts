@@ -1,4 +1,7 @@
 jest.mock("@/lib/plugin/api/agent-turn", () => ({ runPluginAgentTurn: jest.fn() }))
+jest.mock("@/lib/bot/events/dispatch", () => ({
+  dispatchBotEvent: jest.fn(async () => ({ enqueued: [] })),
+}))
 import { outboundFingerprint } from "@/lib/policy/action-review/outbound-targets"
 import { runPluginAgentTurn } from "@/lib/plugin/api/agent-turn"
 
@@ -6,6 +9,243 @@ import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 
 import { BotExecutorUnavailableError, type BotExecutorContext } from "./types"
 import { agentTurnPrompt, agentTurnUsageBooking, createAgentTurnBotExecutor } from "./agent-turn"
+import { deliveryTargetFromEvent, type NormalizedInboundEvent } from "@/types/connectors/event"
+import { parseTelegramUpdate } from "@/lib/connectors/adapters/telegram/parse"
+import { parseSlackEventCallback } from "@/lib/connectors/adapters/slack/parse"
+import { parseLarkEventEnvelope } from "@/lib/connectors/adapters/lark/parse"
+import { parseOneBotEvent } from "@/lib/connectors/adapters/onebot/parse"
+import { parseMatrixEvent } from "@/lib/connectors/adapters/matrix/parse"
+import { parseDiscordDispatch } from "@/lib/connectors/adapters/discord/parse"
+import { parseQQDispatch } from "@/lib/connectors/adapters/qq-official/parse"
+import { parseDingTalkBotMessage } from "@/lib/connectors/adapters/dingtalk/parse"
+import { parseWeComMessage } from "@/lib/connectors/adapters/wecom/parse"
+import { parseIlinkMessage } from "@/lib/connectors/adapters/wechat-personal/parse"
+import { parseWechatOaXml } from "@/lib/connectors/adapters/wechat-oa/parse"
+import { dispatchBotEvent } from "@/lib/bot/events/dispatch"
+import { dispatchConnectorInboundToBots } from "@/lib/bot/sources/connector-inbound"
+
+const parsedEvents: Record<string, (thread?: string) => NormalizedInboundEvent> = {
+  onebot_v11: (group) =>
+    parseOneBotEvent("ob", {
+      time: 1,
+      self_id: 100,
+      post_type: "message",
+      message_type: group ? "group" : "private",
+      message_id: 1,
+      user_id: 9,
+      ...(group ? { group_id: Number(group) } : {}),
+      message: [{ type: "text", data: { text: "Review" } }],
+    })!.parsed!,
+  onebot_v12: (group) =>
+    parseOneBotEvent("ob-v12", {
+      id: "e",
+      time: 1,
+      type: "message",
+      detail_type: group ? "group" : "private",
+      self: { platform: "qq", user_id: "100" },
+      message_id: "m",
+      user_id: "9",
+      ...(group ? { group_id: group } : {}),
+      message: [{ type: "text", data: { text: "Review" } }],
+    })!.parsed!,
+  onebot_channel: (channel) =>
+    parseOneBotEvent("ob-channel", {
+      id: "e",
+      time: 1,
+      type: "message",
+      detail_type: "channel",
+      guild_id: "guild",
+      channel_id: channel ?? "default",
+      self: { platform: "qq", user_id: "100" },
+      message_id: "m",
+      user_id: "9",
+      message: [{ type: "text", data: { text: "Review" } }],
+    })!.parsed!,
+  matrix: (thread) =>
+    parseMatrixEvent("mx", "@bot:example.org", "!room:example.org:8448", {
+      type: "m.room.message",
+      event_id: "$message",
+      sender: "@user:example.org",
+      origin_server_ts: 1,
+      content: {
+        msgtype: "m.text",
+        body: "Review",
+        ...(thread ? { "m.relates_to": { rel_type: "m.thread", event_id: `$${thread}` } } : {}),
+      },
+    })!,
+  discord: (channel) =>
+    parseDiscordDispatch("dc", "bot", {
+      op: 0,
+      t: "MESSAGE_CREATE",
+      s: 1,
+      d: {
+        id: "m",
+        channel_id: channel ?? "dm",
+        ...(channel ? { guild_id: "guild" } : {}),
+        author: { id: "user", username: "user" },
+        mentions: [],
+        attachments: [],
+        content: "Review",
+        timestamp: "2026-10-31T00:00:00Z",
+      },
+    })!,
+  "qq-official": (group) =>
+    parseQQDispatch("qq", "bot", {
+      op: 0,
+      s: 1,
+      t: group ? "GROUP_AT_MESSAGE_CREATE" : "C2C_MESSAGE_CREATE",
+      d: {
+        id: "m",
+        content: "Review",
+        timestamp: "2026-10-31T00:00:00Z",
+        ...(group
+          ? { group_openid: group, author: { member_openid: "user" } }
+          : { author: { user_openid: "user" } }),
+      },
+    })!,
+  dingtalk: (group) =>
+    parseDingTalkBotMessage("dt", "bot", {
+      conversationId: group ?? "dm",
+      conversationType: group ? "2" : "1",
+      senderId: "user",
+      senderNick: "User",
+      robotCode: "bot",
+      msgId: "m",
+      createAt: 1,
+      msgtype: "text",
+      text: { content: "Review" },
+    })!,
+  wecom: (group) =>
+    parseWeComMessage(
+      "wc",
+      "bot",
+      {
+        msgid: "m",
+        aibotid: "bot",
+        chatid: group ?? "dm",
+        chattype: group ? "group" : "single",
+        from: { userid: "user" },
+        msgtype: "text",
+        text: { content: "Review" },
+      },
+      "request",
+      1
+    )!,
+  "wechat-personal": (person) =>
+    parseIlinkMessage(
+      "wx",
+      {
+        from_user_id: person ?? "user",
+        to_user_id: "bot",
+        message_type: 1,
+        context_token: "ctx",
+        item_list: [{ type: 1, text_item: { text: "Review" } }],
+      },
+      1
+    )!,
+  "wechat-oa": (person) =>
+    parseWechatOaXml(
+      "oa",
+      "bot",
+      `<xml><FromUserName>${person ?? "user"}</FromUserName><CreateTime>1</CreateTime><MsgType>text</MsgType><Content>Review</Content><MsgId>m</MsgId></xml>`
+    )!,
+  telegram: (thread) =>
+    parseTelegramUpdate("tg", "bot", {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        date: 1,
+        chat: { id: -100, type: "supergroup", is_forum: true },
+        text: "Review",
+        ...(thread ? { message_thread_id: Number(thread) } : {}),
+      },
+    })!,
+  slack: (thread) =>
+    parseSlackEventCallback("sl", "bot", {
+      type: "event_callback",
+      team_id: "team",
+      event: {
+        type: "message",
+        channel: "C",
+        user: "U",
+        ts: "1234.2",
+        text: "Review",
+        ...(thread ? { thread_ts: thread } : {}),
+      },
+    })!,
+  lark: (thread) =>
+    parseLarkEventEnvelope("lk", "bot", {
+      schema: "2.0",
+      header: {
+        event_id: "e",
+        event_type: "im.message.receive_v1",
+        create_time: "1000",
+        token: "verify",
+        app_id: "app",
+      },
+      event: {
+        sender: { sender_id: { open_id: "U" }, sender_type: "user" },
+        message: {
+          message_id: "m",
+          chat_id: "chat",
+          chat_type: "group",
+          message_type: "text",
+          content: '{"text":"Review"}',
+          ...(thread ? { thread_id: thread } : {}),
+        },
+      },
+    })!,
+}
+
+it.each(Object.keys(parsedEvents))(
+  "accepts real %s parser targets without merging topics",
+  async (platform) => {
+    const run = jest.mocked(runPluginAgentTurn)
+    run.mockResolvedValue({ sessionId: "topic-session", text: "done", status: "completed" })
+    const keys: (string | undefined)[] = []
+    for (const thread of ["42", "43", "42", undefined]) {
+      const inbound = parsedEvents[platform](thread)
+      expect(inbound).not.toBeNull()
+      const target = deliveryTargetFromEvent(inbound)
+      await dispatchConnectorInboundToBots({ event: inbound })
+      const projection = jest.mocked(dispatchBotEvent).mock.lastCall![0].envelope
+      const event = {
+        ...envelope(),
+        ...projection,
+        payload: projection.payload as Record<string, unknown>,
+      }
+      await createAgentTurnBotExecutor()(ctx({ event }))
+      keys.push(run.mock.lastCall?.[1]?.sessionKey)
+      expect(run.mock.lastCall?.[1]?.platformBinding?.deliveryTarget).toEqual(target)
+      expect(event.payload).toMatchObject({ conversationAddress: target.address })
+      expect(run.mock.lastCall?.[1]?.sessionKey).toBe(
+        JSON.stringify(["boti_1", inbound.conversationKey])
+      )
+      // Older queued events retain the same target without a separate address.
+      const { conversationAddress: _address, ...legacyPayload } = event.payload
+      await createAgentTurnBotExecutor()(ctx({ event: { ...event, payload: legacyPayload } }))
+      expect(run.mock.lastCall?.[1]?.platformBinding?.deliveryTarget).toEqual(target)
+      await expect(
+        createAgentTurnBotExecutor()(
+          ctx({
+            event: {
+              ...event,
+              payload: {
+                ...event.payload,
+                deliveryTarget: {
+                  ...target,
+                  address: { ...target.address, topicId: "different-topic" },
+                },
+              },
+            },
+          })
+        )
+      ).rejects.toThrow(/delivery target and conversation disagree/)
+    }
+    expect(keys[0]).toBe(keys[2])
+    expect(new Set([keys[0], keys[1], keys[3]]).size).toBe(3)
+  }
+)
 
 function envelope(): BotEventEnvelopeV1 {
   return {
@@ -100,6 +340,8 @@ describe("createAgentTurnBotExecutor", () => {
     expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ characterId: "char_1" }), {
       grantSource: { kind: "bot", id: "acme:summary" },
       sessionKey: "boti_1",
+      operationId: "bot:run_1:agent-turn",
+      parentRunId: "run_1",
       unattendedLabel: "Bot: Summary",
       // ADR-0239: outbound calls are planned in the installation's origin.
       outboundOrigin: { rootSessionId: "bot:boti_1", instructionEpoch: "bot:boti_1@0" },
@@ -117,6 +359,37 @@ describe("createAgentTurnBotExecutor", () => {
       expect.anything(),
       expect.objectContaining({ sessionKey: "boti_2" })
     )
+  })
+
+  it("scopes IM turns to immutable topic keys and carries the binding and parent run", async () => {
+    const run = jest.mocked(runPluginAgentTurn)
+    run.mockResolvedValue({ sessionId: "topic-session", text: "done", status: "completed" })
+    const executor = createAgentTurnBotExecutor()
+    for (const topic of ["topic-a", "topic-b", "topic-a"]) {
+      await executor(
+        ctx({
+          event: {
+            ...envelope(),
+            binding: {
+              adapterId: "lark-1",
+              conversationKey: `lark:lark-1:chat:${topic}`,
+            },
+            payload: { platform: "lark" },
+          },
+        })
+      )
+    }
+    const options = run.mock.calls.slice(-3).map((call) => call[1])
+    expect(options[0]?.sessionKey).not.toBe(options[1]?.sessionKey)
+    expect(options[0]?.sessionKey).toBe(options[2]?.sessionKey)
+    expect(options[0]).toMatchObject({
+      parentRunId: "run_1",
+      platformBinding: {
+        platform: "lark",
+        adapterId: "lark-1",
+        conversationKey: "lark:lark-1:chat:topic-a",
+      },
+    })
   })
 
   it("lets the turn reach the recipients a person listed for the installation", async () => {
@@ -283,3 +556,84 @@ describe("createAgentTurnBotExecutor", () => {
     )
   })
 })
+
+it("retains the host event's complete topic target and refuses inconsistent targets", async () => {
+  const key = "lark:lark-1:chat:topic"
+  const target = {
+    address: {
+      platform: "lark",
+      adapterId: "lark-1",
+      conversationKey: key,
+      containerId: "chat",
+      topicId: "topic",
+      scopeKind: "thread",
+    },
+    conversationRef: {
+      platform: "lark",
+      adapterId: "lark-1",
+      chatId: "chat",
+      threadRootMessageId: "topic",
+    },
+    sourceMessageId: "message",
+    refreshedAt: 1,
+  }
+  const event = {
+    ...envelope(),
+    binding: { adapterId: "lark-1", conversationKey: key },
+    payload: { conversationAddress: target.address, deliveryTarget: target },
+  }
+  await createAgentTurnBotExecutor()(ctx({ event }))
+  expect(
+    jest.mocked(runPluginAgentTurn).mock.lastCall?.[1]?.platformBinding?.deliveryTarget
+  ).toEqual(target)
+  await expect(
+    createAgentTurnBotExecutor()(
+      ctx({
+        event: {
+          ...event,
+          payload: {
+            ...event.payload,
+            deliveryTarget: { ...target, address: { ...target.address, topicId: "other" } },
+          },
+        },
+      })
+    )
+  ).rejects.toThrow(/delivery target and conversation disagree/)
+})
+
+it.each(["adapter", "conversation", "platform", "source-message", "reference"])(
+  "refuses a delivery target with a mismatched %s",
+  async (field) => {
+    const inbound = parsedEvents.lark("topic")
+    const target = deliveryTargetFromEvent(inbound)
+    await expect(
+      createAgentTurnBotExecutor()(
+        ctx({
+          event: {
+            ...envelope(),
+            binding: { adapterId: inbound.adapterId, conversationKey: inbound.conversationKey },
+            payload: {
+              platform: inbound.platform,
+              conversationKey: inbound.conversationKey,
+              messageId: inbound.messageId,
+              conversationAddress: target.address,
+              deliveryTarget: {
+                ...target,
+                address: {
+                  ...target.address,
+                  ...(field === "adapter" ? { adapterId: "other" } : {}),
+                  ...(field === "conversation" ? { conversationKey: "other" } : {}),
+                  ...(field === "platform" ? { platform: "slack" } : {}),
+                },
+                ...(field === "source-message" ? { sourceMessageId: "other" } : {}),
+                ...(field === "reference"
+                  ? { conversationRef: { ...target.conversationRef, adapterId: "other" } }
+                  : {}),
+              },
+            },
+          },
+        })
+      )
+    ).rejects.toThrow(/delivery target and conversation disagree/)
+  }
+)

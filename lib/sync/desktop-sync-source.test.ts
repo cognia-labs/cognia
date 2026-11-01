@@ -212,13 +212,26 @@ describe("readDexieDelta", () => {
         title: "new",
         kind: "direct",
         programmaticCreator: "plugin:example",
+        agentTurnOwner: { kind: "bot", id: "lecturer-bot", key: "topic" },
+        imAuthorityBinding: {
+          platform: "lark",
+          adapterId: "lark-1",
+          conversationKey: "lark:lark-1:chat:topic",
+          conversationRef: { platform: "lark", adapterId: "lark-1" },
+        },
         createdAt: 0,
         updatedAt: 10,
       } as never,
     ])
     const delta = await readDexieDelta("sessions", 5)
     expect(delta.rows.map((r) => (r as { id: string }).id)).toEqual(["s2"])
-    expect(delta.rows[0]).toMatchObject({ programmaticCreator: "plugin:example" })
+    expect(delta.rows[0]).toMatchObject({
+      programmaticCreator: "plugin:example",
+      agentTurnOwner: { kind: "bot", id: "lecturer-bot", key: "topic" },
+      imAuthorityBinding: { conversationKey: "lark:lark-1:chat:topic" },
+    })
+    expect(delta.rows[0]).not.toHaveProperty("platformBinding")
+    expect(delta.rows[0]).not.toHaveProperty("platformConversationKey")
     expect(delta.next_since).toBe(10)
   })
 

@@ -39,10 +39,14 @@ import type {
   ToolResultReviewEvent,
   SendContent,
   SendOptions,
+  SDKMessage,
+  BetaContentBlock,
 } from "@cognia/agent-config-types"
+import type { ExternalAgentEvent } from "@/types/agent/external-agent"
+import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import type { CanonicalAgentEvent } from "@cognia/agent-config-types/agent-execution"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
-import { extractUsage, type UsageInfo } from "./adapter"
+import { extractUsage, sdkMediaPart, type UsageInfo } from "./adapter"
 import { runChatMiddlewareChain } from "@/lib/claude/chat-middleware/runner"
 import { hasInterceptors } from "@/lib/plugin/interceptors"
 import { isChatMiddlewareExecutionEnabled } from "@/lib/claude/chat-middleware/feature-flag"
@@ -139,6 +143,8 @@ export async function subscribeCaptureFromEnvelopes(
 export interface RunAndCaptureResult {
   /** The accumulated assistant reply text (concatenated text blocks). */
   text: string
+  /** The middleware replaced raw stream text; transcript owners must discard that raw text. */
+  textTransformed?: boolean
   /**
    * The SDK assistant message uuid we captured the text from. Used by the
    * caller as a stable idempotency key so retries don't double-send.
@@ -501,6 +507,12 @@ export interface CaptureToolResultDecision {
 }
 
 export interface RunAndCaptureOptions {
+  /** Canonical user row, independent of this attempt's wire turnId. */
+  currentMessageId?: string
+  /** Lossless SDK frames for callers that own transcript persistence. */
+  onSdkEvent?: (event: SDKMessage) => void
+  /** Lossless external-agent frames for the same transcript owner. */
+  onExternalEvent?: (event: ExternalAgentEvent) => void
   /** Validate the accepted source at the actual send boundary, under the transcript lock. */
   beforeSend?: () => Promise<void>
   /**
@@ -920,7 +932,7 @@ async function runCaptureWithMiddleware(
   // Apply any text transformation the chain produced onto the captured result.
   return response.text === holder.value.text
     ? holder.value
-    : { ...holder.value, text: response.text }
+    : { ...holder.value, text: response.text, textTransformed: true }
 }
 
 /**
@@ -1017,6 +1029,7 @@ async function captureAssistantReplyCore(
       string,
       { name: string; input: Record<string, unknown>; failed?: boolean }
     >()
+    const assistantMediaIds = new Set<string>()
     // A model may emit only tool calls before hitting its cap. Its final text
     // then contains no findings at all, so explicit subagent continuation must
     // retain observed evidence independently of a model-written checkpoint.
@@ -1617,10 +1630,13 @@ async function captureAssistantReplyCore(
           !budgetExhausted &&
           !hasStructuredOutput &&
           surfaceAcc.surfaces.size === 0 &&
+          assistantMediaIds.size === 0 &&
           toolCallsById.size === 0
         ) {
-          // Genuine no-content turn: no text, no A2UI surfaces, AND no tool
-          // calls. Older contract: error out. Two outcomes are NOT errors:
+          // No renderable media, text, A2UI, structured output or tool calls.
+          // Media acceptance shares the transcript converter so malformed or
+          // empty file/image blocks cannot turn an empty reply into success.
+          // Two other outcomes are NOT errors:
           //   • surface-only turns (assistant called a2ui_create_surface but
           //     emitted no text) — `assistantReplyToSegments` emits the a2ui
           //     segments only;
@@ -1656,6 +1672,11 @@ async function captureAssistantReplyCore(
       }
 
       if (evt.type === "event") {
+        try {
+          cap?.onSdkEvent?.(evt.event)
+        } catch {
+          /* observer is best-effort */
+        }
         const inner = evt.event as { type?: string; message?: unknown; uuid?: string }
         // A compaction boundary (auto threshold OR a manual `/compact` that
         // landed mid-turn). Surface it to the typed stream so the CLI marks it;
@@ -1792,6 +1813,10 @@ async function captureAssistantReplyCore(
               }
             | undefined
           if (Array.isArray(message?.content)) {
+            const mediaId = message.id ?? inner.uuid ?? "assistant"
+            if (message.content.some((block) => sdkMediaPart(block as BetaContentBlock) !== null))
+              assistantMediaIds.add(mediaId)
+            else assistantMediaIds.delete(mediaId)
             if (message.id && message.id !== activeStreamMessageId) {
               activeStreamMessageId = message.id
               streamedText = ""
@@ -2087,10 +2112,11 @@ async function captureAssistantReplyCore(
           sessionId,
           prompt,
           { ...(options ?? {}), turnId },
-          cap?.transcriptRuntime || cap?.beforeSend
+          cap?.transcriptRuntime || cap?.beforeSend || cap?.currentMessageId
             ? {
                 ...(cap.transcriptRuntime ? { transcriptRuntime: cap.transcriptRuntime } : {}),
                 ...(cap.beforeSend ? { beforeSend: cap.beforeSend } : {}),
+                ...(cap.currentMessageId ? { messageId: cap.currentMessageId } : {}),
               }
             : undefined
         ).catch((err: unknown) => {
@@ -2146,11 +2172,9 @@ async function captureHostExternalReply(
   const runId = options?.turnId ?? `capture_${crypto.randomUUID()}`
   const textPrompt =
     typeof prompt === "string" ? prompt : prompt.map((b) => ("text" in b ? b.text : "")).join("\n")
-  const hostPrompt = [options?.systemPrompt, options?.appendSystemPrompt, textPrompt]
-    .filter(Boolean)
-    .join("\n\n")
   const timeoutMs = cap?.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const surfaceAcc: SurfaceAccumulator = { surfaces: new Map(), order: [] }
+  const artifactMediaIds = new Set<string>()
   let usage: UsageInfo | undefined
   const toolCalls = new Map<string, { name: string; input: Record<string, unknown> }>()
   let text = ""
@@ -2200,6 +2224,19 @@ async function captureHostExternalReply(
     onGap: () => fail("External agent stream has missing events"),
     onEvent: (event) => {
       if (settled) return
+      observe(cap?.onExternalEvent ? () => cap.onExternalEvent!(event) : undefined)
+      if (event.type === "artifact_update") {
+        const parts = applyExternalAgentEventToParts([], event)
+        if (
+          parts.some(
+            (part) =>
+              part.type === "file" &&
+              sdkMediaPart({ type: "file", url: part.url, media_type: part.mediaType }) !== null
+          )
+        )
+          artifactMediaIds.add(event.artifactId)
+        else artifactMediaIds.delete(event.artifactId)
+      }
       armIdle()
       if (event.type === "error") errorDetail = event.error
       if (event.sessionId && event.sessionId !== sdkSessionId) {
@@ -2318,7 +2355,12 @@ async function captureHostExternalReply(
         fail(error ?? errorDetail ?? terminal)
         return
       }
-      if (!text.trim()) {
+      if (
+        !text.trim() &&
+        toolCalls.size === 0 &&
+        surfaceAcc.surfaces.size === 0 &&
+        artifactMediaIds.size === 0
+      ) {
         fail(errorDetail ?? "External agent returned no assistant text")
         return
       }
@@ -2338,7 +2380,7 @@ async function captureHostExternalReply(
     if (cap?.signal?.aborted) abort()
     if (timeoutMs > 0) timer = setTimeout(() => fail("External agent turn timed out"), timeoutMs)
     if (!settled) {
-      const dispatch = () =>
+      const dispatch = (prepared = options) =>
         startRemoteExternalTurn({
           runId,
           chatSessionId: sessionId,
@@ -2347,20 +2389,31 @@ async function captureHostExternalReply(
             revision: config.revision,
             lifecycleGeneration: config.lifecycleGeneration,
           },
-          prompt: hostPrompt,
-          model: options?.model,
-          reasoningEffort: options?.requestedEffort ?? options?.effort,
-          externalSessionId: options?.resumeSessionId,
+          prompt: [prepared?.systemPrompt, prepared?.appendSystemPrompt, textPrompt]
+            .filter(Boolean)
+            .join("\n\n"),
+          model: prepared?.model,
+          reasoningEffort: prepared?.requestedEffort ?? prepared?.effort,
+          externalSessionId: prepared?.resumeSessionId,
         })
-      const result = cap?.beforeSend
-        ? await (
-            await import("@/lib/chat/transcript/revision-events")
-          ).withTranscriptRuntimeLock(sessionId, async () => {
-            await cap.beforeSend!()
-            if (cap.signal?.aborted) throw new RunAndCaptureError("aborted before send", "aborted")
-            return dispatch()
-          })
-        : await dispatch()
+      const result =
+        cap?.beforeSend || cap?.currentMessageId
+          ? await (
+              await import("@/lib/chat/transcript/revision-events")
+            ).withTranscriptRuntimeLock(sessionId, async () => {
+              const prepared = cap.currentMessageId
+                ? await (
+                    await import("@/hooks/chat/claude-chat-send-options")
+                  ).prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
+                    currentMessageId: cap.currentMessageId,
+                  })
+                : options
+              await cap.beforeSend?.()
+              if (cap.signal?.aborted)
+                throw new RunAndCaptureError("aborted before send", "aborted")
+              return dispatch(prepared)
+            })
+          : await dispatch()
       started = result.started
       if (started && shouldCancel) void cancelRemoteExternalTurn(runId).catch(() => undefined)
       if (!result.started)

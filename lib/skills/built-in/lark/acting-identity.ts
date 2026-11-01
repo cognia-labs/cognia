@@ -1,6 +1,12 @@
 /** Shared ownership check for CLI skills and the adapter's user-token HTTP path. */
+import enSkillMessages from "@/i18n/messages/en/skills.json"
+import { currentLocale } from "@/lib/i18n/runtime-translator"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { resolveBuiltInSkillSessionBinding, resolveBuiltInSkillTurnActors } from "../context"
+import {
+  resolveBuiltInSkillRunScope,
+  resolveBuiltInSkillSessionBinding,
+  resolveBuiltInSkillTurnActors,
+} from "../context"
 import type { BuiltInSkillContext } from "../types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
@@ -8,8 +14,6 @@ import {
   snapshotActingAuthority,
   resolveRunActingIdentity,
 } from "@/lib/execution/acting-authority"
-import { getDispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
-import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 
 export interface VerifiedLarkUserAuthorization {
   accessToken: string
@@ -19,45 +23,64 @@ export interface VerifiedLarkUserAuthorization {
 export class LarkActingIdentityError extends Error {
   readonly reason = "sender_not_token_owner" as const
 
-  constructor(owner?: string) {
+  constructor(owner?: string, hint = enSkillMessages.actingIdentity.personalAccessPhases) {
     super(
-      owner
+      (owner
         ? `sender_not_token_owner: this Lark action runs with ${owner}'s personal authorization; only ${owner} can use it from chat.`
-        : "sender_not_token_owner: cannot verify that every IM sender owns this Lark personal authorization."
+        : "sender_not_token_owner: cannot verify that every IM sender owns this Lark personal authorization.") +
+        ` ${hint}`
     )
     this.name = "LarkActingIdentityError"
   }
+}
+
+/** Resolve the executing identity root, including host-registered child routes. */
+export async function resolveLarkRunIdentity(ctx: BuiltInSkillContext) {
+  const scope = resolveBuiltInSkillRunScope(ctx)
+  return resolveRunActingIdentity(scope.sessionId, scope.runId)
+}
+
+/** Literal catalog message, shared by the HTTP gate and user-only CLI calls. */
+export async function larkPersonalAccessHint(): Promise<string> {
+  return (await currentLocale()) === "zh-CN"
+    ? (await import("@/i18n/messages/zh-CN/skills.json")).actingIdentity.personalAccessPhases
+    : enSkillMessages.actingIdentity.personalAccessPhases
 }
 
 export async function assertLarkActingIdentity(
   adapterId: string,
   ctx?: BuiltInSkillContext
 ): Promise<VerifiedLarkUserAuthorization | undefined> {
-  if (!ctx) throw new LarkActingIdentityError()
+  const hint = await larkPersonalAccessHint()
+  const refusal = (owner?: string) => new LarkActingIdentityError(owner, hint)
+  if (!ctx) throw refusal()
   const authoritySnapshot = snapshotActingAuthority(ctx.sessionId, ctx.executionRunId)
   try {
     const { binding, personalLane, personalRunOnly, rootSessionId } =
       await resolveBuiltInSkillSessionBinding(
         ctx.hitlBypass ? (ctx.imAuthoritySessionId ?? ctx.sessionId) : ctx.sessionId
       )
+    // A plugin invocation cannot borrow the host's current desktop or IM run.
+    if (ctx.outboundAuthorization?.kind === "plugin") throw refusal()
     if (!binding) {
-      // Plugin API invocations cannot borrow a desktop session's active run.
-      if (ctx.outboundAuthorization?.kind === "plugin") throw new LarkActingIdentityError()
       // Never trust ctx.personalLane or treat a missing IM binding as consent.
-      if (!personalRunOnly && personalLane !== "local-session") throw new LarkActingIdentityError()
-      const route = getSubagentApprovalRoute(ctx.sessionId)
-      const childId = getDispatchContext(ctx.sessionId)?.selfRunId ?? route?.runId
-      const runId = ctx.executionRunId ?? (childId ? `execution:job:${childId}` : undefined)
-      const executionSessionId =
-        route && runId === `execution:job:${route.runId}` ? route.parentSessionId : ctx.sessionId
-      const identity = await resolveRunActingIdentity(executionSessionId, runId)
+      if (!personalRunOnly && personalLane !== "local-session") throw refusal()
+      const identity = await resolveLarkRunIdentity(ctx)
       if (identity?.trigger !== "local" || identity.authorizingPrincipal?.kind !== "local-person")
-        throw new LarkActingIdentityError()
+        throw refusal()
       return
     }
+    // Event actors never become requesters, even if the sender owns this token.
+    const identity = await resolveLarkRunIdentity(ctx)
+    if (
+      !identity ||
+      identity.lane === "service" ||
+      (identity.trigger !== "requester" && identity.trigger !== "local")
+    )
+      throw refusal()
     // open_ids are app-scoped: another platform or adapter cannot prove ownership.
     if (binding.platform !== "lark" || binding.adapterId !== adapterId || !binding.conversationKey)
-      throw new LarkActingIdentityError()
+      throw refusal()
     const adapter = await getAdapterInstance(adapterId)
     const connected = adapter?.settings.connectedUser
     const owner =
@@ -76,7 +99,7 @@ export async function assertLarkActingIdentity(
       typeof owner?.openId !== "string" ||
       !owner.openId.trim()
     )
-      throw new LarkActingIdentityError(ownerName)
+      throw refusal(ownerName)
     // Only the host's verified Confirm callback can replace the current run's actors.
     // Otherwise refresh the job view so a newly steered sender cannot use stale context.
     const senders = ctx.hitlBypass
@@ -94,7 +117,7 @@ export async function assertLarkActingIdentity(
             sender.unionId !== owner.unionId)
       )
     )
-      throw new LarkActingIdentityError(ownerName)
+      throw refusal(ownerName)
     // The native token publication precedes the separate connectedUser write.
     void authoritySnapshot
       .then((seen) => {
@@ -104,19 +127,19 @@ export async function assertLarkActingIdentity(
     // Never combine metadata for one authorization with another one's token.
     const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
     if (!snapshot.configured || !snapshot.accessToken || !snapshot.authorizationEpoch)
-      throw new LarkActingIdentityError(ownerName)
+      throw refusal(ownerName)
     if (owner.authorizationEpoch !== undefined) {
       if (
         typeof owner.authorizationEpoch !== "string" ||
         owner.authorizationEpoch !== snapshot.authorizationEpoch
       )
-        throw new LarkActingIdentityError(ownerName)
+        throw refusal(ownerName)
     } else if (snapshot.accountLabel !== (ownerName || owner.openId)) {
-      throw new LarkActingIdentityError(ownerName)
+      throw refusal(ownerName)
     }
     return { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
   } catch (err) {
     if (err instanceof LarkActingIdentityError) throw err
-    throw new LarkActingIdentityError()
+    throw refusal()
   }
 }

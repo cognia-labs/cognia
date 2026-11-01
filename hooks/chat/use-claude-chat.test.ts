@@ -312,6 +312,18 @@ const goalRuntimeMock = {
   requestManualContinue: jest.fn(),
   recordPacingDecision: jest.fn().mockResolvedValue(undefined),
 }
+// Real admission; only the cross-window Stop probe can be forced (jsdom has
+// no Web Locks to hold another window's fence).
+jest.mock("@/lib/execution/session-turn-lock", () => {
+  const actual = jest.requireActual<typeof import("@/lib/execution/session-turn-lock")>(
+    "@/lib/execution/session-turn-lock"
+  )
+  return {
+    ...actual,
+    acquireSessionTurnLease: jest.fn(actual.acquireSessionTurnLease),
+    sessionStopFenced: jest.fn(actual.sessionStopFenced),
+  }
+})
 jest.mock("@/lib/goal/runtime", () => ({
   getGoalRuntime: () => goalRuntimeMock,
 }))
@@ -697,6 +709,7 @@ interface ChatStateLike {
   otherSlices: Record<string, SliceLike>
   readonly sessions: Record<string, SliceLike>
   messages: unknown[]
+  steerQueue?: unknown[]
   status: string
   runId: number
   errorMessage: string | null
@@ -773,6 +786,7 @@ const chatState: ChatStateLike = {
     if (chatState.activeSessionId) {
       map[chatState.activeSessionId] = {
         messages: chatState.messages,
+        steerQueue: chatState.steerQueue,
         status: chatState.status,
         runId: chatState.runId,
         errorMessage: chatState.errorMessage,
@@ -1110,7 +1124,12 @@ jest.setTimeout(30_000)
 // The real tracker keeps per-turn marks across mounts. Never recycle an identity
 // across fixture resets: a synthetic old refusal must not consume a new run.
 let fixtureRunEpoch = 0
-beforeEach(() => {
+beforeEach(async () => {
+  // A previous test's Stop deliberately retains admission until the engine
+  // confirms. Fixture teardown models process exit before recycling session ids.
+  for (const [callback] of onClaudeMessageMock.mock.calls) callback({ type: "sidecar_exited" })
+  await Promise.resolve()
+  await Promise.resolve()
   useTaskWorkspaceStore.getState().clear()
   jest.mocked(publishChatLifecycleEvent).mockClear()
   persistSessionAssetsMock.mockReset().mockImplementation(async (_sessionId, message) => message)
@@ -1220,6 +1239,7 @@ beforeEach(() => {
   chatState.splitSessionId = null
   chatState.otherSlices = {}
   chatState.messages = []
+  chatState.steerQueue = undefined
   chatState.status = "idle"
   chatState.runId = fixtureRunEpoch += 100
   chatState.errorMessage = null
@@ -1257,6 +1277,7 @@ beforeEach(() => {
   isChatTurnQueuedMock.mockReset().mockReturnValue(false)
   driveInSessionPlanAfterTurnMock.mockReset().mockResolvedValue(false)
   haltInSessionPlanOnTurnFailureMock.mockReset().mockResolvedValue(undefined)
+  for (const subscriber of [...subscribers]) subscriber(chatState)
   subscribers.length = 0
   settingsSubscribers.length = 0
   mockGetTwinRuntimeSettings.mockReset()
@@ -3039,6 +3060,296 @@ describe("useClaudeChat — actions", () => {
     expect(tool?.errorText).toContain("Request timeout: session/prompt")
   })
 
+  it.each(["plan", "steer"])(
+    "inherits admission for an external turn's %s continuation",
+    async (kind) => {
+      useAgentRuntimeStore
+        .getState()
+        .setSessionRuntimeRef("sess-1", { kind: "external", agentId: "ext-1" })
+      checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+      let release!: () => void
+      const secondGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let secondStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        secondStarted = resolve
+      })
+      executeOnExternalAgentMock
+        .mockImplementationOnce(async () => {
+          if (kind === "steer")
+            chatState.steerQueue = [{ id: "queued-next", text: "Next instruction" }]
+          return { success: true, finalResponse: "First complete" }
+        })
+        .mockImplementationOnce(async () => {
+          secondStarted()
+          await secondGate
+          return { success: true, finalResponse: "Second complete" }
+        })
+      if (kind === "plan")
+        driveInSessionPlanAfterTurnMock.mockImplementationOnce(async (input: unknown) => {
+          ;(input as { dispatchNextStep: (text: string) => void }).dispatchNextStep(
+            "Next instruction"
+          )
+          return true
+        })
+      chatState.clearSteerQueue.mockImplementationOnce(() => {
+        chatState.steerQueue = []
+      })
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      try {
+        await act(async () => {
+          await result.current.send("First instruction")
+        })
+        await flush()
+        expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(2)
+        await started
+        const { acquireSessionTurnLease } = await import("@/lib/execution/session-turn-lock")
+        expect(await acquireSessionTurnLease("sess-1", true)).toBeNull()
+        expect(toastWarning).not.toHaveBeenCalledWith("busy")
+      } finally {
+        release()
+        await flush()
+        chatState.steerQueue = undefined
+        useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+      }
+    }
+  )
+
+  it.each(["plan", "steer"])(
+    "lets an SDK turn's %s continuation join its lease before the dispatch returns",
+    async (kind) => {
+      useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+      checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+      if (kind === "plan") {
+        const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+          applySdkEvent: jest.Mock
+        }
+        adapterMock.applySdkEvent.mockReturnValueOnce({
+          messages: [{ id: "a1", role: "assistant", parts: [{ type: "text", text: "Step done" }] }],
+          turnComplete: true,
+        })
+        driveInSessionPlanAfterTurnMock.mockImplementationOnce(async (input: unknown) => {
+          ;(input as { dispatchNextStep: (text: string) => void }).dispatchNextStep(
+            "Next instruction"
+          )
+          return true
+        })
+      }
+      chatState.clearSteerQueue.mockImplementationOnce(() => {
+        chatState.steerQueue = []
+      })
+      // The terminal frame is handled while the first dispatch is still open.
+      sendPromptMock.mockImplementationOnce(
+        async (_sessionId: string, _content: unknown, options: { turnId?: string }) => {
+          if (kind === "steer")
+            chatState.steerQueue = [{ id: "queued-next", text: "Next instruction" }]
+          _messageCallback?.(
+            kind === "plan"
+              ? { type: "event", sessionId: "sess-1", event: { type: "result" } }
+              : { type: "session_ended", sessionId: "sess-1", turnId: options.turnId }
+          )
+          await flush()
+        }
+      )
+      const { result, unmount } = renderHook(() => useClaudeChat())
+      await flush()
+      try {
+        await act(async () => {
+          await result.current.send("First instruction")
+        })
+        await flush()
+        expect(sendPromptMock).toHaveBeenCalledTimes(2)
+        expect(toastWarning).not.toHaveBeenCalledWith("busy")
+      } finally {
+        chatState.steerQueue = undefined
+        unmount()
+        useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+      }
+    }
+  )
+
+  it("holds an SDK turn's lease through its session_ended steer drain", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      const turnId = sendPromptMock.mock.calls[0][2].turnId
+      chatState.clearSteerQueue.mockImplementationOnce(() => {
+        chatState.steerQueue = []
+        for (const subscriber of [...subscribers]) subscriber(chatState)
+      })
+      chatState.steerQueue = [{ id: "queued-next", text: "Next instruction" }]
+      await act(async () => {
+        _messageCallback?.({ type: "session_ended", sessionId: "sess-1", turnId })
+        await flush()
+      })
+      expect(sendPromptMock).toHaveBeenCalledTimes(2)
+    } finally {
+      chatState.steerQueue = undefined
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("refuses a desktop turn when Stop begins right after its admission resolved", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    const lock = await import("@/lib/execution/session-turn-lock")
+    const actual = jest.requireActual<typeof import("@/lib/execution/session-turn-lock")>(
+      "@/lib/execution/session-turn-lock"
+    )
+    let releaseStop: (() => void) | undefined
+    jest.mocked(lock.acquireSessionTurnLease).mockImplementationOnce(async (...args) => {
+      const lease = await actual.acquireSessionTurnLease(...args)
+      releaseStop = lock.beginSessionStop("sess-1")
+      return lease
+    })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await expect(result.current.send("Desktop turn")).rejects.toThrow("session_turn_busy")
+      })
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      releaseStop?.()
+      // The refused admission released the lock.
+      const probe = await lock.acquireSessionTurnLease("sess-1", true)
+      expect(probe).not.toBeNull()
+      await probe?.()
+    } finally {
+      releaseStop?.()
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("keeps a joined follow-up on its session when focus moves during admission", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      const { sessionStopFenced } = await import("@/lib/execution/session-turn-lock")
+      jest.mocked(sessionStopFenced).mockImplementationOnce(async () => {
+        chatState.activeSessionId = "sess-other"
+        return false
+      })
+      await act(async () => {
+        await result.current.send("Follow-up")
+      })
+      const targets = [
+        ...steerSessionMock.mock.calls.map((call) => call[0]),
+        ...chatState.enqueueSteer.mock.calls.map((call: unknown[]) => call[0]),
+        ...sendPromptMock.mock.calls.slice(1).map((call) => call[0]),
+      ]
+      expect(targets).toEqual(["sess-1"])
+    } finally {
+      chatState.activeSessionId = "sess-1"
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("refuses a follow-up when Stop begins while the cross-window probe is in flight", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    let releaseStop: (() => void) | undefined
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      const lock = await import("@/lib/execution/session-turn-lock")
+      jest.mocked(lock.sessionStopFenced).mockImplementationOnce(async () => {
+        releaseStop = lock.beginSessionStop("sess-1")
+        return false
+      })
+      await act(async () => {
+        await expect(result.current.send("Follow-up")).rejects.toThrow("session_turn_busy")
+      })
+      expect(chatState.enqueueSteer).not.toHaveBeenCalled()
+      expect(steerSessionMock).not.toHaveBeenCalled()
+    } finally {
+      releaseStop?.()
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("refuses a follow-up into a running turn while another window's Stop is pending", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      expect(chatState.status).toBe("streaming")
+      const { sessionStopFenced } = await import("@/lib/execution/session-turn-lock")
+      jest.mocked(sessionStopFenced).mockResolvedValueOnce(true)
+      await act(async () => {
+        await expect(result.current.send("Follow-up")).rejects.toThrow("session_turn_busy")
+      })
+      expect(sessionStopFenced).toHaveBeenCalledWith("sess-1")
+      expect(chatState.enqueueSteer).not.toHaveBeenCalled()
+      expect(steerSessionMock).not.toHaveBeenCalled()
+    } finally {
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("keeps a settle continuation out of a lease whose Stop is still pending", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInterrupt = resolve
+        })
+    )
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      const turnId = sendPromptMock.mock.calls[0][2].turnId
+      const stopping = result.current.stop("sess-1")
+      await flush()
+      chatState.clearSteerQueue.mockImplementationOnce(() => {
+        chatState.steerQueue = []
+      })
+      chatState.steerQueue = [{ id: "queued-next", text: "Next instruction" }]
+      await act(async () => {
+        _messageCallback?.({ type: "session_ended", sessionId: "sess-1", turnId })
+        await flush()
+      })
+      // The replay must not start a turn the in-flight interrupt could still hit.
+      expect(sendPromptMock).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        finishInterrupt()
+        await stopping
+      })
+    } finally {
+      chatState.steerQueue = undefined
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
   it("completes an in-session plan step that ran on an external agent", async () => {
     useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "step done" })
@@ -3170,6 +3481,11 @@ describe("useClaudeChat — actions", () => {
       parts: Array<{ text?: string }>
     }>
     expect(JSON.stringify(finalWrite)).not.toContain("never mind")
+    // The recall must name the row: an omission alone does not delete in a
+    // Bot/plugin session (lib/db/messages.test.ts pins that on a real database).
+    expect(persistMessagesMock.mock.calls.at(-1)?.[2]).toEqual({
+      deleteIds: [expect.any(String)],
+    })
   })
 
   it("keeps a turn that recovered and answered a success", async () => {
@@ -5146,6 +5462,35 @@ describe("useClaudeChat — actions", () => {
       })
     )
     expect(approveToolMock).not.toHaveBeenCalled()
+  })
+
+  it("replays the steer queue when a HostState turn settles under its own lease", async () => {
+    enqueueHostStateIntentMock.mockResolvedValue({ id: "action-1", status: "pending" })
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("host-owned")
+      })
+      // Zustand notifies subscribers synchronously, so clearing the queue
+      // re-enters every subscriber (the lease's settle included) mid-drain.
+      chatState.clearSteerQueue.mockImplementationOnce(() => {
+        chatState.steerQueue = []
+        for (const subscriber of [...subscribers]) subscriber(chatState)
+      })
+      chatState.steerQueue = [{ id: "queued-next", text: "Next instruction" }]
+      await act(async () => {
+        chatState.setSessionStatus("sess-1", "idle")
+        for (const subscriber of [...subscribers]) subscriber(chatState)
+        await flush()
+      })
+      // The replay is a new turn of its own, admitted under the settling lease.
+      expect(sendPromptMock).toHaveBeenCalledTimes(1)
+      expect(chatState.setSessionStatus.mock.calls.at(-1)).toEqual(["sess-1", "streaming"])
+    } finally {
+      chatState.steerQueue = undefined
+      unmount()
+    }
   })
 
   it("stop() durably queues an attached HostState abort instead of direct interrupt", async () => {
@@ -7302,6 +7647,92 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     expect(busEmitMock).toHaveBeenCalledWith(BusEvents.AGENT_COMPLETED, { sessionId: "sess-1" })
   })
 
+  it("accepts a new message while a settled turn's goal judge is still pending", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
+    buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
+    // A slow or hung judge: the result handler awaits it after going idle.
+    handleTurnCompleteMock.mockImplementation(() => new Promise(() => {}))
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      await driveTurnComplete()
+      expect(handleTurnCompleteMock).toHaveBeenCalled()
+      await act(async () => {
+        await result.current.send("Take over")
+      })
+      expect(sendPromptMock).toHaveBeenCalledTimes(2)
+    } finally {
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
+  it("fences admission for a Stop pressed after the turn already released its lease", async () => {
+    useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+    checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+    goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
+    buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
+    let judge!: (outcome: unknown) => void
+    handleTurnCompleteMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          judge = resolve
+        })
+    )
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInterrupt = resolve
+        })
+    )
+    const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    await flush()
+    try {
+      await act(async () => {
+        await result.current.send("Desktop turn")
+      })
+      await driveTurnComplete()
+      // The turn went idle while the judge runs: its lease settles away.
+      await act(async () => {
+        for (const subscriber of [...subscribers]) subscriber(chatState)
+        await flush()
+      })
+      const { acquireSessionTurnLease } = await import("@/lib/execution/session-turn-lock")
+      const probe = await acquireSessionTurnLease("sess-1", true)
+      expect(probe).not.toBeNull()
+      await probe?.()
+      const stopping = result.current.stop("sess-1")
+      await flush()
+      let botStarted = false
+      const bot = withSessionTurnLock("sess-1", async () => {
+        botStarted = true
+      })
+      // The judge resumes while the interrupt is still in flight.
+      await act(async () => {
+        judge({ kind: "continue", userMessage: "go on" })
+        await flush()
+      })
+      expect(sendPromptMock).toHaveBeenCalledTimes(1)
+      expect(botStarted).toBe(false)
+      await act(async () => {
+        finishInterrupt()
+        await stopping
+        await bot
+      })
+      expect(botStarted).toBe(true)
+    } finally {
+      unmount()
+      useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
+    }
+  })
+
   it("turnComplete computes tokensDelta from result usage", async () => {
     goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal({ id: "g-tok" }))
     buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
@@ -7422,6 +7853,26 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         parts: [expect.objectContaining({ text: expect.stringContaining("Loop completed") })],
       })
     )
+  })
+
+  it("does not let an independent loop kickoff inherit a running desktop turn's lease", async () => {
+    let kickoff: ((loop: unknown) => void) | undefined
+    loopRuntimeMock.onKickoff.mockImplementation((cb) => {
+      kickoff = cb
+      return () => {}
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("First turn")
+    })
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      kickoff?.(activeLoop({ safePrompt: "Independent iteration" }))
+      await flush()
+    })
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+    expect(chatState.status).toBe("streaming")
   })
 
   it("the kickoff listener dispatches iteration 1 silently for the active session", async () => {
@@ -11084,6 +11535,77 @@ describe("precise external steering ownership", () => {
   beforeEach(() => {
     steerExternalSessionMock.mockClear()
   })
+  it.each([true, false])(
+    "persists a follow-up while the first external execution still holds admission (live: %s)",
+    async (linked) => {
+      useAgentRuntimeStore
+        .getState()
+        .setSessionRuntimeRef("sess-1", { kind: "external", agentId: "ext-1" })
+      if (linked)
+        useAgentRuntimeStore
+          .getState()
+          .setSessionExternalLink("sess-1", { agentId: "ext-1", sessionId: "native" })
+      checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+      let finish!: () => void
+      let started!: () => void
+      const running = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      executeOnExternalAgentMock
+        .mockImplementationOnce(async () => {
+          started()
+          await gate
+          return { success: true, finalResponse: "First complete" }
+        })
+        .mockResolvedValue({ success: true, finalResponse: "Follow-up complete" })
+      const { result, unmount } = renderHook(() => useClaudeChat())
+      await flush()
+      const first = result.current.send("First instruction")
+      await running
+      try {
+        expect(chatState.status).toBe("streaming")
+        await act(async () => {
+          await result.current.send("Keep this instruction")
+        })
+        await flush()
+        expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(1)
+        if (linked)
+          expect(steerExternalSessionMock).toHaveBeenCalledWith(
+            "ext-1",
+            "native",
+            "Keep this instruction"
+          )
+        else
+          expect(chatState.enqueueSteer).toHaveBeenCalledWith(
+            "sess-1",
+            expect.objectContaining({ text: "Keep this instruction" })
+          )
+        expect(persistMessagesMock).toHaveBeenCalledWith(
+          "sess-1",
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "user",
+              parts: [{ type: "text", text: "Keep this instruction" }],
+              metadata: expect.objectContaining({
+                steer: expect.objectContaining({ state: linked ? "accepted" : "queued" }),
+              }),
+            }),
+          ])
+        )
+        expect(toastWarning).not.toHaveBeenCalledWith("busy")
+      } finally {
+        finish()
+        await act(async () => {
+          await first
+          await flush()
+        })
+        unmount()
+      }
+    }
+  )
   it.each(["external", "builtin"])(
     "refuses feature overrides on a queued %s turn before its runtime lane is bound",
     async (lane) => {
@@ -11260,4 +11782,151 @@ describe("VS Code participant foreground dispatch", () => {
       if (action !== "unmount") unmount()
     }
   )
+})
+
+it.each(["send", "regenerate", "edit", "steer"])(
+  "refuses desktop %s while a background capture owns the session",
+  async (action) => {
+    const { registerCaptureResponder } = await import("@/lib/connectors/hitl/approval-registry")
+    chatState.status = "idle"
+    chatState.messages = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+    ]
+    const release = registerCaptureResponder("sess-1", "bot-turn", true, true)
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    try {
+      await flush()
+      await act(async () => {
+        if (action === "send")
+          await expect(result.current.send("Desktop prompt")).rejects.toThrow("session_turn_busy")
+        if (action === "regenerate") await result.current.regenerate("sess-1")
+        if (action === "edit") await result.current.editAndResend("u1", "Edited", "sess-1")
+        if (action === "steer") await result.current.interruptAndSteer("sess-1")
+      })
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(steerSessionMock).not.toHaveBeenCalled()
+      expect(interruptSessionMock).not.toHaveBeenCalled()
+      expect(chatState.setSessionStatus).toHaveBeenCalledWith("sess-1", "streaming")
+    } finally {
+      release()
+      unmount()
+    }
+  }
+)
+
+it("holds session admission through desktop preflight so a Bot cannot claim between checks", async () => {
+  useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+  checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+  const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
+  let continuePreflight!: (value: SendOptions) => void
+  let reachedPreflight!: () => void
+  const reached = new Promise<void>((resolve) => {
+    reachedPreflight = resolve
+  })
+  resolveSendOptionsMock.mockImplementationOnce(() => {
+    reachedPreflight()
+    return new Promise((resolve) => {
+      continuePreflight = resolve
+    })
+  })
+  const { result, unmount } = renderHook(() => useClaudeChat())
+  await flush()
+  const desktop = result.current.send("Desktop first")
+  await reached
+  await expect(result.current.send("Still preparing")).rejects.toThrow("session_turn_busy")
+  expect(chatState.enqueueSteer).not.toHaveBeenCalled()
+  let botStarted = false
+  const bot = withSessionTurnLock("sess-1", async () => {
+    botStarted = true
+  })
+  await Promise.resolve()
+  expect(botStarted).toBe(false)
+  await act(async () => {
+    continuePreflight({ model: "sonnet", systemPrompt: "sys" })
+    await desktop
+  })
+  expect(chatState.errorDiagnostic).toBeNull()
+  expect(chatState.errorMessage).toBeNull()
+  expect(sendPromptMock).toHaveBeenCalledTimes(1)
+  expect(botStarted).toBe(false)
+  await act(async () => {
+    chatState.setSessionStatus("sess-1", "idle")
+    for (const subscriber of [...subscribers]) subscriber(chatState)
+    await bot
+  })
+  expect(botStarted).toBe(true)
+  unmount()
+})
+
+it("keeps a waiting Bot behind Stop until its interrupt completes", async () => {
+  useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+  checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+  const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
+  let finishInterrupt!: () => void
+  interruptSessionMock.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishInterrupt = resolve
+      })
+  )
+  const { result, unmount } = renderHook(() => useClaudeChat())
+  await flush()
+  await act(async () => {
+    await result.current.send("Desktop turn")
+  })
+  const turnId = sendPromptMock.mock.calls[0][2].turnId
+  let botStarted = false
+  const bot = withSessionTurnLock("sess-1", async () => {
+    botStarted = true
+  })
+  const stopping = result.current.stop("sess-1")
+  await flush()
+  for (const subscriber of [...subscribers]) subscriber(chatState)
+  await flush()
+  expect(botStarted).toBe(false)
+  await act(async () => {
+    _messageCallback?.({ type: "session_ended", sessionId: "sess-1", turnId: "another-turn" })
+  })
+  expect(botStarted).toBe(false)
+  await act(async () => {
+    _messageCallback?.({ type: "session_ended", sessionId: "sess-1", turnId })
+  })
+  expect(botStarted).toBe(false)
+  await act(async () => {
+    finishInterrupt()
+    await stopping
+    await bot
+  })
+  expect(botStarted).toBe(true)
+  expect(interruptSessionMock).toHaveBeenCalledTimes(1)
+  unmount()
+})
+
+it("lifts the Stop fence when Stop fails before sending its interrupt", async () => {
+  useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+  checkDelegationMock.mockReturnValue({ shouldDelegate: false })
+  const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
+  const { result, unmount } = renderHook(() => useClaudeChat())
+  await flush()
+  await act(async () => {
+    await result.current.send("Desktop turn")
+  })
+  withdrawUnsentHostStateMessagesMock.mockRejectedValueOnce(new Error("host_state_outbox_full"))
+  await act(async () => {
+    await result.current.stop("sess-1")
+  })
+  expect(interruptSessionMock).not.toHaveBeenCalled()
+  // A retried Stop is not swallowed by a fence the failed one left behind.
+  let botStarted = false
+  const bot = withSessionTurnLock("sess-1", async () => {
+    botStarted = true
+  })
+  await act(async () => {
+    await result.current.stop("sess-1")
+    await bot
+  })
+  expect(interruptSessionMock).toHaveBeenCalledTimes(1)
+  expect(botStarted).toBe(true)
+  unmount()
 })

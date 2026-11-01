@@ -136,6 +136,13 @@ describe("dispatchConnectorInboundToBots", () => {
       segments: [{ type: "text", text: "ship it" }],
       channelKind: "group",
       selfMentioned: true,
+      conversationAddress: {
+        conversationKey: "slack:adp_1:C1",
+        platform: "slack",
+        adapterId: "adp_1",
+        scopeKind: "group",
+        containerId: "C1",
+      },
       // The sendable target this conversation had at ingress — what
       // `bindImPresentationForBotDelivery` turns into a run binding.
       deliveryTarget: {

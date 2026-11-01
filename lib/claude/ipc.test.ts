@@ -1359,6 +1359,16 @@ describe("transcript generation dispatch", () => {
     )
   })
 
+  it("excludes the logical user row while retaining the per-attempt turn id", async () => {
+    callSpy.mockResolvedValue(undefined)
+    const options = { provider: "openai", turnId: "attempt-2" }
+    await sendPrompt("retry", "same prompt", options, { messageId: "logical-user" })
+    expect(mockPrepareTranscriptRuntimeSend).toHaveBeenCalledWith("retry", options, {
+      currentMessageId: "logical-user",
+    })
+    expect(callSpy).toHaveBeenCalledWith("claude_send", expect.objectContaining({ options }))
+  })
+
   it("does not lock or prepare again when the controller already holds the lock", async () => {
     callSpy.mockResolvedValue(undefined)
     await sendPrompt(
@@ -1480,4 +1490,28 @@ describe("remote transcript authority", () => {
     expect(callSpy).not.toHaveBeenCalled()
     expect(mockGetSession).not.toHaveBeenCalled()
   })
+})
+
+it("refuses a desktop dispatch without restarting a capture-owned engine", async () => {
+  const { registerCaptureResponder } = await import("@/lib/connectors/hitl/approval-registry")
+  const release = registerCaptureResponder("occupied", "bot-turn", true, true)
+  callSpy.mockResolvedValue(undefined)
+  try {
+    await expect(
+      sendPrompt(
+        "occupied",
+        "Desktop",
+        { turnId: "desktop-turn" },
+        { transcriptRuntime: "prepared" }
+      )
+    ).rejects.toMatchObject({ code: "session_turn_busy" })
+    expect(transport.call).not.toHaveBeenCalled()
+    await sendPrompt("occupied", "Bot", { turnId: "bot-turn" }, { transcriptRuntime: "prepared" })
+    expect(transport.call).toHaveBeenCalledWith(
+      "claude_send",
+      expect.objectContaining({ sessionId: "occupied", prompt: "Bot" })
+    )
+  } finally {
+    release()
+  }
 })

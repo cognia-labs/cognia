@@ -60202,6 +60202,10 @@
     "waiting": "请在浏览器中完成登录…"
   },
   "skills": {
+    "actingIdentity": {
+      "confirmedSkillTitle": "已确认的技能：{skillId}",
+      "personalAccessPhases": "Bot 和 plugin turn 的个人访问需要 phase 4 的 per-person access 或 phase 5 的 bound-person access（ADR-0243 phases 4 and 5）。"
+    },
     "ai": {
       "accept": "采用",
       "buttonLabel": "AI 协助",

@@ -513,7 +513,7 @@ export function ResourceWorkbenchChatPanel({
             onRegenerate={regenerate}
             onEditResend={editAndResend}
             onCreate={() => undefined}
-            onUseSample={(text) => void send(text)}
+            onUseSample={(text) => void send(text).catch(() => undefined)}
             onOpenSettings={() => undefined}
             showHeader={false}
           />

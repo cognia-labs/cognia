@@ -291,12 +291,12 @@ describe("applySdkEvent — assistant", () => {
     expect((messages[0].parts[0] as { type: string }).type).toBe("tool-artifact_create")
   })
 
-  it("converts assistant file blocks into UI file parts", () => {
+  it.each(["image", "file"])("converts assistant %s blocks into UI file parts", (type) => {
     const evt = asAssistant({
       id: "asst-file-1",
       content: [
         {
-          type: "file",
+          type,
           source: { type: "base64", media_type: "image/png", data: "QUJD" },
           filename: "chart.png",
         },
@@ -340,6 +340,20 @@ describe("applySdkEvent — assistant", () => {
       mediaType: "image/png",
     })
   })
+
+  it.each(["data:image/png;base64", "data:image/png;base64,"])(
+    "drops an image without data URL payload: %s",
+    (url) => {
+      const { messages } = applySdkEvent(
+        [],
+        asAssistant({
+          id: "invalid-media",
+          content: [{ type: "image", url, media_type: "image/png" }],
+        } as unknown as BetaMessage)
+      )
+      expect(messages.flatMap((message) => message.parts)).toEqual([])
+    }
+  )
 
   it("falls back to evt.uuid when message.id is missing", () => {
     const evt = asAssistant(

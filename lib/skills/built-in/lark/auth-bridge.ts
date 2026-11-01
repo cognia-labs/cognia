@@ -28,8 +28,12 @@ import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
-import { resolveBuiltInSkillSessionBinding } from "../context"
-import { assertLarkActingIdentity, LarkActingIdentityError } from "./acting-identity"
+import { resolveBuiltInSkillRunScope, resolveBuiltInSkillSessionBinding } from "../context"
+import {
+  assertLarkActingIdentity,
+  LarkActingIdentityError,
+  resolveLarkRunIdentity,
+} from "./acting-identity"
 import type { BuiltInSkillContext } from "../types"
 
 export type LarkAuthIdentity = "user" | "bot"
@@ -40,6 +44,7 @@ export interface LarkAuthBridgeOk {
   adapterId: string
   /** Identity the env will run lark-cli as. */
   identity: LarkAuthIdentity
+  lane?: "service"
   /**
    * CLI 1.0.98 environment credentials. Explicit empty values override
    * inherited profile, auth-proxy and alternate-token selectors in the
@@ -76,9 +81,9 @@ export interface ResolveLarkAuthInput {
   /**
    * Preferred identity:
    *   - `"user"` — uses the OAuth user_access_token; narrower scope,
-   *     attributes actions to the connected user. Default.
+   *     attributes actions to the connected user. Default for local runs.
    *   - `"bot"` — uses the tenant_access_token; broader scope, attributes
-   *     actions to the app/bot. Must be explicitly selected.
+   *     actions to the app/bot. Selected for non-local runs.
    */
   identity?: LarkAuthIdentity
 }
@@ -112,7 +117,29 @@ export async function resolveLarkAuth(
     }
   }
 
-  const preferred = input.identity ?? "user"
+  // Select the trigger-table service lane before touching personal credentials.
+  // An explicit user-only request still goes through the personal refusal.
+  const sessionBinding = input.context
+    ? await resolveBuiltInSkillSessionBinding(
+        input.context.hitlBypass
+          ? (input.context.imAuthoritySessionId ?? input.context.sessionId)
+          : input.context.sessionId
+      )
+    : undefined
+  // Plugin, webhook and schedule sessions have run authority without an IM
+  // binding. The binding selects the account, not the run's identity.
+  const runIdentity = input.context ? await resolveLarkRunIdentity(input.context) : undefined
+  // A requester in an IM conversation is delegated (ADR-0243 §3): their own
+  // token, behind the owner check. Everything else that is not local uses the
+  // service lane by default.
+  const delegatedRequester =
+    runIdentity?.trigger === "requester" && Boolean(sessionBinding?.binding)
+  const preferred =
+    input.identity ??
+    (runIdentity?.lane === "service" ||
+    (runIdentity && runIdentity.trigger !== "local" && !delegatedRequester)
+      ? "bot"
+      : "user")
   if (preferred === "user") {
     let verified: Awaited<ReturnType<typeof assertLarkActingIdentity>>
     try {
@@ -149,12 +176,17 @@ export async function resolveLarkAuth(
 
   // Bot identity (tenant_access_token).
   try {
-    observeTenantServiceData(input.context?.sessionId, adapter.id, "lark-cli")
+    const scope = input.context ? resolveBuiltInSkillRunScope(input.context) : undefined
+    observeTenantServiceData(scope?.sessionId, adapter.id, "lark-cli", {
+      ...(sessionBinding ? { authoritySessionId: sessionBinding.rootSessionId } : {}),
+      ...(scope?.runId ? { executionRunId: scope.runId } : {}),
+    })
     const tenantToken = await getTenantToken({ appId, appSecret }, "service-data")
     return {
       ok: true,
       adapterId: adapter.id,
       identity: "bot",
+      lane: "service",
       env: larkCliEnv(appId, appSecret, "bot", tenantToken),
     }
   } catch (err) {
@@ -185,7 +217,11 @@ export async function resolveLarkAdapter(
   }
   if (input.context) {
     try {
-      const { binding } = await resolveBuiltInSkillSessionBinding(input.context.sessionId)
+      const { binding } = await resolveBuiltInSkillSessionBinding(
+        input.context.hitlBypass
+          ? (input.context.imAuthoritySessionId ?? input.context.sessionId)
+          : input.context.sessionId
+      )
       const supplied = input.context.imBinding
       if (
         (binding &&

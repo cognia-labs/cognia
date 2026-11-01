@@ -11,6 +11,7 @@ import {
   appendImageEditVersion,
   clearMessages,
   commitMessageDelta,
+  prepareMessageDelta,
   deleteStoredMessage,
   listMessages,
   rowToUIMessage,
@@ -112,6 +113,28 @@ async function putSession(id: string, projectId = "proj-A"): Promise<void> {
   } as never)
 }
 
+it("removes explicitly recalled rows after reload while retaining an unknown background row", async () => {
+  await putSession("recall-agent-turn")
+  await getDb().sessions.update("recall-agent-turn", {
+    agentTurnOwner: { kind: "bot", id: "owner" },
+  })
+  const queued: UIMessage = {
+    id: "queued",
+    role: "user",
+    parts: [{ type: "text", text: "Recall me" }],
+  }
+  const background: UIMessage = {
+    id: "background",
+    role: "assistant",
+    parts: [{ type: "text", text: "New background reply" }],
+  }
+  await persistMessages("recall-agent-turn", [queued])
+  await commitMessageDelta("recall-agent-turn", { upserts: [background] })
+  await persistMessages("recall-agent-turn", [], { deleteIds: [queued.id] })
+  invalidatePersistSnapshot("recall-agent-turn")
+  expect((await listMessages("recall-agent-turn")).map((row) => row.id)).toEqual(["background"])
+})
+
 const dbFixture = createDbTestFixture()
 
 beforeAll(dbFixture.initialize)
@@ -120,6 +143,51 @@ beforeEach(async () => {
   await getDb().messages.clear()
 })
 afterAll(dbFixture.dispose)
+
+it("binds a prepared delta to its session and does not prepare assets inside the commit", async () => {
+  await putSession("prepared")
+  const prepared = await prepareMessageDelta("prepared", {
+    upserts: [msg("prepared-message", "assistant", "done")],
+  })
+  jest.mocked(persistMessageSessionAssets).mockClear()
+  await expect(commitMessageDelta("other-session", prepared)).rejects.toThrow(
+    "Prepared message delta scope changed"
+  )
+  const db = getDb()
+  await db.transaction("rw", db.sessions, db.messages, db.messageMediaRefs, async () => {
+    await commitMessageDelta("prepared", prepared)
+  })
+  expect(persistMessageSessionAssets).not.toHaveBeenCalled()
+  expect((await listMessages("prepared"))[0].id).toBe("prepared-message")
+})
+
+it.each(["bot", "plugin"] as const)(
+  "keeps unobserved %s turn rows when a stale pane persists its follow-up",
+  async (kind) => {
+    const id = "owned-background"
+    await putSession(id)
+    await getDb().sessions.update(id, { agentTurnOwner: { kind, id: "owner" } })
+    await persistMessages(id, [msg("earlier", "user", "Earlier")])
+    const stale = await listMessages(id)
+    await commitMessageDelta(id, {
+      upserts: [
+        msg("background-user", "user", "Review"),
+        msg("background-reply", "assistant", "Reviewed"),
+      ],
+    })
+    await persistMessages(id, [...stale, msg("follow-up", "user", "Re-review")])
+    expect((await listMessages(id)).map((message) => message.id)).toEqual(
+      expect.arrayContaining(["earlier", "background-user", "background-reply", "follow-up"])
+    )
+    // There is no renderer snapshot after a reload, either. Explicit deletion
+    // remains available, as it is for connector-owned transcript rows.
+    invalidatePersistSnapshot(id)
+    await persistStreamingMessages(id, [msg("follow-up", "user", "Re-review")])
+    expect(await countMessages(id)).toBe(4)
+    await commitMessageDelta(id, { deleteIds: ["background-reply"] })
+    expect(await countMessages(id)).toBe(3)
+  }
+)
 
 it("retains a terminal continuation stamp when a delayed streaming snapshot is persisted", async () => {
   await putSession("continuation")
@@ -1168,6 +1236,45 @@ describe("persistMessages + listMessages", () => {
     expect(await getDb().messages.get("a")).toBeDefined()
   }, 60_000)
 })
+
+it.each(["clear", "delete", "truncate"])(
+  "removes operation receipt content with %s and preserves other sessions",
+  async (kind) => {
+    await persistMessages("receipt-session", [
+      msg("receipt-user", "user", "Question"),
+      msg("receipt-reply", "assistant", "Private answer"),
+    ])
+    const operation = (sessionId: string) => ({
+      version: 1 as const,
+      operationId: "operation",
+      sessionId,
+      requestFingerprint: "digest",
+      result: {
+        sessionId,
+        messageId: "receipt-reply",
+        text: "Private answer",
+        status: "completed" as const,
+      },
+    })
+    await getDb().sharedRunJournals.bulkPut([
+      { id: "receipt", agentTurnOperation: operation("receipt-session") },
+      { id: "other-receipt", agentTurnOperation: operation("other-session") },
+    ])
+    if (kind === "clear") await clearMessages("receipt-session")
+    else if (kind === "delete") await deleteStoredMessage("receipt-reply")
+    else await truncateAfter("receipt-session", "receipt-reply", { inclusive: true })
+    expect((await getDb().sharedRunJournals.get("receipt"))?.agentTurnOperation).toEqual({
+      version: 1,
+      operationId: "operation",
+      sessionId: "receipt-session",
+      requestFingerprint: "digest",
+      deleted: true,
+    })
+    expect(
+      (await getDb().sharedRunJournals.get("other-receipt"))?.agentTurnOperation?.result?.text
+    ).toBe("Private answer")
+  }
+)
 
 describe("clearMessages", () => {
   it("drops every row in a session", async () => {

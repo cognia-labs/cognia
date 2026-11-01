@@ -3,6 +3,12 @@ import { fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { getSharedBuiltInSkillRegistry } from "../registry"
 import { runLarkCli } from "./_helpers"
 import "./doc"
+import { __setLarkCliProcessRunnerForTests } from "./process"
+import { __setLarkCliBinaryForTests } from "./exec-lark-cli"
+import { resolveLarkAuth } from "./auth-bridge"
+
+jest.mock("./auth-bridge", () => ({ resolveLarkAuth: jest.fn() }))
+jest.mock("./capabilities", () => ({ assertLarkCliCommandAvailable: jest.fn(async () => {}) }))
 
 jest.mock("./_helpers", () => ({
   ...jest.requireActual("./_helpers"),
@@ -23,6 +29,44 @@ async function execute(verb: string, args: Record<string, unknown>) {
 }
 
 beforeEach(() => runMock.mockReset())
+
+it.each([false, true])(
+  "places a service-lane image using real CLI results (move failure: %s)",
+  async (failMove) => {
+    jest
+      .mocked(resolveLarkAuth)
+      .mockResolvedValue({ ok: true, adapterId: "app", identity: "bot", lane: "service", env: {} })
+    const process = jest.fn(async (_binary: string, argv: readonly string[]) => {
+      if (argv.includes("+fetch"))
+        return {
+          stdout: JSON.stringify({ data: { blocks: [{ block_id: "anchor" }] } }),
+          stderr: "",
+        }
+      if (argv.includes("+media-insert"))
+        return { stdout: JSON.stringify({ data: { block_id: "image" } }), stderr: "" }
+      if (failMove && argv.includes("block_move_after")) throw new Error("move failed")
+      return { stdout: JSON.stringify({ ok: true }), stderr: "" }
+    })
+    __setLarkCliBinaryForTests("/fake/lark-cli")
+    __setLarkCliProcessRunnerForTests(process)
+    runMock.mockImplementation(
+      jest.requireActual<typeof import("./_helpers")>("./_helpers").runLarkCli
+    )
+    try {
+      const result = execute("upload_image", {
+        imagePath: "/tmp/lesson.png",
+        anchorBlockId: "anchor",
+      })
+      if (failMove) await expect(result).rejects.toThrow(/move failed/)
+      else await expect(result).resolves.toMatchObject({ identity: "bot", lane: "service" })
+      expect(process.mock.calls.some(([, argv]) => argv.includes("block_move_after"))).toBe(true)
+      expect(process.mock.calls.some(([, argv]) => argv.includes("block_delete"))).toBe(failMove)
+    } finally {
+      __setLarkCliBinaryForTests(null)
+      __setLarkCliProcessRunnerForTests(null)
+    }
+  }
+)
 
 it("registers the certified Lark Docs skill family", () => {
   const skills = getSharedBuiltInSkillRegistry().listByFamily("lark.doc")

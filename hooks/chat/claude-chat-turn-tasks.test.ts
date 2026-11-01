@@ -5,8 +5,17 @@ jest.mock("@/lib/db/sessions", () => ({
   updateSession: (...args: unknown[]) => updateSessionMock(...args),
 }))
 
+const getActiveLoopMock = jest.fn()
+jest.mock("@/lib/loop/runtime", () => ({
+  getLoopRuntime: () => ({ getActiveLoopForSession: getActiveLoopMock }),
+}))
+jest.mock("@/lib/loop/pacing", () => ({
+  gateLoopContinuation: () => ({ kind: "send" }),
+}))
+
 import {
   applyInstantTitle,
+  scheduleLoopContinuation,
   extractAssistantText,
   extractPlainText,
   renderGoalExitCard,
@@ -52,5 +61,25 @@ describe("the composer's context envelope", () => {
     })
     const [, patch] = updateSessionMock.mock.calls[0]
     expect(patch.title).not.toContain("cognia_context")
+  })
+})
+
+describe("a refused automated continuation", () => {
+  it("settles without an unhandled rejection when the session is busy", async () => {
+    getActiveLoopMock.mockResolvedValue({ id: "loop-1" })
+    const unhandled = jest.fn()
+    process.on("unhandledRejection", unhandled)
+    try {
+      const send = jest.fn(() => Promise.reject(new Error("session_turn_busy")))
+      scheduleLoopContinuation("loop-1", "s1", "next iteration", { current: send } as never, {
+        current: "s1",
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(send).toHaveBeenCalledWith("next iteration", undefined, { skipUserAppend: true })
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off("unhandledRejection", unhandled)
+    }
   })
 })

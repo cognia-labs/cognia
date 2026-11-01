@@ -15,6 +15,7 @@ import { absorbRequester } from "@cognia/plugin-contract/types/execution/acting-
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import { canonicalJson } from "@cognia/agent"
+import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 
 /** Missing automated provenance must never masquerade as a local person. */
 export function runTriggerFromOrigin(origin: { source: string } | undefined): RunTriggerV1 {
@@ -69,6 +70,8 @@ export async function startToolExecutionRun(
     runId?: string
     parentRunId?: string
     localAuthorization?: LocalPersonRun
+    /** Host-authorized confirmation, anchored to the run that issued the card. */
+    confirmedSkill?: { originRunId?: string; requester: PrincipalRefV1; rootSessionId: string }
     title?: string
   } = {}
 ): Promise<ExecutionRun> {
@@ -91,6 +94,50 @@ export async function startToolExecutionRun(
       const parent = options.parentRunId
         ? await db.executionRuns.get(options.parentRunId)
         : undefined
+      const confirmation = options.confirmedSkill
+      const origin = confirmation?.originRunId
+        ? await db.executionRuns.get(confirmation.originRunId)
+        : undefined
+      const originRoot = await identityRoot(db, origin)
+      // A click confirms an operation, not a change of personal/service lane.
+      // Missing provenance stays external and cannot acquire personal access.
+      const requesterReplay =
+        confirmation &&
+        originRoot?.actingIdentity &&
+        (originRoot.actingIdentity.trigger === "requester" ||
+          originRoot.actingIdentity.trigger === "local") &&
+        originRoot.actingIdentity.lane !== "service" &&
+        (origin?.sessionId === sessionId || origin?.sessionId === confirmation.rootSessionId)
+      const metadata = confirmation
+        ? requesterReplay
+          ? recordedRunMetadata("requester", {
+              runId: id,
+              requesters: [confirmation.requester],
+              authority: origin?.authority,
+            })
+          : recordedRunMetadata("external-event", {
+              runId: id,
+              ...(originRoot?.actingIdentity?.lane === "service" ||
+              (originRoot?.actingIdentity?.trigger !== "requester" &&
+                originRoot?.actingIdentity?.trigger !== "local")
+                ? { parent: originRoot && { ...originRoot, authority: origin?.authority } }
+                : {}),
+            })
+        : recordedRunMetadata(options.parentRunId ? "child" : local ? "local" : "external-event", {
+            runId: id,
+            parent,
+            ...(local
+              ? {
+                  authorizingPrincipal: { kind: "local-person" },
+                  requesters: [{ kind: "local-person" }],
+                }
+              : {}),
+          })
+      if (requesterReplay && metadata.actingIdentity && originRoot?.actingIdentity)
+        metadata.actingIdentity = {
+          ...metadata.actingIdentity,
+          lane: originRoot.actingIdentity.lane,
+        }
       await db.executionRuns.add({
         id,
         sessionId,
@@ -101,17 +148,12 @@ export async function startToolExecutionRun(
         currentRevision: 0,
         startedAt: now,
         updatedAt: now,
-        ...(options.parentRunId ? { parentRunId: options.parentRunId } : {}),
-        ...recordedRunMetadata(options.parentRunId ? "child" : local ? "local" : "external-event", {
-          runId: id,
-          parent,
-          ...(local
-            ? {
-                authorizingPrincipal: { kind: "local-person" },
-                requesters: [{ kind: "local-person" }],
-              }
+        ...(confirmation && origin
+          ? { parentRunId: origin.id }
+          : options.parentRunId
+            ? { parentRunId: options.parentRunId }
             : {}),
-        }),
+        ...metadata,
       })
       await appendRunEventInsideTransaction(
         db,
@@ -418,15 +460,19 @@ export async function recordRunAuthority(
 export function observeTenantServiceData(
   sessionId: string | undefined,
   adapterId: string,
-  path: string
+  path: string,
+  context?: { authoritySessionId?: string; executionRunId?: string }
 ): void {
   if (!sessionId) return
   void Promise.resolve()
     .then(async () => {
       const db = getDb()
-      const session = await db.sessions.get(sessionId)
-      if (!session?.platformBinding || getDb() !== db) return
-      const snapshot = await snapshotActingAuthority(sessionId)
+      const session = await db.sessions.get(context?.authoritySessionId ?? sessionId)
+      const binding =
+        (session as typeof session & SessionImAuthority)?.imAuthorityBinding ??
+        session?.platformBinding
+      if (!binding || getDb() !== db) return
+      const snapshot = await snapshotActingAuthority(sessionId, context?.executionRunId)
       if (!snapshot || getDb() !== db) return
       const { appendRunObservation } = await import("@/lib/db/execution-runs")
       if (getDb() !== db) return

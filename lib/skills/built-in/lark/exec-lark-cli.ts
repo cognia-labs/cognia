@@ -30,6 +30,7 @@
  */
 
 import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
+import { LarkActingIdentityError, larkPersonalAccessHint } from "./acting-identity"
 import { runLarkCliProcess, type LarkCliProcessResult } from "./process"
 import type { BuiltInSkillContext } from "../types"
 
@@ -95,12 +96,30 @@ export type LarkCliResult =
       adapterId?: string
     }
 
+// Certified CLI 1.0.98 --help advertises only user identity for these
+// commands. Require it explicitly so event runs receive the personal refusal
+// before any credential or process access; never retry a service call as user.
+const USER_ONLY_COMMANDS = new Set([
+  "base +title-resolve",
+  "calendar +search-event",
+  "docs +search",
+  "task +get-my-tasks",
+  "task +tasklist-search",
+])
+
 export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResult> {
+  const requiresUser = USER_ONLY_COMMANDS.has(input.args.slice(0, 2).join(" "))
+  if (requiresUser && input.identity === "bot")
+    return {
+      status: "error",
+      reason: "auth_unavailable",
+      message: new LarkActingIdentityError(undefined, await larkPersonalAccessHint()).message,
+    }
   const auth =
     input.__authOverride ??
     (await resolveLarkAuth({
       adapterId: input.adapterId,
-      identity: input.identity,
+      identity: input.identity ?? (requiresUser ? "user" : undefined),
       context: input.context,
     }))
   if (!auth.ok) {

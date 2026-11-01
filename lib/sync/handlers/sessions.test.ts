@@ -28,6 +28,13 @@ describe("syncSessions managed workspace boundary", () => {
           title: "Custom title",
           kind: "direct",
           programmaticCreator: "plugin:example",
+          agentTurnOwner: { kind: "bot", id: "lecturer-bot", key: "topic" },
+          imAuthorityBinding: {
+            platform: "lark",
+            adapterId: "lark-1",
+            conversationKey: "lark:lark-1:chat:topic",
+            conversationRef: { platform: "lark", adapterId: "lark-1" },
+          },
           createdAt: 1,
           updatedAt: 20,
           ...(managed
@@ -48,6 +55,16 @@ describe("syncSessions managed workspace boundary", () => {
     )
     expect((await getDb().sessions.get("plugin"))?.programmaticCreator).toBe("plugin:example")
     expect((await resolveBuiltInSkillSessionBinding("plugin")).personalLane).toBe("unverified")
+    expect(await getDb().sessions.get("plugin")).toMatchObject({
+      agentTurnOwner: { kind: "bot", id: "lecturer-bot", key: "topic" },
+      imAuthorityBinding: { conversationKey: "lark:lark-1:chat:topic" },
+    })
+    expect((await getDb().sessions.get("plugin"))?.platformBinding).toBeUndefined()
+    expect((await resolveBuiltInSkillSessionBinding("plugin")).binding?.conversationKey).toBe(
+      "lark:lark-1:chat:topic"
+    )
+    const { listSessionsByConversationKey } = await import("@/lib/connectors/session-bindings")
+    expect(await listSessionsByConversationKey("lark:lark-1:chat:topic")).toEqual([])
   })
 
   it("marks a managed workspace from another device as missing instead of guessing a path", async () => {

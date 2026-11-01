@@ -413,6 +413,26 @@ export function useSessions({
   )
   const pendingRemote = useRef(new Set<string>())
   const [remoteMessagesNonce, setRemoteMessagesNonce] = useState<Record<string, number>>({})
+  // List/pane row sharing deliberately ignores transcriptRevision. Observe it
+  // separately for sessions with a headless transcript writer, including the
+  // split pane. Read the committed rows rather than ingesting its stream twice.
+  const agentTurnRevisionRead = useLiveQuery(
+    async function readAgentTurnRevisions() {
+      const rows = await Promise.all(paneIds.map((id) => getSession(id)))
+      if (!isCurrentScope()) return undefined
+      return {
+        key: scopeKey,
+        revisions: JSON.stringify(
+          rows.flatMap((row) =>
+            row?.agentTurnOwner ? [[row.id, row.transcriptRevision ?? 0]] : []
+          )
+        ),
+      }
+    },
+    [paneIds, scopeKey]
+  )
+  const agentTurnRevisions =
+    agentTurnRevisionRead?.key === scopeKey ? agentTurnRevisionRead.revisions : undefined
   const drainRemote = useCallback(() => {
     if (!isCurrentScope()) return
     const ready = [...pendingRemote.current].filter((id) => {
@@ -432,6 +452,12 @@ export function useSessions({
   useEffect(() => {
     pendingRemote.current.clear()
   }, [scopeKey])
+  useEffect(() => {
+    if (!agentTurnRevisions || !isCurrentScope()) return
+    const revisions = JSON.parse(agentTurnRevisions) as [string, number][]
+    for (const [id] of revisions) if (paneIds.includes(id)) pendingRemote.current.add(id)
+    drainRemote()
+  }, [agentTurnRevisions, isCurrentScope, drainRemote, paneIds])
   useEffect(() => {
     return subscribeRemoteChanges((tables) => {
       if (!tables.has("messages") || !isCurrentScope()) return

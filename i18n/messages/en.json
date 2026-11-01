@@ -60202,6 +60202,10 @@
     "waiting": "Complete sign-in in your browser…"
   },
   "skills": {
+    "actingIdentity": {
+      "confirmedSkillTitle": "Confirmed skill: {skillId}",
+      "personalAccessPhases": "Personal access for Bot and plugin turns requires per-person access in phase 4 or bound-person access in phase 5 (ADR-0243 phases 4 and 5)."
+    },
     "ai": {
       "accept": "Accept",
       "buttonLabel": "AI assist",

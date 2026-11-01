@@ -22,6 +22,24 @@ import { registerRunControlHandler } from "@/lib/execution/run-control"
 import { parseLarkInteractiveCallback } from "./adapters/lark/parse"
 import { buildLarkRunFallbackSegment } from "./run-presentation/lark-driver"
 import { sanitizeOutboundSegments } from "./a2ui-bridge/a2ui-to-segments"
+import { connectorsLarkUserAuth } from "./tauri/commands"
+jest.mock("./tauri/commands", () => ({
+  ...jest.requireActual("./tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    accessToken: "owner-token",
+    authorizationEpoch: "epoch",
+    accountLabel: "Owner",
+  })),
+}))
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  ...jest.requireActual("@/lib/i18n/runtime-translator"),
+  currentLocale: jest.fn(async () => "en"),
+  getRuntimeTranslator: async () => (key: string, values: { skillId: string }) => {
+    const messages = jest.requireActual("@/i18n/messages/en/skills.json").actingIdentity
+    return messages[key].replace("{skillId}", values.skillId)
+  },
+}))
 
 // The wf_approve path drives a REAL `startWorkflowFromIM`, which fires
 // `void runWorkflow(...)` in the background (fire-and-forget by design). In a
@@ -541,6 +559,125 @@ describe("ConnectorBus.dispatchConnectorCallback", () => {
 
 // ── ADR-0026 — skill_invoke binding kind ─────────────────────────────
 describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
+  it.each(["requester", "bot", "plugin"] as const)(
+    "replays a completed %s run in its original personal/service lane",
+    async (origin) => {
+      const { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } =
+        await import("@/lib/skills/built-in/registry")
+      const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
+      const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
+      const { recordedRunMetadata, finishToolExecutionRun, resolveRunActingIdentity } =
+        await import("@/lib/execution/acting-authority")
+      const { assertLarkActingIdentity } =
+        await import("@/lib/skills/built-in/lark/acting-identity")
+      const { z } = await import("zod")
+      __resetSharedBuiltInSkillRegistry()
+      jest.mocked(connectorsLarkUserAuth).mockClear()
+      await seedUnguardedAdapter()
+      await getDb().adapterInstances.update("adp_tg", {
+        type: "lark",
+        settings: {
+          larkStrictCallbackAuthorization: "off",
+          connectedUser: { openId: "owner", name: "Owner", authorizationEpoch: "epoch" },
+        },
+      })
+      const key = "lark:adp_tg:c1"
+      await getDb().sessions.put({
+        id: "replay-session",
+        title: "Replay",
+        createdAt: 1,
+        updatedAt: 1,
+        platformBinding: {
+          platform: "lark",
+          adapterId: "adp_tg",
+          conversationKey: key,
+          conversationRef: { platform: "lark", adapterId: "adp_tg", channelId: "c1" },
+        },
+      })
+      const original = `original-${origin}`
+      await createExecutionRun({
+        id: original,
+        sessionId: "replay-session",
+        kind: origin === "bot" ? "bot" : "agent-turn",
+        sourceId: original,
+        title: "Original",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        ...recordedRunMetadata(origin === "requester" ? "requester" : "external-event", {
+          runId: original,
+        }),
+      })
+      const identities: unknown[] = []
+      const execute = jest.fn(
+        async (_args: unknown, ctx: import("@/lib/skills/built-in/types").BuiltInSkillContext) => {
+          expect(ctx.executionRunId).toBeTruthy()
+          expect(ctx.executionRunId).not.toBe(original)
+          identities.push(await resolveRunActingIdentity(ctx.sessionId, ctx.executionRunId))
+          return assertLarkActingIdentity("adp_tg", ctx)
+        }
+      )
+      registerBuiltInSkill({
+        id: "test.personal_confirmation",
+        family: "test",
+        label: { en: "Test", "zh-CN": "测试" },
+        description: { en: "Test", "zh-CN": "测试" },
+        platforms: "any",
+        mutation: "write",
+        imAccess: "always",
+        mcpToolName: "test_personal_confirmation",
+        inputSchema: z.object({}),
+        execute,
+        hitlSurface: () => ({
+          rootId: "personal-confirm",
+          dataModel: {},
+          components: {
+            "personal-confirm": { component: "Card", children: ["btn_confirm", "btn_cancel"] },
+          },
+        }),
+      })
+      try {
+        expect(
+          await runBuiltInSkill(
+            "test.personal_confirmation",
+            {},
+            { ...(await resolveBuiltInSkillContext("replay-session")), executionRunId: original }
+          )
+        ).toMatchObject({ status: "pending_hitl" })
+        const binding = (await getDb().connectorCallbackBindings.toArray()).find((row) =>
+          row.actionId.startsWith("skill_invoke:")
+        )!
+        await finishToolExecutionRun(original)
+        await getBus().dispatchConnectorCallback(
+          makeEvent({
+            platform: "lark",
+            conversationKey: key,
+            triggerId: binding.actionId,
+            value: "approve",
+            user: { ...sender, platform: "lark", remoteUserId: "owner" },
+          })
+        )
+        expect(execute).toHaveBeenCalledTimes(1)
+        expect(identities[0]).toMatchObject({
+          trigger: origin === "requester" ? "requester" : "external-event",
+          requesters:
+            origin === "requester"
+              ? [expect.objectContaining({ kind: "platform", remoteUserId: "owner" })]
+              : [],
+        })
+        expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(origin === "requester" ? 1 : 0)
+        const audit = await getDb().connectorAudit.toArray()
+        expect(audit.some((row) => row.kind === "builtin_skill_failed")).toBe(
+          origin !== "requester"
+        )
+        if (origin !== "requester")
+          expect(audit.some((row) => row.message?.includes("sender_not_token_owner"))).toBe(true)
+      } finally {
+        __resetSharedBuiltInSkillRegistry()
+      }
+    }
+  )
   it("replays the child workspace and root IM authority after child cleanup", async () => {
     const { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } =
       await import("@/lib/skills/built-in/registry")
@@ -583,6 +720,20 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
       runId: "child-run",
       backgrounded: false,
     })
+    const { recordedRunMetadata, finishToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    await createExecutionRun({
+      id: "execution:job:child-run",
+      sessionId: root.id,
+      kind: "job",
+      sourceId: "child-run",
+      title: "Child",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      ...recordedRunMetadata("requester", { runId: "execution:job:child-run" }),
+    })
     const execute = jest.fn(
       async (_args: unknown, ctx: import("@/lib/skills/built-in/types").BuiltInSkillContext) => {
         const { resolveWorkspaceId } = await import("@/lib/skills/built-in/issues/_core")
@@ -621,6 +772,10 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
         row.actionId.startsWith("skill_invoke:")
       )!
       expect(binding.payload?.sessionId).toBe(root.id)
+      expect(binding.payload?.executionContext).toMatchObject({
+        originRunId: "execution:job:child-run",
+      })
+      await finishToolExecutionRun("execution:job:child-run")
       clearSubagentApprovalRoute("ephemeral-child")
       await getDb().sessions.delete("ephemeral-child")
       expect(await getDb().sessions.get("ephemeral-child")).toBeUndefined()

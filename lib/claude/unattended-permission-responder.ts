@@ -37,6 +37,45 @@ import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 import type { CapturePermissionDecision } from "./run-and-capture"
 import type { UnattendedPark } from "./unattended-park"
 
+// Only this host-owned durable-park path can mint the opaque HITL proof.
+// A permission allow (even one claiming human attribution) is not this type.
+const HUMAN_APPROVAL = Symbol("durable-human-approval")
+const humanParkControls = new WeakSet<object>()
+
+/** Called only by the host's human run-control handler, never a permission gate. */
+export function recordHumanParkControlDecision<T extends CapturePermissionDecision>(
+  decision: T
+): T {
+  humanParkControls.add(decision)
+  return decision
+}
+
+export function isHumanParkControlDecision(decision: CapturePermissionDecision): boolean {
+  return humanParkControls.has(decision)
+}
+export type HumanApprovedPermissionDecision = CapturePermissionDecision & {
+  decision: "allow"
+  readonly [HUMAN_APPROVAL]: true
+}
+const humanApprovals = new WeakMap<
+  object,
+  Pick<PermissionRequestEvent, "sessionId" | "requestId" | "toolName" | "input">
+>()
+
+export function isVerifiedHumanApproval(
+  decision: CapturePermissionDecision | undefined,
+  request: Pick<PermissionRequestEvent, "sessionId" | "requestId" | "toolName" | "input">
+): decision is HumanApprovedPermissionDecision {
+  if (!decision || decision.decision !== "allow") return false
+  const proof = humanApprovals.get(decision)
+  return (
+    proof?.sessionId === request.sessionId &&
+    proof.requestId === request.requestId &&
+    proof.toolName === request.toolName &&
+    JSON.stringify(proof.input) === JSON.stringify(request.input)
+  )
+}
+
 /** The status a run carries when at least one tool was denied for want of an approver. */
 export const NEEDS_APPROVAL_STATUS = "needs_approval" as const
 
@@ -72,6 +111,7 @@ export interface UnattendedPermissionResponder {
   deniedToolNames: () => string[]
   /** Whether requests wait for a person instead of being denied at once. */
   readonly parks: boolean
+  runId: () => string | null
   /** Close the run a parked request opened, once the turn is over. */
   finish: (status: "completed" | "failed" | "cancelled", summary?: string) => Promise<void>
 }
@@ -146,11 +186,22 @@ export function createUnattendedPermissionResponder(
       return deny(request, unattendedDenialMessage(surface, request.toolName), "system")
     }
     switch (outcome.kind) {
-      case "approved":
-        return {
+      case "approved": {
+        const decision: CapturePermissionDecision = {
           ...outcome.decision,
           attribution: outcome.decision.attribution ?? { authority: "human" },
         }
+        if (decision.decision === "allow" && decision.attribution?.authority === "human") {
+          Object.defineProperty(decision, HUMAN_APPROVAL, { value: true })
+          humanApprovals.set(decision, {
+            sessionId: request.sessionId,
+            requestId: request.requestId,
+            toolName: request.toolName,
+            input: structuredClone(request.input),
+          })
+        }
+        return decision
+      }
       case "denied": {
         refusals.push({ requestId: request.requestId, toolName: request.toolName, at: now() })
         return {
@@ -169,6 +220,7 @@ export function createUnattendedPermissionResponder(
     denials,
     refusals,
     parks: Boolean(park),
+    runId: () => park?.runId() ?? null,
     onPermissionRequest: (request) =>
       park
         ? parked(request, park)

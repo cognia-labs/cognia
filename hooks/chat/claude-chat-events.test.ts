@@ -583,6 +583,28 @@ describe("Claude chat event seam", () => {
     }
   })
 
+  it.each(["event", "sdk_session_id", "session_ended"])(
+    "leaves a durable Bot turn's %s ingestion to its writer",
+    async (type) => {
+      const release = registerCaptureResponder("bot-topic", "turn", false, true)
+      try {
+        await expect(
+          handleEvent(
+            { type, sessionId: "bot-topic", turnId: "turn" } as never,
+            { current: "bot-topic" },
+            { current: [] },
+            { current: new Map() },
+            { current: new Map() },
+            { current: null },
+            undefined as never
+          )
+        ).resolves.toBeUndefined()
+      } finally {
+        release()
+      }
+    }
+  )
+
   it("exports event routing and filters team sub-sessions", () => {
     expect(typeof handleEvent).toBe("function")
     expect(isTeamSubSession("team::char::member")).toBe(true)

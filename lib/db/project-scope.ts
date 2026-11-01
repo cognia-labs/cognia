@@ -8,6 +8,7 @@
 import type { Collection, Table } from "dexie"
 import type { Project } from "@/types"
 import { getDb } from "./schema"
+import { tombstoneAgentTurnOperations } from "./shared-run-journal"
 import { getSettings, saveSettings } from "./settings"
 import { buildDefaultProject, DEFAULT_PROJECT_ID } from "./project-defaults"
 import { purgeProjectBuckets } from "@/lib/project/project-bucket-purge"
@@ -265,7 +266,9 @@ export async function deleteProjectCascade(projectId: string): Promise<void> {
     ...CHILD_TABLES.map((c) => c.table),
     ...SESSION_CHILD_TABLES,
   ])
-  const tables = [...tableNames, "connectorInboundJobs", "syncTombstones"].map((t) => db.table(t))
+  const tables = [...tableNames, "connectorInboundJobs", "syncTombstones", "sharedRunJournals"].map(
+    (t) => db.table(t)
+  )
   const orphanCandidates = new Set<string>()
   let projectSessionIds: string[] = []
 
@@ -295,6 +298,9 @@ export async function deleteProjectCascade(projectId: string): Promise<void> {
     }
     const sessionIds = projectSessions.map((session) => session.id)
     projectSessionIds = sessionIds
+    // Operation completions copy reply text; keep only content-free tombstones
+    // so a retried operation ends as a cancellation, never a replay.
+    await tombstoneAgentTurnOperations(new Set(sessionIds), db)
     const overrideConversationKeys = (await scopedWhere(
       db.conversationOverrides,
       projectId

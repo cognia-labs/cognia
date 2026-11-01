@@ -124,39 +124,42 @@ describe("prepareTranscriptRuntimeSend", () => {
       ).rejects.toThrow("inbound_message_recalled")
     }
   )
-  it("rebuilds an invalidated native SDK query without resuming withdrawn history", async () => {
-    jest.mocked(getSession).mockResolvedValue({
-      id: "s1",
-      sdkSessionId: "old-sdk",
-      runtimeTranscriptGeneration: "g1",
-      runtimeTranscriptInvalidated: "g1",
-    } as never)
-    jest.mocked(listMessages).mockResolvedValue([
-      {
-        id: "recalled",
-        role: "user",
-        parts: [{ type: "text", text: "[deleted]" }],
-        metadata: { deletedAt: 1 },
-      },
-      { id: "kept", role: "user", parts: [{ type: "text", text: "kept question" }] },
-      { id: "current", role: "user", parts: [{ type: "text", text: "new prompt" }] },
-    ])
-    const prepared = await prepareTranscriptRuntimeSend("s1", {
-      provider: "anthropic",
-      resumeSessionId: "old-sdk",
-      forkFromSessionId: "old-parent",
-      turnId: "current",
-    })
-    expect(prepared.resumeSessionId).toBeUndefined()
-    expect(prepared.forkFromSessionId).toBeUndefined()
-    expect(updateSession).toHaveBeenCalledWith("s1", {
-      sdkSessionId: undefined,
-      forkedFromSdkSessionId: undefined,
-    })
-    expect(prepared.appendSystemPrompt).toContain("kept question")
-    expect(prepared.appendSystemPrompt).not.toContain("new prompt")
-    expect(prepared.transcriptInvalidationId).toBe("g1")
-  })
+  it.each(["anthropic", "cognia:external-agent:pi-1"])(
+    "rebuilds an invalidated native query for %s without resuming withdrawn history",
+    async (provider) => {
+      jest.mocked(getSession).mockResolvedValue({
+        id: "s1",
+        sdkSessionId: "old-sdk",
+        runtimeTranscriptGeneration: "g1",
+        runtimeTranscriptInvalidated: "g1",
+      } as never)
+      jest.mocked(listMessages).mockResolvedValue([
+        {
+          id: "recalled",
+          role: "user",
+          parts: [{ type: "text", text: "[deleted]" }],
+          metadata: { deletedAt: 1 },
+        },
+        { id: "kept", role: "user", parts: [{ type: "text", text: "kept question" }] },
+        { id: "current", role: "user", parts: [{ type: "text", text: "new prompt" }] },
+      ])
+      const prepared = await prepareTranscriptRuntimeSend("s1", {
+        provider,
+        resumeSessionId: "old-sdk",
+        forkFromSessionId: "old-parent",
+        turnId: "current",
+      })
+      expect(prepared.resumeSessionId).toBeUndefined()
+      expect(prepared.forkFromSessionId).toBeUndefined()
+      expect(updateSession).toHaveBeenCalledWith("s1", {
+        sdkSessionId: undefined,
+        forkedFromSdkSessionId: undefined,
+      })
+      expect(prepared.appendSystemPrompt).toContain("kept question")
+      expect(prepared.appendSystemPrompt).not.toContain("new prompt")
+      expect(prepared.transcriptInvalidationId).toBe("g1")
+    }
+  )
   beforeEach(() => {
     jest
       .mocked(getSession)

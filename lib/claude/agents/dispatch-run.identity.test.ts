@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { admitBackgroundDispatch, getBackgroundTaskRecord } from "@/lib/db/background-tasks"
@@ -181,6 +182,27 @@ it("allows a normal background child of a local turn", async () => {
     actingIdentity: { trigger: "local", authorizingPrincipal: { kind: "local-person" } },
   })
   expect(personalChecks.get("original")).toBe(true)
+})
+
+it("freezes the originating approval channel into dispatch and durable recovery", async () => {
+  const end = beginCapturedTurn("desktop", {
+    turnId: "bot-turn",
+    outboundPolicy: { unattended: true },
+  })
+  try {
+    await startToolExecutionRun("desktop", { runId: "bot-origin" })
+    const result = await admit()
+    expect(jest.mocked(dispatchSubagent).mock.calls.at(-1)?.[2]?._approvalRoute).toMatchObject({
+      rootSessionId: "desktop",
+      approvalOrigin: { unattended: true },
+    })
+    expect((await getBackgroundTaskRecord(result.runId))?.recovery).toMatchObject({
+      approvalOrigin: { unattended: true },
+      parentExecutionRunId: "bot-origin",
+    })
+  } finally {
+    end()
+  }
 })
 
 it.each(["missing-pin", "missing-run"])(

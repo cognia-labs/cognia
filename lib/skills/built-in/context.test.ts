@@ -112,6 +112,16 @@ describe("acting IM senders", () => {
 
   beforeEach(() => mockSessionGet.mockResolvedValue({ id: "s1", platformBinding: binding }))
 
+  it("hydrates Bot authority without a delivery binding, including child sessions", async () => {
+    mockSessionGet.mockImplementation(async (id) =>
+      id === "child"
+        ? { id, parentSessionId: "s1", kind: "subagent" }
+        : { id: "s1", imAuthorityBinding: binding, agentTurnOwner: { kind: "bot", id: "bot" } }
+    )
+    expect((await resolveBuiltInSkillContext("s1")).imBinding).toMatchObject(binding)
+    expect((await resolveBuiltInSkillContext("child")).imBinding).toMatchObject(binding)
+  })
+
   it("hydrates the running sender and principal", async () => {
     mockJobs.mockResolvedValue([job("owner", { principalId: "principal-1" })])
     expect((await resolveBuiltInSkillContext("s1")).actingSenders).toEqual([

@@ -17,7 +17,13 @@
 
 import type { PluginDispatchApprovalRoute } from "@/types/plugin/plugin-agent-sdk"
 
-export type SubagentApprovalRoute = PluginDispatchApprovalRoute
+/** Serializable approval channel captured before the originating turn ends. */
+export interface SubagentApprovalOrigin {
+  unattended: boolean
+}
+export type SubagentApprovalRoute = PluginDispatchApprovalRoute & {
+  approvalOrigin?: SubagentApprovalOrigin
+}
 
 const routes = new Map<string, SubagentApprovalRoute>()
 

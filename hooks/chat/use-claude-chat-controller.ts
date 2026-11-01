@@ -1,5 +1,12 @@
 "use client"
 
+import {
+  acquireSessionTurnLease,
+  beginSessionStop,
+  sessionStopFenced,
+  sessionStopPending,
+  sessionTurnLockKey,
+} from "@/lib/execution/session-turn-lock"
 import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
 
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
@@ -10,7 +17,12 @@ import { withWorkbenchMessageContext } from "@/lib/context-workbench/provider-co
 import { externalAgentPresetIdOf } from "@/lib/ai/agent/external/config/preset-identity"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { hasCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import {
+  hasCaptureResponder,
+  isSessionCaptured,
+  captureOwnedSessionIds,
+  subscribeCaptureOccupancy,
+} from "@/lib/connectors/hitl/approval-registry"
 import { useTranslations } from "next-intl"
 import { isCapabilityUsable } from "@cognia/agent-config-types/external-agent-capability"
 import { isCogniaProjectedTool } from "@/lib/ai/agent/external/policy/tool-preapproval"
@@ -841,6 +853,14 @@ export function createExternalIdleEventConsumer(
   })
 }
 
+type DesktopTurnLease = {
+  pendingDispatches: number
+  settle: () => void
+  /** Set by Stop; the lease is held until the interrupt command settles. */
+  stopping?: { interruptSettled: boolean }
+}
+const desktopTurnLeases = new Map<string, DesktopTurnLease>()
+
 export function useClaudeChat() {
   const store = useChatStore
   const tRouting = useTranslations("providers.routingView")
@@ -852,6 +872,28 @@ export function useClaudeChat() {
   const tAttachments = useTranslations("chat.composer.attachments")
   const tCollab = useTranslations("chatCollaboration")
   const tSteer = useTranslations("chat.steer")
+  const tCaptureBusy = useTranslations("chat.restorePoint")
+  const refuseCapturedTurn = useCallback(
+    (sessionId: string) => {
+      if (!isSessionCaptured(sessionId)) return false
+      toast.warning(tCaptureBusy("busy"))
+      return true
+    },
+    [tCaptureBusy]
+  )
+  useEffect(() => {
+    const occupied = new Set<string>()
+    const update = (sessionId: string, active: boolean) => {
+      if (active) {
+        occupied.add(sessionId)
+        store.getState().setSessionStatus(sessionId, "streaming")
+      } else if (occupied.delete(sessionId)) {
+        store.getState().setSessionStatus(sessionId, "idle")
+      }
+    }
+    for (const sessionId of captureOwnedSessionIds()) update(sessionId, true)
+    return subscribeCaptureOccupancy(update)
+  }, [store])
   /**
    * Name what a turn's recipient was not handed, and why, so nothing attached
    * goes missing in silence. A Squad's goal is one string, so it gets the
@@ -1043,6 +1085,11 @@ export function useClaudeChat() {
    * ref kept fresh by the effect below.
    */
   const sendRef = useRef<SendFn | null>(null)
+  const ownedContinuationRef = useRef<SendFn | null>(null)
+  // Joins one exact lease (the turn that emitted a frame) or re-enters admission.
+  const continueFromLeaseRef = useRef<
+    ((lease: DesktopTurnLease | undefined, args: Parameters<SendFn>) => ReturnType<SendFn>) | null
+  >(null)
   const sharedApprovalResponseRef = useRef<
     ((approval: PendingApproval, decision: ApprovalDecision) => Promise<void>) | null
   >(null)
@@ -1440,8 +1487,30 @@ export function useClaudeChat() {
       const tail = (queues.get(key) ?? Promise.resolve())
         // A prior failure must not break the chain for later events.
         .catch(() => {})
-        .then(() =>
-          handleEvent(
+        .then(() => {
+          // A continuation this frame decides belongs to the turn that holds the
+          // lease now. It joins exactly that lease; a lease taken since by another
+          // turn, or a pending Stop, sends it back through public admission.
+          const lease =
+            key === "__nosession__" ? undefined : desktopTurnLeases.get(sessionTurnLockKey(key))
+          const continuation: SendFn = (...args) =>
+            continueFromLeaseRef.current?.(lease, args) ??
+            sendRef.current?.(...args) ??
+            Promise.resolve()
+          // Only around a synchronous drain: clearing the steer queue notifies the
+          // store before the replay joins, and that nested settle must not release
+          // the lease (release is async). Never across a handler's awaits.
+          const holdTurnLease = (work: () => void) => {
+            if (!lease) return work()
+            lease.pendingDispatches++
+            try {
+              work()
+            } finally {
+              lease.pendingDispatches--
+              lease.settle()
+            }
+          }
+          return handleEvent(
             evt,
             activeRef,
             allowListRef,
@@ -1453,9 +1522,11 @@ export function useClaudeChat() {
               registry,
               transcriptFence: transcriptFenceRef.current ?? undefined,
               getExecutionHandle,
+              ownedContinuationRef: { current: continuation },
+              holdTurnLease,
             }
           )
-        )
+        })
         .then(async () => {
           if (evt.type === "sdk_session_id") {
             await asideContextDispatchRef.current
@@ -1518,7 +1589,7 @@ export function useClaudeChat() {
    * `content` can be a plain string (the common case) or an array of
    * multimodal content blocks (text + image), to support attachments.
    */
-  const send = useCallback(
+  const sendUnexcluded = useCallback(
     async (
       content: SendContent,
       opts?: SendOptions,
@@ -1731,6 +1802,11 @@ export function useClaudeChat() {
       ) {
         rejectSend("empty_chat_turn")
         return
+      }
+
+      if (refuseCapturedTurn(sessionId)) {
+        rejectSend("session_turn_busy")
+        throw new Error("session_turn_busy")
       }
 
       if (callOptions?.backgroundDelivery) {
@@ -2826,7 +2902,11 @@ export function useClaudeChat() {
         // new failure writes its own.
         const merged = markTurnAdmission(tagged, groupId, null)
         store.getState().replaceSessionMessages(sessionId, merged)
-        await persistMessages(sessionId, merged)
+        await persistMessages(sessionId, merged, {
+          deleteIds: current
+            .filter((message) => !merged.some((kept) => kept.id === message.id))
+            .map((message) => message.id),
+        })
         publishChatLifecycleEvent({ type: "chat-regenerated", sessionId, messageId: groupId })
         // `handleEvent` stamps the first assistant message that arrives with
         // this tag, and selects it.
@@ -3267,12 +3347,12 @@ export function useClaudeChat() {
             ? markTurnAdmission(current, turnMessage, null)
             : current.filter((message) => message.id !== userMsg.id)
           store.getState().replaceSessionMessages(sessionId, withdrawn)
-          await persistMessages(sessionId, withdrawn).catch((error: unknown) =>
-            console.warn("withdrawn turn persist failed", error)
-          )
+          await persistMessages(sessionId, withdrawn, {
+            deleteIds: skipAppend ? [] : [userMsg.id],
+          }).catch((error: unknown) => console.warn("withdrawn turn persist failed", error))
           // Follow-ups typed while it waited were queued behind it; with it
           // gone they are the next turn.
-          drainSteerVia(sessionId, sendRef)
+          drainSteerVia(sessionId, ownedContinuationRef)
           rejectSend("chat_turn_withdrawn")
           return
         }
@@ -3548,7 +3628,7 @@ export function useClaudeChat() {
             // The same rule as a streamed turn's settle: a clean end drains the
             // queue, an armed interrupt drains it, a failure keeps it.
             if (result === "completed" || steerArmed.has(sessionId)) {
-              drainSteerVia(sessionId, sendRef)
+              drainSteerVia(sessionId, ownedContinuationRef)
             } else if (result === "failed") {
               markPendingSteersFailed(sessionId)
             }
@@ -4656,6 +4736,7 @@ export function useClaudeChat() {
               .catch(() => undefined)
           }
         }
+        const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const handleExternalFailure = async (message: string, error?: Error): Promise<void> => {
           // Before the fallback re-issues this turn on the sidecar: the
           // external agent is gone, so its card is dead and would sit in front
@@ -4670,7 +4751,9 @@ export function useClaudeChat() {
           pending.commit.cancel()
           pending.persist.cancel()
           registry.release(sessionId)
-          await persistMessages(sessionId, next).catch(() => undefined)
+          await persistMessages(sessionId, next, { deleteIds: [assistantId] }).catch(
+            () => undefined
+          )
           if (delegation && chatFailurePolicy === "fallback" && !managedGatewayTask) {
             await finishDirectChatExecutionRun(
               sessionId,
@@ -4694,7 +4777,7 @@ export function useClaudeChat() {
             const { branchTag: _editTag, ...fallbackCallOptions } = callOptions ?? {}
             const editOwner = callOptions?.branchTag ? armedOwner : null
             if (editOwner) armedOwner = null
-            await sendRef.current?.(displayContent, opts, {
+            await ownedContinuationRef.current?.(displayContent, opts, {
               ...fallbackCallOptions,
               skipUserAppend: true,
               bypassDelegation: true,
@@ -4828,7 +4911,6 @@ export function useClaudeChat() {
           // Pre-allocate the assistant message so partial deltas land in it
           // without flickering the chat list. Parts start empty and grow as
           // ExternalAgentEvents arrive via the onEvent callback below.
-          const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
           const externalStartedAt = behaviorTurnStartedAt.get(sessionId)
           let assistantParts: UIMessage["parts"] = [] as unknown as UIMessage["parts"]
           const baseList = store.getState().sessions[sessionId]?.messages ?? []
@@ -5750,11 +5832,14 @@ export function useClaudeChat() {
             lastResponse: extractAssistantText(lastAssistant),
             isActiveSession: () => sessionId === activeRef.current,
             dispatchNextStep: (userMessage) =>
-              void sendRef.current?.(userMessage, undefined, { skipUserAppend: true }),
+              void ownedContinuationRef.current?.(userMessage, undefined, {
+                sessionId,
+                skipUserAppend: true,
+              }),
           })
           // Follow-ups queued behind this turn wait for the next settle when a
           // plan step was just dispatched; two turns must never start at once.
-          if (!dispatchedNextStep) drainSteerVia(sessionId, sendRef)
+          if (!dispatchedNextStep) drainSteerVia(sessionId, ownedContinuationRef)
         }
         if (store.getState().sessions[sessionId]?.errorDiagnostic) rejectSend()
         return
@@ -6149,6 +6234,7 @@ export function useClaudeChat() {
     },
     [
       store,
+      refuseCapturedTurn,
       tRouting,
       tInlineErr,
       tAside,
@@ -6165,14 +6251,138 @@ export function useClaudeChat() {
     ]
   )
 
-  // Keep the module-scope `handleEvent` pointed at the latest `send` so it can
-  // dispatch a silent goal continuation (ADR-0019) without closing over it.
+  const invokeOwnedSend = useCallback(
+    async (entry: DesktopTurnLease, args: Parameters<typeof sendUnexcluded>, joining = false) => {
+      // The share is taken synchronously, so the lease cannot settle away while
+      // a join checks for a Stop pressed in another window. Callers pin the
+      // target session first: the active session may change during the await.
+      entry.pendingDispatches++
+      try {
+        const sessionId = args[2]?.sessionId
+        // Re-check synchronously after the cross-window probe resumes: a Stop
+        // here may have begun while it was in flight.
+        if (
+          joining &&
+          sessionId &&
+          ((await sessionStopFenced(sessionId)) ||
+            sessionStopPending(sessionId) ||
+            (entry.stopping && !entry.stopping.interruptSettled))
+        ) {
+          toast.warning(tCaptureBusy("busy"))
+          throw new Error("session_turn_busy")
+        }
+        return await sendUnexcluded(...args)
+      } finally {
+        entry.pendingDispatches--
+        entry.settle()
+      }
+    },
+    [sendUnexcluded, tCaptureBusy]
+  )
+
+  const send = useCallback(
+    async (...unpinned: Parameters<typeof sendUnexcluded>) => {
+      const sessionId = unpinned[2]?.sessionId ?? store.getState().activeSessionId
+      if (!sessionId) return sendUnexcluded(...unpinned)
+      // Admission and dispatch target one session, whatever becomes active meanwhile.
+      const args: Parameters<typeof sendUnexcluded> = [
+        unpinned[0],
+        unpinned[1],
+        { ...unpinned[2], sessionId },
+      ]
+      const key = sessionTurnLockKey(sessionId)
+      const busy = () => {
+        toast.warning(tCaptureBusy("busy"))
+        throw new Error("session_turn_busy")
+      }
+      // Admission re-checks it after taking the lock; this covers joining a lease.
+      if (sessionStopPending(sessionId)) return busy()
+      const existing = desktopTurnLeases.get(key)
+      if (existing) {
+        if (existing.stopping && !existing.stopping.interruptSettled) return busy()
+        const status = sessionStatusOf(sessionId)
+        const running =
+          status === "streaming" || status === "awaiting_approval" || isChatTurnQueued(sessionId)
+        // An awaited external execution still owns a dispatch, but content sent
+        // during its run belongs to its steering/queue path. Before the turn is
+        // running or queued, preparation must remain exclusive.
+        if (
+          (existing.pendingDispatches && !running) ||
+          args[2]?.skipUserAppend ||
+          args[2]?.steerDrain
+        )
+          return busy()
+        return invokeOwnedSend(existing, args, true)
+      }
+      const release = await acquireSessionTurnLease(sessionId, true)
+      if (!release) return busy()
+      // A Stop that began after admission resolved still fences this turn.
+      if (sessionStopPending(sessionId)) {
+        void release()
+        return busy()
+      }
+      const entry: DesktopTurnLease = {
+        pendingDispatches: 0,
+        settle: () => {
+          if (entry.pendingDispatches || desktopTurnLeases.get(key) !== entry) return
+          if (entry.stopping && !entry.stopping.interruptSettled) return
+          const status = sessionStatusOf(sessionId)
+          if (
+            status === "streaming" ||
+            status === "awaiting_approval" ||
+            isChatTurnQueued(sessionId)
+          )
+            return
+          desktopTurnLeases.delete(key)
+          unsubscribe()
+          void release()
+        },
+      }
+      desktopTurnLeases.set(key, entry)
+      // The owner outlives dispatch and pane unmount. An internal continuation
+      // acquires its share synchronously before its predecessor can settle.
+      const unsubscribe = store.subscribe(entry.settle)
+      return invokeOwnedSend(entry, args)
+    },
+    [invokeOwnedSend, sendUnexcluded, store, tCaptureBusy]
+  )
+
   useEffect(() => {
+    // Only runtime-owned continuations receive this reference; public entry
+    // points must acquire admission. Keep the lease across awaited fallbacks
+    // and fire-and-forget plan/steer turns alike.
+    const continueFromLease = (
+      lease: DesktopTurnLease | undefined,
+      unpinned: Parameters<SendFn>
+    ): ReturnType<SendFn> => {
+      const sessionId = unpinned[2]?.sessionId ?? store.getState().activeSessionId
+      const args: Parameters<SendFn> = sessionId
+        ? [unpinned[0], unpinned[1], { ...unpinned[2], sessionId }]
+        : unpinned
+      const joinable =
+        lease !== undefined &&
+        typeof sessionId === "string" &&
+        desktopTurnLeases.get(sessionTurnLockKey(sessionId)) === lease &&
+        !sessionStopPending(sessionId) &&
+        !(lease.stopping && !lease.stopping.interruptSettled)
+      return joinable ? invokeOwnedSend(lease, args, true) : send(...args)
+    }
+    const continueOwned: SendFn = (...args) => {
+      const sessionId = args[2]?.sessionId ?? store.getState().activeSessionId
+      return continueFromLease(
+        sessionId ? desktopTurnLeases.get(sessionTurnLockKey(sessionId)) : undefined,
+        args
+      )
+    }
+    ownedContinuationRef.current = continueOwned
+    continueFromLeaseRef.current = continueFromLease
     sendRef.current = send
     return () => {
+      if (ownedContinuationRef.current === continueOwned) ownedContinuationRef.current = null
+      if (continueFromLeaseRef.current === continueFromLease) continueFromLeaseRef.current = null
       if (sendRef.current === send) sendRef.current = null
     }
-  }, [send])
+  }, [invokeOwnedSend, send, store])
 
   useEffect(() => {
     const inFlight = new Set<string>()
@@ -6348,10 +6558,12 @@ export function useClaudeChat() {
   // target sessionId.
   useEffect(() => {
     return registerChatSendBridge((text, targetSessionId, automatedTurn) => {
-      void sendRef.current?.(text, undefined, {
-        sessionId: targetSessionId,
-        ...(automatedTurn ? { automatedTurn } : { localAuthorization: LOCAL_PERSON_RUN }),
-      })
+      void sendRef
+        .current?.(text, undefined, {
+          sessionId: targetSessionId,
+          ...(automatedTurn ? { automatedTurn } : { localAuthorization: LOCAL_PERSON_RUN }),
+        })
+        .catch(() => undefined)
     })
   }, [])
 
@@ -6430,7 +6642,24 @@ export function useClaudeChat() {
         if (status === "streaming" || status === "awaiting_approval") continue
         hostStateTurnsRef.current.delete(sessionId)
         if (status === "error" && !steerArmed.has(sessionId)) markPendingSteersFailed(sessionId)
-        else drainSteerVia(sessionId, sendRef)
+        else {
+          // This settle belongs to the turn that still holds the lease. Hold it
+          // across the drain: clearing the queue notifies the store again, and
+          // that nested settle must not release the lease before the replay joins.
+          const lease = desktopTurnLeases.get(sessionTurnLockKey(sessionId))
+          if (lease) lease.pendingDispatches++
+          try {
+            drainSteerVia(sessionId, {
+              current: (...args) =>
+                continueFromLeaseRef.current?.(lease, args) ?? Promise.resolve(),
+            })
+          } finally {
+            if (lease) {
+              lease.pendingDispatches--
+              lease.settle()
+            }
+          }
+        }
       }
     }
     return useChatStore.subscribe(settleHostStateTurns)
@@ -6439,10 +6668,12 @@ export function useClaudeChat() {
   useEffect(() => {
     const unsub = getLoopRuntime().onKickoff((loop) => {
       if (!isSessionOpen(loop.sessionId)) return
-      void sendRef.current?.(renderLoopIterationMessage(loop), undefined, {
-        sessionId: loop.sessionId,
-        skipUserAppend: true,
-      })
+      void sendRef
+        .current?.(renderLoopIterationMessage(loop), undefined, {
+          sessionId: loop.sessionId,
+          skipUserAppend: true,
+        })
+        .catch(() => undefined)
     })
     return unsub
   }, [])
@@ -6497,103 +6728,169 @@ export function useClaudeChat() {
       // Each pane wires its own Stop to its own session id; default to focused.
       const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
       if (!sessionId) return
-      let hostStateAbortQueued = false
-      let withdrawn: WithdrawnHostStateMessage[] = []
-      try {
-        // Stop is delivered ahead of sends the outbox has not offered yet (it
-        // names the turn it was pressed against), and each of those would
-        // otherwise start a new turn right after it. They go back to the
-        // composer with the queued follow-ups below.
-        withdrawn = await withdrawUnsentHostStateMessages(sessionId)
-        hostStateAbortQueued = Boolean(
-          await enqueueHostStateIntentIfAvailable({
-            sessionId,
-            action: { kind: "turn.abort" },
-          })
-        )
-      } catch (error) {
-        store
-          .getState()
-          .setSessionDiagnostic(
-            sessionId,
-            toDiagnostic(error, { source: "chat", meta: { sessionId } })
-          )
-        return
-      }
-      // Plain stop does not replay the queued follow-ups — the user is taking
-      // over, not steering — so the drain is disarmed. But they are the user's
-      // own words, typed for this conversation: they go back into the composer
-      // with everything they carried (files, citations, reply, context), never
-      // silently dropped with the run. Esc is the same Stop.
-      const queuedSteers = useChatStore.getState().sessions[sessionId]?.steerQueue ?? []
-      useChatStore.getState().clearSteerQueue(sessionId)
-      steerArmed.delete(sessionId)
-      hostStateTurnsRef.current.delete(sessionId)
-      if (queuedSteers.length > 0) {
-        void putBackPendingSteers(
-          sessionId,
-          queuedSteers.map((entry) => entry.id),
-          queuedSteers
-        )
-          .then((count) => {
-            if (count > 0) toast.info(tSteer("restoredOnStop", { count }))
-          })
-          .catch((error) => console.error("steer put-back on stop failed", error))
-      }
-      // Sends still sitting unoffered in the outbox are the same: Stop overtook
-      // them, so their bubbles come down and their text goes back to the
-      // composer (their files' bytes are on the Host; the composer names them).
-      if (withdrawn.length > 0) {
-        const ids = new Set(withdrawn.map((message) => message.messageId))
-        const current = store.getState().sessions[sessionId]?.messages ?? []
-        store.getState().replaceSessionMessages(
-          sessionId,
-          current.filter((message) => !ids.has(message.id))
-        )
-        void restoreWithdrawnToComposer(sessionId, withdrawn)
-          .then(() => toast.info(tSteer("restoredOnStop", { count: withdrawn.length })))
-          .catch((error) => console.error("unsent message put-back on stop failed", error))
-      }
-
-      // Seal the renderer state before waiting for the IPC acknowledgement.
-      // `claude_interrupt` is best-effort transport control; if its promise is
-      // delayed by a busy sidecar, the GUI must still leave the streaming
-      // state immediately and preserve the latest partial response.
-      const coalesce = registry.get(sessionId)
-      coalesce?.commit.flush()
-      coalesce?.persist.flush()
-      registry.release(sessionId)
-      messagesMirrorRef.current.delete(sessionId)
-      const chat = store.getState()
-      for (const approval of chat.sessions[sessionId]?.pendingApprovals ?? []) {
-        if (approval.status !== "interrupted") {
-          chat.markApprovalInterrupted(approval.requestId, approval.sessionId, "aborted")
+      const stopKey = sessionTurnLockKey(sessionId)
+      const lease = desktopTurnLeases.get(stopKey)
+      if (lease?.stopping && !lease.stopping.interruptSettled) return
+      // Fence every producer's admission before the first await, lease or not
+      // (a turn that went idle while its goal judge runs has released it),
+      // until the interrupt settles.
+      const releaseStopFence = beginSessionStop(sessionId)
+      let interruptSettled = releaseStopFence
+      // Undo the fence when Stop fails before its interrupt is ever sent.
+      let cancelStopping = releaseStopFence
+      let stopDeadline: Promise<void> | undefined
+      if (lease) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        // The race is a stale interrupt reaching the next turn. Once the
+        // interrupt command itself has settled (sent and handled, or failed),
+        // it can no longer hit another turn, so the lease may go. Waiting for
+        // an engine-terminal event as well could hold the session forever.
+        const stopping = { interruptSettled: false }
+        // UI idle is optimistic. Fence admission before the first await and
+        // retain it until the interrupt command has settled.
+        lease.stopping = stopping
+        stopDeadline = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            store.getState().setSessionDiagnostic(
+              sessionId,
+              createDiagnostic("timeout", {
+                source: "chat",
+                detail: "executor_stop_unconfirmed",
+                meta: { sessionId, extra: { executorStopUnconfirmed: true } },
+              })
+            )
+            resolve()
+          }, 5_000)
+        })
+        interruptSettled = () => {
+          stopping.interruptSettled = true
+          if (timer) clearTimeout(timer)
+          releaseStopFence()
+          lease.settle()
+        }
+        cancelStopping = () => {
+          if (timer) clearTimeout(timer)
+          if (lease.stopping === stopping) lease.stopping = undefined
+          releaseStopFence()
+          lease.settle()
         }
       }
-      const endingRunId = chat.sessions[sessionId]?.runId
-      if (typeof endingRunId === "number") {
-        markTaskWorkspaceTurnCancelled(sessionId, endingRunId)
-      }
-      chat.setSessionStatus(sessionId, "idle", { turnOutcome: "interrupted" })
-      chatTurnPerformance.finish(sessionId, "cancelled")
-      const finishRun = Promise.all([
-        finishDirectChatExecutionRun(sessionId, "cancelled"),
-        settleChatTurnForSession(sessionId, { outcome: "cancelled" }),
-        // A ledgered turn stops granting model calls at once (ADR-0188); the
-        // turn's `session_ended` seals the run. A no-op for any other turn.
-        cancelRouterFusionTurn(sessionId),
-        // A cascade or panel run is cancelled and its calls aborted (B3).
-        stopFusionChatTurn(sessionId, useSettingsStore.getState().settings, {
-          settled: true,
-        }).catch((error) => console.warn("router-fusion chat run stop failed", error)),
-      ])
-
+      // A synchronous failure before the interrupt is dispatched must not leave
+      // the fence up, or the session would refuse every later turn.
+      let abortDispatched = false
       try {
-        await abortRunningTurn(sessionId, hostStateAbortQueued)
-      } catch (err) {
-        console.error("interrupt failed", err)
+        let hostStateAbortQueued = false
+        let withdrawn: WithdrawnHostStateMessage[] = []
+        try {
+          // Stop is delivered ahead of sends the outbox has not offered yet (it
+          // names the turn it was pressed against), and each of those would
+          // otherwise start a new turn right after it. They go back to the
+          // composer with the queued follow-ups below.
+          withdrawn = await withdrawUnsentHostStateMessages(sessionId)
+          hostStateAbortQueued = Boolean(
+            await enqueueHostStateIntentIfAvailable({
+              sessionId,
+              action: { kind: "turn.abort" },
+            })
+          )
+        } catch (error) {
+          store
+            .getState()
+            .setSessionDiagnostic(
+              sessionId,
+              toDiagnostic(error, { source: "chat", meta: { sessionId } })
+            )
+          cancelStopping()
+          return
+        }
+        // Plain stop does not replay the queued follow-ups — the user is taking
+        // over, not steering — so the drain is disarmed. But they are the user's
+        // own words, typed for this conversation: they go back into the composer
+        // with everything they carried (files, citations, reply, context), never
+        // silently dropped with the run. Esc is the same Stop.
+        const queuedSteers = useChatStore.getState().sessions[sessionId]?.steerQueue ?? []
+        useChatStore.getState().clearSteerQueue(sessionId)
+        steerArmed.delete(sessionId)
+        hostStateTurnsRef.current.delete(sessionId)
+        if (queuedSteers.length > 0) {
+          void putBackPendingSteers(
+            sessionId,
+            queuedSteers.map((entry) => entry.id),
+            queuedSteers
+          )
+            .then((count) => {
+              if (count > 0) toast.info(tSteer("restoredOnStop", { count }))
+            })
+            .catch((error) => console.error("steer put-back on stop failed", error))
+        }
+        // Sends still sitting unoffered in the outbox are the same: Stop overtook
+        // them, so their bubbles come down and their text goes back to the
+        // composer (their files' bytes are on the Host; the composer names them).
+        if (withdrawn.length > 0) {
+          const ids = new Set(withdrawn.map((message) => message.messageId))
+          const current = store.getState().sessions[sessionId]?.messages ?? []
+          store.getState().replaceSessionMessages(
+            sessionId,
+            current.filter((message) => !ids.has(message.id))
+          )
+          void restoreWithdrawnToComposer(sessionId, withdrawn)
+            .then(() => toast.info(tSteer("restoredOnStop", { count: withdrawn.length })))
+            .catch((error) => console.error("unsent message put-back on stop failed", error))
+        }
+
+        // Seal the renderer state before waiting for the IPC acknowledgement.
+        // `claude_interrupt` is best-effort transport control; if its promise is
+        // delayed by a busy sidecar, the GUI must still leave the streaming
+        // state immediately and preserve the latest partial response.
+        const coalesce = registry.get(sessionId)
+        coalesce?.commit.flush()
+        coalesce?.persist.flush()
+        registry.release(sessionId)
+        messagesMirrorRef.current.delete(sessionId)
+        const chat = store.getState()
+        for (const approval of chat.sessions[sessionId]?.pendingApprovals ?? []) {
+          if (approval.status !== "interrupted") {
+            chat.markApprovalInterrupted(approval.requestId, approval.sessionId, "aborted")
+          }
+        }
+        const endingRunId = chat.sessions[sessionId]?.runId
+        if (typeof endingRunId === "number") {
+          markTaskWorkspaceTurnCancelled(sessionId, endingRunId)
+        }
+        chat.setSessionStatus(sessionId, "idle", { turnOutcome: "interrupted" })
+        chatTurnPerformance.finish(sessionId, "cancelled")
+        const finishRun = Promise.all([
+          finishDirectChatExecutionRun(sessionId, "cancelled"),
+          settleChatTurnForSession(sessionId, { outcome: "cancelled" }),
+          // A ledgered turn stops granting model calls at once (ADR-0188); the
+          // turn's `session_ended` seals the run. A no-op for any other turn.
+          cancelRouterFusionTurn(sessionId),
+          // A cascade or panel run is cancelled and its calls aborted (B3).
+          stopFusionChatTurn(sessionId, useSettingsStore.getState().settings, {
+            settled: true,
+          }).catch((error) => console.warn("router-fusion chat run stop failed", error)),
+        ])
+
+        try {
+          abortDispatched = true
+          const abort = Promise.resolve()
+            .then(() => abortRunningTurn(sessionId, hostStateAbortQueued))
+            .finally(interruptSettled)
+          await (stopDeadline ? Promise.race([abort, stopDeadline]) : abort)
+        } catch (err) {
+          console.error("interrupt failed", err)
+          store.getState().setSessionDiagnostic(
+            sessionId,
+            toDiagnostic(err, {
+              source: "chat",
+              meta: { sessionId, extra: { executorStopUnconfirmed: true } },
+            })
+          )
+        }
+        await finishRun
+      } finally {
+        if (!abortDispatched) cancelStopping()
       }
-      await finishRun
     },
     [store, registry, abortRunningTurn, tSteer]
   )
@@ -6606,6 +6903,7 @@ export function useClaudeChat() {
     async (targetSessionId?: string) => {
       const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
       if (!sessionId) return
+      if (refuseCapturedTurn(sessionId)) return
       const queued = useChatStore.getState().sessions[sessionId]?.steerQueue ?? []
       if (queued.length === 0) return
       steerArmed.add(sessionId)
@@ -6642,18 +6940,22 @@ export function useClaudeChat() {
           )
       }
     },
-    [store, abortRunningTurn]
+    [store, abortRunningTurn, refuseCapturedTurn]
   )
 
   // Replay a session's queued steer NOW, without a turn boundary. Used by the
   // Run Panel after an errored settle, where the queue is preserved but no
   // settle event is coming — `interruptAndSteer` can't help (nothing to
   // interrupt), so we drain directly. No-op when the queue is empty.
-  const flushSteer = useCallback((targetSessionId?: string) => {
-    const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
-    if (!sessionId) return
-    drainSteerVia(sessionId, sendRef)
-  }, [])
+  const flushSteer = useCallback(
+    (targetSessionId?: string) => {
+      const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
+      if (!sessionId) return
+      if (refuseCapturedTurn(sessionId)) return
+      drainSteerVia(sessionId, sendRef)
+    },
+    [refuseCapturedTurn]
+  )
 
   const respondToApproval = useCallback(
     async (
@@ -6682,7 +6984,9 @@ export function useClaudeChat() {
           : undefined
       const followDenialWithReason = () => {
         if (!denialReason) return
-        void sendRef.current?.(denialReason, undefined, { sessionId: approval.sessionId })
+        void sendRef
+          .current?.(denialReason, undefined, { sessionId: approval.sessionId })
+          .catch(() => undefined)
       }
       {
         const { RENDERER_TOOL_HOST_APPROVAL_PREFIX } =
@@ -7105,6 +7409,7 @@ export function useClaudeChat() {
     ) => {
       const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
       if (!sessionId) return
+      if (refuseCapturedTurn(sessionId)) return
       // Mid-turn this send would land as a steer — and a steer never consumes
       // `branchTag`, leaving the group `tagEditSibling` is about to persist
       // with no replacement variant. Surfaces disable the affordance; this is
@@ -7197,7 +7502,7 @@ export function useClaudeChat() {
         ...(turnRoute ? { turnRoute } : {}),
       })
     },
-    [send, store, registry, warnNotResent]
+    [send, store, registry, warnNotResent, refuseCapturedTurn]
   )
 
   /**
@@ -7208,6 +7513,7 @@ export function useClaudeChat() {
     async (targetSessionId?: string, resourceContext?: string) => {
       const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
       if (!sessionId) return
+      if (refuseCapturedTurn(sessionId)) return
 
       // Regenerate bypasses the steer gate via `skipUserAppend`, so mid-turn
       // it would re-enter the normal send path — restarting the sidecar and
@@ -7270,7 +7576,7 @@ export function useClaudeChat() {
         ...(turnRoute ? { turnRoute } : {}),
       })
     },
-    [send, registry, warnNotResent]
+    [send, registry, warnNotResent, refuseCapturedTurn]
   )
   useEffect(() => {
     regenerateRef.current = regenerate

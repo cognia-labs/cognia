@@ -15,6 +15,12 @@ const route = {
 beforeEach(() => __clearAllSubagentApprovalRoutesForTesting())
 
 describe("subagent approval routes", () => {
+  it("retains the fixed approval channel independently of a live parent capture", () => {
+    registerSubagentApprovalRoute("child", { ...route, approvalOrigin: { unattended: true } })
+    clearSubagentApprovalRoute(route.parentSessionId)
+    expect(getSubagentApprovalRoute("child")?.approvalOrigin).toEqual({ unattended: true })
+    clearSubagentApprovalRoute("child")
+  })
   it("registers, resolves, and clears a route by ephemeral session id", () => {
     registerSubagentApprovalRoute("eph-1", route)
     expect(getSubagentApprovalRoute("eph-1")).toEqual(route)

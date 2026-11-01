@@ -65,6 +65,35 @@ beforeEach(async () => {
   __resetDbForTesting()
 })
 
+it.each(["requester", "service", "external-event", "missing"] as const)(
+  "confirmation admission preserves %s provenance after completion",
+  async (kind) => {
+    const metadata = recordedRunMetadata(
+      kind === "external-event" ? "external-event" : "requester",
+      { runId: "original", requesters: [principal] }
+    )
+    if (kind === "service") metadata.actingIdentity!.lane = "service"
+    if (kind !== "missing")
+      await createExecutionRun(seed({ id: "original", status: "completed", ...metadata }))
+    const clicker = { ...principal, remoteUserId: "clicker" }
+    const replay = await startToolExecutionRun("session", {
+      confirmedSkill: { originRunId: "original", rootSessionId: "session", requester: clicker },
+    })
+    const resolved = await resolveRunActingIdentity("session", replay.id)
+    if (kind === "requester")
+      expect(resolved).toMatchObject({
+        trigger: "requester",
+        rootRunId: replay.id,
+        requesters: [clicker],
+      })
+    else if (kind === "missing")
+      expect(resolved).toMatchObject({ trigger: "external-event", requesters: [] })
+    else expect(resolved).toEqual(metadata.actingIdentity)
+    await finishToolExecutionRun(replay.id)
+    expect((await getExecutionRun(replay.id))?.status).toBe("completed")
+  }
+)
+
 it("binds the exact IPC turn and attempt without falling back on unknown or conflicting correlations", () => {
   bindToolCallRun("correlation", "turn", "run", "attempt")
   expect(toolCallExecutionRunId("correlation", "turn", "attempt")).toBe("run")
@@ -655,6 +684,64 @@ it("detaches tenant data observations onto the current IM run and excludes proje
   expect(await listExecutionRunEvents("completed-run")).toEqual([])
   expect((await getExecutionRun("current-run"))?.updatedAt).toBe(2)
   expect((await getExecutionRun("current-run"))?.currentRevision).toBe(0)
+})
+
+it.each([false, true])(
+  "records tenant service identity with authority-only binding (deleted child: %s)",
+  async (child) => {
+    await getDb().sessions.put({
+      id: "session",
+      imAuthorityBinding: { platform: "lark", adapterId: "adapter", conversationKey: "topic" },
+    } as never)
+    await createExecutionRun(
+      seed({
+        sessionId: child ? "gone-child" : "session",
+        ...recordedRunMetadata("external-event", { runId: "run" }),
+      })
+    )
+    observeTenantServiceData(child ? "gone-child" : "session", "adapter", "lark-cli", {
+      authoritySessionId: "session",
+      executionRunId: "run",
+    })
+    await waitFor(async () =>
+      expect(await listExecutionRunEvents("run")).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            operation: "tenant-service-data",
+            adapterId: "adapter",
+          }),
+        }),
+      ])
+    )
+  }
+)
+
+it("keeps a confirmed external child's narrower authority", async () => {
+  const root = seed({
+    id: "root",
+    status: "completed",
+    authority: { schemaVersion: 1, maxTurns: 10 },
+    ...recordedRunMetadata("external-event", { runId: "root" }),
+  })
+  await createExecutionRun(root)
+  await createExecutionRun(
+    seed({
+      id: "child",
+      status: "completed",
+      parentRunId: "root",
+      ...recordedRunMetadata("child", {
+        runId: "child",
+        parent: root,
+        authority: { schemaVersion: 1, maxTurns: 2 },
+      }),
+    })
+  )
+  const replay = await startToolExecutionRun("session", {
+    confirmedSkill: { originRunId: "child", rootSessionId: "session", requester: principal },
+  })
+  expect(replay.authority?.maxTurns).toBe(2)
+  expect((await resolveRunActingIdentity("session", replay.id))?.trigger).toBe("external-event")
+  await finishToolExecutionRun(replay.id)
 })
 
 it("skips desktop/missing sessions and swallows an unavailable observation database", async () => {

@@ -34,7 +34,9 @@ export type { SiblingConversation } from "@cognia/plugin-contract/lib/connectors
  * `platformConversationKey` index; falls back to the legacy full-scan match
  * on `platformBinding.conversationKey` for any row the backfill missed (e.g.
  * a session written between the index add and the upgrade in the same tick).
- * Returns the most-recently-updated match when several exist.
+ * Authority-only agent transcripts are never connector targets. Ownership
+ * guards also reject older owned rows that mixed authority and delivery.
+ * Returns the most-recently-updated connector match when several exist.
  */
 export async function findSessionByConversationKey(
   conversationKey: string
@@ -43,6 +45,7 @@ export async function findSessionByConversationKey(
   const indexed = await db.sessions
     .where("platformConversationKey")
     .equals(conversationKey)
+    .filter((s) => !s.agentTurnOwner)
     .toArray()
   if (indexed.length > 0) {
     return indexed.sort((a, b) => b.updatedAt - a.updatedAt)[0]
@@ -51,7 +54,7 @@ export async function findSessionByConversationKey(
   // backfill (defensive — the upgrade hook normally covers them).
   const all = await db.sessions.toArray()
   return all
-    .filter((s) => s.platformBinding?.conversationKey === conversationKey)
+    .filter((s) => !s.agentTurnOwner && s.platformBinding?.conversationKey === conversationKey)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
@@ -66,13 +69,14 @@ export async function listSessionsByConversationKey(
   const indexed = await db.sessions
     .where("platformConversationKey")
     .equals(conversationKey)
+    .filter((s) => !s.agentTurnOwner)
     .toArray()
   if (indexed.length > 0) {
     return indexed.sort((a, b) => b.updatedAt - a.updatedAt)
   }
   const all = await db.sessions.toArray()
   return all
-    .filter((s) => s.platformBinding?.conversationKey === conversationKey)
+    .filter((s) => !s.agentTurnOwner && s.platformBinding?.conversationKey === conversationKey)
     .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
@@ -98,7 +102,11 @@ export async function listSessionsByConversationChat(
     // Keep pre-v85 base sessions readable even after new indexed threads
     // exist: the exact-key helper owns the legacy backfill fallback.
     listSessionsByConversationKey(baseKey),
-    db.sessions.where("platformConversationKey").startsWith(threadPrefix).toArray(),
+    db.sessions
+      .where("platformConversationKey")
+      .startsWith(threadPrefix)
+      .filter((s) => !s.agentTurnOwner)
+      .toArray(),
   ])
   return [...base, ...threads].sort((a, b) => b.updatedAt - a.updatedAt)
 }
@@ -125,7 +133,9 @@ export async function listSiblingConversations(
     return []
   }
   const db = getDb()
-  const bound = await db.sessions.filter((s) => s.platformConversationKey != null).toArray()
+  const bound = await db.sessions
+    .filter((s) => !s.agentTurnOwner && s.platformConversationKey != null)
+    .toArray()
   const newestByKey = new Map<string, ChatSession>()
   for (const s of bound.sort((a, b) => b.updatedAt - a.updatedAt)) {
     const key = s.platformConversationKey!
@@ -171,7 +181,7 @@ export async function findActiveSessionForConversation(
 
 function isPrivateLarkChatSession(conversationKey: string, session: ChatSession): boolean {
   const binding = session.platformBinding
-  if (!binding || binding.platform !== "lark") return false
+  if (session.agentTurnOwner || !binding || binding.platform !== "lark") return false
   const ref = binding.conversationRef
   if (
     ref.channelKind !== "private" &&
@@ -205,7 +215,8 @@ export async function resolveConversationLinkSession(
   // user to another session when a copied link is stale or inconsistent.
   if (target.sessionId) {
     const session = await db.sessions.get(target.sessionId)
-    if (session?.platformBinding?.conversationKey !== conversationKey) return undefined
+    if (session?.agentTurnOwner || session?.platformBinding?.conversationKey !== conversationKey)
+      return undefined
     if (target.messageId) {
       const message = await db.messages.get(target.messageId)
       if (message?.sessionId !== session.id) return undefined
@@ -216,7 +227,9 @@ export async function resolveConversationLinkSession(
     const message = await db.messages.get(target.messageId)
     if (!message) return undefined
     const session = await db.sessions.get(message.sessionId)
-    return session?.platformBinding?.conversationKey === conversationKey ? session : undefined
+    return !session?.agentTurnOwner && session?.platformBinding?.conversationKey === conversationKey
+      ? session
+      : undefined
   }
   const override = await db.conversationOverrides
     .where("conversationKey")
@@ -305,6 +318,7 @@ export async function migrateLegacyConversationListState(scope?: {
         const sessions = await db.sessions
           .filter(
             (session) =>
+              !session.agentTurnOwner &&
               session.platformBinding?.conversationKey === override.conversationKey &&
               (!scope?.sessionId || session.id === scope.sessionId)
           )
@@ -363,6 +377,7 @@ export async function migrateLegacyConversationListState(scope?: {
       const bound = await db.sessions
         .filter(
           (session) =>
+            !session.agentTurnOwner &&
             !!session.platformBinding &&
             (!scope || session.platformBinding.conversationKey === scope.conversationKey) &&
             (!scope?.sessionId || session.id === scope.sessionId)

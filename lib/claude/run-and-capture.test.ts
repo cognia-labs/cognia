@@ -172,6 +172,114 @@ const sessionEnded = (opts?: {
 })
 
 describe("runAndCaptureAssistantReply", () => {
+  it.each(["file", "image"])(
+    "accepts a valid %s-only SDK reply without mocking capture",
+    async (type) => {
+      const promise = runAndCaptureAssistantReply(SESSION, "Draw", undefined, { timeoutMs: 1_000 })
+      await flushUntilSubscribed()
+      await flushMicrotasks()
+      fire({
+        type: "event",
+        sessionId: SESSION,
+        event: {
+          type: "assistant",
+          uuid: "media-reply",
+          message: {
+            id: "media",
+            role: "assistant",
+            content: [
+              {
+                type,
+                source: {
+                  type: "base64",
+                  media_type: "image/gif",
+                  data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+                },
+              },
+            ],
+          },
+        },
+      } as unknown as ClaudeEvent)
+      fire(sessionEnded())
+      await expect(promise).resolves.toMatchObject({ text: "", messageId: "media-reply" })
+    }
+  )
+
+  it.each([
+    { type: "file", source: { type: "base64", media_type: "image/png", data: "" } },
+    { type: "image", source: { type: "base64", media_type: "image/png" } },
+    { type: "file", url: "", media_type: "application/pdf" },
+    { type: "file", url: "data:image/png;base64,", media_type: "image/png" },
+    { type: "image", url: "data:image/png;base64", media_type: "image/png" },
+  ])("does not accept malformed media as a successful reply: %j", async (block) => {
+    const promise = runAndCaptureAssistantReply(SESSION, "Draw", undefined, { timeoutMs: 1_000 })
+    await flushUntilSubscribed()
+    await flushMicrotasks()
+    fire({
+      type: "event",
+      sessionId: SESSION,
+      event: {
+        type: "assistant",
+        uuid: "invalid-media",
+        message: { id: "media", role: "assistant", content: [block] },
+      },
+    } as unknown as ClaudeEvent)
+    fire(sessionEnded())
+    await expect(promise).rejects.toMatchObject({ code: "no_assistant_text" })
+  })
+
+  it.each([false, true])(
+    "rechecks replaced SDK media (another message retains media: %s)",
+    async (keepOther) => {
+      const promise = runAndCaptureAssistantReply(SESSION, "Draw", undefined, { timeoutMs: 1_000 })
+      await flushUntilSubscribed()
+      await flushMicrotasks()
+      const snapshot = (id: string, content: unknown[]) =>
+        fire({
+          type: "event",
+          sessionId: SESSION,
+          event: { type: "assistant", uuid: id, message: { id, role: "assistant", content } },
+        } as ClaudeEvent)
+      const image = {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/gif",
+          data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        },
+      }
+      snapshot("replaced", [image])
+      if (keepOther) snapshot("retained", [image])
+      snapshot("replaced", [{ ...image, source: { ...image.source, data: "" } }])
+      fire(sessionEnded())
+      if (keepOther) await expect(promise).resolves.toMatchObject({ text: "" })
+      else await expect(promise).rejects.toMatchObject({ code: "no_assistant_text" })
+    }
+  )
+  it("forwards the logical user id and lossless SDK frames separately from attempt correlation", async () => {
+    const onSdkEvent = jest.fn()
+    const promise = runAndCaptureAssistantReply(
+      SESSION,
+      "hi",
+      { turnId: "attempt" },
+      { currentMessageId: "logical-user", onSdkEvent, timeoutMs: 1_000 }
+    )
+    await flushUntilSubscribed()
+    await flushMicrotasks()
+    fire({ ...assistantEvent("old"), turnId: "old-attempt" } as ClaudeEvent)
+    const reply = { ...assistantEvent("done"), turnId: "attempt" } as ClaudeEvent
+    fire(reply)
+    fire({ ...sessionEnded(), turnId: "attempt" } as ClaudeEvent)
+    await promise
+    expect(sendPromptMock).toHaveBeenCalledWith(
+      SESSION,
+      "hi",
+      { turnId: "attempt" },
+      { messageId: "logical-user" }
+    )
+    expect(onSdkEvent).toHaveBeenCalledTimes(1)
+    expect(onSdkEvent).toHaveBeenCalledWith((reply as { event: unknown }).event)
+  })
   it("forwards the final source validator to IPC admission", async () => {
     const beforeSend = jest.fn(async () => undefined)
     const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, {
@@ -1241,6 +1349,7 @@ describe("runAndCaptureAssistantReply", () => {
     fire(sessionEnded())
     const result = await promise
     expect(result.text).toBe("HELLO")
+    expect(result.textTransformed).toBe(true)
     // The full RunAndCaptureResult is preserved — only text is transformed.
     expect(result.messageId).toBe("uuid-asst-1")
   })
@@ -3714,12 +3823,13 @@ describe("host-owned external agent capture", () => {
       return { started: true }
     })
     const onEvent = jest.fn()
+    const onExternalEvent = jest.fn()
     const onToolResultReview = jest.fn()
     const result = await runAndCaptureAssistantReply(
       SESSION,
       "pwd",
       { provider: "cognia:external-agent:pi-1" },
-      { execution: { skip: true }, onEvent, onToolResultReview, timeoutMs: 100 }
+      { execution: { skip: true }, onEvent, onExternalEvent, onToolResultReview, timeoutMs: 100 }
     )
     expect(result.usage).toMatchObject({ inputTokens: 10, outputTokens: 2 })
     expect(onEvent).toHaveBeenCalledWith(
@@ -3731,6 +3841,146 @@ describe("host-owned external agent capture", () => {
       result: "/project",
       isError: false,
     })
+    expect(onExternalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tool_use_start",
+        toolUseId: "t1",
+        rawInput: { command: "pwd" },
+      })
+    )
+    expect(onExternalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "tool_result", toolUseId: "t1", result: "/project" })
+    )
+  })
+  it("accepts an image-only external artifact without tools or text", async () => {
+    const artifact = {
+      type: "artifact_update",
+      artifactId: "picture",
+      complete: true,
+      blocks: [
+        {
+          type: "image",
+          mimeType: "image/gif",
+          data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        },
+      ],
+    }
+    startExternalTurnMock.mockImplementation(async () => {
+      externalHandlers!.onEvent(artifact as never, {} as never)
+      externalHandlers!.onTerminal("completed", undefined)
+      return { started: true }
+    })
+    const onExternalEvent = jest.fn()
+    await expect(
+      runAndCaptureAssistantReply(
+        SESSION,
+        "draw",
+        { provider: "cognia:external-agent:pi-1" },
+        { execution: { skip: true }, onExternalEvent }
+      )
+    ).resolves.toMatchObject({ text: "" })
+    expect(onExternalEvent).toHaveBeenCalledWith(artifact)
+  })
+
+  it.each([false, true])(
+    "rechecks replaced external media (another artifact retains media: %s)",
+    async (keepOther) => {
+      const artifact = {
+        type: "artifact_update",
+        artifactId: "replaced",
+        complete: true,
+        blocks: [
+          {
+            type: "image",
+            mimeType: "image/gif",
+            data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+          },
+        ],
+      }
+      startExternalTurnMock.mockImplementation(async () => {
+        externalHandlers!.onEvent(artifact as never, {} as never)
+        if (keepOther)
+          externalHandlers!.onEvent({ ...artifact, artifactId: "retained" } as never, {} as never)
+        externalHandlers!.onEvent({ ...artifact, blocks: [] } as never, {} as never)
+        externalHandlers!.onTerminal("completed", undefined)
+        return { started: true }
+      })
+      const promise = runAndCaptureAssistantReply(
+        SESSION,
+        "draw",
+        { provider: "cognia:external-agent:pi-1" },
+        { execution: { skip: true } }
+      )
+      if (keepOther) await expect(promise).resolves.toMatchObject({ text: "" })
+      else await expect(promise).rejects.toThrow("External agent returned no assistant text")
+    }
+  )
+
+  it("accepts a tool-only external turn and preserves its raw parts events", async () => {
+    startExternalTurnMock.mockImplementation(async () => {
+      externalHandlers!.onEvent(
+        { type: "tool_use_start", toolUseId: "t1", toolName: "Read", rawInput: {} } as never,
+        {} as never
+      )
+      externalHandlers!.onEvent(
+        { type: "tool_result", toolUseId: "t1", result: "reviewed" } as never,
+        {} as never
+      )
+      externalHandlers!.onTerminal("completed", undefined)
+      return { started: true }
+    })
+    const onExternalEvent = jest.fn()
+    await expect(
+      runAndCaptureAssistantReply(
+        SESSION,
+        "review",
+        { provider: "cognia:external-agent:pi-1" },
+        { execution: { skip: true }, onExternalEvent }
+      )
+    ).resolves.toMatchObject({ text: "" })
+    expect(onExternalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "tool_result", result: "reviewed" })
+    )
+  })
+  it("rebuilds an invalidated external retry without resending the logical prompt in history", async () => {
+    const fixture = createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    try {
+      const { createSession, updateSession } = await import("@/lib/db/sessions")
+      const { commitMessageDelta } = await import("@/lib/db/messages")
+      const session = await createSession({ title: "Retry", workingDir: "/repo" })
+      await updateSession(session.id, {
+        sdkSessionId: "stale-native",
+        runtimeTranscriptInvalidated: "retry",
+        runtimeTranscriptGeneration: "retry",
+      })
+      await commitMessageDelta(session.id, {
+        upserts: [
+          { id: "prior", role: "assistant", parts: [{ type: "text", text: "Earlier review" }] },
+          { id: "logical-prompt", role: "user", parts: [{ type: "text", text: "Review again" }] },
+        ],
+      })
+      startExternalTurnMock.mockImplementation(async () => {
+        externalHandlers!.onEvent(
+          { type: "message_delta", delta: { type: "text", text: "Reviewed" } } as never,
+          {} as never
+        )
+        externalHandlers!.onTerminal("completed", undefined)
+        return { started: true }
+      })
+      await runAndCaptureAssistantReply(
+        session.id,
+        "Review again",
+        { provider: "cognia:external-agent:pi-1", resumeSessionId: "stale-native" },
+        { execution: { skip: true }, currentMessageId: "logical-prompt" }
+      )
+      const sent = startExternalTurnMock.mock.calls[0][0]
+      expect(sent.externalSessionId).toBeUndefined()
+      expect(sent.prompt).toContain("Earlier review")
+      expect(sent.prompt.match(/Review again/g)).toHaveLength(1)
+    } finally {
+      await fixture.dispose()
+    }
   })
   it("persists Pi's native session id from ordinary events and resumes it on the next turn", async () => {
     startExternalTurnMock.mockImplementation(async () => {

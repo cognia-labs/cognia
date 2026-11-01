@@ -10,7 +10,12 @@
  */
 
 import { interpolateEnvelopeTemplate } from "@/lib/bot/events/envelope"
-import type { SendOptions } from "@cognia/agent-config-types"
+import type {
+  ConversationAddress,
+  ConversationDeliveryTarget,
+  NormalizedInboundEvent,
+} from "@/types/connectors/event"
+import type { ChatSession, SendOptions } from "@cognia/agent-config-types"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 import type {
   PluginAgentTurnRequest,
@@ -61,6 +66,61 @@ export function agentTurnUsageBooking(ctx: BotExecutorContext): PluginAgentTurnU
   }
 }
 
+/** Authority binding; connector routing still belongs to connector-owned sessions. */
+function eventPlatformBinding(ctx: BotExecutorContext): ChatSession["platformBinding"] {
+  const { adapterId, conversationKey } = ctx.event.binding ?? {}
+  if (!adapterId || !conversationKey) return undefined
+  const payload =
+    ctx.event.payload && typeof ctx.event.payload === "object"
+      ? (ctx.event.payload as Partial<
+          Pick<NormalizedInboundEvent, "platform" | "conversationKey" | "messageId">
+        > & {
+          conversationAddress?: ConversationAddress
+          deliveryTarget?: ConversationDeliveryTarget
+        })
+      : undefined
+  const target = payload?.deliveryTarget
+  // The connector projection uses the same deliveryTargetFromEvent helper as
+  // connector runtime. Older persisted projections carry only its target;
+  // neither form may infer an address by splitting the opaque conversationKey.
+  const address = payload?.conversationAddress ?? target?.address
+  const platform = payload?.platform ?? address?.platform
+  const addressFields: (keyof ConversationAddress)[] = [
+    "platform",
+    "adapterId",
+    "conversationKey",
+    "scopeKind",
+    "containerId",
+    "topicId",
+  ]
+  if (
+    !platform ||
+    (payload?.conversationKey !== undefined && payload.conversationKey !== conversationKey) ||
+    (address &&
+      (address.adapterId !== adapterId ||
+        address.conversationKey !== conversationKey ||
+        address.platform !== platform)) ||
+    (target &&
+      (target.address?.adapterId !== adapterId ||
+        target.address.conversationKey !== conversationKey ||
+        target.address.platform !== platform ||
+        addressFields.some((field) => target.address[field] !== address?.[field]) ||
+        (payload?.messageId !== undefined &&
+          target.sourceMessageId !== undefined &&
+          target.sourceMessageId !== payload.messageId) ||
+        target.conversationRef?.adapterId !== adapterId ||
+        target.conversationRef.platform !== platform))
+  )
+    throw new Error("Bot event delivery target and conversation disagree")
+  return {
+    adapterId,
+    conversationKey,
+    platform,
+    conversationRef: target?.conversationRef ?? { platform, adapterId },
+    ...(target ? { deliveryTarget: target } : {}),
+  }
+}
+
 export function createAgentTurnBotExecutor(deps: AgentTurnExecutorDeps = {}): BotExecutorFn {
   return async (ctx) => {
     if (!ctx.definition.prompt?.trim()) {
@@ -95,9 +155,15 @@ export function createAgentTurnBotExecutor(deps: AgentTurnExecutorDeps = {}): Bo
             import("@/lib/policy/action-review/plan-context"),
             import("@/lib/policy/action-review/configured-grants"),
           ])
+        const platformBinding = eventPlatformBinding(ctx)
         return runPluginAgentTurn(input, {
+          operationId: usage.operationId,
+          ...(platformBinding ? { platformBinding } : {}),
+          parentRunId: ctx.runId,
           grantSource: { kind: "bot", id: ctx.definition.id },
-          sessionKey: ctx.installationId,
+          sessionKey: platformBinding
+            ? JSON.stringify([ctx.installationId, platformBinding.conversationKey])
+            : ctx.installationId,
           unattendedLabel: `Bot: ${ctx.definition.name}`,
           usage,
           // ADR-0239: a Bot's outbound calls are planned in its installation's

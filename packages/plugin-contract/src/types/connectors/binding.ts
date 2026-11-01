@@ -12,6 +12,15 @@ export interface PlatformBinding {
   deliveryTarget?: ConversationDeliveryTarget
 }
 
+/**
+ * Host-owned IM authority on an app transcript. This is deliberately separate
+ * from ChatSession.platformBinding: it grants neither connector ownership nor
+ * message/history delivery. Non-indexed session metadata needs no DB migration.
+ */
+export interface SessionImAuthority {
+  imAuthorityBinding?: PlatformBinding
+}
+
 /** Optional defaults a Character can ship per platform binding. */
 export interface CharacterPlatformDefaults {
   mode?: ConnectorMode

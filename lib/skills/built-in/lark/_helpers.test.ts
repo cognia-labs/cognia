@@ -17,6 +17,8 @@ import "./sheets"
 import "./task"
 import "./wiki"
 
+jest.mock("./exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
+jest.mock("./capabilities", () => ({ assertLarkCliCommandAvailable: jest.fn() }))
 jest.mock("./_helpers", () => ({
   ...jest.requireActual("./_helpers"),
   runLarkCli: jest.fn(),
@@ -312,4 +314,29 @@ describe("capLarkData", () => {
     cyclic.self = cyclic
     expect(capLarkData(cyclic)).toBe(cyclic)
   })
+})
+
+it("leaves intermediate CLI data unchanged for structured consumers", async () => {
+  const { execLarkCli } = await import("./exec-lark-cli")
+  const execute = jest.mocked(execLarkCli).mockResolvedValue({
+    status: "ok",
+    adapterId: "app",
+    identity: "bot",
+    data: { docs: [] },
+    stderr: "",
+    durationMs: 1,
+  })
+  const availability = jest
+    .mocked((await import("./capabilities")).assertLarkCliCommandAvailable)
+    .mockResolvedValue(undefined)
+  try {
+    const actual = jest.requireActual<typeof import("./_helpers")>("./_helpers")
+    await expect(actual.runLarkCli({ args: ["docx", "+fetch"] })).resolves.toEqual({
+      docs: [],
+    })
+    expect(execLarkCli).toHaveBeenCalledTimes(1)
+  } finally {
+    execute.mockReset()
+    availability.mockReset()
+  }
 })

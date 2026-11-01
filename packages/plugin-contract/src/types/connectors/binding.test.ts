@@ -1,7 +1,24 @@
-import type { PlatformBinding } from "./binding"
+import type { PlatformBinding, SessionImAuthority } from "./binding"
 import type { ChatSession } from "@cognia/agent-config-types"
 
 describe("PlatformBinding", () => {
+  it("keeps authority metadata separate from indexed delivery ownership", () => {
+    const session: ChatSession & SessionImAuthority = {
+      id: "bot",
+      title: "Bot transcript",
+      createdAt: 0,
+      updatedAt: 0,
+      imAuthorityBinding: {
+        platform: "lark",
+        adapterId: "app",
+        conversationKey: "lark:app:chat:topic",
+        conversationRef: { platform: "lark", adapterId: "app" },
+      },
+    }
+    expect(session.imAuthorityBinding?.adapterId).toBe("app")
+    expect(session.platformBinding).toBeUndefined()
+    expect(session.platformConversationKey).toBeUndefined()
+  })
   it("attaches to ChatSession via platformBinding optional", () => {
     const binding: PlatformBinding = {
       adapterId: "tg-personal",

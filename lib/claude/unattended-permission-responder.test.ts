@@ -167,3 +167,40 @@ describe("createUnattendedPermissionResponder attribution (ADR-0239)", () => {
     })
   })
 })
+
+it("binds human HITL evidence to the durable park's exact request", async () => {
+  const { isVerifiedHumanApproval } = await import("./unattended-permission-responder")
+  const request = {
+    type: "permission_request" as const,
+    sessionId: "s",
+    toolUseID: "proof-tool",
+    requestId: "r",
+    toolName: "issue.delete",
+    input: {},
+  }
+  const responder = createUnattendedPermissionResponder("plugin", {
+    park: {
+      park: async () => ({ kind: "approved", decision: { decision: "allow" } }),
+      finish: async () => {},
+      runId: () => "run",
+    },
+  })
+  const decision = await responder.onPermissionRequest(request)
+  expect(isVerifiedHumanApproval(decision, request)).toBe(true)
+  expect(
+    isVerifiedHumanApproval({ decision: "allow", attribution: { authority: "human" } }, request)
+  ).toBe(false)
+  expect(isVerifiedHumanApproval(decision, { ...request, requestId: "other" })).toBe(false)
+  expect(isVerifiedHumanApproval(decision, { ...request, sessionId: "other" })).toBe(false)
+  expect(isVerifiedHumanApproval(decision, { ...request, input: { changed: true } })).toBe(false)
+})
+
+it("accepts only the original human control credential, not an automated or cloned allow", async () => {
+  const { recordHumanParkControlDecision, isHumanParkControlDecision } =
+    await import("./unattended-permission-responder")
+  const automated = { decision: "allow" as const, attribution: { authority: "human" as const } }
+  expect(isHumanParkControlDecision(automated)).toBe(false)
+  const human = recordHumanParkControlDecision({ decision: "allow" as const })
+  expect(isHumanParkControlDecision(human)).toBe(true)
+  expect(isHumanParkControlDecision({ ...human })).toBe(false)
+})

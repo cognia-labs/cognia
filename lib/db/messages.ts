@@ -1,3 +1,4 @@
+import { tombstoneAgentTurnOperations } from "./shared-run-journal"
 import { measureOperation } from "@/lib/perf/operation-performance"
 import type { UIMessage } from "ai"
 import { mergeChatTurnMetadata } from "@/lib/chat/continuation"
@@ -138,6 +139,8 @@ type PersistSnapshot = Map<string, { ref: WeakRef<UIMessage>; createdAt: number 
 /** Optional ownership fence for provider-originated transcript writes. */
 export interface MessagePersistOptions {
   shouldPersist?: () => boolean
+  /** Intentional removals; omissions alone cannot delete another writer's rows. */
+  deleteIds?: string[]
   /** An object also fences legacy frames whose generation value is absent. */
   runtimeGeneration?: { value?: string }
 }
@@ -444,7 +447,7 @@ export function countMessages(sessionId: string): Promise<number> {
  *
  * Streaming sends one event per token-batch, so this gets called many times
  * per turn. We diff by id: upsert what's still here, delete ordinary messages
- * that disappeared. Connector-owned rows survive omissions from stale windows;
+ * that disappeared. Connector and agent-turn-owned rows survive omissions from stale windows;
  * their removal goes through an explicit clear, truncate or delete operation.
  * That keeps the IO proportional to *changed* messages instead of total
  * messages, which matters once a session grows past a few dozen turns.
@@ -503,9 +506,12 @@ async function replaceSessionTranscriptNow(
     publishedRevision = null
     return transactionDb.transaction(
       "rw",
-      transactionDb.messages,
-      transactionDb.messageMediaRefs,
-      transactionDb.sessions,
+      [
+        transactionDb.messages,
+        transactionDb.messageMediaRefs,
+        transactionDb.sessions,
+        ...(options?.deleteIds?.length ? [transactionDb.sharedRunJournals] : []),
+      ],
       async () => {
         const currentSession = await transactionDb.sessions.get(sessionId)
         if (!canPersist(options, currentSession)) return
@@ -594,12 +600,25 @@ async function replaceSessionTranscriptNow(
               const omittedIds = [...existingIds].filter((id) => !incomingIds.has(id))
               const omittedRows =
                 omittedIds.length > 0 ? await transactionDb.messages.bulkGet(omittedIds) : []
-              // A window may never have observed these rows, or their later
-              // edit/recall. Keep their transport-owned identity and tombstone
-              // so a subsequent stale upsert still has authority to preserve.
+              // A pane is not the sole writer of an agent-turn transcript,
+              // just as it is not the sole writer of connector rows. Preserve
+              // omissions even on a cold write or before revision hydration;
+              // removal requires an explicit clear/truncate/delete operation.
               const toDelete = omittedRows.flatMap((row) =>
-                row && !row.metadata?.platformMessage && !refusedHostMessageOf(row) ? [row.id] : []
+                row &&
+                (options?.deleteIds?.includes(row.id) ||
+                  (!currentSession?.agentTurnOwner &&
+                    !row.metadata?.platformMessage &&
+                    !refusedHostMessageOf(row)))
+                  ? [row.id]
+                  : []
               )
+              if (options?.deleteIds?.length && toDelete.length)
+                await tombstoneAgentTurnOperations(
+                  new Set([sessionId]),
+                  transactionDb,
+                  new Set(toDelete)
+                )
               const changedIds = [...toDelete, ...rows.map((row) => row.id)]
               const oldRefs =
                 changedIds.length > 0
@@ -731,7 +750,8 @@ async function replaceSessionTranscriptNow(
 /**
  * Backward-compatible name for callers that still own a complete transcript
  * snapshot. Partial windows must use {@link commitMessageDelta}; omissions in
- * this API delete ordinary messages, while connector rows require explicit deletion.
+ * this API delete ordinary messages. Connector rows and agent-turn-owned
+ * transcripts require explicit deletion.
  */
 export const persistMessages = replaceSessionTranscript
 
@@ -742,29 +762,55 @@ export interface MessageDelta {
   deleteIds?: string[]
 }
 
+const preparedDeltaScope = Symbol("prepared-message-delta")
+export interface PreparedMessageDelta extends MessageDelta {
+  readonly [preparedDeltaScope]: { database: ReturnType<typeof getDb>; sessionId: string }
+}
+
+/** Prepare assets and images before entering an enclosing acceptance transaction. */
+export async function prepareMessageDelta(
+  sessionId: string,
+  delta: MessageDelta
+): Promise<PreparedMessageDelta> {
+  const database = getDb()
+  const upserts = await Promise.all(
+    (delta.upserts ?? []).map((message) => prepareMessage(database.name, sessionId, message))
+  )
+  assertDatabaseScope(database.name)
+  return { ...delta, upserts, [preparedDeltaScope]: { database, sessionId } }
+}
+
 /**
  * Persist an explicit partial transcript change without treating unloaded
  * history as deleted. This is the safe write path for timeline/detail paging,
  * reconnect reconciliation, and any producer that does not own a full
  * session snapshot.
  */
-export function commitMessageDelta(sessionId: string, delta: MessageDelta): Promise<void> {
+export function commitMessageDelta(
+  sessionId: string,
+  delta: MessageDelta | PreparedMessageDelta
+): Promise<void> {
   return enqueueTranscriptWrite(sessionId, () => commitMessageDeltaNow(sessionId, delta))
 }
 
 async function commitMessageDeltaNow(
   sessionId: string,
-  { upserts = [], deleteIds = [] }: MessageDelta
+  delta: MessageDelta | PreparedMessageDelta
 ): Promise<void> {
   let enclosingTransaction = Dexie.currentTransaction
   while (enclosingTransaction?.parent) enclosingTransaction = enclosingTransaction.parent
   const db = getDb()
+  const { upserts = [], deleteIds = [] } = delta
+  const prepared = preparedDeltaScope in delta ? delta[preparedDeltaScope] : undefined
+  if (prepared && (prepared.database !== db || prepared.sessionId !== sessionId)) {
+    throw new Error("Prepared message delta scope changed")
+  }
   const session = await db.sessions.get(sessionId)
   assertSessionWritable(session, "send-message")
   const projectId = session?.projectId ?? (await resolveScopeProjectId())
-  const normalized = await Promise.all(
-    upserts.map((message) => prepareMessage(db.name, sessionId, message))
-  )
+  const normalized = prepared
+    ? upserts
+    : await Promise.all(upserts.map((message) => prepareMessage(db.name, sessionId, message)))
   const upsertIds = normalized.map((message) => message.id || newId())
   if (new Set(upsertIds).size !== upsertIds.length) {
     throw new Error("Message delta contains duplicate upsert ids")
@@ -776,91 +822,103 @@ async function commitMessageDeltaNow(
   let deletedMessageIds: string[] = []
   let publishedRevision: number | null = null
 
-  await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
-    const currentSession = await db.sessions.get(sessionId)
-    assertSessionWritable(currentSession, "send-message")
-    const existingUpserts = await db.messages.bulkGet(upsertIds)
-    const existingById = new Map(
-      existingUpserts
-        .filter((row): row is StoredMessage => row !== undefined)
-        .map((row) => [row.id, row])
-    )
-    for (const row of existingById.values()) {
-      if (row.sessionId !== sessionId) {
-        throw new Error("Message delta cannot move a message between sessions")
-      }
-    }
-
-    const now = Date.now()
-    const rows = normalized.map((message, index): StoredMessage => {
-      const id = upsertIds[index]!
-      const meta = (message as { metadata?: Record<string, unknown> }).metadata
-      const senderKindRaw = meta?.senderKind
-      const senderKind =
-        senderKindRaw === "user" || senderKindRaw === "assistant" || senderKindRaw === "system"
-          ? senderKindRaw
-          : undefined
-      const row: StoredMessage = {
-        id,
-        sessionId,
-        projectId,
-        role: message.role,
-        parts: message.parts,
-        turnKey: typeof meta?.turnKey === "string" ? meta.turnKey : undefined,
-        senderId: typeof meta?.senderId === "string" ? meta.senderId : undefined,
-        senderKind,
-        collaboration: collaborationColumnOf(meta),
-        metadata: mergeChatTurnMetadata(stripHoistedMeta(meta), existingById.get(id)?.metadata),
-        workingSetSnapshot: existingById.has(id)
-          ? existingById.get(id)?.workingSetSnapshot
-          : (currentSession?.workingSet ?? emptyWorkingSet()),
-        createdAt:
-          existingById.get(id)?.createdAt ??
-          (typeof meta?.createdAt === "number" && Number.isFinite(meta.createdAt)
-            ? meta.createdAt
-            : now + index),
-      }
-      preserveInboundRevision(row, existingById.get(id))
-      return row
-    })
-
-    const requestedDeleteIds = [...new Set(deleteIds)].filter((id) => !upsertIds.includes(id))
-    const existingDeletes = await db.messages.bulkGet(requestedDeleteIds)
-    const effectiveDeleteIds = existingDeletes
-      .filter((row): row is StoredMessage => row?.sessionId === sessionId)
-      .map((row) => row.id)
-    deletedMessageIds = effectiveDeleteIds
-    const changedIds = [...effectiveDeleteIds, ...upsertIds]
-    if (changedIds.length === 0) return
-
-    newUserMessageIds = rows
-      .filter(
-        (row) =>
-          !existingById.has(row.id) &&
-          row.role === "user" &&
-          row.metadata?.triggerWorkflows !== false
+  await db.transaction(
+    "rw",
+    [
+      db.messages,
+      db.messageMediaRefs,
+      db.sessions,
+      ...(deleteIds.length ? [db.sharedRunJournals] : []),
+    ],
+    async () => {
+      const currentSession = await db.sessions.get(sessionId)
+      assertSessionWritable(currentSession, "send-message")
+      const existingUpserts = await db.messages.bulkGet(upsertIds)
+      const existingById = new Map(
+        existingUpserts
+          .filter((row): row is StoredMessage => row !== undefined)
+          .map((row) => [row.id, row])
       )
-      .map((row) => row.id)
+      for (const row of existingById.values()) {
+        if (row.sessionId !== sessionId) {
+          throw new Error("Message delta cannot move a message between sessions")
+        }
+      }
 
-    const oldRefs = await db.messageMediaRefs
-      .where("messageId")
-      .anyOf(changedIds)
-      .filter(isMessageOwnedMediaRef)
-      .toArray()
-    for (const ref of oldRefs) orphanCandidates.add(ref.hash)
-    if (effectiveDeleteIds.length > 0) await db.messages.bulkDelete(effectiveDeleteIds)
-    if (rows.length > 0) await db.messages.bulkPut(rows)
-    await db.messageMediaRefs
-      .where("messageId")
-      .anyOf(changedIds)
-      .filter(isMessageOwnedMediaRef)
-      .delete()
-    const replacementRefs = rows.flatMap((row) =>
-      messageMediaRefRows(row.id, row.sessionId, row.parts)
-    )
-    if (replacementRefs.length > 0) await db.messageMediaRefs.bulkPut(replacementRefs)
-    publishedRevision = await bumpTranscriptRevision(db, sessionId)
-  })
+      const now = Date.now()
+      const rows = normalized.map((message, index): StoredMessage => {
+        const id = upsertIds[index]!
+        const meta = (message as { metadata?: Record<string, unknown> }).metadata
+        const senderKindRaw = meta?.senderKind
+        const senderKind =
+          senderKindRaw === "user" || senderKindRaw === "assistant" || senderKindRaw === "system"
+            ? senderKindRaw
+            : undefined
+        const row: StoredMessage = {
+          id,
+          sessionId,
+          projectId,
+          role: message.role,
+          parts: message.parts,
+          turnKey: typeof meta?.turnKey === "string" ? meta.turnKey : undefined,
+          senderId: typeof meta?.senderId === "string" ? meta.senderId : undefined,
+          senderKind,
+          collaboration: collaborationColumnOf(meta),
+          metadata: mergeChatTurnMetadata(stripHoistedMeta(meta), existingById.get(id)?.metadata),
+          workingSetSnapshot: existingById.has(id)
+            ? existingById.get(id)?.workingSetSnapshot
+            : (currentSession?.workingSet ?? emptyWorkingSet()),
+          createdAt:
+            existingById.get(id)?.createdAt ??
+            (typeof meta?.createdAt === "number" && Number.isFinite(meta.createdAt)
+              ? meta.createdAt
+              : now + index),
+        }
+        preserveInboundRevision(row, existingById.get(id))
+        return row
+      })
+
+      const requestedDeleteIds = [...new Set(deleteIds)].filter((id) => !upsertIds.includes(id))
+      const existingDeletes = await db.messages.bulkGet(requestedDeleteIds)
+      const effectiveDeleteIds = existingDeletes
+        .filter((row): row is StoredMessage => row?.sessionId === sessionId)
+        .map((row) => row.id)
+      deletedMessageIds = effectiveDeleteIds
+      const changedIds = [...effectiveDeleteIds, ...upsertIds]
+      if (changedIds.length === 0) return
+
+      newUserMessageIds = rows
+        .filter(
+          (row) =>
+            !existingById.has(row.id) &&
+            row.role === "user" &&
+            row.metadata?.triggerWorkflows !== false
+        )
+        .map((row) => row.id)
+
+      const oldRefs = await db.messageMediaRefs
+        .where("messageId")
+        .anyOf(changedIds)
+        .filter(isMessageOwnedMediaRef)
+        .toArray()
+      for (const ref of oldRefs) orphanCandidates.add(ref.hash)
+      if (effectiveDeleteIds.length > 0) {
+        await tombstoneAgentTurnOperations(new Set([sessionId]), db, new Set(effectiveDeleteIds))
+        await db.messages.bulkDelete(effectiveDeleteIds)
+      }
+      if (rows.length > 0) await db.messages.bulkPut(rows)
+      await db.messageMediaRefs
+        .where("messageId")
+        .anyOf(changedIds)
+        .filter(isMessageOwnedMediaRef)
+        .delete()
+      const replacementRefs = rows.flatMap((row) =>
+        messageMediaRefRows(row.id, row.sessionId, row.parts)
+      )
+      if (replacementRefs.length > 0) await db.messageMediaRefs.bulkPut(replacementRefs)
+      publishedRevision = await bumpTranscriptRevision(db, sessionId)
+    }
+  )
 
   const finalize = async () => {
     assertDatabaseScope(db.name)
@@ -1121,16 +1179,24 @@ async function clearMessagesNow(sessionId: string): Promise<void> {
     .filter(isMessageOwnedMediaRef)
     .toArray()
   let revision: number | null = null
-  await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
-    assertSessionWritable(await db.sessions.get(sessionId), "send-message")
-    const deleted = await db.messages.where("sessionId").equals(sessionId).delete()
-    await db.messageMediaRefs
-      .where("sessionId")
-      .equals(sessionId)
-      .filter(isMessageOwnedMediaRef)
-      .delete()
-    if (deleted > 0) revision = await bumpTranscriptRevision(db, sessionId)
-  })
+  await db.transaction(
+    "rw",
+    db.messages,
+    db.messageMediaRefs,
+    db.sessions,
+    db.sharedRunJournals,
+    async () => {
+      assertSessionWritable(await db.sessions.get(sessionId), "send-message")
+      await tombstoneAgentTurnOperations(new Set([sessionId]), db)
+      const deleted = await db.messages.where("sessionId").equals(sessionId).delete()
+      await db.messageMediaRefs
+        .where("sessionId")
+        .equals(sessionId)
+        .filter(isMessageOwnedMediaRef)
+        .delete()
+      if (deleted > 0) revision = await bumpTranscriptRevision(db, sessionId)
+    }
+  )
   publishChatLifecycleEvent({ type: "session-cleared", sessionId }, Dexie.currentTransaction)
   invalidatePersistSnapshot(sessionId)
   markSessionDirty(sessionId)
@@ -1173,19 +1239,27 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
     .toArray()
   let revision: number | null = null
   let deleted = false
-  await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
-    assertSessionWritable(await db.sessions.get(sessionId), "send-message")
-    const row = await db.messages.get(messageId)
-    if (!row || row.sessionId !== sessionId) return
-    await db.messages.delete(messageId)
-    deleted = true
-    await db.messageMediaRefs
-      .where("messageId")
-      .equals(messageId)
-      .filter(isMessageOwnedMediaRef)
-      .delete()
-    revision = await bumpTranscriptRevision(db, row.sessionId)
-  })
+  await db.transaction(
+    "rw",
+    db.messages,
+    db.messageMediaRefs,
+    db.sessions,
+    db.sharedRunJournals,
+    async () => {
+      assertSessionWritable(await db.sessions.get(sessionId), "send-message")
+      const row = await db.messages.get(messageId)
+      if (!row || row.sessionId !== sessionId) return
+      await tombstoneAgentTurnOperations(new Set([sessionId]), db, new Set([messageId]))
+      await db.messages.delete(messageId)
+      deleted = true
+      await db.messageMediaRefs
+        .where("messageId")
+        .equals(messageId)
+        .filter(isMessageOwnedMediaRef)
+        .delete()
+      revision = await bumpTranscriptRevision(db, row.sessionId)
+    }
+  )
   if (deleted)
     publishChatLifecycleEvent(
       { type: "message-deleted", sessionId, messageId },
@@ -1333,29 +1407,37 @@ async function truncateAfterNow(
   // lopped off ten turns ago.
   const removedIds: string[] = []
   let revision: number | null = null
-  await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
-    assertSessionWritable(await db.sessions.get(sessionId), "send-message")
-    const ids = await db.messages
-      .where("[sessionId+createdAt]")
-      .between([sessionId, lowerBound], [sessionId, Number.MAX_SAFE_INTEGER])
-      .primaryKeys()
-    if (ids.length > 0) {
-      removedIds.push(...(ids as string[]))
-      const refs = await db.messageMediaRefs
-        .where("messageId")
-        .anyOf(ids as string[])
-        .filter(isMessageOwnedMediaRef)
-        .toArray()
-      for (const ref of refs) orphanCandidates.add(ref.hash)
-      await db.messages.bulkDelete(ids as string[])
-      await db.messageMediaRefs
-        .where("messageId")
-        .anyOf(ids as string[])
-        .filter(isMessageOwnedMediaRef)
-        .delete()
-      revision = await bumpTranscriptRevision(db, sessionId)
+  await db.transaction(
+    "rw",
+    db.messages,
+    db.messageMediaRefs,
+    db.sessions,
+    db.sharedRunJournals,
+    async () => {
+      assertSessionWritable(await db.sessions.get(sessionId), "send-message")
+      const ids = await db.messages
+        .where("[sessionId+createdAt]")
+        .between([sessionId, lowerBound], [sessionId, Number.MAX_SAFE_INTEGER])
+        .primaryKeys()
+      if (ids.length > 0) {
+        await tombstoneAgentTurnOperations(new Set([sessionId]), db, new Set(ids as string[]))
+        removedIds.push(...(ids as string[]))
+        const refs = await db.messageMediaRefs
+          .where("messageId")
+          .anyOf(ids as string[])
+          .filter(isMessageOwnedMediaRef)
+          .toArray()
+        for (const ref of refs) orphanCandidates.add(ref.hash)
+        await db.messages.bulkDelete(ids as string[])
+        await db.messageMediaRefs
+          .where("messageId")
+          .anyOf(ids as string[])
+          .filter(isMessageOwnedMediaRef)
+          .delete()
+        revision = await bumpTranscriptRevision(db, sessionId)
+      }
     }
-  })
+  )
   // The on-disk row set changed out-of-band from `persistMessages`; drop the
   // cache so the next persist re-derives existence/createdAt from Dexie.
   invalidatePersistSnapshot(sessionId)

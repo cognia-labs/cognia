@@ -24,12 +24,34 @@ jest.mock("./desktop-hitl", () => ({
   requestDesktopSkillApproval: (...a: unknown[]) => mockDesktopApproval(...a),
 }))
 
+import { createUnattendedPermissionResponder } from "@/lib/claude/unattended-permission-responder"
+import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { runBuiltInSkill } from "./dispatcher"
 import { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } from "./registry"
 import type { BuiltInSkill, BuiltInSkillContext } from "./types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { resolveBuiltInSkillContext } from "./context"
+import { waitFor } from "@testing-library/react"
+import {
+  registerSubagentApprovalRoute,
+  clearSubagentApprovalRoute,
+} from "@/lib/claude/agents/subagent-approval-routes"
+import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
+import { resolveApproval, hasPendingApproval } from "@/lib/connectors/hitl/approval-registry"
+import { installExecutionRunControlHandlers } from "@/lib/execution/control-handlers"
+import { executeRunControlCommand } from "@/lib/execution/run-control"
+
+function humanParkResponder(approved = true) {
+  return createUnattendedPermissionResponder("test", {
+    park: {
+      park: async () =>
+        approved ? { kind: "approved", decision: { decision: "allow" } } : { kind: "expired" },
+      finish: async () => {},
+      runId: () => "test-run",
+    },
+  }).onPermissionRequest
+}
 
 const hitlSurface = () =>
   buildConfirmSurface({
@@ -107,6 +129,100 @@ beforeEach(async () => {
     },
   })
 })
+
+it.each(["human", "automated"])(
+  "keeps a background child's durable approval after its parent ends (%s)",
+  async (answer) => {
+    const execute = jest.fn(async () => ({ done: true }))
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+    const parent = await startToolExecutionRun("s_x", { runId: "originating-bot" })
+    const child = await startToolExecutionRun("s_x", {
+      runId: "execution:job:background-child",
+      parentRunId: parent.id,
+    })
+    const endParent = beginCapturedTurn("s_x", {
+      turnId: "original",
+      outboundPolicy: { unattended: true },
+    })
+    registerSubagentApprovalRoute("background-child", {
+      parentSessionId: "s_x",
+      rootSessionId: "s_x",
+      runId: "background-child",
+      subagentId: "worker",
+      backgrounded: true,
+      approvalOrigin: { unattended: true },
+    } as Parameters<typeof registerSubagentApprovalRoute>[1])
+    endParent()
+    await finishToolExecutionRun(parent.id)
+    const laterRespond = jest.fn(async () => ({ decision: "allow" as const }))
+    const endLater = beginCapturedTurn("s_x", {
+      turnId: "later",
+      outboundPolicy: { unattended: false },
+      respond: laterRespond,
+    })
+    const endChild = beginCapturedTurn("background-child", {
+      turnId: "child-turn",
+      outboundPolicy: { unattended: true },
+    })
+    const handlers = installExecutionRunControlHandlers()
+    let result: ReturnType<typeof runBuiltInSkill> | undefined
+    try {
+      result = runBuiltInSkill(
+        "lark.calendar.list_events",
+        { calendarId: "cal" },
+        await resolveBuiltInSkillContext("background-child")
+      )
+      await waitFor(async () => {
+        const interrupts = await getDb().executionRunInterrupts.toArray()
+        expect(
+          interrupts.some(
+            (row) => row.status === "pending" && row.requestDigest?.startsWith("builtin-skill:")
+          )
+        ).toBe(true)
+      })
+      const [interrupt] = await getDb().executionRunInterrupts.toArray()
+      const parkRun = (await getDb().executionRuns.get(interrupt.runId))!
+      expect(parkRun.parentRunId).toBe(child.id)
+      expect(parkRun.actingIdentity?.rootRunId).toBe(parent.id)
+      expect(execute).not.toHaveBeenCalled()
+      await waitFor(() =>
+        expect(hasPendingApproval("background-child", interrupt.requestDigest!)).toBe(true)
+      )
+      if (answer === "human") {
+        expect(
+          await executeRunControlCommand(
+            {
+              runId: parkRun.id,
+              action: "approve",
+              interruptId: interrupt.id,
+              expectedRevision: parkRun.currentRevision,
+              idempotencyKey: "human-approval",
+              actor: { remoteUserId: "owner" },
+            },
+            { operatorIds: ["owner"] }
+          )
+        ).toMatchObject({ accepted: true })
+      } else resolveApproval("background-child", interrupt.requestDigest!, { decision: "allow" })
+      expect((await result).status).toBe(answer === "human" ? "ok" : "denied")
+      expect(execute).toHaveBeenCalledTimes(answer === "human" ? 1 : 0)
+      expect(laterRespond).not.toHaveBeenCalled()
+      expect(mockEnqueue).not.toHaveBeenCalled()
+      expect((await getDb().executionRuns.get(parkRun.id))?.status).toBe(
+        answer === "human" ? "completed" : "failed"
+      )
+    } finally {
+      for (const interrupt of await getDb().executionRunInterrupts.toArray())
+        if (interrupt.requestDigest)
+          resolveApproval("background-child", interrupt.requestDigest, { decision: "deny" })
+      await result
+      handlers.dispose()
+      endChild()
+      endLater()
+      clearSubagentApprovalRoute("background-child")
+      await finishToolExecutionRun(child.id)
+    }
+  }
+)
 
 describe("hidden children inherit dispatcher IM gates", () => {
   it("runs a non-personal skill for a row-less workflow run with a bare context", async () => {
@@ -845,4 +961,226 @@ describe("runBuiltInSkill — error surface", () => {
     )
     expect(r).toEqual({ status: "error", message: "upstream 500" })
   })
+})
+
+describe("Bot IM authority and unattended confirmations", () => {
+  it("hydrates the Bot's IM binding and applies the conversation allowlist", async () => {
+    await getDb().sessions.update("s_x", {
+      agentTurnOwner: { kind: "bot", id: "bot", key: "topic" },
+    })
+    await getDb().conversationOverrides.put(mkOverride({ allowedBuiltInSkillIds: [] }))
+    const execute = jest.fn()
+    registerBuiltInSkill(mkSkill({ execute }))
+    const context = await resolveBuiltInSkillContext("s_x")
+    expect(context.imBinding).toEqual(imBinding)
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal" }, context)
+    ).toMatchObject({ status: "denied", reason: "channel_blocks_all_builtin_skills" })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])(
+    "parks a bound unattended write and holds the clock (approved=%s)",
+    async (approved) => {
+      const execute = jest.fn(async () => ({ done: true }))
+      registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+      const releaseClock = jest.fn()
+      const respond = jest.fn(humanParkResponder(approved))
+      const end = beginCapturedTurn("s_x", {
+        turnId: "turn",
+        outboundPolicy: { unattended: true },
+        respond,
+        holdWallClock: () => releaseClock,
+      })
+      try {
+        const result = await runBuiltInSkill(
+          "lark.calendar.list_events",
+          { calendarId: "cal" },
+          imCtx
+        )
+        expect(result.status).toBe(approved ? "ok" : "denied")
+        expect(respond).toHaveBeenCalledTimes(1)
+        expect(releaseClock).toHaveBeenCalledTimes(1)
+        expect(mockEnqueue).not.toHaveBeenCalled()
+        expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+        if (approved)
+          expect(execute).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ humanConfirmed: true, hitlBypass: true })
+          )
+        else expect(execute).not.toHaveBeenCalled()
+      } finally {
+        end()
+      }
+    }
+  )
+})
+
+it("parks a Bot child's write with its unattended root, even if the child capture defaults to interactive", async () => {
+  await getDb().sessions.put({
+    id: "bot-child",
+    parentSessionId: "s_x",
+    createdAt: 0,
+    updatedAt: 0,
+    title: "Child",
+  })
+  const execute = jest.fn(async () => ({ done: true }))
+  registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+  const rootRespond = jest.fn(humanParkResponder())
+  const childRespond = jest.fn()
+  const releaseClock = jest.fn()
+  const endRoot = beginCapturedTurn("s_x", {
+    turnId: "root-turn",
+    outboundPolicy: { unattended: true },
+    respond: rootRespond,
+    holdWallClock: () => releaseClock,
+  })
+  const endChild = beginCapturedTurn("bot-child", {
+    turnId: "child-turn",
+    outboundPolicy: { unattended: false },
+    respond: childRespond,
+  })
+  try {
+    const context = await resolveBuiltInSkillContext("bot-child")
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal" }, context)
+    ).toMatchObject({ status: "ok" })
+    expect(rootRespond).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s_x" }))
+    expect(childRespond).not.toHaveBeenCalled()
+    expect(releaseClock).toHaveBeenCalledTimes(1)
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  } finally {
+    endChild()
+    endRoot()
+  }
+})
+
+it.each(["bot", "plugin"] as const)(
+  "inherits an unbound %s root's approval responder",
+  async (kind) => {
+    await getDb().sessions.update("s_x", {
+      platformBinding: undefined,
+      agentTurnOwner: { kind, id: kind },
+    })
+    await getDb().sessions.put({
+      id: "unbound-child",
+      title: "Child",
+      parentSessionId: "s_x",
+      kind: "subagent",
+      createdAt: 0,
+      updatedAt: 0,
+    })
+    const execute = jest.fn(async () => ({ done: true }))
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+    const respond = jest.fn(humanParkResponder())
+    const releaseClock = jest.fn()
+    const endRoot = beginCapturedTurn("s_x", {
+      turnId: "root",
+      outboundPolicy: { unattended: true },
+      respond,
+      holdWallClock: () => releaseClock,
+    })
+    const endChild = beginCapturedTurn("unbound-child", {
+      turnId: "child",
+      outboundPolicy: { unattended: true },
+    })
+    try {
+      const context = await resolveBuiltInSkillContext("unbound-child")
+      expect(context.imBinding).toBeUndefined()
+      expect(
+        await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal" }, context)
+      ).toMatchObject({ status: "ok" })
+      expect(respond).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s_x" }))
+      expect(execute).toHaveBeenCalledTimes(1)
+      expect(releaseClock).toHaveBeenCalledTimes(1)
+      expect(mockDesktopApproval).not.toHaveBeenCalled()
+      expect(mockEnqueue).not.toHaveBeenCalled()
+    } finally {
+      endChild()
+      endRoot()
+    }
+  }
+)
+
+it.each(["write", "destructive"] as const)(
+  "does not treat an automated %s allow as human confirmation",
+  async (mutation) => {
+    const execute = jest.fn(async () => ({ done: true }))
+    registerBuiltInSkill(mkSkill({ mutation, hitlSurface, execute }))
+    const end = beginCapturedTurn("s_x", {
+      turnId: "plugin-sdk",
+      outboundPolicy: { unattended: true },
+      respond: async () => ({ decision: "allow" }),
+    })
+    try {
+      expect(
+        await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal" }, imCtx)
+      ).toMatchObject({ status: "denied", reason: "hitl_rejected" })
+      expect(execute).not.toHaveBeenCalled()
+      expect(mockDesktopApproval).not.toHaveBeenCalled()
+    } finally {
+      end()
+    }
+  }
+)
+
+it("routes a responder-less Squad child through its interactive IM root's card", async () => {
+  await getDb().sessions.put({
+    id: "im-child",
+    title: "Child",
+    parentSessionId: "s_x",
+    createdAt: 0,
+    updatedAt: 0,
+  })
+  const execute = jest.fn(async () => ({ done: true }))
+  registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+  const endRoot = beginCapturedTurn("s_x", {
+    turnId: "root",
+    outboundPolicy: { unattended: false },
+  })
+  const endChild = beginCapturedTurn("im-child", {
+    turnId: "child",
+    outboundPolicy: { unattended: true },
+  })
+  try {
+    const context = await resolveBuiltInSkillContext("im-child")
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal" }, context)
+    ).toMatchObject({ status: "pending_hitl" })
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
+    expect(mockDesktopApproval).not.toHaveBeenCalled()
+  } finally {
+    endChild()
+    endRoot()
+  }
+})
+
+it("routes an interactive desktop root's child approval to the visible root", async () => {
+  await getDb().sessions.update("s_x", { platformBinding: undefined })
+  await getDb().sessions.put({
+    id: "desktop-child",
+    parentSessionId: "s_x",
+    title: "Child",
+    createdAt: 0,
+    updatedAt: 0,
+  })
+  registerBuiltInSkill(mkSkill({ mutation: "destructive", hitlSurface }))
+  mockDesktopApproval.mockResolvedValue({ approved: true, reason: "user" })
+  const root = beginCapturedTurn("s_x", { turnId: "root", outboundPolicy: { unattended: false } })
+  const child = beginCapturedTurn("desktop-child", {
+    turnId: "child",
+    outboundPolicy: { unattended: true },
+  })
+  try {
+    await runBuiltInSkill(
+      "lark.calendar.list_events",
+      { calendarId: "cal" },
+      await resolveBuiltInSkillContext("desktop-child")
+    )
+    expect(mockDesktopApproval).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s_x" }))
+  } finally {
+    child()
+    root()
+  }
 })

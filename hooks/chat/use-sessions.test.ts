@@ -17,9 +17,18 @@ import { clearPaneRowCache } from "@/lib/chat/pane-row-cache"
 const liveQueryMock = jest.fn()
 let mockRealLiveQuery = false
 let mockDatabaseName = "test-db"
+let mockAgentTurnRevisions = "[]"
 jest.mock("dexie-react-hooks", () => ({
   useLiveQuery: <T>(fn: () => Promise<T> | T, deps: unknown[]): T | undefined => {
     if (mockRealLiveQuery) return jest.requireActual("dexie-react-hooks").useLiveQuery(fn, deps)
+    if (fn.name === "readAgentTurnRevisions")
+      return {
+        key: JSON.stringify([
+          jest.requireActual("@/lib/runtime/runtime-target-context").getRuntimeTargetScopeKey(),
+          mockDatabaseName,
+        ]),
+        revisions: mockAgentTurnRevisions,
+      } as T
     const result = liveQueryMock(fn)
     if (Array.isArray(result) && ["readSessionList", "readSessionFolders"].includes(fn.name)) {
       return {
@@ -225,6 +234,7 @@ const mockedEmit = emitSystemBusEvent as jest.Mock
 beforeEach(() => {
   mockRealLiveQuery = false
   mockDatabaseName = "test-db"
+  mockAgentTurnRevisions = "[]"
   clearActiveRuntimeTargetContext()
   chatStoreState.setSessionMessages.mockClear()
   chatStoreState.setSessionMessagesLoadError.mockClear()
@@ -618,6 +628,33 @@ describe("useSessions", () => {
     // A cached conversation never takes the preview path.
     expect(countMessagesMock).not.toHaveBeenCalled()
   })
+
+  it.each(["idle", "streaming"])(
+    "reloads a committed Bot transcript when the pane is %s",
+    async (status) => {
+      mockAgentTurnRevisions = JSON.stringify([["s1", 1]])
+      chatStoreState.activeSessionId = "s1"
+      chatStoreState.sessions.s1 = { messages: chatStoreState.messages, status: "idle" }
+      const hook = renderHook(() => useSessions())
+      await waitFor(() => expect(listMessagesMock).toHaveBeenCalled())
+      listMessagesMock.mockClear().mockResolvedValue([{ id: "bot-reply" }])
+      act(() => {
+        chatStoreState.sessions.s1!.status = status as ChatStatus
+        mockAgentTurnRevisions = JSON.stringify([["s1", 2]])
+        hook.rerender()
+      })
+      if (status === "streaming") {
+        expect(listMessagesMock).not.toHaveBeenCalled()
+        act(() => {
+          chatStoreState.sessions.s1!.status = "idle"
+          hook.rerender()
+        })
+      }
+      await waitFor(() =>
+        expect(chatStoreState.setMessages).toHaveBeenCalledWith([{ id: "bot-reply" }])
+      )
+    }
+  )
 
   it("reloads the open transcript when account sync applies another device's messages", async () => {
     chatStoreState.activeSessionId = "s1"
