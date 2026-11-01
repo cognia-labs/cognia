@@ -2,7 +2,7 @@
   "inventory": "lib-ui-imports",
   "description": "Non-test lib files importing hooks or components, including type-only and dynamic dependencies. Repay by moving shared contracts and runtime logic below the UI layer.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {

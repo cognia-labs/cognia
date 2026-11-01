@@ -2,7 +2,7 @@
   "inventory": "tauri-dynamic-imports",
   "description": "Renderer files dynamically loading Tauri core/event outside the transport seam owners. Repay by routing through the transport seam; static imports remain host-parity class A's responsibility.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {

@@ -2,7 +2,7 @@
   "inventory": "caps",
   "description": "Numeric concurrency and admission caps plus limiter construction sites in shipped TypeScript and Rust. Repay business caps through the admission limiter; classify native backpressure with the real protected resource and its owner.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {
@@ -1737,7 +1737,7 @@
       "file": "lib/data/authored-content.ts",
       "symbol": "exportAuthoredContent::iterate/concurrency",
       "value": 1,
-      "line": 151,
+      "line": 163,
       "language": "typescript",
       "reason": "lib/data/authored-content.ts:151: Supplies caller configuration to the listed createPagedTablePageIterator concurrency bound in lib/data/paged-table-reader.ts; no independent limiter.",
       "evidence": "a2b040c153dcd5c3"

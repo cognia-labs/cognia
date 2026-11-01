@@ -2,7 +2,7 @@
   "inventory": "runtime-initializers",
   "description": "Imported lib symbols called from provider effects or their local callees, absent from brain calls and headless exclusions. Repay by wiring the effect into the headless registry or classifying it as an explained exclusion.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {

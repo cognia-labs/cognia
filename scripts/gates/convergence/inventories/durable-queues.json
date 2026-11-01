@@ -2,7 +2,7 @@
   "inventory": "durable-queues",
   "description": "Dexie and Rust SQLite tables with queue names, retry counts, due times, leases or pending states, plus verified manual durable queues. Repay by migrating to the shared durable-queue primitive; explain false positives as exclusions.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {

@@ -2,7 +2,7 @@
   "inventory": "run-tables",
   "description": "Run-like Dexie tables by name or row lifecycle fields, with their syntactically verified reference to executionRuns. Repay missing and name-only references through the shared ledger; retain real references or explained exclusions in the inventory.",
   "generatedAt": {
-    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
+    "commit": "4d263af8a42863cf064c01812452c364d5126880",
     "date": "2026-11-01"
   },
   "metrics": {
@@ -3838,7 +3838,7 @@
         "lib/db/labels.ts#deleteLabel",
         "lib/identity/reconcile-user-id.ts#reconcileUserId"
       ],
-      "evidence": "af2565095043a6a8"
+      "evidence": "60d8d22a140b53f8"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/loops",
