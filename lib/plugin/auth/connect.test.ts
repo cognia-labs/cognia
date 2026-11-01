@@ -152,6 +152,24 @@ it("requires a declared manifest authorization binding for Host-managed provider
   expect(provider.exchange).not.toHaveBeenCalled()
 })
 
+it.each([null, 42, ""])(
+  "refuses invalid Host client secret configuration %p",
+  async (clientSecret) => {
+    provider.management = "host"
+    const plugin = (await getPlugin("owner"))!
+    const manifest = plugin.manifest as { authProviders: Array<Record<string, unknown>> }
+    manifest.authProviders[0].authorization = { clientId: "client", issuer: "https://issuer.test" }
+    await expect(
+      connectProvider({ providerId: "acme", scopes: [], configuration: { clientSecret } })
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      reason: "invalid-client-secret-configuration",
+    })
+    expect(provider.authorize).not.toHaveBeenCalled()
+    expect(provider.exchange).not.toHaveBeenCalled()
+  }
+)
+
 it.each(["https://foreign.test/authorize", "http://issuer.test/authorize", "javascript:alert(1)"])(
   "rejects unsafe authorization URL %s before opening",
   async (url) => {

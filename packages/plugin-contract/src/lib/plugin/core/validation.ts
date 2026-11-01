@@ -1114,6 +1114,26 @@ function validateAuthProviders(raw: unknown, pushError: PushDiagnostic): void {
               `${path}.clientSecret must be one of: none, form, json, basic`
             )
           }
+          if (endpoint.credentialFields !== undefined) {
+            const fields = endpoint.credentialFields
+            const validName = (value: unknown) =>
+              typeof value === "string" &&
+              value.match(/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/)?.[0] === value
+            if (
+              endpoint.clientSecret === "basic" ||
+              !isPlainObject(fields) ||
+              Object.keys(fields).some((key) => key !== "clientId" && key !== "clientSecret") ||
+              (fields.clientId !== undefined && !validName(fields.clientId)) ||
+              (fields.clientSecret !== undefined && !validName(fields.clientSecret)) ||
+              (fields.clientId ?? "client_id") === (fields.clientSecret ?? "client_secret")
+            ) {
+              pushError(
+                `${path}.credentialFields`,
+                "manifest.authProviders.tokenEndpoints.credentialFields.invalid",
+                `${path}.credentialFields requires distinct valid parameter names and cannot be used with basic auth`
+              )
+            }
+          }
         }
       }
     }

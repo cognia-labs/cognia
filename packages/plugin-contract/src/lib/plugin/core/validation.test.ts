@@ -344,6 +344,88 @@ describe("Plugin Validation", () => {
         }
       )
 
+      it.each(["form", "json", "none"])("accepts credential mappings for %s", (clientSecret) => {
+        for (const credentialFields of [
+          {},
+          { clientId: "app_id", clientSecret: "app_secret" },
+          { clientId: "_" + "a".repeat(63) },
+          { clientSecret: "vendor.secret-1" },
+        ]) {
+          expect(
+            validate([
+              {
+                ...provider(),
+                tokenEndpoints: [
+                  {
+                    url: "https://auth.example/token",
+                    clientSecret,
+                    credentialFields,
+                  },
+                ],
+              },
+            ]).errors
+          ).toEqual([])
+        }
+      })
+
+      it.each([
+        null,
+        [],
+        "app_id",
+        { clientId: "" },
+        { clientId: "1id" },
+        { clientSecret: "a b" },
+        { clientSecret: "a".repeat(65) },
+        { clientId: "é" },
+        { clientSecret: 42 },
+        { clientId: null },
+        { clientId: "id\n" },
+        { unexpected: "name" },
+        { clientId: "same", clientSecret: "same" },
+        { clientId: "client_secret" },
+        { clientSecret: "client_id" },
+      ])("rejects invalid or colliding credential mapping %j", (credentialFields) => {
+        expect(
+          validate([
+            {
+              ...provider(),
+              tokenEndpoints: [
+                {
+                  url: "https://auth.example/token",
+                  clientSecret: "json",
+                  credentialFields,
+                },
+              ],
+            },
+          ]).diagnostics
+        ).toContainEqual(
+          expect.objectContaining({
+            code: "manifest.authProviders.tokenEndpoints.credentialFields.invalid",
+          })
+        )
+      })
+
+      it("rejects even an empty credential mapping with basic auth", () => {
+        expect(
+          validate([
+            {
+              ...provider(),
+              tokenEndpoints: [
+                {
+                  url: "https://auth.example/token",
+                  clientSecret: "basic",
+                  credentialFields: {},
+                },
+              ],
+            },
+          ]).diagnostics
+        ).toContainEqual(
+          expect.objectContaining({
+            code: "manifest.authProviders.tokenEndpoints.credentialFields.invalid",
+          })
+        )
+      })
+
       it.each([
         null,
         1,

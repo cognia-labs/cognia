@@ -98,8 +98,14 @@ function hostManagedProvider(
       }
       return sessions
     },
-    async createSession(scopes) {
-      return sessionFor(await connectProvider({ providerId: provider.id, scopes }))
+    async createSession(scopes, options) {
+      return sessionFor(
+        await connectProvider({
+          providerId: provider.id,
+          scopes,
+          configuration: options?.configuration,
+        })
+      )
     },
     async removeSession(sessionId) {
       const row = await getAuthConnection(sessionId)

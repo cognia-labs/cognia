@@ -9,6 +9,7 @@ import { getAuthConnection } from "@/lib/db/auth-connections"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import { getProvider } from "./auth-provider-registry"
+import { setProviderClientSecret } from "./client-secrets"
 import {
   createAttempt,
   consumeAttempt,
@@ -49,6 +50,8 @@ export interface ConnectProviderRequest {
   method?: AuthMethod
   reconnect?: AuthConnectionRef
   signal?: AbortSignal
+  /** Setup values from the Host form. The client secret goes only to the Host store. */
+  configuration?: Record<string, unknown>
 }
 
 /** Host sign-in orchestration, separate from credential persistence and callback acceptance. */
@@ -152,6 +155,13 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     if (method === "oauth-pkce" && !redirectUri)
       throw new AuthConnectError("NOT_SUPPORTED", "browser-unavailable")
     active()
+    if (provider.management === "host" && request.configuration?.clientSecret !== undefined) {
+      const secret = request.configuration.clientSecret
+      if (typeof secret !== "string" || !secret || provider.pluginId === null)
+        throw new AuthConnectError("INVALID_REQUEST", "invalid-client-secret-configuration")
+      await setProviderClientSecret(provider.pluginId, providerId, secret)
+      active()
+    }
     const binding = { providerId, clientId: configuration.clientId, issuer: issuer.origin }
     attempt = await createAttempt({ ...binding, method, scopes, redirectUri })
     // Bound the entire exchange too. Providers which ignore cancellation may

@@ -23,6 +23,50 @@ pub enum TokenBodyEncoding {
     Json,
 }
 
+/// Parameter names declared by the installed provider, never by an exchange request.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CredentialFields {
+    #[serde(default, deserialize_with = "CredentialFields::deserialize_name")]
+    pub client_id: Option<String>,
+    #[serde(default, deserialize_with = "CredentialFields::deserialize_name")]
+    pub client_secret: Option<String>,
+}
+
+impl CredentialFields {
+    fn deserialize_name<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        String::deserialize(deserializer).map(Some)
+    }
+
+    pub fn client_id(&self) -> &str {
+        self.client_id.as_deref().unwrap_or("client_id")
+    }
+
+    pub fn client_secret(&self) -> &str {
+        self.client_secret.as_deref().unwrap_or("client_secret")
+    }
+
+    pub fn validate(&self) -> Result<(), ConfidentialExchangeError> {
+        fn valid(name: &str) -> bool {
+            let bytes = name.as_bytes();
+            (1..=64).contains(&bytes.len())
+                && (bytes[0].is_ascii_alphabetic() || bytes[0] == b'_')
+                && bytes
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(b))
+        }
+        if !valid(self.client_id())
+            || !valid(self.client_secret())
+            || self.client_id() == self.client_secret()
+        {
+            return Err(ConfidentialExchangeError::InvalidRequest);
+        }
+        Ok(())
+    }
+}
+
 // Deliberately no Debug/Serialize: a caller must not log the client secret.
 pub struct ConfidentialExchangeRequest {
     pub token_url: String,
@@ -31,6 +75,7 @@ pub struct ConfidentialExchangeRequest {
     pub client_secret: Option<String>,
     pub placement: ClientSecretPlacement,
     pub body_encoding: TokenBodyEncoding,
+    pub credential_fields: CredentialFields,
     pub timeout: Duration,
 }
 
@@ -93,9 +138,16 @@ pub async fn confidential_token_exchange(
     use ConfidentialExchangeError as Error;
     let url = url::Url::parse(&req.token_url).map_err(|_| Error::InvalidDestination)?;
     validate_destination(&url)?;
+    // Basic always uses the RFC 6749 header, independently of body field names.
+    let fields = if req.placement == ClientSecretPlacement::Basic {
+        CredentialFields::default()
+    } else {
+        req.credential_fields
+    };
+    fields.validate()?;
     if req.client_id.is_empty()
-        || req.params.contains_key("client_secret")
-        || req.params.contains_key("client_id")
+        || req.params.contains_key(fields.client_secret())
+        || req.params.contains_key(fields.client_id())
         || matches!(
             (req.placement, req.body_encoding),
             (ClientSecretPlacement::Form, TokenBodyEncoding::Json)
@@ -121,9 +173,9 @@ pub async fn confidential_token_exchange(
     let mut builder = client.post(url);
     match req.placement {
         ClientSecretPlacement::Form | ClientSecretPlacement::Json => {
-            params.insert("client_id".into(), req.client_id);
+            params.insert(fields.client_id().into(), req.client_id);
             params.insert(
-                "client_secret".into(),
+                fields.client_secret().into(),
                 req.client_secret.clone().unwrap_or_default(),
             );
         }
@@ -134,7 +186,7 @@ pub async fn confidential_token_exchange(
             );
         }
         ClientSecretPlacement::None => {
-            params.insert("client_id".into(), req.client_id);
+            params.insert(fields.client_id().into(), req.client_id);
         }
     }
     builder = match req.body_encoding {
@@ -244,6 +296,7 @@ mod tests {
                 TokenBodyEncoding::Form
             },
             timeout: std::time::Duration::from_secs(2),
+            credential_fields: CredentialFields::default(),
         }
     }
 
@@ -291,6 +344,87 @@ mod tests {
             requests[3].body,
             b"client_id=id+%3A%2B&grant_type=client_credentials"
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_exchange_mapped_fields_and_basic_ignores_mapping() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(Default::default()).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .mount(&server)
+            .await;
+        for placement in [
+            ClientSecretPlacement::Json,
+            ClientSecretPlacement::Form,
+            ClientSecretPlacement::Basic,
+            ClientSecretPlacement::None,
+        ] {
+            let mut req = request(server.uri(), placement);
+            req.credential_fields = CredentialFields {
+                client_id: Some("app_id".into()),
+                client_secret: Some("app_secret".into()),
+            };
+            confidential_token_exchange(req).await.unwrap();
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests[0].headers["content-type"], "application/json");
+        assert_eq!(
+            requests[0].body,
+            br#"{"app_id":"id :+","app_secret":"secret :+\"/","grant_type":"client_credentials"}"#
+        );
+        assert_eq!(
+            requests[1].headers["content-type"],
+            "application/x-www-form-urlencoded"
+        );
+        assert_eq!(
+            requests[1].body,
+            b"app_id=id+%3A%2B&app_secret=secret+%3A%2B%22%2F&grant_type=client_credentials"
+        );
+        assert_eq!(
+            requests[2].headers["authorization"],
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("id+%3A%2B:secret+%3A%2B%22%2F")
+            )
+        );
+        assert_eq!(requests[2].body, b"grant_type=client_credentials");
+        assert_eq!(
+            requests[3].body,
+            b"app_id=id+%3A%2B&grant_type=client_credentials"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_exchange_refuses_collisions_and_invalid_names_without_echoing_secrets() {
+        for name in ["", "1id", "a b", "é", &"a".repeat(65), "client_secret"] {
+            let mut req = request("http://127.0.0.1/token".into(), ClientSecretPlacement::Json);
+            req.credential_fields.client_id = Some(name.into());
+            let error = confidential_token_exchange(req).await.unwrap_err();
+            assert_eq!(error, ConfidentialExchangeError::InvalidRequest);
+            assert!(!format!("{error:?} {error}").contains("secret :+\"/"));
+        }
+        for key in ["app_id", "app_secret"] {
+            let mut req = request("http://127.0.0.1/token".into(), ClientSecretPlacement::Json);
+            req.credential_fields = CredentialFields {
+                client_id: Some("app_id".into()),
+                client_secret: Some("app_secret".into()),
+            };
+            req.params.insert(key.into(), "secret :+\"/".into());
+            let error = confidential_token_exchange(req).await.unwrap_err();
+            assert_eq!(error, ConfidentialExchangeError::InvalidRequest);
+            assert!(!format!("{error:?} {error}").contains("secret :+\"/"));
+        }
+        for fields in [
+            CredentialFields::default(),
+            CredentialFields {
+                client_id: Some("_".to_string() + &"a".repeat(63)),
+                client_secret: Some("vendor.secret-1".into()),
+            },
+        ] {
+            fields.validate().unwrap();
+        }
     }
 
     #[tokio::test]

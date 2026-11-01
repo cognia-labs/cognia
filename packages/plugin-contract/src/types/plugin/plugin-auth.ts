@@ -151,7 +151,16 @@ export interface PluginAuthProviderDef {
    * Endpoints the Host may call on the provider's behalf for confidential exchanges.
    * They must also be allowed by networkAccess, checked by the runtime.
    */
-  tokenEndpoints?: Array<{ url: string; clientSecret?: "none" | "form" | "json" | "basic" }>
+  tokenEndpoints?: Array<{
+    url: string
+    clientSecret?: "none" | "form" | "json" | "basic"
+    /**
+     * Host-injected parameter names; defaults to client_id / client_secret.
+     * Names match ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$ and must differ after defaults.
+     * Unavailable with basic auth. Plugin params cannot contain the injected names.
+     */
+    credentialFields?: { clientId?: string; clientSecret?: string }
+  }>
   /** Endpoints the Host may use to revoke credentials. */
   revocationEndpoints?: string[]
   /** Allowed HTTPS issuer origins. */

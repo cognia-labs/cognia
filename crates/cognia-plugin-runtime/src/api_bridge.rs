@@ -757,17 +757,17 @@ fn authorize_token_endpoint(
     provider: &Value,
     token_url: &str,
     placement: cognia_net::oauth_exchange::ClientSecretPlacement,
-) -> std::result::Result<(), PluginApiError> {
+) -> std::result::Result<cognia_net::oauth_exchange::CredentialFields, PluginApiError> {
     let target =
         url::Url::parse(token_url).map_err(|_| PluginApiError::invalid("invalid token URL"))?;
     if !target.username().is_empty() || target.password().is_some() || target.fragment().is_some() {
         return Err(PluginApiError::invalid("invalid token URL"));
     }
-    let allowed = provider
+    let endpoint = provider
         .get("tokenEndpoints")
         .and_then(Value::as_array)
-        .is_some_and(|endpoints| {
-            endpoints.iter().any(|endpoint| {
+        .and_then(|endpoints| {
+            endpoints.iter().find(|endpoint| {
                 let declared = endpoint
                     .get("url")
                     .and_then(Value::as_str)
@@ -791,12 +791,36 @@ fn authorize_token_endpoint(
                     == Some(placement)
             })
         });
-    if !allowed {
-        return Err(PluginApiError::permission_denied(
-            "token endpoint or secret placement is not declared",
+    let endpoint = endpoint.ok_or_else(|| {
+        PluginApiError::permission_denied("token endpoint or secret placement is not declared")
+    })?;
+    if placement == cognia_net::oauth_exchange::ClientSecretPlacement::Basic
+        && endpoint.get("credentialFields").is_some()
+    {
+        return Err(PluginApiError::invalid(
+            "credential fields cannot be declared with basic auth",
         ));
     }
-    guard_network_request(state, plugin_id, token_url, "POST")
+    if endpoint
+        .get("credentialFields")
+        .is_some_and(|fields| !fields.is_object())
+    {
+        return Err(PluginApiError::invalid(
+            "invalid declared credential fields",
+        ));
+    }
+    let fields: cognia_net::oauth_exchange::CredentialFields = serde_json::from_value(
+        endpoint
+            .get("credentialFields")
+            .cloned()
+            .unwrap_or(json!({})),
+    )
+    .map_err(|_| PluginApiError::invalid("invalid declared credential fields"))?;
+    fields
+        .validate()
+        .map_err(|_| PluginApiError::invalid("invalid declared credential fields"))?;
+    guard_network_request(state, plugin_id, token_url, "POST")?;
+    Ok(fields)
 }
 
 async fn handle_auth(
@@ -836,14 +860,30 @@ async fn handle_auth(
                     "auth:exchange requires permission network:fetch",
                 ));
             }
+            if payload.as_object().is_none_or(|object| {
+                object.keys().any(|key| {
+                    !["providerId", "tokenUrl", "params", "clientId", "placement"]
+                        .contains(&key.as_str())
+                })
+            }) {
+                return Err(PluginApiError::invalid("unexpected OAuth exchange field"));
+            }
             let token_url = payload_str(payload, "tokenUrl")?;
             let placement: ClientSecretPlacement =
                 serde_json::from_value(payload.get("placement").cloned().unwrap_or(Value::Null))
                     .map_err(|_| PluginApiError::invalid("invalid client secret placement"))?;
-            authorize_token_endpoint(state, plugin_id, &provider, &token_url, placement)?;
-            let params =
+            let credential_fields =
+                authorize_token_endpoint(state, plugin_id, &provider, &token_url, placement)?;
+            let params: std::collections::BTreeMap<String, String> =
                 serde_json::from_value(payload.get("params").cloned().unwrap_or(Value::Null))
                     .map_err(|_| PluginApiError::invalid("token params must be a string map"))?;
+            if params.contains_key(credential_fields.client_id())
+                || params.contains_key(credential_fields.client_secret())
+            {
+                return Err(PluginApiError::invalid(
+                    "token params collide with injected credentials",
+                ));
+            }
             let client_id = payload_str(payload, "clientId")?;
             let client_secret = if placement == ClientSecretPlacement::None {
                 None
@@ -863,6 +903,7 @@ async fn handle_auth(
                 params,
                 client_id,
                 client_secret,
+                credential_fields,
                 placement,
                 body_encoding: if placement == ClientSecretPlacement::Json {
                     TokenBodyEncoding::Json
@@ -2300,7 +2341,9 @@ mod tests {
             json!({
                 "authProviders": [{"id": "oauth", "tokenEndpoints": [
                     {"url": "https://vendor.test/token", "clientSecret": "basic"},
-                    {"url": "https://vendor.test/public", "clientSecret": "none"}
+                    {"url": "https://vendor.test/public", "clientSecret": "none"},
+                    {"url": "https://vendor.test/mapped", "clientSecret": "json",
+                     "credentialFields": {"clientId": "app_id", "clientSecret": "app_secret"}}
                 ]}]
             })
             .to_string(),
@@ -2553,6 +2596,190 @@ mod tests {
         ] {
             assert_eq!(required_permission("auth", op), Some("auth:provide"));
         }
+    }
+
+    #[tokio::test]
+    async fn exchange_refuses_request_overrides_and_undeclared_endpoints() {
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        let payload = json!({"providerId": "oauth", "tokenUrl": "https://vendor.test/token",
+            "params": {}, "clientId": "app", "placement": "basic"});
+        for field in [
+            "credentialFields",
+            "clientIdField",
+            "clientSecretField",
+            "clientSecret",
+        ] {
+            let mut overridden = payload.clone();
+            overridden[field] = json!({"clientId": "evil_id", "clientSecret": "evil_secret"});
+            assert_eq!(
+                dispatch(None, &state, "demo", "auth:exchange", &overridden)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "INVALID_REQUEST"
+            );
+        }
+        let mut undeclared = payload;
+        undeclared["tokenUrl"] = json!("https://vendor.test/other");
+        assert_eq!(
+            dispatch(None, &state, "demo", "auth:exchange", &undeclared)
+                .await
+                .unwrap_err()
+                .code,
+            "PERMISSION_DENIED"
+        );
+        for key in ["app_id", "app_secret"] {
+            let collision = json!({"providerId": "oauth", "tokenUrl": "https://vendor.test/mapped",
+                "params": {key: "plugin-value"}, "clientId": "app", "placement": "json"});
+            assert_eq!(
+                dispatch(None, &state, "demo", "auth:exchange", &collision)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "INVALID_REQUEST"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exchange_uses_installed_mapping() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        init_proxy();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let token_url = format!("http://{}/token", listener.local_addr().unwrap());
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        // Use a distinct plugin namespace so parallel secret-store tests cannot clear it.
+        let plugin_id = "mapped-exchange";
+        let mut record = state.plugins.write().get("demo").unwrap().clone();
+        record.snapshot.plugin_id = plugin_id.into();
+        record.snapshot.install_path = state.plugin_dir(plugin_id).to_string_lossy().into_owned();
+        state.plugins.write().insert(plugin_id.into(), record);
+        std::fs::create_dir_all(state.plugin_dir(plugin_id)).unwrap();
+        let grants = state.permissions.read().get("demo").unwrap().clone();
+        state.permissions.write().insert(plugin_id.into(), grants);
+        state.set_network_allowlist(plugin_id, vec!["127.0.0.1".into()]);
+        std::fs::write(
+            state.plugin_dir(plugin_id).join("manifest.json"),
+            json!({
+                "authProviders": [{"id": "oauth", "tokenEndpoints": [{
+                    "url": token_url, "clientSecret": "json",
+                    "credentialFields": {"clientId": "app_id", "clientSecret": "app_secret"}
+                }]}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let payload = json!({"providerId": "oauth", "tokenUrl": token_url,
+            "params": {"grant_type": "client_credentials"}, "clientId": "app", "placement": "json"});
+        dispatch(
+            None,
+            &state,
+            plugin_id,
+            "auth:setClientSecret",
+            &json!({"providerId": "oauth", "value": "host-secret"}),
+        )
+        .await
+        .unwrap();
+        for key in ["app_id", "app_secret"] {
+            let mut collision = payload.clone();
+            collision["params"][key] = json!("plugin-value");
+            let error = dispatch(None, &state, plugin_id, "auth:exchange", &collision)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "INVALID_REQUEST");
+            assert!(!error.message.contains("host-secret"));
+        }
+        let server = tokio::spawn(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0; 1024];
+                loop {
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&chunk[..n]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                        let length: usize = headers.lines().find_map(|line|
+                            line.strip_prefix("content-length: ")).unwrap().parse().unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
+                            let response = br#"{"ok":true,"echo":"host-secret"}"#;
+                            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).as_bytes()).await.unwrap();
+                            stream.write_all(response).await.unwrap();
+                            return body;
+                        }
+                    }
+                }
+            }).await.unwrap()
+        });
+        let result = dispatch(None, &state, plugin_id, "auth:exchange", &payload).await;
+        let body = server.await.unwrap();
+        clear_client_secrets(plugin_id).unwrap();
+        assert_eq!(
+            result.unwrap(),
+            json!({"status": 200, "body": {"ok": true, "echo": "[REDACTED]"}})
+        );
+        assert_eq!(
+            body,
+            json!({"app_id": "app", "app_secret": "host-secret", "grant_type": "client_credentials"})
+        );
+    }
+
+    #[test]
+    fn exchange_rejects_invalid_installed_credential_fields() {
+        use cognia_net::oauth_exchange::ClientSecretPlacement as Placement;
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        let provider = json!({"tokenEndpoints": [{"url": "https://vendor.test/token", "clientSecret": "json", "credentialFields": {"clientId": "app_id", "clientSecret": "app_secret"}}]});
+        let fields = authorize_token_endpoint(
+            &state,
+            "demo",
+            &provider,
+            "https://vendor.test/token",
+            Placement::Json,
+        )
+        .unwrap();
+        assert_eq!(fields.client_id(), "app_id");
+        assert_eq!(fields.client_secret(), "app_secret");
+        for fields in [
+            json!(null),
+            json!([]),
+            json!({"clientId": null}),
+            json!({"clientId": "1bad"}),
+            json!({"clientSecret": "client_id"}),
+            json!({"clientId": "same", "clientSecret": "same"}),
+            json!({"other": "name"}),
+        ] {
+            let provider = json!({"tokenEndpoints": [{"url": "https://vendor.test/token", "clientSecret": "json", "credentialFields": fields}]});
+            assert_eq!(
+                authorize_token_endpoint(
+                    &state,
+                    "demo",
+                    &provider,
+                    "https://vendor.test/token",
+                    Placement::Json
+                )
+                .unwrap_err()
+                .code,
+                "INVALID_REQUEST"
+            );
+        }
+        let provider = json!({"tokenEndpoints": [{"url": "https://vendor.test/token", "clientSecret": "basic", "credentialFields": {}}]});
+        assert_eq!(
+            authorize_token_endpoint(
+                &state,
+                "demo",
+                &provider,
+                "https://vendor.test/token",
+                Placement::Basic
+            )
+            .unwrap_err()
+            .code,
+            "INVALID_REQUEST"
+        );
     }
 
     fn ide_scope(user_id: &str, host_id: &str, workspace_root: &str, area: &str) -> Value {

@@ -250,6 +250,30 @@ describe("Host-managed provider session adapter", () => {
     ).resolves.toEqual(session)
   })
 
+  it("stores form configuration through the Host without exposing it to provider callbacks", async () => {
+    jest.mocked(invokePluginApi).mockClear()
+    jest.mocked(invokePluginApi).mockResolvedValueOnce(undefined)
+    const configuration = { clientSecret: "form-client-secret" }
+    const session = await createAuthAPI("host-owner", allow).getSession(providerId, ["read"], {
+      createIfNone: true,
+      configuration,
+    })
+    expect(session?.accessToken).toBe("host-secret")
+    expect(invokePluginApi).toHaveBeenCalledWith("host-owner", "auth:setClientSecret", {
+      providerId,
+      value: configuration.clientSecret,
+    })
+    expect(JSON.stringify(jest.mocked(provider.authorize!).mock.calls)).not.toContain(
+      configuration.clientSecret
+    )
+    expect(JSON.stringify(jest.mocked(provider.exchange!).mock.calls)).not.toContain(
+      configuration.clientSecret
+    )
+    expect(JSON.stringify(await getAuthConnection(session!.id))).not.toContain(
+      configuration.clientSecret
+    )
+  })
+
   it("tombstones before revoking and removes the legacy session", async () => {
     const session = await createAuthAPI("host-owner", allow).getSession(providerId, [], {
       createIfNone: true,

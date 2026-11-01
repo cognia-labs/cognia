@@ -29,10 +29,15 @@ export type * from "../../../types/plugin/plugin-auth"
 /** The host supplies the governed transport; plugins cannot override it. */
 export type PluginPkceFlowConfig = Omit<PkceFlowConfig, "fetchImpl">
 
-/** The trusted Host injects its client secret; it never crosses into ctx. */
+/**
+ * The trusted Host injects its client secret; it never crosses into ctx.
+ * Credential field names come exclusively from the installed manifest's
+ * matching tokenEndpoints[].credentialFields, never from this request.
+ */
 export interface ConfidentialExchangeRequest {
   providerId: string
   tokenUrl: string
+  /** Additional parameters; collisions with Host-injected credential names are refused. */
   params: Record<string, string>
   clientId: string
   placement: "none" | "form" | "json" | "basic"
@@ -145,6 +150,8 @@ export interface PluginAuthAPI {
   createPkceFlow(config: PluginPkceFlowConfig): Promise<PkceTokenResult>
   /** Exchange at a declared token endpoint (`auth:provide` + `network:fetch`).
    * Requires desktop or an always-on Host; otherwise NOT_SUPPORTED (ES-33).
+   * The installed endpoint chooses credentialFields (default client_id/client_secret);
+   * basic auth uses the Authorization header and cannot declare a mapping.
    */
   exchangeConfidential(request: ConfidentialExchangeRequest): Promise<ConfidentialExchangeResponse>
 }
