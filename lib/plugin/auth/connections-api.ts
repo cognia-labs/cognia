@@ -13,6 +13,8 @@ import { getPlugin } from "@/lib/db/plugins"
 import { listRegisteredIntegrations } from "@/lib/integrations/registry"
 import { AuthConnectionApiError, connectionAccess, connectionMetadata } from "./connection-access"
 import { getConnectionManager } from "./connection-manager"
+import { getProvider, listProviders } from "./auth-provider-registry"
+import { connectProvider } from "./connect"
 import { requestConnectionPrompt, type ConnectionGrantOperation } from "./connection-prompts"
 
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
@@ -141,7 +143,49 @@ export function createAuthConnectionsAPI(
       }
       let selected: AuthConnectionMetadata | undefined
       if (candidates.length === 1) selected = candidates[0]
-      else if (candidates.length > 1 && request.interactive) {
+      else if (!candidates.length && request.interactive) {
+        const providers = []
+        for (const provider of listProviders()) {
+          if (request.providerId && provider.id !== request.providerId) continue
+          if (
+            await visible(
+              { providerId: provider.id, ownerPluginId: provider.pluginId },
+              request.service
+            )
+          )
+            providers.push(provider)
+        }
+        if (!providers.length) return undefined
+        if (providers.length !== 1)
+          throw new AuthConnectionApiError(
+            "invalid-request",
+            "Specify a provider for an ambiguous service"
+          )
+        const provider = providers[0]
+        const pluginName = await name()
+        const decision = await checked(() =>
+          requestConnectionPrompt({
+            kind: "sign-in",
+            pluginId,
+            pluginName,
+            providerId: provider.id,
+            providerLabel: provider.label,
+            scopes,
+          })
+        )
+        if (decision.kind !== "sign-in") return undefined
+        if (
+          getProvider(provider.id) !== provider ||
+          !(await visible(
+            { providerId: provider.id, ownerPluginId: provider.pluginId },
+            request.service
+          ))
+        )
+          return undefined
+        const ref = await checked(() => connectProvider({ providerId: provider.id, scopes }))
+        const row = await connected(ref)
+        if (row) selected = connectionMetadata(row)
+      } else if (candidates.length > 1 && request.interactive) {
         const pluginName = await name()
         const decision = await checked(() =>
           requestConnectionPrompt({

@@ -10,6 +10,7 @@ export { AuthRefreshRejected } from "../auth/auth-provider-registry"
 import type { PkceFlowConfig, PkceTokenResult } from "../auth/auth-pkce-flow"
 import type {
   AuthAttemptContext,
+  AuthAuthorizationConfig,
   AuthCallbackParams,
   AuthConnectionChangeEvent,
   AuthConnectionGrantDecision,
@@ -52,6 +53,12 @@ export interface PluginAuthProvider {
   ): Promise<AuthSession[]>
   createSession(scopes: readonly string[], options?: AuthSessionOptions): Promise<AuthSession>
   removeSession(sessionId: string): Promise<void>
+  /** Public client/issuer binding for Host-created attempts; never contains a client secret. */
+  authorization?: AuthAuthorizationConfig
+  /** Build an HTTPS authorization URL using attemptId as state, redirectUri and codeChallenge (S256).
+   * Only the Host calls this, validates its declared issuer origin, and opens the browser.
+   */
+  authorize?(attempt: AuthAttemptContext): Promise<{ url: string }>
   /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
   exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
   /**
@@ -75,7 +82,7 @@ export interface PluginAuthProvider {
  * contract (ADR-0246 P5/P6). Invisible references behave exactly like absent ones.
  */
 export interface PluginAuthConnectionsAPI {
-  /** Select a connection matching the consumer's provider, service and scopes. */
+  /** Select and bind a matching connection. Interactive requests may prompt to sign in when none match. */
   get(request: {
     providerId?: string
     service?: string

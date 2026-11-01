@@ -19,6 +19,7 @@
 import { nanoid } from "nanoid"
 import type {
   AuthAttemptContext,
+  AuthAuthorizationConfig,
   AuthCallbackParams,
   AuthCredentialSet,
   AuthIdentityDescription,
@@ -104,6 +105,10 @@ export interface AuthenticationProvider {
   ) => Promise<ResolvedAuthRequestCredential>
   /** Revoke a session. Idempotent. */
   removeSession: (sessionId: string) => Promise<void>
+  /** Public client/issuer binding for Host-created attempts; never contains a client secret. */
+  authorization?: AuthAuthorizationConfig
+  /** Build the vendor URL from the Host's attemptId (state), redirectUri and S256 codeChallenge. Only the Host calls and opens it. */
+  authorize?(attempt: AuthAttemptContext): Promise<{ url: string }>
   /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
   exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
   /**

@@ -291,6 +291,22 @@ export class ConnectionCredentialStore {
       lineage: expected.lineage,
     })
   }
+  /** Roll back only our unpublished write; never overwrite a later CAS winner.
+   * The connection lock still guards publication, so no new metadata revision
+   * has been exposed for this tentative credential revision.
+   */
+  async rollbackUnpublished(
+    ref: string,
+    committed: CredentialSnapshot,
+    previous: CredentialSnapshot
+  ): Promise<void> {
+    if (previous.raw !== null) {
+      await this.secrets.compareAndSet(ref, committed.raw, previous.raw, true)
+    } else {
+      await this.tombstone(ref, committed)
+      await this.delete(ref)
+    }
+  }
   private async write(
     ref: string,
     expected: CredentialSnapshot,

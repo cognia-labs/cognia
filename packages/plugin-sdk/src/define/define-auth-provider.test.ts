@@ -24,6 +24,10 @@ describe("defineAuthProvider", () => {
   })
 
   it("preserves Host-coordinated callbacks without invoking or scheduling them", () => {
+    const authorize = jest.fn<
+      ReturnType<NonNullable<PluginAuthProvider["authorize"]>>,
+      Parameters<NonNullable<PluginAuthProvider["authorize"]>>
+    >()
     const exchange = jest.fn<
       ReturnType<NonNullable<PluginAuthProvider["exchange"]>>,
       Parameters<NonNullable<PluginAuthProvider["exchange"]>>
@@ -47,6 +51,8 @@ describe("defineAuthProvider", () => {
       createSession: async () =>
         __makeSession({ accessToken: "t", account: { id: "u", label: "U" }, scopes: [] }),
       removeSession: async () => {},
+      authorization: { clientId: "client", issuer: "https://issuer.test" },
+      authorize,
       exchange,
       refresh,
       revoke,
@@ -55,7 +61,8 @@ describe("defineAuthProvider", () => {
 
     const provider = defineAuthProvider(input)
     expect(provider).toBe(input)
-    for (const key of ["exchange", "refresh", "revoke", "describe"] as const) {
+    expect(provider.authorization).toBe(input.authorization)
+    for (const key of ["authorize", "exchange", "refresh", "revoke", "describe"] as const) {
       expect(provider[key]).toBe(input[key])
       expect(input[key]).not.toHaveBeenCalled()
     }

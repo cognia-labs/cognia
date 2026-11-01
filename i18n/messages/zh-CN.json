@@ -34491,6 +34491,9 @@
         "pickerTitle": "为 {plugin} 选择账号",
         "readOperations": "读取操作",
         "scopesLabel": "请求的权限范围",
+        "signIn": "登录",
+        "signInDescription": "{plugin} 需要连接到 {provider}。请登录以继续。",
+        "signInTitle": "登录 {provider}",
         "tenant": "组织：{tenant}",
         "tenantLabel": "组织：",
         "writeOperations": "写入操作"

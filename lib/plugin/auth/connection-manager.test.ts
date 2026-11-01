@@ -103,7 +103,16 @@ function fixture() {
     })),
   }
   providers.set(provider.id, provider)
-  return { rows, tokens, provider, providers, credentials, manager: makeManager(), makeManager }
+  return {
+    rows,
+    tokens,
+    provider,
+    providers,
+    credentials,
+    store,
+    manager: makeManager(),
+    makeManager,
+  }
 }
 
 it("atomically removes all default-store bindings when a connection becomes terminal", async () => {
@@ -247,6 +256,138 @@ it("enforces identity uniqueness, reuses same-provider refs, and bumps scope rev
   await f.manager.disconnect(ref)
   const reconnected = await f.manager.createConnectionFromCredentials(other, fresh)
   expect(reconnected).not.toBe(ref)
+})
+
+it("reconnects only the original identity and revokes mismatched fresh credentials", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  expect(
+    await f.manager.createConnectionFromCredentials(f.provider, fresh, { reconnect: ref })
+  ).toBe(ref)
+  expect(f.rows.get(ref)).toMatchObject({ revision: 1, credentialRevision: 2 })
+  await f.manager.createConnectionFromCredentials(
+    f.provider,
+    { ...fresh, scopes: ["read", "write"] },
+    { reconnect: ref }
+  )
+  expect(f.rows.get(ref)).toMatchObject({ revision: 2, credentialRevision: 3 })
+  const before = structuredClone([...f.rows.values()])
+  const secrets = [...f.tokens.entries()]
+  const describe = f.provider.describe!
+  f.provider.describe = async (credentials) => ({
+    ...(await describe(credentials)),
+    tenantId: "another-tenant",
+  })
+  f.provider.revoke = jest.fn(async () => {})
+  await expect(
+    f.manager.createConnectionFromCredentials(
+      f.provider,
+      { ...fresh, accessToken: "mismatch" },
+      { reconnect: ref }
+    )
+  ).rejects.toMatchObject({ name: "ReconnectIdentityMismatch" })
+  expect(f.provider.revoke).toHaveBeenCalledWith(
+    expect.objectContaining({ credentials: expect.objectContaining({ accessToken: "mismatch" }) })
+  )
+  expect([...f.rows.values()]).toEqual(before)
+  expect([...f.tokens.entries()]).toEqual(secrets)
+})
+
+it("reopens a terminal identity with a new ref and lineage and preserves tombstone cleanup", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const oldRow = f.rows.get(ref)!
+  await f.manager.disconnect(ref)
+  // Recover a pre-release terminal row which still occupies the unique slot.
+  f.rows.set(ref, { ...f.rows.get(ref)!, identityKey: oldRow.identityKey })
+  const next = await f.manager.createConnectionFromCredentials(f.provider, fresh, {
+    reconnect: ref,
+  })
+  expect(next).not.toBe(ref)
+  expect(f.rows.get(next)).toMatchObject({
+    revision: 1,
+    credentialRevision: 1,
+    identityKey: oldRow.identityKey,
+  })
+  expect(f.rows.get(next)?.lineageId).not.toBe(oldRow.lineageId)
+  expect(f.rows.get(ref)?.identityKey).toBe(`tombstoned:${ref}`)
+  await f.manager.sweepTombstoned()
+  expect(await f.manager.getCredentials(next)).toEqual(fresh)
+})
+
+it("restores old credentials if reconnect metadata cannot be persisted", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const before = structuredClone(f.rows.get(ref))
+  const snapshot = await f.credentials.read(ref)
+  f.provider.revoke = jest.fn(async () => {})
+  jest.spyOn(f.store, "put").mockRejectedValueOnce(new Error("metadata unavailable"))
+  await expect(
+    f.manager.createConnectionFromCredentials(
+      f.provider,
+      { ...fresh, accessToken: "unpublished" },
+      { reconnect: ref }
+    )
+  ).rejects.toThrow("metadata unavailable")
+  expect(f.rows.get(ref)).toEqual(before)
+  expect(await f.credentials.read(ref)).toEqual(snapshot)
+  expect(f.provider.revoke).toHaveBeenCalledWith(
+    expect.objectContaining({
+      credentials: expect.objectContaining({ accessToken: "unpublished" }),
+    })
+  )
+})
+
+it("rolls back a credential write if cancellation wins before publication", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const before = await f.credentials.read(ref)
+  const started = deferred<void>()
+  const resume = deferred<void>()
+  const commit = f.credentials.commit.bind(f.credentials)
+  jest.spyOn(f.credentials, "commit").mockImplementationOnce(async (...args) => {
+    const next = await commit(...args)
+    started.resolve()
+    await resume.promise
+    return next
+  })
+  f.provider.revoke = jest.fn(async () => {})
+  const controller = new AbortController()
+  const pending = f.manager.createConnectionFromCredentials(
+    f.provider,
+    { ...fresh, accessToken: "cancelled" },
+    { reconnect: ref, signal: controller.signal }
+  )
+  const rejected = expect(pending).rejects.toMatchObject({ reason: "cancelled" })
+  await started.promise
+  controller.abort()
+  resume.resolve()
+  await rejected
+  expect(await f.credentials.read(ref)).toEqual(before)
+  expect(f.rows.get(ref)).toMatchObject({ revision: 1, credentialRevision: 1 })
+  expect(f.provider.revoke).toHaveBeenCalled()
+})
+
+it("does not reconnect over a disconnect which wins during describe", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const started = deferred<void>()
+  const resume = deferred<void>()
+  const describe = f.provider.describe!
+  f.provider.describe = async (credentials) => {
+    started.resolve()
+    await resume.promise
+    return describe(credentials)
+  }
+  f.provider.revoke = jest.fn(async () => {})
+  const pending = f.manager.createConnectionFromCredentials(f.provider, fresh, { reconnect: ref })
+  const rejected = expect(pending).rejects.toBeInstanceOf(ConnectionRevisionChanged)
+  await started.promise
+  await f.manager.disconnect(ref)
+  resume.resolve()
+  await rejected
+  expect(f.rows.size).toBe(1)
+  expect(f.tokens.size).toBe(0)
 })
 
 it.each(["invalid_grant", "offline"])("classifies refresh failure %s", async (message) => {

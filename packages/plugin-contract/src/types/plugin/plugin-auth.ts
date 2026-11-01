@@ -86,7 +86,15 @@ export interface AuthCredentialSet {
   extra?: Record<string, string>
 }
 
-/** Host-bound attempt supplied only to the providing plugin for an exchange. */
+/** Public client configuration used by the Host before creating a bound attempt. Never include a secret. */
+export interface AuthAuthorizationConfig {
+  clientId: string
+  issuer: string
+  /** Defaults to the existing Host callback route for this runtime. */
+  redirectUri?: string
+}
+
+/** Host-bound attempt supplied only to the providing plugin for authorization and exchange. */
 export interface AuthAttemptContext {
   attemptId: string
   providerId: string
@@ -95,6 +103,8 @@ export interface AuthAttemptContext {
   issuer: string
   redirectUri?: string
   codeVerifier?: string
+  /** S256 challenge for authorize(); state is attemptId. */
+  codeChallenge?: string
   scopes: string[]
 }
 

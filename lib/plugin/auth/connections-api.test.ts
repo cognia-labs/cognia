@@ -108,7 +108,18 @@ beforeEach(async () => {
       ({
         manifest: {
           name: id === "consumer" ? "Business plugin" : id,
-          ...(id === "owner" ? { providesServices: { "auth.vendor": "1.0.0" } } : {}),
+          ...(id === "owner"
+            ? {
+                providesServices: { "auth.vendor": "1.0.0" },
+                authProviders: [
+                  {
+                    id: "vendor",
+                    methods: ["client-credentials"],
+                    issuers: ["https://issuer.vendor.test"],
+                  },
+                ],
+              }
+            : {}),
           ...(id === "consumer" ? { requiresServices: { "auth.vendor": "^1" } } : {}),
         },
       }) as never
@@ -122,6 +133,12 @@ beforeEach(async () => {
       throw new Error("unused")
     },
     removeSession: async () => {},
+    authorization: { clientId: "private-client", issuer: "https://issuer.vendor.test" },
+    exchange: jest.fn(async () => ({
+      accessToken: "new-host-token",
+      scopes: ["read", "write"],
+      extra: { account: "Signed in" },
+    })),
     describe: async (credentials) => ({
       issuer: "https://issuer.vendor.test",
       clientId: "private-client",
@@ -220,6 +237,77 @@ it("binds a single match and reuses it after a second connection appears", async
   await addConnection("Second")
   expect((await api().get({ service: "auth.vendor" }))?.ref).toBe(ref)
   expect((await getConnectionBinding("consumer", "vendor"))?.connectionRef).toBe(ref)
+})
+
+it.each(["consumer", "owner"])(
+  "signs in with zero candidates and binds for %s",
+  async (pluginId) => {
+    await manager.disconnect(ref)
+    const dispose = prompt((request) => {
+      expect(request).toMatchObject({
+        kind: "sign-in",
+        providerId: "vendor",
+        providerLabel: "Vendor",
+      })
+      resolveConnectionPrompt(request.id, { kind: "sign-in" })
+    })
+    try {
+      const result = await createAuthConnectionsAPI(pluginId, () => true).get({
+        service: "auth.vendor",
+        scopes: ["read"],
+        interactive: true,
+      })
+      expect(result).toMatchObject({ status: "connected", accountLabel: "Signed in" })
+      expect((await getConnectionBinding(pluginId, "vendor"))?.connectionRef).toBe(result!.ref)
+      expect(JSON.stringify(result)).not.toMatch(/accessToken|new-host-token|clientId/)
+    } finally {
+      dispose()
+    }
+  }
+)
+
+it("does not sign in non-interactively, when dismissed, or for invisible providers", async () => {
+  await manager.disconnect(ref)
+  const prompted = jest.fn()
+  const dispose = prompt((request) => {
+    prompted()
+    resolveConnectionPrompt(request.id, { kind: "dismissed" })
+  })
+  try {
+    expect(await api().get({ providerId: "vendor" })).toBeUndefined()
+    expect(prompted).not.toHaveBeenCalled()
+    expect(
+      await createAuthConnectionsAPI("unrelated", () => true).get({
+        providerId: "vendor",
+        interactive: true,
+      })
+    ).toBeUndefined()
+    expect(prompted).not.toHaveBeenCalled()
+    expect(await api().get({ providerId: "vendor", interactive: true })).toBeUndefined()
+    expect(prompted).toHaveBeenCalledTimes(1)
+    expect(getProvider("vendor")!.exchange).not.toHaveBeenCalled()
+    expect(await getConnectionBinding("consumer", "vendor")).toBeUndefined()
+  } finally {
+    dispose()
+  }
+})
+
+it("rechecks service visibility after sign-in before binding", async () => {
+  await manager.disconnect(ref)
+  const provider = getProvider("vendor")!
+  const exchange = provider.exchange!
+  provider.exchange = async (...args) => {
+    const credentials = await exchange(...args)
+    jest.mocked(getPlugin).mockResolvedValue({ manifest: {} } as never)
+    return credentials
+  }
+  const dispose = prompt((request) => resolveConnectionPrompt(request.id, { kind: "sign-in" }))
+  try {
+    expect(await api().get({ providerId: "vendor", interactive: true })).toBeUndefined()
+    expect(await getConnectionBinding("consumer", "vendor")).toBeUndefined()
+  } finally {
+    dispose()
+  }
 })
 
 it("persists a picker choice and does not prompt non-interactively", async () => {

@@ -12,6 +12,32 @@ it("dismisses immediately with no prompt surface", async () => {
   ).resolves.toEqual({ kind: "dismissed" })
 })
 
+it("allows only the sign-in decision on a sign-in prompt", async () => {
+  let state!: ConnectionPromptState
+  const dispose = subscribeConnectionPrompts((value) => {
+    state = value
+  })
+  try {
+    const pending = requestConnectionPrompt({
+      kind: "sign-in",
+      pluginId: "p",
+      pluginName: "P",
+      providerId: "vendor",
+      providerLabel: "Vendor",
+      scopes: [],
+    })
+    const id = state.current!.id
+    resolveConnectionPrompt(id, { kind: "approved" })
+    expect(state.current?.id).toBe(id)
+    resolveConnectionPrompt(id, { kind: "selected", ref: "forged" as AuthConnectionRef })
+    expect(state.current?.id).toBe(id)
+    resolveConnectionPrompt(id, { kind: "sign-in" })
+    await expect(pending).resolves.toEqual({ kind: "sign-in" })
+  } finally {
+    dispose()
+  }
+})
+
 it("queues, rejects answers to a queued prompt and dismisses everything on unmount", async () => {
   let state!: ConnectionPromptState
   const dispose = subscribeConnectionPrompts((value) => {

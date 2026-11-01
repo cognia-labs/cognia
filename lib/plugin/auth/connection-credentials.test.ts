@@ -128,6 +128,22 @@ it("reports locked Browser Vault persistence as a typed degraded state", async (
   expect(rows.size).toBe(0)
 })
 
+it("rolls back only an unpublished credential write and preserves a newer CAS winner", async () => {
+  const { credentials } = fixture()
+  const blank = await credentials.read("ref")
+  const first = await credentials.commit("ref", blank, { accessToken: "first", scopes: [] })
+  const second = await credentials.commit("ref", first, { accessToken: "second", scopes: [] })
+  await credentials.rollbackUnpublished("ref", second, first)
+  expect(await credentials.read("ref")).toEqual(first)
+  const next = await credentials.commit("ref", first, { accessToken: "next", scopes: [] })
+  await expect(credentials.rollbackUnpublished("ref", second, first)).rejects.toBeInstanceOf(
+    CredentialRevisionConflict
+  )
+  expect(await credentials.read("ref")).toEqual(next)
+  await credentials.rollbackUnpublished("ref", next, blank)
+  expect(await credentials.read("ref")).toEqual(blank)
+})
+
 it("native CAS uses the exact raw read and only translates condition mismatches", async () => {
   const cas = jest
     .fn()

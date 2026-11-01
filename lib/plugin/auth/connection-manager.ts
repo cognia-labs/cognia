@@ -71,6 +71,21 @@ export class ConnectionUnavailableError extends Error {
     this.name = "ConnectionUnavailableError"
   }
 }
+export class ReconnectIdentityMismatch extends Error {
+  readonly code = "CONFLICT"
+  constructor() {
+    super("Sign-in returned a different identity from the connection being reconnected")
+    this.name = "ReconnectIdentityMismatch"
+  }
+}
+interface ConnectOptions {
+  reconnect?: AuthConnectionRef
+  signal?: AbortSignal
+  expectedRevision?: number
+  binding?: { clientId: string; issuer: string }
+  /** Publication is the commit point; cancellation after it starts must observe its result. */
+  onCommit?: () => void
+}
 /** A stale response or credential resolution must never cross a connection revision. */
 export class ConnectionRevisionChanged extends Error {
   constructor(
@@ -272,43 +287,128 @@ export class AuthConnectionManager {
   }
   async createConnectionFromCredentials(
     provider: AuthenticationProvider,
-    credentials: AuthCredentialSet
+    credentials: AuthCredentialSet,
+    options: ConnectOptions = {}
   ): Promise<AuthConnectionRef> {
-    const registered = this.provider(provider.id)
-    if (registered !== provider || !registered.describe)
-      throw new ConnectionUnavailableError("provider-not-registered-or-no-describe")
-    const description = await registered.describe(credentials)
-    if (
-      !description ||
-      !description.issuer ||
-      !description.clientId ||
-      !description.principal?.id ||
-      !["user", "bot", "service"].includes(description.principal.kind) ||
-      !Array.isArray(description.scopes) ||
-      description.scopes.some((scope) => typeof scope !== "string")
-    )
-      throw new ConnectionUnavailableError("provider-description-invalid")
-    return this.connect(registered, description, credentials)
+    let description: AuthIdentityDescription | undefined
+    try {
+      const registered = this.provider(provider.id)
+      if (registered !== provider || !registered.describe)
+        throw new ConnectionUnavailableError("provider-not-registered-or-no-describe")
+      if (options.reconnect && options.expectedRevision === undefined) {
+        const target = await this.store.get(options.reconnect)
+        if (target && !terminal(target)) options = { ...options, expectedRevision: target.revision }
+      }
+      description = await registered.describe(credentials)
+      if (
+        !description ||
+        !description.issuer ||
+        !description.clientId ||
+        !description.principal?.id ||
+        !["user", "bot", "service"].includes(description.principal.kind) ||
+        !Array.isArray(description.scopes) ||
+        description.scopes.some((scope) => typeof scope !== "string")
+      )
+        throw new ConnectionUnavailableError("provider-description-invalid")
+      if (
+        options.binding &&
+        (description.issuer !== options.binding.issuer ||
+          description.clientId !== options.binding.clientId)
+      )
+        throw new ConnectionUnavailableError("attempt-identity-mismatch")
+      return await this.connect(registered, description, credentials, undefined, options)
+    } catch (error) {
+      // Fresh credentials rejected by identity checks or a disconnect fence
+      // never reach storage. Revoke that fresh grant, not the stored lineage.
+      await this.discardCredentials(provider, credentials, description)
+      throw error
+    }
+  }
+  /** Best-effort cleanup for an exchange finishing after cancellation, without ever storing it. */
+  async discardCredentials(
+    provider: AuthenticationProvider,
+    credentials: AuthCredentialSet,
+    description?: AuthIdentityDescription
+  ): Promise<void> {
+    try {
+      const identity = description ?? (await provider.describe?.(credentials))
+      if (!identity) return
+      await this.revokeBestEffort(provider, {
+        ref: crypto.randomUUID() as AuthConnectionRef,
+        lineageId: crypto.randomUUID(),
+        credentialRevision: 0,
+        identity: { provider: await this.owner(provider), ...identity },
+        credentials,
+      })
+    } catch {
+      console.warn("Auth uncommitted credential cleanup failed")
+    }
   }
   private async connect(
     provider: AuthenticationProvider,
     description: AuthIdentityDescription,
     credentials?: AuthCredentialSet,
-    legacySessionId?: string
+    legacySessionId?: string,
+    options: ConnectOptions = {}
   ): Promise<AuthConnectionRef> {
     const owner = await this.owner(provider)
     const identityKey = authConnectionIdentityKey(description)
     return this.lock(
       "cognia-auth-connections:identity",
       async () => {
-        const existing = await this.store.find(identityKey)
+        if (options.signal?.aborted) throw new ConnectionUnavailableError("cancelled")
+        if (options.reconnect) {
+          const target = await this.store.get(options.reconnect)
+          if (!target) throw new ConnectionUnavailableError("unknown")
+          if (
+            options.expectedRevision !== undefined &&
+            target.revision !== options.expectedRevision
+          )
+            throw new ConnectionRevisionChanged(
+              target.id,
+              options.expectedRevision,
+              target.revision
+            )
+          if (
+            !sameProvider(target, owner) ||
+            authConnectionIdentityKey(identityOf(target)) !== identityKey ||
+            target.tenantId !== description.tenantId
+          )
+            throw new ReconnectIdentityMismatch()
+        }
+        let existing = await this.store.find(identityKey)
+        if (existing && terminal(existing)) {
+          const retired = existing
+          await this.mutate(retired.id, async () => {
+            const current = await this.store.get(retired.id)
+            if (!current || !terminal(current))
+              throw new ConnectionUnavailableError("identity-changed")
+            if (!current.legacySessionId && (await this.credentials.read(current.id)).raw !== null)
+              throw new ConnectionUnavailableError("terminal-cleanup-pending")
+            // Preserve the opaque ref and tombstone for cleanup/provenance,
+            // releasing only its unique identity slot. No schema migration.
+            await this.store.put(
+              tombstoneAuthConnection(
+                current,
+                current.status as "revoked" | "tombstoned",
+                current.updatedAt
+              )
+            )
+          })
+          existing = undefined
+        }
         if (existing && !sameProvider(existing, owner)) throw new ConnectionIdentityConflict()
+        if (existing && existing.tenantId !== description.tenantId)
+          throw new ConnectionIdentityConflict()
         const ref = existing?.id ?? (crypto.randomUUID() as AuthConnectionRef)
         return this.mutate(ref, async () => {
           if (this.provider(provider.id) !== provider)
             throw new ConnectionUnavailableError("provider-unavailable")
           const current = await this.store.get(ref)
           if (current && terminal(current)) throw new ConnectionUnavailableError(current.status)
+          if (options.reconnect && current && current.id !== options.reconnect)
+            throw new ConnectionUnavailableError("reconnect-replaced")
+          if (options.signal?.aborted) throw new ConnectionUnavailableError("cancelled")
           const scopes = [...new Set(description.scopes)].sort()
           const row: AuthConnectionRow = {
             ...owner,
@@ -332,8 +432,11 @@ export class AuthConnectionManager {
             createdAt: current?.createdAt ?? this.now(),
             updatedAt: this.now(),
           }
+          let committed: CredentialSnapshot | undefined
+          let previous: CredentialSnapshot | undefined
           if (credentials) {
-            const previous = await this.credentials.read(ref)
+            previous = await this.credentials.read(ref)
+            if (options.signal?.aborted) throw new ConnectionUnavailableError("cancelled")
             const next = await this.credentials.commit(
               ref,
               previous,
@@ -345,12 +448,21 @@ export class AuthConnectionManager {
               }
             )
             row.credentialRevision = next.revision
+            committed = next
           }
           if (this.provider(provider.id) !== provider) {
             row.status = "provider-unavailable"
             row.unavailableStatus = "connected"
           }
-          await this.publish(row, current ? "changed" : "added")
+          try {
+            if (options.signal?.aborted) throw new ConnectionUnavailableError("cancelled")
+            options.onCommit?.()
+            await this.publish(row, current ? "changed" : "added")
+          } catch (error) {
+            if (committed && previous)
+              await this.credentials.rollbackUnpublished(ref, committed, previous)
+            throw error
+          }
           return ref
         })
       },
@@ -677,23 +789,31 @@ export class AuthConnectionManager {
   }
   async ensureLegacyConnection(
     providerId: string,
-    session: AuthSession
+    session: AuthSession,
+    options: ConnectOptions = {}
   ): Promise<AuthConnectionRef> {
     const provider = this.provider(providerId)
     if (!provider) throw new ConnectionUnavailableError("provider-unavailable")
     if (provider.describe)
       throw new Error("Host-managed providers must create connections from credentials")
+    const previous = options.reconnect ? await this.store.get(options.reconnect) : undefined
+    let principalId = JSON.stringify([session.account.id, session.id])
+    if (previous?.legacySessionId) {
+      const original = JSON.parse(previous.principalId) as string[]
+      if (original[0] === session.account.id) principalId = previous.principalId
+    }
     return this.connect(
       provider,
       {
         issuer: `provider:${providerId}`,
         clientId: "legacy",
-        principal: { id: JSON.stringify([session.account.id, session.id]), kind: "user" },
+        principal: { id: principalId, kind: "user" },
         accountLabel: session.account.label,
         scopes: session.scopes,
       },
       undefined,
-      session.id
+      session.id,
+      options
     )
   }
 }
@@ -710,8 +830,9 @@ export function getConnectionManager(): AuthConnectionManager {
 }
 export const createConnectionFromCredentials = (
   provider: AuthenticationProvider,
-  credentials: AuthCredentialSet
-) => getConnectionManager().createConnectionFromCredentials(provider, credentials)
+  credentials: AuthCredentialSet,
+  options?: ConnectOptions
+) => getConnectionManager().createConnectionFromCredentials(provider, credentials, options)
 export const getCredentials = (ref: AuthConnectionRef, options?: { minValidityMs?: number }) =>
   getConnectionManager().getCredentials(ref, options)
 export const disconnect = (ref: AuthConnectionRef, options?: { revoke?: boolean }) =>

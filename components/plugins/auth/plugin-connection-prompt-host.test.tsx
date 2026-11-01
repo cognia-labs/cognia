@@ -6,6 +6,36 @@ import en from "@/i18n/messages/en/plugins/auth.json"
 import { requestConnectionPrompt } from "@/lib/plugin/auth/connection-prompts"
 import type { AuthConnectionMetadata } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { PluginConnectionPromptHost } from "./plugin-connection-prompt-host"
+import { startHostAuthCallbackListeners } from "@/lib/plugin/auth/callback-acceptor"
+
+jest.mock("@/lib/plugin/auth/callback-acceptor", () => ({
+  startHostAuthCallbackListeners: jest.fn(() => jest.fn()),
+}))
+
+it("starts Host callbacks at runtime mount and wires sign-in approval", async () => {
+  const { unmount } = render(
+    <NextIntlClientProvider locale="en" messages={{ plugins: { auth: en } }}>
+      <PluginConnectionPromptHost />
+    </NextIntlClientProvider>
+  )
+  expect(startHostAuthCallbackListeners).toHaveBeenCalled()
+  const stop = jest.mocked(startHostAuthCallbackListeners).mock.results.at(-1)!.value
+  let pending!: ReturnType<typeof requestConnectionPrompt>
+  act(() => {
+    pending = requestConnectionPrompt({
+      kind: "sign-in",
+      pluginId: "calendar",
+      pluginName: "Calendar",
+      providerId: "acme",
+      providerLabel: "Acme",
+      scopes: ["read"],
+    })
+  })
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }))
+  await expect(pending).resolves.toEqual({ kind: "sign-in" })
+  unmount()
+  expect(stop).toHaveBeenCalledTimes(1)
+})
 
 const connection: AuthConnectionMetadata = {
   ref: "ref" as AuthConnectionMetadata["ref"],

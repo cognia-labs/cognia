@@ -34491,6 +34491,9 @@
         "pickerTitle": "Choose an account for {plugin}",
         "readOperations": "Read operations",
         "scopesLabel": "Requested scopes",
+        "signIn": "Sign in",
+        "signInDescription": "{plugin} needs a connection to {provider}. Sign in to continue.",
+        "signInTitle": "Sign in to {provider}",
         "tenant": "Organization: {tenant}",
         "tenantLabel": "Organization:",
         "writeOperations": "Write operations"

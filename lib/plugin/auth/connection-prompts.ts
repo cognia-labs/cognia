@@ -12,6 +12,7 @@ export interface ConnectionGrantOperation {
 
 type PromptInput =
   | { kind: "picker"; candidates: AuthConnectionMetadata[] }
+  | { kind: "sign-in"; providerId: string; providerLabel: string; scopes: string[] }
   | {
       kind: "grant"
       connection: AuthConnectionMetadata
@@ -25,6 +26,7 @@ export type ConnectionPrompt = PromptInput & {
 }
 export type ConnectionPromptResult =
   | { kind: "selected"; ref: AuthConnectionRef }
+  | { kind: "sign-in" }
   | { kind: "approved" }
   | { kind: "denied" }
   | { kind: "dismissed" }
@@ -67,6 +69,8 @@ export function resolveConnectionPrompt(id: string, result: ConnectionPromptResu
   if (result.kind === "selected") {
     if (current.kind !== "picker" || !current.candidates.some((row) => row.ref === result.ref))
       return
+  } else if (result.kind === "sign-in") {
+    if (current.kind !== "sign-in") return
   } else if (result.kind !== "dismissed" && current.kind !== "grant") return
   const entry = pending.get(id)!
   pending.delete(id)
