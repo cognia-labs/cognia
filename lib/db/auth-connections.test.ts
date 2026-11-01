@@ -49,6 +49,20 @@ it("enforces unique identity and releases it on tombstone", async () => {
   expect(await listAuthConnections("p")).toHaveLength(2)
   expect(await listAuthConnections("other")).toEqual([])
 })
+
+it("round-trips a Host-only native credential binding without a schema backfill", async () => {
+  const native = {
+    ...row("native"),
+    hostMetadata: {
+      adapterId: "adapter",
+      authorizationEpoch: "epoch",
+      credentialVersion: "revision",
+      bot: true,
+    },
+  }
+  await putAuthConnection(native)
+  expect(await getAuthConnection(native.id)).toEqual(native)
+})
 it("escapes identity delimiters to prevent aliases", () => {
   const key = (issuer: string, clientId: string) =>
     authConnectionIdentityKey({ issuer, clientId, principal: { id: "u", kind: "user" } })

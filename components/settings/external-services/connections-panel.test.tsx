@@ -8,7 +8,13 @@ import zh from "@/i18n/messages/zh-CN/settings/externalServices.json"
 import { listAuthConnections } from "@/lib/db/auth-connections"
 import { listCapabilityGrants, listServiceConnections } from "@/lib/db/external-services"
 import { listPlugins } from "@/lib/db/plugins"
-import { getConnectionManager, disconnect } from "@/lib/plugin/auth/connection-manager"
+import {
+  getConnectionManager,
+  disconnect,
+  registerHostConnectionDriver,
+  ConnectionIdentityConflict,
+} from "@/lib/plugin/auth/connection-manager"
+import { listProviders } from "@/lib/plugin/auth/auth-provider-registry"
 import { connectProvider } from "@/lib/plugin/auth/connect"
 import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
 import { ConnectionsPanel } from "./connections-panel"
@@ -21,15 +27,19 @@ jest.mock("@/lib/db/external-services", () => ({
 }))
 jest.mock("@/lib/db/plugins", () => ({ listPlugins: jest.fn() }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
   getConnectionManager: jest.fn(() => ({ onDidChange: jest.fn(() => jest.fn()) })),
   disconnect: jest.fn(async () => {}),
+}))
+jest.mock("@/hooks/use-connector-ingress", () => ({
+  useConnectorIngress: () => ({ base: "https://relay.example" }),
 }))
 jest.mock("@/lib/plugin/auth/connect", () => ({ connectProvider: jest.fn(async () => "host") }))
 jest.mock("@/lib/plugin/auth/revoke-consumer-access", () => ({
   revokeConsumerAccess: jest.fn(async () => {}),
 }))
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({
-  listProviders: () => [{ id: "vendor", label: "Vendor", pluginId: "owner", describe: () => {} }],
+  listProviders: jest.fn(),
   subscribeAuthProviders: () => () => {},
   getAuthProviderRevision: () => 0,
 }))
@@ -69,6 +79,11 @@ function mount() {
 }
 beforeEach(() => {
   jest.clearAllMocks()
+  jest
+    .mocked(listProviders)
+    .mockReturnValue([
+      { id: "vendor", label: "Vendor", pluginId: "owner", describe: () => {} },
+    ] as never)
   jest.mocked(listAuthConnections).mockResolvedValue([row])
   jest.mocked(listServiceConnections).mockResolvedValue([
     {
@@ -166,4 +181,39 @@ it("has matching Settings translation keys in both locales", () => {
     )
   }
   expect(keys(en).sort()).toEqual(keys(zh).sort())
+})
+
+it("maps duplicate-lineage refusal to the localized existing-connection reason", async () => {
+  jest.mocked(connectProvider).mockRejectedValueOnce(new ConnectionIdentityConflict())
+  mount()
+  await screen.findByText("Person")
+  await userEvent.click(screen.getByRole("button", { name: "Sign in to Vendor" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent(en.connections.identityConflict)
+})
+
+it("reauthorizes a Lark Host connection through its adapter flow", async () => {
+  const reauthorize = jest.fn(async () => {})
+  const dispose = registerHostConnectionDriver("lark", {
+    publisher: "cognia",
+    getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
+    disconnect: async () => {},
+    reauthorize,
+  })
+  jest
+    .mocked(listProviders)
+    .mockReturnValue([{ id: "lark", label: "Feishu / Lark", pluginId: null }] as never)
+  jest
+    .mocked(listAuthConnections)
+    .mockResolvedValue([{ ...row, providerId: "lark", ownerPluginId: null }])
+  try {
+    mount()
+    await screen.findByText("Person")
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }))
+    await waitFor(() =>
+      expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
+    )
+    expect(connectProvider).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+  }
 })

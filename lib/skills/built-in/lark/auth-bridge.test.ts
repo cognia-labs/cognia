@@ -22,6 +22,10 @@ import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
 import { resolveBuiltInSkillSessionBinding } from "../context"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 jest.mock("@/lib/db/adapter-instances", () => ({
   getAdapterInstance: jest.fn(),
@@ -110,6 +114,20 @@ beforeEach(() => {
   mockListByType.mockReset()
   mockKeyring.mockReset()
   mockTenantToken.mockReset()
+  jest.mocked(resolveLarkConnection).mockImplementation(async () => {
+    const snapshot = await jest.mocked(connectorsLarkUserAuth).mock.results.at(-1)?.value
+    return {
+      id: "host-ref",
+      revision: 1,
+      hostMetadata: { authorizationEpoch: snapshot?.authorizationEpoch ?? "epoch-a" },
+    } as never
+  })
+  jest.mocked(getConnectionManager).mockReturnValue({
+    getCredentials: async () => {
+      const verified = await jest.mocked(connectorsLarkUserAuth).mock.results.at(-1)?.value
+      return { accessToken: verified?.accessToken ?? (await mockKeyring("lark-1", "user_token")) }
+    },
+  } as never)
 })
 
 describe("resolveLarkAuth", () => {

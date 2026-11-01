@@ -1,14 +1,10 @@
-jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstancesByType: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  listLarkConnections: jest.fn(),
+  larkConnectionAdapter: jest.fn(),
+}))
 jest.mock("@/lib/tauri/transport-instance", () => ({
   localTransport: { subscribe: jest.fn(() => jest.fn()) },
   transport: { subscribe: jest.fn(() => jest.fn()) },
-}))
-jest.mock("@/lib/connectors/tauri/commands", () => ({
-  connectorsLarkUserAuth: jest.fn(async () => ({
-    authorizationEpoch: "authorization-a",
-    configured: true,
-    accessToken: "user-a",
-  })),
 }))
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
@@ -19,8 +15,16 @@ jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
   fetchLarkDocAsRawSource: jest.fn(),
 }))
 
-import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import {
+  listLarkConnections,
+  larkConnectionAdapter,
+} from "@/lib/connectors/adapters/lark/host-auth"
+import { ConnectionRevisionChanged } from "@/lib/plugin/auth/connection-manager"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
+  getConnectionManager: jest.fn(() => ({ onDidChange: jest.fn(() => jest.fn()) })),
+}))
 import {
   LarkAccessError,
   withLarkAuthedApi,
@@ -33,11 +37,12 @@ import { DocsProviderError } from "@/lib/docs-providers/types"
 import { larkDocsProvider } from "./index"
 import { localTransport, transport } from "@/lib/tauri/transport-instance"
 
-const listByTypeMock = listAdapterInstancesByType as jest.Mock
+const listConnectionsMock = listLarkConnections as jest.Mock
 const withAuthMock = withLarkAuthedApi as jest.Mock
 const fetchDocMock = fetchLarkDocAsRawSource as jest.Mock
 
-const ACCOUNT = "cai_1"
+const ACCOUNT = "host-connection-ref"
+const ADAPTER = "cai_1"
 
 /**
  * Stubs are written against `unknown` because `LarkAuthedApi`'s methods are
@@ -65,12 +70,22 @@ function runWith(api: StubLarkApi) {
   )
 }
 
+const connection = {
+  id: ACCOUNT,
+  providerId: "lark",
+  accountLabel: "Ada",
+  revision: 1,
+  scopes: ["search:docs:read"],
+  status: "connected",
+  hostMetadata: { adapterId: ADAPTER, authorizationEpoch: "native-a" },
+}
 beforeEach(() => {
   jest.clearAllMocks()
-  ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
-    authorizationEpoch: "authorization-a",
-    configured: true,
-    accessToken: "user-a",
+  listConnectionsMock.mockResolvedValue([connection])
+  ;(larkConnectionAdapter as jest.Mock).mockImplementation(async (_ref, revision) => {
+    if (revision !== undefined && revision !== 1)
+      throw new ConnectionRevisionChanged(ACCOUNT, revision, 1)
+    return { connection, adapterId: ADAPTER }
   })
 })
 
@@ -78,7 +93,7 @@ describe("larkDocsProvider — shape", () => {
   it("releases an aborted caller while the initial native authorization snapshot is pending", async () => {
     const controller = new AbortController()
     let finish!: (value: unknown) => void
-    ;(connectorsLarkUserAuth as jest.Mock).mockReturnValue(
+    ;(larkConnectionAdapter as jest.Mock).mockReturnValue(
       new Promise((resolve) => {
         finish = resolve
       })
@@ -95,7 +110,7 @@ describe("larkDocsProvider — shape", () => {
     controller.abort()
     await new Promise<void>((resolve) => setImmediate(resolve))
     const releasedBeforeSnapshot = settled
-    finish({ configured: true, authorizationEpoch: "authorization-a" })
+    finish({ connection, adapterId: ADAPTER })
     expect(await observed).toMatchObject({ name: "AbortError" })
     expect(releasedBeforeSnapshot).toBe(true)
   })
@@ -105,9 +120,9 @@ describe("larkDocsProvider — shape", () => {
     async (operation) => {
       const controller = new AbortController()
       let snapshots = 0
-      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+      ;(larkConnectionAdapter as jest.Mock).mockImplementation(async () => {
         if (++snapshots === 2) queueMicrotask(() => queueMicrotask(() => controller.abort()))
-        return { configured: true, authorizationEpoch: "authorization-a", accessToken: "user-a" }
+        return { connection, adapterId: ADAPTER }
       })
       fetchDocMock.mockResolvedValue({ title: "Doc", text: "must not publish" })
       withAuthMock.mockResolvedValue([])
@@ -131,7 +146,13 @@ describe("larkDocsProvider — shape", () => {
       listener
     )
     expect(transport.subscribe).not.toHaveBeenCalled()
+    const manager = jest.mocked(getConnectionManager).mock.results.at(-1)!.value
+    const changed = manager.onDidChange.mock.calls[0][0]
+    changed({ providerId: "lark" })
+    changed({ providerId: "other" })
+    expect(listener).toHaveBeenCalledTimes(1)
     stop()
+    expect(manager.onDidChange.mock.results[0].value).toHaveBeenCalled()
   })
 
   it("declares a colon-terminated prefix and the four readable kinds", () => {
@@ -146,92 +167,44 @@ describe("larkDocsProvider — shape", () => {
 })
 
 describe("larkDocsProvider.listAccounts", () => {
-  it("pins the native authorization lineage rather than the adapter label", async () => {
-    listByTypeMock.mockResolvedValue([
-      { id: ACCOUNT, enabled: true, displayName: "Same adapter", settings: {} },
-    ])
+  it("returns connection references and numeric revisions rather than adapter ids", async () => {
     expect(await larkDocsProvider.listAccounts()).toEqual([
-      expect.objectContaining({ id: ACCOUNT, authorizationEpoch: "authorization-a" }),
+      { id: ACCOUNT, label: "Ada", authorizationEpoch: "1", searchable: true },
     ])
+    expect(ACCOUNT).not.toBe(ADAPTER)
   })
-
-  it("rejects a stale same-adapter binding before reading a document", async () => {
-    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({
-      authorizationEpoch: "authorization-b",
-      configured: true,
-      accessToken: "user-b",
-    })
+  it("does not advertise disconnected, unavailable, or needs-reauth connections", async () => {
+    listConnectionsMock.mockResolvedValue(
+      ["tombstoned", "provider-unavailable", "needs-reauth"].map((status) => ({
+        ...connection,
+        status,
+      }))
+    )
+    expect(await larkDocsProvider.listAccounts()).toEqual([])
+  })
+  it("rejects a stale connection revision before reading a document", async () => {
     await expect(
       larkDocsProvider.fetch(
         {
           providerId: "lark",
-          id: "doxcnAbCdEfGh1234567890",
+          id: "doc",
           kind: "doc",
-          title: "Old pick",
-          accountBinding: { accountId: ACCOUNT, authorizationEpoch: "authorization-a" },
+          title: "Old",
+          accountBinding: { accountId: ACCOUNT, authorizationEpoch: "2" },
         },
-        { accountId: ACCOUNT, expectedAuthorizationEpoch: "authorization-a" }
+        { accountId: ACCOUNT, expectedAuthorizationEpoch: "2" }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(fetchDocMock).not.toHaveBeenCalled()
   })
-
-  it("projects enabled Lark adapters and labels the connected OAuth user", async () => {
-    listByTypeMock.mockResolvedValue([
-      {
-        id: "a1",
-        enabled: true,
-        displayName: "Acme",
-        settings: { connectedUser: { name: "Ada" } },
-      },
-      { id: "a2", enabled: true, displayName: "BotOnly", settings: {} },
-      { id: "a3", enabled: false, displayName: "Off", settings: {} },
-    ])
+  it("does not advertise document search without the connected scope", async () => {
+    listConnectionsMock.mockResolvedValue([{ ...connection, scopes: [] }])
     expect(await larkDocsProvider.listAccounts()).toEqual([
-      { id: "a1", label: "Acme", authorizationEpoch: "authorization-a", searchable: false },
-      { id: "a2", label: "BotOnly", authorizationEpoch: "authorization-a", searchable: false },
+      expect.objectContaining({ searchable: false }),
     ])
   })
-
-  it("returns nothing when no Lark account is bound", async () => {
-    listByTypeMock.mockResolvedValue([])
-    expect(await larkDocsProvider.listAccounts()).toEqual([])
-  })
-
-  it("takes its account label and scopes from the native lineage, not delayed DB metadata", async () => {
-    listByTypeMock.mockResolvedValue([
-      {
-        id: ACCOUNT,
-        enabled: true,
-        displayName: "Acme",
-        settings: { connectedUser: { name: "Stale A" } },
-      },
-    ])
-    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
-      authorizationEpoch: "authorization-b",
-      configured: true,
-      accessToken: "user-b",
-      accountLabel: "Current B",
-      scopes: ["search:docs:read"],
-    })
-    expect(await larkDocsProvider.listAccounts()).toEqual([
-      {
-        id: ACCOUNT,
-        label: "Acme · Current B",
-        authorizationEpoch: "authorization-b",
-        searchable: true,
-      },
-    ])
-  })
-
-  it("does not advertise enabled adapters whose host credentials are missing", async () => {
-    listByTypeMock.mockResolvedValue([
-      { id: ACCOUNT, enabled: true, displayName: "Unconfigured", settings: {} },
-    ])
-    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
-      authorizationEpoch: "missing",
-      configured: false,
-    })
+  it("returns no accounts without a Host connection", async () => {
+    listConnectionsMock.mockResolvedValue([])
     expect(await larkDocsProvider.listAccounts()).toEqual([])
   })
 })
@@ -269,7 +242,7 @@ describe("larkDocsProvider.search", () => {
     runWith({ post: async () => ({ docs_entities: [] }) })
     await larkDocsProvider.search?.("q", { accountId: ACCOUNT, limit: 10 })
     expect(withAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({ adapterId: ACCOUNT, identity: "user" }),
+      expect.objectContaining({ adapterId: ADAPTER, identity: "user" }),
       expect.any(Function)
     )
   })
@@ -355,8 +328,8 @@ describe("larkDocsProvider.fetch — documents", () => {
     expect(fetchDocMock).toHaveBeenCalledWith(
       "doxcn1",
       expect.objectContaining({
-        adapterId: ACCOUNT,
-        expectedAuthorizationEpoch: "authorization-a",
+        adapterId: ADAPTER,
+        expectedAuthorizationEpoch: "native-a",
         maxResponseBytes: 10 * 1024 * 1024,
       })
     )
@@ -383,7 +356,7 @@ describe("larkDocsProvider.fetch — documents", () => {
     )
     expect(fetchDocMock).toHaveBeenCalledWith(
       "https://acme.feishu.cn/docx/doxcn1",
-      expect.objectContaining({ adapterId: ACCOUNT })
+      expect.objectContaining({ adapterId: ADAPTER })
     )
   })
 
@@ -493,16 +466,15 @@ describe("Lark Wiki resource dispatch", () => {
 
   it("rejects authorization changes while a body is in flight", async () => {
     fetchDocMock.mockImplementation(async () => {
-      ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
-        authorizationEpoch: "authorization-b",
-        configured: true,
-      })
+      ;(larkConnectionAdapter as jest.Mock).mockRejectedValue(
+        new ConnectionRevisionChanged(ACCOUNT, 1, 2)
+      )
       return { title: "New account", text: "must not attach" }
     })
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", id: "d", kind: "doc", title: "Old" },
-        { accountId: ACCOUNT, expectedAuthorizationEpoch: "authorization-a" }
+        { accountId: ACCOUNT, expectedAuthorizationEpoch: "1" }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
   })

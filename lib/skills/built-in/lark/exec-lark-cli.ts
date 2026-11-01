@@ -33,6 +33,8 @@ import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
 import { LarkActingIdentityError, larkPersonalAccessHint } from "./acting-identity"
 import { runLarkCliProcess, type LarkCliProcessResult } from "./process"
 import type { BuiltInSkillContext } from "../types"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 const MAX_STDOUT_BYTES = 1024 * 1024 // 1 MB
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -154,6 +156,11 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
     timeoutMs,
     maxOutputBytes: MAX_STDOUT_BYTES,
   })
+  if (auth.connection)
+    await getConnectionManager().getConnection(
+      auth.connection.ref as AuthConnectionRef,
+      auth.connection.revision
+    )
   if (result.truncated) {
     return {
       status: "error",

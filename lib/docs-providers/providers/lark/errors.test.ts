@@ -3,8 +3,18 @@ import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { LarkIngestError } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { DocsProviderError } from "@/lib/docs-providers/types"
 import { toDocsProviderError } from "./errors"
+import {
+  ConnectionUnavailableError,
+  ConnectionRevisionChanged,
+} from "@/lib/plugin/auth/connection-manager"
 
 describe("toDocsProviderError", () => {
+  it.each([
+    new ConnectionUnavailableError("needs-reauth"),
+    new ConnectionRevisionChanged("connection", 1, 2),
+  ])("maps a disconnected or superseded connection to notAuthorized: %s", (error) => {
+    expect(toDocsProviderError(error)).toMatchObject({ code: "notAuthorized" })
+  })
   it("passes an existing DocsProviderError through untouched", () => {
     const original = new DocsProviderError("rateLimited", { account: "Acme" })
     expect(toDocsProviderError(original)).toBe(original)

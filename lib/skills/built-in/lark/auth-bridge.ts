@@ -35,6 +35,8 @@ import {
   resolveLarkRunIdentity,
 } from "./acting-identity"
 import type { BuiltInSkillContext } from "../types"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 
 export type LarkAuthIdentity = "user" | "bot"
 
@@ -52,6 +54,8 @@ export interface LarkAuthBridgeOk {
    * created or changed. The selected environment provider owns the account.
    */
   env: Record<string, string>
+  /** Host-only fence checked again before returning a CLI read. */
+  connection?: { ref: string; revision: number }
 }
 
 export type LarkAuthBridgeError =
@@ -94,6 +98,7 @@ export async function resolveLarkAuth(
   const selection = await resolveLarkAdapter(input)
   if (!selection.ok) return selection
   const { adapter } = selection
+  const brand = adapter.settings.brand === "lark" ? "lark" : "feishu"
 
   const appId =
     (await safeKeyringGet(adapter.id, "appId"))?.trim() ||
@@ -148,13 +153,29 @@ export async function resolveLarkAuth(
       if (!(err instanceof LarkActingIdentityError)) throw err
       return { ok: false, reason: err.reason, message: err.message, adapterId: adapter.id }
     }
-    const userToken = verified?.accessToken ?? (await safeKeyringGet(adapter.id, "user_token"))
+    let connection: Awaited<ReturnType<typeof resolveLarkConnection>>
+    let userToken: string
+    try {
+      connection = await resolveLarkConnection(adapter.id)
+      if (verified && verified.authorizationEpoch !== connection.hostMetadata?.authorizationEpoch)
+        throw new Error("lark_auth_stale")
+      userToken = (await getConnectionManager().getCredentials(connection.id)).accessToken
+    } catch {
+      return {
+        ok: false,
+        reason: "user_not_authorized",
+        message:
+          "user_not_authorized: reconnect the Lark connection before using personal actions.",
+        adapterId: adapter.id,
+      }
+    }
     if (userToken) {
       return {
         ok: true,
         adapterId: adapter.id,
         identity: "user",
-        env: larkCliEnv(appId, appSecret, "user", userToken),
+        env: larkCliEnv(appId, appSecret, "user", userToken, brand),
+        connection: { ref: connection.id, revision: connection.revision },
       }
     }
     return {
@@ -181,13 +202,16 @@ export async function resolveLarkAuth(
       ...(sessionBinding ? { authoritySessionId: sessionBinding.rootSessionId } : {}),
       ...(scope?.runId ? { executionRunId: scope.runId } : {}),
     })
-    const tenantToken = await getTenantToken({ appId, appSecret }, "service-data")
+    const tenantToken = await getTenantToken(
+      { appId, appSecret, ...(brand === "lark" ? { brand } : {}) },
+      "service-data"
+    )
     return {
       ok: true,
       adapterId: adapter.id,
       identity: "bot",
       lane: "service",
-      env: larkCliEnv(appId, appSecret, "bot", tenantToken),
+      env: larkCliEnv(appId, appSecret, "bot", tenantToken, brand),
     }
   } catch (err) {
     return {
@@ -305,12 +329,13 @@ function larkCliEnv(
   appId: string,
   appSecret: string,
   identity: LarkAuthIdentity,
-  token: string
+  token: string,
+  brand: "feishu" | "lark"
 ): Record<string, string> {
   return {
     LARKSUITE_CLI_APP_ID: appId,
     LARKSUITE_CLI_APP_SECRET: appSecret,
-    LARKSUITE_CLI_BRAND: "feishu",
+    LARKSUITE_CLI_BRAND: brand,
     LARKSUITE_CLI_USER_ACCESS_TOKEN: identity === "user" ? token : "",
     LARKSUITE_CLI_TENANT_ACCESS_TOKEN: identity === "bot" ? token : "",
     LARKSUITE_CLI_DEFAULT_AS: identity,

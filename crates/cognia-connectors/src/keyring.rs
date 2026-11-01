@@ -109,6 +109,10 @@ pub enum LarkUserAuthInput {
     Snapshot {
         adapter_id: String,
     },
+    Disconnect {
+        adapter_id: String,
+        expected_authorization_epoch: String,
+    },
     Authorize {
         adapter_id: String,
         expected_authorization_epoch: String,
@@ -175,6 +179,19 @@ fn capture_user_auth(
                 reset_on_write: true,
             },
         ];
+        let epoch_key = account_key(adapter_id, USER_EPOCH);
+        let epoch_dependencies = [
+            cognia_secrets::host_secrets::SecretDependency {
+                service: SERVICE.into(),
+                account: access_key.clone(),
+                reset_on_write: true,
+            },
+            cognia_secrets::host_secrets::SecretDependency {
+                service: SERVICE.into(),
+                account: refresh_key.clone(),
+                reset_on_write: true,
+            },
+        ];
         cognia_secrets::host_secrets::with_secret_dependency_group(
             cognia_secrets::host_secrets::HostSecretKind::Connector,
             &app_key,
@@ -182,6 +199,7 @@ fn capture_user_auth(
             &[
                 (&access_key, &access_dependencies),
                 (&refresh_key, &refresh_dependencies),
+                (&epoch_key, &epoch_dependencies),
             ],
             || Ok(()),
         )?;
@@ -238,7 +256,11 @@ fn capture_user_auth(
                 .collect();
             cognia_secrets::host_secrets::set_many_if_current(
                 cognia_secrets::host_secrets::HostSecretKind::Connector,
-                &[(keys[4].as_str(), lineage.as_str())],
+                &[
+                    (keys[2].as_str(), access.value.as_str()),
+                    (keys[3].as_str(), refresh.value.as_str()),
+                    (keys[4].as_str(), lineage.as_str()),
+                ],
                 &guards,
                 None,
                 chrono::Utc::now().timestamp_millis(),
@@ -250,6 +272,10 @@ fn capture_user_auth(
                     error
                 }
             })?;
+            // Adoption republishes the pair with the epoch in one batch.
+            // Return those committed revisions, never the pre-adoption ones.
+            snapshots[2] = get_snapshot(adapter_id, "user_token")?;
+            snapshots[3] = get_snapshot(adapter_id, "user_refresh_token")?;
             snapshots[4] = get_snapshot(adapter_id, USER_EPOCH)?;
         }
     }
@@ -345,6 +371,36 @@ pub fn lark_user_auth(input: LarkUserAuthInput) -> Result<LarkUserAuthState, Str
     let _guard = USER_AUTH_LOCK.lock();
     let (adapter, epoch, pending, refresh_revision, access, refresh) = match &input {
         LarkUserAuthInput::Snapshot { adapter_id } => {
+            return capture_user_auth(adapter_id).map(|s| s.0);
+        }
+        LarkUserAuthInput::Disconnect {
+            adapter_id,
+            expected_authorization_epoch,
+        } => {
+            let (current, expectations, _) = capture_user_auth(adapter_id)?;
+            if &current.authorization_epoch != expected_authorization_epoch {
+                return Err("lark_auth_stale".into());
+            }
+            let guards: Vec<_> = expectations
+                .iter()
+                .map(|(name, revision)| (name.as_str(), revision.as_deref()))
+                .collect();
+            // Writing the epoch atomically invalidates both dependent tokens.
+            // Direct Host-secret edits participate in these same expectations.
+            host_secrets::set_many_if_current(
+                HostSecretKind::Connector,
+                &[(account_key(adapter_id, USER_EPOCH).as_str(), "disconnected")],
+                &guards,
+                None,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| {
+                if error == "host_secret_revision_changed" {
+                    "lark_auth_stale".into()
+                } else {
+                    error
+                }
+            })?;
             return capture_user_auth(adapter_id).map(|s| s.0);
         }
         LarkUserAuthInput::Authorize {
@@ -502,6 +558,47 @@ mod tests {
             adapter_id: adapter.into(),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn lark_disconnect_fences_refresh_and_preserves_a_newer_authorization() {
+        let adapter = "lark-disconnect-cas";
+        let first = lark_fixture(adapter);
+        let disconnected = lark_user_auth(LarkUserAuthInput::Disconnect {
+            adapter_id: adapter.into(),
+            expected_authorization_epoch: first.authorization_epoch.clone(),
+        })
+        .unwrap();
+        assert!(disconnected.access_token.is_none());
+        assert!(disconnected.refresh_token.is_none());
+        assert!(lark_user_auth(LarkUserAuthInput::Refresh {
+            adapter_id: adapter.into(),
+            expected_authorization_epoch: first.authorization_epoch.clone(),
+            expected_refresh_revision: first.refresh_revision.unwrap(),
+            access_token: "late".into(),
+            refresh_token: "late-refresh".into(),
+        })
+        .is_err());
+        set(adapter, "oauth_pending", &serde_json::json!({"state":"new", "ts":chrono::Utc::now().timestamp_millis(), "authorizationEpoch":disconnected.authorization_epoch}).to_string()).unwrap();
+        lark_user_auth(LarkUserAuthInput::Authorize {
+            adapter_id: adapter.into(),
+            expected_authorization_epoch: disconnected.authorization_epoch,
+            pending_state: "new".into(),
+            account_label: None,
+            scopes: None,
+            access_token: "new-user".into(),
+            refresh_token: "new-refresh".into(),
+        })
+        .unwrap();
+        assert!(lark_user_auth(LarkUserAuthInput::Disconnect {
+            adapter_id: adapter.into(),
+            expected_authorization_epoch: first.authorization_epoch,
+        })
+        .is_err());
+        assert_eq!(
+            get(adapter, "user_token").unwrap().as_deref(),
+            Some("new-user")
+        );
     }
 
     #[test]

@@ -39,6 +39,7 @@
     "needsReapproval": "Needs re-approval",
     "readOperations": "Read operations",
     "writeOperations": "Write operations",
+    "identityConflict": "This account is already connected through another sign-in provider. Use the existing connection.",
     "failed": "The connection could not be loaded or updated. Please try again.",
     "loading": "Loading connections…",
     "status": {

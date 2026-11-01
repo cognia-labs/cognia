@@ -4,19 +4,21 @@
  * Credentials are NOT its own: it acts as a bound Lark connector instance, so
  * document reading reuses the connected adapter's credentials and requires
  * the corresponding document permissions. Document ACLs are evaluated against
- * that identity. `listAccounts` projects enabled, configured adapters through
- * the host's current authorization lineage.
+ * that identity. `listAccounts` projects connected Host user connections.
  *
  * Document bodies come straight from `fetchLarkDocAsRawSource`; only the two
  * grid-shaped kinds (电子表格 / 多维表格) needed new readers, and those run on
  * the shared `withLarkAuthedApi` harness that the doc fetcher itself now uses.
  */
 
-import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import {
+  listLarkConnections,
+  larkConnectionAdapter,
+} from "@/lib/connectors/adapters/lark/host-auth"
 import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { localTransport } from "@/lib/tauri/transport-instance"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { hasLarkDocumentSearchScope } from "@/lib/connectors/adapters/lark/auth"
 import { fetchLarkDocAsRawSource, resolveLarkWikiNode } from "@/lib/twin/ingest/lark-doc-fetcher"
@@ -40,20 +42,18 @@ import { readLarkSpreadsheet } from "./sheets"
 
 export const LARK_PROVIDER_ID = "lark"
 
-async function assertLarkAuthorization(opts: DocsProviderCallOptions): Promise<string> {
+async function assertLarkAuthorization(opts: DocsProviderCallOptions) {
   throwIfRequestAborted(opts.signal)
-  const state = await withRequestAbort(opts.signal, () =>
-    connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.accountId })
+  const resolved = await withRequestAbort(opts.signal, () =>
+    larkConnectionAdapter(
+      opts.accountId,
+      opts.expectedAuthorizationEpoch === undefined
+        ? undefined
+        : Number(opts.expectedAuthorizationEpoch)
+    )
   )
   throwIfRequestAborted(opts.signal)
-  if (!state.configured) throw new DocsProviderError("notConfigured")
-  if (
-    opts.expectedAuthorizationEpoch !== undefined &&
-    state.authorizationEpoch !== opts.expectedAuthorizationEpoch
-  )
-    throw new DocsProviderError("notAuthorized")
-  throwIfRequestAborted(opts.signal)
-  return state.authorizationEpoch
+  return resolved
 }
 
 /** `parseLarkResourceUrl` kinds → provider kinds. `docx` and `doc` both read as a document. */
@@ -83,33 +83,26 @@ export const larkDocsProvider: DocsProvider = {
   hosts: ["tauri"],
 
   async listAccounts(): Promise<DocsProviderAccount[]> {
-    const rows = await listAdapterInstancesByType(LARK_PROVIDER_ID)
-    const accounts = await Promise.all(
-      rows
-        .filter((row) => row.enabled)
-        .map(async (row) => {
-          const state = await connectorsLarkUserAuth({ action: "snapshot", adapterId: row.id })
-          if (!state.configured) return null
-          return {
-            id: row.id,
-            label: state.accountLabel
-              ? `${row.displayName} · ${state.accountLabel}`
-              : row.displayName,
-            authorizationEpoch: state.authorizationEpoch,
-            searchable:
-              Boolean(state.accessToken) && hasLarkDocumentSearchScope(state.scopes ?? []),
-          }
-        })
-    )
-    return accounts.filter((account): account is NonNullable<typeof account> => account !== null)
+    return (await listLarkConnections())
+      .filter((row) => row.status === "connected")
+      .map((row) => ({
+        id: row.id,
+        label: row.accountLabel,
+        authorizationEpoch: String(row.revision),
+        searchable: hasLarkDocumentSearchScope(row.scopes),
+      }))
   },
 
   subscribeAccounts(listener) {
     const stopCredentials = onCredentialsRotated(() => listener())
     const stopNative = localTransport.subscribe("lark-user-authorization-changed", listener)
+    const stopConnections = getConnectionManager().onDidChange((event) => {
+      if (event.providerId === LARK_PROVIDER_ID) listener()
+    })
     return () => {
       stopCredentials()
       stopNative()
+      stopConnections()
     }
   },
 
@@ -127,13 +120,14 @@ export const larkDocsProvider: DocsProvider = {
 
   async search(query: string, opts: DocsProviderSearchOptions): Promise<RemoteDocRef[]> {
     try {
-      opts = { ...opts, expectedAuthorizationEpoch: await assertLarkAuthorization(opts) }
+      const { connection, adapterId } = await assertLarkAuthorization(opts)
+      opts = { ...opts, expectedAuthorizationEpoch: String(connection.revision) }
       throwIfRequestAborted(opts.signal)
       const refs = await withLarkAuthedApi(
         {
-          adapterId: opts.accountId,
+          adapterId,
           identity: "user",
-          expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+          expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
           signal: opts.signal,
           maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
         },
@@ -160,14 +154,15 @@ export const larkDocsProvider: DocsProvider = {
         opts.accountId,
         opts.expectedAuthorizationEpoch ?? ref.accountBinding?.authorizationEpoch
       )
-      opts = { ...opts, expectedAuthorizationEpoch: await assertLarkAuthorization(opts) }
+      const { connection, adapterId } = await assertLarkAuthorization(opts)
+      opts = { ...opts, expectedAuthorizationEpoch: String(connection.revision) }
       throwIfRequestAborted(opts.signal)
       let bodyRef = ref
       let wikiTitle = ""
       const apiOptions = {
         identity: "user" as const,
-        adapterId: opts.accountId,
-        expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+        adapterId,
+        expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
         signal: opts.signal,
         maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
       }
@@ -182,8 +177,8 @@ export const larkDocsProvider: DocsProvider = {
       }
       if (bodyRef.kind === "doc") {
         const fetched = await fetchLarkDocAsRawSource(docInputFor(bodyRef), {
-          adapterId: opts.accountId,
-          expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+          adapterId,
+          expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
           signal: opts.signal,
           maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
           ...(bodyRef.sourceType === "doc" || bodyRef.sourceType === "docx"

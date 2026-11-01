@@ -377,11 +377,37 @@ describe("image block anchoring", () => {
 
 const binary = process.env.LARK_CLI_BIN || "lark-cli"
 const cliIt = spawnSync(binary, ["--version"], { encoding: "utf8" }).status === 0 ? it : it.skip
+// Dry-run parsing must use synthetic environment auth, never the developer's CLI keychain.
+const cliEnv = {
+  ...process.env,
+  LARKSUITE_CLI_APP_ID: "cli_cognia_document_probe",
+  LARKSUITE_CLI_APP_SECRET: "nonsecret-app-secret",
+  LARKSUITE_CLI_USER_ACCESS_TOKEN: "nonsecret-user-token",
+  LARKSUITE_CLI_TENANT_ACCESS_TOKEN: "",
+  LARKSUITE_CLI_BRAND: "feishu",
+  LARKSUITE_CLI_DEFAULT_AS: "user",
+  LARKSUITE_CLI_STRICT_MODE: "user",
+  LARKSUITE_CLI_PROFILE: "",
+  LARKSUITE_CLI_CONFIG_DIR: "",
+  LARKSUITE_CLI_AUTH_PROXY: "",
+  LARKSUITE_CLI_PROXY_KEY: "",
+  LARKSUITE_CLI_TENANT_ACCESS_TOKEN_SOURCE: "",
+  LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
+  LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
+  HTTP_PROXY: "http://127.0.0.1:9",
+  HTTPS_PROXY: "http://127.0.0.1:9",
+  ALL_PROXY: "http://127.0.0.1:9",
+  NO_PROXY: "",
+}
 
 describe("generated document arguments against the installed CLI", () => {
   cliIt("accepts the ingestion fetch arguments and extracts the CLI body", async () => {
     const exec = jest.fn(async (input: { args: readonly string[] }) => {
-      const output = spawnSync(binary, [...input.args, "--dry-run"], { encoding: "utf8" })
+      const output = spawnSync(binary, [...input.args, "--dry-run"], {
+        encoding: "utf8",
+        env: cliEnv,
+        timeout: 15_000,
+      })
       expect(output.status).toBe(0)
       return {
         status: "ok" as const,
@@ -431,7 +457,7 @@ describe("generated document arguments against the installed CLI", () => {
         const output = spawnSync(
           binary,
           [...call.args, "--dry-run", ...(call.confirmed ? ["--yes"] : [])],
-          { encoding: "utf8" }
+          { encoding: "utf8", env: cliEnv, timeout: 15_000 }
         )
         const scopeBlocked =
           output.status === 3 && output.stderr.includes('"subtype": "missing_scope"')

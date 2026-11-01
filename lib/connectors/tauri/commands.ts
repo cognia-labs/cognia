@@ -413,6 +413,7 @@ interface LarkUserAuthCommit {
 
 export type LarkUserAuthInput =
   | { action: "snapshot"; adapterId: string }
+  | { action: "disconnect"; adapterId: string; expectedAuthorizationEpoch: string }
   | (LarkUserAuthCommit & {
       action: "authorize"
       pendingState: string
@@ -423,7 +424,12 @@ export type LarkUserAuthInput =
 
 /** Host-owned conditional token-pair publication; unsupported hosts fail closed. */
 export async function connectorsLarkUserAuth(input: LarkUserAuthInput): Promise<LarkUserAuthState> {
-  return invoker("connectors_lark_user_auth", { input })
+  const result = await invoker<LarkUserAuthState>("connectors_lark_user_auth", { input })
+  if (input.action === "disconnect") {
+    const { emitCredentialsRotated } = await import("@/lib/connectors/credentials-events")
+    emitCredentialsRotated(input.adapterId)
+  }
+  return result
 }
 
 /** Runtime-only atomic value/revision read; never cached as an idempotent result. */

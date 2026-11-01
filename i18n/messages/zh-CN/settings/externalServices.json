@@ -39,6 +39,7 @@
     "needsReapproval": "需要重新批准",
     "readOperations": "读取操作",
     "writeOperations": "写入操作",
+    "identityConflict": "此账号已通过其他登录提供方连接。请使用已有连接。",
     "failed": "无法加载或更新连接，请重试。",
     "loading": "正在加载连接…",
     "status": {

@@ -52318,6 +52318,7 @@
         "empty": "No external service connections yet.",
         "failed": "The connection could not be loaded or updated. Please try again.",
         "grantedRevision": "Granted revision: {revision}",
+        "identityConflict": "This account is already connected through another sign-in provider. Use the existing connection.",
         "issuer": "Issuer:",
         "loading": "Loading connections…",
         "needsReapproval": "Needs re-approval",

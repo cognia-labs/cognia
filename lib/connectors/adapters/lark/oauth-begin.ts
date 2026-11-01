@@ -25,6 +25,8 @@ import { buildLarkOAuthUrl, LARK_SENDAS_SCOPES, mergeLarkScopes } from "./auth"
 import { setLarkOAuthPending } from "./oauth-pending"
 
 export interface BeginLarkOAuthInput {
+  brand?: "feishu" | "lark"
+  connection?: { ref: string; revision: number }
   adapterId: string
   /**
    * Exact `redirect_uri` to register with Feishu — normally
@@ -105,10 +107,12 @@ export async function beginLarkOAuth(
     codeVerifier,
     redirectUri,
     authorizationEpoch: captured.authorizationEpoch,
+    ...(input.connection ? { connection: input.connection } : {}),
   })
 
   return {
     authorizeUrl: buildLarkOAuthUrl({
+      brand: input.brand,
       appId,
       redirectUri,
       state,

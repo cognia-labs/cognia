@@ -33,16 +33,11 @@ import {
 import { CODE_CHALLENGE_METHOD } from "./pkce"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 
-const LARK_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-
-/** OAuth 2.0 authorization endpoint (accounts host, client_id + response_type). */
-const LARK_OAUTH_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
-
-/** OAuth 2.0 token endpoint — code→token and refresh both POST here. */
-const LARK_TOKEN_V2_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
-
-/** User-identity endpoint — resolves open_id / name / email from a user token. */
-const LARK_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+/** One deployment definition for authorization identity and every API endpoint. */
+export function larkDeployment(brand: "feishu" | "lark" = "feishu") {
+  const domain = brand === "lark" ? "larksuite.com" : "feishu.cn"
+  return { issuer: `https://accounts.${domain}`, apiBase: `https://open.${domain}` }
+}
 
 /**
  * Scopes requested for the send-as-user flow. `offline_access` is mandatory —
@@ -124,11 +119,11 @@ interface TenantTokenResponse {
  * @throws Error if the Lark API returns a non-zero code
  */
 export async function getTenantAccessToken(
-  opts: { appId: string; appSecret: string },
+  opts: { appId: string; appSecret: string; brand?: "feishu" | "lark" },
   purpose: TenantTokenPurposeV1
 ): Promise<string> {
   void purpose
-  const cacheKey = `${opts.appId}:${opts.appSecret}`
+  const cacheKey = `${opts.brand ?? "feishu"}:${opts.appId}:${opts.appSecret}`
   const now = Date.now()
 
   const cached = tokenCache.get(cacheKey)
@@ -137,7 +132,7 @@ export async function getTenantAccessToken(
   }
 
   const resp = await connectorsHttpRequest({
-    url: LARK_TOKEN_URL,
+    url: `${larkDeployment(opts.brand).apiBase}/open-apis/auth/v3/tenant_access_token/internal`,
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({ app_id: opts.appId, app_secret: opts.appSecret }),
@@ -163,7 +158,7 @@ export async function getTenantAccessToken(
 
 /** The only production entry to the token cache. Purpose is a label, never a cache key. */
 export function getTenantToken(
-  opts: { appId: string; appSecret: string },
+  opts: { appId: string; appSecret: string; brand?: "feishu" | "lark" },
   purpose: TenantTokenPurposeV1
 ): Promise<string> {
   // Deliberately no policy, logging, or purpose-specific credential selection.
@@ -176,7 +171,7 @@ export function getTenantToken(
  * Useful in tests or when credentials are rotated.
  */
 export function clearTokenCache(appId: string, appSecret: string): void {
-  tokenCache.delete(`${appId}:${appSecret}`)
+  for (const brand of ["feishu", "lark"]) tokenCache.delete(`${brand}:${appId}:${appSecret}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +179,7 @@ export function clearTokenCache(appId: string, appSecret: string): void {
 // ---------------------------------------------------------------------------
 
 export interface LarkOAuthUrlInput {
+  brand?: "feishu" | "lark"
   /** The app's App ID — sent as the OAuth 2.0 `client_id`. */
   appId: string
   redirectUri: string
@@ -214,7 +210,7 @@ export function buildLarkOAuthUrl(input: LarkOAuthUrlInput): string {
     params.set("code_challenge", input.codeChallenge)
     params.set("code_challenge_method", CODE_CHALLENGE_METHOD)
   }
-  return `${LARK_OAUTH_URL}?${params.toString()}`
+  return `${larkDeployment(input.brand).issuer}/open-apis/authen/v1/authorize?${params.toString()}`
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +238,7 @@ export interface LarkUserAccessTokenResult {
 /** Connected-user identity resolved from `fetchLarkUserInfo`. */
 export interface LarkUserInfo {
   openId: string
+  tenantKey?: string
   unionId?: string
   name?: string
   avatarUrl?: string
@@ -270,6 +267,7 @@ interface LarkUserInfoResponse {
   msg?: string
   data?: {
     open_id?: string
+    tenant_key?: string
     union_id?: string
     name?: string
     avatar_url?: string
@@ -282,6 +280,15 @@ interface LarkUserInfoResponse {
  * Parse + validate a v2 token response into the internal token shape. Throws
  * with Feishu's own `error_description`/`error`/code when the exchange failed.
  */
+export class LarkOAuthError extends Error {
+  constructor(
+    readonly code: string | undefined,
+    message: string
+  ) {
+    super(message)
+    this.name = "LarkOAuthError"
+  }
+}
 function parseTokenV2Response(rawBody: string, context: string): LarkUserAccessTokenResult {
   const parsed = JSON.parse(rawBody) as LarkTokenV2Response
   if (
@@ -293,7 +300,7 @@ function parseTokenV2Response(rawBody: string, context: string): LarkUserAccessT
       parsed.error_description ??
       parsed.error ??
       (parsed.code !== undefined ? `code=${parsed.code}` : "unknown")
-    throw new Error(`Lark ${context} failed: ${detail}`)
+    throw new LarkOAuthError(parsed.error, `Lark ${context} failed: ${detail}`)
   }
   return {
     accessToken: parsed.access_token,
@@ -317,6 +324,7 @@ function parseTokenV2Response(rawBody: string, context: string): LarkUserAccessT
  * propagated so OAuth UI surfaces can show the user a meaningful error.
  */
 export async function exchangeCodeForUserAccessToken(opts: {
+  brand?: "feishu" | "lark"
   /** Authorization code from the redirect URL. */
   code: string
   appId: string
@@ -336,7 +344,7 @@ export async function exchangeCodeForUserAccessToken(opts: {
   if (opts.codeVerifier) body.code_verifier = opts.codeVerifier
 
   const resp = await connectorsHttpRequest({
-    url: LARK_TOKEN_V2_URL,
+    url: `${larkDeployment(opts.brand).apiBase}/open-apis/authen/v2/oauth/token`,
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify(body),
@@ -351,12 +359,13 @@ export async function exchangeCodeForUserAccessToken(opts: {
  * re-using the old refresh token.
  */
 export async function refreshUserAccessToken(opts: {
+  brand?: "feishu" | "lark"
   refreshToken: string
   appId: string
   appSecret: string
 }): Promise<LarkUserAccessTokenResult> {
   const resp = await connectorsHttpRequest({
-    url: LARK_TOKEN_V2_URL,
+    url: `${larkDeployment(opts.brand).apiBase}/open-apis/authen/v2/oauth/token`,
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({
@@ -376,9 +385,12 @@ export async function refreshUserAccessToken(opts: {
  * (email, enterprise_email) are only present when the app was granted the
  * matching scope — the caller tolerates their absence.
  */
-export async function fetchLarkUserInfo(accessToken: string): Promise<LarkUserInfo> {
+export async function fetchLarkUserInfo(
+  accessToken: string,
+  brand?: "feishu" | "lark"
+): Promise<LarkUserInfo> {
   const resp = await connectorsHttpRequest({
-    url: LARK_USER_INFO_URL,
+    url: `${larkDeployment(brand).apiBase}/open-apis/authen/v1/user_info`,
     method: "GET",
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -392,6 +404,7 @@ export async function fetchLarkUserInfo(accessToken: string): Promise<LarkUserIn
   const d = parsed.data
   return {
     openId: d.open_id ?? "",
+    tenantKey: d.tenant_key,
     unionId: d.union_id,
     name: d.name,
     avatarUrl: d.avatar_url,
@@ -425,6 +438,7 @@ export async function getUserAccessToken(adapterId: string): Promise<string | nu
  * Throws when no refresh token is stored or Lark rejects it.
  */
 export async function refreshUserToken(opts: {
+  brand?: "feishu" | "lark"
   adapterId: string
   appId: string
   appSecret: string
@@ -446,11 +460,25 @@ export async function refreshUserToken(opts: {
   if (!captured.refreshToken || !captured.refreshRevision) {
     throw new Error(`Lark user token refresh: no refresh token stored for ${opts.adapterId}`)
   }
-  const tokens = await refreshUserAccessToken({
-    refreshToken: captured.refreshToken,
-    appId: opts.appId,
-    appSecret: opts.appSecret,
-  })
+  let tokens: LarkUserAccessTokenResult
+  try {
+    tokens = await refreshUserAccessToken({
+      refreshToken: captured.refreshToken,
+      appId: opts.appId,
+      appSecret: opts.appSecret,
+      brand: opts.brand,
+    })
+  } catch (error) {
+    if (error instanceof LarkOAuthError && error.code === "invalid_grant") {
+      const { markLarkNeedsReauth } = await import("./host-auth")
+      await markLarkNeedsReauth(
+        opts.adapterId,
+        captured.authorizationEpoch,
+        captured.refreshRevision
+      )
+    }
+    throw error
+  }
   // Once dispatched, finish conditional publication even if this caller aborts:
   // dropping a rotated refresh token would break the still-connected account.
   try {
@@ -463,6 +491,11 @@ export async function refreshUserToken(opts: {
       refreshToken: tokens.refreshToken,
     })
     if (!committed.accessToken) throw new Error("lark_auth_stale")
+    const { reconcileLarkConnection } = await import("./host-auth")
+    await reconcileLarkConnection(opts.adapterId, {
+      expiresAt: new Date(Date.now() + tokens.expiresInSec * 1000).toISOString(),
+      onlyExisting: true,
+    })
     return committed.accessToken
   } catch (error) {
     if (!String(error).includes("lark_auth_stale")) throw error

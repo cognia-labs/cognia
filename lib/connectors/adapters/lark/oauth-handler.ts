@@ -72,6 +72,7 @@ export function parseLarkOAuthState(state: string): { adapterId: string; nonce: 
 
 export interface LarkConnectedUser {
   openId: string
+  tenantKey?: string
   /** Native token lineage; absent only on rows written before epoch stamping. */
   authorizationEpoch?: string
   unionId?: string
@@ -154,13 +155,25 @@ export async function handleLarkOAuth(
   }
   // ── Step 4: exchange the code for a user token (v2), then resolve identity
   const tokens = await exchangeCodeForUserAccessToken({
+    brand: adapter.settings.brand === "lark" ? "lark" : "feishu",
     code,
     appId,
     appSecret,
     redirectUri: pending.redirectUri,
     codeVerifier: pending.codeVerifier,
   })
-  const userInfo = await fetchLarkUserInfo(tokens.accessToken)
+  const userInfo = await fetchLarkUserInfo(
+    tokens.accessToken,
+    adapter.settings.brand === "lark" ? "lark" : "feishu"
+  )
+  const { assertLarkIdentityAvailable, reconcileLarkConnection } = await import("./host-auth")
+  await assertLarkIdentityAvailable(
+    adapterId,
+    appId,
+    userInfo,
+    adapter.settings.brand === "lark" ? "lark" : "feishu",
+    pending.connection
+  )
 
   // ── Step 5: persist tokens in keyring ──────────────────────────────────
   const authorization = await connectorsLarkUserAuth({
@@ -179,6 +192,7 @@ export async function handleLarkOAuth(
   const now = Date.now()
   const connectedUser: LarkConnectedUser = {
     openId: userInfo.openId,
+    tenantKey: userInfo.tenantKey,
     authorizationEpoch: authorization.authorizationEpoch,
     unionId: userInfo.unionId,
     name: userInfo.name,
@@ -216,6 +230,21 @@ export async function handleLarkOAuth(
   // Native publication consumed the exact pending state atomically with the
   // authorization fence. Reload display metadata after its separate DB write.
   emitCredentialsRotated(adapterId)
+
+  try {
+    await reconcileLarkConnection(adapterId)
+  } catch (error) {
+    // A competing provider can win the identity slot after the preflight.
+    // Roll back only the authorization this callback actually published.
+    const { ConnectionIdentityConflict } = await import("@/lib/plugin/auth/connection-manager")
+    if (error instanceof ConnectionIdentityConflict)
+      await connectorsLarkUserAuth({
+        action: "disconnect",
+        adapterId,
+        expectedAuthorizationEpoch: authorization.authorizationEpoch,
+      })
+    throw error
+  }
 
   return connectedUser
 }

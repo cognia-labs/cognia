@@ -5901,6 +5901,26 @@
               "type": "object",
               "properties": {
                 "action": {
+                  "const": "disconnect"
+                },
+                "adapterId": {
+                  "type": "string"
+                },
+                "expectedAuthorizationEpoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "adapterId",
+                "expectedAuthorizationEpoch"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
                   "const": "authorize"
                 },
                 "adapterId": {

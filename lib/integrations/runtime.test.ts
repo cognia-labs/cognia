@@ -1,5 +1,9 @@
 import { startIntegrationRuntime } from "./runtime"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
+import { startLarkHostAuth } from "@/lib/connectors/adapters/lark/host-auth"
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  startLarkHostAuth: jest.fn(() => jest.fn()),
+}))
 
 const drainIntegrationActionJobs = jest.fn()
 const pruneIntegrationRetention = jest.fn()
@@ -59,6 +63,7 @@ describe("Integration runtime", () => {
     expect(pruneIntegrationRetention).toHaveBeenCalledTimes(1)
     expect(installIntegrationIngressRuntime).toHaveBeenCalledTimes(1)
     expect(registerGithubIntegrationAuthProviders).toHaveBeenCalledTimes(1)
+    expect(startLarkHostAuth).toHaveBeenCalled()
     expect(reconcileGithubAppDeliveries).toHaveBeenCalledTimes(1)
 
     jest.advanceTimersByTime(30_000)
@@ -72,6 +77,7 @@ describe("Integration runtime", () => {
     expect(pruneIntegrationRetention).toHaveBeenCalledTimes(1)
     expect(disposeIngress).toHaveBeenCalledTimes(1)
     expect(disposeGithubAuth).toHaveBeenCalledTimes(1)
+    expect(jest.mocked(startLarkHostAuth).mock.results.at(-1)!.value).toHaveBeenCalled()
   })
 
   it("recovers unfinished event projections at startup and on every sweep", async () => {

@@ -2,6 +2,7 @@ import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 import type { CapabilityGrant, ServiceConnection } from "@/types/external-service"
 import type { PluginIntegrationDef } from "@/types/plugin/plugin-integration"
 import type { AuthenticationProvider } from "@/lib/plugin/auth/auth-provider-registry"
+import { getHostConnectionDriver } from "@/lib/plugin/auth/connection-manager"
 
 export interface ConsumerGrantView {
   id: string
@@ -86,7 +87,10 @@ export function buildConnectionViews(
         connection,
         providerLabel: provider?.label ?? connection.providerId,
         canReconnect:
-          Boolean(provider?.describe) &&
+          Boolean(
+            provider?.describe ||
+            (provider?.pluginId === null && getHostConnectionDriver(provider.id)?.reauthorize)
+          ) &&
           (connection.status === "needs-reauth" || connection.status === "provider-unavailable"),
         consumers: [...consumers.values()].sort((a, b) => a.name.localeCompare(b.name)),
       }

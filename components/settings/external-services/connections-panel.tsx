@@ -5,22 +5,31 @@ import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useAuthConnections } from "@/hooks/external-services/use-auth-connections"
 import { connectProvider } from "@/lib/plugin/auth/connect"
-import { disconnect } from "@/lib/plugin/auth/connection-manager"
+import {
+  disconnect,
+  ConnectionIdentityConflict,
+  getHostConnectionDriver,
+} from "@/lib/plugin/auth/connection-manager"
+import { useConnectorIngress } from "@/hooks/use-connector-ingress"
 import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
 import { ConnectionRow } from "./connection-row"
 
 export function ConnectionsPanel() {
   const t = useTranslations("settings.externalServices")
   const { rows, providers, loading, failed } = useAuthConnections()
+  const ingress = useConnectorIngress()
   const [busy, setBusy] = useState(false)
   const [actionFailed, setActionFailed] = useState(false)
+  const [identityConflict, setIdentityConflict] = useState(false)
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
     setActionFailed(false)
+    setIdentityConflict(false)
     try {
       await action()
-    } catch {
+    } catch (error) {
       setActionFailed(true)
+      setIdentityConflict(error instanceof ConnectionIdentityConflict)
     } finally {
       setBusy(false)
     }
@@ -53,7 +62,7 @@ export function ConnectionsPanel() {
       </div>
       {(failed || actionFailed) && (
         <p role="alert" className="text-sm text-destructive">
-          {t("connections.failed")}
+          {identityConflict ? t("connections.identityConflict") : t("connections.failed")}
         </p>
       )}
       {loading ? (
@@ -70,13 +79,19 @@ export function ConnectionsPanel() {
             view={view}
             busy={busy}
             onReconnect={() =>
-              void run(() =>
-                connectProvider({
-                  providerId: view.connection.providerId,
-                  reconnect: view.connection.id,
-                  scopes: [...view.connection.scopes],
-                })
-              )
+              void run(() => {
+                const driver =
+                  view.connection.ownerPluginId === null
+                    ? getHostConnectionDriver(view.connection.providerId)
+                    : undefined
+                return driver?.reauthorize
+                  ? driver.reauthorize(view.connection.id, { ingressBase: ingress.base })
+                  : connectProvider({
+                      providerId: view.connection.providerId,
+                      reconnect: view.connection.id,
+                      scopes: [...view.connection.scopes],
+                    })
+              })
             }
             onDisconnect={() => void run(() => disconnect(view.connection.id, { revoke: true }))}
             onRevokeConsumer={(pluginId) =>

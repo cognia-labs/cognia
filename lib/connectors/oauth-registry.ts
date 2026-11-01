@@ -46,9 +46,9 @@ oauthRegistry.set("slack", async (code: string, state: string): Promise<void> =>
 // through `handleLarkOAuth`. The handler:
 //   1. Parses `adapterId` out of state.
 //   2. Loads the adapter row + decrypts the app secret from keyring.
-//   3. Acquires a tenant-access-token.
-//   4. Calls /open-apis/authen/v1/oidc/access_token to swap the code for
-//      a user_access_token + refresh_token.
+//   3. Claims the Rust-owned pending authorization and PKCE verifier.
+//   4. Calls /open-apis/authen/v2/oauth/token with client credentials and PKCE
+//      to swap the code for a user_access_token + refresh_token.
 //   5. Persists tokens in keyring under `<adapterId>:user_token` +
 //      `<adapterId>:user_refresh_token`.
 //   6. Stamps `connectedUser` metadata onto the adapter row.

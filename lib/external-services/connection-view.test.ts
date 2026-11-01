@@ -3,6 +3,7 @@ import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 import type { CapabilityGrant, ServiceConnection } from "@/types/external-service"
 import type { PluginIntegrationDef } from "@/types/plugin/plugin-integration"
 import type { AuthenticationProvider } from "@/lib/plugin/auth/auth-provider-registry"
+import { registerHostConnectionDriver } from "@/lib/plugin/auth/connection-manager"
 
 const connection: AuthConnectionRow = {
   id: "host" as AuthConnectionRow["id"],
@@ -24,6 +25,28 @@ const connection: AuthConnectionRow = {
   createdAt: 0,
   updatedAt: 0,
 }
+
+it("offers reauthentication through a registered Rust-backed Host driver", () => {
+  const dispose = registerHostConnectionDriver("lark", {
+    publisher: "cognia",
+    getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
+    disconnect: async () => {},
+    reauthorize: async () => {},
+  })
+  try {
+    const [view] = buildConnectionViews(
+      [{ ...connection, providerId: "lark", ownerPluginId: null }],
+      [],
+      [],
+      [{ id: "lark", pluginId: null, label: "Lark" } as AuthenticationProvider],
+      [],
+      []
+    )
+    expect(view.canReconnect).toBe(true)
+  } finally {
+    dispose()
+  }
+})
 const projection = (id: string): ServiceConnection => ({
   id,
   pluginId: "consumer",

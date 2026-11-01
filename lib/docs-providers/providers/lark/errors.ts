@@ -9,6 +9,10 @@
 
 import { LarkAccessError } from "@/lib/connectors/adapters/lark/authed-api"
 import {
+  ConnectionUnavailableError,
+  ConnectionRevisionChanged,
+} from "@/lib/plugin/auth/connection-manager"
+import {
   LarkIngestError,
   mapLarkError,
   type LarkIngestErrorCode,
@@ -46,6 +50,8 @@ const ACCESS_TO_PROVIDER: Record<LarkAccessError["code"], DocsProviderErrorCode>
 export function toDocsProviderError(err: unknown, account?: string): DocsProviderError {
   if (String(err).includes("download_body_too_large")) return new DocsProviderError("tooLarge")
   if (err instanceof DocsProviderError) return err
+  if (err instanceof ConnectionUnavailableError || err instanceof ConnectionRevisionChanged)
+    return new DocsProviderError("notAuthorized")
   if (err instanceof LarkAccessError) {
     return new DocsProviderError(
       ACCESS_TO_PROVIDER[err.code],

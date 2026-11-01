@@ -51,6 +51,8 @@ export interface LarkOAuthPending {
   redirectUri: string
   /** Host authorization captured at begin; legacy records must restart Connect. */
   authorizationEpoch?: string
+  /** Host-only reconnect fence; never sent to the authorization server. */
+  connection?: { ref: string; revision: number }
   /** Wall-clock ms the record was written (for TTL expiry). */
   ts: number
 }

@@ -7,6 +7,34 @@
 import { invoke } from "@tauri-apps/api/core"
 import requestSchemas from "@/protocol/companion-request-schemas.json"
 import Ajv from "ajv"
+import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
+
+it("routes epoch-fenced Lark disconnect and notifies credential consumers only after success", async () => {
+  const { connectorsLarkUserAuth } = await import("./commands")
+  const input = {
+    action: "disconnect" as const,
+    adapterId: "lark-disconnect",
+    expectedAuthorizationEpoch: "epoch",
+  }
+  const validate = new Ajv({ strict: false }).compile(
+    requestSchemas.commands.connectors_lark_user_auth
+  )
+  expect(validate({ input })).toBe(true)
+  expect(validate({ input: { action: "disconnect", adapterId: "lark-disconnect" } })).toBe(false)
+  const changed = jest.fn()
+  const stop = onCredentialsRotated(changed)
+  try {
+    jest.mocked(invoke).mockResolvedValueOnce({ authorizationEpoch: "disconnected" })
+    await connectorsLarkUserAuth(input)
+    expect(invoke).toHaveBeenLastCalledWith("connectors_lark_user_auth", { input })
+    expect(changed).toHaveBeenCalledTimes(1)
+    jest.mocked(invoke).mockRejectedValueOnce(new Error("lark_auth_stale"))
+    await expect(connectorsLarkUserAuth(input)).rejects.toThrow("lark_auth_stale")
+    expect(changed).toHaveBeenCalledTimes(1)
+  } finally {
+    stop()
+  }
+})
 
 it("publishes a finite backup request schema including standard version metadata", () => {
   const validate = new Ajv({ strict: false, validateFormats: false }).compile(

@@ -4,6 +4,16 @@ jest.mock("@/lib/execution/acting-authority", () => ({
 }))
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
+jest.mock("./host-auth", () => ({
+  resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+}))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
+  getConnectionManager: () => ({
+    getConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+    getCredentials: async () => ({ accessToken: await getUserAccessTokenMock(ADAPTER) }),
+  }),
+}))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
@@ -17,6 +27,10 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 jest.mock("./auth", () => {
   const getTenantAccessToken = jest.fn()
   return {
+    larkDeployment: () => ({
+      issuer: "https://accounts.feishu.cn",
+      apiBase: "https://open.feishu.cn",
+    }),
     getUserAccessToken: jest.fn(),
     getTenantAccessToken,
     getTenantToken: getTenantAccessToken,

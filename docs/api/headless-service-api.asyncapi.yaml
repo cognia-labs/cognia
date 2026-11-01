@@ -3,7 +3,7 @@ info:
   title: Cognia Headless Service Event and Bridge API
   version: "3"
   description: Generated WebSocket contract for the existing Headless event stream and Brain data-plane bridge.
-  x-cognia-catalog-hash: 912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a
+  x-cognia-catalog-hash: cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60
 servers:
   loopback:
     host: 127.0.0.1:{port}
@@ -285,7 +285,7 @@ components:
               type: string
           catalogHash:
             type: string
-            const: 912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a
+            const: cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60
           contractVersion:
             type: integer
             const: 3
@@ -318,7 +318,7 @@ components:
             type: string
           catalogHash:
             type: string
-            const: 912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a
+            const: cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60
           contractVersion:
             type: integer
             const: 3
@@ -354,7 +354,7 @@ components:
             const: 3
           catalogHash:
             type: string
-            const: 912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a
+            const: cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60
           contractVersion:
             type: integer
             const: 3

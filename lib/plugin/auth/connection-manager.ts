@@ -43,6 +43,29 @@ export { AuthRefreshRejected }
 export const AUTH_REFRESH_TIMEOUT_MS = 30_000
 export const AUTH_REVOKE_TIMEOUT_MS = 30_000
 
+/** Built-in controllers keep their own CAS/keyring authority; never copy their tokens. */
+export interface HostConnectionDriver {
+  publisher: string
+  synchronize?(row: AuthConnectionRow): Promise<void>
+  getCredentials(row: AuthConnectionRow): Promise<AuthCredentialSet>
+  disconnect(row: AuthConnectionRow): Promise<void>
+  reauthorize?(ref: AuthConnectionRef, options: { ingressBase?: string | null }): Promise<void>
+}
+const hostDrivers = new Map<string, HostConnectionDriver>()
+export function registerHostConnectionDriver(
+  providerId: string,
+  driver: HostConnectionDriver
+): () => void {
+  if (hostDrivers.has(providerId)) throw new Error("Host connection driver already registered")
+  hostDrivers.set(providerId, driver)
+  return () => {
+    if (hostDrivers.get(providerId) === driver) hostDrivers.delete(providerId)
+  }
+}
+export function getHostConnectionDriver(providerId: string): HostConnectionDriver | undefined {
+  return hostDrivers.get(providerId)
+}
+
 export type AuthConnectionChangeKind = "added" | "changed" | "removed"
 type ConnectionListener = (metadata: AuthConnectionMetadata, kind: AuthConnectionChangeKind) => void
 
@@ -123,7 +146,12 @@ async function providerIdentity(
   provider: AuthenticationProvider
 ): Promise<AuthConnectionProviderIdentity> {
   if (provider.pluginId === null)
-    return { providerId: provider.id, ownerPluginId: null, publisher: null, contractMajor: 1 }
+    return {
+      providerId: provider.id,
+      ownerPluginId: null,
+      publisher: hostDrivers.get(provider.id)?.publisher ?? null,
+      contractMajor: 1,
+    }
   const plugin = await getPlugin(provider.pluginId)
   if (!plugin) throw new ConnectionUnavailableError("provider-manifest-missing")
   const manifest = plugin.manifest
@@ -268,6 +296,7 @@ export class AuthConnectionManager {
     }
     const before = await read()
     const provider = await this.requireProvider(before)
+    if (before.hostMetadata) await hostDrivers.get(before.providerId)?.synchronize?.(before)
     // Provider ownership may await a manifest read. Re-read after that await,
     // so a disconnect or scope change during validation cannot pass the fence.
     const current = await read()
@@ -314,6 +343,127 @@ export class AuthConnectionManager {
   }
   private mutate<T>(ref: string, task: () => Promise<T>): Promise<T> {
     return this.lock(`cognia-auth-connection:${ref}`, task, "connection")
+  }
+  /** Runtime reconciliation, under the same uniqueness and publication locks as plugin grants. */
+  async reconcileHostConnection(
+    providerId: string,
+    description: AuthIdentityDescription,
+    hostMetadata: NonNullable<AuthConnectionRow["hostMetadata"]>,
+    available = true
+  ): Promise<AuthConnectionRef> {
+    const provider = this.provider(providerId)
+    if (!provider || provider.pluginId !== null || !hostDrivers.has(providerId))
+      throw new ConnectionUnavailableError("provider-unavailable")
+    if (
+      !description.issuer ||
+      !description.clientId ||
+      !description.principal.id ||
+      !hostMetadata.authorizationEpoch
+    )
+      throw new ConnectionUnavailableError("provider-description-invalid")
+    const owner = await this.owner(provider)
+    const identityKey = authConnectionIdentityKey(description)
+    return this.lock(
+      "cognia-auth-connections:identity",
+      async () => {
+        const existing = await this.store.find(identityKey)
+        if (
+          existing &&
+          (!sameProvider(existing, owner) ||
+            existing.hostMetadata?.adapterId !== hostMetadata.adapterId ||
+            existing.tenantId !== description.tenantId)
+        )
+          throw new ConnectionIdentityConflict()
+        const rows = (await this.store.list(providerId)).filter(
+          (row) => row.hostMetadata?.adapterId === hostMetadata.adapterId
+        )
+        // An account switch retires the previous identity without clearing the new native grant.
+        for (const old of rows) {
+          if (terminal(old) || authConnectionIdentityKey(identityOf(old)) === identityKey) continue
+          await this.retireHostConnection(old.id)
+        }
+        const current =
+          existing ?? rows.find((row) => authConnectionIdentityKey(identityOf(row)) === identityKey)
+        const ref = current?.id ?? (crypto.randomUUID() as AuthConnectionRef)
+        return this.mutate(ref, async () => {
+          const latest = await this.store.get(ref)
+          // A disconnect fence wins until Rust publishes a NEW authorization epoch.
+          if (
+            latest &&
+            terminal(latest) &&
+            latest.hostMetadata?.authorizationEpoch === hostMetadata.authorizationEpoch
+          )
+            return ref
+          const authorizationChanged =
+            latest?.hostMetadata?.authorizationEpoch !== hostMetadata.authorizationEpoch
+          const scopes = [...new Set(description.scopes)].sort()
+          const row: AuthConnectionRow = {
+            ...owner,
+            id: ref,
+            issuer: description.issuer,
+            clientId: description.clientId,
+            tenantId: description.tenantId,
+            tenantLabel: description.tenantLabel,
+            principalId: description.principal.id,
+            principalKind: description.principal.kind,
+            accountLabel: description.accountLabel,
+            scopes,
+            revision: latest ? latest.revision + Number(authorizationChanged) : 1,
+            credentialRevision: latest
+              ? latest.credentialRevision +
+                Number(latest.hostMetadata?.credentialVersion !== hostMetadata.credentialVersion)
+              : 1,
+            lineageId: latest?.lineageId ?? crypto.randomUUID(),
+            status: !available
+              ? "provider-unavailable"
+              : !authorizationChanged &&
+                  (latest?.status === "needs-reauth" ||
+                    latest?.unavailableStatus === "needs-reauth")
+                ? "needs-reauth"
+                : "connected",
+            unavailableStatus: !available
+              ? !authorizationChanged &&
+                (latest?.status === "needs-reauth" || latest?.unavailableStatus === "needs-reauth")
+                ? "needs-reauth"
+                : "connected"
+              : undefined,
+            identityKey,
+            hostMetadata,
+            createdAt: latest?.createdAt ?? this.now(),
+            updatedAt: latest?.updatedAt ?? this.now(),
+          }
+          if (JSON.stringify(row) !== JSON.stringify(latest)) {
+            row.updatedAt = this.now()
+            await this.publish(row, latest ? "changed" : "added")
+          }
+          return ref
+        })
+      },
+      "identity"
+    )
+  }
+  /** Native credential deletion / invalid_grant must invalidate online access too. */
+  async retireHostConnection(
+    ref: AuthConnectionRef,
+    status: "tombstoned" | "needs-reauth" = "tombstoned"
+  ): Promise<void> {
+    await this.mutate(ref, async () => {
+      const row = await this.store.get(ref)
+      if (!row?.hostMetadata || terminal(row) || row.status === status) return
+      const next = {
+        ...row,
+        status,
+        revision: row.revision + Number(status === "tombstoned"),
+        updatedAt: this.now(),
+      }
+      await this.publish(
+        status === "tombstoned" ? tombstoneAuthConnection(next, status, this.now()) : next
+      )
+    })
+  }
+  async dropHostConnection(ref: AuthConnectionRef): Promise<void> {
+    await this.retireHostConnection(ref)
+    if (this.hostPersistence) await getDb().authConnections.delete(ref)
   }
   async createConnectionFromCredentials(
     provider: AuthenticationProvider,
@@ -505,6 +655,14 @@ export class AuthConnectionManager {
   ): Promise<AuthCredentialSet> {
     let row = await this.requireRow(ref)
     let provider = await this.requireProvider(row)
+    if (row.hostMetadata) {
+      row = await this.getConnection(ref, row.revision)
+      const driver = hostDrivers.get(row.providerId)
+      if (!driver) throw new ConnectionUnavailableError("provider-unavailable")
+      const credentials = await driver.getCredentials(row)
+      await this.getConnection(ref, row.revision)
+      return credentials
+    }
     if (row.legacySessionId) {
       const session = (await provider.getSessions(undefined, { silent: true })).find(
         (session) => session.id === row.legacySessionId
@@ -624,6 +782,27 @@ export class AuthConnectionManager {
     )
   }
   async disconnect(ref: AuthConnectionRef, options: { revoke?: boolean } = {}): Promise<void> {
+    const hostRow = await this.store.get(ref)
+    if (hostRow?.hostMetadata) {
+      let retired = hostRow
+      await this.mutate(ref, async () => {
+        const current = await this.store.get(ref)
+        if (!current?.hostMetadata) return
+        retired = current
+        if (!terminal(current))
+          await this.publish(
+            tombstoneAuthConnection(
+              { ...current, revision: current.revision + 1 },
+              "tombstoned",
+              this.now()
+            )
+          )
+      })
+      const driver = hostDrivers.get(hostRow.providerId)
+      if (!driver) throw new ConnectionUnavailableError("provider-unavailable")
+      await driver.disconnect(retired)
+      return
+    }
     let context: AuthLineageContext | undefined
     let provider: AuthenticationProvider | undefined
     let legacySessionId: string | undefined
@@ -716,7 +895,7 @@ export class AuthConnectionManager {
           await this.disconnect(row.id, { revoke: true })
         } finally {
           // Startup recovery also discards tokens if the vendor is unavailable.
-          await this.mutate(row.id, () => this.credentials.delete(row.id))
+          if (!row.hostMetadata) await this.mutate(row.id, () => this.credentials.delete(row.id))
         }
       } catch {
         console.warn("Auth tombstone cleanup failed")

@@ -13,6 +13,7 @@ import {
   AUTH_REVOKE_TIMEOUT_MS,
   AuthRefreshRejected,
   forgetProfileAuthSecrets,
+  registerHostConnectionDriver,
 } from "./connection-manager"
 import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credentials"
 import { authConnectionIdentityKey, type AuthConnectionRow } from "@/lib/db/auth-connections"
@@ -127,6 +128,54 @@ function fixture() {
     makeManager,
   }
 }
+
+it("reconciles Rust-owned credentials without copying them into the connection keyring", async () => {
+  const f = fixture()
+  f.provider.pluginId = null
+  const dispose = registerHostConnectionDriver("acme", {
+    publisher: "cognia",
+    getCredentials: async () => fresh,
+    disconnect: jest.fn(),
+  })
+  try {
+    const manager = f.makeManager(true)
+    const description = await f.provider.describe!(fresh)
+    const state = {
+      adapterId: "adapter",
+      authorizationEpoch: "epoch-1",
+      credentialVersion: "r1",
+      bot: true,
+    }
+    const ref = await manager.reconcileHostConnection("acme", description, state)
+    const first = structuredClone(f.rows.get(ref)!)
+    expect(first).toMatchObject({ publisher: "cognia", revision: 1, credentialRevision: 1 })
+    await manager.reconcileHostConnection("acme", description, state)
+    expect(f.rows.get(ref)).toEqual(first)
+    await manager.reconcileHostConnection("acme", description, {
+      ...state,
+      credentialVersion: "r2",
+    })
+    expect(f.rows.get(ref)).toMatchObject({ revision: 1, credentialRevision: 2 })
+    await manager.reconcileHostConnection("acme", description, {
+      ...state,
+      authorizationEpoch: "epoch-2",
+      credentialVersion: "r3",
+    })
+    expect(f.rows.get(ref)).toMatchObject({ revision: 2, credentialRevision: 3 })
+    expect(await manager.getCredentials(ref)).toEqual(fresh)
+    expect(f.tokens.size).toBe(0)
+    await manager.disconnect(ref)
+    expect(f.rows.get(ref)?.status).toBe("tombstoned")
+    await manager.reconcileHostConnection("acme", description, {
+      ...state,
+      authorizationEpoch: "epoch-2",
+      credentialVersion: "r3",
+    })
+    expect(f.rows.get(ref)?.status).toBe("tombstoned")
+  } finally {
+    dispose()
+  }
+})
 
 it("atomically removes all default-store bindings when a connection becomes terminal", async () => {
   const dbFixture = createDbTestFixture()

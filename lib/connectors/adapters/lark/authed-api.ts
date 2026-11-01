@@ -27,7 +27,11 @@ import {
   connectorsLarkUserAuth,
 } from "@/lib/connectors/tauri/commands"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
-import { getTenantToken, getUserAccessToken } from "./auth"
+import { getTenantToken } from "./auth"
+import type { AuthConnectionRow } from "@/lib/db/auth-connections"
+import { larkDeployment } from "./auth"
+import { resolveLarkConnection } from "./host-auth"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import {
   LarkApiError,
   isLarkUserTokenInvalidation,
@@ -114,6 +118,12 @@ export async function withLarkAuthedApi<T>(
     const assertCurrent = async () => {
       throwIfRequestAborted(opts.signal)
       if (opts.identity === "bot") return
+      if (connection)
+        await getConnectionManager()
+          .getConnection(connection.id, connection.revision)
+          .catch(() => {
+            throw new LarkAccessError("notAuthorized")
+          })
       const current = await connectorsLarkUserAuth({
         action: "snapshot",
         adapterId: opts.adapterId,
@@ -141,6 +151,12 @@ export async function withLarkAuthedApi<T>(
     if (!row || row.type !== "lark" || !row.enabled) {
       throw new LarkAccessError("noAccount")
     }
+    const connection: AuthConnectionRow | undefined =
+      opts.identity === "user"
+        ? await resolveLarkConnection(opts.adapterId).catch(() => {
+            throw new LarkAccessError("notAuthorized", row.displayName)
+          })
+        : undefined
     await assertCurrent()
     throwIfRequestAborted(opts.signal)
     const [appId, appSecret] = await Promise.all([
@@ -166,7 +182,7 @@ export async function withLarkAuthedApi<T>(
       throwIfRequestAborted(opts.signal)
       if (opts.identity === "bot") observeTenantServiceData(opts.sessionId, opts.adapterId, path)
       const resp = await httpImpl({
-        url: `${LARK_API_BASE}${path}`,
+        url: `${larkDeployment(row.settings?.brand === "lark" ? "lark" : "feishu").apiBase}${path}`,
         method: init?.method ?? "GET",
         headers: {
           Authorization: authHeader,
@@ -217,11 +233,12 @@ export async function withLarkAuthedApi<T>(
       appSecret,
       expectedAuthorizationEpoch: authorizationEpoch,
       signal: opts.signal,
+      ...(row.settings?.brand === "lark" ? { brand: "lark" as const } : {}),
     }
     if (opts.identity === "user") {
       let userToken: string | null
       try {
-        userToken = await getUserAccessToken(opts.adapterId)
+        userToken = (await getConnectionManager().getCredentials(connection!.id)).accessToken
       } catch {
         throw new LarkAccessError("notAuthorized", row.displayName)
       }
@@ -233,7 +250,9 @@ export async function withLarkAuthedApi<T>(
           await assertCurrent()
           throwIfRequestAborted(opts.signal)
           try {
-            return await fn(bindApi(`Bearer ${token}`), account)
+            const value = await fn(bindApi(`Bearer ${token}`), account)
+            await assertCurrent()
+            return value
           } catch (err) {
             lastCallError = err
             throw err
@@ -253,7 +272,14 @@ export async function withLarkAuthedApi<T>(
       return await withTatRefresh(ctx, "service-data", async () => {
         await assertCurrent()
         throwIfRequestAborted(opts.signal)
-        const tat = await getTenantToken({ appId, appSecret }, "service-data")
+        const tat = await getTenantToken(
+          {
+            appId,
+            appSecret,
+            ...(row.settings?.brand === "lark" ? { brand: "lark" as const } : {}),
+          },
+          "service-data"
+        )
         throwIfRequestAborted(opts.signal)
         const value = await fn(bindApi(`Bearer ${tat}`), account)
         await assertCurrent()

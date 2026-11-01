@@ -10,6 +10,10 @@ jest.mock("@/lib/db/adapter-instances", () => ({
   getAdapterInstance: jest.fn(),
   updateAdapterInstance: jest.fn().mockResolvedValue(undefined),
 }))
+jest.mock("./host-auth", () => ({
+  reconcileLarkConnection: jest.fn(),
+  assertLarkIdentityAvailable: jest.fn(),
+}))
 
 const mockHttp = jest.fn()
 const mockKeyringGet = jest.fn()
@@ -38,6 +42,8 @@ import { buildLarkOAuthState, parseLarkOAuthState, handleLarkOAuth } from "./oau
 import { getUserAccessToken } from "./auth"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
+import { assertLarkIdentityAvailable, reconcileLarkConnection } from "./host-auth"
+import { ConnectionIdentityConflict } from "@/lib/plugin/auth/connection-manager"
 
 const mockGetAdapter = getAdapterInstance as jest.Mock
 const mockUpdateAdapter = updateAdapterInstance as jest.Mock
@@ -96,6 +102,7 @@ function userInfoResponse(overrides: Record<string, unknown> = {}) {
       code: 0,
       data: {
         open_id: "ou_alice",
+        tenant_key: "tenant-alice",
         union_id: "on_alice",
         name: "Alice",
         avatar_url: "https://lark.example.com/alice.png",
@@ -119,6 +126,8 @@ beforeEach(() => {
   mockUpdateAdapter.mockReset().mockResolvedValue(undefined)
   mockGetPending.mockReset()
   mockClearPending.mockReset()
+  jest.mocked(assertLarkIdentityAvailable).mockReset().mockResolvedValue(undefined)
+  jest.mocked(reconcileLarkConnection).mockReset().mockResolvedValue(undefined)
 })
 
 describe("buildLarkOAuthState / parseLarkOAuthState", () => {
@@ -144,6 +153,35 @@ describe("buildLarkOAuthState / parseLarkOAuthState", () => {
 })
 
 describe("handleLarkOAuth — happy path", () => {
+  it("refuses a duplicate identity before publishing a second native authorization", async () => {
+    const state = buildLarkOAuthState("lk-1", "duplicate")
+    primePending(state)
+    mockGetAdapter.mockResolvedValueOnce(makeAdapterRow())
+    mockHttp.mockResolvedValueOnce(tokenV2Response()).mockResolvedValueOnce(userInfoResponse())
+    const conflict = new ConnectionIdentityConflict()
+    jest.mocked(assertLarkIdentityAvailable).mockRejectedValueOnce(conflict)
+    await expect(handleLarkOAuth("code", { state })).rejects.toBe(conflict)
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "authorize" })
+    )
+    expect(mockUpdateAdapter).not.toHaveBeenCalled()
+  })
+
+  it("rolls back only the just-published epoch if another provider wins the identity slot", async () => {
+    const state = buildLarkOAuthState("lk-1", "racing-duplicate")
+    primePending(state)
+    mockGetAdapter.mockResolvedValueOnce(makeAdapterRow())
+    mockHttp.mockResolvedValueOnce(tokenV2Response()).mockResolvedValueOnce(userInfoResponse())
+    const conflict = new ConnectionIdentityConflict()
+    jest.mocked(reconcileLarkConnection).mockRejectedValueOnce(conflict)
+    await expect(handleLarkOAuth("code", { state })).rejects.toBe(conflict)
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
+      action: "disconnect",
+      adapterId: "lk-1",
+      expectedAuthorizationEpoch: "auth-b",
+    })
+  })
+
   it("exchanges code, resolves identity, persists tokens, stamps connectedUser", async () => {
     const state = buildLarkOAuthState("lk-1", "nonce-1")
     primePending(state)
@@ -189,6 +227,7 @@ describe("handleLarkOAuth — happy path", () => {
     )
     const patch = mockUpdateAdapter.mock.calls[0][1]
     expect(patch.settings.connectedUser.openId).toBe("ou_alice")
+    expect(patch.settings.connectedUser.tenantKey).toBe("tenant-alice")
     // Granted scopes normalized (split, deduped, sorted) and stamped.
     expect(patch.settings.connectedScopes.scopes).toEqual(["im:message", "offline_access"])
     expect(patch.credentialsRef.accounts).toEqual(

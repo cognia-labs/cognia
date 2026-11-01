@@ -3,6 +3,11 @@ import { resolveLarkAuth } from "./auth-bridge"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 jest.mock("@/lib/db/adapter-instances", () => ({
   getAdapterInstance: jest.fn(),
@@ -38,6 +43,15 @@ const integrationIt = detected.status === 0 ? it : it.skip
 let integrationEnv: NodeJS.ProcessEnv
 
 async function selectedAuth(identity: "user" | "bot") {
+  jest.mocked(resolveLarkConnection).mockResolvedValue({
+    id: "school-host-ref",
+    revision: 1,
+    hostMetadata: { authorizationEpoch: "school-epoch" },
+  } as never)
+  jest.mocked(getConnectionManager).mockReturnValue({
+    getCredentials: async () => ({ accessToken: "nonsecret-user-token", scopes: [] }),
+    getConnection: async () => ({ id: "school-host-ref", revision: 1 }),
+  } as never)
   jest.mocked(getAdapterInstance).mockResolvedValue({
     id: "school",
     type: "lark",

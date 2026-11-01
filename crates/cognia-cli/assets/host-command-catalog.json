@@ -20135,6 +20135,26 @@
                 "type": "object",
                 "properties": {
                   "action": {
+                    "const": "disconnect"
+                  },
+                  "adapterId": {
+                    "type": "string"
+                  },
+                  "expectedAuthorizationEpoch": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "adapterId",
+                  "expectedAuthorizationEpoch"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
                     "const": "authorize"
                   },
                   "adapterId": {
@@ -110526,5 +110546,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a"
+  "catalogHash": "cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60"
 }

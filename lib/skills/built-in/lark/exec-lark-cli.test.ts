@@ -13,6 +13,8 @@ import { execLarkCli, __setLarkCliBinaryForTests } from "./exec-lark-cli"
 import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
 jest.mock("./auth-bridge", () => ({ resolveLarkAuth: jest.fn() }))
 import { __setLarkCliProcessRunnerForTests } from "./process"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 const mockProcessRunner = jest.fn()
 
@@ -31,6 +33,24 @@ beforeEach(() => {
   mockProcessRunner.mockReset()
   __setLarkCliProcessRunnerForTests(mockProcessRunner)
   __setLarkCliBinaryForTests("/fake/lark-cli")
+})
+
+it("drops a calendar read when its Host connection moved while the CLI was running", async () => {
+  const fence = jest.fn(async () => {
+    throw new Error("connection-revision-changed")
+  })
+  jest.mocked(getConnectionManager).mockReturnValue({ getConnection: fence } as never)
+  mockProcessRunner.mockResolvedValue({ stdout: '{"events":["stale"]}', stderr: "" })
+  await expect(
+    execLarkCli({
+      args: ["calendar", "+agenda"],
+      __authOverride: {
+        ...okAuth,
+        connection: { ref: "host-ref", revision: 3 },
+      } as LarkAuthBridgeResult,
+    })
+  ).rejects.toThrow("connection-revision-changed")
+  expect(fence).toHaveBeenCalledWith("host-ref", 3)
 })
 
 afterAll(() => {

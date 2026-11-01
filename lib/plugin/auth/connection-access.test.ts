@@ -95,6 +95,7 @@ it("projects only allowed metadata and copies scopes", () => {
     principalId: "private",
     clientId: "private",
     accessToken: "never",
+    hostMetadata: { adapterId: "local-adapter", authorizationEpoch: "native-epoch", bot: true },
   } as unknown as AuthConnectionRow
   expect(connectionMetadata(row)).toEqual({
     ref: "ref",

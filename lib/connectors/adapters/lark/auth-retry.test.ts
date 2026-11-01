@@ -44,6 +44,18 @@ describe("withUserTokenRefresh", () => {
     })
     expect(fn).toHaveBeenCalledTimes(2)
   })
+  it("retains the Lark international deployment during user refresh", async () => {
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "expired" }))
+      .mockResolvedValueOnce("ok")
+    await expect(withUserTokenRefresh({ ...ctx, brand: "lark" }, fn)).resolves.toBe("ok")
+    expect(refreshUserToken).toHaveBeenCalledWith({
+      ...ctx,
+      brand: "lark",
+      expectedAuthorizationEpoch: "request-epoch",
+    })
+  })
   it("passes the captured identity and refuses a successful result after replacement", async () => {
     const fn = jest.fn(async (token: string, epoch: string) => {
       expect(token).toBe("user-a")

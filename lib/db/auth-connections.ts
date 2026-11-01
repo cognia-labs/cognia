@@ -29,6 +29,14 @@ export interface AuthConnectionRow {
   unavailableStatus?: "connected" | "needs-reauth"
   identityKey: string
   legacySessionId?: string
+  /** Host-only binding to Rust-owned credentials. Never projected to plugins or synced. */
+  hostMetadata?: {
+    adapterId: string
+    authorizationEpoch: string
+    credentialVersion?: string
+    bot: boolean
+    expiresAt?: string
+  }
   createdAt: number
   updatedAt: number
 }

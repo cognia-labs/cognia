@@ -24,6 +24,17 @@ function makeDeps(overrides: Partial<BeginLarkOAuthDependencies> = {}) {
 }
 
 describe("beginLarkOAuth", () => {
+  it("pins a reconnect locally and uses the selected deployment's issuer", async () => {
+    const { deps, pending } = makeDeps()
+    const connection = { ref: "host-ref", revision: 3 }
+    const result = await beginLarkOAuth(
+      { adapterId: "lk-1", redirectUri: REDIRECT, brand: "lark", connection },
+      deps
+    )
+    expect(new URL(result.authorizeUrl).origin).toBe("https://accounts.larksuite.com")
+    expect(result.authorizeUrl).not.toContain("host-ref")
+    expect(pending[0][1].connection).toEqual(connection)
+  })
   it("returns an authorize URL carrying the challenge, and persists the verifier", async () => {
     const { pending, deps } = makeDeps()
     const result = await beginLarkOAuth({ adapterId: "lk-1", redirectUri: REDIRECT }, deps)
