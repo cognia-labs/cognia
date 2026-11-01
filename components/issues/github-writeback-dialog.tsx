@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Confirmation for an irreversible external write.
  *
@@ -77,7 +79,9 @@ export function GithubWritebackDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void resolveGithubWritebackAccount(target.repoFullName).then((account) => {
+    void resolveGithubWritebackAccount(target.repoFullName, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    }).then((account) => {
       if (cancelled) return
       setResolvedAccount({ repoFullName: target.repoFullName, account })
     })
@@ -124,6 +128,7 @@ export function GithubWritebackDialog({
     setError(null)
     try {
       await runGithubWriteback({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         target,
         action: buildAction(),
         connectorAccountId: account?.id,

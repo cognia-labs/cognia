@@ -1,6 +1,7 @@
 "use client"
 
 import { personChatCapability } from "@/lib/headless/person-chat"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 /**
  * Host-side counterpart of the Rust `companion::desktop_writes_bridge`.
@@ -609,7 +610,9 @@ export async function dispatchCommand(
     case "integration_github_account_connect_from_secret": {
       const { connectGithubAccountFromSecret } =
         await import("@/lib/integrations/github-account-setup")
-      return connectGithubAccountFromSecret(payload)
+      // This paired operator command provisions an explicit Host credential;
+      // its post-setup health check is the person's direct action, without a run.
+      return connectGithubAccountFromSecret(payload, { localAuthorization: LOCAL_PERSON_RUN })
     }
     case "bot_installation_mutate": {
       const { mutateBotInstallationOnHost } =

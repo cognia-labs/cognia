@@ -25,11 +25,7 @@
  */
 
 import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
-import {
-  connectorsHttpRequest,
-  connectorsKeyringGet,
-  connectorsLarkUserAuth,
-} from "@/lib/connectors/tauri/commands"
+import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { CODE_CHALLENGE_METHOD } from "./pkce"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 
@@ -426,8 +422,18 @@ export async function fetchLarkUserInfo(
  * Read the host-owned token on every call. A renderer-local cold-read cache
  * cannot observe another window's reauthorization or credential revocation.
  */
-export async function getUserAccessToken(adapterId: string): Promise<string | null> {
-  return connectorsKeyringGet(adapterId, "user_token")
+export async function getUserAccessToken(
+  adapterId: string,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+): Promise<string | null> {
+  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "lark-user",
+    person: adapterId,
+  })
+  if (!admission.ok) return null
+  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+  return snapshot.configured && snapshot.authorizationEpoch ? (snapshot.accessToken ?? null) : null
 }
 
 /**
@@ -439,12 +445,27 @@ export async function getUserAccessToken(adapterId: string): Promise<string | nu
  */
 export async function refreshUserToken(opts: {
   brand?: "feishu" | "lark"
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+  connectionAuthorization?: import("@/lib/plugin/auth/connection-manager").HostConnectionCredentialAuthorization
   adapterId: string
   appId: string
   appSecret: string
   expectedAuthorizationEpoch?: string
   signal?: AbortSignal
 }): Promise<string> {
+  const { admitPersonalCredential, PersonalCredentialRefusedError } =
+    await import("@/lib/execution/personal-credential")
+  if (opts.connectionAuthorization) {
+    const { assertHostConnectionCredentialAuthorization } =
+      await import("@/lib/plugin/auth/connection-manager")
+    await assertHostConnectionCredentialAuthorization(opts.connectionAuthorization, opts.adapterId)
+  } else {
+    const admission = await admitPersonalCredential(opts.credentialContext, {
+      source: "lark-user",
+      person: opts.adapterId,
+    })
+    if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
+  }
   const captured = await withRequestAbort(opts.signal, () =>
     connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.adapterId })
   )

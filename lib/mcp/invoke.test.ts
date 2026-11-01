@@ -48,6 +48,9 @@ describe("invokeMcpTool", () => {
         toolName: "do",
         signal: ac.signal,
         authProvider,
+        credentialContext: {
+          localAuthorization: (await import("@/lib/execution/acting-authority")).LOCAL_PERSON_RUN,
+        },
         clientInfo: { name: "cognia-workflow", version: "1.0.0" },
       },
       { getServer: async () => srv("http", { url: "https://x", headers: { A: "1" } }), open }
@@ -176,4 +179,15 @@ describe("invokeMcpTool", () => {
     await expect(invokeMcpTool({ serverId: "  ", toolName: "x" })).rejects.toThrow("serverId")
     await expect(invokeMcpTool({ serverId: "s", toolName: " " })).rejects.toThrow("toolName")
   })
+})
+
+it("refuses an OAuth authProvider before opening a client without an admitted run", async () => {
+  const { open, openSpy } = fakeOpen()
+  await expect(
+    invokeMcpTool(
+      { serverId: "mcp_s", toolName: "do", authProvider: {} },
+      { getServer: async () => srv("http", { url: "https://x" }), open }
+    )
+  ).rejects.toMatchObject({ decision: { source: "mcp-oauth" } })
+  expect(openSpy).not.toHaveBeenCalled()
 })

@@ -2,6 +2,7 @@
 import { connectorsEnsureServer } from "@/lib/connectors/tauri/commands"
 import { CONNECTORS_SERVER_PORT } from "@/lib/connectors/server-transport"
 import { DocsProviderError } from "@/lib/docs-providers/types"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { GOOGLE_DOCS_SCOPES, getGoogleDocsSettings } from "./config"
 import { googleState, type GoogleDisconnectOutcome, type GoogleStateReply } from "./state"
 
@@ -36,30 +37,42 @@ export async function beginGoogleDocsAuth(deps: GoogleAuthDeps = {}) {
   return { ...reply.attempt, authorizeUrl: reply.attempt.authorizeUrl, redirectUri }
 }
 
-export async function completeGoogleDocsAuth(input: {
-  code?: string
-  state?: string
-  clientId?: string
-  error?: string
-  errorDescription?: string
-}): Promise<GoogleStateReply> {
+export async function completeGoogleDocsAuth(
+  input: {
+    code?: string
+    state?: string
+    clientId?: string
+    error?: string
+    errorDescription?: string
+  },
+  credentialContext?: PersonalCredentialContext
+): Promise<GoogleStateReply> {
   if (input.error)
     throw new DocsProviderError("notAuthorized", { reason: input.errorDescription ?? input.error })
   if (!input.state || !input.code) throw new DocsProviderError("notAuthorized")
-  return googleState({
-    action: "complete",
-    state: input.state,
-    code: input.code,
-    ...(input.clientId ? { clientId: input.clientId } : {}),
-  })
+  return googleState(
+    {
+      action: "complete",
+      state: input.state,
+      code: input.code,
+      ...(input.clientId ? { clientId: input.clientId } : {}),
+    },
+    credentialContext
+  )
 }
 
-export async function pollGoogleDeviceAuth(attemptId: string): Promise<GoogleStateReply> {
-  return googleState({ action: "pollDevice", attemptId })
+export async function pollGoogleDeviceAuth(
+  attemptId: string,
+  credentialContext?: PersonalCredentialContext
+): Promise<GoogleStateReply> {
+  return googleState({ action: "pollDevice", attemptId }, credentialContext)
 }
 
-export async function disconnectGoogleDocs(lineageId: string): Promise<GoogleDisconnectOutcome> {
-  const reply = await googleState({ action: "disconnect", lineageId })
+export async function disconnectGoogleDocs(
+  lineageId: string,
+  credentialContext?: PersonalCredentialContext
+): Promise<GoogleDisconnectOutcome> {
+  const reply = await googleState({ action: "disconnect", lineageId }, credentialContext)
   if (!reply.outcome) throw new Error("Google disconnect returned no outcome")
   return reply.outcome
 }

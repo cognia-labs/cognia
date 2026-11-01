@@ -215,6 +215,10 @@ export async function buildSlackAdapter(row: AdapterInstanceRow): Promise<Platfo
     // key the Slack OAuth handler wrote before the key unification, so
     // installs completed via OAuth keep their presence-status support.
     userToken: async () => {
+      // Scheduled presence updates have no verified personal authorizer.
+      const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+      if (!(await admitPersonalCredential(undefined, { source: "slack-user", person: row.id })).ok)
+        return ""
       const token = await connectorsKeyringGet(row.id, "userToken")
       if (token) return token
       return (await connectorsKeyringGet(row.id, "user_token")) ?? ""

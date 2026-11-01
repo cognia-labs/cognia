@@ -1,4 +1,10 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import {
+  invokePluginTool,
+  __setInvokePluginToolDepsForTesting,
+} from "@/lib/plugin/core/invoke-plugin-tool"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { getAuthConnection, listAuthConnections } from "@/lib/db/auth-connections"
@@ -40,6 +46,9 @@ import { revokeConsumerAccess } from "./revoke-consumer-access"
 import { reconcileLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 
+jest.mock("@/lib/external-services/runtime-profile", () => ({
+  currentExternalServiceRuntimeContext: () => ({ local: "tauri", gateway: "tauri" }),
+}))
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
 jest.mock("@/lib/keyring", () => ({
@@ -197,7 +206,10 @@ it("connects PKCE, stores the resolved App ID, rotates only credential revision,
     credentialRevision: 1,
   })
   tokenBody = { ...tokenBody, access_token: "user-two", refresh_token: "refresh-two" }
-  await getConnectionManager().getCredentials(ref, { minValidityMs: 7200001 })
+  await getConnectionManager().getCredentials(ref, {
+    minValidityMs: 7200001,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   const rotated = (await getAuthConnection(ref))!
   expect(rotated).toMatchObject({
     revision: initial.revision,
@@ -207,7 +219,10 @@ it("connects PKCE, stores the resolved App ID, rotates only credential revision,
   expect((await owner().getSessions(FEISHU_PROVIDER_ID))[0].accessToken).toBe("user-two")
   tokenBody = { error: "invalid_grant" }
   await expect(
-    getConnectionManager().getCredentials(ref, { minValidityMs: 7200001 })
+    getConnectionManager().getCredentials(ref, {
+      minValidityMs: 7200001,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
   ).rejects.toMatchObject({ name: "AuthRefreshRejected" })
   expect(await getAuthConnection(ref)).toMatchObject({
     status: "needs-reauth",
@@ -272,7 +287,10 @@ it("connects a bot using client credentials and the documented tenant envelope",
     accountLabel: "Company",
   })
   expect(openExternal).not.toHaveBeenCalled()
-  await getConnectionManager().getCredentials(ref, { minValidityMs: 7200001 })
+  await getConnectionManager().getCredentials(ref, {
+    minValidityMs: 7200001,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(
     jest.mocked(invokePluginApi).mock.calls.filter(([, op]) => op === "auth:exchange")
   ).toHaveLength(2)
@@ -662,13 +680,19 @@ it.each(["feishu-auth", "lark"] as const)(
       expect(account.connectionId).toBeDefined()
       if (legacyAccountId) expect(account.id).toBe(legacyAccountId)
       const calendarSync = createCalendarSync(host)
+      const syncFromPerson = () =>
+        withPluginExecutionContext(
+          "feishu-calendar",
+          { localAuthorization: LOCAL_PERSON_RUN },
+          () => calendarSync.syncCalendar(account.id, "cal")
+        )
       // The Host owns the cursor now (ADR-0246 P8c); the plugin keeps only
       // fingerprints and drops the v1 token after its first completed run.
       const targetKey = `plugin:feishu-calendar/calendar:${createHash("sha256")
         .update(JSON.stringify([account.id, "cal"]))
         .digest("hex")}`
       const hostCursor = async () => (await getDb().externalSyncCursors.get(targetKey))?.cursor
-      await expect(calendarSync.syncCalendar(account.id, "cal")).resolves.toMatchObject({
+      await expect(syncFromPerson()).resolves.toMatchObject({
         pages: 1,
       })
       expect(await hostCursor()).toBe("saved-cursor")
@@ -699,7 +723,7 @@ it.each(["feishu-auth", "lark"] as const)(
           { status: 200, headers: { "content-type": "application/json" } }
         )
       })
-      await expect(calendarSync.syncCalendar(account.id, "cal")).rejects.toMatchObject({
+      await expect(syncFromPerson()).rejects.toMatchObject({
         name: "ConsumerGrantRequired",
       })
       expect((await api.listAccounts("feishu-calendar"))[0].status?.code).toBe(
@@ -709,7 +733,7 @@ it.each(["feishu-auth", "lark"] as const)(
       // (P3d teardown), so the row is either still at the last committed
       // cursor or already gone; the page fetched before it never commits.
       expect(["saved-cursor", undefined]).toContain(await hostCursor())
-      await expect(calendarSync.syncCalendar(account.id, "cal")).rejects.toThrow()
+      await expect(syncFromPerson()).rejects.toThrow()
       expect(["saved-cursor", undefined]).toContain(await hostCursor())
       expect(jest.mocked(proxyFetch)).toHaveBeenCalledTimes(count + 1)
       expect(approvals).toHaveLength(1)
@@ -719,3 +743,51 @@ it.each(["feishu-auth", "lark"] as const)(
     }
   }
 )
+
+it("allows owner sessions outside a run but cannot escape a Host-bound tool run with omitted or forged fields", async () => {
+  register()
+  await connectProvider({ providerId: FEISHU_PROVIDER_ID, scopes, configuration })
+  expect((await owner().getSessions(FEISHU_PROVIDER_ID))[0]).toMatchObject({
+    accessToken: "user-token",
+  })
+  const run = await startToolExecutionRun(undefined, { runId: "feishu-non-person" })
+  const execute = async () => {
+    await expect(owner().getSessions(FEISHU_PROVIDER_ID)).rejects.toMatchObject({
+      name: "PersonalCredentialRefusedError",
+    })
+    await expect(
+      owner().getSession(FEISHU_PROVIDER_ID, [], {
+        executionRunId: undefined,
+        credentialContext: { localAuthorization: "local-person" },
+      } as never)
+    ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+    return "refused"
+  }
+  __setInvokePluginToolDepsForTesting({
+    getManager: () => ({
+      getPlugin: () => ({ status: "enabled", manifest: {} }),
+      getRegistry: () => ({
+        getTool: () => ({ pluginId: "feishu-auth", definition: { name: "read" }, execute }),
+      }),
+      handleActivationEvent: async () => {},
+    }),
+    getGuard: () => ({ getTier: () => "silent", checkWithConsent: async () => true }),
+    getBroker: () => ({ request: async () => true }),
+    resolveSandboxRuntimeRef: () => undefined,
+  } as never)
+  try {
+    await expect(
+      invokePluginTool(
+        "feishu-auth",
+        "read",
+        { executionRunId: "forged-person" },
+        { executionRunId: run.id }
+      )
+    ).resolves.toMatchObject({ result: "refused" })
+  } finally {
+    __setInvokePluginToolDepsForTesting(null)
+  }
+  expect((await owner().getSessions(FEISHU_PROVIDER_ID))[0]).toMatchObject({
+    accessToken: "user-token",
+  })
+})

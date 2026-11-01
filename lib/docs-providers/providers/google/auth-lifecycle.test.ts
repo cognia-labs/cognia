@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
 import { __setGoogleStatePortForTests, googleState } from "./state"
 import { completeGoogleDocsAuth, disconnectGoogleDocs } from "./auth"
@@ -11,8 +12,13 @@ it("preserves native stale-callback rejection after disconnect without renderer 
     return { ...host.snapshot, outcome: { revoked: true } }
   }
   __setGoogleStatePortForTests(host.call)
-  await disconnectGoogleDocs("original")
-  await expect(completeGoogleDocsAuth({ state: "google:old", code: "old" })).rejects.toMatchObject({
+  await disconnectGoogleDocs("original", { localAuthorization: LOCAL_PERSON_RUN })
+  await expect(
+    completeGoogleDocsAuth(
+      { state: "google:old", code: "old" },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
+  ).rejects.toMatchObject({
     code: "notAuthorized",
     params: { reason: "connection changed" },
   })
@@ -35,9 +41,15 @@ it("leaves refresh and credential revisions entirely with the native AccessToken
       : undefined
   __setGoogleStatePortForTests(host.call)
   await expect(
-    googleState({ action: "accessToken", lineageId: "original", minValidityMs: 60_000 })
+    googleState(
+      { action: "accessToken", lineageId: "original", minValidityMs: 60_000 },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
   ).resolves.toMatchObject({ credential: { revision: "r1", credentialRevision: "c2" } })
-  const snapshot = await googleState({ action: "snapshot" })
+  const snapshot = await googleState(
+    { action: "snapshot" },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
   expect(snapshot).not.toHaveProperty("credential")
   expect(JSON.stringify(snapshot)).not.toContain("ephemeral-access")
 })

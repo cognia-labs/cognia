@@ -1,7 +1,12 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import { act, renderHook, waitFor } from "@testing-library/react"
 
+jest.mock("@/lib/stack/forge-session", () => ({
+  ...jest.requireActual("@/lib/stack/forge-session"),
+  openStackForge: jest.fn(async () => ({ status: "noCredential" })),
+}))
 import type { StackForge } from "@/lib/stack/forge-session"
 import { createFakeForge } from "@/lib/stack/forge/fake"
 import { mergeStack } from "@/lib/stack/merge"
@@ -216,5 +221,16 @@ describe("useStackForge", () => {
     rerender({ root: "/repos/other" })
     await waitFor(() => expect(result.current.forge).toBeNull())
     expect(result.current.pullRequests).toEqual({})
+  })
+})
+
+it("admits a publish gesture explicitly at the Host hook entry", async () => {
+  const { openStackForge } = await import("@/lib/stack/forge-session")
+  const { result } = renderHook(() => useStackForge("/repos/app"))
+  await act(async () => {
+    await result.current.publish(STACK)
+  })
+  expect(openStackForge).toHaveBeenCalledWith("/repos/app", undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
   })
 })

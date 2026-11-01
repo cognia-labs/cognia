@@ -1,3 +1,7 @@
+import {
+  withPluginExecutionContext,
+  withHostCommandExecution,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * Renderer-side IPC handler for `plugin_tool_exec` events from the SDK
  * sidecar (M2 of the plugin-first Computer Use plan).
@@ -966,11 +970,17 @@ async function runPluginToolExec(
     }
     // ── Promoted SlashCommand built-in — run a registered slash command ────
     if (isSlashCommandBuiltinTool(request.name)) {
-      const result = await runSlashCommandBuiltinTool(
-        request.name,
-        request.args,
-        await resolveSlashToolDeps(),
-        { sessionId: request.sessionId }
+      const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+      const context = { sessionId: request.sessionId }
+      const deps = await resolveSlashToolDeps()
+      const result = await withHostCommandExecution(
+        context,
+        {
+          sessionId: request.sessionId,
+          executionRunId:
+            toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
+        },
+        () => runSlashCommandBuiltinTool(request.name, request.args, deps, context)
       )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
@@ -996,7 +1006,10 @@ async function runPluginToolExec(
       if (tool) {
         const { createInvocationProjectAPI } = await import("@/lib/plugin/api/project-api")
         const invocationProject = createInvocationProjectAPI(tool.pluginId, request.sessionId)
+        const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
         const context: PluginToolContext = {
+          executionRunId:
+            toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
           sessionId: request.sessionId,
           sandboxRuntimeRef: request.sandboxRuntimeRef,
           config: resolverOverride.getPluginConfig?.(tool.pluginId) ?? {},
@@ -1004,7 +1017,9 @@ async function runPluginToolExec(
           project: invocationProject.api,
         }
         try {
-          const result = await tool.execute(request.args, context)
+          const result = await withPluginExecutionContext(tool.pluginId, context, () =>
+            tool.execute(request.args, context)
+          )
           return {
             ...baseResponse,
             result: assertSafePluginToolResult(result),
@@ -1038,8 +1053,11 @@ async function runPluginToolExec(
           `plugin:${resolved.pluginId}`
         )
         try {
+          const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
           const { result } = await invokePluginTool(resolved.pluginId, request.name, request.args, {
             signal: request.abortSignal,
+            executionRunId:
+              toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
             sessionId: request.sessionId,
             sandboxRuntimeRef: request.sandboxRuntimeRef,
             reason: `chat:plugin_tool_exec:${request.name}`,
@@ -1081,11 +1099,10 @@ async function runPluginToolExec(
       const skillCtx = await resolveBuiltInSkillContext(request.sessionId)
       const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
       const executionRunId =
-        request.runId ??
-        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId)
+        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? ""
       const result = await runBuiltInSkill(builtIn.id, request.args, {
         ...skillCtx,
-        ...(executionRunId !== undefined ? { executionRunId } : {}),
+        executionRunId,
         signal: request.abortSignal,
         outboundAuthorization: toolCallAuthorization(request),
       })
@@ -1141,12 +1158,11 @@ async function runPluginToolExec(
       const { runDispatchAgentTool } = await import("@/lib/claude/agents/dispatch-agent-handler")
       const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
       const executionRunId =
-        request.runId ??
-        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId)
+        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? ""
       const result = await runDispatchAgentTool({
         sessionId: request.sessionId,
         args: request.args,
-        ...(executionRunId !== undefined ? { executionRunId } : {}),
+        executionRunId,
       })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }

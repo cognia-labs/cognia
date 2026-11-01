@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Says a conversation now continues on another device (ADR-0103), and, when
  * its code went along to an always-on host (ADR-0224 A11b), brings the work
@@ -75,7 +77,10 @@ function CommittedBanner({
   )
   const hostName = host?.label ?? ticket?.target.label ?? t("anotherDevice")
   const refusal = bringBackRefusal({ handed, host, isDesktop: isTauri() })
-  const provider = useMemo(() => createGitHubPullRequestProvider(), [])
+  const provider = useMemo(
+    () => createGitHubPullRequestProvider(undefined, { localAuthorization: LOCAL_PERSON_RUN }),
+    []
+  )
 
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<BringBackProgress | null>(null)

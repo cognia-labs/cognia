@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 
@@ -97,7 +98,10 @@ describe("AccountDangerTab", () => {
     act(() => {
       jest.advanceTimersByTime(UNDO_WINDOW_MS)
     })
-    expect(deleteAccountMock).toHaveBeenCalledWith("acct_beta", { replacementAccountId: undefined })
+    expect(deleteAccountMock).toHaveBeenCalledWith("acct_beta", {
+      replacementAccountId: undefined,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
   })
 
   it("commits the active account with a replacement after the window", () => {
@@ -111,6 +115,7 @@ describe("AccountDangerTab", () => {
     })
     expect(deleteAccountMock).toHaveBeenCalledWith("acct_alpha", {
       replacementAccountId: "acct_beta",
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     })
   })
 

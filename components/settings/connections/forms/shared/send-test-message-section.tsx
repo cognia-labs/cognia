@@ -22,6 +22,7 @@
  * selected runtime actually reads.
  */
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { CheckCircle2Icon, LoaderIcon, SendIcon, XCircleIcon } from "lucide-react"
@@ -198,7 +199,13 @@ export function SendTestMessageSection({ adapterId, platform }: SendTestMessageS
     setSending(true)
     setResult(null)
     try {
-      setResult(await getConnectorDeliveryGateway().sendDiagnostic(adapterId, requestForTarget()))
+      setResult(
+        await getConnectorDeliveryGateway().sendDiagnostic(
+          adapterId,
+          requestForTarget(),
+          LOCAL_PERSON_RUN
+        )
+      )
     } catch (err) {
       setResult({
         ok: false,

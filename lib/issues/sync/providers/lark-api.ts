@@ -30,6 +30,7 @@ import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { isTauri } from "@/lib/tauri"
 import { assertIssueSyncSource } from "../kept-copy-source"
 import { KeptCopySourceError } from "@/lib/docs-providers/kept-copy-source"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { IssueSyncBinding } from "../types"
 
 /** Preserve retry headers before the shared harness projects them into LarkApiError. */
@@ -73,12 +74,14 @@ export function withIssueLarkApi<T>(
   adapterId: string,
   fn: (api: LarkAuthedApi) => Promise<T>,
   signal?: AbortSignal,
-  expectedAuthorizationEpoch?: string
+  expectedAuthorizationEpoch?: string,
+  credentialContext?: PersonalCredentialContext
 ): Promise<T> {
   return withLarkAuthedApi(
     {
       adapterId,
       identity: "user",
+      credentialContext,
       signal,
       expectedAuthorizationEpoch,
       ...(isTauri() ? { httpImpl: issueLarkHttpRequest } : {}),
@@ -93,9 +96,14 @@ export async function withIssueLarkBindingApi<T>(
   binding: IssueSyncBinding,
   fn: (api: LarkAuthedApi) => Promise<T>,
   options: {
+    credentialContext?: PersonalCredentialContext
     signal?: AbortSignal
     expectedAuthorizationEpoch?: string
-    withApi?: <R>(adapterId: string, read: (api: LarkAuthedApi) => Promise<R>) => Promise<R>
+    withApi?: <R>(
+      adapterId: string,
+      read: (api: LarkAuthedApi) => Promise<R>,
+      credentialContext?: PersonalCredentialContext
+    ) => Promise<R>
   } = {}
 ): Promise<T> {
   const source = await assertIssueSyncSource(binding)
@@ -128,8 +136,8 @@ export async function withIssueLarkBindingApi<T>(
     return fn(api)
   }
   const result = await (options.withApi
-    ? options.withApi(adapterId, guarded)
-    : withIssueLarkApi(adapterId, guarded, options.signal, epoch))
+    ? options.withApi(adapterId, guarded, options.credentialContext)
+    : withIssueLarkApi(adapterId, guarded, options.signal, epoch, options.credentialContext))
   await assertCurrent()
   return result
 }

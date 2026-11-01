@@ -65,6 +65,8 @@ export interface LeadPlanResult {
 export interface RunTeamLifecycleDeps {
   /** Optional caller-allocated id used to bind an inbound job before side effects begin. */
   runId?: string
+  /** Publish/park a successful Squad before its durable and execution terminal writes. */
+  beforeCompletion?: () => Promise<void>
   storeReader: {
     getTeam(teamId: string): AgentTeam | undefined
     getTeammates(teamId: string): AgentTeammate[]
@@ -193,7 +195,8 @@ export interface RunTeamLifecycleDeps {
   } | null>
   resolvePrObserveOctokit?: (
     repoFullName: string,
-    host?: import("@/lib/github/host").GithubHost
+    host?: import("@/lib/github/host").GithubHost,
+    credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   ) => Promise<import("@/lib/github/pr-observe/types").OctokitLike | null>
   runPrReview?: import("./pr-feedback/reviewer").RunReview
   /**
@@ -293,7 +296,10 @@ export async function buildRunPrFeedback(opts: {
   try {
     const resolved = await opts.resolveTeamRepo(opts.workingDir)
     if (!resolved) return undefined
-    const octokit = await opts.resolvePrObserveOctokit(resolved.fullName, resolved.host)
+    const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+    const octokit = await opts.resolvePrObserveOctokit(resolved.fullName, resolved.host, {
+      executionRunId: agentTeamExecutionRunId(opts.runId),
+    })
     if (!octokit) return undefined
     const [{ buildTeamPrFeedback }, { gitPush }] = await Promise.all([loadRuntime(), loadGit()])
     return buildTeamPrFeedback({
@@ -1289,7 +1295,7 @@ export async function runTeamLifecycle(
           : String(ac.signal.reason ?? "")
       // `paused` and `needs_input` are deliberately NOT terminal: a paused
       // Squad is still the conversation's turn and can be steered.
-      const desiredStatus =
+      let desiredStatus: AgentTeamRunStatus =
         finalStatus === "cancelled" && abortMessage === "paused"
           ? "paused"
           : finalStatus === "cancelled" && abortMessage === "shutdown"
@@ -1300,6 +1306,15 @@ export async function runTeamLifecycle(
                 ? "cancelled"
                 : "failed"
       let settlementError: unknown
+      if (desiredStatus === "completed") {
+        try {
+          await deps.beforeCompletion?.()
+        } catch (error) {
+          settlementError = error
+          desiredStatus = "failed"
+          finalReason = error instanceof Error ? error.message : String(error)
+        }
+      }
       const teamRunStatus = await settleDurableRunStatus(runId, desiredStatus, finalReason).catch(
         (error) => {
           settlementError = error

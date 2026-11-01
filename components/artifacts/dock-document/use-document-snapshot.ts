@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { requestComposerDocument } from "@/lib/chat/composer-document-request"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -206,7 +208,9 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
         }
         const storedBinding = choice ?? documentMemory(tab.id).binding
         if (storedBinding && provider.resolveLegacyAccount) {
-          const resolved = await resolveDocsAccountBinding(provider, storedBinding)
+          const resolved = await resolveDocsAccountBinding(provider, storedBinding, undefined, {
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          })
           if (!currentTab()) return
           if (resolved) choice = resolved
         }
@@ -245,7 +249,9 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
       setOperation({ phase, generation: captured.generation })
       try {
         if (!binding) {
-          const available = await provider.listAccounts()
+          const available = await provider.listAccounts({
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          })
           if (alive()) {
             setAccounts(available)
             setOperation({ phase: "idle", generation: captured.generation })
@@ -254,7 +260,9 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
         }
         // A named account click is the only way to establish a missing binding.
         const verify = async () => {
-          const available = await provider.listAccounts()
+          const available = await provider.listAccounts({
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          })
           if (!alive()) return false
           if (!available.some((account) => accountMatchesBinding(account, binding))) {
             // Same path as an account-change notice: what this identity read goes too.
@@ -300,6 +308,7 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
             },
             {
               accountId: binding.accountId,
+              credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
               expectedAuthorizationEpoch: binding.authorizationEpoch,
               signal: controller.signal,
             }
@@ -411,7 +420,9 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
   const attachToChat = useCallback(async () => {
     if (!provider || !canAttach || !binding || !currentTab()) return false
     const held = documentMemory(tab.id)
-    const accounts = await provider.listAccounts().catch(() => [])
+    const accounts = await provider
+      .listAccounts({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+      .catch(() => [])
     if (!mounted.current || !currentTab() || documentMemory(tab.id).generation !== held.generation)
       return false
     if (!accounts.some((account) => accountMatchesBinding(account, binding))) {

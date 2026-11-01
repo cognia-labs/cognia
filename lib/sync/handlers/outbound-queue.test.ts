@@ -12,6 +12,7 @@ import {
   pickNextDue,
   recoverStaleSendingJobs,
   markSending,
+  enqueueOutbound,
 } from "@/lib/db/outbound-jobs"
 
 import {
@@ -56,6 +57,54 @@ function job(id: string, over: Partial<OutboundJobRow> = {}): OutboundJobRow {
 }
 
 describe("syncOutboundQueue", () => {
+  async function localJob() {
+    return enqueueOutbound({
+      adapterId: "tg",
+      conversationKey: "telegram:tg:1",
+      source: "manual",
+      request: job("request").request,
+    })
+  }
+
+  it("settles local journal owners on sync tombstones without settling mirrored Host runs", async () => {
+    const db = getDb()
+    const local = await localJob()
+    const runId = `execution:job:outbound:${local.id}`
+    const run = (await db.executionRuns.get(runId))!
+    const foreign = job("foreign-tombstone")
+    const foreignRunId = `execution:job:outbound:${foreign.id}`
+    await db.outboundQueue.put(foreign)
+    // Host summaries have no private local run.started journal entry.
+    await db.executionRuns.put({ ...run, id: foreignRunId })
+    const transport = makeTransport()
+    jest.mocked(transport.call).mockResolvedValueOnce({
+      rows: [],
+      deleted_ids: [local.id, foreign.id],
+      next_since: 21,
+    })
+    expect((await syncOutboundQueue(transport, { since: 0 })).ok).toBe(true)
+    expect(await db.outboundQueue.bulkGet([local.id, foreign.id])).toEqual([undefined, undefined])
+    expect(await db.executionRuns.get(runId)).toMatchObject({ status: "cancelled" })
+    expect(await db.executionRuns.get(foreignRunId)).toMatchObject({ status: "running" })
+    expect(await db.syncTombstones.count()).toBe(0)
+  })
+
+  it("settles a retained local journal when an aged projection is swept", async () => {
+    const db = getDb()
+    const local = await localJob()
+    await db.outboundQueue.update(local.id, {
+      status: "sent",
+      syncedFromHost: true,
+      createdAt: 0,
+    })
+    expect(await sweepAgedMirroredRows(Date.now())).toBe(1)
+    expect(await db.outboundQueue.get(local.id)).toBeUndefined()
+    expect(await db.executionRuns.get(`execution:job:outbound:${local.id}`)).toMatchObject({
+      status: "completed",
+    })
+    expect(await db.syncTombstones.count()).toBe(0)
+  })
+
   it("retains old mirrored sends while a provider result remains outstanding", async () => {
     const row = job("pending-audit", {
       createdAt: 1,

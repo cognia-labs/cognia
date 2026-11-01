@@ -76,6 +76,7 @@ export type LarkAuthBridgeError =
 export type LarkAuthBridgeResult = LarkAuthBridgeOk | LarkAuthBridgeError
 
 export interface ResolveLarkAuthInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   context?: BuiltInSkillContext
   /**
    * Specific Cognia connection, never a local CLI profile. IM sessions
@@ -148,7 +149,21 @@ export async function resolveLarkAuth(
   if (preferred === "user") {
     let verified: Awaited<ReturnType<typeof assertLarkActingIdentity>>
     try {
-      verified = await assertLarkActingIdentity(adapter.id, input.context)
+      if (input.context) verified = await assertLarkActingIdentity(adapter.id, input.context)
+      else {
+        const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+        const admission = await admitPersonalCredential(input.credentialContext, {
+          source: "lark-user",
+          person: adapter.id,
+        })
+        if (!admission.ok) throw new LarkActingIdentityError()
+        const { connectorsLarkUserAuth } = await import("@/lib/connectors/tauri/commands")
+        const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId: adapter.id })
+        verified =
+          snapshot.configured && snapshot.accessToken && snapshot.authorizationEpoch
+            ? { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
+            : undefined
+      }
     } catch (err) {
       if (!(err instanceof LarkActingIdentityError)) throw err
       return { ok: false, reason: err.reason, message: err.message, adapterId: adapter.id }
@@ -156,10 +171,21 @@ export async function resolveLarkAuth(
     let connection: Awaited<ReturnType<typeof resolveLarkConnection>>
     let userToken: string
     try {
-      connection = await resolveLarkConnection(adapter.id)
+      const scope = input.context ? resolveBuiltInSkillRunScope(input.context) : undefined
+      const credentialContext = input.context
+        ? {
+            sessionId: scope!.sessionId,
+            executionRunId: scope!.runId,
+            larkContext: input.context,
+            delivery: input.context.delivery,
+          }
+        : input.credentialContext
+      connection = await resolveLarkConnection(adapter.id, undefined, credentialContext)
       if (verified && verified.authorizationEpoch !== connection.hostMetadata?.authorizationEpoch)
         throw new Error("lark_auth_stale")
-      userToken = (await getConnectionManager().getCredentials(connection.id)).accessToken
+      userToken = (
+        await getConnectionManager().getCredentials(connection.id, { credentialContext })
+      ).accessToken
     } catch {
       return {
         ok: false,

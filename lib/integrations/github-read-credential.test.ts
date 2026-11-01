@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/integrations", () => ({ listAllIntegrationAccounts: jest.fn() }))
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({ getProvider: jest.fn() }))
 jest.mock("./github-auth", () => ({ githubHostForSession: jest.fn() }))
@@ -66,10 +67,18 @@ describe("githubReadAccountsFor", () => {
       s4: GHES,
       s5: GITHUB_DOT_COM,
     })
-    expect((await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d)).map((a) => a.id)).toEqual([
-      "pat",
-    ])
-    expect((await githubReadAccountsFor("acme/app", GHES, d)).map((a) => a.id)).toEqual(["ghes"])
+    expect(
+      (
+        await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d, {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+      ).map((a) => a.id)
+    ).toEqual(["pat"])
+    expect(
+      (
+        await githubReadAccountsFor("acme/app", GHES, d, { localAuthorization: LOCAL_PERSON_RUN })
+      ).map((a) => a.id)
+    ).toEqual(["ghes"])
   })
 
   it("ranks the owner's App install, then PATs, then other App installs", async () => {
@@ -79,11 +88,13 @@ describe("githubReadAccountsFor", () => {
       account({ id: "owner-app", authSessionId: "s3", providerId: "github-app", label: "ACME" }),
     ]
     const d = deps(accounts, { s1: GITHUB_DOT_COM, s2: GITHUB_DOT_COM, s3: GITHUB_DOT_COM })
-    expect((await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d)).map((a) => a.id)).toEqual([
-      "owner-app",
-      "pat",
-      "other-app",
-    ])
+    expect(
+      (
+        await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d, {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+      ).map((a) => a.id)
+    ).toEqual(["owner-app", "pat", "other-app"])
   })
 
   it("answers an empty list when the account store cannot be read", async () => {
@@ -94,7 +105,11 @@ describe("githubReadAccountsFor", () => {
       hostForSession: async () => GITHUB_DOT_COM,
       resolveToken: async () => "t",
     }
-    expect(await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d)).toEqual([])
+    expect(
+      await githubReadAccountsFor("acme/app", GITHUB_DOT_COM, d, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toEqual([])
   })
 })
 
@@ -107,7 +122,11 @@ describe("resolveGithubReadToken", () => {
         pat: "ghp_pat",
       }
     )
-    expect(await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, d)).toBe("ghp_pat")
+    expect(
+      await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, d, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBe("ghp_pat")
     expect(d.resolveToken).toHaveBeenCalledWith(
       expect.objectContaining({ id: "pat" }),
       GITHUB_DOT_COM
@@ -123,7 +142,11 @@ describe("resolveGithubReadToken", () => {
       { s1: GITHUB_DOT_COM, s2: GITHUB_DOT_COM },
       { broken: new Error("token exchange 401"), pat: "ghp_pat" }
     )
-    expect(await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, d)).toBe("ghp_pat")
+    expect(
+      await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, d, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBe("ghp_pat")
   })
 
   it("never offers a github.com account's token to an enterprise host", async () => {
@@ -134,12 +157,18 @@ describe("resolveGithubReadToken", () => {
         pat: "ghp_pat",
       }
     )
-    expect(await resolveGithubReadToken("acme/app", GHES, d)).toBeNull()
+    expect(
+      await resolveGithubReadToken("acme/app", GHES, d, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toBeNull()
     expect(d.resolveToken).not.toHaveBeenCalled()
   })
 
   it("is null with no connected account", async () => {
-    expect(await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, deps([], {}))).toBeNull()
+    expect(
+      await resolveGithubReadToken("acme/app", GITHUB_DOT_COM, deps([], {}), {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBeNull()
   })
 })
 
@@ -183,9 +212,37 @@ it("passes the connector identity and deployment to the host credential resolver
   jest.mocked(githubHostForSession).mockResolvedValue(GHES)
   jest.mocked(getProvider).mockReturnValue({ resolveRequestCredential } as never)
 
-  expect(await resolveGithubReadToken("acme/app", GHES)).toBe("scoped-token")
+  expect(
+    await resolveGithubReadToken("acme/app", GHES, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toBe("scoped-token")
   expect(resolveRequestCredential).toHaveBeenCalledWith("work-session", {
     connectorAccountId: "work",
     origin: "https://ghe.acme.io",
+  })
+})
+
+it("refuses ambient PAT fallback but preserves App service tokens and explicit Bot bindings", async () => {
+  const pat = account({ id: "personal" })
+  const service = account({ id: "service", authSessionId: "s-service", providerId: "github-app" })
+  const d = deps(
+    [pat, service],
+    { "s-acc": GITHUB_DOT_COM, "s-service": GITHUB_DOT_COM },
+    { personal: "pat", service: "installation" }
+  )
+  expect(await resolveGithubReadToken("acme/repo", GITHUB_DOT_COM, d)).toBe("installation")
+  expect(d.resolveToken).not.toHaveBeenCalledWith(pat, expect.anything())
+  d.resolveToken.mockClear()
+  expect(
+    await resolveGithubReadToken("acme/repo", GITHUB_DOT_COM, {
+      ...d,
+      listAccounts: async () => [pat],
+    })
+  ).toBeNull()
+  expect(d.resolveToken).not.toHaveBeenCalled()
+  expect(await resolveGithubAccountGitAccess(pat, d)).toEqual({
+    host: GITHUB_DOT_COM,
+    token: "pat",
   })
 })

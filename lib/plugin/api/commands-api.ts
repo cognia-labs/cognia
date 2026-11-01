@@ -1,3 +1,4 @@
+import { withPluginCommandExecution } from "@/lib/plugin/core/invocation-identity"
 /**
  * `ctx.commands`: the slash-command surface, for plugins whose command set is
  * only known at runtime.
@@ -147,7 +148,9 @@ export function createCommandsAPI(
       const shortId = input.id.trim()
       const namespacedId = namespacedCommandId(pluginId, shortId)
       const handler = async (args: string, context?: SlashCommandContext) => {
-        const outcome = await input.handler(args, context)
+        const outcome = await withPluginCommandExecution(pluginId, context, async () =>
+          input.handler(args, context)
+        )
         return outcome ?? {}
       }
       const description = input.description ?? input.name ?? shortId

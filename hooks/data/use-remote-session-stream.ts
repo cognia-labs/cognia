@@ -533,7 +533,11 @@ export function useRemoteSessionStream(
         ])
         const session = await getSession(sessionId)
         if (!session) throw new Error("session is not synced to this device yet")
-        const sendOptions = await buildSendOptions(session, text)
+        // The legacy paired transport has no accepted Host run receipt yet.
+        // A client-side session (or another live run) cannot authorize this turn.
+        const sendOptions = await buildSendOptions(session, text, undefined, undefined, undefined, {
+          executionRunId: "",
+        })
         await sendPrompt(sessionId, text, sendOptions)
       } catch (err) {
         setStatusBoth("idle")

@@ -9,6 +9,7 @@
  * connectors server (`/oauth/docs/google/callback`).
  */
 
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import { clampDocText } from "@/lib/docs-providers/limits"
 import {
   assertRemoteDocBinding,
@@ -67,9 +68,13 @@ export function __setGoogleProviderDepsForTests(next: GoogleProviderDeps): void 
   deps = next
 }
 
-async function assertGoogleEpoch(accountId: string, revision?: number) {
+async function assertGoogleEpoch(
+  accountId: string,
+  revision?: number,
+  credentialContext?: DocsProviderCallOptions["credentialContext"]
+) {
   try {
-    const connection = await resolveGoogleConnection(accountId, revision)
+    const connection = await resolveGoogleConnection(accountId, revision, credentialContext)
     if (
       connection.status !== "connected" ||
       !GOOGLE_DOCS_SCOPES.every((scope) => connection.scopes.includes(scope))
@@ -86,11 +91,21 @@ type BoundGoogleContext = GoogleApiContext & { accountId: string; revision: numb
 async function context(opts: DocsProviderCallOptions): Promise<BoundGoogleContext> {
   const signal = opts.signal
   throwIfGoogleRequestAborted(signal)
+  const admission = await admitPersonalCredential(opts.credentialContext, {
+    source: "google-docs",
+    person: opts.accountId,
+  })
+  if (!admission.ok) throw new DocsProviderError("notAuthorized")
   if (opts.accountId === GOOGLE_ACCOUNT_ID) {
-    const resolved = await resolveDocsAccountBinding(googleDocsProvider, {
-      accountId: opts.accountId,
-      authorizationEpoch: opts.expectedAuthorizationEpoch,
-    })
+    const resolved = await resolveDocsAccountBinding(
+      googleDocsProvider,
+      {
+        accountId: opts.accountId,
+        authorizationEpoch: opts.expectedAuthorizationEpoch,
+      },
+      undefined,
+      { credentialContext: opts.credentialContext }
+    )
     if (!resolved) throw new DocsProviderError("notAuthorized")
     opts = {
       ...opts,
@@ -104,24 +119,28 @@ async function context(opts: DocsProviderCallOptions): Promise<BoundGoogleContex
       : Number(opts.expectedAuthorizationEpoch)
   if (expected !== undefined && !Number.isSafeInteger(expected))
     throw new DocsProviderError("notAuthorized")
-  const connection = await assertGoogleEpoch(opts.accountId, expected)
+  const connection = await assertGoogleEpoch(opts.accountId, expected, opts.credentialContext)
   let accessToken: string
   try {
     accessToken = await withGoogleRequestAbort(
       signal,
       deps.accessToken ??
         (async () =>
-          (await getConnectionManager().getCredentials(connection.id, { minValidityMs: 60_000 }))
-            .accessToken)
+          (
+            await getConnectionManager().getCredentials(connection.id, {
+              minValidityMs: 60_000,
+              credentialContext: opts.credentialContext,
+            })
+          ).accessToken)
     )
   } catch (error) {
     throwIfGoogleRequestAborted(signal)
     // Rust publishes invalid_grant as needs-reauth; preserve that outcome
     // instead of presenting an authorization failure as a network outage.
-    await assertGoogleEpoch(connection.id, connection.revision)
+    await assertGoogleEpoch(connection.id, connection.revision, opts.credentialContext)
     throw error
   }
-  await assertGoogleEpoch(connection.id, connection.revision)
+  await assertGoogleEpoch(connection.id, connection.revision, opts.credentialContext)
   throwIfGoogleRequestAborted(signal)
   return {
     http: deps.http ?? googleHttp,
@@ -142,8 +161,8 @@ export const googleDocsProvider: DocsProvider = {
   // land on the Rust loopback listener. See `DocsProvider.hosts`.
   hosts: ["tauri"],
 
-  async listAccounts(): Promise<DocsProviderAccount[]> {
-    return (await listGoogleConnections())
+  async listAccounts(options): Promise<DocsProviderAccount[]> {
+    return (await listGoogleConnections(options?.credentialContext))
       .filter(
         (connection) =>
           connection.status === "connected" &&
@@ -156,9 +175,9 @@ export const googleDocsProvider: DocsProvider = {
       }))
   },
 
-  async resolveLegacyAccount(binding) {
+  async resolveLegacyAccount(binding, options) {
     if (binding.accountId !== GOOGLE_ACCOUNT_ID) return null
-    const accounts = await googleDocsProvider.listAccounts()
+    const accounts = await googleDocsProvider.listAccounts(options)
     return accounts.length === 1 ? accounts[0] : null
   },
 
@@ -182,7 +201,7 @@ export const googleDocsProvider: DocsProvider = {
   async search(query: string, opts: DocsProviderSearchOptions): Promise<RemoteDocRef[]> {
     const ctx = await context(opts)
     const refs = await searchGoogleDocs(ctx, query, opts.limit)
-    await assertGoogleEpoch(ctx.accountId, ctx.revision)
+    await assertGoogleEpoch(ctx.accountId, ctx.revision, opts.credentialContext)
     return refs
   },
 
@@ -208,7 +227,7 @@ export const googleDocsProvider: DocsProvider = {
       ])
       if (!read.text.trim()) throw new DocsProviderError("empty", { title: name })
       const clamped = clampDocText(read.text)
-      await assertGoogleEpoch(ctx.accountId, ctx.revision)
+      await assertGoogleEpoch(ctx.accountId, ctx.revision, opts.credentialContext)
       return {
         ref: { ...ref, title: name },
         title: name,
@@ -224,7 +243,7 @@ export const googleDocsProvider: DocsProvider = {
     const read = await readGoogleSpreadsheet(ctx, ref.id)
     if (!read.text.trim()) throw new DocsProviderError("empty", { title: read.title })
     const clamped = clampDocText(read.text)
-    await assertGoogleEpoch(ctx.accountId, ctx.revision)
+    await assertGoogleEpoch(ctx.accountId, ctx.revision, opts.credentialContext)
     return {
       ref: { ...ref, title: read.title },
       title: read.title,
@@ -238,12 +257,15 @@ export const googleDocsProvider: DocsProvider = {
 // Registered at module load, next to the provider it completes, so the deep-link
 // router never has to know which providers exist. The registry can outlive a reload.
 if (!getDocsOAuthCompletion(GOOGLE_PROVIDER_ID)) {
-  registerDocsOAuthCompletion(GOOGLE_PROVIDER_ID, async (callback) => {
-    await completeGoogleDocsAuth({
-      code: callback.code,
-      state: callback.state,
-      error: callback.error,
-      errorDescription: callback.errorDescription,
-    })
+  registerDocsOAuthCompletion(GOOGLE_PROVIDER_ID, async (callback, credentialContext) => {
+    await completeGoogleDocsAuth(
+      {
+        code: callback.code,
+        state: callback.state,
+        error: callback.error,
+        errorDescription: callback.errorDescription,
+      },
+      credentialContext
+    )
   })
 }

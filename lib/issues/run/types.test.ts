@@ -105,3 +105,8 @@ describe("withRunBrief", () => {
     expect(withRunBrief("", "brief")).toBe("brief")
   })
 })
+
+it("keeps run-target credential context optional for unproven entries", () => {
+  const target = {} as IssueRunTarget
+  expect(target.credentialContext).toBeUndefined()
+})

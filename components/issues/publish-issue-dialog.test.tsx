@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
@@ -84,7 +85,9 @@ describe("PublishIssueDialog", () => {
     const { props } = renderDialog()
     await user.click(screen.getByTestId("publish-issue-submit"))
     await waitFor(() => expect(props.onOpenChange).toHaveBeenCalledWith(false))
-    expect(mockPublish).toHaveBeenCalledWith("i1", github, { kind: "human" })
+    expect(mockPublish).toHaveBeenCalledWith("i1", github, { kind: "human" }, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(props.onPublished).toHaveBeenCalled()
     expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining("acme/app#9"))
   })

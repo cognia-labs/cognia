@@ -31,7 +31,10 @@ import {
   updateIntegrationAccount,
   updateIntegrationSubscription,
   updateIntegrationActionJob,
+  reconcileIntegrationJobExecutions,
+  cancelIntegrationActionJobsByPlugin,
 } from "./integrations"
+import { startJobExecutionRun } from "@/lib/execution/acting-authority"
 import {
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
@@ -41,6 +44,78 @@ describe("Integration persistence", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  const createExecutionJob = async () => {
+    const job = await enqueueIntegrationActionJob({
+      pluginId: "test",
+      integrationId: "test",
+      accountId: "account",
+      actionId: "write",
+      input: {},
+      status: "awaiting_approval",
+      risk: "write",
+      source: "manual",
+      attempts: 0,
+      maxAttempts: 1,
+    })
+    await startJobExecutionRun(`integration:${job.id}`)
+    return job
+  }
+  const execution = (id: string) => getDb().executionRuns.get(`execution:job:integration:${id}`)
+
+  it.each(["succeeded", "failed", "deadlettered", "cancelled"] as const)(
+    "settles %s through the DB lifecycle without runner finally",
+    async (status) => {
+      const job = await createExecutionJob()
+      if (status === "cancelled") await cancelIntegrationActionJobRecord(job.id)
+      else await updateIntegrationActionJob(job.id, { status })
+      expect(await execution(job.id)).toMatchObject({
+        status:
+          status === "succeeded" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
+      })
+    }
+  )
+
+  it("settles held executions when their plugin is unregistered", async () => {
+    const job = await createExecutionJob()
+    await cancelIntegrationActionJobsByPlugin("test")
+    expect(await execution(job.id)).toMatchObject({ status: "cancelled" })
+  })
+
+  it("settles bulk account deletion while preserving terminal and unrelated executions", async () => {
+    const account = await createIntegrationAccount("test", {
+      integrationId: "test",
+      providerId: "vendor",
+      authSessionId: "auth",
+      remoteAccountId: "remote",
+      label: "Removed account",
+    })
+    const held = await createExecutionJob()
+    const completed = await createExecutionJob()
+    const keep = await createExecutionJob()
+    await getDb().integrationActionJobs.update(held.id, { accountId: account.id })
+    await getDb().integrationActionJobs.update(completed.id, { accountId: account.id })
+    await updateIntegrationActionJob(completed.id, { status: "succeeded" })
+    await removeIntegrationAccount("test", account.id)
+    expect(await getIntegrationActionJob(held.id)).toBeUndefined()
+    expect(await getIntegrationActionJob(completed.id)).toBeUndefined()
+    expect(await execution(held.id)).toMatchObject({ status: "cancelled" })
+    expect(await execution(completed.id)).toMatchObject({ status: "completed" })
+    expect(await getIntegrationActionJob(keep.id)).toBeDefined()
+    expect(await execution(keep.id)).toMatchObject({ status: "running" })
+  })
+
+  it("reconciles terminal and missing jobs without closing held work", async () => {
+    const terminal = await createExecutionJob(),
+      missing = await createExecutionJob(),
+      held = await createExecutionJob()
+    await getDb().integrationActionJobs.update(terminal.id, { status: "failed" })
+    await getDb().integrationActionJobs.delete(missing.id)
+    await reconcileIntegrationJobExecutions()
+    expect(await execution(terminal.id)).toMatchObject({ status: "failed" })
+    expect(await execution(missing.id)).toMatchObject({ status: "cancelled" })
+    expect(await execution(held.id)).toMatchObject({ status: "running" })
   })
 
   it("keeps cancelled bound-account writes as security records after uninstall", async () => {

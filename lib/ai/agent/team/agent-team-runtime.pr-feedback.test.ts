@@ -59,6 +59,9 @@ describe("buildRunPrFeedback", () => {
   it("resolves the repo + octokit and builds the controller", async () => {
     const { opts, buildTeamPrFeedback } = harness()
     const result = await buildRunPrFeedback(opts)
+    expect(opts.resolvePrObserveOctokit).toHaveBeenCalledWith("acme/app", undefined, {
+      executionRunId: "execution:team:run-1",
+    })
     expect(result).toBe(controller)
     expect(buildTeamPrFeedback).toHaveBeenCalledTimes(1)
     const params = buildTeamPrFeedback.mock.calls[0]![0]

@@ -18,6 +18,10 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
   },
   getAgentTeamRun: (runId: string) => getAgentTeamRun(runId),
   updateAgentTeamRun: (runId: string, patch: unknown) => updateAgentTeamRun(runId, patch),
+  updateAgentTeamRunIfCurrent: async (runId: string, current: unknown, patch: unknown) => {
+    if ((await getAgentTeamRun(runId)) !== current) return false
+    return updateAgentTeamRun(runId, patch)
+  },
 }))
 jest.mock("./squad-run-records", () => ({
   ...jest.requireActual("./squad-run-records"),
@@ -133,6 +137,11 @@ beforeEach(() => {
   __resetAgentTeamRuntimeForTesting()
   jest.clearAllMocks()
   recoveryChildren.mockResolvedValue([])
+  updateAgentTeamRun.mockImplementation(async (id, patch) => {
+    const current = await getAgentTeamRun(id)
+    getAgentTeamRun.mockResolvedValue({ ...(current as object), ...(patch as object) })
+    return true
+  })
   getAgentTeamRun.mockResolvedValue({
     id: "run-1",
     teamId: "t1",
@@ -142,6 +151,25 @@ beforeEach(() => {
 })
 
 describe("runSquadLifecycle", () => {
+  it.each(["pausing", "paused", "sleeping", "needs_input"])(
+    "keeps %s authoritative when the lifecycle returns cancellation",
+    async (status) => {
+      useAgentTeamStore.getState().upsertTeam(makeTeam())
+      configureAgentTeamRuntime({ runLeadPlanning: jest.fn(), notifierDeps: {} })
+      await runSquadLifecycle(
+        { teamId: "t1", runId: "run-1" },
+        {
+          run: async () => {
+            getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "t1", status })
+            return { runId: "run-1", status: "cancelled" }
+          },
+        }
+      )
+      expect(settleAgentTeamExecutionRun).not.toHaveBeenCalled()
+      expect(useAgentTeamStore.getState().teams.t1.status).toBe("paused")
+      expect(emitSchedulerEvent).not.toHaveBeenCalled()
+    }
+  )
   it.each([false, true])(
     "checks stop proof before re-entering the lifecycle (fence proof=%s)",
     async (fenceCapable) => {
@@ -252,7 +280,10 @@ describe("runSquadLifecycle", () => {
         requirePlanApprovalFloor: false,
       },
     })
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle(
       {
         teamId: "t1",
@@ -348,7 +379,10 @@ describe("runSquadLifecycle", () => {
     })
     const restored = await restoreSquadRunInput("t1", "run-1")
     expect(restored).toMatchObject(executionConstraints)
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle(
       {
         ...restored!,
@@ -373,7 +407,10 @@ describe("runSquadLifecycle", () => {
   it("auto-configures default deps (with a warning) when nothing was configured", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
     useAgentTeamStore.getState().upsertTeam(makeTeam())
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
     expect(buildAgentTeamRuntimeDeps).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("auto-configured"))
@@ -398,7 +435,10 @@ describe("runSquadLifecycle", () => {
         sessionWorkingDir: "/work",
       },
     })
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle(
       {
         teamId: "t1",
@@ -440,7 +480,10 @@ describe("runSquadLifecycle", () => {
         entryPersona: { id: "c1", name: "Ada", systemPrompt: "be Ada" },
       },
     })
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle(
       {
         teamId: "t1",
@@ -456,7 +499,10 @@ describe("runSquadLifecycle", () => {
 
   it("mirrors the durable status, settles the execution row and emits the scheduler event", async () => {
     useAgentTeamStore.getState().upsertTeam(makeTeam())
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     const statuses: string[] = []
     const unsubscribe = useAgentTeamStore.subscribe((state) => {
       const status = state.teams.t1?.status
@@ -487,13 +533,64 @@ describe("runSquadLifecycle", () => {
         status: durableStatus,
         executionConstraints: { version: 1, teamConfig: {} },
       })
-      const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+      const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+        await lifecycleDeps.beforeCompletion?.()
+        return { runId: "run-1", status: "completed" as const }
+      })
       await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
       expect(useAgentTeamStore.getState().teams.t1?.status).toBe("paused")
       expect(settleAgentTeamExecutionRun).not.toHaveBeenCalled()
       if (durableStatus === "needs_input") expect(emitSchedulerEvent).not.toHaveBeenCalled()
     }
   )
+
+  it("publishes with a live execution and settles only after successful delivery", async () => {
+    useAgentTeamStore.getState().upsertTeam(
+      makeTeam({
+        config: {
+          ...makeTeam().config,
+          githubDeliveryPolicy: {
+            enabled: true,
+            stackedPullRequests: true,
+            minLayers: 1,
+            maxLayers: 3,
+            mergeMode: "approved-bottom-up",
+          },
+        },
+      })
+    )
+    configureAgentTeamRuntime({ runLeadPlanning: jest.fn(), notifierDeps: {} })
+    getAgentTeamRun.mockResolvedValue({
+      id: "run-1",
+      teamId: "t1",
+      status: "running",
+      executionConstraints: {
+        version: 1,
+        teamConfig: {
+          githubDeliveryPolicy: useAgentTeamStore.getState().teams.t1.config.githubDeliveryPolicy,
+        },
+      },
+    })
+    const order: string[] = []
+    prepareAndPublishGithubStack.mockImplementationOnce(async () => {
+      expect(settleAgentTeamExecutionRun).not.toHaveBeenCalled()
+      order.push("publish")
+    })
+    settleAgentTeamExecutionRun.mockImplementationOnce(async () => {
+      order.push("settle")
+    })
+    await runSquadLifecycle(
+      { teamId: "t1", runId: "run-1" },
+      {
+        run: async (_teamId, lifecycleDeps) => {
+          expect(lifecycleDeps.beforeCompletion).toBeInstanceOf(Function)
+          await lifecycleDeps.beforeCompletion?.()
+          return { runId: "run-1", status: "completed" }
+        },
+      }
+    )
+    expect(order).toEqual(["publish", "settle"])
+  })
 
   it("parks the run on a delivery_failed CODE when the GitHub stack cannot publish", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
@@ -529,7 +626,10 @@ describe("runSquadLifecycle", () => {
         },
       },
     })
-    const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+    const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+      await lifecycleDeps.beforeCompletion?.()
+      return { runId: "run-1", status: "completed" as const }
+    })
     await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
     expect(updateAgentTeamRun).toHaveBeenCalledWith(
       "run-1",
@@ -541,6 +641,49 @@ describe("runSquadLifecycle", () => {
     expect(emitSchedulerEvent).not.toHaveBeenCalled()
     warn.mockRestore()
   })
+
+  it.each(["cancelled", "terminated", "paused", "pausing", "sleeping"])(
+    "preserves %s when control wins during publication",
+    async (status) => {
+      const team = makeTeam({
+        config: {
+          ...makeTeam().config,
+          githubDeliveryPolicy: {
+            enabled: true,
+            stackedPullRequests: true,
+            minLayers: 2,
+            maxLayers: 3,
+            mergeMode: "approved-bottom-up",
+          },
+        },
+      })
+      useAgentTeamStore.getState().upsertTeam(team)
+      configureAgentTeamRuntime({ runLeadPlanning: jest.fn(), notifierDeps: {} })
+      const row = {
+        id: "run-1",
+        teamId: "t1",
+        status: "running",
+        executionConstraints: { version: 1, teamConfig: team.config },
+      }
+      getAgentTeamRun.mockResolvedValue(row)
+      prepareAndPublishGithubStack.mockImplementationOnce(async () => {
+        getAgentTeamRun.mockResolvedValue({ ...row, status })
+        throw new Error("provider failed after control")
+      })
+      await runSquadLifecycle(
+        { teamId: "t1", runId: "run-1" },
+        {
+          run: async (_id, lifecycleDeps) => {
+            await lifecycleDeps.beforeCompletion?.()
+            return { runId: "run-1", status: "completed" }
+          },
+        }
+      )
+      expect(prepareAndPublishGithubStack).toHaveBeenCalled()
+      expect(updateAgentTeamRun).not.toHaveBeenCalled()
+      expect(await getAgentTeamRun("run-1")).toMatchObject({ status })
+    }
+  )
 
   it.each([
     ["held", "delivery_awaiting_approval"],
@@ -580,7 +723,10 @@ describe("runSquadLifecycle", () => {
           },
         },
       })
-      const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+      const run = jest.fn(async (_teamId: string, lifecycleDeps: RunTeamLifecycleDeps) => {
+        await lifecycleDeps.beforeCompletion?.()
+        return { runId: "run-1", status: "completed" as const }
+      })
       await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
       expect(updateAgentTeamRun).toHaveBeenCalledWith(
         "run-1",

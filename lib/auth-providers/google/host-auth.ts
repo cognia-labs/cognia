@@ -14,6 +14,8 @@ import { registerHostAuthProviderService } from "@/lib/plugin/auth/connection-ac
 import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
 import {
   ConnectionRevisionChanged,
+  assertHostConnectionCredentialAuthorization,
+  hostConnectionCredentialContext,
   ConnectionUnavailableError,
   getConnectionManager,
   getHostConnectionDriver,
@@ -23,6 +25,7 @@ import {
 import {
   type GoogleAuthAttempt,
   googleState,
+  type GoogleStateAdmission,
   subscribeGoogleStateChanged,
 } from "@/lib/docs-providers/providers/google/state"
 import { connectorsEnsureServer } from "@/lib/connectors/tauri/commands"
@@ -39,7 +42,8 @@ export interface GoogleDeviceAuthorization extends HostDeviceAuthorization {
 
 /** Adapt Host metadata for the shared dialog; OAuth credentials remain in Rust. */
 export function createGoogleDeviceAuthorization(
-  attempt: GoogleAuthAttempt
+  attempt: GoogleAuthAttempt,
+  admission?: GoogleStateAdmission
 ): GoogleDeviceAuthorization {
   if (!attempt.userCode || !attempt.verificationUrl)
     throw new ConnectionUnavailableError("device-challenge-missing")
@@ -52,11 +56,14 @@ export function createGoogleDeviceAuthorization(
     expiresAt: attempt.expiresAt,
     intervalSeconds,
     async poll() {
-      const reply = await googleState({ action: "pollDevice", attemptId: attempt.attemptId })
+      const reply = await googleState(
+        { action: "pollDevice", attemptId: attempt.attemptId },
+        admission
+      )
       if (cancelled) return { status: "expired" }
       if (reply.pollStatus === "connected") {
         if (!reply.lineageId) throw new ConnectionUnavailableError("authorized-lineage-missing")
-        await reconcileGoogleConnections()
+        await reconcileGoogleConnections(admission)
         if (cancelled) return { status: "expired" }
         authorization.lineageId = reply.lineageId
         return { status: "authorized" }
@@ -86,20 +93,28 @@ export function ensureGoogleHostProvider(): void {
     synchronize: async () => {
       await reconcileGoogleConnections()
     },
-    getCredentials: async (row) => {
-      const reply = await googleState({
-        action: "accessToken",
-        lineageId: lineageId(row),
-        minValidityMs: 60_000,
-      }).catch(async (error: unknown) => {
-        await reconcileGoogleConnections()
+    getCredentials: async (row, authorization) => {
+      await assertHostConnectionCredentialAuthorization(authorization, lineageId(row))
+      const admission = { connectionAuthorization: authorization, lineageId: lineageId(row) }
+      const context = await hostConnectionCredentialContext(authorization, lineageId(row))
+      await reconcileGoogleConnections(context)
+      const reply = await googleState(
+        {
+          action: "accessToken",
+          lineageId: lineageId(row),
+          minValidityMs: 60_000,
+        },
+        admission
+      ).catch(async (error: unknown) => {
+        await reconcileGoogleConnections(context)
         throw error
       })
+      await assertHostConnectionCredentialAuthorization(authorization, lineageId(row))
       const credential = reply.credential
       // A refresh may finish after a native disconnect or reauthorization.
       if (!credential || credential.revision !== row.hostMetadata!.authorizationEpoch)
         throw new ConnectionUnavailableError("authorization-changed")
-      await reconcileGoogleConnections()
+      await reconcileGoogleConnections(context)
       await getConnectionManager().getConnection(row.id, row.revision)
       return {
         accessToken: credential.accessToken,
@@ -107,10 +122,13 @@ export function ensureGoogleHostProvider(): void {
         scopes: [...row.scopes],
       }
     },
-    disconnect: async (row) => {
-      await googleState({ action: "disconnect", lineageId: lineageId(row) })
+    disconnect: async (row, options) => {
+      await googleState(
+        { action: "disconnect", lineageId: lineageId(row) },
+        options?.credentialContext
+      )
     },
-    reauthorize: (ref) => authorizeGoogleConnection(ref),
+    reauthorize: (ref, options) => authorizeGoogleConnection(ref, options.credentialContext),
   })
   let disposeProvider: () => void
   try {
@@ -152,24 +170,38 @@ function lineageId(row: AuthConnectionRow): string {
  * every window, so a stale "disconnected" snapshot read in one window cannot
  * tombstone a reauthorization another window has already published.
  */
-export function reconcileGoogleConnections(): Promise<AuthConnectionRow[]> {
+export function reconcileGoogleConnections(
+  admission?: GoogleStateAdmission
+): Promise<AuthConnectionRow[]> {
   ensureGoogleHostProvider()
+  // Native snapshot can perform legacy userinfo hydration. Unproven background
+  // reconciliation observes published Host metadata only; it cannot mint proof.
+  if (!admission) return listAuthConnections("google")
   const next = reconciliation.then(() =>
-    withAuthLock(GOOGLE_RECONCILE_LOCK, publishGoogleSnapshot, "provider-reconcile")
+    withAuthLock(
+      GOOGLE_RECONCILE_LOCK,
+      () => publishGoogleSnapshot(admission),
+      "provider-reconcile"
+    )
   )
   reconciliation = next.catch(() => undefined)
   return next
 }
 
-async function publishGoogleSnapshot(): Promise<AuthConnectionRow[]> {
+async function publishGoogleSnapshot(
+  admission: GoogleStateAdmission
+): Promise<AuthConnectionRow[]> {
   const preferences = await getSettings()
   const legacyClientId = preferences.docsProviders?.google?.clientId?.trim()
   const legacyBackupClientId = preferences.backupDestinations?.googleDrive?.clientId?.trim()
-  const snapshot = await googleState({
-    action: "snapshot",
-    ...(legacyBackupClientId ? { legacyBackupClientId } : {}),
-    ...(legacyClientId ? { legacyClientId } : {}),
-  })
+  const snapshot = await googleState(
+    {
+      action: "snapshot",
+      ...(legacyBackupClientId ? { legacyBackupClientId } : {}),
+      ...(legacyClientId ? { legacyClientId } : {}),
+    },
+    admission
+  )
   const manager = getConnectionManager()
   const previous = (await listAuthConnections("google")).filter((row) => row.ownerPluginId === null)
   const active = new Set<string>()
@@ -204,15 +236,18 @@ async function publishGoogleSnapshot(): Promise<AuthConnectionRow[]> {
   return listAuthConnections("google")
 }
 
-export async function listGoogleConnections(): Promise<AuthConnectionRow[]> {
-  return reconcileGoogleConnections()
+export async function listGoogleConnections(
+  admission?: GoogleStateAdmission
+): Promise<AuthConnectionRow[]> {
+  return reconcileGoogleConnections(admission)
 }
 
 export async function resolveGoogleConnection(
   ref: string,
-  expectedRevision?: number
+  expectedRevision?: number,
+  admission?: GoogleStateAdmission
 ): Promise<AuthConnectionRow> {
-  await reconcileGoogleConnections()
+  await reconcileGoogleConnections(admission)
   const row = await getConnectionManager().getConnection(ref as AuthConnectionRef, expectedRevision)
   lineageId(row)
   return row
@@ -220,14 +255,15 @@ export async function resolveGoogleConnection(
 
 /** A Host reconnect binds to the same native lineage and client, including rejected grants. */
 export async function authorizeGoogleConnection(
-  ref: string
+  ref: string,
+  admission?: GoogleStateAdmission
 ): Promise<void | GoogleDeviceAuthorization> {
   ensureGoogleHostProvider()
-  await reconcileGoogleConnections()
+  await reconcileGoogleConnections(admission)
   const row = await getAuthConnection(ref)
   if (!row) throw new ConnectionUnavailableError("unknown")
   const nativeId = lineageId(row)
-  const snapshot = await googleState({ action: "snapshot" })
+  const snapshot = await googleState({ action: "snapshot" }, admission)
   const lineage = snapshot.lineages.find((value) => value.id === nativeId)
   if (!lineage) throw new ConnectionUnavailableError("unknown-lineage")
   if (lineage.revision !== row.hostMetadata!.authorizationEpoch)
@@ -241,7 +277,7 @@ export async function authorizeGoogleConnection(
     })
     if (!reply.attempt?.userCode || !reply.attempt.verificationUrl)
       throw new ConnectionUnavailableError("device-challenge-missing")
-    return createGoogleDeviceAuthorization(reply.attempt)
+    return createGoogleDeviceAuthorization(reply.attempt, admission)
   }
   const bound = await connectorsEnsureServer(CONNECTORS_SERVER_PORT)
   const reply = await googleState({

@@ -233,9 +233,12 @@ it("fails closed on session and adapter lookup failures", async () => {
 
 it("allows local sessions without a platform binding", async () => {
   sessionGet.mockResolvedValue({ id: "s1" })
-  await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).resolves.toBeUndefined()
+  await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).resolves.toEqual({
+    accessToken: "owner-token",
+    authorizationEpoch: "auth-owner",
+  })
   expect(getAdapterInstance).not.toHaveBeenCalled()
-  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(1)
 })
 
 it("allows the HTTP personal-token path inside the recorded desktop run", async () => {
@@ -530,4 +533,26 @@ it("uses the shared Chinese refusal catalog when the runtime translator selects 
     "个人访问需要 phase 4"
   )
   expect(currentLocale).toHaveBeenCalled()
+})
+
+it("checks a delivered run's persisted requesters after live inbound jobs finish", async () => {
+  const delivered = {
+    ...localRun,
+    id: "finished",
+    status: "completed",
+    actingIdentity: {
+      ...localRun.actingIdentity,
+      rootRunId: "finished",
+      trigger: "requester",
+      authorizingPrincipal: undefined,
+      requesters: [{ kind: "platform", platform: "lark", adapterId: "a1", remoteUserId: "owner" }],
+    },
+  }
+  runGet.mockResolvedValue(delivered)
+  const context = { sessionId: "s1", executionRunId: "finished", delivery: true }
+  expect(await assertLarkActingIdentity("a1", context)).toMatchObject({
+    authorizationEpoch: "auth-owner",
+  })
+  delivered.actingIdentity.requesters[0].remoteUserId = "non-owner"
+  await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("sender_not_token_owner")
 })

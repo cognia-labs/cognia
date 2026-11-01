@@ -23,6 +23,7 @@
  * session" instead of either lying or refusing.
  */
 
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { forgetProfileAuthSecrets } from "@/lib/plugin/auth/connection-manager"
 import { forgetCollabConnection } from "@/lib/collab/connection"
 import {
@@ -71,6 +72,7 @@ export interface ProfileCloudIdentityCleanup {
 }
 
 export interface ForgetProfileCloudIdentityDeps {
+  credentialContext?: PersonalCredentialContext
   forgetAuthSecrets?: typeof forgetProfileAuthSecrets
   registry?: Pick<UserBindingRegistry, "unbind">
   signOut?: (deps: LogtoAppSessionDeps) => Promise<LogtoSignOutReport>
@@ -96,6 +98,7 @@ export async function forgetProfileCloudIdentity(
   localAccountId: string,
   deps: ForgetProfileCloudIdentityDeps = {}
 ): Promise<ProfileCloudIdentityCleanup> {
+  const credentialContext = deps.credentialContext && { ...deps.credentialContext }
   const steps = {} as Record<ProfileCloudIdentityStep, ProfileCloudIdentityStepOutcome>
   const failures: ProfileCloudIdentityCleanup["failures"] = []
   const fail = (step: ProfileCloudIdentityStep, error: unknown): void => {
@@ -124,7 +127,10 @@ export async function forgetProfileCloudIdentity(
   }
 
   try {
-    const auth = await (deps.forgetAuthSecrets ?? forgetProfileAuthSecrets)(localAccountId)
+    const forgetAuth = deps.forgetAuthSecrets ?? forgetProfileAuthSecrets
+    const auth = credentialContext
+      ? await forgetAuth(localAccountId, { credentialContext })
+      : await forgetAuth(localAccountId)
     tokensMayRemainLive ||= auth.tokensMayRemainLive
     if (auth.failures.length) fail("plugin-auth", new Error(auth.failures.join("; ")))
     else steps["plugin-auth"] = { status: "done" }

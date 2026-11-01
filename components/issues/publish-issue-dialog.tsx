@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Publish a local issue to a remote tracker.
  *
@@ -68,7 +70,9 @@ export function PublishIssueDialog({
     if (!target || busy) return
     setBusy(true)
     try {
-      const ref = await publishIssue(issue.id, target, { kind: "human" })
+      const ref = await publishIssue(issue.id, target, { kind: "human" }, undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
       toast.success(t("publish.success", { target: ref.label ?? targetLabel(target) }))
       onPublished?.()
       onOpenChange(false)

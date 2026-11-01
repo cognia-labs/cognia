@@ -1,3 +1,5 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { HOST_BACKGROUND, pluginExecutionContext } from "../core/invocation-identity"
 import { createDocsProvidersAPI, clearDocsProvidersForPlugin } from "./docs-providers-api"
 import {
   __clearDocsProvidersForTests,
@@ -104,6 +106,31 @@ function setup(definitions: PluginDocsProviderDef[] = [def]) {
     },
   }
 }
+
+it("binds account discovery and reads to Host proof and backgrounds URL matching", async () => {
+  const { api, input } = setup()
+  input.matchRef = (url) => {
+    expect(pluginExecutionContext("acme")).toEqual(HOST_BACKGROUND)
+    return { kind: "doc", id: "report", url }
+  }
+  input.listAccounts = async () => {
+    expect(pluginExecutionContext("acme")?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+    return [{ id: connection.ref, label: "Alice", authorizationEpoch: "4" }]
+  }
+  input.fetch = async (target) => {
+    await Promise.resolve()
+    expect(pluginExecutionContext("acme")?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+    return { ref: target, title: "Report", text: "safe", format: "markdown" }
+  }
+  api.register(input)
+  const provider = getDocsProvider(ref.providerId)!
+  await provider.fetch(ref, {
+    accountId: connection.ref,
+    expectedAuthorizationEpoch: "4",
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(pluginExecutionContext("acme")).toBeUndefined()
+})
 
 beforeEach(() => {
   clearDocsProvidersForPlugin("acme")
@@ -363,4 +390,28 @@ it("releases its Host listener if a plugin account subscription cannot start", (
   expect(runtime.listeners.size).toBe(1)
   registration.unregister()
   expect(runtime.listeners.size).toBe(0)
+})
+
+it("never exposes Host-local credential admission to a plugin fetch callback", async () => {
+  const runtime = setup()
+  const original = runtime.input.fetch
+  const fetch = jest.fn(original)
+  runtime.input.fetch = fetch
+  const listAccounts = jest.fn(runtime.input.listAccounts)
+  runtime.input.listAccounts = listAccounts
+  const registration = runtime.api.register(runtime.input)
+  await getDocsProvider(registration.providerId)!.listAccounts({
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(listAccounts).toHaveBeenCalledWith()
+  await getDocsProvider(registration.providerId)!.fetch(ref, {
+    accountId: connection.ref,
+    expectedAuthorizationEpoch: "4",
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(fetch.mock.calls[0][1]).not.toHaveProperty("credentialContext")
+  expect(fetch.mock.calls[0][1]).toMatchObject({
+    accountId: connection.ref,
+    expectedAuthorizationEpoch: "4",
+  })
 })

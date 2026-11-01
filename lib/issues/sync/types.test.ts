@@ -4,6 +4,7 @@
  * read-only provider is one with no `push`, and every outcome variant is
  * discriminated on `status`.
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import type { IssueExternalRef, IssueProject } from "@/types/issues"
 import type { IssueSyncBinding, IssueSyncProvider, PushOutcome, RemoteIssue } from "./types"
@@ -68,4 +69,12 @@ describe("issue sync contract", () => {
     }
     expect(remote.coarseStatus).toBe(true)
   })
+})
+
+it("keeps local-person proof in Host invocation options without serializing it", async () => {
+  const options: import("./types").PullOptions = {
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  }
+  expect(options.credentialContext?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+  expect(JSON.stringify(options)).not.toContain("localAuthorization")
 })

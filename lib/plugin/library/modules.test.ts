@@ -5,6 +5,12 @@ import { evaluatePluginBundle } from "../core/evaluate-plugin-bundle"
 import { assertLibraryAccess, authorizeLibraryAccess } from "./access"
 import { PluginLibraryModules } from "./modules"
 import { loggers } from "../core/logger"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("../core/logger", () => ({ loggers: { manager: { info: jest.fn() } } }))
 
@@ -18,6 +24,48 @@ describe("consumer-owned library modules", () => {
   let check: jest.Mock
   const hostCall = jest.fn(() => "host")
   const context = { network: { fetch: hostCall } } as unknown as FullPluginContext
+
+  it.each([HOST_BACKGROUND, { executionRunId: "original-import" }])(
+    "pins a delayed factory to its initiating Host identity and backgrounds disposal: %p",
+    async (original) => {
+      let finish!: (value: object) => void
+      let started!: () => void
+      const loading = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      load.mockImplementation(() => {
+        started()
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      })
+      const seen: unknown[] = []
+      let pending!: Promise<Record<string, unknown>>
+      await withPluginExecutionContext("a", original, async () => {
+        pending = modules.importModule("a", "lib", "utils", context)
+        await loading
+      })
+      const local = { localAuthorization: LOCAL_PERSON_RUN } as const
+      await withPluginExecutionContext("a", local, async () => {
+        finish({
+          default: () => {
+            seen.push(pluginExecutionContext("lib"))
+            return {
+              exports: { read: () => pluginExecutionContext("lib") },
+              dispose: () => {
+                seen.push(pluginExecutionContext("lib"))
+              },
+            }
+          },
+        })
+        const exports = await pending
+        expect((exports.read as () => unknown)()).toEqual(local)
+        await scopes.get("a")!.dispose()
+      })
+      expect(seen).toEqual([original, HOST_BACKGROUND])
+      expect(pluginExecutionContext("lib")).toBeUndefined()
+    }
+  )
 
   beforeEach(() => {
     jest.clearAllMocks()
@@ -156,6 +204,7 @@ describe("consumer-owned library modules", () => {
     const dispose = jest.fn()
     load.mockResolvedValue({
       default: (ctx: FullPluginContext) => {
+        expect(pluginExecutionContext("lib")).toEqual(HOST_BACKGROUND)
         ctx.lifecycle.onDispose(dispose)
         return { exports: { host: () => ctx.network.fetch("https://example.test") } }
       },

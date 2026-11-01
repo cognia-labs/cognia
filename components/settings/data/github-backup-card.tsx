@@ -1,4 +1,6 @@
 "use client"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 
 /**
  * GitHub backup destination card (Settings → Data). Configures the private
@@ -27,10 +29,9 @@ import {
 } from "@/components/ui/select"
 import {
   DEFAULT_GITHUB_BACKUP_PATH,
-  backupDestinationSecrets,
-  GITHUB_TOKEN_KEY,
   clearGithubBackupToken,
   getBackupDestinationsSettings,
+  getGithubBackupToken,
   parseRepoFullName,
   setGithubBackupToken,
   updateBackupDestinationsSettings,
@@ -60,6 +61,13 @@ async function loadAuthSessions(): Promise<GithubAuthSessionOption[]> {
     for (const providerId of ["github-pat", "github-app"] as const) {
       const provider = getProvider(providerId)
       if (!provider) continue
+      if (providerId !== "github-app" || provider.pluginId !== null) {
+        const decision = await admitPersonalCredential(
+          { localAuthorization: LOCAL_PERSON_RUN },
+          { source: "github-user" }
+        )
+        if (!decision.ok) return []
+      }
       const sessions = await provider.getSessions(undefined, { silent: true })
       for (const session of sessions) {
         out.push({
@@ -108,7 +116,11 @@ export function GithubBackupCard({ authSessionsForTesting }: GithubBackupCardPro
       setVisibility(cfg?.lastVerifiedVisibility ?? "unknown")
       setLastSyncAt(cfg?.lastSyncAt)
       setSessions(authSessionsForTesting ?? (await loadAuthSessions()))
-      setTokenSaved(Boolean(await backupDestinationSecrets().load(GITHUB_TOKEN_KEY)))
+      setTokenSaved(
+        Boolean(
+          await getGithubBackupToken({ kind: "keyring" }, { localAuthorization: LOCAL_PERSON_RUN })
+        )
+      )
       await loadPersistedSyncPassphrase()
       setUnlocked(hasSyncPassphrase())
     })()
@@ -157,7 +169,9 @@ export function GithubBackupCard({ authSessionsForTesting }: GithubBackupCardPro
   const onVerify = async () => {
     setBusy(true)
     try {
-      const result = await verifyGithubBackupDestination()
+      const result = await verifyGithubBackupDestination({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       if (result.ok) {
         setVisibility("private")
         toast.success(t("verified", { branch: result.defaultBranch }))
@@ -177,7 +191,10 @@ export function GithubBackupCard({ authSessionsForTesting }: GithubBackupCardPro
     }
     setBusy(true)
     try {
-      const result = await runRemoteBackupSyncNow("github", "", { onProgress: setPhase })
+      const result = await runRemoteBackupSyncNow("github", "", {
+        onProgress: setPhase,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       if (result.ok) {
         setLastSyncAt(new Date().toISOString())
         toast.success(t("syncDone"))
@@ -237,7 +254,9 @@ export function GithubBackupCard({ authSessionsForTesting }: GithubBackupCardPro
           <Input
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
-            placeholder="owner/repository"
+            placeholder={
+              /* i18n-exempt: a GitHub repository slug format, identical in every language */ "owner/repository"
+            }
             className="h-9 font-mono text-xs"
             data-testid="github-backup-repo"
           />

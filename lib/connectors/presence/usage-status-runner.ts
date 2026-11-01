@@ -221,18 +221,21 @@ async function refreshCard(args: {
 
   const segments = [{ type: "markdown" as const, md: buildUsageCardMarkdown(snapshot, { now }) }]
 
-  const job = await enqueueOutbound({
-    adapterId,
-    conversationKey,
-    request: {
-      conversationRef: deliveryTarget.conversationRef,
-      deliveryTarget,
-      segments,
-      metadata: { idempotencyKey: `usage-presence:${adapterId}:${now}` },
-      ...(state.cardMessageId ? { editTargetMessageId: state.cardMessageId } : {}),
+  const job = await enqueueOutbound(
+    {
+      adapterId,
+      conversationKey,
+      request: {
+        conversationRef: deliveryTarget.conversationRef,
+        deliveryTarget,
+        segments,
+        metadata: { idempotencyKey: `usage-presence:${adapterId}:${now}` },
+        ...(state.cardMessageId ? { editTargetMessageId: state.cardMessageId } : {}),
+      },
+      source: "manual",
     },
-    source: "manual",
-  })
+    { executionContext: { automation: "service" } }
+  )
   if (!state.cardMessageId && !state.cardJobId) state.cardJobId = job.id
 
   // Pin once, best-effort, as soon as we know the platform message id.

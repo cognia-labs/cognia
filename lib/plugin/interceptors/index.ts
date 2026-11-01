@@ -3,3 +3,12 @@
  * This re-export keeps host imports of `@/lib/plugin/interceptors` working.
  */
 export * from "@cognia/plugin-contract/lib/plugin/interceptors/index"
+export {
+  dispatchObserve,
+  dispatchTransform,
+  dispatchGuard,
+  requireGuardPass,
+  dispatchAround,
+  type InterceptorDispatchContext,
+  type TransformDispatchOptions,
+} from "./dispatch"

@@ -10,6 +10,11 @@ import {
   type PythonEventSubscribe,
 } from "./python-backed-proxy"
 import type { PythonPluginEvent } from "@/lib/plugin/python/log-buffer"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { invoke } from "@tauri-apps/api/core"
 import { transport } from "@/lib/tauri/transport-instance"
@@ -49,6 +54,25 @@ interface OcrLike {
 }
 
 describe("createPythonBackedProxy", () => {
+  it("binds Python contribution calls until transport settlement with exact Host provenance", async () => {
+    const seen: unknown[] = []
+    const proxy = createPythonBackedProxy<OcrLike>({
+      pluginId: "bound-python",
+      contributionId: "ocr",
+      methods: ["extract"],
+      call: async () => {
+        await Promise.resolve()
+        seen.push(pluginExecutionContext("bound-python"))
+        return "safe"
+      },
+    })
+    await proxy.extract("background.png")
+    const context = { executionRunId: "python-service-attempt" }
+    await withPluginExecutionContext("bound-python", context, () => proxy.extract("run.png"))
+    expect(seen).toEqual([HOST_BACKGROUND, context])
+    expect(pluginExecutionContext("bound-python")).toBeUndefined()
+  })
+
   it("routes a method call through the contribution dispatcher", async () => {
     const call = jest.fn<ReturnType<PythonCallTransport>, Parameters<PythonCallTransport>>(
       async () => "recognized"
@@ -96,6 +120,40 @@ describe("createPythonBackedProxy", () => {
     await expect(proxy.extract("a.png")).rejects.toThrow(
       'python-backed OCR provider "py-ocr:tesseract".extract failed: python handler missing'
     )
+  })
+
+  it("retains the exact run after a stream closes until Python actually settles", async () => {
+    const harness = createEventHarness()
+    let resolveCall!: (value: unknown) => void
+    const proxy = createPythonBackedProxy<{
+      complete(): AsyncGenerator<unknown, unknown, void>
+    }>({
+      pluginId: "late-python",
+      contributionId: "llm",
+      methods: ["complete"],
+      streamingMethods: ["complete"],
+      call: () =>
+        new Promise((resolve) => {
+          resolveCall = resolve
+        }),
+      subscribe: harness.subscribe,
+      newStreamId: () => "late-stream",
+    })
+    const context = { executionRunId: "late-python-attempt" }
+    const iterator = withPluginExecutionContext("late-python", context, () => proxy.complete())
+    const first = iterator.next()
+    harness.emit({
+      pluginId: "late-python",
+      kind: "chunk",
+      data: { streamId: "late-stream", value: "first" },
+    })
+    await expect(first).resolves.toEqual({ value: "first", done: false })
+    await iterator.return(undefined)
+    expect(harness.listenerCount()).toBe(0)
+    expect(pluginExecutionContext("late-python")).toEqual(context)
+    resolveCall("done")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pluginExecutionContext("late-python")).toBeUndefined()
   })
 
   it("streams chunks and returns the call's final value", async () => {

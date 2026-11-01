@@ -20,6 +20,7 @@ import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
+import { resolveBuiltInSkillRunScope } from "../context"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import { previewText, skillDeliveryAuthorization } from "./_helpers"
 
@@ -119,7 +120,11 @@ const skill: BuiltInSkill<typeof schema> = {
       batchOutcomes.push(outcome)
     }
 
-    const results = await enqueueGovernedMany(batch)
+    const runScope = resolveBuiltInSkillRunScope(ctx)
+    const results = await enqueueGovernedMany(batch, {
+      signal: ctx.signal,
+      executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+    })
     results.forEach((result, index) => {
       if (result.kind === "drafted") batchOutcomes[index].status = "drafted"
     })

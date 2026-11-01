@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   createGithubIssue,
   GITHUB_DELIVERY_PLUGIN_ID,
@@ -91,13 +92,23 @@ describe("resolveGithubWritebackAccount", () => {
       account({ id: "A", connectionId: "connection-A" as never }),
     ])
     await expect(
-      resolveGithubWritebackAccount("acme/one", undefined, "connection-A")
+      resolveGithubWritebackAccount(
+        "acme/one",
+        undefined,
+        { localAuthorization: LOCAL_PERSON_RUN },
+        "connection-A"
+      )
     ).resolves.toMatchObject({ id: "A" })
     mockListAccounts.mockResolvedValue([
       account({ id: "B", connectionId: "connection-B" as never }),
     ])
     await expect(
-      resolveGithubWritebackAccount("acme/one", undefined, "connection-A")
+      resolveGithubWritebackAccount(
+        "acme/one",
+        undefined,
+        { localAuthorization: LOCAL_PERSON_RUN },
+        "connection-A"
+      )
     ).resolves.toBeNull()
   })
   it("never selects a newer enterprise account for a public issue", async () => {
@@ -105,7 +116,9 @@ describe("resolveGithubWritebackAccount", () => {
       account({ id: "enterprise", authSessionId: "enterprise-session" }),
       account({ id: "public" }),
     ])
-    await expect(resolveGithubWritebackAccount("acme/one")).resolves.toMatchObject({ id: "public" })
+    await expect(
+      resolveGithubWritebackAccount("acme/one", undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({ id: "public" })
   })
 
   it("refuses unreadable or revoked credentials instead of guessing a host", async () => {
@@ -114,15 +127,21 @@ describe("resolveGithubWritebackAccount", () => {
       account({ id: "unreadable", authSessionId: "missing" }),
     ])
     mockHostForSession.mockResolvedValue(undefined)
-    await expect(resolveGithubWritebackAccount("acme/one")).resolves.toBeNull()
+    await expect(
+      resolveGithubWritebackAccount("acme/one", undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toBeNull()
   })
 
   it("keeps the account shown at confirmation even if a newer account appears", async () => {
     mockListAccounts.mockResolvedValue([account({ id: "new" }), account({ id: "shown" })])
-    await expect(resolveGithubWritebackAccount("acme/one", "shown")).resolves.toMatchObject({
+    await expect(
+      resolveGithubWritebackAccount("acme/one", "shown", { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({
       id: "shown",
     })
-    await expect(resolveGithubWritebackAccount("acme/one", "removed")).resolves.toBeNull()
+    await expect(
+      resolveGithubWritebackAccount("acme/one", "removed", { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toBeNull()
   })
 
   it("prefers the repository owner's App installation on the correct host", async () => {
@@ -130,14 +149,18 @@ describe("resolveGithubWritebackAccount", () => {
       account({ id: "other-install", providerId: "github-app", label: "other" }),
       account({ id: "owner-install", providerId: "github-app", label: "acme" }),
     ])
-    await expect(resolveGithubWritebackAccount("acme/one")).resolves.toMatchObject({
+    await expect(
+      resolveGithubWritebackAccount("acme/one", undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({
       id: "owner-install",
     })
   })
   it("picks the first enabled account (newest, by the query's own ordering)", async () => {
     mockListAccounts.mockResolvedValue([account({ id: "new" }), account({ id: "old" })])
 
-    await expect(resolveGithubWritebackAccount()).resolves.toMatchObject({ id: "new" })
+    await expect(
+      resolveGithubWritebackAccount(undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({ id: "new" })
     expect(mockListAccounts).toHaveBeenCalledWith(GITHUB_DELIVERY_PLUGIN_ID, GITHUB_INTEGRATION_ID)
   })
 
@@ -147,12 +170,16 @@ describe("resolveGithubWritebackAccount", () => {
       account({ id: "on" }),
     ])
 
-    await expect(resolveGithubWritebackAccount()).resolves.toMatchObject({ id: "on" })
+    await expect(
+      resolveGithubWritebackAccount(undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({ id: "on" })
   })
 
   it("returns null when nothing is connected", async () => {
     mockListAccounts.mockResolvedValue([])
-    await expect(resolveGithubWritebackAccount()).resolves.toBeNull()
+    await expect(
+      resolveGithubWritebackAccount(undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toBeNull()
   })
 })
 
@@ -188,18 +215,28 @@ describe("runGithubWriteback", () => {
   it("routes through the github-delivery plugin, not a new write path", async () => {
     const execute = jest.fn().mockResolvedValue(job({ status: "succeeded" }))
     await runGithubWriteback(
-      { target, action: { kind: "comment", body: "hi" }, idempotencyKey: "k1" },
+      {
+        target,
+        action: { kind: "comment", body: "hi" },
+        idempotencyKey: "k1",
+        credentialContext: { sessionId: "s", executionRunId: "run" },
+      },
       { resolveAccount: async () => account(), execute }
     )
 
-    expect(execute).toHaveBeenCalledWith(GITHUB_DELIVERY_PLUGIN_ID, {
-      integrationId: GITHUB_INTEGRATION_ID,
-      accountId: "acct-1",
-      actionId: "commentIssue",
-      input: { repoFullName: "acme/one", issueNumber: 7, body: "hi" },
-      source: "manual",
-      idempotencyKey: "k1",
-    })
+    expect(execute).toHaveBeenCalledWith(
+      GITHUB_DELIVERY_PLUGIN_ID,
+      {
+        integrationId: GITHUB_INTEGRATION_ID,
+        accountId: "acct-1",
+        actionId: "commentIssue",
+        input: { repoFullName: "acme/one", issueNumber: 7, body: "hi" },
+        source: "manual",
+        idempotencyKey: "k1",
+      },
+      undefined,
+      { sessionId: "s", executionRunId: "run" }
+    )
   })
 
   it("omits idempotencyKey entirely when the caller has none", async () => {
@@ -231,14 +268,23 @@ describe("runGithubWriteback", () => {
     const approve = jest.fn().mockResolvedValue(job({ status: "succeeded" }))
 
     const result = await runGithubWriteback(
-      { target, action: { kind: "close" }, approval: "user-confirmed" },
+      {
+        target,
+        action: { kind: "close" },
+        approval: "user-confirmed",
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      },
       { resolveAccount: async () => account(), execute, approve }
     )
 
     expect(approve).toHaveBeenCalledWith("job-1")
     expect(result.status).toBe("succeeded")
     // The confirmed write is the person's under the outbound policy (ADR-0239).
-    expect(execute.mock.calls[0][2]).toEqual({ kind: "person", surface: "issue-writeback" })
+    expect(execute.mock.calls[0][2]).toEqual({
+      kind: "person",
+      surface: "issue-writeback",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
   })
 
   it("leaves an unconfirmed write to the plugin's outbound plan", async () => {
@@ -247,7 +293,8 @@ describe("runGithubWriteback", () => {
       { target, action: { kind: "close" } },
       { resolveAccount: async () => account(), execute, approve: jest.fn() }
     )
-    expect(execute.mock.calls[0]).toHaveLength(2)
+    expect(execute.mock.calls[0]).toHaveLength(4)
+    expect(execute.mock.calls[0].slice(2)).toEqual([undefined, undefined])
   })
 
   it("does not re-approve a job that never needed approval", async () => {
@@ -334,7 +381,8 @@ describe("createGithubIssue", () => {
         idempotencyKey: "issue-publish:i1:acme/app",
       },
       // A person confirmed it in the publish dialog (ADR-0239).
-      { kind: "person", surface: "issue-publish" }
+      { kind: "person", surface: "issue-publish" },
+      undefined
     )
     expect(approve).toHaveBeenCalledWith("j1")
   })
@@ -356,4 +404,14 @@ describe("createGithubIssue", () => {
       })
     ).rejects.toMatchObject({ code: "plugin-unavailable" })
   })
+})
+
+it("never implicitly selects a personal writeback account without admission", async () => {
+  mockListAccounts.mockResolvedValue([account()])
+  expect(await resolveGithubWritebackAccount("acme/one")).toBeNull()
+  expect(
+    await resolveGithubWritebackAccount("acme/one", undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toMatchObject({ id: "acct-1" })
 })

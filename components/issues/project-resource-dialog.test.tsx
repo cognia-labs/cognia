@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({
   useLocale: () => "en",
@@ -375,7 +376,11 @@ describe("binding a Lark tasklist", () => {
     await user.click(screen.getByTestId("resource-load-tasklists"))
     await screen.findByTestId("resource-tasklist")
     expect(mockWithApi).toHaveBeenCalledWith(
-      { adapterId: "cai_1", identity: "user" },
+      {
+        adapterId: "cai_1",
+        identity: "user",
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      },
       expect.any(Function)
     )
     await user.click(screen.getByTestId("resource-submit"))

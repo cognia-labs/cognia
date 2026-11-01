@@ -7,6 +7,11 @@
  */
 
 import type { PluginManifest } from "@/types/plugin"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 
 const invokeMock = jest.fn()
 const transportCallMock = jest.fn()
@@ -60,6 +65,23 @@ beforeEach(() => {
   invokeMock.mockReset()
   transportCallMock.mockReset()
   delete (globalThis as Record<string, unknown>).__COGNIA_HEADLESS__
+})
+
+it("binds direct WASM callbacks through transport settlement", async () => {
+  setTauri(true)
+  const seen: unknown[] = []
+  invokeMock.mockImplementation(async () => {
+    await Promise.resolve()
+    seen.push(pluginExecutionContext("bound-wasm"))
+    return "null"
+  })
+  await callWasmExport("bound-wasm", "read", {}, "generation")
+  const context = { executionRunId: "wasm-service-attempt" }
+  await withPluginExecutionContext("bound-wasm", context, () =>
+    callWasmExport("bound-wasm", "read", {}, "generation")
+  )
+  expect(seen).toEqual([HOST_BACKGROUND, context])
+  expect(pluginExecutionContext("bound-wasm")).toBeUndefined()
 })
 
 describe("updateWasmPluginConfig", () => {

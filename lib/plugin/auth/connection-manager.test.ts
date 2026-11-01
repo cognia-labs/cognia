@@ -1,3 +1,13 @@
+import {
+  createPluginCredentialAccess,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 import "fake-indexeddb/auto"
 import fs from "node:fs"
 import os from "node:os"
@@ -16,6 +26,8 @@ import {
   registerHostConnectionDriver,
   getHostConnectionDriver,
   type HostDeviceAuthorization,
+  assertHostConnectionCredentialAuthorization,
+  hostConnectionCredentialContext,
 } from "./connection-manager"
 import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credentials"
 import { authConnectionIdentityKey, type AuthConnectionRow } from "@/lib/db/auth-connections"
@@ -35,6 +47,10 @@ import {
 } from "@/lib/db/integrations"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
+jest.mock("@/lib/plugin/api/bot-integration-binding", () => ({
+  resolveBotIntegrationBinding: jest.fn(),
+}))
+import { resolveBotIntegrationBinding } from "@/lib/plugin/api/bot-integration-binding"
 
 it("hands a vendor-neutral device authorization from a Host driver to its caller", async () => {
   const authorization: HostDeviceAuthorization = {
@@ -89,7 +105,9 @@ it("marks plugin credentials without hostMetadata for reauth and fences a replac
   expect(f.rows.get(ref)?.status).toBe("connected")
   await f.manager.retireHostConnection(ref, "needs-reauth", 1, "api-key")
   expect(f.rows.get(ref)).toMatchObject({ status: "needs-reauth", revision: 1 })
-  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({ reason: "needs-reauth" })
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toMatchObject({ reason: "needs-reauth" })
   expect(f.provider.refresh).not.toHaveBeenCalled()
 })
 
@@ -183,13 +201,15 @@ function fixture() {
     },
     removeSession: jest.fn(),
     refresh: jest.fn(async () => fresh),
-    describe: jest.fn(async (credentials) => ({
-      issuer: "https://issuer",
-      clientId: "client",
-      principal: { kind: "user" as const, id: "user" },
-      accountLabel: "Account",
-      scopes: credentials.scopes,
-    })),
+    describe: jest.fn(async (credentials) => {
+      return {
+        issuer: "https://issuer",
+        clientId: "client",
+        principal: { kind: "user" as const, id: "user" },
+        accountLabel: "Account",
+        scopes: credentials.scopes,
+      }
+    }),
   }
   providers.set(provider.id, provider)
   return {
@@ -203,6 +223,25 @@ function fixture() {
     makeManager,
   }
 }
+
+it("binds provider description and refresh callbacks to Host background or the admitted read", async () => {
+  const f = fixture()
+  const describe = f.provider.describe!
+  f.provider.describe = jest.fn(async (credentials) => {
+    expect(pluginExecutionContext("owner")).toEqual({ executionRunId: "" })
+    return describe(credentials)
+  })
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
+  f.provider.refresh = jest.fn(async () => {
+    await Promise.resolve()
+    expect(pluginExecutionContext("owner")?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+    return fresh
+  })
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).resolves.toEqual(fresh)
+  expect(pluginExecutionContext("owner")).toBeUndefined()
+})
 
 it("retains a known tenant when importing failed legacy credentials without tenant metadata", async () => {
   const f = fixture()
@@ -249,7 +288,10 @@ it("refreshes each connection with its stored OAuth client and issuer", async ()
     ...old,
     accessToken: "two",
   })
-  await Promise.all([f.manager.getCredentials(one), f.manager.getCredentials(two)])
+  await Promise.all([
+    f.manager.getCredentials(one, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }),
+    f.manager.getCredentials(two, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }),
+  ])
   expect(requests).toEqual(
     expect.arrayContaining([
       { clientId: "one", issuer: "https://issuer", secret: "secret-one" },
@@ -265,7 +307,9 @@ it("requires reauthentication when legacy client-secret ownership is ambiguous",
   f.provider.refresh = async () => {
     throw { code: "NOT_FOUND", details: { reason: "client-secret-ambiguous" } }
   }
-  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toMatchObject({
     code: "NOT_FOUND",
     details: { reason: "client-secret-ambiguous" },
   })
@@ -305,7 +349,11 @@ it("reconciles Rust-owned credentials without copying them into the connection k
       credentialVersion: "r3",
     })
     expect(f.rows.get(ref)).toMatchObject({ revision: 2, credentialRevision: 3 })
-    expect(await manager.getCredentials(ref)).toEqual(fresh)
+    expect(
+      await manager.getCredentials(ref, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    ).toEqual(fresh)
     expect(f.tokens.size).toBe(0)
     await manager.disconnect(ref)
     expect(f.rows.get(ref)?.status).toBe("tombstoned")
@@ -418,7 +466,10 @@ it("startup retries a failed local purge after vendor revocation without revokin
       }),
     })
     const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
-    await manager.disconnect(ref, { revoke: true })
+    await manager.disconnect(ref, {
+      revoke: true,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     expect(await getDb().authConnections.get(ref)).toMatchObject({ status: "revoked" })
     expect(
       await getDb().integrationAudit.where("kind").equals("access.cleanup.pending").count()
@@ -435,16 +486,26 @@ it("startup retries a failed local purge after vendor revocation without revokin
   }
 })
 
-it.each([true, false])(
-  "provider uninstall loaded=%s removes credentials and retires refs",
-  async (loaded) => {
+it.each([
+  [true, "user"],
+  [false, "user"],
+  [true, "service"],
+  [false, "service"],
+] as const)(
+  "provider uninstall loaded=%s principal=%s removes credentials and retires refs",
+  async (loaded, principalKind) => {
     const f = fixture()
+    const describe = f.provider.describe!
+    f.provider.describe = jest.fn(async (credentials) => ({
+      ...(await describe(credentials)),
+      principal: { kind: principalKind, id: "user" },
+    }))
     f.provider.revoke = jest.fn(async () => {})
     const refs = [await f.manager.createConnectionFromCredentials(f.provider, fresh)]
     f.provider.describe = jest.fn(async () => ({
       issuer: "https://issuer",
       clientId: "second-client",
-      principal: { kind: "user" as const, id: "user" },
+      principal: { kind: principalKind, id: "user" },
       accountLabel: "Second",
       scopes: ["read"],
     }))
@@ -455,11 +516,12 @@ it.each([true, false])(
     }
     await f.manager.uninstallProviderConnections("owner")
     await f.manager.uninstallProviderConnections("owner")
-    expect(f.provider.revoke).toHaveBeenCalledTimes(loaded ? 2 : 0)
+    const revoked = loaded && principalKind === "service"
+    expect(f.provider.revoke).toHaveBeenCalledTimes(revoked ? 2 : 0)
     expect(f.tokens.size).toBe(0)
     for (const ref of refs)
       expect(f.rows.get(ref)).toMatchObject({
-        status: loaded ? "revoked" : "tombstoned",
+        status: revoked ? "revoked" : "tombstoned",
         identityKey: `tombstoned:${ref}`,
       })
     f.providers.set(f.provider.id, { ...f.provider, pluginId: "new-owner" })
@@ -490,6 +552,11 @@ it("fences a sign-in publishing during provider uninstall across manager instanc
   await dbFixture.initialize()
   try {
     const f = fixture()
+    const describe = f.provider.describe!
+    f.provider.describe = jest.fn(async (credentials) => ({
+      ...(await describe(credentials)),
+      principal: { kind: "service" as const, id: "app" },
+    }))
     const options = {
       credentials: f.credentials,
       provider: (id: string) => f.providers.get(id),
@@ -516,7 +583,7 @@ it("fences a sign-in publishing during provider uninstall across manager instanc
     f.provider.describe = jest.fn(async () => ({
       issuer: "https://issuer",
       clientId: "late-client",
-      principal: { kind: "user" as const, id: "user" },
+      principal: { kind: "service" as const, id: "app" },
       accountLabel: "Late",
       scopes: ["read"],
     }))
@@ -616,10 +683,14 @@ it("fault injection: a stalled lineage owner is replaced only beyond the stale b
         return late.promise
       })
       .mockResolvedValue(fresh)
-    const pendingA = a.getCredentials(ref)
+    const pendingA = a.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     const rejectedA = expect(pendingA).rejects.toBeInstanceOf(FileLockLostError)
     await started.promise
-    const pendingB = b.getCredentials(ref)
+    const pendingB = b.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     await new Promise((resolve) => setTimeout(resolve, 15))
     expect(f.provider.refresh).toHaveBeenCalledTimes(1)
     now += 1000
@@ -644,10 +715,14 @@ it("two tab managers sharing storage make exactly one lineage refresh", async ()
   const f = fixture()
   const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
   const second = f.makeManager()
-  expect(await Promise.all([f.manager.getCredentials(ref), second.getCredentials(ref)])).toEqual([
-    fresh,
-    fresh,
-  ])
+  expect(
+    await Promise.all([
+      f.manager.getCredentials(ref, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      }),
+      second.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }),
+    ])
+  ).toEqual([fresh, fresh])
   expect(f.provider.refresh).toHaveBeenCalledTimes(1)
   expect(await f.credentials.read(ref)).toMatchObject({ revision: 2, credentials: fresh })
 })
@@ -659,7 +734,11 @@ it("returns a CAS winner without retrying the stale refresh token", async () => 
     await f.credentials.commit(ref, await f.credentials.read(ref), fresh)
     return { ...fresh, accessToken: "loser" }
   })
-  expect(await f.manager.getCredentials(ref)).toEqual(fresh)
+  expect(
+    await f.manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toEqual(fresh)
   expect(f.provider.refresh).toHaveBeenCalledTimes(1)
 })
 
@@ -672,14 +751,18 @@ it("a refresh completing after disconnect cannot resurrect credentials", async (
     started.resolve()
     return release.promise
   })
-  const refreshing = f.manager.getCredentials(ref)
+  const refreshing = f.manager.getCredentials(ref, {
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   const rejected = expect(refreshing).rejects.toThrow("revoked")
   await started.promise
   f.provider.revoke = jest.fn(async () => {
     if ((await f.credentials.read(ref)).raw !== null)
       expect(await f.credentials.read(ref)).toMatchObject({ tombstoned: true })
   })
-  await f.makeManager().disconnect(ref, { revoke: true })
+  await f
+    .makeManager()
+    .disconnect(ref, { revoke: true, credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
   release.resolve(fresh)
   await rejected
   expect(f.tokens.size).toBe(0)
@@ -766,7 +849,11 @@ it("reopens a terminal identity with a new ref and lineage and preserves tombsto
   expect(f.rows.get(next)?.lineageId).not.toBe(oldRow.lineageId)
   expect(f.rows.get(ref)?.identityKey).toBe(`tombstoned:${ref}`)
   await f.manager.sweepTombstoned()
-  expect(await f.manager.getCredentials(next)).toEqual(fresh)
+  expect(
+    await f.manager.getCredentials(next, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toEqual(fresh)
 })
 
 it("restores old credentials if reconnect metadata cannot be persisted", async () => {
@@ -850,9 +937,9 @@ it.each(["invalid_grant", "offline"])("classifies refresh failure %s", async (me
   f.provider.refresh = jest.fn(async () => {
     throw message === "invalid_grant" ? new AuthRefreshRejected() : new Error(message)
   })
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow(
-    message === "invalid_grant" ? "refresh grant" : message
-  )
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow(message === "invalid_grant" ? "refresh grant" : message)
   expect(f.rows.get(ref)?.status).toBe(message === "invalid_grant" ? "needs-reauth" : "connected")
 })
 
@@ -885,9 +972,17 @@ it("legacy adapters delegate credentials to the existing provider", async () => 
   f.provider.getSessions = async () => [session]
   const ref = await f.manager.ensureLegacyConnection(f.provider.id, session)
   expect(f.tokens.size).toBe(0)
-  expect(await f.manager.getCredentials(ref)).toMatchObject({ accessToken: "legacy" })
+  expect(
+    await f.manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({ accessToken: "legacy" })
   f.provider.resolveRequestCredential = jest.fn(async () => ({ accessToken: "resolved" }))
-  expect(await f.manager.getCredentials(ref)).toMatchObject({ accessToken: "resolved" })
+  expect(
+    await f.manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({ accessToken: "resolved" })
   expect(f.rows.get(ref)?.identityKey).toBe(
     authConnectionIdentityKey({
       issuer: "provider:acme",
@@ -924,7 +1019,9 @@ it("keeps needs-reauth across temporary provider loss and disconnect is idempote
   f.provider.refresh = async () => {
     throw new AuthRefreshRejected("invalid_grant")
   }
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("invalid_grant")
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("invalid_grant")
   await f.manager.markProviderUnavailable(f.provider.id)
   await f.manager.restoreProvider(f.provider.id)
   expect(f.rows.get(ref)?.status).toBe("needs-reauth")
@@ -955,7 +1052,11 @@ it("retains an existing refresh token when the vendor does not rotate it", async
     scopes: ["read"],
     expiresAt: fresh.expiresAt,
   })
-  expect(await f.manager.getCredentials(ref)).toMatchObject({
+  expect(
+    await f.manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({
     accessToken: "new",
     refreshToken: "old-refresh",
   })
@@ -1011,9 +1112,13 @@ it.each([
     const f = fixture()
     const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
     f.provider.refresh = jest.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(fresh)
-    await expect(f.manager.getCredentials(ref)).rejects.toEqual(failure)
+    await expect(
+      f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    ).rejects.toEqual(failure)
     expect(f.rows.get(ref)?.status).toBe("connected")
-    await expect(f.manager.getCredentials(ref)).resolves.toEqual(fresh)
+    await expect(
+      f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    ).resolves.toEqual(fresh)
   }
 )
 
@@ -1023,7 +1128,9 @@ it.each([{ code: "invalid_grant" }, { error: "invalid_grant" }])(
     const f = fixture()
     const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
     f.provider.refresh = jest.fn().mockRejectedValue(failure)
-    await expect(f.manager.getCredentials(ref)).rejects.toEqual(failure)
+    await expect(
+      f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    ).rejects.toEqual(failure)
     expect(f.rows.get(ref)?.status).toBe("needs-reauth")
   }
 )
@@ -1035,11 +1142,21 @@ it("retains failed revocation credentials and retries a tombstoned connection", 
     .fn()
     .mockRejectedValueOnce(new Error("offline"))
     .mockResolvedValueOnce(undefined)
-  await expect(f.manager.disconnect(ref, { revoke: true })).rejects.toThrow("offline")
+  await expect(
+    f.manager.disconnect(ref, {
+      revoke: true,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).rejects.toThrow("offline")
   expect(f.rows.get(ref)?.status).toBe("tombstoned")
   expect(await f.credentials.read(ref)).toMatchObject({ tombstoned: true, credentials: fresh })
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("tombstoned")
-  await f.manager.disconnect(ref, { revoke: true })
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("tombstoned")
+  await f.manager.disconnect(ref, {
+    revoke: true,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(f.provider.revoke).toHaveBeenCalledTimes(2)
   expect(f.rows.get(ref)?.status).toBe("revoked")
   expect(f.tokens.size).toBe(0)
@@ -1049,12 +1166,18 @@ it("retains a missing provider's tombstone secret until revocation can be retrie
   const f = fixture()
   const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
   f.providers.clear()
-  await f.manager.disconnect(ref, { revoke: true })
+  await f.manager.disconnect(ref, {
+    revoke: true,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(f.rows.get(ref)?.status).toBe("tombstoned")
   expect((await f.credentials.read(ref)).credentials).toEqual(fresh)
   f.provider.revoke = jest.fn(async () => {})
   f.providers.set(f.provider.id, f.provider)
-  await f.manager.disconnect(ref, { revoke: true })
+  await f.manager.disconnect(ref, {
+    revoke: true,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(f.provider.revoke).toHaveBeenCalledWith(expect.objectContaining({ credentials: fresh }))
   expect(f.rows.get(ref)?.status).toBe("revoked")
 })
@@ -1070,17 +1193,24 @@ it("a local-only disconnect deletes credentials without claiming vendor revocati
 })
 
 it.each(["success", "failure", "missing"])(
-  "sweeps tombstoned secrets after %s revocation",
+  "discards tombstoned secrets without using personal tokens during background cleanup: %s",
   async (result) => {
     const f = fixture()
     const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
     f.provider.revoke = jest.fn().mockRejectedValue(new Error("offline"))
-    await expect(f.manager.disconnect(ref, { revoke: true })).rejects.toThrow("offline")
+    await expect(
+      f.manager.disconnect(ref, {
+        revoke: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    ).rejects.toThrow("offline")
     if (result === "success") f.provider.revoke = jest.fn().mockResolvedValue(undefined)
     if (result === "missing") f.providers.clear()
     await f.makeManager().sweepTombstoned()
     expect(f.tokens.size).toBe(0)
-    expect(f.rows.get(ref)?.status).toBe(result === "success" ? "revoked" : "tombstoned")
+    expect(f.rows.get(ref)?.status).toBe("tombstoned")
+    if (result !== "missing")
+      expect(f.provider.revoke).toHaveBeenCalledTimes(result === "failure" ? 1 : 0)
   }
 )
 
@@ -1091,12 +1221,16 @@ it("persists rotated credentials when the provider disappears during refresh", a
     f.providers.clear()
     return fresh
   }
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("provider-unavailable")
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("provider-unavailable")
   expect((await f.credentials.read(ref)).credentials).toEqual(fresh)
   expect(f.rows.get(ref)?.status).toBe("provider-unavailable")
   f.providers.set(f.provider.id, f.provider)
   await f.manager.restoreProvider(f.provider.id)
-  await expect(f.manager.getCredentials(ref)).resolves.toEqual(fresh)
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).resolves.toEqual(fresh)
 })
 
 it("revokes the newly issued lineage when a local-only disconnect wins refresh", async () => {
@@ -1107,7 +1241,9 @@ it("revokes the newly issued lineage when a local-only disconnect wins refresh",
     await f.makeManager().disconnect(ref, { revoke: false })
     return fresh
   }
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("tombstoned")
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("tombstoned")
   expect(f.provider.revoke).toHaveBeenCalledWith(expect.objectContaining({ credentials: fresh }))
   expect(f.tokens.size).toBe(0)
 })
@@ -1121,9 +1257,16 @@ it("keeps legacy sessions for one account in separate rows", async () => {
   const first = await f.manager.ensureLegacyConnection(f.provider.id, a)
   const second = await f.manager.ensureLegacyConnection(f.provider.id, b)
   expect(first).not.toBe(second)
-  await f.manager.disconnect(first, { revoke: true })
+  await f.manager.disconnect(first, {
+    revoke: true,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(f.provider.removeSession).toHaveBeenCalledWith("a")
-  await expect(f.manager.getCredentials(second)).resolves.toMatchObject({ accessToken: "b-token" })
+  await expect(
+    f.manager.getCredentials(second, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).resolves.toMatchObject({ accessToken: "b-token" })
 })
 
 it("times out and aborts hung refreshes, releases the lineage, and revokes late results", async () => {
@@ -1143,7 +1286,9 @@ it("times out and aborts hung refreshes, releases the lineage, and revokes late 
       return late.promise
     })
     f.provider.revoke = jest.fn(async () => {})
-    const pending = manager.getCredentials(ref)
+    const pending = manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     const rejected = expect(pending).rejects.toMatchObject({ name: "AuthRefreshTimeout" })
     await started.promise
     expect(signal?.aborted).toBe(false)
@@ -1153,7 +1298,9 @@ it("times out and aborts hung refreshes, releases the lineage, and revokes late 
     expect((await f.credentials.read(ref)).credentials).toEqual(old)
     expect(f.rows.get(ref)?.status).toBe("connected")
     f.provider.refresh = jest.fn(async () => fresh)
-    await expect(manager.getCredentials(ref)).resolves.toEqual(fresh)
+    await expect(
+      manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    ).resolves.toEqual(fresh)
     late.resolve({ ...fresh, accessToken: "late" })
     await jest.advanceTimersByTimeAsync(0)
     expect(f.provider.revoke).toHaveBeenCalledWith(
@@ -1165,9 +1312,13 @@ it("times out and aborts hung refreshes, releases the lineage, and revokes late 
   }
 })
 
-it.each([false, true])(
-  "profile cleanup revokes and clears only the deleted account, revoke failure=%s",
-  async (failRevoke) => {
+it.each([
+  { failRevoke: false, personal: true },
+  { failRevoke: true, personal: true },
+  { failRevoke: false, personal: false },
+])(
+  "profile cleanup gates personal revocation and clears only the deleted account: %p",
+  async ({ failRevoke, personal }) => {
     const f = fixture()
     const namespaces = new Map<string, Map<string, string>>()
     const secrets = (kind: "auth-connections" | "auth-attempts", accountId = "active") => {
@@ -1221,6 +1372,7 @@ it.each([false, true])(
       ? jest.fn().mockRejectedValue(new Error("offline"))
       : jest.fn().mockResolvedValue(undefined)
     const report = await forgetProfileAuthSecrets("deleted", {
+      credentialContext: personal ? { localAuthorization: LOCAL_PERSON_RUN } : undefined,
       secrets,
       provider: () => f.provider,
       providerIdentity: async () => ({
@@ -1230,9 +1382,13 @@ it.each([false, true])(
         contractMajor: 1,
       }),
     })
-    expect(f.provider.revoke).toHaveBeenCalledWith(expect.objectContaining({ credentials: fresh }))
-    expect(report.tokensMayRemainLive).toBe(failRevoke)
-    expect(report.failures.length > 0).toBe(failRevoke)
+    if (personal)
+      expect(f.provider.revoke).toHaveBeenCalledWith(
+        expect.objectContaining({ credentials: fresh })
+      )
+    else expect(f.provider.revoke).not.toHaveBeenCalled()
+    expect(report.tokensMayRemainLive).toBe(failRevoke || !personal)
+    expect(report.failures.length > 0).toBe(failRevoke || !personal)
     for (const kind of ["auth-connections", "auth-attempts"] as const) {
       expect([...namespaces.get(`${kind}:deleted`)!.keys()]).toEqual(["__host_auth_keys__"])
       await expect(
@@ -1244,30 +1400,70 @@ it.each([false, true])(
   }
 )
 
+it("does not replace an explicit originating run with a proof captured in a later local run", async () => {
+  const dbFixture = createDbTestFixture()
+  await dbFixture.initialize()
+  try {
+    const f = fixture()
+    const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+    const origin = await startToolExecutionRun(undefined, {
+      runId: "explicit-service-origin",
+      automation: "service",
+    })
+    const later = await startToolExecutionRun(undefined, {
+      runId: "explicit-later-local",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await withPluginExecutionContext("owner", { executionRunId: later.id }, async () => {
+      await expect(
+        f.manager.getCredentials(ref, {
+          pluginAccess: createPluginCredentialAccess("owner"),
+          credentialContext: { executionRunId: origin.id },
+        })
+      ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+    })
+  } finally {
+    await dbFixture.dispose()
+  }
+})
+
 it("revokes refreshed credentials if profile deletion fences the commit", async () => {
   const f = fixture()
   const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
   const { AuthProfileDeleted } = await import("./connection-credentials")
   f.provider.revoke = jest.fn(async () => {})
   jest.spyOn(f.credentials, "commit").mockRejectedValueOnce(new AuthProfileDeleted())
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("profile-deleted")
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("profile-deleted")
   expect(f.provider.revoke).toHaveBeenCalledWith(expect.objectContaining({ credentials: fresh }))
 })
 
-it("startup sweep discards tombstone secrets even when vendor revoke hangs", async () => {
+it("startup sweep bounds a service-token revoke and discards tombstone secrets", async () => {
   jest.useFakeTimers()
+  const release = deferred<void>()
   try {
     const f = fixture()
+    const describe = f.provider.describe!
+    f.provider.describe = jest.fn(async (credentials) => ({
+      ...(await describe(credentials)),
+      principal: { kind: "service" as const, id: "app" },
+    }))
     const manager = f.makeManager(false, (name, task) =>
       withNamedLock(name, task, { mode: "in-process" })
     )
     const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
     f.provider.revoke = jest.fn().mockRejectedValueOnce(new Error("offline"))
-    await expect(manager.disconnect(ref, { revoke: true })).rejects.toThrow("offline")
+    await expect(
+      manager.disconnect(ref, {
+        revoke: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    ).rejects.toThrow("offline")
     const started = deferred<void>()
     f.provider.revoke = jest.fn(async () => {
       started.resolve()
-      await new Promise(() => {})
+      await release.promise
     })
     const sweep = manager.sweepTombstoned()
     await started.promise
@@ -1275,8 +1471,13 @@ it("startup sweep discards tombstone secrets even when vendor revoke hangs", asy
     await sweep
     expect(f.tokens.size).toBe(0)
     expect(f.rows.get(ref)?.status).toBe("tombstoned")
+    expect(pluginExecutionContext("owner")).toEqual({ executionRunId: "" })
   } finally {
+    release.resolve()
     jest.useRealTimers()
+    // The Host timeout settles before the provider callback; release its
+    // real promise as well so its retained binding cannot leak into a test.
+    await new Promise((resolve) => setTimeout(resolve, 0))
   }
 })
 
@@ -1289,6 +1490,209 @@ it("revokes a refresh lost to disconnect even when logout locks the secret store
     jest.spyOn(f.credentials, "read").mockRejectedValue(new Error("vault locked"))
     return fresh
   }
-  await expect(f.manager.getCredentials(ref)).rejects.toThrow("tombstoned")
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+  ).rejects.toThrow("tombstoned")
   expect(f.provider.revoke).toHaveBeenCalledWith(expect.objectContaining({ credentials: fresh }))
+})
+
+it("refuses a Host-held user connection before reading or refreshing without admission", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, old)
+  const read = jest.spyOn(f.credentials, "read")
+  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  expect(read).not.toHaveBeenCalled()
+  expect(f.provider.refresh).not.toHaveBeenCalled()
+})
+
+it("keeps explicit Bot bindings scoped to the connection verified by the existing resolver", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const resolve = jest.mocked(resolveBotIntegrationBinding)
+  resolve.mockResolvedValue({ account: { connectionId: ref } } as never)
+  const binding = { runId: "bot-run", slotId: "installed-slot" }
+  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  await expect(f.manager.getCredentialsForBotBinding(ref, "bot-plugin", binding)).resolves.toEqual(
+    fresh
+  )
+  expect(resolve).toHaveBeenCalledWith("bot-plugin", binding)
+  resolve.mockResolvedValue({ account: { connectionId: "different-connection" } } as never)
+  await expect(f.manager.getCredentialsForBotBinding(ref, "bot-plugin", binding)).rejects.toThrow(
+    "bot-binding-changed"
+  )
+})
+
+it("refuses forged or external admission and keeps service connections service", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  await expect(
+    f.manager.getCredentials(ref, { credentialContext: { localAuthorization: "local" as never } })
+  ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  await expect(
+    f.manager.getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN, externalEngine: true },
+    })
+  ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  f.provider.describe = async (credentials) => ({
+    issuer: "https://issuer",
+    clientId: "client",
+    principal: { id: "app", kind: "service" },
+    accountLabel: "Service",
+    scopes: credentials.scopes,
+  })
+  const service = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  await expect(f.manager.getCredentials(service)).resolves.toEqual(fresh)
+})
+
+it("binds driver refresh proof to one adapter and one live request", async () => {
+  const f = fixture()
+  f.provider.pluginId = null
+  let captured: import("./connection-manager").HostConnectionCredentialAuthorization | undefined
+  const dispose = registerHostConnectionDriver("acme", {
+    publisher: "cognia",
+    disconnect: jest.fn(),
+    getCredentials: async (_row, authorization) => {
+      captured = authorization
+      await assertHostConnectionCredentialAuthorization(authorization, "adapter")
+      expect(await hostConnectionCredentialContext(authorization, "adapter")).toEqual({
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      await expect(
+        assertHostConnectionCredentialAuthorization(authorization, "another-adapter")
+      ).rejects.toThrow("credential-admission-missing")
+      return fresh
+    },
+  })
+  try {
+    const manager = f.makeManager(true)
+    const ref = await manager.reconcileHostConnection("acme", await f.provider.describe!(fresh), {
+      adapterId: "adapter",
+      authorizationEpoch: "epoch",
+      bot: true,
+    })
+    await expect(manager.getCredentials(ref)).rejects.toMatchObject({
+      name: "PersonalCredentialRefusedError",
+    })
+    await expect(
+      manager.getCredentials(ref, { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    ).resolves.toEqual(fresh)
+    await expect(assertHostConnectionCredentialAuthorization(captured!, "adapter")).rejects.toThrow(
+      "credential-admission-missing"
+    )
+    await expect(
+      assertHostConnectionCredentialAuthorization({} as never, "adapter")
+    ).rejects.toThrow("credential-admission-missing")
+  } finally {
+    dispose()
+  }
+})
+
+it("admits only opaque owner access outside a run and rechecks the Host binding before token release", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const access = createPluginCredentialAccess("owner")
+  await expect(f.manager.getCredentials(ref, { pluginAccess: access })).resolves.toEqual(fresh)
+  await expect(f.manager.getCredentials(ref, { pluginAccess: {} as never })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  const read = jest.spyOn(f.credentials, "read")
+  await withPluginExecutionContext("owner", { executionRunId: "unknown-attempt" }, async () => {
+    await expect(
+      f.manager.getCredentials(ref, {
+        pluginAccess: access,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  })
+  expect(read).not.toHaveBeenCalled()
+})
+
+it.each([false, true])(
+  "pins an unawaited credential read to its refused invocation across a later local-person run (existing proof: %s)",
+  async (existingProof) => {
+    const dbFixture = createDbTestFixture()
+    await dbFixture.initialize()
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    let pending: Promise<AuthCredentialSet> | undefined
+    try {
+      const f = fixture()
+      const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+      const refused = await startToolExecutionRun(undefined, {
+        runId: "deferred-service-read",
+        automation: "service",
+      })
+      const local = await startToolExecutionRun(undefined, {
+        runId: "later-local-read",
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      const originalGet = f.store.get
+      jest.spyOn(f.store, "get").mockImplementationOnce(async (id) => {
+        entered.resolve()
+        await release.promise
+        return originalGet(id)
+      })
+      const read = jest.spyOn(f.credentials, "read")
+      const outsideProof = createPluginCredentialAccess("owner")
+      await withPluginExecutionContext("owner", { executionRunId: refused.id }, async () => {
+        pending = f.manager.getCredentials(ref, {
+          pluginAccess: existingProof ? outsideProof : createPluginCredentialAccess("owner"),
+        })
+        await entered.promise
+      })
+      await finishToolExecutionRun(refused.id)
+      await withPluginExecutionContext("owner", { executionRunId: local.id }, async () => {
+        release.resolve()
+        await expect(pending).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+      })
+      expect(read).not.toHaveBeenCalled()
+    } finally {
+      release.resolve()
+      await pending?.catch(() => undefined)
+      await dbFixture.dispose()
+    }
+  }
+)
+
+it("refuses background revocation before reading a stored personal credential or publishing a tombstone", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  f.provider.revoke = jest.fn(async () => {})
+  const read = jest.spyOn(f.credentials, "read")
+  await expect(f.manager.disconnect(ref, { revoke: true })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  expect(read).not.toHaveBeenCalled()
+  expect(f.rows.get(ref)?.status).toBe("connected")
+  expect(f.provider.revoke).not.toHaveBeenCalled()
+  await f.manager.disconnect(ref, {
+    revoke: true,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(f.provider.revoke).toHaveBeenCalledTimes(1)
+  expect(f.rows.get(ref)?.status).toBe("revoked")
+})
+it("retains owner revocation outside a run and refuses an owner read bound to unproven Host work", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  f.provider.revoke = jest.fn(async () => {})
+  await withPluginExecutionContext("owner", { executionRunId: "unknown-revoke" }, async () => {
+    await expect(
+      f.manager.disconnect(ref, {
+        revoke: true,
+        pluginAccess: createPluginCredentialAccess("owner"),
+      })
+    ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  })
+  expect(f.rows.get(ref)?.status).toBe("connected")
+  await f.manager.disconnect(ref, {
+    revoke: true,
+    pluginAccess: createPluginCredentialAccess("owner"),
+  })
+  expect(f.provider.revoke).toHaveBeenCalledTimes(1)
+  expect(f.rows.get(ref)?.status).toBe("revoked")
 })

@@ -185,6 +185,34 @@ describe("auth provider registry", () => {
   })
 
   describe("removeSession", () => {
+    it("disconnects Host sessions and emits metadata without reading a personal bearer", async () => {
+      const provider = makeProvider()
+      const getSessions = jest.fn(async () => {
+        throw new Error("personal credential refused")
+      })
+      provider.getSessions = getSessions
+      provider.getSessionMetadata = async (id) => ({
+        id,
+        account: { id: "person", label: "Person" },
+        scopes: ["read"],
+      })
+      registerAuthenticationProvider(provider)
+      const events: AuthSession[][] = []
+      onDidChangeSessions((event) => events.push(event.removed))
+      await removeSession(provider.id, "host-connection")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(getSessions).not.toHaveBeenCalled()
+      expect(provider.removeSession).toHaveBeenCalledWith("host-connection")
+      expect(events.flat()).toEqual([
+        {
+          id: "host-connection",
+          account: { id: "person", label: "Person" },
+          scopes: ["read"],
+          accessToken: "",
+        },
+      ])
+    })
+
     it("calls provider.removeSession and emits a removed event", async () => {
       const provider = makeProvider()
       registerAuthenticationProvider(provider)

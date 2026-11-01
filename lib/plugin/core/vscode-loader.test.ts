@@ -307,6 +307,19 @@ describe("vscode-loader — Tauri mode", () => {
     expect(result).toEqual({ ok: true, count: 7 })
   })
 
+  it("retains a background binding for the complete extension callback RPC", async () => {
+    const { pluginExecutionContext } = await import("./invocation-identity")
+    const invoke = jest.fn(async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("cognia.test-ext")).toEqual({ executionRunId: "" })
+      return "null"
+    })
+    jest.doMock("@tauri-apps/api/core", () => ({ invoke }))
+    const { invokeVscodeRpc } = await import("./vscode-loader")
+    await invokeVscodeRpc("cognia.test-ext", "extension:call", {}, "test-generation")
+    expect(pluginExecutionContext("cognia.test-ext")).toBeUndefined()
+  })
+
   it("invokeVscodeRpc passes through non-JSON results", async () => {
     const invoke = jest.fn(async () => undefined)
     jest.doMock("@tauri-apps/api/core", () => ({ invoke }))

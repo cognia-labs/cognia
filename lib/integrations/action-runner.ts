@@ -1,9 +1,31 @@
+import {
+  createPluginCredentialAccess,
+  pluginExecutionContext,
+  restrictPluginCredentialContext,
+  withPluginJobExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
+import {
+  LOCAL_PERSON_RUN,
+  resolveRunActingIdentity,
+  startJobExecutionRun,
+} from "@/lib/execution/acting-authority"
+import {
+  isIntegrationActionJobTerminal,
+  reconcileIntegrationJobExecutions,
+} from "@/lib/db/integrations"
+import { getDb } from "@/lib/db/schema"
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import type {
   ExecuteIntegrationActionInput,
   IntegrationActionHandler,
   IntegrationActionHandlerContext,
   IntegrationActionJob,
   IntegrationAccount,
+  IntegrationBotBindingRef,
 } from "@/types/plugin/plugin-integration"
 import type { ExternalCapability } from "@/types/external-service"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
@@ -81,14 +103,19 @@ import { isIntegrationRuntimeOwner } from "./runtime-owner"
  * code.
  */
 export type IntegrationActionCaller =
-  | { kind: "tool-call"; sessionId?: string }
+  | { kind: "tool-call"; sessionId?: string; executionRunId?: string }
   | { kind: "workflow"; workflowId: string; runId: string }
   /**
    * A person confirmed this exact write by hand (a writeback or publish
    * dialog). Its human receipt is the write's authority; the outbound policy
    * does not hold it.
    */
-  | { kind: "person"; surface: string; sessionId?: string }
+  | {
+      kind: "person"
+      surface: string
+      sessionId?: string
+      localAuthorization?: import("@/lib/execution/acting-authority").LocalPersonRun
+    }
 
 /** Who answers a held job: only a person releases it (ADR-0239 phase 2). */
 export interface IntegrationJobAnswer {
@@ -306,6 +333,12 @@ async function planAuthenticatedRequest(
   if (decision.action === "park") throw new OutboundPolicyError(OUTBOUND_HELD_REQUEST_ERROR)
 }
 
+export type VerifiedBotAccount = {
+  pluginId: string
+  accountId: string
+  binding?: { pluginId: string; ref: IntegrationBotBindingRef }
+}
+
 type AuthenticatedRequestExecutor = <T>(
   pluginId: string,
   connectorAccountId: string,
@@ -318,8 +351,18 @@ type AuthenticatedRequestExecutor = <T>(
     beforeSend?: () => Promise<void>
     operation?: RequestOperation
     connectionRef?: AuthConnectionRef
+    credentialContext?: PersonalCredentialContext
+    verifiedBotAccount?: VerifiedBotAccount
   }
 ) => Promise<{ status: number; headers: Record<string, string>; data: T }>
+
+// Host-only, never serialized into plugin arguments or new persisted fields.
+// Jobs recovered without their admission fail closed; Bot bindings are reverified below.
+// The Host enqueue creates this exact execution. Its persisted root survives
+// approval, retries and process restarts; approval labels never grant authority.
+const jobCredentialContext = (jobId: string): PersonalCredentialContext => ({
+  executionRunId: `execution:job:integration:${jobId}`,
+})
 
 const runningControllers = new Map<string, AbortController>()
 const runningPerAccount = new Map<string, number>()
@@ -389,6 +432,48 @@ function integrationErrorDetail(error: unknown): Record<string, unknown> {
   }
 }
 
+/** Builtin Issue Loop only: raw git credentials obey the same job admission as HTTP. */
+export async function assertIntegrationJobCredential(
+  jobId: string,
+  account: IntegrationAccount
+): Promise<void> {
+  const job = await getIntegrationActionJob(jobId)
+  if (
+    !job ||
+    job.status !== "running" ||
+    job.pluginId !== account.pluginId ||
+    job.accountId !== account.id
+  )
+    throw new Error("Integration credential has no executing job")
+  if (job.botBinding) {
+    const bound = await assertBotIntegrationAction(
+      job.botBinding.pluginId,
+      job.botBinding,
+      job,
+      job.botBinding.approvalId
+    )
+    if (bound.account.pluginId !== account.pluginId || bound.account.id !== account.id)
+      throw new Error("Bot integration binding changed")
+    return
+  }
+  const connection = await authorizeAccountConnection(account, "GET", {
+    actionId: job.actionId,
+    input: job.input,
+  })
+  const provider = getProvider(account.providerId)
+  if (
+    connection
+      ? connection.principalKind !== "user"
+      : account.providerId === "github-app" && provider?.pluginId === null
+  )
+    return
+  const admission = await admitPersonalCredential(jobCredentialContext(job.id), {
+    source: account.providerId.startsWith("github") ? "github-user" : "integration-user",
+    person: account.id,
+  })
+  if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
+}
+
 async function defaultAuthenticatedRequest<T>(
   pluginId: string,
   connectorAccountId: string,
@@ -401,8 +486,14 @@ async function defaultAuthenticatedRequest<T>(
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
     operation?: RequestOperation
+    credentialContext?: PersonalCredentialContext
+    verifiedBotAccount?: VerifiedBotAccount
   } = {}
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
+  const credentialContext = restrictPluginCredentialContext(
+    "credentialContext" in init ? init.credentialContext : pluginExecutionContext(pluginId),
+    pluginExecutionContext(pluginId)
+  )
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
   if (!account) throw new Error(`Integration account "${connectorAccountId}" is disabled`)
   if (init.connectionRef !== undefined && account.connectionId !== init.connectionRef)
@@ -467,7 +558,42 @@ async function defaultAuthenticatedRequest<T>(
       throw new Error(message)
     }
   }
+  // Connection identity is authoritative. Legacy built-in GitHub App accounts
+  // mint installation tokens; PAT, GitHub user OAuth, Lark/Google user OAuth,
+  // and unclassified legacy providers require personal admission. Operator
+  // SecretRefs use the separate MCP service path, never this personal fallback.
+  const personal = connection
+    ? connection.principalKind === "user"
+    : !(account.providerId === "github-app" && provider.pluginId === null)
+  const pluginAccess = createPluginCredentialAccess(pluginId, async (ref) => {
+    if (ref !== account.connectionId)
+      throw new ConnectionUnavailableError("connection-binding-changed")
+    await authorizeAccountConnection(
+      account,
+      (init.method ?? "GET").toUpperCase(),
+      init.operation,
+      connection?.revision
+    )
+  })
+  const assertPersonalAdmission = async () => {
+    // Outside a run a connection consumer's live operation grant decides.
+    if (connection && credentialContext === undefined) return
+    // Only assertBotIntegrationAction produces this Host-private exception.
+    // Explicit operator credentialBindings migrate in ADR-0243 phase 5.
+    if (
+      !personal ||
+      (init.verifiedBotAccount?.accountId === account.id &&
+        init.verifiedBotAccount.pluginId === account.pluginId)
+    )
+      return
+    const admission = await admitPersonalCredential(credentialContext, {
+      source: account.providerId.startsWith("github") ? "github-user" : "integration-user",
+      person: account.id,
+    })
+    if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
+  }
   await assertProviderOwner()
+  await assertPersonalAdmission()
   const sessions = connection ? [] : await provider.getSessions(undefined, { silent: true })
   const session = sessions.find((candidate) => candidate.id === account.authSessionId)
   if (!connection && !session) {
@@ -488,13 +614,22 @@ async function defaultAuthenticatedRequest<T>(
   const headers = new Headers(init.headers)
   const requestAuth = strategy.requestAuth ?? { type: "bearer" as const }
   const credential = connection
-    ? await getConnectionManager()
-        .getCredentials(connection.id)
-        .catch(async (error: unknown) => {
-          if (error instanceof ConnectionUnavailableError)
-            await updateIntegrationAccount(pluginId, connectorAccountId, { health: "revoked" })
-          throw error
-        })
+    ? await (
+        init.verifiedBotAccount?.binding
+          ? getConnectionManager().getCredentialsForBotBinding(
+              connection.id,
+              init.verifiedBotAccount.binding.pluginId,
+              init.verifiedBotAccount.binding.ref
+            )
+          : getConnectionManager().getCredentials(connection.id, {
+              credentialContext,
+              pluginAccess,
+            })
+      ).catch(async (error: unknown) => {
+        if (error instanceof ConnectionUnavailableError)
+          await updateIntegrationAccount(pluginId, connectorAccountId, { health: "revoked" })
+        throw error
+      })
     : provider.resolveRequestCredential
       ? await provider.resolveRequestCredential(session!.id, {
           connectorAccountId,
@@ -520,6 +655,7 @@ async function defaultAuthenticatedRequest<T>(
   }
   if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
   await init.beforeSend?.()
+  await assertPersonalAdmission()
   await assertProviderOwner()
   if (connection)
     await authorizeAccountConnection(
@@ -585,12 +721,15 @@ async function authenticatedRequest<T>(
   connectorAccountId: string,
   input: string,
   init?: {
+    connectionRef?: AuthConnectionRef
     method?: string
     headers?: Record<string, string>
     body?: string
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
     operation?: RequestOperation
+    credentialContext?: PersonalCredentialContext
+    verifiedBotAccount?: VerifiedBotAccount
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   if (
@@ -629,8 +768,16 @@ export async function authenticatedIntegrationRequest<T>(
     headers?: Record<string, string>
     body?: string
     signal?: AbortSignal
-  }
+  },
+  credentialContext?: PersonalCredentialContext,
+  verifiedBotAccount?: VerifiedBotAccount
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
+  // An explicitly supplied undefined context records an outside-run entry.
+  // Preserve it across awaits instead of borrowing a later plugin invocation.
+  const captured = restrictPluginCredentialContext(
+    arguments.length >= 5 ? credentialContext : pluginExecutionContext(pluginId),
+    pluginExecutionContext(pluginId)
+  )
   // Snapshot public fields before any await. Runtime callers cannot supply
   // the Host-only action operation or change the method after write planning.
   const request = init
@@ -650,7 +797,11 @@ export async function authenticatedIntegrationRequest<T>(
     (request?.method ?? "GET").toUpperCase(),
     { kind: "plugin", pluginId }
   )
-  return authenticatedRequest<T>(pluginId, connectorAccountId, input, request)
+  return authenticatedRequest<T>(pluginId, connectorAccountId, input, {
+    ...request,
+    credentialContext: captured,
+    verifiedBotAccount,
+  })
 }
 
 async function assertApprovedPublicationHead(
@@ -659,6 +810,8 @@ async function assertApprovedPublicationHead(
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
     operation?: RequestOperation
+    credentialContext?: PersonalCredentialContext
+    verifiedBotAccount?: VerifiedBotAccount
   }
 ): Promise<void> {
   if (!binding.approvedPublication) return
@@ -668,7 +821,10 @@ async function assertApprovedPublicationHead(
     binding.account.pluginId,
     binding.account.id,
     `${baseUrl}/repos/${binding.repository}/commits/${encodeURIComponent(binding.approvedPublication.branch)}`,
-    requestInit
+    {
+      ...requestInit,
+      verifiedBotAccount: requestInit?.verifiedBotAccount,
+    }
   )
   if (current.status !== 200 || current.data.sha !== binding.approvedPublication.headSha) {
     throw new Error("Approved pull request head SHA changed")
@@ -681,6 +837,50 @@ async function botApprovalDecidedBy(interruptId: string | undefined): Promise<"p
   const { getDb } = await import("@/lib/db/schema")
   const approval = await getDb().executionRunInterrupts.get(interruptId)
   return approval?.approvalDecisionMode === "policy" || !approval ? "policy" : "person"
+}
+
+/** A caller-controlled key cannot borrow another run's credentials or results. */
+async function assertIntegrationJobReplay(
+  job: IntegrationActionJob,
+  pluginId: string,
+  input: ExecuteIntegrationActionInput,
+  context: PersonalCredentialContext | undefined,
+  botBinding: IntegrationActionJob["botBinding"]
+): Promise<void> {
+  if (
+    job.pluginId !== pluginId ||
+    job.accountId !== input.accountId ||
+    job.integrationId !== input.integrationId ||
+    job.actionId !== input.actionId ||
+    canonicalIntegrationValue(job.input) !== canonicalIntegrationValue(input.input) ||
+    canonicalIntegrationValue(job.botBinding) !== canonicalIntegrationValue(botBinding)
+  ) {
+    throw new Error("Integration idempotency key belongs to different approved content")
+  }
+  // assertBotIntegrationAction has already verified this exact Bot run/binding
+  // and its approved content, including revocation on a cached-result replay.
+  if (botBinding) return
+  const original = await resolveRunActingIdentity(
+    undefined,
+    `execution:job:integration:${job.id}`,
+    { delivery: true }
+  )
+  const caller = await resolveRunActingIdentity(context?.sessionId, context?.executionRunId)
+  if (original?.rootRunId && caller?.rootRunId === original.rootRunId) return
+  // Direct UI enqueue creates a local-person root on the job itself. The
+  // opaque Host admission may continue that exact operation after waiting or
+  // completion, but cannot adopt a job rooted in another tool/workflow run.
+  if (
+    context?.executionRunId === undefined &&
+    context?.localAuthorization === LOCAL_PERSON_RUN &&
+    original?.rootRunId === `execution:job:integration:${job.id}` &&
+    original.trigger === "local" &&
+    original.lane !== "service" &&
+    original.authorizingPrincipal?.kind === "local-person" &&
+    original.requesters.length <= 1
+  )
+    return
+  throw new Error("Integration idempotency replay refused: caller identity root does not match")
 }
 
 /**
@@ -698,8 +898,22 @@ async function botApprovalDecidedBy(interruptId: string | undefined): Promise<"p
 export async function executeIntegrationAction(
   pluginId: string,
   input: ExecuteIntegrationActionInput,
-  caller?: IntegrationActionCaller
+  caller?: IntegrationActionCaller,
+  /** Host-only credential proof; separate from who approved the write. */
+  hostCredentialContext?: PersonalCredentialContext
 ): Promise<IntegrationActionJob> {
+  const callerCredentialContext: PersonalCredentialContext | undefined =
+    caller?.kind === "tool-call"
+      ? { sessionId: caller.sessionId, executionRunId: caller.executionRunId ?? "" }
+      : caller?.kind === "workflow"
+        ? { executionRunId: `execution:workflow:${caller.runId}` }
+        : caller?.kind === "person" && caller.localAuthorization
+          ? { localAuthorization: caller.localAuthorization }
+          : undefined
+  const credentialContext =
+    callerCredentialContext?.executionRunId !== undefined
+      ? callerCredentialContext
+      : (hostCredentialContext ?? callerCredentialContext)
   const callerPluginId = pluginId
   let botBinding: IntegrationActionJob["botBinding"]
   let botAuthorization: Extract<IntegrationAuthorization, { kind: "bot" }> | undefined
@@ -712,6 +926,11 @@ export async function executeIntegrationAction(
     )
     await assertApprovedPublicationHead(binding, {
       operation: { actionId: input.actionId, input: input.input },
+      verifiedBotAccount: {
+        pluginId: binding.account.pluginId,
+        accountId: binding.account.id,
+        binding: { pluginId, ref: input.binding },
+      },
     })
     if (input.accountId && input.accountId !== binding.account.id)
       throw new Error("Bot action account does not match its binding")
@@ -795,52 +1014,68 @@ export async function executeIntegrationAction(
   }
   const unplannedStatus = action.risk === "read" || botBinding ? "queued" : "awaiting_approval"
 
-  const job = await enqueueIntegrationActionJob({
-    pluginId,
-    integrationId: input.integrationId,
-    accountId: input.accountId,
-    actionId: input.actionId,
-    input: input.input,
-    status:
-      planned?.action === "park"
-        ? "awaiting_approval"
-        : planned?.action === "deny"
-          ? "failed"
-          : unplannedStatus,
-    ...(planned?.action === "deny" ? { error: OUTBOUND_FENCED_ERROR } : {}),
-    ...(botBinding ? { botBinding } : {}),
-    ...(planned
-      ? {
-          outbound: {
-            ...planned.outbound,
-            ...(planned.action === "park"
-              ? {
-                  held: {
-                    receiptId: planned.receipt.request.requestId,
-                    heldAt: new Date().toISOString(),
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
-    ...(planned?.action === "proceed" && planned.authorizedBy
-      ? { authorizedBy: planned.authorizedBy }
-      : {}),
-    risk: action.risk,
-    idempotencyKey: input.idempotencyKey,
-    attempts: 0,
-    maxAttempts: action.idempotency === "none" ? 1 : 5,
-    source: input.source ?? "manual",
-  })
-  if (
-    botBinding &&
-    (canonicalIntegrationValue(job.botBinding) !== canonicalIntegrationValue(botBinding) ||
-      canonicalIntegrationValue(job.input) !== canonicalIntegrationValue(input.input) ||
-      job.actionId !== input.actionId)
-  ) {
-    throw new Error("Bot integration idempotency key belongs to different approved content")
-  }
+  await import("@/lib/db/execution-runs")
+  const db = getDb()
+  const job = await db.transaction(
+    "rw",
+    db.integrationActionJobs,
+    db.executionRuns,
+    db.executionRunEvents,
+    db.notificationProjectionWork,
+    async () => {
+      // Re-read inside the enqueue transaction: another caller may have won
+      // the key after the planning lookup. Never attach or schedule its job
+      // before verifying both its content and identity root.
+      const replay = input.idempotencyKey
+        ? await findIntegrationActionJobByIdempotencyKey(input.accountId, input.idempotencyKey)
+        : undefined
+      if (replay) {
+        await assertIntegrationJobReplay(replay, pluginId, input, credentialContext, botBinding)
+        return replay
+      }
+      const queued = await enqueueIntegrationActionJob({
+        pluginId,
+        integrationId: input.integrationId,
+        accountId: input.accountId,
+        actionId: input.actionId,
+        input: input.input,
+        status:
+          planned?.action === "park"
+            ? "awaiting_approval"
+            : planned?.action === "deny"
+              ? "failed"
+              : unplannedStatus,
+        ...(planned?.action === "deny" ? { error: OUTBOUND_FENCED_ERROR } : {}),
+        ...(botBinding ? { botBinding } : {}),
+        ...(planned
+          ? {
+              outbound: {
+                ...planned.outbound,
+                ...(planned.action === "park"
+                  ? {
+                      held: {
+                        receiptId: planned.receipt.request.requestId,
+                        heldAt: new Date().toISOString(),
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(planned?.action === "proceed" && planned.authorizedBy
+          ? { authorizedBy: planned.authorizedBy }
+          : {}),
+        risk: action.risk,
+        idempotencyKey: input.idempotencyKey,
+        attempts: 0,
+        maxAttempts: action.idempotency === "none" ? 1 : 5,
+        source: input.source ?? "manual",
+      })
+      if (!isIntegrationActionJobTerminal(queued.status))
+        await startJobExecutionRun(`integration:${queued.id}`, credentialContext)
+      return queued
+    }
+  )
   if (planned?.action === "deny" && !existing) {
     await appendIntegrationAudit({
       pluginId,
@@ -953,10 +1188,17 @@ export async function approveIntegrationActionJob(
     : approved
 }
 
-export async function runIntegrationActionJob(jobId: string): Promise<IntegrationActionJob> {
+export async function runIntegrationActionJob(
+  jobId: string,
+  credentialContext?: PersonalCredentialContext
+): Promise<IntegrationActionJob> {
   const candidate = await getIntegrationActionJob(jobId)
   if (!candidate) throw new Error(`Integration action job "${jobId}" was not found`)
   if (!(await isIntegrationRuntimeOwner())) return candidate
+  // An explicit Host UI execution can bind legacy jobs, never actor/source data.
+  // Existing execution rows are immutable and cannot be reauthorized this way.
+  if (credentialContext && !isIntegrationActionJobTerminal(candidate.status))
+    await startJobExecutionRun(`integration:${jobId}`, credentialContext)
   const running = runningPerAccount.get(candidate.accountId) ?? 0
   if (running >= MAX_ACCOUNT_CONCURRENCY) return candidate
   runningPerAccount.set(candidate.accountId, running + 1)
@@ -1052,7 +1294,14 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
         if (binding.account.id !== job.accountId || binding.account.pluginId !== job.pluginId) {
           throw new Error("Bot integration binding changed before publication")
         }
-        await assertApprovedPublicationHead(binding, readRequestInit)
+        await assertApprovedPublicationHead(binding, {
+          ...readRequestInit,
+          verifiedBotAccount: {
+            pluginId: binding.account.pluginId,
+            accountId: binding.account.id,
+            binding: { pluginId: job.botBinding.pluginId, ref: job.botBinding },
+          },
+        })
         approvedHeadSha = binding.approvedPublication?.headSha
       } catch (error) {
         return updateIntegrationActionJob(
@@ -1113,7 +1362,8 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
       signal: controller.signal,
       authenticatedRequest: async (input, init) => {
         if (controller.signal.aborted) throw new Error("Action cancelled or timed out")
-        if (job.botBinding && !["GET", "HEAD"].includes((init?.method ?? "GET").toUpperCase())) {
+        let verifiedBotAccount: VerifiedBotAccount | undefined
+        if (job.botBinding) {
           const binding = await assertBotIntegrationAction(
             job.botBinding.pluginId,
             job.botBinding,
@@ -1122,7 +1372,12 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
           )
           if (binding.account.id !== job.accountId || binding.account.pluginId !== job.pluginId)
             throw new Error("Bot integration binding changed before publication")
-          await assertApprovedPublicationHead(binding, readRequestInit)
+          verifiedBotAccount = {
+            pluginId: binding.account.pluginId,
+            accountId: binding.account.id,
+            binding: { pluginId: job.botBinding.pluginId, ref: job.botBinding },
+          }
+          await assertApprovedPublicationHead(binding, { ...readRequestInit, verifiedBotAccount })
           if (controller.signal.aborted) throw new Error("Action cancelled or timed out")
         }
         // A write the job makes on its own (the Issue Loop's pull request):
@@ -1140,6 +1395,8 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
         if (controller.signal.aborted) throw new Error("Action cancelled or timed out")
         return authenticatedRequest(job.pluginId, job.accountId, input, {
           ...init,
+          credentialContext: jobCredentialContext(job.id),
+          verifiedBotAccount,
           signal: controller.signal,
           beforeSend: () => assertActiveClaim(!READ_METHODS.has(method)),
           operation: { actionId: job.actionId, input: job.input },
@@ -1149,9 +1406,11 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     }
     await assertActiveClaim()
     // Keep persisted/approved input immutable. This value comes only from the host publication.
-    const output = await handler(
-      approvedHeadSha ? { ...job.input, expectedHeadSha: approvedHeadSha } : job.input,
-      context
+    const output = await withPluginJobExecutionContext(job.pluginId, job.id, () =>
+      handler(
+        approvedHeadSha ? { ...job.input, expectedHeadSha: approvedHeadSha } : job.input,
+        context
+      )
     )
     if (controller.signal.aborted) return cancelClaim("Action cancelled or timed out")
     const outputValidation = action.outputSchema
@@ -1189,6 +1448,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     const retryable =
       !(error instanceof OutboundPolicyError) &&
       !(error instanceof ConsumerGrantRequired) &&
+      !(error instanceof PersonalCredentialRefusedError) &&
       !(error instanceof ConnectionUnavailableError) &&
       !(error instanceof ConnectionRevisionChanged) &&
       action?.idempotency !== "none" &&
@@ -1234,6 +1494,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
 
 export async function drainIntegrationActionJobs(): Promise<IntegrationActionJob[]> {
   if (!(await isIntegrationRuntimeOwner())) return []
+  await reconcileIntegrationJobExecutions()
   const jobs = await listRunnableIntegrationActionJobs()
   return Promise.all(jobs.map((job) => runIntegrationActionJob(job.id)))
 }
@@ -1249,7 +1510,7 @@ export async function cancelIntegrationActionJob(
 ): Promise<IntegrationActionJob> {
   const job = await getIntegrationActionJob(jobId)
   if (!job) throw new Error(`Integration action job "${jobId}" was not found`)
-  if (["succeeded", "failed", "deadlettered", "cancelled"].includes(job.status)) return job
+  if (isIntegrationActionJobTerminal(job.status)) return cancelIntegrationActionJobRecord(jobId)
   let hold: Partial<IntegrationActionJob> = {}
   if (job.outbound?.held) {
     withdrawHeldIntegrationJob(jobId)
@@ -1262,7 +1523,9 @@ export async function cancelIntegrationActionJob(
     ...hold,
     error: "Cancelled by user",
   })
-  if (cancelled.status === "cancelled") runningControllers.get(jobId)?.abort()
+  if (cancelled.status === "cancelled") {
+    runningControllers.get(jobId)?.abort()
+  }
   return cancelled
 }
 

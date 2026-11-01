@@ -1,3 +1,4 @@
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin task executor (§B-2 activation).
  *
@@ -206,7 +207,12 @@ export async function executePluginTask(
       },
     }
 
-    const result = await handler(payload.args ?? {}, ctx)
+    // Scheduler TaskExecution is not an ADR-0243 identity run. Until phase 4
+    // records its authorizing principal, it cannot become an outside-run owner
+    // read or mint personal authority from triggerSource/task metadata.
+    const result = await withPluginExecutionContext(payload.pluginId, { executionRunId: "" }, () =>
+      handler(payload.args ?? {}, ctx)
+    )
     if (result?.metrics && typeof result.metrics === "object") {
       // The execution row has no column for metrics; a tagged log entry keeps
       // them with the run, and the plugin API reads them back from it.

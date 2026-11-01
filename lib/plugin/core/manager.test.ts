@@ -95,6 +95,12 @@ import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from 
 import { clearPythonLogs, getPythonLogs } from "@/lib/plugin/python/log-buffer"
 import { loggers } from "@/lib/plugin/core/logger"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import {
+  hostCommandExecution,
+  pluginExecutionContext,
+  withHostCommandExecution,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 
 const mockTransportCall = jest.fn()
 const mockTransportSubscribe = jest.fn()
@@ -3960,7 +3966,7 @@ describe("PluginManager", () => {
         setPluginVerificationSnapshot: jest.fn(),
       }
       mockGetState.mockReturnValue(store)
-      getPermissionGuard().registerPlugin(id, ["storage:read"])
+      getPermissionGuard().registerPlugin(id, ["filesystem:read"])
       const manager = new PluginManager({ pluginDirectory: "/plugins" })
       await manager.unloadPlugin(id)
       expect(mockClearWasmCapabilityGrant).not.toHaveBeenCalled()
@@ -5475,6 +5481,24 @@ describe("PluginManager", () => {
         message: "## Findings\n\n1. [source](https://x)",
         payload: { citations: 1 },
       })
+
+      let commandProof: unknown
+      ;(onCommand as jest.Mock).mockImplementation(
+        (_command: string, _args: string[], invocation: object) => {
+          commandProof = hostCommandExecution(invocation)
+          return { handled: true, message: "bound", payload: { citations: 1 } }
+        }
+      )
+      const boundContext = { sessionId: "plugin-field-is-not-proof" }
+      await withHostCommandExecution(
+        boundContext,
+        { executionRunId: "bound-command-attempt" },
+        async () => registration!.handler("", boundContext)
+      )
+      expect(commandProof).toEqual({
+        executionRunId: "bound-command-attempt",
+        sessionId: undefined,
+      })
     })
 
     it("keeps the generic acknowledgement for a legacy boolean handler", async () => {
@@ -6562,6 +6586,47 @@ describe("PluginManager", () => {
       expect(updateWasmPluginConfig).not.toHaveBeenCalled()
     })
 
+    it("binds frontend IDE providers to the Host operation through settlement", async () => {
+      const plugin = createTypedPlugin("bound-ide", "frontend", "enabled")
+      mockGetState.mockReturnValue({ plugins: { "bound-ide": plugin } })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const loader = (manager as unknown as { loader: { getModuleExports(id: string): object } })
+        .loader
+      loader.getModuleExports = () => ({
+        complete: async () => {
+          await Promise.resolve()
+          return pluginExecutionContext("bound-ide")
+        },
+      })
+      await expect(manager.invokeIdeProvider("bound-ide", "complete", [])).resolves.toEqual({
+        executionRunId: "",
+      })
+      const context = { executionRunId: "ide-service-attempt" }
+      await withPluginExecutionContext("bound-ide", context, () =>
+        expect(manager.invokeIdeProvider("bound-ide", "complete", [])).resolves.toEqual(context)
+      )
+      expect(pluginExecutionContext("bound-ide")).toBeUndefined()
+    })
+
+    it("binds direct Python Host callbacks until the transport settles", async () => {
+      const seen: unknown[] = []
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      ;(
+        manager as unknown as { pythonRuntimeGenerations: Map<string, string> }
+      ).pythonRuntimeGenerations.set("bound-python", "generation")
+      mockInvoke.mockImplementation(async () => {
+        await Promise.resolve()
+        seen.push(pluginExecutionContext("bound-python"))
+      })
+      await manager.callPythonFunction("bound-python", "read", [])
+      const context = { executionRunId: "python-service-attempt" }
+      await withPluginExecutionContext("bound-python", context, () =>
+        manager.callPythonHook("bound-python", "onRead", "read", {})
+      )
+      expect(seen).toEqual([{ executionRunId: "" }, context])
+      expect(pluginExecutionContext("bound-python")).toBeUndefined()
+    })
+
     it("installPythonDeps and pushPythonConfig delegate to the backend commands", async () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
       ;(
@@ -6896,6 +6961,7 @@ describe("PluginManager", () => {
       )
       const manager = new PluginManager({ pluginDirectory: "/plugins" })
       const activate = jest.fn(() => {
+        expect(pluginExecutionContext(plugin.manifest.id)).toBeUndefined()
         expect(store.plugins[plugin.manifest.id].manifest.sharedMemoryAdapters?.[0].write).toBe(
           adapter.write
         )
@@ -7101,7 +7167,14 @@ describe("PluginManager", () => {
         },
       }))
 
-      await expect(manager.loadPlugin(plugin.manifest.id)).rejects.toThrow(/timed out/i)
+      await expect(
+        withPluginExecutionContext(
+          plugin.manifest.id,
+          { executionRunId: "activation-attempt" },
+          () => manager.loadPlugin(plugin.manifest.id)
+        )
+      ).rejects.toThrow(/timed out/i)
+      expect(pluginExecutionContext(plugin.manifest.id)?.executionRunId).toBe("activation-attempt")
       await expect(manager.getPluginLifecycleState(plugin.manifest.id)).resolves.toMatchObject({
         actual: "dirty",
         dirty: { labels: expect.arrayContaining(["plugin.activate"]) },
@@ -7110,6 +7183,7 @@ describe("PluginManager", () => {
       finishActivation()
       await gate
       await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(pluginExecutionContext(plugin.manifest.id)).toBeUndefined()
       expect(lateDispose).toHaveBeenCalledTimes(1)
       await expect(manager.recoverPluginRuntime(plugin.manifest.id)).resolves.toBe(true)
       await expect(manager.getPluginLifecycleState(plugin.manifest.id)).resolves.toMatchObject({
@@ -9781,6 +9855,89 @@ describe("PluginManager", () => {
       expect(enableSpy).not.toHaveBeenCalled()
       resumeSpy.mockRestore()
       enableSpy.mockRestore()
+    })
+
+    it("binds lazy command activation to its opaque Host attempt, ignoring public labels", async () => {
+      mockGetState.mockReturnValue({
+        plugins: {
+          "lazy-auth": mkPlugin(
+            "lazy-auth",
+            "installed",
+            { activationEvents: ["onCommand:foo"] },
+            { source: "builtin" }
+          ),
+        },
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const seen: unknown[] = []
+      const enable = jest.spyOn(manager, "enablePlugin").mockImplementation(async () => {
+        seen.push(pluginExecutionContext("lazy-auth"))
+      })
+      const context = { sessionId: "forged" }
+      try {
+        await withHostCommandExecution(context, { executionRunId: "actual-attempt" }, () =>
+          manager.handleActivationEvent("onCommand:foo", { hostCommandContext: context })
+        )
+        expect(seen).toEqual([{ executionRunId: "actual-attempt", sessionId: undefined }])
+        expect(pluginExecutionContext("lazy-auth")).toBeUndefined()
+      } finally {
+        enable.mockRestore()
+      }
+    })
+
+    it("binds non-target auth providers resumed by a tool event to the Host initiator", async () => {
+      mockGetState.mockReturnValue({
+        plugins: {
+          caller: mkPlugin("caller", "enabled"),
+          "other-auth": mkPlugin("other-auth", "suspended", {}, { source: "builtin" }),
+        },
+      })
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const seen: unknown[] = []
+      const resume = jest.spyOn(manager, "resumePlugin").mockImplementation(async () => {
+        seen.push(pluginExecutionContext("other-auth"))
+      })
+      try {
+        await withPluginExecutionContext("caller", { executionRunId: "tool-attempt" }, () =>
+          manager.handleActivationEvent("onTool:any", { initiatorPluginId: "caller" })
+        )
+        expect(seen).toEqual([{ executionRunId: "tool-attempt", sessionId: undefined }])
+      } finally {
+        resume.mockRestore()
+      }
+    })
+
+    it("retains a timed-out lifecycle callback's Host attempt until the callback really settles", async () => {
+      jest.useFakeTimers()
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      let finish!: () => void
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const resume = jest.spyOn(getPluginLifecycleHooks(), "dispatchOnResume").mockReturnValue(gate)
+      try {
+        const pending = withPluginExecutionContext(
+          "slow-auth",
+          { executionRunId: "resume-attempt" },
+          () =>
+            (
+              manager as unknown as {
+                safeDispatchLifecycleHook(id: string, hook: "onResume"): Promise<void>
+              }
+            ).safeDispatchLifecycleHook("slow-auth", "onResume")
+        )
+        await jest.advanceTimersByTimeAsync(60_000)
+        await pending
+        expect(pluginExecutionContext("slow-auth")?.executionRunId).toBe("resume-attempt")
+        finish()
+        await gate
+        await Promise.resolve()
+        expect(pluginExecutionContext("slow-auth")).toBeUndefined()
+      } finally {
+        finish()
+        resume.mockRestore()
+        jest.useRealTimers()
+      }
     })
 
     it("recordPluginToolUse refreshes the plugin's idle-suspend clock", () => {

@@ -1,9 +1,14 @@
 /** @jest-environment jsdom */
 import { contractChild } from "@cognia/agent-orchestration/store-contract"
 import "fake-indexeddb/auto"
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({ configured: false })),
+}))
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
 import {
   registerTeamDispatchContext,
@@ -65,6 +70,18 @@ describe("createSquadRunRecords", () => {
         trigger: "local",
         authorizingPrincipal: { kind: "local-person" },
       })
+      expect(
+        await admitPersonalCredential(
+          { executionRunId: result.executionRunId },
+          { source: "github-user" }
+        )
+      ).toMatchObject({ ok: true })
+      expect(
+        await admitPersonalCredential(
+          { executionRunId: result.executionRunId, sessionId: "unrelated" },
+          { source: "github-user" }
+        )
+      ).toMatchObject({ ok: false, reason: "missing-identity" })
       await getDb().sessions.put({
         id: "member",
         kind: "team",

@@ -72,15 +72,21 @@ export class GithubWritebackError extends Error {
 export async function resolveGithubWritebackAccount(
   repoFullName = "",
   connectorAccountId?: string,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext,
   connectionRef?: string
 ): Promise<IntegrationAccount | null> {
-  const accounts = await githubReadAccountsFor(repoFullName, GITHUB_DOT_COM, {
-    listAccounts: () => listIntegrationAccounts(GITHUB_DELIVERY_PLUGIN_ID, GITHUB_INTEGRATION_ID),
-    hostForSession: async (sessionId) => {
-      const { githubHostForSession } = await import("@/lib/integrations/github-auth")
-      return githubHostForSession(sessionId)
+  const accounts = await githubReadAccountsFor(
+    repoFullName,
+    GITHUB_DOT_COM,
+    {
+      listAccounts: () => listIntegrationAccounts(GITHUB_DELIVERY_PLUGIN_ID, GITHUB_INTEGRATION_ID),
+      hostForSession: async (sessionId) => {
+        const { githubHostForSession } = await import("@/lib/integrations/github-auth")
+        return githubHostForSession(sessionId)
+      },
     },
-  })
+    credentialContext
+  )
   return (
     accounts.find(
       (account) =>
@@ -110,6 +116,7 @@ export function toIntegrationAction(
 }
 
 export interface RunGithubWritebackInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   target: GithubWritebackTarget
   action: GithubWritebackAction
   /** The account shown in the confirmation dialog, when there is one. */
@@ -138,7 +145,11 @@ export async function runGithubWriteback(
   const execute = deps.execute ?? executeIntegrationAction
   const approve = deps.approve ?? approveIntegrationActionJob
 
-  const account = await resolveAccount(input.target.repoFullName, input.connectorAccountId)
+  const account = await resolveAccount(
+    input.target.repoFullName,
+    input.connectorAccountId,
+    input.credentialContext
+  )
   if (
     !account ||
     (input.connectorAccountId !== undefined && account.id !== input.connectorAccountId)
@@ -163,9 +174,14 @@ export async function runGithubWriteback(
         source: "manual",
         ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       },
-      ...(input.approval === "user-confirmed"
-        ? [{ kind: "person" as const, surface: "issue-writeback" }]
-        : [])
+      input.approval === "user-confirmed"
+        ? {
+            kind: "person",
+            surface: "issue-writeback",
+            localAuthorization: input.credentialContext?.localAuthorization,
+          }
+        : undefined,
+      input.credentialContext
     )
   } catch (cause) {
     // The commonest cause by far is the plugin not being enabled, which reads
@@ -183,6 +199,7 @@ export async function runGithubWriteback(
 }
 
 export interface CreateGithubIssueInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   repoFullName: string
   title: string
   body?: string
@@ -218,7 +235,7 @@ export async function createGithubIssue(
   const execute = deps.execute ?? executeIntegrationAction
   const approve = deps.approve ?? approveIntegrationActionJob
 
-  const account = await resolveAccount(input.repoFullName)
+  const account = await resolveAccount(input.repoFullName, undefined, input.credentialContext)
   if (!account) {
     throw new GithubWritebackError(
       "no-account",
@@ -243,7 +260,12 @@ export async function createGithubIssue(
         idempotencyKey: input.idempotencyKey,
       },
       // Only ever called after a person confirmed the issue in a dialog.
-      { kind: "person", surface: "issue-publish" }
+      {
+        kind: "person",
+        surface: "issue-publish",
+        localAuthorization: input.credentialContext?.localAuthorization,
+      },
+      input.credentialContext
     )
   } catch (cause) {
     throw new GithubWritebackError(

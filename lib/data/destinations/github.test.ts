@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 const settingsState: { current: Partial<AppSettings> } = { current: {} }
@@ -17,7 +18,7 @@ jest.mock("@cognia/logging", () => {
   return { loggers: { export: stub, scheduler: stub }, createLogger: () => stub }
 })
 
-import { __setBackupDestinationSecretStoreForTesting } from "./config"
+import { __setBackupDestinationSecretStoreForTesting, setGithubBackupToken } from "./config"
 import {
   fetchGithubRepoInfo,
   uploadSnapshotToGithub,
@@ -121,14 +122,24 @@ describe("uploadSnapshotToGithub", () => {
   })
   it("refuses when not configured or without a token", async () => {
     settingsState.current = { backupDestinations: {} }
-    expect(await uploadSnapshotToGithub("b", meta, { http: makeGithub().http })).toMatchObject({
+    expect(
+      await uploadSnapshotToGithub("b", meta, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: makeGithub().http,
+      })
+    ).toMatchObject({
       ok: false,
       code: "not-configured",
     })
     settingsState.current = {
       backupDestinations: { github: { enabled: true, repo: "octo/vault" } },
     }
-    expect(await uploadSnapshotToGithub("b", meta, { http: makeGithub().http })).toMatchObject({
+    expect(
+      await uploadSnapshotToGithub("b", meta, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: makeGithub().http,
+      })
+    ).toMatchObject({
       ok: false,
       code: "no-token",
     })
@@ -248,11 +259,21 @@ describe("uploadSnapshotToGithub", () => {
       })
     ).toMatchObject({ ok: false, code: "public-repo" })
     expect(settingsState.current.backupDestinations?.github?.lastVerifiedVisibility).toBe("public")
-    expect(await verifyGithubBackupDestination({ http: makeGithub().http })).toMatchObject({
+    expect(
+      await verifyGithubBackupDestination({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: makeGithub().http,
+      })
+    ).toMatchObject({
       code: "no-token",
     })
     settingsState.current = { backupDestinations: {} }
-    expect(await verifyGithubBackupDestination({ http: makeGithub().http })).toMatchObject({
+    expect(
+      await verifyGithubBackupDestination({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: makeGithub().http,
+      })
+    ).toMatchObject({
       code: "not-configured",
     })
   })
@@ -270,4 +291,23 @@ describe("uploadSnapshotToGithub", () => {
     const plain: BackupHttpFn = async () => ({ status: 503, headers: {}, body: "" })
     expect(await fetchGithubRepoInfo(config, "t", plain)).toMatchObject({ ok: false, status: 503 })
   })
+})
+
+it("keeps stored backup PATs out of unproven verification/upload and admits the Host UI", async () => {
+  await setGithubBackupToken("private-pat")
+  const api = makeGithub()
+  await expect(verifyGithubBackupDestination({ config, http: api.http })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  await expect(
+    uploadSnapshotToGithub("ciphertext", meta, { config, http: api.http })
+  ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  expect(api.calls).toHaveLength(0)
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  await expect(
+    verifyGithubBackupDestination({ config, http: api.http, credentialContext })
+  ).resolves.toMatchObject({ ok: true })
+  await expect(
+    uploadSnapshotToGithub("ciphertext", meta, { config, http: api.http, credentialContext })
+  ).resolves.toMatchObject({ ok: true })
 })

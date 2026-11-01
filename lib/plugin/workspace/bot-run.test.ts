@@ -398,13 +398,19 @@ it("publishes approved files via the bound account and replays without duplicate
     snapshotId: input.snapshotId,
   })
   const count = jest.mocked(authenticatedIntegrationRequest).mock.calls.length
+  for (const call of jest.mocked(authenticatedIntegrationRequest).mock.calls) {
+    expect(call[4]).toBeUndefined()
+    expect(call[5]).toEqual({ pluginId: "github-delivery", accountId: "account" })
+  }
   await publishBotWorkspace("plugin", handle, input)
   expect(authenticatedIntegrationRequest).toHaveBeenCalledTimes(count)
   expect(authenticatedIntegrationRequest).toHaveBeenCalledWith(
     "github-delivery",
     "account",
     expect.any(String),
-    expect.anything()
+    expect.anything(),
+    undefined,
+    { pluginId: "github-delivery", accountId: "account" }
   )
 })
 

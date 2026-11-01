@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Bind a resource to a delivery container.
  *
@@ -265,8 +267,13 @@ export function ProjectResourceDialog({
     if (!selectedAccountId) return
     void loadWith(
       () =>
-        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
-          listLarkTasklists(api)
+        withLarkAuthedApi(
+          {
+            adapterId: selectedAccountId,
+            identity: "user",
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          },
+          (api) => listLarkTasklists(api)
         ),
       (rows) => {
         setTasklists(rows)
@@ -279,8 +286,13 @@ export function ProjectResourceDialog({
     if (!selectedAccountId || !appToken) return
     void loadWith(
       () =>
-        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
-          listBitableTables(api, appToken)
+        withLarkAuthedApi(
+          {
+            adapterId: selectedAccountId,
+            identity: "user",
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          },
+          (api) => listBitableTables(api, appToken)
         ),
       (rows) => {
         setTables(rows)
@@ -295,8 +307,13 @@ export function ProjectResourceDialog({
     if (!selectedAccountId || !appToken || !tableId) return
     void loadWith(
       () =>
-        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
-          listBitableFields(api, appToken, tableId)
+        withLarkAuthedApi(
+          {
+            adapterId: selectedAccountId,
+            identity: "user",
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          },
+          (api) => listBitableFields(api, appToken, tableId)
         ),
       (rows) => {
         setFields(rows)

@@ -42,7 +42,11 @@ it("synthesizes through the shared TTS service and queues the captured destinati
     .mockResolvedValue({ voiceProfile: { provider: "openai", voiceId: "nova" } } as never)
   await skill.execute(
     { conversationKey: "qq-official:a:g", text: "Hello" },
-    { sessionId: "s", outboundAuthorization: { kind: "human", actor: "connector-user" } }
+    {
+      sessionId: "s",
+      executionRunId: "host-exact-run",
+      outboundAuthorization: { kind: "human", actor: "connector-user" },
+    }
   )
   expect(synthesizeConnectorVoice).toHaveBeenCalledWith({
     adapter,
@@ -60,7 +64,7 @@ it("synthesizes through the shared TTS service and queues the captured destinati
         segments: [expect.objectContaining({ type: "voice", mimeType: "audio/mpeg" })],
       }),
     }),
-    { signal: undefined }
+    { signal: undefined, executionContext: { sessionId: "s", executionRunId: "host-exact-run" } }
   )
 })
 it("refuses a missing captured target before synthesis or delivery", async () => {

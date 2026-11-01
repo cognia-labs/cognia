@@ -6,6 +6,9 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import {
   __resetIntegrationRegistryForTesting,
   registerIntegrationDefinitions,
+  getIntegrationResourceProvider,
+  getIntegrationAccountStatusProvider,
+  getRegisteredIntegration,
 } from "@/lib/integrations/registry"
 import * as botBinding from "./bot-integration-binding"
 import * as actionRunner from "@/lib/integrations/action-runner"
@@ -510,6 +513,12 @@ describe("ctx.integrations", () => {
     ).resolves.toMatchObject({ headers: { link: "next" } })
     expect(request).toHaveBeenCalledWith("example-delivery", account.id, expect.any(String), {
       headers: { "if-none-match": "etag" },
+      credentialContext: undefined,
+      verifiedBotAccount: {
+        pluginId: account.pluginId,
+        accountId: account.id,
+        binding: { pluginId: "bot", ref },
+      },
     })
     for (const url of [
       "https://api.github.com/repos/owner/other/issues",
@@ -618,6 +627,28 @@ describe("ctx.integrations", () => {
       >)
     const bot = createIntegrationsAPI("bot", () => true)
     const ref = { runId: "run", slotId: "github" }
+    const resourceRequest = jest.fn().mockResolvedValue({ status: 200, headers: {}, data: {} })
+    setIntegrationAuthenticatedRequestExecutorForTesting(resourceRequest)
+    const resourceProvider = getIntegrationResourceProvider("example-delivery", "example")!
+    const healthProvider = getIntegrationAccountStatusProvider("example-delivery", "example")!
+    // Both callbacks use the real provider request context rather than a direct API request.
+    registerIntegrationDefinitions({
+      pluginId: "example-delivery",
+      definitions: [getRegisteredIntegration("example-delivery", "example")!.definition],
+      handlers: {},
+      resourceProviders: {
+        example: async (query, ctx) => {
+          await ctx.authenticatedRequest("https://api.example.com/resources")
+          return resourceProvider(query, ctx)
+        },
+      },
+      accountStatusProviders: {
+        example: async (ctx) => {
+          await ctx.authenticatedRequest("https://api.example.com/health")
+          return healthProvider(ctx)
+        },
+      },
+    })
     await expect(bot.listSubscriptions(ref)).resolves.toEqual([own])
     await expect(bot.listResources({ accountId: ref, kind: "repository" })).resolves.toMatchObject({
       items: [{ id: "cognia/cognia-next" }],
@@ -626,6 +657,13 @@ describe("ctx.integrations", () => {
       "scoped repository"
     )
     await expect(bot.checkAccountHealth(ref)).resolves.toMatchObject({ health: "healthy" })
+    expect(resourceRequest).toHaveBeenCalledTimes(2)
+    for (const call of resourceRequest.mock.calls) {
+      expect(call[3]).toMatchObject({
+        verifiedBotAccount: { pluginId: account.pluginId, accountId: account.id },
+      })
+    }
+    setIntegrationAuthenticatedRequestExecutorForTesting()
   })
 })
 
@@ -703,7 +741,14 @@ it("resolves an API-root-relative path against the bound account's own deploymen
     "github-delivery",
     "account",
     "https://api.github.com/repos/owner/repo/issues",
-    undefined
+    {
+      credentialContext: undefined,
+      verifiedBotAccount: {
+        pluginId: "github-delivery",
+        accountId: "account",
+        binding: { pluginId: "bot", ref },
+      },
+    }
   )
 
   const base = jest
@@ -714,7 +759,14 @@ it("resolves an API-root-relative path against the bound account's own deploymen
     "github-delivery",
     "account",
     "https://ghe.acme.io/api/v3/repos/owner/repo/pulls/1",
-    undefined
+    {
+      credentialContext: undefined,
+      verifiedBotAccount: {
+        pluginId: "github-delivery",
+        accountId: "account",
+        binding: { pluginId: "bot", ref },
+      },
+    }
   )
   // Relative paths get the same scope checks as absolute URLs.
   for (const path of ["/repos/owner/other", "/user/repos", "//evil.test/repos/owner/repo"])
@@ -766,7 +818,7 @@ it("delegates account, publication and recovery operations with the calling plug
       .mockResolvedValue({ id: "job" } as never)
     const action = { actionId: "write", accountId: "account", integrationId: "github", input: {} }
     await api.executeAction(action)
-    expect(execute).toHaveBeenCalledWith("owner", action)
+    expect(execute).toHaveBeenCalledWith("owner", action, undefined, undefined)
     const job = jest
       .spyOn(database, "getIntegrationActionJob")
       .mockResolvedValue({ pluginId: "other" } as never)

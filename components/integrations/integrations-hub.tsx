@@ -1,5 +1,6 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { NativeSelect } from "@/components/ui/native-select"
 import { FormEvent, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import Link from "next/link"
@@ -47,7 +48,7 @@ import {
   requeueIntegrationIngressDeadletter,
   syncIntegrationIngressRoutes,
 } from "@/lib/integrations/ingress-client"
-import { getSession as getAuthSession } from "@/lib/plugin/auth/auth-provider-registry"
+import { getHostAuthSession as getAuthSession } from "@/lib/plugin/api/auth-api"
 import { createAuthConnectionsAPI } from "@/lib/plugin/auth/connections-api"
 import { createIntegrationsAPI } from "@/lib/plugin/api/integrations-api"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
@@ -288,7 +289,8 @@ export function IntegrationsHub() {
       const session = await getAuthSession(
         selectedStrategy.providerId,
         selectedStrategy.scopes ?? [],
-        { createIfNone: true, forceNewSession: true, configuration }
+        { createIfNone: true, forceNewSession: true, configuration },
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
       if (!session) throw new Error("session")
       const account = await createIntegrationAccount(selected.pluginId, {
@@ -299,7 +301,9 @@ export function IntegrationsHub() {
         label: label || session.account.label,
         dedicatedAppConfirmed: selectedStrategy.type === "app" ? dedicatedAppConfirmed : undefined,
       })
-      await checkIntegrationAccountHealth(selected.pluginId, account.id)
+      await checkIntegrationAccountHealth(selected.pluginId, account.id, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
       setLabel("")
       setAuthConfiguration({})
       setDedicatedAppConfirmed(false)
@@ -367,13 +371,17 @@ export function IntegrationsHub() {
     setBusy(true)
     setError(undefined)
     try {
-      const page = await listIntegrationResources(subscriptionAccount.pluginId, {
-        accountId: subscriptionAccount.id,
-        kind: resourceKind,
-        query: resourceSearch || undefined,
-        cursor,
-        limit: 50,
-      })
+      const page = await listIntegrationResources(
+        subscriptionAccount.pluginId,
+        {
+          accountId: subscriptionAccount.id,
+          kind: resourceKind,
+          query: resourceSearch || undefined,
+          cursor,
+          limit: 50,
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
       setResources(cursor ? [...resources, ...page.items] : page.items)
       setResourceCursor(page.nextCursor)
     } catch {
@@ -467,6 +475,7 @@ export function IntegrationsHub() {
           } else {
             try {
               const configured = await configureGithubRepoWebhook({
+                credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
                 account: refreshedAccount,
                 repoFullName: resourceId,
                 webhookUrl,
@@ -864,7 +873,9 @@ export function IntegrationsHub() {
                               variant="outline"
                               aria-label={t("accounts.checkHealth")}
                               onClick={() =>
-                                checkIntegrationAccountHealth(account.pluginId, account.id)
+                                checkIntegrationAccountHealth(account.pluginId, account.id, {
+                                  localAuthorization: LOCAL_PERSON_RUN,
+                                })
                               }
                             >
                               <RefreshCwIcon className="size-3" />

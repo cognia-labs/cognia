@@ -555,6 +555,21 @@ export async function invokeVscodeRpc<T = unknown>(
   runtimeGeneration?: string,
   signal?: AbortSignal
 ): Promise<T> {
+  if (method === "extension:call") {
+    return withPluginExecutionContext(pluginId, pluginDispatchContext(pluginId), () =>
+      invokeBoundVscodeRpc<T>(pluginId, method, payload, runtimeGeneration, signal)
+    )
+  }
+  return invokeBoundVscodeRpc<T>(pluginId, method, payload, runtimeGeneration, signal)
+}
+
+async function invokeBoundVscodeRpc<T>(
+  pluginId: string,
+  method: string,
+  payload: unknown,
+  runtimeGeneration?: string,
+  signal?: AbortSignal
+): Promise<T> {
   if (!isVscodeHostAvailable()) {
     throw new Error("VS Code extension host unavailable (browser mode)")
   }
@@ -639,3 +654,4 @@ function hasThemeOnlyContributions(manifest: PluginManifest): boolean {
     (manifest.vscodeLanguages ?? []).length > 0
   )
 }
+import { pluginDispatchContext, withPluginExecutionContext } from "./invocation-identity"

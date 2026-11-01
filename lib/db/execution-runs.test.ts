@@ -24,6 +24,8 @@ import {
   runEventJournal,
   sweepExecutionRunEventRetention,
   semanticRunEvent,
+  jobExecutionTables,
+  settleJobExecutionInsideTransaction,
   updateExecutionRunBinding,
 } from "./execution-runs"
 
@@ -31,6 +33,46 @@ describe("execution run journal", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("settles a job once and rolls its journal back with the owner's transaction", async () => {
+    const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
+    await startJobExecutionRun("outbound:test")
+    const db = getDb()
+    await expect(
+      db.transaction("rw", jobExecutionTables(db), async () => {
+        await settleJobExecutionInsideTransaction(db, "outbound:test", "completed")
+        throw new Error("owner write failed")
+      })
+    ).rejects.toThrow("owner write failed")
+    expect(await getExecutionRun("execution:job:outbound:test")).toMatchObject({
+      status: "running",
+    })
+    await db.transaction("rw", jobExecutionTables(db), async () => {
+      await settleJobExecutionInsideTransaction(db, "outbound:test", "cancelled")
+      await settleJobExecutionInsideTransaction(db, "outbound:test", "completed")
+    })
+    expect(await getExecutionRun("execution:job:outbound:test")).toMatchObject({
+      status: "cancelled",
+    })
+    expect(
+      (await listExecutionRunEvents("execution:job:outbound:test")).filter(
+        (event) => event.type === "run.cancelled"
+      )
+    ).toHaveLength(1)
+  })
+
+  it("does not reconcile a remote job summary without the local creation journal", async () => {
+    const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
+    const local = await startJobExecutionRun("outbound:local")
+    const id = "execution:job:outbound:remote"
+    await createExecutionRun({ ...local, id, sourceId: "outbound:remote" })
+    const db = getDb()
+    await db.transaction("rw", jobExecutionTables(db), () =>
+      settleJobExecutionInsideTransaction(db, "outbound:remote", "cancelled")
+    )
+    expect(await getExecutionRun(id)).toMatchObject({ status: "running" })
+    expect(await listExecutionRunEvents(id)).toEqual([])
   })
 
   it("inherits recorded parent identity and meets child authority without changing legacy creation", async () => {

@@ -60,6 +60,7 @@ import {
   hasPendingApproval,
   resolveApproval as resolveLocalApproval,
 } from "@/lib/connectors/hitl/approval-registry"
+import { stableHash } from "@/lib/notifications/result/materiality"
 
 const SIDECAR_EVENT = "claude://message"
 /** Canonical agent-event channel (ADR-0090 Phase 3). */
@@ -215,6 +216,26 @@ type PromptDelivery = {
   messageId?: string
 }
 
+// An AI-SDK runtime retains MCP clients across turns. A changed credential map
+// must rebuild that runtime even when transcript/model policy otherwise matches.
+const sentMcpConfigurations = new Map<string, { configuration: string; generation?: string }>()
+
+/** Unknown renderer state cannot prove a retained engine's credentials. */
+export function mcpRuntimeConfigurationMatches(
+  sessionId: string,
+  options: SendOptions,
+  generation = options.transcriptInvalidationId
+): boolean {
+  const previous = sentMcpConfigurations.get(sessionId)
+  // A different window advances the existing transcript generation before it
+  // replaces a credential map. Our old in-memory map cannot bless its engine.
+  return (
+    !!generation &&
+    previous?.generation === generation &&
+    previous.configuration === stableHash(JSON.stringify(options.mcpServers ?? {}))
+  )
+}
+
 export async function sendPrompt(
   sessionId: string,
   prompt: SendContent,
@@ -225,7 +246,7 @@ export async function sendPrompt(
   // Bind the existing turn/attempt wire to the canonical host run before dispatch.
   if (options?.turnId) {
     const [
-      { bindToolCallRun, activeToolExecutionRunId },
+      { bindToolCallRun, activeToolExecutionRunId, toolCallExecutionRunId },
       { activeDirectChatExecutionRunId },
       { getSubagentApprovalRoute },
     ] = await Promise.all([
@@ -234,14 +255,24 @@ export async function sendPrompt(
       import("@/lib/claude/agents/subagent-approval-routes"),
     ])
     const route = getSubagentApprovalRoute(sessionId)
+    // Connector recovery binds its current attempt at Host dispatch. Provider
+    // execution.identity is stable routing data, never credential authority.
+    const boundRunId = toolCallExecutionRunId(
+      sessionId,
+      options.turnId,
+      options.execution?.identity?.attemptId
+    )
     bindToolCallRun(
       sessionId,
       options.turnId,
-      (route ? `execution:job:${route.runId}` : undefined) ??
+      (boundRunId || undefined) ??
+        (route ? `execution:job:${route.runId}` : undefined) ??
         activeDirectChatExecutionRunId(sessionId) ??
-        activeToolExecutionRunId(sessionId) ??
-        options.execution?.identity?.runId,
-      options.execution?.identity?.attemptId
+        activeToolExecutionRunId(sessionId),
+      options.execution?.identity?.attemptId,
+      // This entry dispatches to the builtin transport; external engines use
+      // their separate controller rail. Never infer this from a session label.
+      { builtinRuntime: true }
     )
   }
   // A mirrored row is not the execution host's transcript authority. Preserve
@@ -258,6 +289,18 @@ export async function sendPrompt(
     return sendPromptToTransport(sessionId, prompt, options, delivery, { pairedHost: true })
   }
   if (delivery?.transcriptRuntime === "prepared" || delivery?.transcriptRuntime === "host-owned") {
+    if (
+      delivery.transcriptRuntime === "prepared" &&
+      options?.expectedRuntimeSessionId &&
+      !mcpRuntimeConfigurationMatches(sessionId, options)
+    ) {
+      const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
+      options = await prepareTranscriptRuntimeSend(
+        sessionId,
+        options,
+        delivery.messageId ? { currentMessageId: delivery.messageId } : undefined
+      )
+    }
     return sendPromptToTransport(sessionId, prompt, options, delivery)
   }
   const { withTranscriptRuntimeLock } = await import("@/lib/chat/transcript/revision-events")
@@ -348,6 +391,7 @@ async function sendPromptToTransport(
     const { routerFusionRouting: _renderOnly, ...rest } = options
     wireOptions = rest
   }
+  const mcpConfiguration = stableHash(JSON.stringify(wireOptions?.mcpServers ?? {}))
   // No await between this check and dispatch: cancelled admission cannot
   // lazily restart the Rust sidecar after its capture has declared it stopped.
   delivery?.signal?.throwIfAborted()
@@ -358,6 +402,10 @@ async function sendPromptToTransport(
     options: wireOptions,
     ...(delivery?.commandId ? { commandId: delivery.commandId } : {}),
     ...(messageId ? { messageId } : {}),
+  })
+  sentMcpConfigurations.set(sessionId, {
+    configuration: mcpConfiguration,
+    generation: wireOptions?.transcriptInvalidationId,
   })
 }
 
@@ -1209,6 +1257,7 @@ export async function closeSession(
     sessionId,
     ...(options?.commandId ? { commandId: options.commandId } : {}),
   })
+  sentMcpConfigurations.delete(sessionId)
 }
 
 export async function getSidecarStatus(): Promise<{ ready: boolean }> {

@@ -77,6 +77,31 @@ export async function getExecutionRun(runId: string): Promise<ExecutionRun | und
   return getDb().executionRuns.get(runId)
 }
 
+/** Job owners include these tables in the same transaction as every terminal write. */
+export function jobExecutionTables(db: ReturnType<typeof getDb>) {
+  return [db.executionRuns, db.executionRunEvents, db.notificationProjectionWork]
+}
+
+/** Never leave a terminal/deleted job's execution live, even if its runner stops. */
+export async function settleJobExecutionInsideTransaction(
+  db: ReturnType<typeof getDb>,
+  jobKey: string,
+  status: "completed" | "failed" | "cancelled"
+): Promise<void> {
+  const id = `execution:job:${jobKey}`
+  const run = await db.executionRuns.get(id)
+  if (!run || ["completed", "failed", "cancelled"].includes(run.status)) return
+  // Paired clients sync summaries, never these private journal events. A
+  // missing local job row must not cancel a mirrored Host execution.
+  const entry = await db.executionRunEvents.get(`execution-event:${id}:tool-entry:${id}`)
+  if (entry?.type !== "run.started") return
+  await appendRunEventInsideTransaction(
+    db,
+    id,
+    semanticRunEvent(`run.${status}`, {}, { sourceEventId: `job-terminal:${id}` })
+  )
+}
+
 export interface ExecutionRunQuery {
   kinds?: readonly ExecutionRunKind[]
   statuses?: readonly ExecutionRunStatus[]

@@ -20,6 +20,7 @@
  * (which call `local.ts` directly).
  */
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { OperationAvailability } from "@/lib/runtime/operation-availability"
 import type { ConversationReference } from "@/types/connectors/event"
 import type { OutboundRequest } from "@/types/connectors/outbound"
@@ -130,7 +131,7 @@ export async function sendManualReply(
     messageMetadata: input.messageMetadata,
   }
   if (route === "local") {
-    const result = await sendManualReplyLocally(shared)
+    const result = await sendManualReplyLocally(shared, LOCAL_PERSON_RUN)
     return { ...result, route, idempotencyKey }
   }
   const result = await sendManualReplyRemotely(shared, { label: input.label })
@@ -156,10 +157,14 @@ export async function approveInboxDraft(
   const draftId = typeof draft === "string" ? draft : draft.id
   const route = resolveRouteOrThrow(INBOX_WRITE_COMMANDS.approve)
   if (route === "local") {
-    const result = await approveDraftLocally(draftId, {
-      segments: options.segments,
-      binding: options.binding,
-    })
+    const result = await approveDraftLocally(
+      draftId,
+      {
+        segments: options.segments,
+        binding: options.binding,
+      },
+      LOCAL_PERSON_RUN
+    )
     return { route, draftId, jobId: result.jobId }
   }
   await approveDraftRemotely(draftId, options.segments, { label: options.label })

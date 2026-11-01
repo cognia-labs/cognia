@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { fetchPrObservation } from "@/lib/github/pr-observe/fetch"
 import { parseRepoFullName, type OctokitLike } from "@/lib/github/pr-observe/types"
 import type { AgentTeamDeliveryNode } from "@/types/agent/agent-team-runtime"
@@ -184,7 +185,11 @@ export function createGithubDeliveryAdapter(
 
 export interface ApproveAndMergeGithubStackOptions {
   resolveTeamRepo?: (path: string) => Promise<ResolvedTeamRepoLike | null>
-  resolveOctokit?: (fullName: string) => Promise<OctokitLike | null>
+  resolveOctokit?: (
+    fullName: string,
+    host?: import("@/lib/github/host").GithubHost,
+    context?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+  ) => Promise<OctokitLike | null>
   /** Record a layer's parent in the repository's own config. */
   recordParent?: (repositoryRoot: string, branch: string, parent: string) => Promise<void>
   /** Ask git what is actually true about a chain of branches. */
@@ -296,7 +301,7 @@ export async function approveAndMergeGithubStack(
   }
   const first = Object.values(repositories)[0]
   if (!first) throw new Error("GitHub delivery requires a repository binding")
-  const octokit = await resolveOctokit(first)
+  const octokit = await resolveOctokit(first, undefined, { localAuthorization: LOCAL_PERSON_RUN })
   if (!octokit) throw new Error("GitHub delivery credentials are unavailable")
   const record =
     options.recordWrite ??
@@ -495,10 +500,16 @@ export async function approveAndPublishGithubStack(
   const { forRequest, ...rest } = options
   const { withdrawHeldIntegrationJob } = await import("@/lib/integrations/outbound-hold")
   withdrawHeldIntegrationJob(stackHoldId(runId))
-  const graphId = await prepareAndPublishGithubStack(team, runId, {
-    ...rest,
-    publishedBy: { by: "person", ...(forRequest ? { forRequest: true } : {}) },
-  })
+  let graphId: string | undefined
+  try {
+    graphId = await prepareAndPublishGithubStack(team, runId, {
+      ...rest,
+      publishedBy: { by: "person", ...(forRequest ? { forRequest: true } : {}) },
+    })
+  } catch (error) {
+    await settleHeldRun(team.id, runId, "failed")
+    throw error
+  }
   await settleHeldRun(team.id, runId, "completed")
   return graphId
 }
@@ -533,36 +544,67 @@ export async function declineGithubStackPublish(
 async function settleHeldRun(
   teamId: string,
   runId: string,
-  outcome: "completed" | "refused"
+  outcome: "completed" | "failed" | "refused"
 ): Promise<void> {
-  const { getAgentTeamRun, updateAgentTeamRun } = await import("@/lib/db/agent-team-runtime")
-  const run = await getAgentTeamRun(runId).catch(() => undefined)
-  if (
-    !run ||
-    run.status !== "needs_input" ||
-    (run.recoveryReason !== STACK_PUBLISH_HELD_REASON &&
-      run.recoveryReason !== STACK_PUBLISH_REFUSED_REASON)
-  ) {
-    return
-  }
-  if (outcome === "refused") {
-    await updateAgentTeamRun(runId, {
-      recoveryReason: STACK_PUBLISH_REFUSED_REASON,
-      updatedAt: Date.now(),
-    })
-    return
-  }
-  await updateAgentTeamRun(runId, {
-    status: "completed",
-    recoveryReason: undefined,
-    updatedAt: Date.now(),
-  })
+  const [
+    { getAgentTeamRun, updateAgentTeamRun },
+    { agentTeamExecutionRunId },
+    { appendRunEventInsideTransaction, semanticRunEvent, jobExecutionTables },
+  ] = await Promise.all([
+    import("@/lib/db/agent-team-runtime"),
+    import("@/lib/execution/agent-team-bridge"),
+    import("@/lib/db/execution-runs"),
+  ])
+  const db = getDb()
+  const settled = await db.transaction(
+    "rw",
+    [db.agentTeamRuns, ...jobExecutionTables(db)],
+    async () => {
+      const run = await getAgentTeamRun(runId)
+      if (
+        !run ||
+        run.teamId !== teamId ||
+        run.status !== "needs_input" ||
+        (run.recoveryReason !== STACK_PUBLISH_HELD_REASON &&
+          run.recoveryReason !== STACK_PUBLISH_REFUSED_REASON)
+      )
+        return false
+      if (outcome === "refused") {
+        // A refusal keeps the draft resumable; only stop/cancel ends that turn.
+        await updateAgentTeamRun(runId, {
+          recoveryReason: STACK_PUBLISH_REFUSED_REASON,
+          updatedAt: Date.now(),
+        })
+        return false
+      }
+      const now = Date.now()
+      await updateAgentTeamRun(runId, {
+        status: outcome,
+        recoveryReason: outcome === "failed" ? "delivery_failed" : undefined,
+        completedAt: now,
+        updatedAt: now,
+      })
+      // The chat watcher observes this execution, not the durable/store mirror.
+      // Commit both together and never overwrite a stop that won during publish.
+      await appendRunEventInsideTransaction(
+        db,
+        agentTeamExecutionRunId(runId),
+        semanticRunEvent(
+          `run.${outcome}`,
+          {},
+          { ts: now, sourceEventId: `agent-team:${runId}:terminal:${outcome}` }
+        )
+      )
+      return true
+    }
+  )
+  if (!settled || outcome === "refused") return
   const [{ useAgentTeamStore }, { emitTeamCompletedSchedulerEvent }] = await Promise.all([
     import("@/stores/agent/agent-team-store"),
     import("../squad/squad-lifecycle-runner"),
   ])
-  useAgentTeamStore.getState().setTeamStatus(teamId, "completed")
-  await emitTeamCompletedSchedulerEvent(teamId, "completed")
+  useAgentTeamStore.getState().setTeamStatus(teamId, outcome)
+  await emitTeamCompletedSchedulerEvent(teamId, outcome)
 }
 
 export async function prepareAndPublishGithubStack(
@@ -692,7 +734,10 @@ export async function prepareAndPublishGithubStack(
     )
   }
 
-  const octokit = await resolveOctokit(first)
+  const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+  const octokit = await resolveOctokit(first, undefined, {
+    executionRunId: agentTeamExecutionRunId(runId),
+  })
   if (!octokit) throw new Error("GitHub delivery credentials are unavailable")
   const { createDeliveryGraphService } = await import("./delivery-graph")
   const service = createDeliveryGraphService({

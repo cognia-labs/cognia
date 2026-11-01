@@ -1,3 +1,4 @@
+import { pluginExecutionContext } from "./invocation-identity"
 /**
  * Tests for the unified plugin-tool invocation seam.
  *
@@ -252,6 +253,7 @@ describe("invokePluginTool", () => {
         signal: controller.signal,
         sessionId: "sess-1",
         messageId: "msg-1",
+        executionRunId: "exact-run",
         sandboxRuntimeRef: "sandbox-runtime:one",
       }
     )
@@ -261,6 +263,7 @@ describe("invokePluginTool", () => {
       expect.objectContaining({
         sessionId: "sess-1",
         messageId: "msg-1",
+        executionRunId: "exact-run",
         sandboxRuntimeRef: "sandbox-runtime:one",
         signal: expect.any(AbortSignal),
       })
@@ -721,6 +724,18 @@ describe("invokePluginTool — interceptor points (ADR-0189)", () => {
     expect(received).toEqual({ normalized: true })
   })
 
+  it("binds a different plugin's interceptor to the exact Host attempt", async () => {
+    const seen: unknown[] = []
+    interceptor("cross-plugin", "tool.call.prepare", "transform", (value: object) => {
+      seen.push(pluginExecutionContext("policy"))
+      return value
+    })
+    __setInvokePluginToolDepsForTesting(makeDeps())
+    await invokePluginTool("plug-a", "demo_tool", {}, { executionRunId: "service-attempt" })
+    expect(seen).toEqual([{ executionRunId: "service-attempt" }])
+    expect(pluginExecutionContext("policy")).toBeUndefined()
+  })
+
   it("refuses a transform that redirects the call to another tool", async () => {
     const deps = makeDeps()
     __setInvokePluginToolDepsForTesting(deps)
@@ -775,4 +790,85 @@ describe("invokePluginTool — interceptor points (ADR-0189)", () => {
     await expect(invokePluginTool("plug-a", "demo_tool", {})).rejects.toThrow()
     expect(execute).not.toHaveBeenCalled()
   })
+})
+
+it("binds Host execution before lazy activation and ignores tool/model identity fields", async () => {
+  const execute = jest.fn(async () => {
+    await Promise.resolve()
+    expect(pluginExecutionContext("bound-provider")?.executionRunId).toBe("host-attempt")
+    return "done"
+  })
+  const deps = makeDeps({
+    plugins: { "bound-provider": { status: "disabled" } },
+    tools: [makeTool({ execute, pluginId: "bound-provider" })],
+    onActivationEvent: () => {
+      expect(pluginExecutionContext("bound-provider")?.executionRunId).toBe("host-attempt")
+    },
+  })
+  // Use a disabled first read so activation executes while the binding exists.
+  const manager = deps.getManager()
+  const activate = jest.fn(manager.handleActivationEvent)
+  let reads = 0
+  deps.getManager = () => ({
+    ...manager,
+    handleActivationEvent: activate,
+    getPlugin: () => ({ status: reads++ === 0 ? "disabled" : "enabled", manifest: {} }),
+  })
+  __setInvokePluginToolDepsForTesting(deps)
+  try {
+    await invokePluginTool(
+      "bound-provider",
+      "demo_tool",
+      { executionRunId: "forged", localAuthorization: "local-person" },
+      { executionRunId: "host-attempt" }
+    )
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(activate).toHaveBeenCalledWith("onTool:demo_tool", {
+      initiatorPluginId: "bound-provider",
+    })
+  } finally {
+    __setInvokePluginToolDepsForTesting(null)
+  }
+  expect(pluginExecutionContext("bound-provider")).toBeUndefined()
+})
+
+it("keeps one Host identity through real nested own/dependency invocation", async () => {
+  const inner = makeTool({
+    name: "inner",
+    pluginId: "nested-dependency",
+    execute: async () => {
+      expect(pluginExecutionContext("nested-dependency")?.executionRunId).toBe("host-attempt")
+      return "read"
+    },
+  })
+  const outer = makeTool({
+    name: "outer",
+    pluginId: "nested-owner",
+    execute: async () => {
+      return (
+        await invokePluginTool(
+          "nested-dependency",
+          "inner",
+          { executionRunId: "forged" },
+          pluginExecutionContext("nested-owner")
+        )
+      ).result
+    },
+  })
+  __setInvokePluginToolDepsForTesting(
+    makeDeps({
+      plugins: {
+        "nested-owner": { status: "enabled" },
+        "nested-dependency": { status: "enabled" },
+      },
+      tools: [outer, inner],
+    })
+  )
+  try {
+    await expect(
+      invokePluginTool("nested-owner", "outer", {}, { executionRunId: "host-attempt" })
+    ).resolves.toMatchObject({ result: "read" })
+  } finally {
+    __setInvokePluginToolDepsForTesting(null)
+  }
 })

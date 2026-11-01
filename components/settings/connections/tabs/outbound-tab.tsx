@@ -139,7 +139,7 @@ async function retryAllDeadlettered(ids: string[]) {
 /** Drop every dead-letter row from the active filter scope. */
 async function clearAllDeadlettered(ids: string[]) {
   if (ids.length === 0) return
-  await getDb().outboundQueue.bulkDelete(ids)
+  for (const id of ids) await deleteOutboundJob(id)
 }
 
 /**

@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/i18n/runtime-translator", () => ({
   currentLocale: jest.fn(async () => "en"),
 }))
@@ -313,4 +314,18 @@ it.each([
   })
   expect(resolveLarkAuth).toHaveBeenLastCalledWith(expect.objectContaining({ identity: "user" }))
   expect(mockProcessRunner).not.toHaveBeenCalled()
+})
+
+it("forwards direct Host ingest admission to the shared auth bridge", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
+    ok: false,
+    reason: "sender_not_token_owner",
+    message: "refused",
+    adapterId: "a",
+  })
+  await execLarkCli({ args: ["docs", "+fetch"], adapterId: "a", credentialContext })
+  expect(resolveLarkAuth).toHaveBeenLastCalledWith(
+    expect.objectContaining({ adapterId: "a", credentialContext })
+  )
 })

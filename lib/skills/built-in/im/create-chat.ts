@@ -12,6 +12,7 @@ import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
+import { resolveBuiltInSkillRunScope } from "../context"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import {
   previewText,
@@ -98,25 +99,35 @@ const skill: BuiltInSkill<typeof schema> = {
       } else {
         const { enqueueAuthorized } = await import("@/lib/connectors/delivery-gateway")
         const { newIdempotencyKey } = await import("@/types/connectors/outbound")
-        const delivered = await enqueueAuthorized({
-          adapterId: resolved.adapterId,
-          conversationKey: bootstrap.conversationKey,
-          request: {
-            conversationRef: {
-              platform: resolved.platform,
-              adapterId: resolved.adapterId,
-              channelId: result.chatId,
+        const runScope = resolveBuiltInSkillRunScope(ctx)
+        const delivered = await enqueueAuthorized(
+          {
+            adapterId: resolved.adapterId,
+            conversationKey: bootstrap.conversationKey,
+            request: {
+              conversationRef: {
+                platform: resolved.platform,
+                adapterId: resolved.adapterId,
+                channelId: result.chatId,
+              },
+              segments: [{ type: "text", text: args.firstMessage }],
+              metadata: { idempotencyKey: newIdempotencyKey() },
             },
-            segments: [{ type: "text", text: args.firstMessage }],
-            metadata: { idempotencyKey: newIdempotencyKey() },
+            source: "skill",
+            // The chat is the one this call just created, around the members
+            // the call was authorized to reach.
+            authorization: skillDeliveryAuthorization(ctx, "im.create_chat", {
+              createdConversation: true,
+            }),
           },
-          source: "skill",
-          // The chat is the one this call just created, around the members
-          // the call was authorized to reach.
-          authorization: skillDeliveryAuthorization(ctx, "im.create_chat", {
-            createdConversation: true,
-          }),
-        })
+          {
+            signal: ctx.signal,
+            executionContext: {
+              sessionId: runScope.sessionId,
+              executionRunId: runScope.runId ?? "",
+            },
+          }
+        )
         firstMessage = delivered.kind === "drafted" ? "drafted" : "sent"
       }
     }

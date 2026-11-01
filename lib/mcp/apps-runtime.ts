@@ -1,3 +1,5 @@
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { isBuiltinToolExecutionRun } from "@/lib/execution/acting-authority"
 import type { McpCapabilityCacheRow, McpServer, McpToolRisk } from "@cognia/agent-config-types"
 import type {
   McpUiResourceCsp,
@@ -23,15 +25,46 @@ export interface LoadedMcpApp {
 }
 
 interface AppDownloadDeps {
+  credentialContext?: PersonalCredentialContext
   readLinked?: typeof readMcpDownloadResource
   saveText?: typeof saveFileAs
   saveBinary?: typeof saveBinaryFileAs
 }
 
 interface AppsRuntimeDeps {
+  credentialContext?: PersonalCredentialContext
   listServers?: typeof listEnabledMcpServers
   loadCapabilities?: (serverId: string) => Promise<McpCapabilityCacheRow[]>
   readResource?: typeof readMcpAppResource
+}
+
+/** The Host journal binds the tool call to its exact run, including in history.
+ * Never borrow a newer session run or infer personal admission from mounting UI.
+ */
+export async function resolveMcpAppToolCredentialContext(
+  sessionId: string,
+  toolCallId: string
+): Promise<PersonalCredentialContext> {
+  const refused = { sessionId, executionRunId: "" }
+  if (!toolCallId) return refused
+  const db = getDb()
+  return db.transaction("r", db.executionRuns, db.executionRunEvents, async () => {
+    const runs = await db.executionRuns.where("sessionId").equals(sessionId).toArray()
+    if (!runs.length) return refused
+    const events = await db.executionRunEvents
+      .where("runId")
+      .anyOf(runs.map((run) => run.id))
+      .filter((event) => event.type === "tool.started" && event.payload.toolCallId === toolCallId)
+      .toArray()
+    const ids = new Set(events.map((event) => event.runId))
+    return getDb() === db && ids.size === 1
+      ? {
+          sessionId,
+          executionRunId: events[0].runId,
+          externalEngine: !isBuiltinToolExecutionRun(sessionId, events[0].runId),
+        }
+      : refused
+  })
 }
 
 export function parseNamespacedMcpToolName(
@@ -58,7 +91,12 @@ export async function loadMcpAppForTool(
   const tool = freshest.tools.find((candidate) => candidate.name === parsed.toolName)
   const resourceUri = tool ? toolUiResourceUri(tool._meta) : undefined
   if (!resourceUri) return undefined
-  const resource = await (deps.readResource ?? readMcpAppResource)(server, resourceUri, scopeId)
+  const resource = await (deps.readResource ?? readMcpAppResource)(
+    server,
+    resourceUri,
+    scopeId,
+    deps.credentialContext
+  )
   return {
     server,
     toolName: parsed.toolName,
@@ -107,13 +145,14 @@ export async function promoteMcpAppDownload(
 export async function readMcpAppResource(
   server: McpServer,
   resourceUri: string,
-  scopeId: string
+  scopeId: string,
+  credentialContext?: PersonalCredentialContext
 ): Promise<{
   html: string
   csp?: McpUiResourceCsp
   permissions?: McpUiResourcePermissions
 }> {
-  const resource = await readMcpDownloadResource(server, resourceUri, scopeId)
+  const resource = await readMcpDownloadResource(server, resourceUri, scopeId, credentialContext)
   if (resource.mimeType !== "text/html;profile=mcp-app" || !resource.text) {
     throw new Error("MCP App resource must return text/html;profile=mcp-app HTML")
   }
@@ -131,7 +170,8 @@ export async function readMcpAppResource(
 export async function readMcpDownloadResource(
   server: McpServer,
   resourceUri: string,
-  scopeId: string
+  scopeId: string,
+  credentialContext?: PersonalCredentialContext
 ): Promise<{
   uri: string
   mimeType?: string
@@ -144,7 +184,9 @@ export async function readMcpDownloadResource(
   // blocked or deleted server is refused instead of reconnected.
   const current = await getMcpServer(server.id)
   if (!current) throw new Error(`MCP server ${server.name} is no longer configured`)
-  const resolved = await resolveMcpRuntimeCredential(current)
+  const resolved = await resolveMcpRuntimeCredential(current, {
+    credentialContext: credentialContext ?? { sessionId: scopeId },
+  })
   const result = await defaultMcpRuntimeGateway.readResource({
     scopeId,
     server: resolved.server,
@@ -159,6 +201,7 @@ export async function readMcpDownloadResource(
 }
 
 export async function callMcpAppTool(input: {
+  credentialContext?: PersonalCredentialContext
   serverId: string
   toolName: string
   args?: Record<string, unknown>
@@ -168,6 +211,7 @@ export async function callMcpAppTool(input: {
   if (!server) throw new Error(`MCP server ${input.serverId} not found`)
   return invokeMcpTool(
     {
+      credentialContext: input.credentialContext,
       serverId: input.serverId,
       toolName: input.toolName,
       args: input.args,
@@ -202,7 +246,12 @@ async function resolveDownloadResource(
 ): Promise<{ filename: string; mimeType?: string; text?: string; bytes?: Uint8Array } | undefined> {
   if (!isRecord(value)) return undefined
   if (value.type === "resource_link" && typeof value.uri === "string") {
-    const linked = await (deps.readLinked ?? readMcpDownloadResource)(server, value.uri, scopeId)
+    const linked = await (deps.readLinked ?? readMcpDownloadResource)(
+      server,
+      value.uri,
+      scopeId,
+      deps.credentialContext
+    )
     if (linked.text !== undefined) {
       return { filename: filenameFromUri(value.uri), text: linked.text, mimeType: linked.mimeType }
     }

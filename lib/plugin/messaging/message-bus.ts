@@ -114,6 +114,7 @@ export const SystemEvents = {
 // =============================================================================
 
 export class MessageBus {
+  private readonly executions = new WeakMap<BusEvent, PersonalCredentialContext>()
   private config: MessageBusConfig
   private subscriptions: Map<string, EventSubscription> = new Map()
   private eventHistory: BusEvent[] = []
@@ -163,6 +164,12 @@ export class MessageBus {
       metadata,
     }
 
+    this.executions.set(
+      event,
+      source.type === "plugin"
+        ? (pluginExecutionContext(source.id) ?? HOST_BACKGROUND)
+        : HOST_BACKGROUND
+    )
     this.recordEvent(event)
     this.log("emit", event)
     this.deliverEvent(event)
@@ -374,7 +381,13 @@ export class MessageBus {
 
     for (const subscription of matchingSubscriptions) {
       try {
-        subscription.handler(event)
+        if (subscription.source.type === "plugin")
+          withPluginExecutionContext(
+            subscription.source.id,
+            this.executions.get(event) ?? HOST_BACKGROUND,
+            () => subscription.handler(event)
+          )
+        else subscription.handler(event)
 
         if (subscription.once) {
           toRemove.push(subscription.id)
@@ -674,3 +687,9 @@ export function createEventAPI(pluginId: string): PluginEventAPI {
     },
   }
 }
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"

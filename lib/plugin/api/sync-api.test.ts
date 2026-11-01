@@ -6,6 +6,14 @@ import { assertSyncConnection, clearSyncForPlugin, createSyncAPI } from "./sync-
 import { connectionAccess } from "@/lib/plugin/auth/connection-access"
 import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import { pendingExternalSyncKeys } from "@/lib/external-services/sync/runtime"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import {
+  HOST_BACKGROUND,
+  bindPluginContextCallbacks,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 
 jest.mock("@/lib/plugin/auth/connection-access", () => ({ connectionAccess: jest.fn() }))
 
@@ -27,6 +35,104 @@ const driver = () =>
     applyPage: jest.fn(async () => {}),
   }) satisfies PluginSyncDriver<string>
 const api = () => createSyncAPI("sync-test", { hasPermission: () => true })
+
+it("pins direct sync callbacks to their initiating Host identity across awaits", async () => {
+  const sync = bindPluginContextCallbacks("sync-test", api())
+  const identity: PersonalCredentialContext = { localAuthorization: LOCAL_PERSON_RUN }
+  const observed: unknown[] = []
+  const record = async () => {
+    await Promise.resolve()
+    observed.push(pluginExecutionContext("sync-test"))
+  }
+  sync.register("calendar:a:b", {
+    itemId: (id: string) => {
+      observed.push(pluginExecutionContext("sync-test"))
+      return id
+    },
+    fetchPage: async () => {
+      await record()
+      return { items: ["a"], cursor: "next" }
+    },
+    applyPage: record,
+    complete: record,
+  })
+  let pending!: ReturnType<typeof sync.run>
+  withPluginExecutionContext("sync-test", identity, () => {
+    pending = sync.run("calendar:a:b")
+  })
+  expect(await pending).toMatchObject({ status: "completed" })
+  expect(observed).toEqual(Array(4).fill(identity))
+  expect(pluginExecutionContext("sync-test")).toBeUndefined()
+})
+
+it("keeps queued cursor callbacks background despite a pending person invocation or manual label", async () => {
+  const sync = api()
+  let release!: () => void
+  const pending = withPluginExecutionContext(
+    "sync-test",
+    { localAuthorization: LOCAL_PERSON_RUN },
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve
+      })
+  )
+  const observed: unknown[] = []
+  let complete!: () => void
+  const finished = new Promise<void>((resolve) => {
+    complete = resolve
+  })
+  sync.register("calendar:a:b", {
+    itemId: String,
+    fetchPage: async () => {
+      observed.push(pluginExecutionContext("sync-test"))
+      complete()
+      return { items: [] }
+    },
+    applyPage: async () => {},
+  })
+  try {
+    sync.request("calendar:a:b", {
+      reason: "manual",
+      ...{ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } },
+    })
+    await finished
+    expect(observed).toEqual([HOST_BACKGROUND])
+  } finally {
+    release()
+    await pending
+  }
+})
+
+it("retains cancelled sync callback binding until the plugin promise actually settles", async () => {
+  const sync = api()
+  let entered!: () => void
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  let release!: () => void
+  const resume = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let observed: unknown
+  const d = driver()
+  d.fetchPage.mockImplementationOnce(async () => {
+    entered()
+    await resume
+    observed = pluginExecutionContext("sync-test")
+    return { items: [], cursor: "late" }
+  })
+  sync.register("calendar:a:b", d)
+  const controller = new AbortController()
+  const pending = sync.run("calendar:a:b", { signal: controller.signal })
+  await ready
+  controller.abort()
+  expect(await pending).toMatchObject({ status: "cancelled" })
+  expect(pluginExecutionContext("sync-test")).toEqual(HOST_BACKGROUND)
+  release()
+  await resume
+  await Promise.resolve()
+  expect(observed).toEqual(HOST_BACKGROUND)
+})
 
 it("checks Host integration grants without requiring a legacy builtin to declare auth services", async () => {
   const db = getDb()

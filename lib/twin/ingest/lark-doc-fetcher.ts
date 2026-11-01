@@ -123,6 +123,7 @@ interface ExecLarkCliLike {
   (input: {
     args: readonly string[]
     adapterId?: string
+    credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
     timeoutMs?: number
   }): Promise<
     | { status: "ok"; data: unknown; adapterId: string }
@@ -131,6 +132,7 @@ interface ExecLarkCliLike {
 }
 
 export interface FetchLarkDocOptions {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Required when reopening a kept copy; fresh imports have no prior capture. */
   sourceProvenance?: RemoteDocumentProvenanceV1 | KeptCopySourceReference
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
@@ -171,6 +173,12 @@ export async function fetchLarkDocAsRawSource(
   if (!ref) throw new LarkIngestError("larkInvalidUrl")
 
   try {
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    const decision = await admitPersonalCredential(opts.credentialContext, {
+      source: "lark-user",
+      person: opts.adapterId,
+    })
+    if (!decision.ok) throw new LarkIngestError("larkNotAuthorized")
     const result =
       (opts.channel ?? "api") === "cli"
         ? await withRequestAbort(opts.signal, () => fetchViaCli(urlOrToken, ref, opts))
@@ -207,6 +215,7 @@ async function fetchViaApi(
       {
         adapterId: opts.adapterId,
         identity: "user",
+        credentialContext: opts.credentialContext,
         httpImpl: opts.httpImpl,
         mapError: mapLarkError,
         signal: opts.signal,
@@ -214,7 +223,11 @@ async function fetchViaApi(
         maxResponseBytes: opts.maxResponseBytes ?? MAX_REMOTE_DOC_RESPONSE_BYTES,
       },
       async (api) => {
-        const connection = await resolveLarkConnection(opts.adapterId)
+        const connection = await resolveLarkConnection(
+          opts.adapterId,
+          undefined,
+          opts.credentialContext
+        )
         const result = await readDoc(api, input, ref, opts.adapterId)
         return {
           ...result,
@@ -372,12 +385,13 @@ async function fetchViaCli(
   // itself, so every ref kind goes through the same subcommand.
   let result: Awaited<ReturnType<ExecLarkCliLike>>
   throwIfRequestAborted(opts.signal)
-  const connection = await resolveLarkConnection(opts.adapterId)
+  const connection = await resolveLarkConnection(opts.adapterId, undefined, opts.credentialContext)
   throwIfRequestAborted(opts.signal)
   try {
     result = await exec({
       args: ["docs", "+fetch", "--doc", ref.token, "--doc-format", "markdown"],
       adapterId: opts.adapterId,
+      credentialContext: opts.credentialContext,
     })
   } catch (err) {
     // The native process bridge is unavailable on unsupported hosts.
@@ -396,7 +410,7 @@ async function fetchViaCli(
     throw new LarkIngestError("larkNetwork", { reason: result.message })
   }
 
-  const current = await resolveLarkConnection(opts.adapterId)
+  const current = await resolveLarkConnection(opts.adapterId, undefined, opts.credentialContext)
   if (current.id !== connection.id || current.revision !== connection.revision)
     throw new LarkIngestError("larkNotAuthorized")
   throwIfRequestAborted(opts.signal)

@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 const settingsState: { current: Partial<AppSettings> } = { current: {} }
@@ -151,7 +152,12 @@ describe("uploadSnapshotToGoogleDrive", () => {
   })
   it("refuses when not configured / not connected", async () => {
     settingsState.current = { backupDestinations: {} }
-    expect(await uploadSnapshotToGoogleDrive("b", meta, { http: makeDrive().http })).toMatchObject({
+    expect(
+      await uploadSnapshotToGoogleDrive("b", meta, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: makeDrive().http,
+      })
+    ).toMatchObject({
       code: "not-configured",
     })
     settingsState.current = {
@@ -177,10 +183,14 @@ describe("uploadSnapshotToGoogleDrive", () => {
       http: drive.http,
       config,
       now: () => Date.UTC(2026, 7, 16, 2, 0, 5),
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     })
     expect(result).toMatchObject({
       ok: true,
       remotePath: "Cognia Backups/cognia-backup-2026-08-16T02-00-00-000Z.enc.cbk",
+    })
+    expect(getGoogleDriveCredentialLease).toHaveBeenLastCalledWith({
+      localAuthorization: LOCAL_PERSON_RUN,
     })
     const upload = drive.calls.find((c) => c.method === "POST" && c.url.includes("/upload/"))!
     expect(upload.headers?.["Content-Type"]).toMatch(/multipart\/related/)
@@ -227,7 +237,12 @@ describe("uploadSnapshotToGoogleDrive", () => {
       body: JSON.stringify({ error: "invalid_grant" }),
     })
     expect(
-      await uploadSnapshotToGoogleDrive("b", meta, { http: refreshFails, config, now: () => 5 })
+      await uploadSnapshotToGoogleDrive("b", meta, {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        http: refreshFails,
+        config,
+        now: () => 5,
+      })
     ).toMatchObject({
       ok: false,
       code: "not-connected",
@@ -270,13 +285,29 @@ it("lists and downloads ciphertext with the same Host credential lease", async (
       }),
     }
   })
-  expect(await listGoogleDriveSnapshots({ http, config: cfg })).toEqual([
-    { remoteId: "snapshot", label: "cognia-backup-one.enc.cbk", bytes: 10 },
-  ])
   expect(
-    new TextDecoder().decode(await downloadGoogleDriveSnapshot("snapshot", { http, config: cfg }))
+    await listGoogleDriveSnapshots({
+      http,
+      config: cfg,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toEqual([{ remoteId: "snapshot", label: "cognia-backup-one.enc.cbk", bytes: 10 }])
+  expect(
+    new TextDecoder().decode(
+      await downloadGoogleDriveSnapshot("snapshot", {
+        http,
+        config: cfg,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    )
   ).toBe("ciphertext")
   expect(getGoogleDriveCredentialLease).toHaveBeenCalledTimes(2)
+  expect(getGoogleDriveCredentialLease).toHaveBeenNthCalledWith(1, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(getGoogleDriveCredentialLease).toHaveBeenNthCalledWith(2, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
   for (const [request] of http.mock.calls) expect(request.headers?.Authorization).toBe("Bearer at")
 })
 it.each(["list", "download"])("drops a stale %s result", async (operation) => {

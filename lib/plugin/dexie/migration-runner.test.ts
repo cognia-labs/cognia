@@ -8,6 +8,7 @@ import {
 } from "./migration-runner"
 import type { PluginDexieMigrationDef } from "@/types/plugin"
 import { loggers } from "@/lib/plugin/core/logger"
+import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 jest.mock("@/lib/plugin/core/logger", () => ({
   loggers: { manager: { warn: jest.fn() } },
@@ -133,6 +134,16 @@ describe("runPluginMigrations", () => {
     await runPluginMigrations(db, "plugin", 2, migrations, { upgrade })
     expect(upgrade).toHaveBeenCalledTimes(1)
     expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
+  })
+
+  it("binds Host database reconciliation callbacks through actual settlement", async () => {
+    await runPluginMigrations(db, "plugin", 1, [{ toVersion: 1, upgrade: "upgrade" }], {
+      upgrade: async () => {
+        await Promise.resolve()
+        expect(pluginExecutionContext("plugin")).toEqual(HOST_BACKGROUND)
+      },
+    })
+    expect(pluginExecutionContext("plugin")).toBeUndefined()
   })
 
   it("refuses a package below the committed data version without running handlers", async () => {

@@ -12,6 +12,7 @@ import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
   githubMirrorSyncTarget,
+  prepareGithubMirrorSync,
   syncRepoIssues,
   syncWorkspaceRepos,
   GithubMirrorSyncOutcomeError,
@@ -440,4 +441,21 @@ describe("syncWorkspaceRepos", () => {
     ).toEqual({ results: [], failures: [{ repoFullName: "o/r", error }] })
     expect(await syncWorkspaceRepos({ bindings: [] }, {})).toEqual({ results: [], failures: [] })
   })
+})
+
+it("prepares mirror credentials from the operation without retaining manual proof for later runs", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  const { HOST_BACKGROUND } = await import("@/lib/plugin/core/invocation-identity")
+  const { client } = octokit([{ data: [] }])
+  const resolveReadClient = jest.fn(async () => ({ octokit: client }))
+  const credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext =
+    { localAuthorization: actingAuthority.LOCAL_PERSON_RUN }
+  await prepareGithubMirrorSync(INPUT, { resolveReadClient }, credentialContext)
+  expect(resolveReadClient).toHaveBeenLastCalledWith(
+    INPUT.repoFullName,
+    undefined,
+    credentialContext
+  )
+  await prepareGithubMirrorSync(INPUT, { resolveReadClient })
+  expect(resolveReadClient).toHaveBeenLastCalledWith(INPUT.repoFullName, undefined, HOST_BACKGROUND)
 })

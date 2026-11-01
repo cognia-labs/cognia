@@ -82,6 +82,7 @@ function managedWorkspaceRoots(
 /** Acquire or validate the canonical physical environment for a managed chat. */
 export async function ensureSessionExecutionBundle(input: {
   sessionId: string
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   context: SessionExecutionContext
   project: Pick<Project, "id" | "roots" | "workspaceProvisioning">
   /**
@@ -117,7 +118,12 @@ export async function ensureSessionExecutionBundle(input: {
     : (roots.find((root) => root.id === context.rootId) ?? primaryRootOf(project))
   if (!primaryRoot) throw new Error("managed execution requires at least one Project root")
   const requestedBase = context.execution?.base ?? { kind: "workingState" as const }
-  const resolvedBase = await resolvePullRequestWorkspaceBase(primaryRoot.path, requestedBase)
+  const resolvedBase = await resolvePullRequestWorkspaceBase(
+    primaryRoot.path,
+    requestedBase,
+    undefined,
+    input.credentialContext
+  )
 
   let bundle = context.execution?.bundleId
     ? await getWorkspaceBundle(context.execution.bundleId)

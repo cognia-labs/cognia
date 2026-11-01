@@ -1,3 +1,19 @@
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
+import {
+  assertHostConnectionCredentialAuthorization,
+  type HostConnectionCredentialAuthorization,
+} from "@/lib/plugin/auth/connection-manager"
+
+export type GoogleStateAdmission =
+  | PersonalCredentialContext
+  | {
+      connectionAuthorization: HostConnectionCredentialAuthorization
+      lineageId: string
+    }
 /** Atomic credential transitions executed by the selected host, shared by WebViews. */
 import { transport } from "@/lib/tauri/transport-instance"
 import { DocsProviderError } from "@/lib/docs-providers/types"
@@ -85,11 +101,37 @@ function notify() {
   }
 }
 
-export async function googleState(input: GoogleStateInput): Promise<GoogleStateReply> {
+export async function googleState(
+  input: GoogleStateInput,
+  admission?: GoogleStateAdmission
+): Promise<GoogleStateReply> {
+  const assertAdmission = async () => {
+    // Snapshot/completion/poll may call userinfo; disconnect reads a personal
+    // token for revocation. None may silently run with ambient user authority.
+    if (!["snapshot", "accessToken", "complete", "pollDevice", "disconnect"].includes(input.action))
+      return
+    if (admission && "connectionAuthorization" in admission) {
+      // A consumer's row grant permits that row's token, not userinfo probes
+      // for unrelated legacy lineages during a global native snapshot.
+      if (input.action !== "accessToken") throw new DocsProviderError("notAuthorized")
+      if (input.action === "accessToken" && input.lineageId !== admission.lineageId)
+        throw new DocsProviderError("notAuthorized")
+      await assertHostConnectionCredentialAuthorization(
+        admission.connectionAuthorization,
+        admission.lineageId
+      )
+    } else {
+      const decision = await admitPersonalCredential(admission, { source: "google-docs" })
+      if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+    }
+  }
+  await assertAdmission()
   try {
-    return await (override
+    const reply = await (override
       ? override(input)
       : transport.call<GoogleStateReply>("connectors_google_docs_auth", { input }))
+    await assertAdmission()
+    return reply
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes("google_docs_state_stale"))

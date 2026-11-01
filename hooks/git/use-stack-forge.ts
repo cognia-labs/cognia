@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * The half of a stack that lives on GitHub: opening the pull requests, landing
  * them, and telling their reviewers when a restack moved the commits.
@@ -64,7 +66,8 @@ export interface UseStackForgeDeps {
 }
 
 const DEFAULT_DEPS: UseStackForgeDeps = {
-  open: (repositoryRoot) => openStackForge(repositoryRoot),
+  open: (repositoryRoot) =>
+    openStackForge(repositoryRoot, undefined, { localAuthorization: LOCAL_PERSON_RUN }),
   push: async (repositoryRoot, remote, branches) => {
     const { gitStackPush } = await import("@/lib/git/commands")
     return gitStackPush(repositoryRoot, remote, branches)

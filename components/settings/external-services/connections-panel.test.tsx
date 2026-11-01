@@ -28,6 +28,7 @@ jest.mock("next-intl", () => {
 })
 import "fake-indexeddb/auto"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import en from "@/i18n/messages/en/settings/externalServices.json"
@@ -48,6 +49,12 @@ import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
 import { ConnectionsPanel } from "./connections-panel"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  listLarkConnections: jest.fn(async () => []),
+}))
+jest.mock("@/lib/auth-providers/google/host-auth", () => ({
+  listGoogleConnections: jest.fn(async () => []),
+}))
 jest.mock("@/lib/db/auth-connections", () => ({ listAuthConnections: jest.fn() }))
 jest.mock("@/lib/db/external-services", () => ({
   listServiceConnections: jest.fn(),
@@ -162,7 +169,11 @@ it("signs in, reconnects, revokes one consumer, and disconnects only after confi
   expect(screen.getByText("Team")).toBeVisible()
   await user.click(screen.getByRole("button", { name: "Sign in to Vendor" }))
   await waitFor(() =>
-    expect(connectProvider).toHaveBeenCalledWith({ providerId: "vendor", scopes: [] })
+    expect(connectProvider).toHaveBeenCalledWith({
+      providerId: "vendor",
+      scopes: [],
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
   )
   await user.click(screen.getByRole("button", { name: "Reconnect" }))
   await waitFor(() =>
@@ -170,6 +181,7 @@ it("signs in, reconnects, revokes one consumer, and disconnects only after confi
       providerId: "vendor",
       reconnect: "host",
       scopes: ["read"],
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     })
   )
   await user.click(screen.getByRole("button", { name: "Revoke access for Calendar" }))
@@ -182,7 +194,12 @@ it("signs in, reconnects, revokes one consumer, and disconnects only after confi
   expect(disconnect).not.toHaveBeenCalled()
   await user.click(screen.getByRole("button", { name: "Disconnect" }))
   await user.click(screen.getByRole("button", { name: "Disconnect and revoke" }))
-  await waitFor(() => expect(disconnect).toHaveBeenCalledWith("host", { revoke: true }))
+  await waitFor(() =>
+    expect(disconnect).toHaveBeenCalledWith("host", {
+      revoke: true,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  )
 })
 
 it("rerenders from manager changes, shows the empty state, and unsubscribes on unmount", async () => {
@@ -301,7 +318,10 @@ it.each(["lark", "google"])(
       await screen.findByText("Person")
       await userEvent.click(screen.getByRole("button", { name: "Reconnect" }))
       await waitFor(() =>
-        expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
+        expect(reauthorize).toHaveBeenCalledWith("host", {
+          ingressBase: "https://relay.example",
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        })
       )
       expect(connectProvider).not.toHaveBeenCalled()
     } finally {
@@ -343,7 +363,10 @@ it("opens the shared device dialog for a Host reconnect and polls that authoriza
     })
     expect(screen.getByRole("dialog", { name: auth.deviceTitle })).toBeVisible()
     expect(screen.getByText("PANEL-CODE")).toBeVisible()
-    expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
+    expect(reauthorize).toHaveBeenCalledWith("host", {
+      ingressBase: "https://relay.example",
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     await act(async () => {
       await jest.advanceTimersByTimeAsync(5000)
     })

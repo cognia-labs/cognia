@@ -326,7 +326,10 @@ export async function publishBotWorkspace(
       owned.binding.account.pluginId,
       owned.binding.account.id,
       `${prefix}${path}`,
-      { method, ...(body ? { body: JSON.stringify(body) } : {}) }
+      { method, ...(body ? { body: JSON.stringify(body) } : {}) },
+      undefined,
+      // The exact operator binding was reverified above; phase 5 owns its migration.
+      { pluginId: owned.binding.account.pluginId, accountId: owned.binding.account.id }
     )
     if (response.status < 200 || response.status >= 300)
       throw new Error(`GitHub publication failed (${response.status})`)
@@ -379,7 +382,10 @@ export async function publishBotWorkspace(
   const remote = await authenticatedIntegrationRequest<{ object?: { sha: string } }>(
     owned.binding.account.pluginId,
     owned.binding.account.id,
-    `${prefix}${refPath}`
+    `${prefix}${refPath}`,
+    undefined,
+    undefined,
+    { pluginId: owned.binding.account.pluginId, accountId: owned.binding.account.id }
   )
   if (remote.status === 404)
     await request("/git/refs", "POST", { ref: `refs/heads/${input.branch}`, sha: commit.sha })

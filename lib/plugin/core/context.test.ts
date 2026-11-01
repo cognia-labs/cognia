@@ -14,6 +14,7 @@ import type { Plugin, PluginManifest } from "@/types/plugin"
 import type { PluginManager } from "./manager"
 import { generateCodeVerifier } from "@cognia/provider-core/providers/oauth"
 import { invoke } from "@tauri-apps/api/core"
+import { getExecutor } from "@/lib/workflow/nodes/registry"
 
 jest.mock("@cognia/provider-core/providers/oauth", () => {
   const actual = jest.requireActual("@cognia/provider-core/providers/oauth")
@@ -29,6 +30,11 @@ import {
   unregisterPluginProtocolAdaptersByPlugin,
   __resetPluginProtocolAdaptersForTesting,
 } from "@/lib/ai/agent/external/protocol-adapter"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 import { invokePluginTool } from "@/lib/plugin/core/invoke-plugin-tool"
 import {
   __resetPluginHostRuntimesForTesting,
@@ -680,8 +686,9 @@ describe("createPluginContext", () => {
       expect(createWorkflowAuthorAPI).toHaveBeenLastCalledWith()
     })
 
-    it("surfaces plugin node default params on the hot-merged catalog entry", () => {
+    it("surfaces plugin node default params and binds execution to its exact workflow run", async () => {
       const context = createPluginContext(createMockPlugin(), mockManager)
+      const seen: unknown[] = []
       const dispose = context.workflow.registerNode({
         kind: "action.format",
         typeVersion: 1,
@@ -691,12 +698,21 @@ describe("createPluginContext", () => {
         iconName: "Wand",
         paramsSchema: { type: "object" },
         defaultParams: { mode: "markdown", retries: 2 },
-        execute: async () => ({ output: {} }),
+        execute: async () => {
+          await Promise.resolve()
+          seen.push(pluginExecutionContext("test-plugin"))
+          return { output: {} }
+        },
       })
 
       const entry = nodeCatalogEntry("test-plugin.action.format" as never)
       expect(entry.defaultParams).toEqual({ mode: "markdown", retries: 2 })
       expect(entry.typeVersion).toBe(1)
+      await getExecutor("test-plugin.action.format" as never, 1)!.execute({
+        runId: "service-workflow",
+      } as never)
+      expect(seen).toEqual([{ executionRunId: "execution:workflow:service-workflow" }])
+      expect(pluginExecutionContext("test-plugin")).toBeUndefined()
 
       dispose()
     })
@@ -3086,6 +3102,37 @@ describe("agent imperative API", () => {
       )
     })
 
+    it("inherits the Host-held execution for own and dependency tools even when plugin options name another session", async () => {
+      initializePluginPermissions(PLUGIN_ID, ["agent:control"])
+      const original = createMockPlugin()
+      jest.mocked(mockManager.getPlugin).mockReturnValue({
+        ...original,
+        manifest: { ...original.manifest, dependencies: { dependency: "*" } },
+      })
+      try {
+        const ctx = createPluginContext(createMockPlugin(), mockManager)
+        await withPluginExecutionContext(
+          PLUGIN_ID,
+          { sessionId: "host-session", executionRunId: "host-attempt" },
+          async () => {
+            await ctx.agent.invokeTool("own_tool", {}, { sessionId: "forged" })
+            await ctx.agent.invokeDependencyTool(
+              "dependency",
+              "dep_tool",
+              {},
+              { sessionId: "forged" }
+            )
+          }
+        )
+        for (const call of mockInvokePluginTool.mock.calls)
+          expect(call[3]).toEqual(
+            expect.objectContaining({ sessionId: "host-session", executionRunId: "host-attempt" })
+          )
+      } finally {
+        jest.mocked(mockManager.getPlugin).mockReturnValue(original)
+      }
+    })
+
     it("routes an author-callable host tool to the host runtime, not the plugin registry", async () => {
       // The promoted web tools must reach the HOST's search/fetch policy. If
       // they fell through to `invokePluginTool` a plugin could shadow them by
@@ -4589,4 +4636,13 @@ describe("ctx.browser guard (ADR-0201)", () => {
       expect(typeof (route.engine as Record<string, unknown>)[method]).toBe("function")
     }
   })
+})
+it("fences callbacks registered through the published base context", () => {
+  const plugin = createMockPlugin()
+  const ctx = createPluginContext(plugin, mockManager)
+  const seen: unknown[] = []
+  ctx.events.on("binding", () => seen.push(pluginExecutionContext(plugin.manifest.id)))
+  ctx.events.emit("binding", {})
+  expect(seen).toEqual([HOST_BACKGROUND])
+  expect(pluginExecutionContext(plugin.manifest.id)).toBeUndefined()
 })

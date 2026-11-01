@@ -108,6 +108,8 @@ export interface InterceptorOutcomeSink {
 }
 
 export interface InterceptorDispatchContext {
+  /** Host-only callback fence; never copied into plugin metadata or payloads. */
+  invokeHandler?<T>(registration: InterceptorRegistration, invoke: () => T | Promise<T>): Promise<T>
   /** Stable across the whole logical operation. */
   operationId: string
   traceId?: string
@@ -336,6 +338,14 @@ function runHandler<T>(invoke: () => T | Promise<T>, timeoutMs: number, label: s
   return withTimeout(Promise.resolve().then(invoke), timeoutMs, label) as Promise<T>
 }
 
+function invokeHandler<T>(
+  registration: InterceptorRegistration,
+  context: InterceptorDispatchContext,
+  invoke: () => T | Promise<T>
+): T | Promise<T> {
+  return context.invokeHandler ? context.invokeHandler(registration, invoke) : invoke()
+}
+
 function resolveChain(
   pointId: string,
   context: InterceptorDispatchContext
@@ -388,7 +398,7 @@ export function dispatchObserve<TPayload>(
       continue
     }
     void runHandler(
-      () => handler(structuredClone(payload), meta),
+      () => invokeHandler(registration, context, () => handler(structuredClone(payload), meta)),
       effectiveTimeout(point, registration, context),
       `interceptor:${pointId}:${registration.registrationId}`
     )
@@ -526,7 +536,7 @@ export async function dispatchTransform<TValue>(
         throw new InterceptorReentrancyError(pointId, registration.registrationId, depth)
       }
       const produced = await runHandler(
-        () => handler(structuredClone(current), meta),
+        () => invokeHandler(registration, context, () => handler(structuredClone(current), meta)),
         effectiveTimeout(point, registration, context),
         `interceptor:${pointId}:${registration.registrationId}`
       )
@@ -607,7 +617,7 @@ export async function dispatchGuard<TPayload>(
         throw new InterceptorReentrancyError(pointId, registration.registrationId, depth)
       }
       const verdict = await runHandler(
-        () => handler(structuredClone(payload), meta),
+        () => invokeHandler(registration, context, () => handler(structuredClone(payload), meta)),
         effectiveTimeout(point, registration, context),
         `interceptor:${pointId}:${registration.registrationId}`
       )
@@ -784,6 +794,8 @@ function emitOperationCompleted(
     interceptorsFailed: report.failed.length,
   }
   dispatchObserve<OperationCompletedPayload>("operation.completed", payload, {
+    ...context,
+    chain: undefined,
     operationId: report.operationId,
     ...(context.traceId ? { traceId: context.traceId } : {}),
     ...(context.sessionId ? { sessionId: context.sessionId } : {}),
@@ -838,7 +850,7 @@ async function runAroundEntry<TIn, TOut>(
     }
     const meta = mintMetadata(registration, context)
     const produced = await runHandler(
-      () => handler(value, nextFn, meta),
+      () => invokeHandler(registration, context, () => handler(value, nextFn, meta)),
       effectiveTimeout(point, registration, context),
       `interceptor:${pointId}:${registration.registrationId}`
     )

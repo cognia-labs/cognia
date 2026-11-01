@@ -43,6 +43,7 @@
 import Dexie from "dexie"
 
 import { getDb } from "@/lib/db/schema"
+import { deleteOutboundJobs } from "@/lib/db/outbound-jobs"
 import { CONVERSATION_KEY_SEP } from "@/types/connectors/event"
 
 /** The identifying fields the reaper needs; a full row satisfies it. */
@@ -82,7 +83,6 @@ const BY_ADAPTER_ID = [
  */
 const BY_ADAPTER_ID_COMPOUND: ReadonlyArray<{ table: string; index: string }> = [
   { table: "larkMessageImports", index: "[adapterId+chatId]" },
-  { table: "outboundQueue", index: "[adapterId+status]" },
   { table: "platformIdentities", index: "[adapterId+remoteUserId]" },
 ]
 
@@ -151,6 +151,14 @@ export async function reapAdapterResidue(
       table.where(index).between([target.id, Dexie.minKey], [target.id, Dexie.maxKey]).delete()
     )
   }
+
+  await reap(report, "outboundQueue", () =>
+    deleteOutboundJobs(
+      getDb()
+        .outboundQueue.where("[adapterId+status]")
+        .between([target.id, Dexie.minKey], [target.id, Dexie.maxKey])
+    )
+  )
 
   const prefix = conversationKeyPrefix(target)
   for (const name of BY_CONVERSATION_KEY) {

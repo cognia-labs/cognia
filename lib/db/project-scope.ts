@@ -236,6 +236,8 @@ export async function detachProjectContents(projectId: string): Promise<string> 
 }
 
 export async function deleteProjectCascade(projectId: string): Promise<void> {
+  const { deleteOutboundJobs } = await import("./outbound-jobs")
+  const { jobExecutionTables } = await import("./execution-runs")
   const db = getDb()
   // Native histories live outside Dexie. Remove them before the transaction
   // drops their durable links; a host failure leaves the workspace retryable.
@@ -266,9 +268,12 @@ export async function deleteProjectCascade(projectId: string): Promise<void> {
     ...CHILD_TABLES.map((c) => c.table),
     ...SESSION_CHILD_TABLES,
   ])
-  const tables = [...tableNames, "connectorInboundJobs", "syncTombstones", "sharedRunJournals"].map(
-    (t) => db.table(t)
-  )
+  const tables = [
+    ...[...tableNames, "connectorInboundJobs", "syncTombstones", "sharedRunJournals"].map((t) =>
+      db.table(t)
+    ),
+    ...jobExecutionTables(db),
+  ]
   const orphanCandidates = new Set<string>()
   let projectSessionIds: string[] = []
 
@@ -350,7 +355,9 @@ export async function deleteProjectCascade(projectId: string): Promise<void> {
       if (ids.length > 0) await db.table(table).where(fk).anyOf(ids).delete()
     }
     for (const t of PROJECT_SCOPED_TABLES) {
-      await db.table(t).where("projectId").equals(projectId).delete()
+      if (t === "outboundQueue")
+        await deleteOutboundJobs(db.outboundQueue.where("projectId").equals(projectId))
+      else await db.table(t).where("projectId").equals(projectId).delete()
     }
     if (sessionIds.length > 0) {
       for (const t of SESSION_CHILD_TABLES) {

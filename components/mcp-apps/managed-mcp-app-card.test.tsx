@@ -8,6 +8,10 @@ const promoteMock = jest.fn()
 const toolRisk: { value: "read" | "write" | "destructive" } = { value: "write" }
 jest.mock("@/lib/mcp/apps-runtime", () => ({
   loadMcpAppForTool: (...args: unknown[]) => loadMock(...args),
+  resolveMcpAppToolCredentialContext: async (sessionId: string) => ({
+    sessionId,
+    executionRunId: "",
+  }),
   callMcpAppTool: (...args: unknown[]) => callMock(...args),
   promoteMcpAppDownload: (...args: unknown[]) => promoteMock(...args),
   getMcpAppToolRisk: () => toolRisk.value,
@@ -196,4 +200,16 @@ describe("ManagedMcpAppCard", () => {
       await waitFor(() => expect(answers).toEqual([false]))
     })
   })
+})
+
+it("never grants local admission merely by mounting conversation history", async () => {
+  loadMock.mockResolvedValue(app)
+  render(
+    <ManagedMcpAppCard namespacedToolName="mcp__figma__tool" sessionId="history" part={part} />
+  )
+  await waitFor(() =>
+    expect(loadMock).toHaveBeenLastCalledWith("mcp__figma__tool", "history", {
+      credentialContext: { sessionId: "history", executionRunId: "" },
+    })
+  )
 })

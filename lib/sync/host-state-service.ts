@@ -424,7 +424,16 @@ export function createAgentRpcHostStateDispatcher(
             const options =
               partitionChat || personAgent
                 ? undefined
-                : await buildSendOptions(session, action.action.text)
+                : await buildSendOptions(
+                    session,
+                    action.action.text,
+                    undefined,
+                    undefined,
+                    undefined,
+                    {
+                      executionRunId: receipt?.runId ?? "",
+                    }
+                  )
             // Attachments become content here, not in the intent: the intent
             // carries refs so a 10 MB screenshot never rides the action ledger
             // (or the replay stream, or a queue row that gets retried). This is

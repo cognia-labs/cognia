@@ -240,6 +240,7 @@ export async function registerIntegrationsForPlugin(
                 },
                 {
                   kind: "tool-call",
+                  executionRunId: context.executionRunId ?? "",
                   ...(context.sessionId ? { sessionId: context.sessionId } : {}),
                 }
               )

@@ -41,6 +41,7 @@ export type GithubUploadResult =
   | { ok: false; error: string; code?: "not-configured" | "no-token" | "public-repo" | "http" }
 
 export interface GithubDestinationDeps {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   assertActive?: () => void
   http?: BackupHttpFn
   now?: () => number
@@ -120,7 +121,8 @@ export async function verifyGithubBackupDestination(
     deps.config ?? resolveGithubBackupConfig(settings.github, { requireEnabled: false })
   if (!config)
     return { ok: false, error: "GitHub backup is not configured.", code: "not-configured" }
-  const token = deps.token ?? (await getGithubBackupToken(config.credential))
+  const token =
+    deps.token ?? (await getGithubBackupToken(config.credential, deps.credentialContext))
   if (!token) return { ok: false, error: "No GitHub token is available.", code: "no-token" }
   const info = await fetchGithubRepoInfo(config, token, deps.http)
   if (!info.ok) return { ok: false, error: info.error, code: "http" }
@@ -250,7 +252,8 @@ export async function uploadSnapshotToGithub(
   const config = deps.config ?? resolveGithubBackupConfig(settings.github)
   if (!config)
     return { ok: false, code: "not-configured", error: "GitHub backup is not configured." }
-  const token = deps.token ?? (await getGithubBackupToken(config.credential))
+  const token =
+    deps.token ?? (await getGithubBackupToken(config.credential, deps.credentialContext))
   if (!token) return { ok: false, code: "no-token", error: "No GitHub token is available." }
 
   try {

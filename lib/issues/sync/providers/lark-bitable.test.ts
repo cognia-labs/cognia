@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject, LarkBitableFieldMap } from "@/types/issues"
@@ -342,10 +343,24 @@ it("resolves the Bitable adapter's Host connection before sync", async () => {
     }),
     expect.any(Function)
   )
-  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1")
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1", undefined, undefined)
 })
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 const fixture = createDbTestFixture({ seeded: false })
 beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
+
+it("forwards a per-call admission without capturing it in the registered provider", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const withApi = jest.fn(async () => ({ items: [], notModified: true }))
+  const provider = createLarkBitableSyncProvider({ withApi: withApi as never })
+  await provider.pull(binding(), { credentialContext })
+  expect(withApi).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.any(Function),
+    credentialContext
+  )
+  await provider.pull(binding(), {})
+  expect(withApi).toHaveBeenLastCalledWith(expect.any(String), expect.any(Function), undefined)
+})

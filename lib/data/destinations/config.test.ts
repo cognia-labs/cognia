@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 const settingsState: { current: Partial<AppSettings> } = { current: {} }
@@ -15,14 +16,17 @@ jest.mock("@/lib/db/settings", () => ({
 }))
 
 const providerSessions: Record<string, unknown[]> = {}
+const requestCredentials: Record<string, () => Promise<{ accessToken: string }>> = {}
 const resolveRequestCredential = jest.fn(async () => ({ accessToken: "installation-token" }))
 jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({
   getProvider: (id: string) =>
     providerSessions[id]
       ? {
           id,
+          pluginId: null,
           getSessions: async () => providerSessions[id],
-          resolveRequestCredential: id === "github-app" ? resolveRequestCredential : undefined,
+          resolveRequestCredential:
+            requestCredentials[id] ?? (id === "github-app" ? resolveRequestCredential : undefined),
         }
       : undefined,
 }))
@@ -77,6 +81,7 @@ beforeEach(() => {
   settingsState.current = {}
   saveSettingsMock.mockClear()
   for (const key of Object.keys(providerSessions)) delete providerSessions[key]
+  for (const key of Object.keys(requestCredentials)) delete requestCredentials[key]
 })
 
 afterAll(() => __setBackupDestinationSecretStoreForTesting(null))
@@ -130,6 +135,22 @@ describe("settings access", () => {
 })
 
 describe("github config + token", () => {
+  it("resolves a Host PAT handle only after personal admission", async () => {
+    providerSessions["github-pat"] = [
+      { id: "pat", accessToken: "host-resolved", account: { id: "person" } },
+    ]
+    const resolve = jest.fn(async () => ({ accessToken: "actual-personal-pat" }))
+    requestCredentials["github-pat"] = resolve
+    const credential = { kind: "auth-session", providerId: "github-pat", sessionId: "pat" } as const
+    await expect(getGithubBackupToken(credential)).rejects.toMatchObject({
+      name: "PersonalCredentialRefusedError",
+    })
+    expect(resolve).not.toHaveBeenCalled()
+    await expect(
+      getGithubBackupToken(credential, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toBe("actual-personal-pat")
+    expect(resolve).toHaveBeenCalledTimes(1)
+  })
   it("resolves an enabled config with defaults and the keyring credential", () => {
     expect(resolveGithubBackupConfig(undefined)).toBeNull()
     expect(resolveGithubBackupConfig({ enabled: false, repo: "o/r" })).toBeNull()
@@ -154,53 +175,75 @@ describe("github config + token", () => {
   it("stores, loads and clears the keyring token", async () => {
     await expect(setGithubBackupToken("  ")).rejects.toThrow(/empty/)
     await setGithubBackupToken(" ghp_x ")
-    expect(await getGithubBackupToken({ kind: "keyring" })).toBe("ghp_x")
+    expect(
+      await getGithubBackupToken({ kind: "keyring" }, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toBe("ghp_x")
     await clearGithubBackupToken()
-    expect(await getGithubBackupToken({ kind: "keyring" })).toBeNull()
+    expect(
+      await getGithubBackupToken({ kind: "keyring" }, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toBeNull()
   })
 
   it("reuses github-pat / github-app auth sessions", async () => {
     providerSessions["github-pat"] = [{ id: "s1", accessToken: "pat-token", account: { id: "a" } }]
     providerSessions["github-app"] = [{ id: "s2", accessToken: "jwt", account: { id: "b" } }]
     expect(
-      await getGithubBackupToken({
-        kind: "auth-session",
-        providerId: "github-pat",
-        sessionId: "s1",
-      })
+      await getGithubBackupToken(
+        {
+          kind: "auth-session",
+          providerId: "github-pat",
+          sessionId: "s1",
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
     ).toBe("pat-token")
     expect(
-      await getGithubBackupToken({
-        kind: "auth-session",
-        providerId: "github-app",
-        sessionId: "s2",
-      })
+      await getGithubBackupToken(
+        {
+          kind: "auth-session",
+          providerId: "github-app",
+          sessionId: "s2",
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
     ).toBe("installation-token")
+    await expect(
+      getGithubBackupToken({ kind: "auth-session", providerId: "github-app", sessionId: "s2" })
+    ).resolves.toBe("installation-token")
     expect(resolveRequestCredential).toHaveBeenCalledWith("s2", {
       connectorAccountId: "b",
       origin: "https://api.github.com",
     })
     expect(
-      await getGithubBackupToken({
-        kind: "auth-session",
-        providerId: "github-pat",
-        sessionId: "missing",
-      })
+      await getGithubBackupToken(
+        {
+          kind: "auth-session",
+          providerId: "github-pat",
+          sessionId: "missing",
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
     ).toBeNull()
     expect(
-      await getGithubBackupToken({
-        kind: "auth-session",
-        providerId: "github-app",
-        sessionId: "s2",
-      })
+      await getGithubBackupToken(
+        {
+          kind: "auth-session",
+          providerId: "github-app",
+          sessionId: "s2",
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
     ).toBe("installation-token")
     delete providerSessions["github-pat"]
     expect(
-      await getGithubBackupToken({
-        kind: "auth-session",
-        providerId: "github-pat",
-        sessionId: "s1",
-      })
+      await getGithubBackupToken(
+        {
+          kind: "auth-session",
+          providerId: "github-pat",
+          sessionId: "s1",
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
     ).toBeNull()
   })
 })
@@ -253,9 +296,18 @@ describe("readiness matrix", () => {
     driveAuthState.bound = true
     driveAuthState.secret = true
     await setGithubBackupToken("github-token")
-    readiness = await describeBackupDestinationReadiness()
+    readiness = await describeBackupDestinationReadiness(undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(readiness.find((row) => row.destination === "github")?.state).toBe("ready")
     expect(readiness.find((row) => row.destination === "googledrive")?.state).toBe("ready")
     clearSyncPassphrase()
+  })
+})
+
+it("refuses the stored backup PAT without Host admission", async () => {
+  await setGithubBackupToken("personal-backup-token")
+  await expect(getGithubBackupToken({ kind: "keyring" })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
   })
 })

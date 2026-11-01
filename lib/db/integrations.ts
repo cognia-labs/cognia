@@ -30,6 +30,7 @@ import {
 import { listExternalCapabilities, listExternalServices } from "@/lib/external-services/catalog"
 import { sha256Hex } from "@/lib/share/hash"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
+import { jobExecutionTables, settleJobExecutionInsideTransaction } from "./execution-runs"
 
 function nowIso(): string {
   return new Date(Date.now()).toISOString()
@@ -366,6 +367,7 @@ export async function removeIntegrationAccount(pluginId: string, accountId: stri
       db.integrationSubscriptions,
       db.integrationEvents,
       db.integrationActionJobs,
+      ...jobExecutionTables(db),
     ],
     async () => {
       await db.integrationAccounts.delete(accountId)
@@ -373,8 +375,14 @@ export async function removeIntegrationAccount(pluginId: string, accountId: stri
       await db.integrationEvents.where("accountId").equals(accountId).delete()
       // Bound-account cancellations and unknown outcomes are security records;
       // keep their idempotency evidence after the account is removed.
-      if (!existing.connectionId)
+      if (!existing.connectionId) {
+        const jobs = await db.integrationActionJobs.where("accountId").equals(accountId).toArray()
+        for (const job of jobs) {
+          await settleIntegrationJobExecution(db, job.id)
+          await settleJobExecutionInsideTransaction(db, `integration:${job.id}`, "cancelled")
+        }
         await db.integrationActionJobs.where("accountId").equals(accountId).delete()
+      }
     }
   )
   await Promise.all(connections.map((connection) => removeServiceConnection(connection.id)))
@@ -628,6 +636,42 @@ export async function listDueIntegrationEventProjections(
 
 export type NewIntegrationActionJob = Omit<IntegrationActionJob, "id" | "createdAt" | "updatedAt">
 
+export function isIntegrationActionJobTerminal(status: IntegrationActionJob["status"]): boolean {
+  return ["succeeded", "failed", "cancelled", "deadlettered"].includes(status)
+}
+
+async function settleIntegrationJobExecution(db: ReturnType<typeof getDb>, jobId: string) {
+  const job = await db.integrationActionJobs.get(jobId)
+  if (job && !isIntegrationActionJobTerminal(job.status)) return
+  await settleJobExecutionInsideTransaction(
+    db,
+    `integration:${jobId}`,
+    !job || job.status === "cancelled"
+      ? "cancelled"
+      : job.status === "succeeded"
+        ? "completed"
+        : "failed"
+  )
+}
+
+/** Repair older terminal/deleted jobs before draining the durable queue. */
+export async function reconcileIntegrationJobExecutions(): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", [db.integrationActionJobs, ...jobExecutionTables(db)], async () => {
+    const runs = await db.executionRuns
+      .where("kind")
+      .equals("job")
+      .filter(
+        (run) =>
+          run.id.startsWith("execution:job:integration:") &&
+          !["completed", "failed", "cancelled"].includes(run.status)
+      )
+      .toArray()
+    for (const run of runs)
+      await settleIntegrationJobExecution(db, run.id.slice("execution:job:integration:".length))
+  })
+}
+
 /** The job an account already has for this idempotency key, if any. */
 export async function findIntegrationActionJobByIdempotencyKey(
   accountId: string,
@@ -676,24 +720,29 @@ export async function updateIntegrationActionJob(
   } = {}
 ): Promise<IntegrationActionJob> {
   const db = getDb()
-  return db.transaction("rw", db.integrationActionJobs, db.integrationAudit, async () => {
-    const existing = await db.integrationActionJobs.get(jobId)
-    if (!existing) throw new Error(`Integration action job "${jobId}" was not found`)
-    if (
-      (condition.claimToken !== undefined &&
-        (existing.status !== "running" ||
-          existing.claimToken !== condition.claimToken ||
-          !existing.claimLeaseExpiresAt ||
-          existing.claimLeaseExpiresAt <= nowIso())) ||
-      (condition.statuses && !condition.statuses.includes(existing.status)) ||
-      existing.status === "cancelled"
-    )
-      return existing
-    const row = { ...existing, ...patch, updatedAt: nowIso() }
-    await db.integrationActionJobs.put(row)
-    if (condition.audit) await appendIntegrationAudit(condition.audit)
-    return row
-  })
+  return db.transaction(
+    "rw",
+    [db.integrationActionJobs, db.integrationAudit, ...jobExecutionTables(db)],
+    async () => {
+      const existing = await db.integrationActionJobs.get(jobId)
+      if (!existing) throw new Error(`Integration action job "${jobId}" was not found`)
+      if (
+        (condition.claimToken !== undefined &&
+          (existing.status !== "running" ||
+            existing.claimToken !== condition.claimToken ||
+            !existing.claimLeaseExpiresAt ||
+            existing.claimLeaseExpiresAt <= nowIso())) ||
+        (condition.statuses && !condition.statuses.includes(existing.status)) ||
+        existing.status === "cancelled"
+      )
+        return existing
+      const row = { ...existing, ...patch, updatedAt: nowIso() }
+      await db.integrationActionJobs.put(row)
+      await settleIntegrationJobExecution(db, jobId)
+      if (condition.audit) await appendIntegrationAudit(condition.audit)
+      return row
+    }
+  )
 }
 
 const CANCELLABLE_JOB_STATUSES: IntegrationActionJob["status"][] = [
@@ -710,52 +759,64 @@ export async function cancelIntegrationActionJobRecord(
   claimToken?: string
 ): Promise<IntegrationActionJob> {
   const db = getDb()
-  return db.transaction("rw", db.integrationActionJobs, db.integrationAudit, async () => {
-    const job = await db.integrationActionJobs.get(jobId)
-    if (!job) throw new Error(`Integration action job "${jobId}" was not found`)
-    if (
-      !CANCELLABLE_JOB_STATUSES.includes(job.status) ||
-      (claimToken !== undefined && (job.status !== "running" || job.claimToken !== claimToken))
-    ) {
-      return job
+  return db.transaction(
+    "rw",
+    [db.integrationActionJobs, db.integrationAudit, ...jobExecutionTables(db)],
+    async () => {
+      const job = await db.integrationActionJobs.get(jobId)
+      if (!job) throw new Error(`Integration action job "${jobId}" was not found`)
+      if (
+        !CANCELLABLE_JOB_STATUSES.includes(job.status) ||
+        (claimToken !== undefined && (job.status !== "running" || job.claimToken !== claimToken))
+      ) {
+        await settleIntegrationJobExecution(db, jobId)
+        return job
+      }
+      const cancelled: IntegrationActionJob = {
+        ...job,
+        ...patch,
+        status: "cancelled",
+        nextAttemptAt: undefined,
+        error: patch.error ?? "Cancelled by user",
+        ...(job.remoteWriteStartedAt ||
+        (job.status === "running" && job.remoteWriteStartedAt !== null)
+          ? { remoteOutcome: "unknown" as const }
+          : {}),
+        updatedAt: nowIso(),
+      }
+      await db.integrationActionJobs.put(cancelled)
+      await settleIntegrationJobExecution(db, jobId)
+      await appendIntegrationAudit({
+        pluginId: job.pluginId,
+        integrationId: job.integrationId,
+        accountId: job.accountId,
+        kind: `action.${job.actionId}.cancelled`,
+        outcome: "denied",
+        detail: {
+          jobId,
+          ...(cancelled.remoteOutcome ? { remoteOutcome: cancelled.remoteOutcome } : {}),
+        },
+      })
+      return cancelled
     }
-    const cancelled: IntegrationActionJob = {
-      ...job,
-      ...patch,
-      status: "cancelled",
-      nextAttemptAt: undefined,
-      error: patch.error ?? "Cancelled by user",
-      ...(job.remoteWriteStartedAt ||
-      (job.status === "running" && job.remoteWriteStartedAt !== null)
-        ? { remoteOutcome: "unknown" as const }
-        : {}),
-      updatedAt: nowIso(),
-    }
-    await db.integrationActionJobs.put(cancelled)
-    await appendIntegrationAudit({
-      pluginId: job.pluginId,
-      integrationId: job.integrationId,
-      accountId: job.accountId,
-      kind: `action.${job.actionId}.cancelled`,
-      outcome: "denied",
-      detail: {
-        jobId,
-        ...(cancelled.remoteOutcome ? { remoteOutcome: cancelled.remoteOutcome } : {}),
-      },
-    })
-    return cancelled
-  })
+  )
 }
 
 /** Also covers queued/held work when its plugin is disabled or uninstalled. */
 export async function cancelIntegrationActionJobsByPlugin(pluginId: string): Promise<void> {
   const db = getDb()
-  await db.transaction("rw", db.integrationActionJobs, db.integrationAudit, async () => {
-    const jobs = await db.integrationActionJobs.filter((job) => job.pluginId === pluginId).toArray()
-    for (const job of jobs) {
-      await cancelIntegrationActionJobRecord(job.id, { error: "Integration plugin unregistered" })
+  await db.transaction(
+    "rw",
+    [db.integrationActionJobs, db.integrationAudit, ...jobExecutionTables(db)],
+    async () => {
+      const jobs = await db.integrationActionJobs
+        .filter((job) => job.pluginId === pluginId)
+        .toArray()
+      for (const job of jobs) {
+        await cancelIntegrationActionJobRecord(job.id, { error: "Integration plugin unregistered" })
+      }
     }
-  })
+  )
 }
 
 /** One durable winner, including retry due-time and crashed executor recovery. */
@@ -765,43 +826,48 @@ export async function claimIntegrationActionJob(
   now = Date.now()
 ): Promise<IntegrationActionJob | undefined> {
   const db = getDb()
-  return db.transaction("rw", db.integrationActionJobs, db.integrationAudit, async () => {
-    const job = await db.integrationActionJobs.get(jobId)
-    if (!job) throw new Error(`Integration action job "${jobId}" was not found`)
-    const at = new Date(now).toISOString()
-    if (job.status === "running") {
-      if (job.claimLeaseExpiresAt && job.claimLeaseExpiresAt > at) return undefined
-      // New claims explicitly persist an unset marker. Missing evidence on a
-      // legacy running row cannot prove that no remote write was dispatched.
-      // Enqueue deduplication says nothing about remote replay safety.
-      if (job.remoteWriteStartedAt !== null) {
-        await cancelIntegrationActionJobRecord(
-          jobId,
-          {
-            error: "Execution lease expired; verify the outcome on the service",
-            remoteOutcome: "unknown",
-          },
-          job.claimToken
-        )
+  return db.transaction(
+    "rw",
+    [db.integrationActionJobs, db.integrationAudit, ...jobExecutionTables(db)],
+    async () => {
+      const job = await db.integrationActionJobs.get(jobId)
+      if (!job) throw new Error(`Integration action job "${jobId}" was not found`)
+      const at = new Date(now).toISOString()
+      if (job.status === "running") {
+        if (job.claimLeaseExpiresAt && job.claimLeaseExpiresAt > at) return undefined
+        // New claims explicitly persist an unset marker. Missing evidence on a
+        // legacy running row cannot prove that no remote write was dispatched.
+        // Enqueue deduplication says nothing about remote replay safety.
+        if (job.remoteWriteStartedAt !== null) {
+          await cancelIntegrationActionJobRecord(
+            jobId,
+            {
+              error: "Execution lease expired; verify the outcome on the service",
+              remoteOutcome: "unknown",
+            },
+            job.claimToken
+          )
+          return undefined
+        }
+      } else if (job.status !== "queued" && job.status !== "retry_wait") return undefined
+      if (job.status === "retry_wait" && job.nextAttemptAt && job.nextAttemptAt > at)
         return undefined
+      const claimed: IntegrationActionJob = {
+        ...job,
+        status: "running",
+        attempts: job.attempts + 1,
+        claimToken: crypto.randomUUID(),
+        claimOwner: options.owner,
+        claimLeaseExpiresAt: new Date(now + options.leaseMs).toISOString(),
+        remoteWriteStartedAt: null,
+        error: undefined,
+        nextAttemptAt: undefined,
+        updatedAt: at,
       }
-    } else if (job.status !== "queued" && job.status !== "retry_wait") return undefined
-    if (job.status === "retry_wait" && job.nextAttemptAt && job.nextAttemptAt > at) return undefined
-    const claimed: IntegrationActionJob = {
-      ...job,
-      status: "running",
-      attempts: job.attempts + 1,
-      claimToken: crypto.randomUUID(),
-      claimOwner: options.owner,
-      claimLeaseExpiresAt: new Date(now + options.leaseMs).toISOString(),
-      remoteWriteStartedAt: null,
-      error: undefined,
-      nextAttemptAt: undefined,
-      updatedAt: at,
+      await db.integrationActionJobs.put(claimed)
+      return claimed
     }
-    await db.integrationActionJobs.put(claimed)
-    return claimed
-  })
+  )
 }
 
 export async function listRunnableIntegrationActionJobs(

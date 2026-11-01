@@ -43,6 +43,7 @@ jest.mock("@/lib/db/issues", () => ({ getIssue: async () => mockIssue }))
 jest.mock("@/lib/db/issue-projects", () => ({ getIssueProject: async () => mockProject }))
 jest.mock("@/lib/db/issue-runs", () => ({ listIssueRuns: async () => mockRuns }))
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import userEvent from "@testing-library/user-event"
 import { render, screen, waitFor } from "@testing-library/react"
 import { IssueRunRefusedError } from "@/lib/issues/run/registry"
@@ -96,6 +97,7 @@ describe("RunIssueDialog", () => {
     await user.click(screen.getByTestId("run-issue-submit"))
     await waitFor(() =>
       expect(mockStart).toHaveBeenCalledWith({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         issueId: "iss-1",
         adapterId: "agent-team",
         by: { kind: "human" },
@@ -103,6 +105,9 @@ describe("RunIssueDialog", () => {
       })
     )
     expect(mockToastSuccess).toHaveBeenCalledWith("run.started:MERC-1,run.adapter.agent-team.name")
+    expect(mockListOptions).toHaveBeenCalledWith("iss-1", undefined, "interactive", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(props.onStarted).toHaveBeenCalledWith({ id: "run-1", adapterId: "agent-team" })
     expect(props.onOpenChange).toHaveBeenCalledWith(false)
   })

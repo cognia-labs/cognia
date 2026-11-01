@@ -36,7 +36,7 @@ jest.mock("@/lib/plugin/cogpack/transfer-install", () => ({
 }))
 const mockGithubAccountSetup = jest.fn()
 jest.mock("@/lib/integrations/github-account-setup", () => ({
-  connectGithubAccountFromSecret: (input: unknown) => mockGithubAccountSetup(input),
+  connectGithubAccountFromSecret: (...args: unknown[]) => mockGithubAccountSetup(...args),
 }))
 jest.mock("@/lib/bot/control-writes/lifecycle-host", () => ({
   mutateBotInstallationOnHost: (input: unknown) => mockBotLifecycleMutation(input),
@@ -1598,6 +1598,7 @@ describe("dispatchCommand: session_attach / session_detach", () => {
       "session.folder",
       "session.order",
       "session.workspace",
+      "session.model",
       "folder.create",
       "folder.rename",
       "folder.reorder",
@@ -3491,7 +3492,9 @@ it("routes reference-only GitHub setup to the host credential boundary", async (
   await expect(
     dispatchCommand("integration_github_account_connect_from_secret", payload)
   ).resolves.toEqual({ accountId: "github", login: "MaxQian888", health: "healthy" })
-  expect(mockGithubAccountSetup).toHaveBeenCalledWith(payload)
+  expect(mockGithubAccountSetup).toHaveBeenCalledWith(payload, {
+    localAuthorization: (await import("@/lib/execution/acting-authority")).LOCAL_PERSON_RUN,
+  })
 })
 
 it("serializes successful undefined command results as explicit JSON null", async () => {

@@ -1,3 +1,9 @@
+import { getHostAuthSession } from "@/lib/plugin/api/auth-api"
+import {
+  checkIntegrationAccountHealth,
+  listIntegrationResources,
+} from "@/lib/integrations/providers"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getNativeSelect, selectOption } from "@/lib/testing/select-option"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { IntegrationsHub } from "./integrations-hub"
@@ -20,6 +26,9 @@ const mockRotateAppWebhook = jest.fn()
 const mockCreateSubscription = jest.fn()
 const mockGetAccount = jest.fn()
 const mockUpdateAccount = jest.fn()
+const mockCreateAccount = jest.fn()
+
+jest.mock("@/lib/plugin/api/auth-api", () => ({ getHostAuthSession: jest.fn() }))
 
 jest.mock("@/lib/integrations/ingress-client", () => ({
   ...jest.requireActual("@/lib/integrations/ingress-client"),
@@ -37,9 +46,9 @@ jest.mock("@/lib/integrations/github-webhook", () => ({
 }))
 jest.mock("@/lib/integrations/providers", () => ({
   checkIntegrationAccountHealth: jest.fn(),
-  listIntegrationResources: async () => ({
+  listIntegrationResources: jest.fn(async () => ({
     items: [{ kind: "repository", id: "acme/app", name: "acme/app" }],
-  }),
+  })),
 }))
 jest.mock("@/lib/credentials/keyring-store", () => ({
   createKeyringStore: () => ({ save: async () => undefined }),
@@ -47,6 +56,7 @@ jest.mock("@/lib/credentials/keyring-store", () => ({
 jest.mock("@/lib/db/integrations", () => ({
   ...jest.requireActual("@/lib/db/integrations"),
   createIntegrationSubscription: (...args: unknown[]) => mockCreateSubscription(...args),
+  createIntegrationAccount: (...args: unknown[]) => mockCreateAccount(...args),
   getIntegrationAccount: (...args: unknown[]) => mockGetAccount(...args),
   updateIntegrationAccount: (...args: unknown[]) => mockUpdateAccount(...args),
 }))
@@ -126,6 +136,36 @@ beforeEach(() => {
   mockEntries = undefined
   mockJobs = []
   jest.clearAllMocks()
+})
+
+it("admits the person's account setup and health check only in the Host submit action", async () => {
+  jest.mocked(getHostAuthSession).mockResolvedValueOnce({
+    id: "host-connection",
+    accessToken: "test-token",
+    account: { id: "person", label: "Person" },
+    scopes: [],
+  })
+  mockCreateAccount.mockResolvedValueOnce({ id: "new-account" })
+  render(<IntegrationsHub />)
+  await selectOption(screen.getByLabelText("Integration"), "demo-delivery:demo")
+  fireEvent.click(screen.getByRole("button", { name: /Token Recommended/ }))
+  fireEvent.change(screen.getByLabelText("Personal access token"), {
+    target: { value: "test-token" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Validate and add" }))
+  await waitFor(() =>
+    expect(getHostAuthSession).toHaveBeenCalledWith(
+      "demo-token",
+      [],
+      { createIfNone: true, forceNewSession: true, configuration: { token: "test-token" } },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
+  )
+  await waitFor(() =>
+    expect(checkIntegrationAccountHealth).toHaveBeenCalledWith("demo-delivery", "new-account", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  )
 })
 
 describe("connection service consumers", () => {
@@ -323,6 +363,18 @@ describe("IntegrationsHub webhook delivery", () => {
     ).toBeInTheDocument()
   })
 
+  it("checks account health with the Host person's explicit admission", async () => {
+    mockEntries = [GITHUB_ENTRY]
+    mockAccounts = [githubAccount()]
+    await act(async () => {
+      render(<IntegrationsHub />)
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Check account health" }))
+    expect(checkIntegrationAccountHealth).toHaveBeenCalledWith("github-delivery", "acc-gh", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  })
+
   it("configures the repository webhook for a PAT account at the public URL", async () => {
     mockEntries = [GITHUB_ENTRY]
     const account = githubAccount()
@@ -338,6 +390,13 @@ describe("IntegrationsHub webhook delivery", () => {
 
     await selectOption(screen.getByRole("combobox", { name: "Account" }), "acc-gh")
     fireEvent.click(await screen.findByRole("button", { name: "Discover" }))
+    await waitFor(() =>
+      expect(listIntegrationResources).toHaveBeenCalledWith(
+        "github-delivery",
+        expect.objectContaining({ accountId: "acc-gh" }),
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
+    )
     await waitFor(() =>
       expect(getNativeSelect(screen.getByLabelText("Repository"))).toHaveTextContent("acme/app")
     )
@@ -355,6 +414,7 @@ describe("IntegrationsHub webhook delivery", () => {
 
     await waitFor(() =>
       expect(mockConfigureRepoWebhook).toHaveBeenCalledWith({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         account: withBase,
         repoFullName: "acme/app",
         webhookUrl: "https://hooks.example.com/integration/route-1",

@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   __clearDocsOAuthCompletionsForTests,
   completeDocsOAuthDeepLink,
@@ -90,16 +91,20 @@ describe("completeDocsOAuthDeepLink", () => {
     const fn = jest.fn(async () => undefined)
     registerDocsOAuthCompletion("google", fn)
     const outcome = await completeDocsOAuthDeepLink(
-      "cognia://docs-provider/oauth/google?code=abc&state=google%3An1"
+      "cognia://docs-provider/oauth/google?code=abc&state=google%3An1",
+      { localAuthorization: LOCAL_PERSON_RUN }
     )
     expect(outcome).toEqual({ status: "ok", providerId: "google" })
-    expect(fn).toHaveBeenCalledWith({
-      providerId: "google",
-      code: "abc",
-      state: "google:n1",
-      error: undefined,
-      errorDescription: undefined,
-    })
+    expect(fn).toHaveBeenCalledWith(
+      {
+        providerId: "google",
+        code: "abc",
+        state: "google:n1",
+        error: undefined,
+        errorDescription: undefined,
+      },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
   })
 
   it("never throws — a failed exchange becomes a reportable outcome", async () => {

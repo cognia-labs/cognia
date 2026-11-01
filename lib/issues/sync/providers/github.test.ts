@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { IssueExternalRef, IssueProject } from "@/types/issues"
 import type { OctokitLike } from "@/lib/github/issues"
 import { fetchGithubIssuePage } from "@/lib/github/issues"
@@ -33,8 +34,8 @@ it("describes its built-in resource through the shared descriptor", () => {
 })
 
 jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
-  createResolveOctokit: () => async () => null,
   ghCliToken: jest.fn(async () => null),
+  createResolveOctokit: jest.fn(() => async () => null),
 }))
 jest.mock("@/lib/integrations/github-read-credential", () => ({
   githubReadAccountsFor: jest.fn(),
@@ -541,7 +542,11 @@ describe("push", () => {
     ).resolves.toMatchObject({ status: "queued" })
     expect(execute).toHaveBeenCalledWith(
       "github-delivery",
-      expect.objectContaining({ input: { repoFullName: "acme/one", issueNumber: 5, milestone: 3 } })
+      expect.objectContaining({
+        input: { repoFullName: "acme/one", issueNumber: 5, milestone: 3 },
+      }),
+      undefined,
+      undefined
     )
   })
 
@@ -557,14 +562,19 @@ describe("push", () => {
       by: { kind: "agent" },
     })
     expect(outcome).toEqual({ status: "queued", jobId: "job-1" })
-    expect(execute).toHaveBeenCalledWith("github-delivery", {
-      integrationId: "github",
-      accountId: "acct",
-      actionId: "updateIssue",
-      input: { repoFullName: "acme/one", issueNumber: 5, title: "T" },
-      source: "workflow",
-      idempotencyKey: "k",
-    })
+    expect(execute).toHaveBeenCalledWith(
+      "github-delivery",
+      {
+        integrationId: "github",
+        accountId: "acct",
+        actionId: "updateIssue",
+        input: { repoFullName: "acme/one", issueNumber: 5, title: "T" },
+        source: "workflow",
+        idempotencyKey: "k",
+      },
+      undefined,
+      undefined
+    )
   })
 
   it("names a person's own edits as that person's write, and nobody for an agent's (ADR-0239)", async () => {
@@ -578,15 +588,21 @@ describe("push", () => {
       idempotencyKey: "k1",
       by: { kind: "agent" },
       editedBy: "person",
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     })
     await provider.push!(binding(), ref, { title: "T" }, issue, {
       idempotencyKey: "k2",
       by: { kind: "agent" },
       editedBy: "automation",
+      credentialContext: { executionRunId: "agent-sync" },
     })
     expect(execute.mock.calls.map((call) => call[2])).toEqual([
-      { kind: "person", surface: "issue-sync" },
+      { kind: "person", surface: "issue-sync", localAuthorization: LOCAL_PERSON_RUN },
       undefined,
+    ])
+    expect(execute.mock.calls.map((call) => call[3])).toEqual([
+      { localAuthorization: LOCAL_PERSON_RUN },
+      { executionRunId: "agent-sync" },
     ])
   })
 
@@ -674,7 +690,9 @@ describe("assignee push", () => {
       "github-delivery",
       expect.objectContaining({
         input: { repoFullName: "acme/one", issueNumber: 5, assignees: ["carol", "bob"] },
-      })
+      }),
+      undefined,
+      undefined
     )
   })
 
@@ -686,7 +704,9 @@ describe("assignee push", () => {
     })
     expect(execute).toHaveBeenCalledWith(
       "github-delivery",
-      expect.objectContaining({ input: expect.objectContaining({ assignees: [] }) })
+      expect.objectContaining({ input: expect.objectContaining({ assignees: [] }) }),
+      undefined,
+      undefined
     )
   })
 
@@ -700,7 +720,9 @@ describe("assignee push", () => {
     expect(request).not.toHaveBeenCalled()
     expect(execute).toHaveBeenCalledWith(
       "github-delivery",
-      expect.objectContaining({ input: { repoFullName: "acme/one", issueNumber: 5, title: "T" } })
+      expect.objectContaining({ input: { repoFullName: "acme/one", issueNumber: 5, title: "T" } }),
+      undefined,
+      undefined
     )
   })
 
@@ -1161,3 +1183,10 @@ const fixture = createDbTestFixture({ seeded: false })
 beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
+
+it("uses a fresh credential resolver with the pull's Host admission", async () => {
+  const { createResolveOctokit } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  await expect(createGithubSyncProvider().pull(binding(), { credentialContext })).rejects.toThrow()
+  expect(createResolveOctokit).toHaveBeenLastCalledWith(undefined, credentialContext)
+})

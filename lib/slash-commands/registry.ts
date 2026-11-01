@@ -1,3 +1,8 @@
+import {
+  hostCommandExecution,
+  withPluginExecutionContext,
+  pluginDispatchContext,
+} from "@/lib/plugin/core/invocation-identity"
 // Unified slash-command registry (Phase 3 of the ClaudeCode 完整化 plan).
 //
 // This is the SINGLE source of truth for any third-party / plugin / settings-
@@ -157,12 +162,24 @@ export async function dispatchSlashCommand(
       const { ensureBootCapability, getBootProfile } = await import("@/lib/boot/capabilities")
       if (getBootProfile() === "main") await ensureBootCapability("plugin-runtime")
       const { getPluginManager } = await import("@/lib/plugin/core/manager")
-      await getPluginManager().handleActivationEvent(`onCommand:${id}`)
+      await getPluginManager().handleActivationEvent(
+        `onCommand:${id}`,
+        hostCommandExecution(ctx) ? { hostCommandContext: ctx } : undefined
+      )
       def = registry.get(id)
     } catch {
       // Plugin manager not available — fall through to "not registered".
     }
     if (!def) return null
+  }
+  const execution = hostCommandExecution(ctx)
+  if (def.pluginId) {
+    const handler = def.handler
+    return withPluginExecutionContext(
+      def.pluginId,
+      execution ?? pluginDispatchContext(def.pluginId),
+      async () => handler(args, ctx)
+    )
   }
   return def.handler(args, ctx)
 }

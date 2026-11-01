@@ -252,6 +252,7 @@ async function runStepWork(
         const { result } = await invokePluginTool(owner.pluginId, toolName, input ?? {}, {
           signal,
           reason: "plan:tool_call",
+          executionRunId: `execution:plan:${runCtx.plan.id}`,
           ...(runCtx.plan.sessionId ? { sessionId: runCtx.plan.sessionId } : {}),
         })
         return {
@@ -295,6 +296,7 @@ async function runStepWork(
           args,
           signal,
           scopeId: `run:${runCtx.runId}`,
+          credentialContext: { executionRunId: `execution:plan:${runCtx.plan.id}` },
           surface: "plan",
           clientInfo: { name: "cognia-plan", version: "1.0.0" },
         })

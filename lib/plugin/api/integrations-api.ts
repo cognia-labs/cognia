@@ -1,3 +1,4 @@
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import {
   AuthConnectionApiError,
   authStrategyMatchesProvider,
@@ -197,10 +198,16 @@ export function createIntegrationsAPI(
         const binding = await resolveBotIntegrationBinding(pluginId, query.accountId)
         if (binding.repository && query.kind !== "repository")
           throw new Error("Bot binding only permits scoped repository discovery")
-        const page = await listIntegrationResources(binding.account.pluginId, {
-          ...query,
-          accountId: binding.account.id,
-        })
+        const page = await listIntegrationResources(
+          binding.account.pluginId,
+          { ...query, accountId: binding.account.id },
+          undefined,
+          {
+            pluginId: binding.account.pluginId,
+            accountId: binding.account.id,
+            binding: { pluginId, ref: query.accountId },
+          }
+        )
         return binding.repository
           ? {
               ...page,
@@ -208,15 +215,32 @@ export function createIntegrationsAPI(
             }
           : page
       }
-      return listIntegrationResources(pluginId, { ...query, accountId: query.accountId })
+      return listIntegrationResources(
+        pluginId,
+        { ...query, accountId: query.accountId },
+        pluginExecutionContext(pluginId)
+      )
     },
     async checkAccountHealth(connectorAccountId) {
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.checkAccountHealth")
       if (typeof connectorAccountId !== "string") {
         const binding = await resolveBotIntegrationBinding(pluginId, connectorAccountId)
-        return checkIntegrationAccountHealth(binding.account.pluginId, binding.account.id)
+        return checkIntegrationAccountHealth(
+          binding.account.pluginId,
+          binding.account.id,
+          undefined,
+          {
+            pluginId: binding.account.pluginId,
+            accountId: binding.account.id,
+            binding: { pluginId, ref: connectorAccountId },
+          }
+        )
       }
-      return checkIntegrationAccountHealth(pluginId, connectorAccountId)
+      return checkIntegrationAccountHealth(
+        pluginId,
+        connectorAccountId,
+        pluginExecutionContext(pluginId)
+      )
     },
     async createSubscription(
       input: IntegrationSubscriptionInput
@@ -246,7 +270,7 @@ export function createIntegrationsAPI(
     },
     async executeAction(input): Promise<IntegrationActionJob> {
       requirePermission(hasPermission, "integrations:execute", "ctx.integrations.executeAction")
-      return executeIntegrationAction(pluginId, input)
+      return executeIntegrationAction(pluginId, input, undefined, pluginExecutionContext(pluginId))
     },
     async getActionJob(jobId) {
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.getActionJob")
@@ -272,6 +296,7 @@ export function createIntegrationsAPI(
       input: string,
       init?: IntegrationRequestInit
     ) {
+      const credentialContext = pluginExecutionContext(pluginId)
       requirePermission(
         hasPermission,
         "integrations:execute",
@@ -337,7 +362,13 @@ export function createIntegrationsAPI(
           binding.account.pluginId,
           binding.account.id,
           target,
-          init
+          init,
+          undefined,
+          {
+            pluginId: binding.account.pluginId,
+            accountId: binding.account.id,
+            binding: { pluginId, ref: connectorAccountId },
+          }
         )
         if (!ownIdentity) return response
         const identity = response.data as { login?: unknown; id?: unknown } | null
@@ -351,7 +382,13 @@ export function createIntegrationsAPI(
       }
       const account = await getIntegrationAccount(pluginId, connectorAccountId)
       if (!account) throw new Error(`Integration account "${connectorAccountId}" was not found`)
-      return authenticatedIntegrationRequest<T>(pluginId, connectorAccountId, input, init)
+      return authenticatedIntegrationRequest<T>(
+        pluginId,
+        connectorAccountId,
+        input,
+        init,
+        credentialContext
+      )
     },
     async getIngressPublicUrl(subscriptionId) {
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.getIngressPublicUrl")

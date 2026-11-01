@@ -10,6 +10,11 @@
  * with a concrete endpoint never falls back because the former entry cannot
  * prove which origin issued it.
  */
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import { transport } from "@/lib/tauri"
 import { getBuiltinMcpRuntimeContext } from "@/lib/claude/builtin-mcp/runtime-context"
 import {
@@ -75,8 +80,14 @@ export async function mcpOAuthStatus(
 export async function mcpOAuthLoadEntry(
   serverId: string,
   legacyName?: string,
-  server?: McpServerDescriptor
+  server?: McpServerDescriptor,
+  credentialContext?: PersonalCredentialContext
 ): Promise<McpOAuthEntry | undefined> {
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "mcp-oauth",
+    person: serverId,
+  })
+  if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const credentialKey = server
     ? (await resolveMcpOAuthCredentialPartition(serverId, server)).credentialKey
     : serverId
@@ -90,7 +101,7 @@ export async function mcpOAuthLoadEntry(
     legacyName &&
     legacyName !== serverId
   ) {
-    return mcpOAuthLoadEntry(legacyName)
+    return mcpOAuthLoadEntry(legacyName, undefined, undefined, credentialContext)
   }
   if (!raw?.access_token) return undefined
   return { accessToken: raw.access_token, expiresAtMs: raw.expires_at_ms ?? undefined }
@@ -99,8 +110,14 @@ export async function mcpOAuthLoadEntry(
 /** Run a headless refresh (PKCE refresh token) and return the new entry. */
 export async function mcpOAuthRefresh(
   serverId: string,
-  server: McpServerDescriptor
+  server: McpServerDescriptor,
+  credentialContext?: PersonalCredentialContext
 ): Promise<McpOAuthEntry | undefined> {
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "mcp-oauth",
+    person: serverId,
+  })
+  if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const partition = await resolveMcpOAuthCredentialPartition(serverId, server)
   return runMcpOAuthRefreshSingleFlight(partition.credentialKey, async () => {
     const helperPath = await resolveHelperPath()

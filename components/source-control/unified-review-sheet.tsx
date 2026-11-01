@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * The unified review surface.
  *
@@ -74,7 +76,9 @@ export function UnifiedReviewSheet({
 }) {
   const t = useTranslations("unifiedReview")
   const provider = useMemo(
-    () => providerOverride ?? createGitHubPullRequestProvider(),
+    () =>
+      providerOverride ??
+      createGitHubPullRequestProvider(undefined, { localAuthorization: LOCAL_PERSON_RUN }),
     [providerOverride]
   )
   const workspace = useReviewWorkspace({

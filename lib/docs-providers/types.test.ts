@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { DocsProviderError, type DocsProvider, type RemoteDocRef } from "./types"
 import { DocsProviderError as PublicDocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
 
@@ -58,4 +59,18 @@ describe("DocsProviderError", () => {
     expect(new DocsProviderError("empty").message).toBe("empty")
     expect(new DocsProviderError("empty", { title: "Doc" }).message).toBe("empty")
   })
+})
+
+it("keeps local-person proof in Host invocation options without serializing it", async () => {
+  const options: import("./types").DocsProviderCallOptions = {
+    accountId: "a",
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  }
+  expect(options.credentialContext?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+  expect(JSON.stringify(options)).not.toContain("localAuthorization")
+  const discovery: NonNullable<Parameters<import("./types").DocsProvider["listAccounts"]>[0]> = {
+    credentialContext: options.credentialContext,
+  }
+  expect(discovery.credentialContext?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+  expect(JSON.stringify(discovery)).not.toContain("localAuthorization")
 })

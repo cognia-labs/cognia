@@ -11,6 +11,7 @@
  * the bound Google Host connection. Rust owns refresh.
  */
 
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { getSettings } from "@/lib/db/settings"
 import { loggers } from "@cognia/logging"
 import {
@@ -43,6 +44,7 @@ export type GoogleDriveUploadResult =
   | { ok: false; error: string; code?: "not-configured" | "not-connected" | "http" }
 
 export interface GoogleDriveDestinationDeps {
+  credentialContext?: PersonalCredentialContext
   now?: () => number
   assertActive?: () => void
   http?: BackupHttpFn
@@ -316,7 +318,7 @@ function rethrowConnectionError(error: unknown): void {
 
 /** Every request, including retention/list/download, carries the same connection revision. */
 async function driveContext(deps: GoogleDriveDestinationDeps) {
-  const lease = await getGoogleDriveCredentialLease()
+  const lease = await getGoogleDriveCredentialLease(deps.credentialContext)
   const http: BackupHttpFn = async (request) => {
     deps.assertActive?.()
     await lease.assertCurrent()

@@ -18,6 +18,7 @@
  */
 
 import { getDecisionRegistry } from "@/lib/decisions/host-registry"
+import { bindPluginCallbacks, pluginExecutionContext } from "../core/invocation-identity"
 import { loadDecisionSettings } from "@/lib/decisions/config"
 import { toDecisionProviderInfo, type DecisionRegistry } from "@/lib/decisions/registry"
 import { runDecision, type RunDecisionOptions } from "@/lib/decisions/run-decision"
@@ -67,7 +68,7 @@ export function registerPluginDecisionProvider(
   }
   const providerId = `${pluginId}:${provider.id}`
   registry.register({
-    ...provider,
+    ...bindPluginCallbacks(pluginId, provider),
     id: providerId,
     pluginId,
     calibrated: provider.calibrated === true,
@@ -94,6 +95,7 @@ export function createDecisionsAPI(
         ...(options.providerId ? { providerId: options.providerId } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         callerPluginId: pluginId,
+        credentialContext: pluginExecutionContext(pluginId),
       }),
     listProviders: () => runtime.registry().list().map(toDecisionProviderInfo),
     getSelectedProviderId: () => runtime.selectedProviderId(),

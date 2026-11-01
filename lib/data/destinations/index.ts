@@ -8,6 +8,7 @@ import type { SnapshotMeta } from "./webdav"
 import { isEncryptedEnvelope } from "@/lib/data/migrate"
 import { getSyncPassphrase } from "@/lib/webdav/passphrase-cache"
 import type { BackupDestinationReadiness } from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 export * from "./registry"
 export type DispatchResult = {
@@ -22,21 +23,27 @@ export type DispatchResult = {
 export async function readBackupDestinationReadiness(
   destination: string,
   signal?: AbortSignal,
-  keyAvailable = Boolean(getSyncPassphrase())
+  keyAvailable = Boolean(getSyncPassphrase()),
+  credentialContext?: PersonalCredentialContext
 ): Promise<BackupDestinationReadiness> {
   if (!getBackupDestination(destination))
     return { state: "unavailable", reasonKey: "destinationUnavailable" }
   if (!keyAvailable) return { state: "needs-setup", reasonKey: "syncPassphraseLocked" }
   try {
-    return await withBackupDestination(destination, signal, async (entry, active) => {
-      const result = await entry.readiness(active)
-      if (!["ready", "needs-setup", "needs-auth", "unavailable"].includes(result?.state))
-        return { state: "unavailable", reasonKey: "destinationUnavailable" }
-      return {
-        state: result.state,
-        ...(typeof result.reasonKey === "string" ? { reasonKey: result.reasonKey } : {}),
-      }
-    })
+    return await withBackupDestination(
+      destination,
+      signal,
+      async (entry, active) => {
+        const result = await entry.readiness(active, credentialContext)
+        if (!["ready", "needs-setup", "needs-auth", "unavailable"].includes(result?.state))
+          return { state: "unavailable", reasonKey: "destinationUnavailable" }
+        return {
+          state: result.state,
+          ...(typeof result.reasonKey === "string" ? { reasonKey: result.reasonKey } : {}),
+        }
+      },
+      credentialContext
+    )
   } catch (error) {
     if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error
     return { state: "unavailable", reasonKey: "destinationUnavailable" }
@@ -56,7 +63,8 @@ export async function dispatchBackupDestination(
   envelopeJson: string,
   meta: SnapshotMeta,
   assertActive: () => void = () => undefined,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  credentialContext?: PersonalCredentialContext
 ): Promise<DispatchResult> {
   assertActive()
   if (!destination || destination === "local") return { ok: true, target: "local" }
@@ -93,9 +101,7 @@ export async function dispatchBackupDestination(
             encryption: "passphrase" as const,
           },
         }
-        const uploaded = entry.pluginId
-          ? await entry.upload(input, active)
-          : await entry.upload(input, active, assertActive)
+        const uploaded = await entry.upload(input, active, assertActive, credentialContext)
         active.throwIfAborted()
         assertActive()
         if (
@@ -142,7 +148,8 @@ export async function dispatchBackupDestination(
           }
         }
         return { ok: true, target: result.locationLabel ?? result.remoteId, result }
-      }
+      },
+      credentialContext
     )
   } catch (error) {
     if (signal?.aborted || (error instanceof Error && error.name === "AbortError"))

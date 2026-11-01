@@ -8,6 +8,7 @@ jest.mock("./agent-state-bridge", () => ({
 
 import { waitFor } from "@testing-library/dom"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "./acting-authority"
 import {
   __resetWorkflowExecutionBridgeForTesting,
   executionKindForWorkflowRun,
@@ -386,6 +387,7 @@ describe("workflow execution bridge", () => {
     // than coordinating with whoever pressed the button — is what makes a retry
     // driven from the desktop history view join the same chain as one driven
     // through the run-control gate.
+    await getDb().workflowRuns.put(workflowRun())
     await syncWorkflowExecutionRun(workflowRun(), [], [])
     await syncWorkflowExecutionRun(
       workflowRun({
@@ -408,6 +410,46 @@ describe("workflow execution bridge", () => {
       (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.parentRunId
     ).toBeUndefined()
   })
+
+  it.each(["workflow", "project", "session", "source", "kind", "missing-source"] as const)(
+    "round 4: rejects a mismatched %s retry anchor through createExecutionRun",
+    async (mismatch) => {
+      const local = await startToolExecutionRun("session-1", {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      const foreign = workflowRun({
+        id: "foreign",
+        workflowId: mismatch === "workflow" ? "other-workflow" : "wf-1",
+        projectId: mismatch === "project" ? "other-project" : undefined,
+      })
+      if (mismatch !== "missing-source") await getDb().workflowRuns.put(foreign)
+      await getDb().executionRuns.put({
+        ...local,
+        id: "execution:workflow:foreign",
+        sessionId: mismatch === "session" ? "foreign-session" : "session-1",
+        kind: mismatch === "kind" ? "agent-turn" : "workflow",
+        sourceId: mismatch === "source" ? "different-source" : foreign.id,
+        actingIdentity: { ...local.actingIdentity!, rootRunId: "execution:workflow:foreign" },
+      })
+      await syncWorkflowExecutionRun(
+        workflowRun({
+          lineage: {
+            rootRunId: foreign.id,
+            retryOfRunId: foreign.id,
+            retryMode: "current-deployment",
+          },
+        }),
+        [],
+        []
+      )
+      const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
+      expect(run?.parentRunId).toBeUndefined()
+      const { admitPersonalCredential } = await import("./personal-credential")
+      expect(
+        await admitPersonalCredential({ executionRunId: run!.id }, { source: "github-user" })
+      ).toMatchObject({ ok: false })
+    }
+  )
 
   it("projects UI-triggered runs without fanout subscriptions", async () => {
     const row = workflowRun({

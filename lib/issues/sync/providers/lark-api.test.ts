@@ -304,3 +304,22 @@ describe("bitable", () => {
     expect(bitableCellNumber("x")).toBeNull()
   })
 })
+
+it("forwards Host admission through the captured-source Lark harness", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  jest.mocked(assertIssueSyncSource).mockResolvedValueOnce(undefined)
+  jest
+    .mocked(withLarkAuthedApi)
+    .mockImplementationOnce(async (_opts, fn) => fn({} as never, {} as never))
+  const credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext =
+    { localAuthorization: actingAuthority.LOCAL_PERSON_RUN }
+  await withIssueLarkBindingApi(
+    { resource: { kind: "lark-tasklist", adapterId: "cai_1" } } as never,
+    async () => "read",
+    { credentialContext }
+  )
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({ adapterId: "cai_1", credentialContext }),
+    expect.any(Function)
+  )
+})

@@ -18,6 +18,8 @@ import {
 } from "@/lib/external-services/runtime-support"
 import { ConnectionCredentialStore, CredentialStoreDegraded } from "./connection-credentials"
 import { PluginGatewayError } from "@/lib/plugin/core/transport"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND, withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { openExternal } from "@/lib/tauri/opener"
 import { getProvider } from "./auth-provider-registry"
 import { isClientSecretRequired, setProviderClientSecret } from "./client-secrets"
@@ -60,6 +62,8 @@ export class AuthConnectError extends Error {
 }
 
 export interface ConnectProviderRequest {
+  /** Host-only operation authority; never forwarded to provider arguments. */
+  credentialContext?: PersonalCredentialContext
   providerId: string
   scopes: readonly string[]
   method?: AuthMethod
@@ -71,6 +75,7 @@ export interface ConnectProviderRequest {
 
 /** Host sign-in orchestration, separate from credential persistence and callback acceptance. */
 export async function connectProvider(request: ConnectProviderRequest): Promise<AuthConnectionRef> {
+  const credentialContext = { ...(request.credentialContext ?? HOST_BACKGROUND) }
   let attempt: AuthAttempt | undefined
   let waiter: ReturnType<typeof registerAuthCallbackWaiter> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -84,6 +89,10 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
   signal?.addEventListener("abort", forwardAbort, { once: true })
   if (signal?.aborted) forwardAbort()
   const provider = getProvider(providerId)
+  const call = <T>(task: () => T): T =>
+    provider?.pluginId
+      ? withPluginExecutionContext(provider.pluginId, credentialContext, task)
+      : task()
   const active = () => {
     if (controller.signal.aborted) throw new AuthConnectError("CANCELLED", "cancelled")
     if (getProvider(providerId) !== provider)
@@ -143,7 +152,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
         ? original.revision
         : undefined
     if (!provider.describe) {
-      const session = await provider.createSession(scopes)
+      const session = await call(() => provider.createSession(scopes))
       try {
         active()
         return await manager.ensureLegacyConnection(providerId, session, {
@@ -153,7 +162,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
         })
       } catch (error) {
         try {
-          await provider.removeSession(session.id)
+          await call(() => provider.removeSession(session.id))
         } catch {
           /* Best effort; never log vendor errors. */
         }
@@ -207,6 +216,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
         { accessToken: key, scopes },
         {
           authMethod: method,
+          credentialContext,
           discardOnFailure: false,
           reconnect,
           signal: controller.signal,
@@ -337,7 +347,9 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     if (redirectMethod) {
       waiter = registerAuthCallbackWaiter(attempt.state, binding, attempt.expiresAt)
       void waiter.promise.catch(() => {})
-      const result = await bounded(provider.authorize!({ ...attempt, scopes: [...scopes] }))
+      const result = await bounded(
+        call(() => provider.authorize!({ ...attempt!, scopes: [...scopes] }))
+      )
       let url: URL
       try {
         url = new URL(result.url)
@@ -364,7 +376,9 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     }
     active()
     const exchange = Promise.resolve()
-      .then(() => provider.exchange!({ ...accepted, scopes: [...accepted.scopes] }, callback))
+      .then(() =>
+        call(() => provider.exchange!({ ...accepted, scopes: [...accepted.scopes] }, callback))
+      )
       .then(async (credentials) => {
         if (interrupted) await manager.discardCredentials(provider, credentials)
         return credentials
@@ -376,6 +390,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     return await bounded(
       manager.createConnectionFromCredentials(provider, credentials, {
         authMethod: method,
+        credentialContext,
         reconnect,
         signal: controller.signal,
         expectedRevision,

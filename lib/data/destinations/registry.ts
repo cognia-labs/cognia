@@ -6,16 +6,38 @@ import {
   type PluginBackupDestinationId,
 } from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"
 import type { BackupDestination } from "@/types/scheduler"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import {
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  pluginDispatchContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 
 export interface RegisteredBackupDestination extends BackupDestinationContribution {
   id: BackupDestination
   pluginId?: string
   /** Host-only opt-in flags for legacy interval schedules; never passed to plugins. */
   intervalEnabled?: (settings: import("@cognia/agent-config-types").AppSettings) => boolean
+  /** Host invocation proof is passed only to built-ins, never plugin callbacks. */
+  readiness(
+    signal: AbortSignal,
+    credentialContext?: PersonalCredentialContext
+  ): ReturnType<BackupDestinationContribution["readiness"]>
+  list?(
+    signal: AbortSignal,
+    credentialContext?: PersonalCredentialContext
+  ): ReturnType<NonNullable<BackupDestinationContribution["list"]>>
+  download?(
+    remoteId: string,
+    signal: AbortSignal,
+    credentialContext?: PersonalCredentialContext
+  ): ReturnType<NonNullable<BackupDestinationContribution["download"]>>
   upload(
     input: Parameters<BackupDestinationContribution["upload"]>[0],
     signal: AbortSignal,
-    assertActive?: () => void
+    assertActive?: () => void,
+    credentialContext?: PersonalCredentialContext
   ): ReturnType<BackupDestinationContribution["upload"]>
 }
 
@@ -112,8 +134,54 @@ export function registerBackupDestination(
   for (const method of ["list", "download", "delete"] as const)
     if (contribution[method] !== undefined && typeof contribution[method] !== "function")
       throw new Error(`Invalid backup destination ${method}`)
+  const callbacks = owner
+    ? {
+        ...bindPluginCallbacks(owner.pluginId, contribution),
+        ...(contribution.list
+          ? {
+              list: (signal: AbortSignal, context?: PersonalCredentialContext) =>
+                withPluginExecutionContext(
+                  owner.pluginId,
+                  context ?? pluginDispatchContext(owner.pluginId),
+                  () => contribution.list!(signal)
+                ),
+            }
+          : {}),
+        ...(contribution.download
+          ? {
+              download: (
+                remoteId: string,
+                signal: AbortSignal,
+                context?: PersonalCredentialContext
+              ) =>
+                withPluginExecutionContext(
+                  owner.pluginId,
+                  context ?? pluginDispatchContext(owner.pluginId),
+                  () => contribution.download!(remoteId, signal)
+                ),
+            }
+          : {}),
+        readiness: (signal: AbortSignal, context?: PersonalCredentialContext) =>
+          withPluginExecutionContext(
+            owner.pluginId,
+            context ?? pluginDispatchContext(owner.pluginId),
+            () => contribution.readiness(signal)
+          ),
+        upload: (
+          input: Parameters<RegisteredBackupDestination["upload"]>[0],
+          signal: AbortSignal,
+          _assertActive?: () => void,
+          context?: PersonalCredentialContext
+        ) =>
+          withPluginExecutionContext(
+            owner.pluginId,
+            context ?? pluginDispatchContext(owner.pluginId),
+            () => contribution.upload(input, signal)
+          ),
+      }
+    : contribution
   const entry = {
-    value: Object.freeze({ ...contribution, id, ...(owner ? { pluginId: owner.pluginId } : {}) }),
+    value: Object.freeze({ ...callbacks, id, ...(owner ? { pluginId: owner.pluginId } : {}) }),
     lifetime: new AbortController(),
   }
   entries.set(id, entry)
@@ -130,7 +198,8 @@ export function registerBackupDestination(
 export async function withBackupDestination<T>(
   id: string,
   signal: AbortSignal | undefined,
-  invoke: (entry: RegisteredBackupDestination, signal: AbortSignal) => Promise<T>
+  invoke: (entry: RegisteredBackupDestination, signal: AbortSignal) => Promise<T>,
+  credentialContext?: PersonalCredentialContext
 ): Promise<T> {
   const entry = entries.get(id)
   if (!entry) throw new Error("destination unavailable on this runtime")
@@ -146,7 +215,15 @@ export async function withBackupDestination<T>(
       onAbort = () => reject(new DOMException("Backup cancelled", "AbortError"))
       controller.signal.addEventListener("abort", onAbort, { once: true })
     })
-    const result = await Promise.race([invoke(entry.value, controller.signal), aborted])
+    const pluginId = entry.value.pluginId
+    const context = credentialContext ?? HOST_BACKGROUND
+    const work = () =>
+      invoke(
+        pluginId ? bindPluginCallbacks(pluginId, entry.value, () => context) : entry.value,
+        controller.signal
+      )
+    const pending = pluginId ? withPluginExecutionContext(pluginId, context, work) : work()
+    const result = await Promise.race([pending, aborted])
     controller.signal.throwIfAborted()
     return result
   } finally {

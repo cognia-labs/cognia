@@ -1,6 +1,7 @@
 import type { BotExecutorContext } from "./types"
 import { BotExecutorUnavailableError } from "./types"
 import { runHandlerBot } from "./handler"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 function ctx(overrides: Partial<BotExecutorContext> = {}): BotExecutorContext {
   return {
@@ -30,7 +31,11 @@ function ctx(overrides: Partial<BotExecutorContext> = {}): BotExecutorContext {
 
 describe("runHandlerBot", () => {
   it("passes the context straight through to the plugin's handler", async () => {
-    const handler = jest.fn().mockResolvedValue({ summary: "done" })
+    const handler = jest.fn(async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("acme")).toEqual({ executionRunId: "run_1" })
+      return { summary: "done" }
+    })
     const context = ctx({
       definition: { ...ctx().definition, handler },
     })

@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { registerBackupDestination } from "./registry"
 import {
   listBackupDestinationSnapshots,
@@ -88,14 +89,22 @@ it("routes built-in Drive listing and restore through the shared connection-chec
   // The public barrel installs the built-in descriptor, including list/download.
   await import("./index")
   expect(supportsBackupDestinationRestore("googledrive")).toBe(true)
-  expect(await listBackupDestinationSnapshots("googledrive")).toEqual([
-    { remoteId: "drive-snapshot", label: "Drive snapshot" },
-  ])
+  expect(
+    await listBackupDestinationSnapshots("googledrive", undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toEqual([{ remoteId: "drive-snapshot", label: "Drive snapshot" }])
   const options = { passphrase: "pass", mergeStrategy: "skip" as const }
-  await restoreFromBackupDestination("googledrive", "drive-snapshot", options)
-  expect(listGoogleDriveSnapshots).toHaveBeenCalledWith({ assertActive: expect.any(Function) })
+  await restoreFromBackupDestination("googledrive", "drive-snapshot", options, undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(listGoogleDriveSnapshots).toHaveBeenCalledWith({
+    assertActive: expect.any(Function),
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(downloadGoogleDriveSnapshot).toHaveBeenCalledWith("drive-snapshot", {
     assertActive: expect.any(Function),
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
   })
   expect(restoreBackupCiphertext).toHaveBeenCalledWith(
     "drive-ciphertext",

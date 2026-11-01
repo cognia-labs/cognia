@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 /** @jest-environment jsdom */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
@@ -9,6 +10,7 @@ const updateMock = jest.fn(async (patch: unknown) => {
   return next
 })
 const secretStore = new Map<string, string>()
+const getTokenMock = jest.fn(async (..._args: unknown[]) => secretStore.get("github-token") ?? null)
 const setTokenMock = jest.fn(async (token: string) => {
   secretStore.set("github-token", token.trim())
 })
@@ -19,7 +21,7 @@ jest.mock("@/lib/data/destinations/config", () => ({
   ...jest.requireActual("@/lib/data/destinations/config"),
   getBackupDestinationsSettings: async () => settingsState.current,
   updateBackupDestinationsSettings: (patch: unknown) => updateMock(patch),
-  backupDestinationSecrets: () => ({ load: async (k: string) => secretStore.get(k) ?? null }),
+  getGithubBackupToken: (...args: unknown[]) => getTokenMock(...args),
   setGithubBackupToken: (t: string) => setTokenMock(t),
   clearGithubBackupToken: () => clearTokenMock(),
 }))
@@ -72,6 +74,10 @@ describe("GithubBackupCard", () => {
     expect(screen.getByTestId("github-backup-private-badge")).toBeInTheDocument()
     expect((screen.getByTestId("github-backup-branch") as HTMLInputElement).value).toBe("main")
     expect(screen.getByTestId("github-backup-last-sync")).not.toHaveTextContent(/never/i)
+    expect(getTokenMock).toHaveBeenCalledWith(
+      { kind: "keyring" },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
   })
 
   it("validates the repo, saves the token to the keyring and the settings", async () => {
@@ -126,7 +132,13 @@ describe("GithubBackupCard", () => {
     await waitFor(() => expect(screen.getByTestId("github-backup-sync")).not.toBeDisabled())
     syncMock.mockResolvedValueOnce({ ok: true })
     fireEvent.click(screen.getByTestId("github-backup-sync"))
-    await waitFor(() => expect(syncMock).toHaveBeenCalledWith("github", "", expect.any(Object)))
+    await waitFor(() =>
+      expect(syncMock).toHaveBeenCalledWith(
+        "github",
+        "",
+        expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+      )
+    )
     await waitFor(() => expect(toast.success).toHaveBeenCalled())
     syncMock.mockResolvedValueOnce({ ok: false, error: "public" })
     fireEvent.click(screen.getByTestId("github-backup-sync"))

@@ -174,22 +174,25 @@ export function createImPushExecutor(deps: ImPushExecutorDeps = {}) {
     const idempotencyKey = normalized.idempotencyKey ?? `${task.id}:${execution.id}`
     try {
       const { taskPlanOrigin } = await import("@/lib/policy/action-review/plan-context")
-      const delivered = await enqueue({
-        adapterId,
-        conversationKey,
-        request: {
-          conversationRef: deliveryTarget.conversationRef,
-          deliveryTarget,
-          segments,
-          metadata: { idempotencyKey },
+      const delivered = await enqueue(
+        {
+          adapterId,
+          conversationKey,
+          request: {
+            conversationRef: deliveryTarget.conversationRef,
+            deliveryTarget,
+            segments,
+            metadata: { idempotencyKey },
+          },
+          source: "manual",
+          authorization: {
+            kind: "unattended",
+            ownerRef: `task:${task.id}`,
+            origin: taskPlanOrigin(task),
+          },
         },
-        source: "manual",
-        authorization: {
-          kind: "unattended",
-          ownerRef: `task:${task.id}`,
-          origin: taskPlanOrigin(task),
-        },
-      })
+        { executionContext: { automation: "schedule" } }
+      )
       if (delivered.kind === "drafted") {
         log.info("Scheduler im-push held as a draft", {
           taskId: task.id,

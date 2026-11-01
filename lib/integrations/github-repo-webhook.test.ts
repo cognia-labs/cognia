@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/credentials/keyring-store", () => ({ createKeyringStore: jest.fn() }))
 jest.mock("@/lib/db/integrations", () => ({ updateIntegrationAccount: jest.fn() }))
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
@@ -235,7 +236,17 @@ it("resolves webhook credentials with a qualified connector identity", async () 
       json: async () => ({ id: 42 }),
     } as never)
 
+  await expect(
+    configureGithubRepoWebhook({
+      account: account(),
+      repoFullName: "acme/app",
+      webhookUrl: URL,
+      eventTypes: ["issues.closed"],
+    })
+  ).rejects.toThrow("Personal credential github-user refused")
+  expect(resolveRequestCredential).not.toHaveBeenCalled()
   await configureGithubRepoWebhook({
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     account: account(),
     repoFullName: "acme/app",
     webhookUrl: URL,

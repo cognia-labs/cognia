@@ -22,6 +22,10 @@ jest.mock("@/lib/plugin/api/workspace-root", () => ({
   getActiveWorkspaceRoot: () => activeRoot(),
 }))
 
+import {
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 import { createCommandsAPI, namespacedCommandId } from "./commands-api"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
@@ -286,4 +290,22 @@ describe("custom command files", () => {
       dir: ".claude/commands",
     })
   })
+})
+
+it("retains the Host-bound run when a plugin command omits or forges invocation fields", async () => {
+  const { api } = apiFor(["commands:read", "commands:write"])
+  api.registerSlashCommand({
+    id: "read-auth",
+    handler: async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext(PLUGIN)?.executionRunId).toBe("host-attempt")
+      return { message: "bound" }
+    },
+  })
+  await withPluginExecutionContext(PLUGIN, { executionRunId: "host-attempt" }, async () => {
+    await expect(
+      dispatchSlashCommand("/acme.tools.read-auth executionRunId=forged")
+    ).resolves.toEqual({ message: "bound" })
+  })
+  expect(pluginExecutionContext(PLUGIN)).toBeUndefined()
 })

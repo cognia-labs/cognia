@@ -1,5 +1,6 @@
 import { registerDocsProvider } from "@/lib/docs-providers/registry"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en.json"
@@ -53,7 +54,12 @@ jest.mock("@/lib/auth-providers/google/host-auth", () => ({
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
   getHostConnectionDriver: () => ({
     reauthorize: (...args: unknown[]) =>
-      jest.requireMock("@/lib/auth-providers/google/host-auth").authorizeGoogleConnection(...args),
+      jest
+        .requireMock("@/lib/auth-providers/google/host-auth")
+        .authorizeGoogleConnection(
+          args[0],
+          (args[1] as { credentialContext?: unknown })?.credentialContext
+        ),
   }),
 }))
 jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
@@ -162,6 +168,23 @@ describe("DocsProvidersCard — host gating", () => {
 })
 
 describe("DocsProvidersCard — Feishu row", () => {
+  it("admits legacy account discovery from the desktop settings row", async () => {
+    renderCard()
+    await waitFor(() =>
+      expect(larkDocsProvider.listAccounts).toHaveBeenCalledWith({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
+    )
+  })
+
+  it("does not lend local admission to companion account discovery", async () => {
+    hostProfileMock.mockReturnValue("mobile-companion")
+    renderCard()
+    await waitFor(() =>
+      expect(larkDocsProvider.listAccounts).toHaveBeenCalledWith({ credentialContext: undefined })
+    )
+  })
+
   it("retains the latest native readiness when an older account read finishes late", async () => {
     let finish!: (accounts: unknown[]) => void
     ;(larkDocsProvider.listAccounts as jest.Mock)
@@ -306,9 +329,12 @@ describe("DocsProvidersCard — Google connections", () => {
     await waitFor(() =>
       expect(beginAuthMock).toHaveBeenCalledWith({ clientId: "cid.apps.googleusercontent.com" })
     )
-    expect(updateGoogleDocsSettings).toHaveBeenCalledWith({
-      clientId: "cid.apps.googleusercontent.com",
-    })
+    expect(updateGoogleDocsSettings).toHaveBeenCalledWith(
+      {
+        clientId: "cid.apps.googleusercontent.com",
+      },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
     expect(saveGoogleClientSecret).toHaveBeenCalledWith("shh", "cid.apps.googleusercontent.com")
     expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
     expect(openUrl).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?x=1")
@@ -361,7 +387,9 @@ describe("DocsProvidersCard — Google connections", () => {
     await screen.findByText("Reauthorize to confirm this Google account's identity.")
     await user.click(screen.getByRole("button", { name: "Reauthorize" }))
     await waitFor(() =>
-      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada", {})
+      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada", {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
     )
     expect(beginAuthMock).not.toHaveBeenCalled()
   })
@@ -400,7 +428,9 @@ describe("DocsProvidersCard — Google connections", () => {
       })
       expect(screen.getByRole("dialog", { name: "Authorize connection" })).toBeVisible()
       expect(screen.getByText("BOB-CODE")).toBeVisible()
-      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-bob", {})
+      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-bob", {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
       expect(authorizeGoogleConnection).toHaveBeenCalledTimes(1)
       await act(async () => {
         await jest.advanceTimersByTimeAsync(5000)
@@ -449,7 +479,11 @@ describe("DocsProvidersCard — Google connections", () => {
     await screen.findByRole("button", { name: "Disconnect" })
     showConnections([])
     await user.click(screen.getByRole("button", { name: "Disconnect" }))
-    await waitFor(() => expect(disconnectMock).toHaveBeenCalledWith("native-ada"))
+    await waitFor(() =>
+      expect(disconnectMock).toHaveBeenCalledWith("native-ada", {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    )
     await waitFor(() => expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument())
     expect(toast.success).toHaveBeenCalledWith(
       "Disconnected. The Google authorization has been revoked."

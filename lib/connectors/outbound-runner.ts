@@ -36,6 +36,7 @@ import { validateOutboundFeatures } from "./outbound-features"
  *   controller.abort()
  */
 
+import type { AdapterSendOptions } from "@/types/connectors/adapter"
 import type { PlatformAdapter } from "@/types/connectors"
 import { createMutex, computeBackoffDelay } from "@cognia/primitives"
 import { placeMessage } from "./message-placement"
@@ -54,6 +55,7 @@ import {
   markDeadlettered,
   unclaimSending,
   recoverStaleSendingJobs,
+  reconcileOutboundJobExecutions,
   findDeliveredByIdempotencyKey,
   findOlderActiveOutboundSibling,
   findNextActiveOutboundSibling,
@@ -760,7 +762,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         persistedAddress?.platform ?? parsedKey!.platform,
         targetId,
         persistedAddress?.containerId ?? parsedKey!.remoteChatId,
-        persistedAddress?.topicId ?? parsedKey!.threadId
+        persistedAddress?.topicId ?? parsedKey?.threadId
       )
       const reroutedRef = { ...job.request.conversationRef, adapterId: targetId }
       const reroutedTarget = job.request.deliveryTarget
@@ -776,36 +778,42 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         : undefined
       let newJob: Awaited<ReturnType<typeof enqueueOutbound>>
       try {
-        newJob = await enqueueOutbound({
-          adapterId: targetId,
-          conversationKey: newConversationKey,
-          request: {
-            ...job.request,
-            conversationRef: reroutedRef,
-            ...(reroutedTarget ? { deliveryTarget: reroutedTarget } : {}),
-            metadata: {
-              ...job.request.metadata,
-              idempotencyKey: `${job.request.metadata.idempotencyKey}:${keySuffix}:${targetId}`,
-              ...(mechanism === "failover"
-                ? { failoverFromAdapterId: job.adapterId }
-                : { balancedFromAdapterId: job.adapterId }),
+        newJob = await enqueueOutbound(
+          {
+            adapterId: targetId,
+            conversationKey: newConversationKey,
+            request: {
+              ...job.request,
+              conversationRef: reroutedRef,
+              ...(reroutedTarget ? { deliveryTarget: reroutedTarget } : {}),
+              metadata: {
+                ...job.request.metadata,
+                idempotencyKey: `${job.request.metadata.idempotencyKey}:${keySuffix}:${targetId}`,
+                ...(mechanism === "failover"
+                  ? { failoverFromAdapterId: job.adapterId }
+                  : { balancedFromAdapterId: job.adapterId }),
+              },
+            },
+            source: job.source,
+            ...(job.source === "workflow" && job.sourceWorkflow
+              ? { sourceWorkflow: job.sourceWorkflow }
+              : {}),
+            // The same chat through a sibling bot: what authorized the original
+            // job carries over, it is not planned again (ADR-0239).
+            authorization: {
+              kind: "rerouted",
+              from: {
+                conversationKey: job.conversationKey,
+                ...(job.authorizedBy ? { authorizedBy: job.authorizedBy } : {}),
+                ...(job.authorizationProvenance ? { provenance: job.authorizationProvenance } : {}),
+              },
             },
           },
-          source: job.source,
-          ...(job.source === "workflow" && job.sourceWorkflow
-            ? { sourceWorkflow: job.sourceWorkflow }
-            : {}),
-          // The same chat through a sibling bot: what authorized the original
-          // job carries over, it is not planned again (ADR-0239).
-          authorization: {
-            kind: "rerouted",
-            from: {
-              conversationKey: job.conversationKey,
-              ...(job.authorizedBy ? { authorizedBy: job.authorizedBy } : {}),
-              ...(job.authorizationProvenance ? { provenance: job.authorizationProvenance } : {}),
-            },
-          },
-        })
+          {
+            // Inherit the exact live Host job before settling the original.
+            executionContext: { executionRunId: `execution:job:outbound:${job.id}` },
+          }
+        )
       } catch (error) {
         // The copy was refused (the mode turned to enforce after the original
         // was authorized). The original goes back to the queue, unsent, and is
@@ -1558,6 +1566,13 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       return
     }
 
+    // Only the Host enqueue's exact job execution is proof. Serialized source,
+    // message ids and result-card metadata cannot mint or recover admission.
+    const deliveryRun = await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)
+    const identityOptions: AdapterSendOptions | undefined = deliveryRun?.sessionId
+      ? { executionIdentity: { sessionId: deliveryRun.sessionId, runId: deliveryRun.id } }
+      : undefined
+
     // Edit-vs-send dispatch. When the request carries an
     // `editTargetMessageId`, route to `adapter.edit()` so the platform
     // updates the existing message in place. Adapters that don't
@@ -1584,11 +1599,14 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
         result = await sendSemaphore.run(() =>
           adapter.meta.capabilities.includes("events.delivery-status")
             ? adapter.send(request, {
+                ...identityOptions,
                 onPendingReceipt: async (receipt) => {
                   await markAwaitingDeliveryReceipt(job.id, receipt)
                 },
               })
-            : adapter.send(request)
+            : identityOptions
+              ? adapter.send(request, identityOptions)
+              : adapter.send(request)
         )
       }
     } catch (err: unknown) {
@@ -1877,6 +1895,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
 
   // ── Wake-driven loop ──────────────────────────────────────────────────────
   try {
+    await reconcileOutboundJobExecutions()
     while (!opts.signal.aborted) {
       // CRM (v83): reopen snoozed conversations whose snooze window has
       // elapsed, so a snooze wakes on schedule even when no inbound arrives.

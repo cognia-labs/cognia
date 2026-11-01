@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject } from "@/types/issues"
@@ -195,7 +196,7 @@ describe("provider", () => {
     )
     const provider = createLarkTaskSyncProvider({ withApi: withApi as never })
     const result = await provider.pull(binding(), { since: 10 })
-    expect(withApi).toHaveBeenCalledWith("cai_1", expect.any(Function))
+    expect(withApi).toHaveBeenCalledWith("cai_1", expect.any(Function), undefined)
     expect(result.cycles).toEqual([
       { externalId: "section/s1", kind: "cycle", name: "Sprint 1", status: "active" },
     ])
@@ -309,7 +310,7 @@ it("resolves the bound adapter's Host connection before sync", async () => {
     }),
     expect.any(Function)
   )
-  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1")
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1", undefined, undefined)
 })
 
 it("refuses a pending push if another context switches the prepared adapter's authorization", async () => {
@@ -350,3 +351,17 @@ const fixture = createDbTestFixture({ seeded: false })
 beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
+
+it("forwards a per-call admission without capturing it in the registered provider", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const withApi = jest.fn(async () => ({ items: [], notModified: true }))
+  const provider = createLarkTaskSyncProvider({ withApi: withApi as never })
+  await provider.pull(binding(), { credentialContext })
+  expect(withApi).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.any(Function),
+    credentialContext
+  )
+  await provider.pull(binding(), {})
+  expect(withApi).toHaveBeenLastCalledWith(expect.any(String), expect.any(Function), undefined)
+})

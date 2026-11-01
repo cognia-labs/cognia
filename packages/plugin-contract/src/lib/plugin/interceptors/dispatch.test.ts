@@ -675,3 +675,39 @@ it("checks nested invariant identities structurally without accepting opaque rep
   expect(primitive.value).toEqual(input)
   expect(primitive.report.failed[0]?.kind).toBe("invariant")
 })
+it("invokes the injected Host fence before entering registered code", async () => {
+  let entered = false
+  const { value } = await dispatchTransform(
+    "model.request.prepare",
+    { text: "before" },
+    {
+      operationId: "host-fence",
+      chain: [
+        {
+          registrationId: "bound",
+          pluginId: "owner",
+          pluginInstanceId: "owner#1",
+          generation: 1,
+          realmId: "global",
+          pointId: "model.request.prepare",
+          semantic: "transform",
+          trustTier: "community",
+          order: {},
+          timeoutMs: 5000,
+          source: "interceptors",
+          runtime: "frontend",
+          handler: ((input: { text: string }) => {
+            expect(entered).toBe(true)
+            return input
+          }) as never,
+        },
+      ],
+      invokeHandler: async (registration, invoke) => {
+        expect(registration.pluginId).toBe("owner")
+        entered = true
+        return invoke()
+      },
+    }
+  )
+  expect(value.text).toBe("before")
+})

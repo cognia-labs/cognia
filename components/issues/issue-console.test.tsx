@@ -6,6 +6,7 @@
  * file asserts on what the console hands them and what it does with what comes
  * back.
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
@@ -1001,7 +1002,11 @@ describe("IssueConsole", () => {
       await act(async () => {
         await (detailProps.onWritebackCompleted as () => Promise<void>)()
       })
-      expect(mockRunSync).toHaveBeenCalledWith({ projectId: "w1", full: true })
+      expect(mockRunSync).toHaveBeenCalledWith({
+        projectId: "w1",
+        full: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
     })
   })
 

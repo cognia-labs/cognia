@@ -29,15 +29,17 @@ export interface GitHubRuntimeDeps {
  * connected integration account first, the `gh` CLI second.
  */
 export function createGitHubPullRequestProvider(
-  deps: GitHubRuntimeDeps = {
+  deps: GitHubRuntimeDeps | undefined = undefined,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+): GitHubPullRequestProvider {
+  deps ??= {
     isLocalRuntime: isTauri,
     // No repository yet, so the owner is unknown; an empty name ranks every
     // github.com account equally.
-    getToken: () => resolveGithubReadTokenForRepo(""),
+    getToken: () => resolveGithubReadTokenForRepo("", undefined, credentialContext),
     resolveRepository: createResolveTeamRepo(),
-    resolveClient: createResolveOctokit(),
+    resolveClient: createResolveOctokit(undefined, credentialContext),
   }
-): GitHubPullRequestProvider {
   return new GitHubPullRequestProvider({
     authenticationState: async (repositoryRoot) => {
       if (!deps.isLocalRuntime()) return "unavailable"

@@ -1,3 +1,4 @@
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import "./builtins"
 import { listBackupDestinations, withBackupDestination } from "./registry"
 import * as registry from "./registry"
@@ -82,3 +83,23 @@ it.each([
     expect(entry.download).toBeDefined()
   }
 )
+
+it("forwards direct Settings identity to Drive readiness without changing reload ownership", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  const context: PersonalCredentialContext = {
+    localAuthorization: actingAuthority.LOCAL_PERSON_RUN,
+  }
+  jest
+    .mocked(getBackupDestinationsSettings)
+    .mockResolvedValue({ googleDrive: { enabled: true, clientId: "backup" } })
+  jest.mocked(resolveGoogleDriveConnection).mockResolvedValue({ id: "bound" } as never)
+  jest
+    .mocked(googleState)
+    .mockResolvedValue({ clients: [{ clientId: "backup", hasClientSecret: true }] } as never)
+  const entry = listBackupDestinations().find((value) => value.id === "googledrive")!
+  await expect(entry.readiness(new AbortController().signal, context)).resolves.toEqual({
+    state: "ready",
+  })
+  expect(resolveGoogleDriveConnection).toHaveBeenLastCalledWith(context)
+  expect(googleState).toHaveBeenLastCalledWith({ action: "snapshot" }, context)
+})

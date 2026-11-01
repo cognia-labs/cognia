@@ -26,4 +26,5 @@ it("activates only a Host-managed provider and disposes its registration", async
   )
   onDispose.mock.calls[0][0]()
   expect(unregister).toHaveBeenCalledTimes(1)
+  expect(registerProvider).toHaveBeenCalledTimes(1)
 })

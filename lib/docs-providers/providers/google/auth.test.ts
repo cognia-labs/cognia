@@ -4,6 +4,7 @@ jest.mock("./config", () => ({
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsEnsureServer: jest.fn() }))
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getGoogleDocsSettings } from "./config"
 import { __setGoogleStatePortForTests } from "./state"
 import {
@@ -61,7 +62,10 @@ it("does not begin without a client id or an available loopback Host", async () 
 it("forwards callbacks to Rust without any renderer token exchange", async () => {
   host.handle = async () => host.snapshot
   await expect(
-    completeGoogleDocsAuth({ code: "code", state: "google:state", clientId: "client" })
+    completeGoogleDocsAuth(
+      { code: "code", state: "google:state", clientId: "client" },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
   ).resolves.toEqual(host.snapshot)
   expect(host.calls).toEqual([
     { action: "complete", code: "code", state: "google:state", clientId: "client" },
@@ -77,15 +81,32 @@ it.each([{ state: "s" }, { code: "c" }, { error: "access_denied", errorDescripti
 )
 
 it("polls once per caller action so the caller owns cadence", async () => {
-  await expect(pollGoogleDeviceAuth("attempt")).resolves.toMatchObject({ pollStatus: "pending" })
+  await expect(
+    pollGoogleDeviceAuth("attempt", { localAuthorization: LOCAL_PERSON_RUN })
+  ).resolves.toMatchObject({ pollStatus: "pending" })
   expect(host.calls).toEqual([{ action: "pollDevice", attemptId: "attempt" }])
 })
 
 it("disconnects only the selected lineage and preserves the Host outcome", async () => {
   host.handle = async () => ({ ...host.snapshot, outcome: { revoked: false, reason: "offline" } })
-  await expect(disconnectGoogleDocs("lineage")).resolves.toEqual({
+  await expect(
+    disconnectGoogleDocs("lineage", { localAuthorization: LOCAL_PERSON_RUN })
+  ).resolves.toEqual({
     revoked: false,
     reason: "offline",
   })
   expect(host.calls).toEqual([{ action: "disconnect", lineageId: "lineage" }])
+})
+
+it("refuses OAuth userinfo and revocation without Host admission", async () => {
+  await expect(completeGoogleDocsAuth({ code: "code", state: "s" })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  await expect(pollGoogleDeviceAuth("attempt")).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  await expect(disconnectGoogleDocs("lineage")).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  expect(host.calls).toEqual([])
 })

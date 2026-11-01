@@ -591,7 +591,8 @@ describe("runBuiltInSkill — write tier HITL routing", () => {
             }),
           ],
         }),
-      })
+      }),
+      { executionContext: { sessionId: "s_x", executionRunId: "" } }
     )
   })
 

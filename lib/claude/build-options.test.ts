@@ -1,4 +1,10 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+jest.mock("@/lib/mcp/run-server-map", () => {
+  const actual = jest.requireActual("@/lib/mcp/run-server-map")
+  return { ...actual, buildRunMcpServerMap: jest.fn(actual.buildRunMcpServerMap) }
+})
 jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
   recordRunAuthority: jest.fn(async () => undefined),
 }))
 import { recordRunAuthority } from "@/lib/execution/acting-authority"
@@ -9393,4 +9399,66 @@ it("resolves participants before provider or key work and freezes the extension 
           .resolveAgentExecutionEnvironment
       )
   }
+})
+
+it("never restores a refused MCP namespace through late grants or tool filters", async () => {
+  const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
+  mListMcp.mockResolvedValue([
+    { id: "private", name: "Private", transport: "http", config: { url: "https://private" } },
+  ])
+  jest.mocked(buildRunMcpServerMap).mockImplementationOnce(async (servers, deps) => {
+    deps?.onRefusal?.(servers[0], "trigger-not-personal")
+    return {}
+  })
+  const opts = await resolveSendOptions({
+    character: makeChar({ allowedTools: ["mcp__Private__read"] }),
+    capabilityGrants: [
+      {
+        schemaVersion: 1,
+        source: { kind: "cli", id: "test" },
+        tools: { restrictTo: ["mcp__Private__read"] },
+      },
+    ],
+    personalCredentialContext: { sessionId: "im", executionRunId: "event-run" },
+  })
+  expect(opts.mcpServers).not.toHaveProperty("Private")
+  expect(opts.allowedTools ?? []).not.toContain("mcp__Private__read")
+  expect(opts.disallowedTools).toContain("mcp__Private__*")
+})
+
+it("forbids personal OAuth configuration on the direct external desktop send path", async () => {
+  const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
+  mListMcp.mockResolvedValue([
+    { id: "private", name: "Private", transport: "http", config: { url: "https://private" } },
+  ])
+  jest.mocked(buildRunMcpServerMap).mockResolvedValueOnce({})
+  await resolveSendOptions({
+    externalRuntimeId: "test-external",
+    personalCredentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(buildRunMcpServerMap).toHaveBeenLastCalledWith(
+    expect.any(Array),
+    expect.objectContaining({
+      credentialContext: expect.objectContaining({ externalEngine: true }),
+    })
+  )
+})
+
+it("keeps personal OAuth for a builtin member with an external session model", async () => {
+  const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
+  mListMcp.mockResolvedValue([{ id: "private", name: "Private" }])
+  jest
+    .mocked(buildRunMcpServerMap)
+    .mockResolvedValueOnce({ Private: { type: "http", url: "https://private" } })
+  const options = await resolveSendOptions({
+    session: makeSession({ providerOverride: "cognia:external-agent:codex" }),
+    personalCredentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(buildRunMcpServerMap).toHaveBeenLastCalledWith(
+    expect.any(Array),
+    expect.objectContaining({
+      credentialContext: expect.objectContaining({ externalEngine: false }),
+    })
+  )
+  expect(options.mcpServers).toHaveProperty("Private")
 })

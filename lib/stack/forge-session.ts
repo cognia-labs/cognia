@@ -54,7 +54,11 @@ export interface StackForgeDeps {
    * Null when no credential could be resolved. `host` is the deployment the
    * remote was matched to; the credential and the REST root both come from it.
    */
-  octokit(repository: string, host: GithubHost): Promise<OctokitLike | null>
+  octokit(
+    repository: string,
+    host: GithubHost,
+    credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+  ): Promise<OctokitLike | null>
   adapter(octokit: OctokitLike): ForgeStackAdapter
   /**
    * The GitHub deployments the user has an account on (ADR-0176).
@@ -74,9 +78,9 @@ const DEFAULT_DEPS: StackForgeDeps = {
   // Imported lazily and by path, not at module scope: the credential source is
   // the application's, and a static import would drag the Agent Team graph
   // into every consumer of the stack engine — including its own tests.
-  octokit: async (repository, host) => {
+  octokit: async (repository, host, credentialContext) => {
     const { createResolveOctokit } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
-    return createResolveOctokit()(repository, host)
+    return createResolveOctokit(undefined, credentialContext)(repository, host)
   },
   adapter: (octokit) => createGithubStackAdapter({ octokit }),
   // Lazy for the same reason as `octokit`: the account registry belongs to the
@@ -104,7 +108,8 @@ export function pickForgeRemote(remotes: readonly GitRemote[]): GitRemote | null
 
 export async function openStackForge(
   repositoryRoot: string,
-  deps?: Partial<StackForgeDeps>
+  deps?: Partial<StackForgeDeps>,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
 ): Promise<StackForge> {
   const resolved: StackForgeDeps = { ...DEFAULT_DEPS, ...deps }
   const remotes = await resolved.remotes(repositoryRoot).catch(() => [] as GitRemote[])
@@ -120,7 +125,9 @@ export async function openStackForge(
     return { status: "unsupportedHost", host: parsed.host, remote: remote.name }
   }
 
-  const octokit = await resolved.octokit(parsed.fullName, parsed.host).catch(() => null)
+  const octokit = await resolved
+    .octokit(parsed.fullName, parsed.host, credentialContext)
+    .catch(() => null)
   if (!octokit) {
     return { status: "noCredential", repository: parsed.fullName, remote: remote.name }
   }

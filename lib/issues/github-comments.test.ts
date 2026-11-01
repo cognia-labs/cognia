@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
   createResolveOctokit: () => async () => null,
 }))
@@ -105,4 +106,15 @@ describe("fetchGithubIssueComments", () => {
       )
     ).rejects.toThrow("owner/repository")
   })
+})
+
+it("forwards local-view admission rather than granting it in the reader", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const resolveOctokit = jest.fn(async () => octokit([]).client)
+  await fetchGithubIssueComments(
+    { repoFullName: "o/r", number: 1 },
+    { resolveOctokit },
+    credentialContext
+  )
+  expect(resolveOctokit).toHaveBeenCalledWith("o/r", credentialContext)
 })

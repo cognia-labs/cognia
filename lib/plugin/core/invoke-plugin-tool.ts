@@ -1,3 +1,4 @@
+import { withPluginExecutionContext } from "./invocation-identity"
 /**
  * Unified plugin-tool invocation seam.
  *
@@ -84,6 +85,8 @@ export class PluginToolInvocationError extends Error {
 }
 
 export interface InvokePluginToolOptions {
+  /** Exact Host-correlated execution identity, independent of model arguments. */
+  executionRunId?: string
   /** Host-created invocation-bound API; not derived from tool/model arguments. */
   project?: PluginProjectAPI
   /** Abort signal threaded into `PluginToolContext.signal`. */
@@ -124,7 +127,10 @@ export interface InvokePluginToolDeps {
         }
       | undefined
     getRegistry: () => { getTool: (name: string) => PluginTool | undefined }
-    handleActivationEvent: (event: `onTool:${string}`) => Promise<void>
+    handleActivationEvent: (
+      event: `onTool:${string}`,
+      options?: { initiatorPluginId?: string }
+    ) => Promise<void>
     /** Refresh the plugin's idle-suspend clock on tool use (optional so test
      * fixtures may omit it). */
     recordPluginToolUse?: (pluginId: string) => void
@@ -232,6 +238,19 @@ export async function invokePluginTool(
   args: Record<string, unknown>,
   options: InvokePluginToolOptions = {}
 ): Promise<InvokePluginToolResult> {
+  // Bind before lazy activation/interceptors too: plugin registration must not
+  // turn a tool's auth read into an outside-run owner read.
+  return withPluginExecutionContext(pluginId, options, () =>
+    invokeBoundPluginTool(pluginId, toolName, args, options)
+  )
+}
+
+async function invokeBoundPluginTool(
+  pluginId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  options: InvokePluginToolOptions
+): Promise<InvokePluginToolResult> {
   if (options.signal?.aborted) {
     throw abortedError(pluginId, toolName, options.signal.reason)
   }
@@ -272,7 +291,7 @@ export async function invokePluginTool(
   // skips enabled plugins and guards in-flight activations, so calling
   // unconditionally is safe + idempotent.
   if (plugin.status !== "enabled" && options.autoActivate !== false) {
-    await manager.handleActivationEvent(`onTool:${toolName}`)
+    await manager.handleActivationEvent(`onTool:${toolName}`, { initiatorPluginId: pluginId })
     plugin = manager.getPlugin(pluginId) ?? plugin
   }
   if (plugin.status !== "enabled") {
@@ -314,6 +333,7 @@ export async function invokePluginTool(
     { pluginId, toolName, args, sessionId: options.sessionId },
     {
       operationId,
+      credentialContext: options,
       ...(options.sessionId ? { sessionId: options.sessionId } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       invariantFields: ["pluginId", "toolName"],
@@ -366,6 +386,7 @@ export async function invokePluginTool(
 
   const context: PluginToolContext = {
     invocationId: operationId,
+    executionRunId: options.executionRunId,
     sessionId: options.sessionId,
     messageId: options.messageId,
     sandboxRuntimeRef,
@@ -393,26 +414,32 @@ export async function invokePluginTool(
     // retry, breaker) stays INSIDE the wrapper so an interceptor observes one
     // logical execution rather than each retry attempt, and so a retry cannot
     // re-enter the interceptor chain.
-    const { result } = await dispatchAround<Record<string, unknown>, unknown>(
-      "tool.execute",
-      effectiveArgs,
-      (finalArgs) =>
-        runResilient(
-          (attemptSignal) => tool.execute(finalArgs, { ...context, signal: attemptSignal }),
-          {
-            timeoutMs: cfg.timeoutMs,
-            maxRetries: cfg.maxRetries,
-            retryable: cfg.retryable,
-            breaker,
-            label: `${pluginId}/${toolName}`,
-            signal: options.signal,
-          }
-        ),
-      {
-        operationId,
-        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-      }
+    const { result } = await withPluginExecutionContext(pluginId, context, () =>
+      dispatchAround<Record<string, unknown>, unknown>(
+        "tool.execute",
+        effectiveArgs,
+        (finalArgs) =>
+          runResilient(
+            (attemptSignal) =>
+              withPluginExecutionContext(pluginId, context, () =>
+                tool.execute(finalArgs, { ...context, signal: attemptSignal })
+              ),
+            {
+              timeoutMs: cfg.timeoutMs,
+              maxRetries: cfg.maxRetries,
+              retryable: cfg.retryable,
+              breaker,
+              label: `${pluginId}/${toolName}`,
+              signal: options.signal,
+            }
+          ),
+        {
+          operationId,
+          credentialContext: options,
+          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+        }
+      )
     )
     return { result, pluginId, toolName }
   } catch (err) {

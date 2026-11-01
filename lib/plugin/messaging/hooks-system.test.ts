@@ -1,4 +1,9 @@
+import {
+  pluginExecutionContext,
+  withHostCommandExecution,
+} from "@/lib/plugin/core/invocation-identity"
 import type { PluginManifest } from "@/types/plugin"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 /**
  * Plugin Hooks System Tests
  *
@@ -81,6 +86,76 @@ function seedPlugins(state: {
     }
   }
 }
+
+describe("Host chat hook identity", () => {
+  afterEach(() => seedPlugins({ plugins: {} }))
+
+  it("pins the Host context across asynchronous prompt recipients and ignores payload identity", async () => {
+    const seen: unknown[] = []
+    const execution = { sessionId: "session", executionRunId: "host-run" }
+    const hooks = new PluginEventHooks()
+    seedPlugins({
+      plugins: Object.fromEntries(
+        ["p1", "p2"].map((pluginId) => [
+          pluginId,
+          {
+            status: "enabled",
+            hooks: {
+              onUserPromptSubmit: async (_prompt: string, _session: string, context: unknown) => {
+                await Promise.resolve()
+                seen.push([pluginId, pluginExecutionContext(pluginId), context])
+                return { action: "proceed" }
+              },
+            },
+          },
+        ])
+      ),
+    })
+    const payload = { mode: "chat", previousMessages: [], executionRunId: "forged" } as never
+    const pending = hooks.dispatchUserPromptSubmit("hello", "session", payload, execution)
+    execution.executionRunId = "replacement"
+    await pending
+    expect(seen).toEqual(
+      ["p1", "p2"].map((pluginId) => [
+        pluginId,
+        { sessionId: "session", executionRunId: "host-run" },
+        payload,
+      ])
+    )
+    expect(pluginExecutionContext("p1")).toBeUndefined()
+    expect(pluginExecutionContext("p2")).toBeUndefined()
+  })
+
+  it.each(["dispatchOnMessageSend", "dispatchOnMessageReceive"] as const)(
+    "%s pins local proof across a rewritten message and later recipient",
+    async (dispatch) => {
+      const seen: unknown[] = []
+      const lifecycle = new PluginLifecycleHooks()
+      const key = dispatch === "dispatchOnMessageSend" ? "onMessageSend" : "onMessageReceive"
+      seedPlugins({
+        plugins: Object.fromEntries(
+          ["p1", "p2"].map((pluginId) => [
+            pluginId,
+            {
+              status: "enabled",
+              hooks: {
+                [key]: async (message: object) => {
+                  await Promise.resolve()
+                  seen.push(pluginExecutionContext(pluginId))
+                  return { ...message, executionRunId: "forged" }
+                },
+              },
+            },
+          ])
+        ),
+      })
+      const execution = { localAuthorization: LOCAL_PERSON_RUN } as const
+      await lifecycle[dispatch]({ id: "message", role: "user", content: "hello" }, execution)
+      expect(seen).toEqual([execution, execution])
+      expect(pluginExecutionContext("p1")).toBeUndefined()
+    }
+  )
+})
 
 describe("Plugin Hooks System", () => {
   describe("HookPriority enum", () => {
@@ -1329,7 +1404,10 @@ describe("PluginLifecycleHooks - Team hook isolation (fire-and-forget)", () => {
 
   it("defers handler execution to a microtask (does not run synchronously)", async () => {
     const hooks = new PluginLifecycleHooks()
-    const onTeamStart = jest.fn()
+    const seen: unknown[] = []
+    const onTeamStart = jest.fn(() => {
+      seen.push(pluginExecutionContext("p-defer"))
+    })
     hooks.registerHooks("p-defer", { onTeamStart })
 
     hooks.dispatchOnTeamStart(payload)
@@ -1337,6 +1415,7 @@ describe("PluginLifecycleHooks - Team hook isolation (fire-and-forget)", () => {
 
     await flushMicrotasks()
     expect(onTeamStart).toHaveBeenCalledWith(payload)
+    expect(seen).toEqual([{ executionRunId: "" }])
   })
 
   it("isolates a throwing plugin so siblings on the same hook still run", async () => {
@@ -1672,6 +1751,31 @@ describe("PluginLifecycleHooks.dispatchOnCommand", () => {
     seedPlugins({ plugins: {} })
   })
 
+  it("keeps every fallback recipient inside the Host-bound attempt", async () => {
+    const context = { sessionId: "forged-session" }
+    const seen: unknown[] = []
+    lifecycleHooks.registerHooks("command-owner", {
+      onCommand: () => {
+        seen.push(pluginExecutionContext("command-owner"))
+        return false
+      },
+    })
+    lifecycleHooks.registerHooks("auth-owner", {
+      onCommand: () => {
+        seen.push(pluginExecutionContext("auth-owner"))
+        return true
+      },
+    })
+    await withHostCommandExecution(context, { executionRunId: "host-attempt" }, () =>
+      lifecycleHooks.dispatchOnCommand("command-owner.run", [], context)
+    )
+    expect(seen).toEqual([
+      { executionRunId: "host-attempt", sessionId: undefined },
+      { executionRunId: "host-attempt", sessionId: undefined },
+    ])
+    expect(pluginExecutionContext("auth-owner")).toBeUndefined()
+  })
+
   it("normalizes the legacy boolean contract to a bare acceptance", async () => {
     // Plugins written against SDK 0.1 return `true`. They must keep working
     // untouched — the host then supplies its own generic response line.
@@ -1804,10 +1908,18 @@ describe("PluginLifecycleHooks.dispatchOnCommand", () => {
     })
 
     it("leaves a plugin without python-backed commands on the positional contract", async () => {
-      const onCommand = jest.fn(() => true)
+      const seen: unknown[] = []
+      const onCommand = jest.fn(async () => {
+        await Promise.resolve()
+        seen.push(pluginExecutionContext("js"))
+        return true
+      })
       lifecycleHooks.registerHooks("js", { onCommand })
-      await lifecycleHooks.dispatchOnCommand("hello", ["x"], { sessionId: "s1" })
+      await expect(
+        lifecycleHooks.dispatchOnCommand("hello", ["x"], { sessionId: "s1" })
+      ).resolves.toEqual({ handled: true })
       expect(onCommand).toHaveBeenCalledWith("hello", ["x"], { sessionId: "s1" })
+      expect(seen).toEqual([{ executionRunId: "" }])
     })
   })
 

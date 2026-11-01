@@ -1,3 +1,8 @@
+import {
+  bindPluginCallbacks,
+  withPluginCommandExecution,
+} from "@/lib/plugin/core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 /**
  * Plugin Hooks System - Unified hook management
  *
@@ -221,10 +226,21 @@ export class PluginLifecycleHooks {
   }
 
   /** One plugin's registered hooks, ignoring enablement. */
-  private registered(pluginId: string): RegisteredHooks | undefined {
+  private registered(
+    pluginId: string,
+    execution?: PersonalCredentialContext
+  ): RegisteredHooks | undefined {
     const entry = getPluginHookContribution(pluginId)
     if (!entry) return undefined
-    return { pluginId, hooks: entry.hooks as PluginHooks, priority: entry.priority }
+    const hooks = bindPluginCallbacks(
+      pluginId,
+      entry.hooks,
+      execution ? () => execution : undefined
+    ) as PluginHooks
+    // Activation/lifecycle code on the plugin's own initiative remains phase 5/6.
+    for (const key of ["onLoad", "onEnable", "onDisable", "onUnload"] as const)
+      if (entry.hooks[key]) hooks[key] = entry.hooks[key]
+    return { pluginId, hooks, priority: entry.priority }
   }
 
   /**
@@ -544,11 +560,15 @@ export class PluginLifecycleHooks {
   // Hook Dispatchers - Message (Pipeline style)
   // ===========================================================================
 
-  async dispatchOnMessageSend(message: PluginMessage): Promise<PluginMessage> {
+  async dispatchOnMessageSend(
+    message: PluginMessage,
+    execution?: PersonalCredentialContext
+  ): Promise<PluginMessage> {
+    const binding = execution && { ...execution }
     let currentMessage = message
 
     for (const pluginId of this.hookExecutionOrder) {
-      const registered = this.registered(pluginId)
+      const registered = this.registered(pluginId, binding)
       if (registered?.hooks.onMessageSend) {
         try {
           currentMessage = await registered.hooks.onMessageSend(currentMessage)
@@ -561,11 +581,15 @@ export class PluginLifecycleHooks {
     return currentMessage
   }
 
-  async dispatchOnMessageReceive(message: PluginMessage): Promise<PluginMessage> {
+  async dispatchOnMessageReceive(
+    message: PluginMessage,
+    execution?: PersonalCredentialContext
+  ): Promise<PluginMessage> {
+    const binding = execution && { ...execution }
     let currentMessage = message
 
     for (const pluginId of this.hookExecutionOrder) {
-      const registered = this.registered(pluginId)
+      const registered = this.registered(pluginId, binding)
       if (registered?.hooks.onMessageReceive) {
         try {
           currentMessage = await registered.hooks.onMessageReceive(currentMessage)
@@ -880,15 +904,17 @@ export class PluginLifecycleHooks {
           // A python plugin's `onCommand` is the bridged `@hook("onCommand")`,
           // which carries one payload value. The commands bridge hands it a
           // structured invocation and reads the answer back into this contract.
-          const outcome = isPythonCommandPlugin(pluginId)
-            ? await dispatchPythonCommand(
-                pluginId,
-                onCommand as unknown as PythonCommandHook,
-                command,
-                args,
-                context
-              )
-            : await onCommand(command, args, context)
+          const invoke = async () =>
+            isPythonCommandPlugin(pluginId)
+              ? await dispatchPythonCommand(
+                  pluginId,
+                  onCommand as unknown as PythonCommandHook,
+                  command,
+                  args,
+                  context
+                )
+              : await onCommand(command, args, context)
+          const outcome = await withPluginCommandExecution(pluginId, context, invoke)
           context?.signal?.throwIfAborted()
           if (outcome === true) return { handled: true }
           if (outcome && typeof outcome === "object" && outcome.handled) return outcome
@@ -1037,8 +1063,10 @@ export class PluginEventHooks {
   private async executeHook<T>(
     hookName: keyof PluginHooksAll,
     executor: (hooks: PluginHooksAll, pluginId: string) => T | Promise<T>,
-    timeoutMs: number = PluginEventHooks.HOOK_TIMEOUT_MS
+    timeoutMs: number = PluginEventHooks.HOOK_TIMEOUT_MS,
+    execution?: PersonalCredentialContext
   ): Promise<HookSandboxExecutionResult<T>[]> {
+    const binding = execution && { ...execution }
     const store = usePluginStore.getState()
     const pluginIds = this.getPluginsByPriority(hookName)
     const results: HookSandboxExecutionResult<T>[] = []
@@ -1061,7 +1089,16 @@ export class PluginEventHooks {
       // and rejects into the void later.
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined
       try {
-        const hookPromise = Promise.resolve(executor(plugin.hooks as PluginHooksAll, pluginId))
+        const hookPromise = Promise.resolve(
+          executor(
+            bindPluginCallbacks(
+              pluginId,
+              plugin.hooks,
+              binding ? () => binding : undefined
+            ) as PluginHooksAll,
+            pluginId
+          )
+        )
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(
             () =>
@@ -1405,8 +1442,13 @@ export class PluginEventHooks {
     this.executeHook("onStreamEnd", (hooks) => hooks.onStreamEnd?.(sessionId, finalContent))
   }
 
-  dispatchChatError(sessionId: string, error: Error) {
-    this.executeHook("onChatError", (hooks) => hooks.onChatError?.(sessionId, error))
+  dispatchChatError(sessionId: string, error: Error, execution?: PersonalCredentialContext) {
+    this.executeHook(
+      "onChatError",
+      (hooks) => hooks.onChatError?.(sessionId, error),
+      undefined,
+      execution
+    )
   }
 
   dispatchTokenUsage(
@@ -1426,14 +1468,20 @@ export class PluginEventHooks {
   async dispatchUserPromptSubmit(
     prompt: string,
     sessionId: string,
-    context: import("@/types/plugin/plugin-hooks").PromptSubmitContext
+    context: import("@/types/plugin/plugin-hooks").PromptSubmitContext,
+    execution?: PersonalCredentialContext
   ): Promise<import("@/types/plugin/plugin-hooks").PromptSubmitResult> {
-    const results = await this.executeHook("onUserPromptSubmit", async (hooks) => {
-      if (hooks.onUserPromptSubmit) {
-        return hooks.onUserPromptSubmit(prompt, sessionId, context)
-      }
-      return { action: "proceed" as const }
-    })
+    const results = await this.executeHook(
+      "onUserPromptSubmit",
+      async (hooks) => {
+        if (hooks.onUserPromptSubmit) {
+          return hooks.onUserPromptSubmit(prompt, sessionId, context)
+        }
+        return { action: "proceed" as const }
+      },
+      undefined,
+      execution
+    )
 
     // Check for block or modify actions (first one wins)
     for (const result of results) {
@@ -1523,14 +1571,20 @@ export class PluginEventHooks {
    * Dispatch post-chat-receive hook - allows plugins to process AI responses
    */
   async dispatchPostChatReceive(
-    response: import("@/types/plugin/plugin-hooks").ChatResponseData
+    response: import("@/types/plugin/plugin-hooks").ChatResponseData,
+    execution?: PersonalCredentialContext
   ): Promise<import("@/types/plugin/plugin-hooks").PostChatReceiveResult> {
-    const results = await this.executeHook("onPostChatReceive", async (hooks) => {
-      if (hooks.onPostChatReceive) {
-        return hooks.onPostChatReceive(response)
-      }
-      return {}
-    })
+    const results = await this.executeHook(
+      "onPostChatReceive",
+      async (hooks) => {
+        if (hooks.onPostChatReceive) {
+          return hooks.onPostChatReceive(response)
+        }
+        return {}
+      },
+      undefined,
+      execution
+    )
 
     // Merge all results
     const finalResult: import("@/types/plugin/plugin-hooks").PostChatReceiveResult = {}

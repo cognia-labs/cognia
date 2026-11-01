@@ -15,6 +15,7 @@
  *      nothing is destroyed.
  */
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Trash2Icon, Undo2Icon } from "lucide-react"
@@ -91,7 +92,10 @@ export function AccountDangerTab({ account, accounts, activeAccountId }: Account
     // Detached from the component lifecycle — runs even if the dialog closed.
     timerRef.current = null
     toastRef.current = null
-    void deleteAccount(account.id, { replacementAccountId })
+    void deleteAccount(account.id, {
+      replacementAccountId,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
       .then((result) => {
         // The profile is gone either way. What must not be reported as a
         // clean delete is a cloud sign-in the app could not fully clear.

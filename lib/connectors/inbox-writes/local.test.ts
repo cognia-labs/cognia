@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 import "fake-indexeddb/auto"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 // Dexie `delete()` + `open()` per test is well past the 5 s default hook
 // budget when the suite runs alongside the repo's heavier DB suites.
@@ -171,6 +172,17 @@ describe("sendManualReplyLocally", () => {
     expect(message?.parts).toEqual([{ type: "text", text: "on it" }])
     expect(message?.metadata?.outboundJobId).toBe(result.jobId)
     expect(invalidateMock).toHaveBeenCalledWith("messages", KEY)
+  })
+
+  it("keeps paired/manual labels unproven and forwards only explicit Host UI admission", async () => {
+    await sendManualReplyLocally(input)
+    expect(enqueueMock.mock.calls.at(-1)?.[1]).toEqual({
+      executionContext: { sessionId: SESSION, localAuthorization: undefined },
+    })
+    await sendManualReplyLocally({ ...input, idempotencyKey: "host-ui" }, LOCAL_PERSON_RUN)
+    expect(enqueueMock.mock.calls.at(-1)?.[1]).toEqual({
+      executionContext: { sessionId: SESSION, localAuthorization: LOCAL_PERSON_RUN },
+    })
   })
 
   it("stamps the reply as the session's last-message preview", async () => {
@@ -414,4 +426,20 @@ describe("parseManualReplyMessageMetadata", () => {
       expect(() => parseManualReplyMessageMetadata(value)).toThrow("invalid messageMetadata")
     }
   )
+})
+
+it("forwards Host draft approval proof separately from persisted draft data", async () => {
+  const draft = await createDraft({
+    sessionId: SESSION,
+    conversationKey: KEY,
+    segments: [{ type: "text", text: "approved" }],
+  })
+  await approveDraftLocally(
+    draft.id,
+    { binding: { adapterId: ADAPTER, conversationKey: KEY, conversationRef: REF } },
+    LOCAL_PERSON_RUN
+  )
+  expect(enqueueMock.mock.calls.at(-1)?.[1]).toEqual({
+    executionContext: { sessionId: SESSION, localAuthorization: LOCAL_PERSON_RUN },
+  })
 })

@@ -1,3 +1,5 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import type { IssueProject } from "@/types/issues"
 import { IssueSyncRegistry } from "./registry"
 import { resolveWorkspaceSyncBindings, runWorkspaceIssueSync } from "./runner"
@@ -261,7 +263,11 @@ describe("runWorkspaceIssueSync", () => {
     )
     expect(runMirror).toHaveBeenCalledWith({ projectId: "w1", full: true })
     expect(reconcile).toHaveBeenCalledTimes(2)
-    expect(reconcile.mock.calls[0][2]).toEqual({ full: true, signal: expect.any(AbortSignal) })
+    expect(reconcile.mock.calls[0][2]).toEqual({
+      full: true,
+      signal: expect.any(AbortSignal),
+      credentialContext: HOST_BACKGROUND,
+    })
     expect(result.bindingCount).toBe(4)
     expect(result.outcomes).toHaveLength(1)
     expect(result.failures).toEqual([{ binding: bad, error: expect.any(Error) }])
@@ -292,5 +298,23 @@ describe("runWorkspaceIssueSync", () => {
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(result.bindingCount).toBe(1)
     expect(result.mirror.repoCount).toBe(0)
+  })
+})
+
+it("carries a manual Host admission to both mirror and provider reconciliation", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const registry = new IssueSyncRegistry()
+  const b = binding("a", "p1")
+  registry.register(provider("a", [b]))
+  const runMirror = jest.fn(async () => ({ repoCount: 0, results: [], failures: [] }))
+  const reconcile = jest.fn(async () => outcome(b))
+  await runWorkspaceIssueSync(
+    { credentialContext },
+    { registry, runMirror, reconcile, listContainers: async () => [] }
+  )
+  expect(runMirror).toHaveBeenCalledWith({ credentialContext })
+  expect(reconcile).toHaveBeenCalledWith(b, registry.get("a"), {
+    credentialContext,
+    signal: expect.any(AbortSignal),
   })
 })

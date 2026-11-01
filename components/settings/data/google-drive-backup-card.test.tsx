@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getSettings, saveSettings } from "@/lib/db/settings"
@@ -39,7 +40,7 @@ afterEach(async () => {
   cleanup()
   jest.useRealTimers()
   // Drain native reconciliation before replacing its port or disposing Dexie.
-  await listGoogleConnections()
+  await listGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   __setGoogleStatePortForTests(null)
 })
 
@@ -126,7 +127,7 @@ it("displays the device code, honors pending and slow_down intervals, then binds
   await tick(1)
   expect(polls).toBe(3)
   jest.useRealTimers()
-  await listGoogleConnections()
+  await listGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   await screen.findByText("Connected as ada@example.test", {}, { timeout: 5000 })
   expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeTruthy()
 })
@@ -198,7 +199,11 @@ it("syncs the connected destination through the Host backup pipeline", async () 
   await waitFor(() => expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled())
   fireEvent.click(screen.getByRole("button", { name: "Sync now" }))
   await waitFor(() =>
-    expect(runRemoteBackupSyncNow).toHaveBeenCalledWith("googledrive", "", expect.any(Object))
+    expect(runRemoteBackupSyncNow).toHaveBeenCalledWith(
+      "googledrive",
+      "",
+      expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+    )
   )
 })
 
@@ -244,16 +249,20 @@ it("disconnects account A without rebinding B, needs auth, then explicitly binds
     sub: "other",
     email: "bob@example.test",
   })
-  await bindGoogleDriveConnection("native")
+  await bindGoogleDriveConnection("native", { localAuthorization: LOCAL_PERSON_RUN })
   render(<GoogleDriveBackupCard />)
   await screen.findByText("Connected as ada@example.test")
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }))
   await waitFor(async () =>
     expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
   )
-  expect(await resolveGoogleDriveConnection()).toBeNull()
+  expect(await resolveGoogleDriveConnection({ localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   const destination = listBackupDestinations().find((value) => value.id === "googledrive")!
-  expect(await destination.readiness(new AbortController().signal)).toEqual({
+  expect(
+    await destination.readiness(new AbortController().signal, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toEqual({
     state: "needs-auth",
     reasonKey: "googledrive",
   })
@@ -272,8 +281,15 @@ it("disconnects account A without rebinding B, needs auth, then explicitly binds
   jest.useRealTimers()
   await listGoogleConnections()
   await screen.findByText("Connected as ada@example.test", {}, { timeout: 5000 })
-  expect((await resolveGoogleDriveConnection())?.hostMetadata?.adapterId).toBe("native")
-  expect(await destination.readiness(new AbortController().signal)).toEqual({ state: "ready" })
+  expect(
+    (await resolveGoogleDriveConnection({ localAuthorization: LOCAL_PERSON_RUN }))?.hostMetadata
+      ?.adapterId
+  ).toBe("native")
+  expect(
+    await destination.readiness(new AbortController().signal, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).toEqual({ state: "ready" })
 })
 
 it("preserves explicit unbinding when saving a different backup client", async () => {
@@ -291,5 +307,5 @@ it("preserves explicit unbinding when saving a different backup client", async (
     expect(toast.success).toHaveBeenCalledWith("Google Drive backup settings saved")
   )
   expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
-  expect(await resolveGoogleDriveConnection()).toBeNull()
+  expect(await resolveGoogleDriveConnection({ localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
 })

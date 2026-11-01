@@ -67,10 +67,13 @@ export interface GithubIssueLoopDependencies {
 async function resolveCredential(
   pluginId: string,
   connectorAccountId: string,
-  origin: string
+  origin: string,
+  jobId: string
 ): Promise<string> {
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
   if (!account?.enabled) throw new Error(`Integration account "${connectorAccountId}" is disabled`)
+  const { assertIntegrationJobCredential } = await import("./action-runner")
+  await assertIntegrationJobCredential(jobId, account)
   const provider = getProvider(account.providerId)
   if (!provider) throw new Error(`Auth provider "${account.providerId}" is not registered`)
   const sessions = await provider.getSessions(undefined, { silent: true })
@@ -94,7 +97,8 @@ function defaultDependencies(
 ): GithubIssueLoopDependencies {
   return {
     request: context.authenticatedRequest,
-    resolveCredential,
+    resolveCredential: (pluginId, accountId, origin) =>
+      resolveCredential(pluginId, accountId, origin, context.jobId),
     clone: cloneToWorkspace,
     executeAgent,
     commitAndPush,
@@ -229,11 +233,17 @@ export async function runGithubIssueLoop(
         },
       })
       try {
+        // Agent work may outlive a revocation or a steered identity change.
+        const pushCredential = await deps.resolveCredential(
+          context.pluginId,
+          context.accountId,
+          new URL(api).origin
+        )
         commitSha = await deps.commitAndPush({
           workspace,
           message: `fix: resolve GitHub issue #${number}`,
           remoteBranch: head,
-          token: credential,
+          token: pushCredential,
         })
       } catch (error) {
         await deps.updateJob(context.jobId, {

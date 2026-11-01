@@ -14,6 +14,7 @@ import { loggers } from "@cognia/logging"
 import type { PluginDefinition, PluginManifest, PluginTool } from "@/types/plugin"
 import type { PluginNodeDef } from "@/types/plugin/plugin-workflow"
 import { persistRuntimeStubWarning, RUNTIME_STUB_WARNINGS } from "./runtime-stub-warning"
+import { pluginDispatchContext, withPluginExecutionContext } from "./invocation-identity"
 
 const wasmLoaderLogger = loggers.plugin.child("wasm-loader")
 
@@ -60,12 +61,17 @@ export async function updateWasmPluginConfig(
 }
 
 async function invokeWasmHost<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core")
-    return invoke<T>(command, args)
+  const dispatch = async () => {
+    if (isTauri()) {
+      const { invoke } = await import("@tauri-apps/api/core")
+      return invoke<T>(command, args)
+    }
+    const { transport } = await import("@/lib/tauri/transport-instance")
+    return transport.call<T>(command, args)
   }
-  const { transport } = await import("@/lib/tauri/transport-instance")
-  return transport.call<T>(command, args)
+  return typeof args?.pluginId === "string" && command === "plugin_wasm_call"
+    ? withPluginExecutionContext(args.pluginId, pluginDispatchContext(args.pluginId), dispatch)
+    : dispatch()
 }
 
 /**

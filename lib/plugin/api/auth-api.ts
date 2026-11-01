@@ -1,4 +1,12 @@
 import { currentExternalServiceRuntimeContext } from "@/lib/external-services/runtime-profile"
+import {
+  createPluginCredentialAccess,
+  pluginExecutionContext,
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  withPluginExecutionContext,
+  type PluginCredentialAccess,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * `ctx.auth` — native auth/OAuth provider API (C1).
  *
@@ -19,8 +27,11 @@ import {
   onDidChangeSessions as registryOnDidChange,
   type AuthSession,
   type AuthenticationProvider,
+  type AuthSessionOptions,
 } from "@/lib/plugin/auth/auth-provider-registry"
 import { getAuthConnection, listAuthConnections } from "@/lib/db/auth-connections"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+
 import { connectProvider } from "@/lib/plugin/auth/connect"
 import {
   runLegacySessionMigrations,
@@ -53,6 +64,35 @@ import type {
   PluginAuthSessionMetadata,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 
+// Each Host invocation gets its own scope-array key. Registration never captures
+// personal authority, and concurrent/plugin calls cannot borrow another read's proof.
+const hostSessionContexts = new WeakMap<
+  readonly string[],
+  { credentialContext?: PersonalCredentialContext; pluginAccess?: PluginCredentialAccess }
+>()
+
+/** Host UI/dispatch entry; proof stays per invocation and never enters provider options. */
+export async function getHostAuthSession(
+  providerId: string,
+  scopes: readonly string[],
+  options?: AuthSessionOptions,
+  credentialContext?: PersonalCredentialContext,
+  pluginAccess?: PluginCredentialAccess
+): Promise<AuthSession | undefined> {
+  const requestedScopes = [...scopes]
+  if (credentialContext || pluginAccess)
+    hostSessionContexts.set(requestedScopes, { credentialContext, pluginAccess })
+  try {
+    const provider = getProvider(providerId)
+    const read = () => registryGetSession(providerId, requestedScopes, options)
+    return await (provider?.pluginId && !provider.describe
+      ? withPluginExecutionContext(provider.pluginId, credentialContext ?? HOST_BACKGROUND, read)
+      : read())
+  } finally {
+    hostSessionContexts.delete(requestedScopes)
+  }
+}
+
 /** Adapt connection-backed providers for the native and VS Code session surfaces. */
 function hostManagedProvider(
   provider: Extract<PluginAuthProvider, { management: "host" }>,
@@ -65,9 +105,15 @@ function hostManagedProvider(
   const ready = Promise.resolve().then(() => runLegacySessionMigrations(adapted))
   void ready.catch(() => console.warn("Host auth migration requires recovery"))
 
-  async function sessionFor(ref: AuthConnectionRef): Promise<AuthSession> {
+  async function sessionFor(
+    ref: AuthConnectionRef,
+    access?: {
+      credentialContext?: PersonalCredentialContext
+      pluginAccess?: PluginCredentialAccess
+    }
+  ): Promise<AuthSession> {
     const manager = getConnectionManager()
-    const credentials = await manager.getCredentials(ref)
+    const credentials = await manager.getCredentials(ref, access)
     // Credential resolution may refresh or await a provider. Fence logout and
     // ownership changes after it, before returning anything to a session reader.
     const row = await manager.getConnection(ref)
@@ -97,7 +143,10 @@ function hostManagedProvider(
         )
           continue
         try {
-          const session = await sessionFor(row.id)
+          const session = await sessionFor(
+            row.id,
+            scopes ? hostSessionContexts.get(scopes) : undefined
+          )
           if (!scopes || scopes.every((scope) => session.scopes.includes(scope)))
             sessions.push(
               ...[
@@ -120,16 +169,34 @@ function hostManagedProvider(
         await connectProvider({
           providerId: provider.id,
           scopes,
+          credentialContext: hostSessionContexts.get(scopes)?.credentialContext,
           configuration: options?.configuration,
-        })
+        }),
+        hostSessionContexts.get(scopes)
       )
     },
     async removeSession(sessionId) {
+      const credentialContext = pluginExecutionContext(pluginId)
+      const pluginAccess = createPluginCredentialAccess(pluginId)
       await ready
       const aliases = await legacySessionAliases(adapted)
       const row = await getAuthConnection(aliases.get(sessionId) ?? sessionId)
       if (row?.providerId === provider.id && row.ownerPluginId === pluginId)
-        await getConnectionManager().disconnect(row.id, { revoke: Boolean(provider.revoke) })
+        await getConnectionManager().disconnect(row.id, {
+          revoke: Boolean(provider.revoke),
+          credentialContext,
+          pluginAccess,
+        })
+    },
+    async getSessionMetadata(sessionId) {
+      const row = await getAuthConnection(sessionId)
+      return row?.providerId === provider.id && row.ownerPluginId === pluginId
+        ? {
+            id: row.id,
+            account: { id: row.principalId, label: row.accountLabel },
+            scopes: [...row.scopes],
+          }
+        : undefined
     },
   }
   return adapted
@@ -183,7 +250,8 @@ function requirePermission(
 export function createAuthAPI(
   pluginId: string,
   options: CreateAuthAPIOptions,
-  tokenReadPolicy: ConsumerTokenReadPolicy = DEFAULT_CONSUMER_TOKEN_READ_POLICY
+  tokenReadPolicy: ConsumerTokenReadPolicy = DEFAULT_CONSUMER_TOKEN_READ_POLICY,
+  credentialContext?: PersonalCredentialContext
 ): PluginAuthAPI {
   const { hasPermission } = options
   return {
@@ -225,6 +293,7 @@ export function createAuthAPI(
       if (existing && existing.pluginId !== pluginId) {
         throw new Error(`Auth provider "${provider.id}" is owned by another plugin.`)
       }
+      provider = bindPluginCallbacks(pluginId, provider)
       return registerAuthenticationProvider(
         provider.management === "host"
           ? hostManagedProvider(provider, pluginId)
@@ -233,7 +302,13 @@ export function createAuthAPI(
     },
     async getSession(providerId, scopes, sessionOptions) {
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
-      const session = await registryGetSession(providerId, scopes, sessionOptions)
+      const session = await getHostAuthSession(
+        providerId,
+        scopes,
+        sessionOptions,
+        pluginExecutionContext(pluginId) ?? credentialContext,
+        createPluginCredentialAccess(pluginId)
+      )
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
       if (session) enforceConsumerTokenReadPolicy(pluginId, providerId, tokenReadPolicy)
       return session
@@ -242,7 +317,24 @@ export function createAuthAPI(
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSessions")
       const provider = getProvider(providerId)
       if (!provider) throw new Error(`No auth provider registered for id "${providerId}"`)
-      const sessions = await provider.getSessions(scopes, { silent: true })
+      const requestedScopes = [...(scopes ?? [])]
+      hostSessionContexts.set(requestedScopes, {
+        credentialContext: pluginExecutionContext(pluginId) ?? credentialContext,
+        pluginAccess: createPluginCredentialAccess(pluginId),
+      })
+      let sessions: AuthSession[]
+      try {
+        const read = () => provider.getSessions(requestedScopes, { silent: true })
+        sessions = await (provider.pluginId && !provider.describe
+          ? withPluginExecutionContext(
+              provider.pluginId,
+              pluginExecutionContext(pluginId) ?? credentialContext ?? HOST_BACKGROUND,
+              read
+            )
+          : read())
+      } finally {
+        if (requestedScopes) hostSessionContexts.delete(requestedScopes)
+      }
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSessions")
       if (sessions.length) enforceConsumerTokenReadPolicy(pluginId, providerId, tokenReadPolicy)
       return sessions

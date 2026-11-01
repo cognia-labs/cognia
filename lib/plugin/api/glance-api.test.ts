@@ -43,6 +43,15 @@ afterEach(() => {
 })
 
 describe("createGlanceAPI", () => {
+  it("backgrounds the visibility callback without granting personal authority", () => {
+    const api = createGlanceAPI({ pluginId: PLUGIN, capabilities: ["glance"] })
+    api.register({ id: "bound", title: "Bound" })
+    const seen: unknown[] = []
+    const stop = api.onVisibilityChange("bound", () => seen.push(pluginExecutionContext(PLUGIN)))
+    glancePluginModules.setOnScreen("test", [pluginEntryId(PLUGIN, "bound")])
+    expect(seen).toEqual([HOST_BACKGROUND, HOST_BACKGROUND])
+    stop()
+  })
   it("is a warn-once no-op without the glance capability", () => {
     const api = createGlanceAPI({ pluginId: PLUGIN, capabilities: ["tray"] })
     const dispose = api.register({ id: "builds", title: "Builds" })
@@ -199,3 +208,4 @@ describe("createGlanceAPI", () => {
     expect(handler).toHaveBeenCalledTimes(1)
   })
 })
+import { HOST_BACKGROUND, pluginExecutionContext } from "../core/invocation-identity"

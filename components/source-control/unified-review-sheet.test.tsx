@@ -1,3 +1,5 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+jest.mock("@/lib/review/github-runtime", () => ({ createGitHubPullRequestProvider: jest.fn() }))
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import en from "@/i18n/messages/en/unifiedReview.json"
 import zh from "@/i18n/messages/zh-CN/unifiedReview.json"
@@ -371,4 +373,23 @@ it("turns a picked scope into the sheet's scope and the primary root's refs", as
   await waitFor(() =>
     expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ scope: "staged" }))
   )
+})
+
+it("admits the person's default review provider explicitly in the Host UI", async () => {
+  const { createGitHubPullRequestProvider } = await import("@/lib/review/github-runtime")
+  jest.mocked(createGitHubPullRequestProvider).mockReturnValue(provider as never)
+  render(
+    <UnifiedReviewSheet
+      open
+      onOpenChange={jest.fn()}
+      rootDir="/repo"
+      repositoryRoots={["/repo"]}
+      stagedCount={0}
+      committing={false}
+      actions={actions as never}
+    />
+  )
+  expect(createGitHubPullRequestProvider).toHaveBeenCalledWith(undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
 })

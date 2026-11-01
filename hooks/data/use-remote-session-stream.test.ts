@@ -481,7 +481,11 @@ describe("useRemoteSessionStream", () => {
     })
     expect(buildSendOptionsMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "sess-1" }),
-      "hello"
+      "hello",
+      undefined,
+      undefined,
+      undefined,
+      { executionRunId: "" }
     )
     expect(sendPromptMock).toHaveBeenCalledWith("sess-1", "hello", {
       model: "sonnet",

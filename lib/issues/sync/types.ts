@@ -8,35 +8,27 @@
  * repository and a plugin's Jira instance all reconcile the same way.
  */
 
+import type {
+  IssueSyncProvider as PortableProvider,
+  PullOptions as PortablePullOptions,
+  PullPageOptions as PortablePullPageOptions,
+} from "@cognia/plugin-contract/lib/issues/sync/types"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { IssueSyncBinding } from "@cognia/plugin-contract/lib/issues/sync/types"
-import type { IssueSyncProvider as ContractProvider } from "@cognia/plugin-contract/lib/issues/sync/types"
 import type { ExternalSyncOutcome, ExternalSyncTarget } from "@/lib/external-services/sync/types"
 export type {
   IssueSyncBinding,
   IssueSyncResourceDescriptor,
   IssueSyncResourceSchema,
   PluginIssueSyncProviderDef,
-  PullOptions,
   PullResult,
   PullPage,
-  PullPageOptions,
   PushOutcome,
   RemoteCycle,
   RemoteIssue,
   RemoteLink,
   RemotePatch,
 } from "@cognia/plugin-contract/lib/issues/sync/types"
-
-/** Host-only credential preparation; plugin registrations never copy this hook. */
-export interface IssueSyncProvider extends ContractProvider {
-  readonly connectionRef?: ExternalSyncTarget["connectionRef"]
-  prepare?(binding: IssueSyncBinding): Promise<{
-    provider: IssueSyncProvider
-    connectionRef?: ExternalSyncTarget["connectionRef"]
-    consumerPluginId?: string
-    consumerKind?: "integration"
-  }>
-}
 
 export interface ReconcileOutcome {
   status: ExternalSyncOutcome["status"]
@@ -65,4 +57,57 @@ export class IssueSyncOutcomeError extends Error {
 export interface IssueSyncFailure {
   binding: IssueSyncBinding
   error: unknown
+}
+
+/** Invocation proof stays in Host types and never crosses plugin callbacks. */
+export interface PullOptions extends PortablePullOptions {
+  credentialContext?: PersonalCredentialContext
+}
+export interface PullPageOptions extends PortablePullPageOptions {
+  credentialContext?: PersonalCredentialContext
+}
+
+/** Invocation proof and preparation are Host-only; public callbacks receive portable arguments. */
+export interface IssueSyncProvider extends Omit<
+  PortableProvider,
+  "pull" | "pullPage" | "confirmDeparted" | "push" | "create"
+> {
+  readonly connectionRef?: ExternalSyncTarget["connectionRef"]
+  prepare?(
+    binding: IssueSyncBinding,
+    credentialContext?: PersonalCredentialContext
+  ): Promise<{
+    provider: IssueSyncProvider
+    connectionRef?: ExternalSyncTarget["connectionRef"]
+    consumerPluginId?: string
+    consumerKind?: "integration"
+  }>
+  pullPage?: (
+    binding: IssueSyncBinding,
+    options: PullPageOptions
+  ) => ReturnType<NonNullable<PortableProvider["pullPage"]>>
+  confirmDeparted?: (
+    binding: IssueSyncBinding,
+    ids: Parameters<NonNullable<PortableProvider["confirmDeparted"]>>[1],
+    options: Parameters<NonNullable<PortableProvider["confirmDeparted"]>>[2] & {
+      credentialContext?: PersonalCredentialContext
+    }
+  ) => ReturnType<NonNullable<PortableProvider["confirmDeparted"]>>
+  pull(binding: IssueSyncBinding, options: PullOptions): ReturnType<PortableProvider["pull"]>
+  push?: (
+    ...args: [
+      Parameters<NonNullable<PortableProvider["push"]>>[0],
+      Parameters<NonNullable<PortableProvider["push"]>>[1],
+      Parameters<NonNullable<PortableProvider["push"]>>[2],
+      Parameters<NonNullable<PortableProvider["push"]>>[3],
+      Parameters<NonNullable<PortableProvider["push"]>>[4] & {
+        credentialContext?: PersonalCredentialContext
+      },
+    ]
+  ) => ReturnType<NonNullable<PortableProvider["push"]>>
+  create?: (
+    binding: IssueSyncBinding,
+    issue: Parameters<NonNullable<PortableProvider["create"]>>[1],
+    credentialContext?: PersonalCredentialContext
+  ) => ReturnType<NonNullable<PortableProvider["create"]>>
 }

@@ -530,6 +530,8 @@ function buildWorkflowSnapshotBlock(
 }
 
 export interface BuildOptionsContext {
+  /** Host proof before the turn exists; never a serialized origin label. */
+  personalCredentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Partition-only ticket route; skips all Host credential and workspace resolution. */
   personChat?: { model: string; secret: string; endpoint: string }
 
@@ -1442,6 +1444,7 @@ export function resolvedSessionAsideRuntime(options: SendOptions): AgentRuntimeR
 }
 
 export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<SendOptions> {
+  const withheldPersonalMcpServers = new Set<string>()
   const participantCharacterId =
     ctx.character?.id ?? ctx.memberOverride?.characterId ?? ctx.session?.characterId
   if (
@@ -3670,7 +3673,25 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       // Desktop injects send-time OAuth bearer headers for remote (sse/http)
       // servers from the keyring; web / CLI stay header-only (no keyring).
       const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
-      opts.mcpServers = await buildRunMcpServerMap(chosen)
+      opts.mcpServers = await buildRunMcpServerMap(chosen, {
+        credentialContext: {
+          ...ctx.personalCredentialContext,
+          // Routing (including Aside fallback) has now selected the engine.
+          externalEngine: Boolean(ctx.externalRuntimeId),
+        },
+        onRefusal: (server) => {
+          withheldPersonalMcpServers.add(server.name)
+          const prefix = `mcp__${server.name}__`
+          opts.allowedTools = opts.allowedTools?.filter((tool) => !tool.startsWith(prefix))
+          opts.alwaysLoadTools = opts.alwaysLoadTools?.filter((tool) => !tool.startsWith(prefix))
+          opts.alwaysLoadServers = opts.alwaysLoadServers?.filter((name) => name !== server.name)
+          if (opts.mcpToolAllowlist) delete opts.mcpToolAllowlist[server.name]
+          opts.toolPermissionRules = opts.toolPermissionRules?.filter(
+            (rule) => !rule.tool.startsWith(prefix)
+          )
+        },
+      })
+      chosen = chosen.filter((server) => Object.hasOwn(opts.mcpServers ?? {}, server.name))
 
       // `declared_by` locators for hook tool_provenance — same keys as the
       // wire map above. File-loaded rows carry `declaredBy` from the loader;
@@ -6027,6 +6048,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   }
   if (finalizedToolSurface.toolSurface !== undefined) {
     opts.toolSurface = finalizedToolSurface.toolSurface
+  }
+  // Hooks, grants and parent ceilings cannot restore a withheld namespace.
+  if (withheldPersonalMcpServers.size) {
+    const withheld = (tool: string) =>
+      [...withheldPersonalMcpServers].some((name) => tool.startsWith(`mcp__${name}__`))
+    opts.allowedTools = opts.allowedTools?.filter((tool) => !withheld(tool))
+    opts.disallowedTools = [
+      ...new Set([
+        ...(opts.disallowedTools ?? []),
+        ...[...withheldPersonalMcpServers].map((name) => `mcp__${name}__*`),
+      ]),
+    ]
+    for (const def of Object.values(opts.agents ?? {})) {
+      if (def.tools) def.tools = def.tools.filter((tool) => !withheld(tool))
+    }
   }
   // ADR-0237: a harness subagent can never hold a tool its parent lacks. The
   // grant filter may already have dropped some of them from the map.

@@ -260,26 +260,29 @@ async function runUrgent(
   const authorization = urgentAuthorization(ctx, targetKey, userIds)
   let jobId: string
   try {
-    const result = await enqueue({
-      adapterId: ctx.adapter.id,
-      conversationKey: targetKey,
-      request: {
-        conversationRef: binding.conversationRef,
-        deliveryTarget: binding.deliveryTarget,
-        segments: [
-          {
-            type: "text",
-            text: SLA_ESCALATION_NOTICE.urgent.text(
-              ctx.overdueMinutes,
-              targetKey === ctx.conversationKey ? undefined : ctx.conversationKey
-            ),
-          },
-        ],
-        metadata: { idempotencyKey: `sla-urgent:${ctx.conversationKey}:${ctx.stepIndex}` },
+    const result = await enqueue(
+      {
+        adapterId: ctx.adapter.id,
+        conversationKey: targetKey,
+        request: {
+          conversationRef: binding.conversationRef,
+          deliveryTarget: binding.deliveryTarget,
+          segments: [
+            {
+              type: "text",
+              text: SLA_ESCALATION_NOTICE.urgent.text(
+                ctx.overdueMinutes,
+                targetKey === ctx.conversationKey ? undefined : ctx.conversationKey
+              ),
+            },
+          ],
+          metadata: { idempotencyKey: `sla-urgent:${ctx.conversationKey}:${ctx.stepIndex}` },
+        },
+        source: "manual",
+        authorization,
       },
-      source: "manual",
-      authorization,
-    })
+      { executionContext: { sessionId: session.id, automation: "service" } }
+    )
     if (result.kind === "drafted") return fail("notice_held", result.draft.id)
     jobId = result.job.id
   } catch (err) {

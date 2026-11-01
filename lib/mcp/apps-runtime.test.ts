@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { McpCapabilityCacheRow, McpServer } from "@cognia/agent-config-types"
 
 const mockRegistryRow = jest.fn()
@@ -19,6 +20,7 @@ import {
   parseNamespacedMcpToolName,
   promoteMcpAppDownload,
   readMcpDownloadResource,
+  resolveMcpAppToolCredentialContext,
 } from "./apps-runtime"
 
 const server = {
@@ -44,6 +46,12 @@ function cache(meta: Record<string, unknown>): McpCapabilityCacheRow {
 }
 
 describe("MCP Apps runtime wiring", () => {
+  it("does not resolve an uncorrelated tool to an active session run", async () => {
+    await expect(resolveMcpAppToolCredentialContext("chat", "")).resolves.toEqual({
+      sessionId: "chat",
+      executionRunId: "",
+    })
+  })
   it("parses exact Anthropic MCP namespaces", () => {
     expect(parseNamespacedMcpToolName("mcp__figma-local__delete_frame")).toEqual({
       namespace: "figma-local",
@@ -73,7 +81,7 @@ describe("MCP Apps runtime wiring", () => {
       permissions: { clipboardWrite: {} },
       risk: "destructive",
     })
-    expect(readResource).toHaveBeenCalledWith(server, "ui://figma/editor", "chat-1")
+    expect(readResource).toHaveBeenCalledWith(server, "ui://figma/editor", "chat-1", undefined)
   })
 
   it("supports the deprecated flat resource URI and defaults unknown tools to write", async () => {
@@ -160,7 +168,7 @@ describe("MCP Apps runtime wiring", () => {
         { saveText, readLinked }
       )
     ).resolves.toBe(1)
-    expect(readLinked).toHaveBeenCalledWith(server, "report://daily.csv", "chat")
+    expect(readLinked).toHaveBeenCalledWith(server, "report://daily.csv", "chat", undefined)
     expect(saveText).toHaveBeenCalledWith({ defaultName: "daily.csv", content: "a,b\n1,2" })
   })
 
@@ -188,4 +196,16 @@ describe("MCP Apps runtime wiring", () => {
       expect(mockGatewayRead).not.toHaveBeenCalled()
     })
   })
+})
+
+it("forwards explicit Host view admission while loading an MCP App resource", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const readResource = jest.fn(async () => ({ html: "<main />" }))
+  await loadMcpAppForTool("mcp__figma-local__delete_frame", "history", {
+    credentialContext,
+    listServers: async () => [server],
+    loadCapabilities: async () => [cache({ ui: { resourceUri: "ui://view" } })],
+    readResource,
+  })
+  expect(readResource).toHaveBeenCalledWith(server, "ui://view", "history", credentialContext)
 })

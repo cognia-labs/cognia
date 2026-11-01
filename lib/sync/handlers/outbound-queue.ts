@@ -22,7 +22,11 @@
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { OutboundJobRow } from "@/lib/db/connector-types"
-import { isOutboundTerminal, OUTBOUND_TERMINAL_RETENTION_MS } from "@/lib/db/outbound-jobs"
+import {
+  deleteOutboundJobs,
+  isOutboundTerminal,
+  OUTBOUND_TERMINAL_RETENTION_MS,
+} from "@/lib/db/outbound-jobs"
 import type { SyncCursor, SyncOutcome } from "../types"
 import { runSyncHandler } from "./base"
 
@@ -67,8 +71,10 @@ export async function sweepAgedMirroredRows(
     .toArray()
   if (victims.length === 0) return 0
   assertCurrent()
-  await table.bulkDelete(victims.map((row) => row.id))
-  return victims.length
+  return deleteOutboundJobs(
+    victims.map((row) => row.id),
+    { tombstones: false }
+  )
 }
 
 export function syncOutboundQueue(transport: Transport, cursor: SyncCursor): Promise<SyncOutcome> {
@@ -77,6 +83,10 @@ export function syncOutboundQueue(transport: Transport, cursor: SyncCursor): Pro
       table: "outboundQueue",
       getTable: () => getDb().outboundQueue,
       applyRows: (rows, assertCurrent) => applyOutboundQueueRows(rows, Date.now(), assertCurrent),
+      applyDeletes: async (ids, assertCurrent) => {
+        assertCurrent()
+        await deleteOutboundJobs(ids, { tombstones: false })
+      },
     },
     transport,
     cursor

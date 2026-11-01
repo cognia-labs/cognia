@@ -1,6 +1,13 @@
 /** @jest-environment jsdom */
 
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import "fake-indexeddb/auto"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  startJobExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 import { liveQuery } from "dexie"
 import type { IntegrationActionHandlerContext } from "@/types/plugin/plugin-integration"
 
@@ -101,6 +108,33 @@ jest.mock("./github-auth", () => ({
 }))
 
 describe("Integration action runner", () => {
+  it("startup drain settles orphaned executions before selecting runnable jobs", async () => {
+    const account = await setup()
+    const terminal = await queue(account.id)
+    const missing = await enqueueIntegrationActionJob({ ...terminal, idempotencyKey: "missing" })
+    const held = await enqueueIntegrationActionJob({ ...terminal, idempotencyKey: "held" })
+    for (const job of [terminal, missing, held]) await startJobExecutionRun(`integration:${job.id}`)
+    await getDb().integrationActionJobs.update(terminal.id, { status: "failed" })
+    await getDb().integrationActionJobs.delete(missing.id)
+    await getDb().integrationActionJobs.update(held.id, { status: "awaiting_approval" })
+    expect(await drainIntegrationActionJobs()).toEqual([])
+    for (const [id, status] of [
+      [terminal.id, "failed"],
+      [missing.id, "cancelled"],
+      [held.id, "running"],
+    ])
+      expect(await getDb().executionRuns.get(`execution:job:integration:${id}`)).toMatchObject({
+        status,
+      })
+  })
+
+  it("does not create a live execution when a legacy terminal job is explicitly run", async () => {
+    const account = await setup()
+    const job = await queue(account.id)
+    await updateIntegrationActionJob(job.id, { status: "failed" })
+    await runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
+    expect(await getDb().executionRuns.get(`execution:job:integration:${job.id}`)).toBeUndefined()
+  })
   beforeEach(async () => {
     const actualDb = jest.requireActual("@/lib/db/integrations")
     jest
@@ -210,6 +244,22 @@ describe("Integration action runner", () => {
     })
     return account
   }
+
+  it("keeps a deferred plugin handler inside its Host job execution until settlement", async () => {
+    let expected = ""
+    const account = await setup(async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("example-delivery")?.executionRunId).toBe(expected)
+      return {}
+    })
+    const job = await queue(account.id)
+    expected = `execution:job:integration:${job.id}`
+    await expect(
+      runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({ status: "succeeded" })
+    expect(pluginExecutionContext("example-delivery")).toBeUndefined()
+    expect(await getDb().executionRuns.get(expected)).toMatchObject({ status: "completed" })
+  })
 
   it("preserves the requested connection ref and refuses a changed account binding before transport", async () => {
     const account = await setup()
@@ -364,7 +414,7 @@ describe("Integration action runner", () => {
     })
     const active = await queue(account.id)
     const other = await queue("other-account")
-    const execution = runIntegrationActionJob(active.id)
+    const execution = runIntegrationActionJob(active.id, { localAuthorization: LOCAL_PERSON_RUN })
     const context = await entered.promise
     await cancelIntegrationActionJobsForAccounts([account.id])
     expect(context.signal.aborted).toBe(true)
@@ -377,7 +427,10 @@ describe("Integration action runner", () => {
     const handler = jest.fn(async () => ({ updated: true }))
     const account = await setup(handler)
     const job = await queue(account.id)
-    await Promise.all([runIntegrationActionJob(job.id), runIntegrationActionJob(job.id)])
+    await Promise.all([
+      runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN }),
+      runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN }),
+    ])
     expect(handler).toHaveBeenCalledTimes(1)
     expect(await getIntegrationActionJob(job.id)).toMatchObject({
       status: "succeeded",
@@ -394,7 +447,7 @@ describe("Integration action runner", () => {
       return { updated: true }
     })
     const job = await queue(account.id)
-    const execution = runIntegrationActionJob(job.id)
+    const execution = runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
     await entered.promise
     await cancelIntegrationActionJob(job.id)
     release.resolve()
@@ -439,7 +492,7 @@ describe("Integration action runner", () => {
       const job = await queue(account.id)
       // IndexedDB still needs its real task/microtask scheduling while the action clock is controlled.
       jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
-      const execution = runIntegrationActionJob(job.id)
+      const execution = runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
       let settled = false
       void execution.then(() => {
         settled = true
@@ -503,7 +556,7 @@ describe("Integration action runner", () => {
       .mocked(liveQuery)
       .mockReturnValueOnce({ subscribe } as unknown as ReturnType<typeof liveQuery>)
     const job = await queue(account.id)
-    const execution = runIntegrationActionJob(job.id)
+    const execution = runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
     try {
       const context = await entered.promise
       const claimed = await getIntegrationActionJob(job.id)
@@ -567,7 +620,7 @@ describe("Integration action runner", () => {
       global.fetch = fetchMock
       try {
         const job = await queue(account.id)
-        const execution = runIntegrationActionJob(job.id)
+        const execution = runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
         const signal = await dispatched.promise
         expect(signal).toBe(handlerSignal)
         expect(signal?.aborted).toBe(false)
@@ -617,7 +670,7 @@ describe("Integration action runner", () => {
       pluginId: "other",
       idempotencyKey: "other",
     })
-    const execution = runIntegrationActionJob(active.id)
+    const execution = runIntegrationActionJob(active.id, { localAuthorization: LOCAL_PERSON_RUN })
     const context = await entered.promise
     unregisterIntegrationsByPlugin("example-delivery")
     expect(context.signal.aborted).toBe(true)
@@ -650,7 +703,7 @@ describe("Integration action runner", () => {
       context.authenticatedRequest("https://api.example.test/issues")
     )
     const job = await queue(account.id)
-    const execution = runIntegrationActionJob(job.id)
+    const execution = runIntegrationActionJob(job.id, { localAuthorization: LOCAL_PERSON_RUN })
     const signal = await dispatched.promise
     await cancelIntegrationActionJobRecord(job.id)
     expect(await execution).toMatchObject({ status: "cancelled" })
@@ -660,6 +713,7 @@ describe("Integration action runner", () => {
   it("does not replay an expired non-idempotent job", async () => {
     const account = await setup()
     const job = await queue(account.id, "issue.delete")
+    await startJobExecutionRun(`integration:${job.id}`)
     await getDb().integrationActionJobs.update(job.id, {
       status: "running",
       claimToken: "crashed",
@@ -668,6 +722,9 @@ describe("Integration action runner", () => {
     })
     const [recovered] = await drainIntegrationActionJobs()
     expect(recovered).toMatchObject({ status: "cancelled", remoteOutcome: "unknown", attempts: 0 })
+    expect(await getDb().executionRuns.get(`execution:job:integration:${job.id}`)).toMatchObject({
+      status: "cancelled",
+    })
     expect(
       await getDb().integrationAudit.where("kind").equals("action.issue.delete.cancelled").first()
     ).toMatchObject({ detail: { jobId: job.id, remoteOutcome: "unknown" } })
@@ -823,7 +880,9 @@ describe("Integration action runner", () => {
         await authenticatedIntegrationRequest(
           "example-delivery",
           account.id,
-          "https://api.example.test/items"
+          "https://api.example.test/items",
+          undefined,
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
         expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
           providerOwnerPluginId: "provider-a",
@@ -839,7 +898,9 @@ describe("Integration action runner", () => {
           authenticatedIntegrationRequest(
             "example-delivery",
             account.id,
-            "https://api.example.test/items"
+            "https://api.example.test/items",
+            undefined,
+            { localAuthorization: LOCAL_PERSON_RUN }
           )
         ).rejects.toThrow(/provider.*owner.*changed/i)
         expect(replacement).not.toHaveBeenCalled()
@@ -896,13 +957,16 @@ describe("Integration action runner", () => {
         "example-delivery",
         "account-1",
         "https://api.example.test/issues",
-        { body: JSON.stringify({ email: "person@example.com" }) }
+        { body: JSON.stringify({ email: "person@example.com" }) },
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
     ).rejects.toThrow("blocked by the PII gate")
   })
 
   it("requires host approval before write actions and preserves idempotency", async () => {
     const account = await setup()
+    const origin = await startToolExecutionRun("desktop", { localAuthorization: LOCAL_PERSON_RUN })
+    const caller = { kind: "tool-call" as const, sessionId: "desktop", executionRunId: origin.id }
     const input = {
       integrationId: "example",
       accountId: account.id,
@@ -911,8 +975,8 @@ describe("Integration action runner", () => {
       idempotencyKey: "workflow-run-1",
     } as const
 
-    const awaiting = await executeIntegrationAction("example-delivery", input)
-    const duplicate = await executeIntegrationAction("example-delivery", input)
+    const awaiting = await executeIntegrationAction("example-delivery", input, caller)
+    const duplicate = await executeIntegrationAction("example-delivery", input, caller)
     expect(awaiting.status).toBe("awaiting_approval")
     expect(duplicate.id).toBe(awaiting.id)
 
@@ -921,6 +985,205 @@ describe("Integration action runner", () => {
       status: "succeeded",
       output: { updated: "EX-1" },
     })
+  })
+
+  it.each(["succeeded", "queued"] as const)(
+    "round 4: refuses cross-root replay of a personal %s job through the real runner",
+    async (status) => {
+      const account = await setup(undefined, undefined, "supported", "github-pat")
+      const resolveCredential = jest.fn(async () => ({ accessToken: "private-pat" }))
+      const disposeProvider = registerAuthenticationProvider({
+        id: "github-pat",
+        label: "PAT",
+        pluginId: "example-delivery",
+        getSessions: async () => [
+          {
+            id: "opaque",
+            accessToken: "private-pat",
+            account: { id: "acct", label: "Account" },
+            scopes: [],
+          },
+        ],
+        resolveRequestCredential: resolveCredential,
+        createSession: async () => {
+          throw new Error("unused")
+        },
+        removeSession: async () => {},
+      })
+      const previousFetch = global.fetch
+      global.fetch = jest.fn(
+        async () =>
+          ({
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({ privateResult: "owner-only" }),
+          }) as Response
+      ) as typeof fetch
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      try {
+        const origin = await startToolExecutionRun("desktop", {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+        const input = {
+          integrationId: "example",
+          accountId: account.id,
+          actionId: "issue.read",
+          input: { issueId: "private" },
+          idempotencyKey: "personal-replay",
+        }
+        const caller = {
+          kind: "tool-call" as const,
+          sessionId: "desktop",
+          executionRunId: origin.id,
+        }
+        if (status === "queued") jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(false)
+        const original = await executeIntegrationAction("example-delivery", input, caller)
+        expect(original.status).toBe(status)
+        jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
+        // A local-person run with a different root is also not this job's caller.
+        const outsider = await startToolExecutionRun("desktop", {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+        const nonOwner = await startToolExecutionRun("im")
+        for (const requester of [
+          { ...caller, executionRunId: outsider.id },
+          { kind: "tool-call" as const, sessionId: "im", executionRunId: nonOwner.id },
+          { ...caller, sessionId: "im" },
+          undefined,
+          { kind: "person", surface: "settings", localAuthorization: LOCAL_PERSON_RUN } as const,
+        ]) {
+          await expect(
+            executeIntegrationAction("example-delivery", input, requester)
+          ).rejects.toThrow(/idempotency.*identity/i)
+        }
+        for (const changed of [
+          { ...input, actionId: "issue.update" },
+          { ...input, input: { issueId: "different" } },
+        ]) {
+          await expect(
+            executeIntegrationAction("example-delivery", changed, caller)
+          ).rejects.toThrow(/idempotency.*content/i)
+        }
+        expect(await getIntegrationActionJob(original.id)).toMatchObject({ status })
+        expect(await getDb().integrationActionJobs.count()).toBe(1)
+        expect(resolveCredential).toHaveBeenCalledTimes(status === "succeeded" ? 1 : 0)
+        // A real child keeps the same root even after the originating turn ends.
+        const child = await startToolExecutionRun("desktop", { parentRunId: origin.id })
+        await finishToolExecutionRun(origin.id)
+        await expect(
+          executeIntegrationAction("example-delivery", input, {
+            ...caller,
+            executionRunId: child.id,
+          })
+        ).resolves.toMatchObject({ id: original.id, status: "succeeded" })
+        expect(resolveCredential).toHaveBeenCalledTimes(1)
+      } finally {
+        global.fetch = previousFetch
+        disposeProvider()
+      }
+    }
+  )
+
+  it.each(["queued", "retry_wait", "succeeded"] as const)(
+    "round 5: the original direct UI operation resumes its %s job without adopting another root",
+    async (status) => {
+      const account = await setup(async () => {
+        if (status === "retry_wait") throw Object.assign(new Error("busy"), { status: 429 })
+        return { published: "remote-issue" }
+      })
+      const input = {
+        integrationId: "example",
+        accountId: account.id,
+        actionId: status === "queued" ? "issue.read" : "issue.update",
+        input: { issueId: "local-ui" },
+        idempotencyKey: "issue-publish:local-ui:repo",
+      }
+      const caller = {
+        kind: "person",
+        surface: "settings",
+        localAuthorization: LOCAL_PERSON_RUN,
+      } as const
+      jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(status !== "queued")
+      const enqueued = await executeIntegrationAction("example-delivery", input, caller)
+      if (status !== "queued") expect(enqueued.status).toBe("awaiting_approval")
+      const original =
+        status === "queued" ? enqueued : await approveIntegrationActionJob(enqueued.id)
+      expect(original.status).toBe(status)
+      const executionId = `execution:job:integration:${original.id}`
+      expect(await getDb().executionRuns.get(executionId)).toMatchObject({
+        actingIdentity: {
+          rootRunId: executionId,
+          trigger: "local",
+          authorizingPrincipal: { kind: "local-person" },
+        },
+      })
+      const outsider = await startToolExecutionRun("outsider", {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      for (const unverified of [
+        undefined,
+        { kind: "person", surface: "settings" } as const,
+        {
+          kind: "person",
+          surface: "settings",
+          localAuthorization: Symbol("host-local-person-run"),
+        } as never,
+        { kind: "tool-call", sessionId: "outsider", executionRunId: outsider.id } as const,
+      ]) {
+        await expect(
+          executeIntegrationAction("example-delivery", input, unverified)
+        ).rejects.toThrow(/idempotency.*identity/i)
+      }
+      await expect(
+        executeIntegrationAction(
+          "example-delivery",
+          { ...input, input: { issueId: "changed" } },
+          caller
+        )
+      ).rejects.toThrow(/idempotency.*content/i)
+      await expect(
+        executeIntegrationAction("example-delivery", input, caller)
+      ).resolves.toMatchObject({
+        id: original.id,
+        status,
+        ...(status === "succeeded" ? { output: original.output } : {}),
+      })
+      expect(await getDb().integrationActionJobs.count()).toBe(1)
+    }
+  )
+
+  it("round 4: concurrent idempotent callers cannot adopt the winner's identity", async () => {
+    const account = await setup()
+    jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(false)
+    const origins = await Promise.all([
+      startToolExecutionRun("local", { localAuthorization: LOCAL_PERSON_RUN }),
+      startToolExecutionRun("im"),
+    ])
+    const results = await Promise.allSettled(
+      origins.map((origin) =>
+        executeIntegrationAction(
+          "example-delivery",
+          {
+            integrationId: "example",
+            accountId: account.id,
+            actionId: "issue.read",
+            input: {},
+            idempotencyKey: "racing-key",
+          },
+          { kind: "tool-call", sessionId: origin.sessionId, executionRunId: origin.id }
+        )
+      )
+    )
+    const winningIndex = results.findIndex((result) => result.status === "fulfilled")
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringMatching(/idempotency.*identity/i) }),
+    })
+    const jobs = await getDb().integrationActionJobs.toArray()
+    expect(jobs).toHaveLength(1)
+    expect(
+      await getDb().executionRuns.get(`execution:job:integration:${jobs[0]!.id}`)
+    ).toMatchObject({ actingIdentity: { rootRunId: origins[winningIndex]!.id } })
   })
 
   it("routes the first-party Issue Loop through the allowlisted host executor", async () => {
@@ -1185,7 +1448,8 @@ describe("Integration action runner", () => {
         "header-delivery",
         account.id,
         "https://gitlab.example.test/api/v4/user",
-        { headers: { "Private-Token": "plugin-attempt" } }
+        { headers: { "Private-Token": "plugin-attempt" } },
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
 
       const headers = fetchMock.mock.calls[0]?.[1]?.headers as Headers
@@ -1219,14 +1483,21 @@ describe("Integration action runner", () => {
         "https://api.example.test/x",
         {
           signal: controller.signal,
-        }
+        },
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
       expect(executor.mock.calls[0]?.[3]?.signal).toBe(controller.signal)
       controller.abort()
       await expect(
-        authenticatedIntegrationRequest("example-delivery", "acct", "https://api.example.test/x", {
-          signal: controller.signal,
-        })
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          "acct",
+          "https://api.example.test/x",
+          {
+            signal: controller.signal,
+          },
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
       ).rejects.toThrow(/cancelled/)
       expect(executor).toHaveBeenCalledTimes(1)
     } finally {
@@ -1301,7 +1572,9 @@ describe("Integration action runner", () => {
       await authenticatedIntegrationRequest(
         "app-delivery",
         account.id,
-        "https://api.example.test/app/installations/42"
+        "https://api.example.test/app/installations/42",
+        undefined,
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
 
       expect(resolveRequestCredential).toHaveBeenCalledWith("app-session", {
@@ -1450,7 +1723,13 @@ describe("Integration action runner", () => {
         setIntegrationAuthenticatedRequestExecutorForTesting(request)
 
         await expect(
-          authenticatedIntegrationRequest("example-delivery", account.id, url, { method: "POST" })
+          authenticatedIntegrationRequest(
+            "example-delivery",
+            account.id,
+            url,
+            { method: "POST" },
+            { localAuthorization: LOCAL_PERSON_RUN }
+          )
         ).rejects.toThrow("Integration request account is unavailable")
         expect(request).not.toHaveBeenCalled()
         expect(await getDb().actionReviewReceipts.count()).toBe(0)
@@ -1462,10 +1741,16 @@ describe("Integration action runner", () => {
       const request = jest.fn().mockResolvedValue({ status: 204, headers: {}, data: {} })
       setIntegrationAuthenticatedRequestExecutorForTesting(request)
       await expect(
-        authenticatedIntegrationRequest("example-delivery", account.id, url, {
-          method: "delete",
-          body: '{"event":"private-body"}',
-        })
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          url,
+          {
+            method: "delete",
+            body: '{"event":"private-body"}',
+          },
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
       ).resolves.toMatchObject({ status: 204 })
       expect(request).toHaveBeenCalledTimes(1)
       const receipts = await getDb().actionReviewReceipts.toArray()
@@ -1507,7 +1792,13 @@ describe("Integration action runner", () => {
       const request = jest.fn()
       setIntegrationAuthenticatedRequestExecutorForTesting(request)
       await expect(
-        authenticatedIntegrationRequest("example-delivery", account.id, url, { method: "DELETE" })
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          url,
+          { method: "DELETE" },
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
       ).rejects.toThrow(/^outbound_held/)
       expect(request).not.toHaveBeenCalled()
       expect(await getDb().actionReviewReceipts.toArray()).toEqual([
@@ -1522,7 +1813,13 @@ describe("Integration action runner", () => {
       outboundSettings = enforceIntegration
       const account = await setup()
       await expect(
-        authenticatedIntegrationRequest("example-delivery", account.id, url, { method })
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          url,
+          { method },
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
       ).resolves.toMatchObject({ status: 200 })
       expect(await getDb().actionReviewReceipts.toArray()).toEqual([])
     })
@@ -1539,7 +1836,8 @@ describe("Integration action runner", () => {
           "example-delivery",
           account.id,
           "https://api.github.com/repos/acme/web/pulls",
-          { method: "POST" }
+          { method: "POST" },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).rejects.toThrow(/^outbound_held/)
       expect(request).not.toHaveBeenCalled()
@@ -1571,7 +1869,8 @@ describe("Integration action runner", () => {
           "example-delivery",
           account.id,
           `${host.apiBaseUrl}/repos/acme/web/pulls`,
-          { method: "POST" }
+          { method: "POST" },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).rejects.toThrow(/^outbound_held/)
       expect(request).not.toHaveBeenCalled()
@@ -1681,7 +1980,14 @@ describe("Integration action runner", () => {
       outboundSettings = enforceGithub
       const handler = jest.fn(async () => ({ commented: true }))
       const account = await setupGithub(handler)
-      const held = await executeIntegrationAction("github-delivery", comment(account.id, "k1"))
+      const origin = await startToolExecutionRun("plugin-run")
+      const credentialContext = { sessionId: origin.sessionId, executionRunId: origin.id }
+      const held = await executeIntegrationAction(
+        "github-delivery",
+        comment(account.id, "k1"),
+        undefined,
+        credentialContext
+      )
       expect(held).toMatchObject({
         status: "awaiting_approval",
         outbound: { ownerRef: "plugin:github-delivery", held: { receiptId: expect.any(String) } },
@@ -1734,7 +2040,12 @@ describe("Integration action runner", () => {
       expect(answer?.decision).toMatchObject({ outcome: "allow", authority: "human" })
 
       // A replay keeps the job's plan: no second hold, no second push.
-      await executeIntegrationAction("github-delivery", comment(account.id, "k1"))
+      await executeIntegrationAction(
+        "github-delivery",
+        comment(account.id, "k1"),
+        undefined,
+        credentialContext
+      )
       expect(pushHeldIntegrationJob).toHaveBeenCalledTimes(1)
     })
 
@@ -1804,7 +2115,8 @@ describe("Integration action runner", () => {
           "github-delivery",
           account.id,
           "https://api.github.com/repos/acme/web/issues/3/comments",
-          { method: "POST", body: "{}" }
+          { method: "POST", body: "{}" },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).resolves.toMatchObject({ status: 200 })
       // Another repository is still held.
@@ -1813,7 +2125,8 @@ describe("Integration action runner", () => {
           "github-delivery",
           account.id,
           "https://api.github.com/repos/acme/api/issues/3/comments",
-          { method: "POST", body: "{}" }
+          { method: "POST", body: "{}" },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).rejects.toThrow(/^outbound_held/)
     })
@@ -1852,7 +2165,8 @@ describe("Integration action runner", () => {
           "github-delivery",
           account.id,
           "https://api.github.com/repos/acme/web/issues/3/comments",
-          { method: "POST", body: "{}" }
+          { method: "POST", body: "{}" },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).rejects.toThrow(/^outbound_held/)
     })
@@ -1922,6 +2236,9 @@ describe("Integration action runner", () => {
         status: "failed",
         error: expect.stringMatching(/^outbound_fenced/),
       })
+      expect(
+        await getDb().executionRuns.get(`execution:job:integration:${fenced.id}`)
+      ).toBeUndefined()
       expect(pushHeldIntegrationJob).toHaveBeenCalledTimes(1)
       expect(
         (await getDb().integrationAudit.toArray()).some(
@@ -1983,7 +2300,8 @@ describe("Integration action runner", () => {
           "https://api.example.test/x",
           {
             method: "POST",
-          }
+          },
+          { localAuthorization: LOCAL_PERSON_RUN }
         )
       ).resolves.toMatchObject({ status: 200 })
       expect(await receipts()).toEqual([
@@ -2005,7 +2323,8 @@ describe("Integration action runner", () => {
             "github-delivery",
             account.id,
             "https://api.github.com/repos/acme/web/issues/3/comments",
-            { method: "POST", body: "{}" }
+            { method: "POST", body: "{}" },
+            { localAuthorization: LOCAL_PERSON_RUN }
           )
         ).rejects.toThrow(/^outbound_held/)
         await expect(
@@ -2013,14 +2332,17 @@ describe("Integration action runner", () => {
             "github-delivery",
             account.id,
             "https://api.github.com/graphql",
-            { method: "post", body: "{}" }
+            { method: "post", body: "{}" },
+            { localAuthorization: LOCAL_PERSON_RUN }
           )
         ).rejects.toThrow(/^outbound_held/)
         await expect(
           authenticatedIntegrationRequest(
             "github-delivery",
             account.id,
-            "https://api.github.com/repos/acme/web/pulls"
+            "https://api.github.com/repos/acme/web/pulls",
+            undefined,
+            { localAuthorization: LOCAL_PERSON_RUN }
           )
         ).resolves.toMatchObject({ status: 200 })
         expect((await receipts()).map((r) => r.request.subject.title)).toEqual(["POST", "POST"])
@@ -2033,7 +2355,8 @@ describe("Integration action runner", () => {
             "github-delivery",
             account.id,
             "https://api.github.com/repos/acme/web/pulls",
-            { method: "POST", body: "{}" }
+            { method: "POST", body: "{}" },
+            { localAuthorization: LOCAL_PERSON_RUN }
           )
         ).resolves.toMatchObject({ status: 200 })
         expect((await receipts())[0]).toMatchObject({
@@ -2131,4 +2454,217 @@ describe("Integration action runner", () => {
       })
     })
   })
+
+  it.each(["github-pat", "github-oauth", "feishu-user-oauth", "google-oauth", "unknown-oauth"])(
+    "gates %s action reads at credential resolution, preserving local and explicit Bot access",
+    async (providerId) => {
+      const account = await setup(
+        async (_input, context) => context.authenticatedRequest("https://api.example.test/issues"),
+        undefined,
+        "supported",
+        providerId
+      )
+      const resolveCredential = jest.fn(async () => ({ accessToken: "personal-private" }))
+      const dispose = registerAuthenticationProvider({
+        id: providerId,
+        label: providerId,
+        pluginId: "example-delivery",
+        getSessions: async () => [
+          {
+            id: "opaque",
+            accessToken: "legacy-private",
+            account: { id: "acct", label: "Account" },
+            scopes: [],
+          },
+        ],
+        resolveRequestCredential: resolveCredential,
+        createSession: async () => {
+          throw new Error("unused")
+        },
+        removeSession: async () => {},
+      })
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      const originalFetch = global.fetch
+      const fetch = jest.fn(
+        async () =>
+          ({
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({ issue: "private" }),
+          }) as Response
+      )
+      global.fetch = fetch as never
+      try {
+        const run = await startToolExecutionRun("im", { runId: `non-owner-${providerId}` })
+        for (const trigger of ["requester", "schedule", "external-event"] as const) {
+          await getDb().executionRuns.update(run.id, {
+            actingIdentity: {
+              schemaVersion: 1,
+              rootRunId: run.id,
+              lane: "legacy",
+              trigger,
+              authorityRevision: 0,
+              requesters:
+                trigger === "requester"
+                  ? [
+                      {
+                        kind: "platform",
+                        platform: "lark",
+                        adapterId: "connected",
+                        remoteUserId: "not-owner",
+                      },
+                    ]
+                  : [],
+            },
+          })
+          const denied = await executeIntegrationAction(
+            "example-delivery",
+            { integrationId: "example", accountId: account.id, actionId: "issue.read", input: {} },
+            { kind: "tool-call", sessionId: "im", executionRunId: run.id }
+          )
+          expect(denied.status).toBe("failed")
+          expect(denied.error).toMatch(/Personal credential.*refused/)
+        }
+        expect(resolveCredential).not.toHaveBeenCalled()
+        expect(fetch).not.toHaveBeenCalled()
+        await expect(
+          authenticatedIntegrationRequest(
+            "example-delivery",
+            account.id,
+            "https://api.example.test/issues",
+            {
+              credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+              verifiedBotAccount: { pluginId: account.pluginId, accountId: account.id },
+            } as never
+          )
+        ).rejects.toThrow("Personal credential")
+        expect(resolveCredential).not.toHaveBeenCalled()
+        const localRun = await startToolExecutionRun("desktop", {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+        const local = await executeIntegrationAction(
+          "example-delivery",
+          { integrationId: "example", accountId: account.id, actionId: "issue.read", input: {} },
+          { kind: "tool-call", sessionId: "desktop", executionRunId: localRun.id }
+        )
+        expect(local.status).toBe("succeeded")
+        expect(resolveCredential).toHaveBeenCalledTimes(1)
+        const contextOnly = await executeIntegrationAction(
+          "example-delivery",
+          {
+            integrationId: "example",
+            accountId: account.id,
+            actionId: "issue.read",
+            input: {},
+          },
+          undefined,
+          { sessionId: "desktop", executionRunId: localRun.id }
+        )
+        expect(contextOnly.status).toBe("succeeded")
+        const conflicting = await executeIntegrationAction(
+          "example-delivery",
+          {
+            integrationId: "example",
+            accountId: account.id,
+            actionId: "issue.read",
+            input: {},
+          },
+          { kind: "tool-call", sessionId: "im", executionRunId: run.id },
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
+        expect(conflicting.status).toBe("failed")
+        expect(resolveCredential).toHaveBeenCalledTimes(2)
+        jest
+          .mocked(botBinding.assertBotIntegrationAction)
+          .mockResolvedValue({ account, installation: { id: "bot" } } as never)
+        const bound = await executeIntegrationAction("example-delivery", {
+          integrationId: "example",
+          accountId: account.id,
+          actionId: "issue.read",
+          input: {},
+          binding: { runId: "bot-run", slotId: "github" },
+        })
+        expect(bound.status).toBe("succeeded")
+        expect(botBinding.assertBotIntegrationAction).toHaveBeenCalled()
+        expect(resolveCredential).toHaveBeenCalledTimes(3)
+      } finally {
+        global.fetch = originalFetch
+        dispose()
+      }
+    }
+  )
+  it.each(["approval", "retry"] as const)(
+    "keeps PAT job identity after the original chat finishes before %s",
+    async (mode) => {
+      const account = await setup(undefined, undefined, "supported", "github-pat")
+      const credential = jest.fn(async () => ({ accessToken: "personal-job-token" }))
+      const dispose = registerAuthenticationProvider({
+        id: "github-pat",
+        label: "PAT",
+        pluginId: "example-delivery",
+        getSessions: async () => [
+          {
+            id: "opaque",
+            accessToken: "legacy-private",
+            account: { id: "acct", label: "Account" },
+            scopes: [],
+          },
+        ],
+        resolveRequestCredential: credential,
+        createSession: async () => {
+          throw new Error("unused")
+        },
+        removeSession: async () => {},
+      })
+      const originalFetch = global.fetch
+      const fetch = jest.fn(
+        async () =>
+          ({
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            json: async () => ({ ok: true }),
+          }) as Response
+      )
+      global.fetch = fetch as never
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      try {
+        const origin = await startToolExecutionRun("desktop", {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
+        if (mode === "approval") jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(false)
+        else fetch.mockRejectedValueOnce(new Error("temporary network failure"))
+        const job = await executeIntegrationAction(
+          "example-delivery",
+          {
+            integrationId: "example",
+            accountId: account.id,
+            actionId: "issue.read",
+            input: {},
+          },
+          { kind: "tool-call", sessionId: "desktop", executionRunId: origin.id }
+        )
+        if (mode === "approval") {
+          await updateIntegrationActionJob(job.id, { status: "awaiting_approval" })
+          jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
+        } else expect(job.status).toBe("retry_wait")
+        await finishToolExecutionRun(origin.id)
+        if (mode === "retry")
+          await updateIntegrationActionJob(job.id, { nextAttemptAt: new Date(0).toISOString() })
+        const result =
+          mode === "approval"
+            ? await approveIntegrationActionJob(job.id, { actor: "person" })
+            : await runIntegrationActionJob(job.id)
+        expect(result).toMatchObject({ status: "succeeded", error: undefined })
+        const execution = await getDb().executionRuns.get(`execution:job:integration:${job.id}`)
+        expect(execution).toMatchObject({
+          status: "completed",
+          actingIdentity: { rootRunId: origin.id },
+        })
+        expect(credential).toHaveBeenCalledTimes(mode === "approval" ? 1 : 2)
+      } finally {
+        global.fetch = originalFetch
+        dispose()
+      }
+    }
+  )
 })

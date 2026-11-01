@@ -1,3 +1,4 @@
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 /**
  * Google Workspace document connection — settings + secret storage.
  *
@@ -29,24 +30,30 @@ export const GOOGLE_DOCS_SCOPES = [
 
 export const GOOGLE_DOCS_SCOPE_STRING = GOOGLE_DOCS_SCOPES.join(" ")
 
-export async function getGoogleDocsSettings(): Promise<GoogleDocsProviderSettings> {
+export async function getGoogleDocsSettings(
+  credentialContext?: PersonalCredentialContext
+): Promise<GoogleDocsProviderSettings> {
   let preferences: GoogleDocsProviderSettings = {}
   try {
     preferences = (await getSettings()).docsProviders?.google ?? {}
   } catch {
     /* Read-only UI remains usable while the DB is unavailable. */
   }
-  return connectionSettings(preferences)
+  return connectionSettings(preferences, credentialContext)
 }
 
 async function connectionSettings(
-  preferences: GoogleDocsProviderSettings
+  preferences: GoogleDocsProviderSettings,
+  credentialContext?: PersonalCredentialContext
 ): Promise<GoogleDocsProviderSettings> {
   try {
-    const { lineages } = await googleState({
-      action: "snapshot",
-      legacyClientId: preferences.clientId,
-    })
+    const { lineages } = await googleState(
+      {
+        action: "snapshot",
+        legacyClientId: preferences.clientId,
+      },
+      credentialContext
+    )
     const connection = lineages.find(
       (lineage) =>
         lineage.status === "connected" &&
@@ -66,11 +73,11 @@ async function connectionSettings(
 }
 
 type GoogleSettingsListener = (settings: GoogleDocsProviderSettings) => void
-const settingsListeners = new Set<GoogleSettingsListener>()
+const settingsListeners = new Map<GoogleSettingsListener, PersonalCredentialContext | undefined>()
 let stopStateSubscription: (() => void) | undefined
 let notificationVersion = 0
 function notifySettings(settings: GoogleDocsProviderSettings) {
-  for (const listener of settingsListeners) {
+  for (const listener of settingsListeners.keys()) {
     try {
       listener(settings)
     } catch {
@@ -80,13 +87,18 @@ function notifySettings(settings: GoogleDocsProviderSettings) {
 }
 async function reloadConnection() {
   const version = ++notificationVersion
-  const settings = await getGoogleDocsSettings()
-  if (version === notificationVersion) notifySettings(settings)
+  for (const [listener, context] of settingsListeners) {
+    const settings = await getGoogleDocsSettings(context)
+    if (version === notificationVersion && settingsListeners.has(listener)) listener(settings)
+  }
 }
 
 /** Observe committed connection state in the credential-owning host. */
-export function subscribeGoogleDocsSettings(listener: GoogleSettingsListener): () => void {
-  settingsListeners.add(listener)
+export function subscribeGoogleDocsSettings(
+  listener: GoogleSettingsListener,
+  credentialContext?: PersonalCredentialContext
+): () => void {
+  settingsListeners.set(listener, credentialContext)
   if (!stopStateSubscription)
     stopStateSubscription = subscribeGoogleStateChanged(() => {
       void reloadConnection()
@@ -103,7 +115,8 @@ export function subscribeGoogleDocsSettings(listener: GoogleSettingsListener): (
 export async function updateGoogleDocsSettings(
   patch:
     | Partial<GoogleDocsProviderSettings>
-    | ((current: GoogleDocsProviderSettings) => GoogleDocsProviderSettings)
+    | ((current: GoogleDocsProviderSettings) => GoogleDocsProviderSettings),
+  credentialContext?: PersonalCredentialContext
 ): Promise<GoogleDocsProviderSettings> {
   // Apply inside the database's existing save queue, never to a stale snapshot.
   const saved = await saveSettings((settings) => {
@@ -113,7 +126,7 @@ export async function updateGoogleDocsSettings(
     return { docsProviders: { ...providers, google: next } }
   })
   // The DB keeps preferences; host state supplies credential readiness.
-  const next = await connectionSettings(saved.docsProviders?.google ?? {})
+  const next = await connectionSettings(saved.docsProviders?.google ?? {}, credentialContext)
   ++notificationVersion
   notifySettings(next)
   return next

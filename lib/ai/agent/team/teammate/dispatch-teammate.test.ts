@@ -1563,6 +1563,15 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
       })
     )
     expect(resolveSendOptionsMock).toHaveBeenCalledTimes(1)
+    expect(resolveSendOptionsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        personalCredentialContext: {
+          sessionId: expect.any(String),
+          executionRunId: expect.any(String),
+        },
+      })
+    )
+
     // The dispatch names the turn so a lifecycle hook can scope to teammates:
     // without it the run is indistinguishable from the user's own chat turn.
     expect(runAndCaptureMock).toHaveBeenCalledWith(

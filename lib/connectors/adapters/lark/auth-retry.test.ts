@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import {
   LarkApiError,
@@ -31,7 +32,12 @@ beforeEach(() => {
 })
 
 describe("withUserTokenRefresh", () => {
-  const ctx = { adapterId: "fixture", appId: "app", appSecret: "secret" }
+  const ctx = {
+    adapterId: "fixture",
+    appId: "app",
+    appSecret: "secret",
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  } as const
   it("refreshes against the originating request epoch and retries once", async () => {
     const fn = jest
       .fn()
@@ -298,3 +304,21 @@ it.each(["transport", "service-data", "adapter-admin"] as const)(
     expect(fn).toHaveBeenCalledTimes(2)
   }
 )
+
+it("forwards Host credential admission into a refresh without replacing its epoch", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  let first = true
+  await withUserTokenRefresh(
+    { adapterId: "fixture", appId: "app", appSecret: "secret", credentialContext },
+    async () => {
+      if (first) {
+        first = false
+        throw new LarkApiError({ status: 401, code: 99991677, message: "expired" })
+      }
+      return "ok"
+    }
+  )
+  expect(refreshUserToken).toHaveBeenCalledWith(
+    expect.objectContaining({ credentialContext, expectedAuthorizationEpoch: "request-epoch" })
+  )
+})

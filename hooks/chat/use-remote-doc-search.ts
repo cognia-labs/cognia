@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Backing state for the composer's `@lark:` / `@gdoc:` panel (ADR-0134).
  *
@@ -126,16 +128,18 @@ export function useRemoteDocSearch({
       const attempt = ++version
       setAccountSnapshot(null)
       setResult(null)
-      void provider.listAccounts().then(
-        (list) => {
-          if (!cancelled && attempt === version)
-            setAccountSnapshot({ provider, accounts: list, error: null })
-        },
-        (err) => {
-          if (!cancelled && attempt === version)
-            setAccountSnapshot({ provider, accounts: [], error: toError(err) })
-        }
-      )
+      void provider
+        .listAccounts({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+        .then(
+          (list) => {
+            if (!cancelled && attempt === version)
+              setAccountSnapshot({ provider, accounts: list, error: null })
+          },
+          (err) => {
+            if (!cancelled && attempt === version)
+              setAccountSnapshot({ provider, accounts: [], error: toError(err) })
+          }
+        )
     }
     const unsubscribe = provider.subscribeAccounts?.(reload)
     reload()
@@ -178,6 +182,7 @@ export function useRemoteDocSearch({
       void provider
         .search?.(trimmed, {
           accountId,
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
           ...(epoch ? { expectedAuthorizationEpoch: epoch } : {}),
           limit: DOC_SEARCH_LIMIT,
           signal: controller.signal,

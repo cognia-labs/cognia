@@ -4,6 +4,7 @@ jest.mock("@/lib/decisions/config", () => ({ loadDecisionSettings: jest.fn() }))
 
 import type { DecisionProvider, DecisionProviderResponse, DecisionRequest } from "@/types/decisions"
 import { createDecisionRegistry } from "./registry"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { redactDecisionRequest, runDecision, type RunDecisionDeps } from "./run-decision"
 
 const request: DecisionRequest = {
@@ -44,6 +45,19 @@ const okAnswers = {
   tense: { noul: 0.7 },
   intent: { choice: "ask", probabilities: { chat: 0.3, ask: 0.7 } },
 }
+
+it("binds a plugin decision callback through awaits to the caller's exact Host identity", async () => {
+  const credentialContext = { executionRunId: "service-decision" }
+  const decide = async () => {
+    await Promise.resolve()
+    expect(pluginExecutionContext("p")).toEqual(credentialContext)
+    return { ok: true as const, answers: okAnswers }
+  }
+  await expect(
+    runDecision(request, { credentialContext }, deps(provider(decide), "p:laya"))
+  ).resolves.toMatchObject({ ok: true })
+  expect(pluginExecutionContext("p")).toBeUndefined()
+})
 
 describe("runDecision", () => {
   it("answers through the provider selected in settings", async () => {

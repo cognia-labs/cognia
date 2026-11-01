@@ -1,12 +1,18 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("@/lib/gateway/person-model-ticket", () => ({
   ...jest.requireActual("@/lib/gateway/person-model-ticket"),
   mintPersonModelTicket: jest.fn(),
 }))
 jest.mock("@/lib/claude/build-options", () => ({ resolveSendOptions: jest.fn() }))
+jest.mock("@/lib/mcp/oauth-tauri", () => ({
+  mcpOAuthStatus: jest.fn(async () => ({ hasTokens: true })),
+  mcpOAuthLoadEntry: jest.fn(async () => ({ accessToken: "host-oauth" })),
+  mcpOAuthRefresh: jest.fn(),
+}))
 const personAgentPolicyMock = jest.fn()
 const personAgentStartMock = jest.fn().mockResolvedValue(undefined)
 const personAgentAbortMock = jest.fn().mockResolvedValue(true)
@@ -3928,6 +3934,57 @@ describe("HostStateService", () => {
 })
 
 describe("HostState Agent RPC dispatcher", () => {
+  it("carries the accepted run through the real send builder and OAuth server map", async () => {
+    const { resolveSendOptions } = await import("@/lib/claude/build-options")
+    const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const realBuilder = jest.requireActual("@/hooks/chat/claude-chat-send-options").buildSendOptions
+    const local = await startToolExecutionRun("session-1", {
+      runId: "host-local",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const service = await startToolExecutionRun("session-1", { runId: "host-service" })
+    jest.mocked(resolveSendOptions).mockImplementation(async (context) => ({
+      mcpServers: await buildRunMcpServerMap(
+        [
+          {
+            id: "oauth",
+            name: "private",
+            enabled: true,
+            transport: "http",
+            config: { url: "https://private.test" },
+          } as never,
+        ],
+        {
+          isTauri: () => true,
+          credentialContext: context.personalCredentialContext,
+        }
+      ),
+    }))
+    try {
+      for (const runId of [local.id, service.id, undefined]) {
+        acceptHostStateChatTurnMock.mockResolvedValueOnce(
+          runId ? { submissionId: "work", runId } : null
+        )
+        buildSendOptionsMock.mockImplementationOnce(realBuilder)
+        await createAgentRpcHostStateDispatcher()(
+          action({
+            kind: "message.enqueue",
+            messageId: "oauth-message",
+            text: "hello",
+            attachments: [],
+          })
+        )
+        const options = sendPromptMock.mock.calls.at(-1)?.[2]
+        if (runId === local.id)
+          expect(options.mcpServers.private.headers.Authorization).toBe("Bearer host-oauth")
+        else expect(options.mcpServers).toEqual({})
+      }
+    } finally {
+      jest.mocked(resolveSendOptions).mockReset()
+    }
+  })
+
   beforeEach(async () => {
     activateAccountDatabase(scope.accountId, scope.runtimeTargetId)
     activateAccountContentCipher(

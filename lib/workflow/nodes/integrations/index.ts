@@ -1,3 +1,4 @@
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { registerNodeExecutor } from "../registry"
 import {
   createSkill,
@@ -351,6 +352,7 @@ registerNodeExecutor({
           args: safeArgs,
           signal: ctx.signal,
           scopeId: `run:${ctx.runId}`,
+          credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
           surface: "workflow",
           clientInfo: { name: "cognia-workflow", version: "1.0.0" },
         },
@@ -446,6 +448,7 @@ registerNodeExecutor({
         const { result } = await invokePluginTool(pluginId, toolName, safeArgs, {
           signal: ctx.signal,
           reason: "workflow:action.plugin.invoke",
+          executionRunId: `execution:workflow:${ctx.runId}`,
         })
         return {
           output: {
@@ -499,7 +502,12 @@ registerNodeExecutor({
           `Plugins must add a workflow.task extension to be invokable.`
       )
     }
-    const data = await candidate.registration.handler(safeArgs, ctx.signal)
+    const handler = candidate.registration.handler
+    const data = await withPluginExecutionContext(
+      pluginId,
+      { executionRunId: `execution:workflow:${ctx.runId}` },
+      () => handler(safeArgs, ctx.signal)
+    )
     return {
       output: {
         pluginId,

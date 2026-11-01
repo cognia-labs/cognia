@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   registerDocsProvider,
   getDocsProvider as lookupDocsProvider,
@@ -156,6 +157,9 @@ it("requires a named account click even when there is only one account", async (
     await result.current.refresh()
   })
   expect(result.current.accounts).toEqual([account])
+  expect(provider.listAccounts).toHaveBeenCalledWith({
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(provider.fetch).not.toHaveBeenCalled()
   await act(async () => {
     await result.current.refresh(binding)
@@ -165,6 +169,7 @@ it("requires a named account click even when there is only one account", async (
     expect.objectContaining({ accountBinding: binding }),
     expect.objectContaining({
       accountId: "a",
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
       expectedAuthorizationEpoch: "v1",
       signal: expect.any(AbortSignal),
     })
@@ -417,6 +422,10 @@ it("resolves a provider-owned legacy binding before the preview and then pins th
       accountId: account.id,
       expectedAuthorizationEpoch: account.authorizationEpoch,
     })
+  )
+  expect(provider.resolveLegacyAccount).toHaveBeenCalledWith(
+    { accountId: "legacy", authorizationEpoch: "old-native-nonce" },
+    { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }
   )
   expect(documentMemory(tab.id).binding).toEqual(binding)
 })

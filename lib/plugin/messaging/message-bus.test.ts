@@ -14,6 +14,11 @@ import {
   type BusEvent,
 } from "./message-bus"
 import { PLUGIN_MESSAGE_HISTORY_MAX, PLUGIN_MESSAGE_MAX_BYTES } from "./constants"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
 import catalog from "@/packages/plugin-contract/contract/catalog.json"
 import {
   initializePluginPermissions,
@@ -21,6 +26,27 @@ import {
 } from "@/lib/plugin/api/permission-api"
 
 describe("MessageBus", () => {
+  it("binds a recipient to the emitting Host operation and refuses runless delivery", async () => {
+    const events = new MessageBus()
+    const seen: unknown[] = []
+    events.on(
+      "bound",
+      async () => {
+        await Promise.resolve()
+        seen.push(pluginExecutionContext("target"))
+      },
+      { source: { type: "plugin", id: "target" } }
+    )
+    await withPluginExecutionContext("sender", { executionRunId: "service" }, async () => {
+      events.emitFromPlugin("sender", "bound", {})
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    events.emit("bound", {}, { type: "system", id: "host" })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(seen).toEqual([{ executionRunId: "service" }, HOST_BACKGROUND])
+  })
   let bus: MessageBus
 
   beforeEach(() => {

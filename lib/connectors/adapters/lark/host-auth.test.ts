@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { listAuthConnections } from "@/lib/db/auth-connections"
@@ -55,6 +56,7 @@ import { authenticatedIntegrationRequest } from "@/lib/integrations/action-runne
 import { proxyFetch } from "@/lib/network/proxy-fetch"
 import { createLarkTaskSyncProvider } from "@/lib/issues/sync/providers/lark-task"
 import { createLarkBitableSyncProvider } from "@/lib/issues/sync/providers/lark-bitable"
+import { fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import type { IssueSyncBinding } from "@/lib/issues/sync/types"
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 
@@ -66,6 +68,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/docs-providers/registry", () => ({ getDocsProvider: jest.fn() }))
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
+const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 afterAll(fixture.dispose)
@@ -195,7 +198,13 @@ it("injects the Lark credential for an auth.feishu consumer only under its own g
       headers: { "content-type": "application/json" },
     })
   )
-  const response = await authenticatedIntegrationRequest("business", account.id, url)
+  const response = await authenticatedIntegrationRequest(
+    "business",
+    account.id,
+    url,
+    undefined,
+    credentialContext
+  )
   expect(response.data).toEqual({ items: [] })
   const headers = new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers)
   expect(headers.get("authorization")).toBe("Bearer private-user-token")
@@ -269,7 +278,7 @@ it.each(["task", "bitable"] as const)(
       key: "binding",
       resource,
     } as IssueSyncBinding
-    const options = { since: 123456, full: false }
+    const options = { since: 123456, full: false, credentialContext }
     const savedResource = structuredClone(resource)
     jest.mocked(connectorsHttpRequest).mockResolvedValue({
       status: 200,
@@ -278,7 +287,7 @@ it.each(["task", "bitable"] as const)(
     })
     expect(await provider.pull(binding, options)).toMatchObject({ items: [], notModified: false })
     expect(resource).toEqual(savedResource)
-    expect(options).toEqual({ since: 123456, full: false })
+    expect(options).toEqual({ since: 123456, full: false, credentialContext })
     expect(connectorsHttpRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: "Bearer private-user-token" }),
@@ -308,7 +317,7 @@ it.each(["task", "bitable"] as const)(
           createdAt: 1,
           updatedAt: 1,
         },
-        { idempotencyKey: "disconnected-push", by: { kind: "human" } }
+        { credentialContext, idempotencyKey: "disconnected-push", by: { kind: "human" } }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(connectorsHttpRequest).not.toHaveBeenCalled()
@@ -324,7 +333,7 @@ it("uses the deployment issuer and resolves legacy tenant identity through user_
     headers: {},
     body: JSON.stringify({ code: 0, data: { open_id: "ou_lark", tenant_key: "lark-tenant" } }),
   })
-  expect(await reconcileLarkConnection("adapter")).toMatchObject({
+  expect(await reconcileLarkConnection("adapter", { credentialContext })).toMatchObject({
     issuer: "https://accounts.larksuite.com",
     tenantId: "lark-tenant",
     principalId: "ou_lark",
@@ -332,6 +341,70 @@ it("uses the deployment issuer and resolves legacy tenant identity through user_
   expect(connectorsHttpRequest).toHaveBeenCalledWith(
     expect.objectContaining({ url: "https://open.larksuite.com/open-apis/authen/v1/user_info" })
   )
+})
+
+it.each(["missing-tenant", "old-epoch"])(
+  "hydrates a legacy %s account only when the person's Host UI lists accounts",
+  async (legacy) => {
+    await getDb().adapterInstances.update("adapter", {
+      settings: {
+        connectedUser: {
+          openId: "ou_ada",
+          ...(legacy === "old-epoch" ? { tenantKey: "tenant", authorizationEpoch: "old" } : {}),
+        },
+      },
+    })
+    jest.mocked(connectorsHttpRequest).mockResolvedValue({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ code: 0, data: { open_id: "ou_ada", tenant_key: "tenant" } }),
+    })
+    await expect(reconcileLarkConnection("adapter")).rejects.toMatchObject({
+      name: "PersonalCredentialRefusedError",
+    })
+    await expect(larkDocsProvider.listAccounts()).resolves.toEqual([])
+    expect(connectorsHttpRequest).not.toHaveBeenCalled()
+    await expect(larkDocsProvider.listAccounts({ credentialContext })).resolves.toEqual([
+      { id: expect.any(String), label: "Ada", authorizationEpoch: "1", searchable: true },
+    ])
+    expect(connectorsHttpRequest).toHaveBeenCalledTimes(1)
+    expect(connectorsHttpRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://open.feishu.cn/open-apis/authen/v1/user_info",
+        headers: expect.objectContaining({ Authorization: "Bearer private-user-token" }),
+      })
+    )
+    // Once the UI hydrated metadata, background listing needs no personal HTTP.
+    await expect(larkDocsProvider.listAccounts()).resolves.toHaveLength(1)
+    expect(connectorsHttpRequest).toHaveBeenCalledTimes(1)
+  }
+)
+
+it("admits local-person Twin ingest through the real Host connection and refuses an unproven agent", async () => {
+  const http = jest.fn(async (request: { url: string }) => ({
+    status: 200,
+    headers: {},
+    body: JSON.stringify({
+      code: 0,
+      data: request.url.includes("raw_content")
+        ? { content: "Twin body" }
+        : { document: { title: "Twin document" } },
+    }),
+  }))
+  const url = "https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890"
+  await expect(
+    fetchLarkDocAsRawSource(url, { adapterId: "adapter", httpImpl: http })
+  ).rejects.toMatchObject({ code: "larkNotAuthorized" })
+  expect(http).not.toHaveBeenCalled()
+  await expect(
+    fetchLarkDocAsRawSource(url, { adapterId: "adapter", credentialContext, httpImpl: http })
+  ).resolves.toMatchObject({ title: "Twin document", text: "Twin body" })
+  expect(http).toHaveBeenCalledWith(
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer private-user-token" }),
+    })
+  )
+  expect(await listAuthConnections("lark")).toHaveLength(1)
 })
 
 it("tombstones token clearing and disconnect, keeps captured copies, and drops a deleted adapter's connection", async () => {
@@ -448,14 +521,21 @@ it("marks invalid_grant needs-reauth and does not silently restore it on reconci
     body: JSON.stringify({ error: "invalid_grant" }),
   })
   await expect(
-    refreshUserToken({ adapterId: "adapter", appId: "cli_app", appSecret: "secret" })
+    refreshUserToken({
+      credentialContext,
+      adapterId: "adapter",
+      appId: "cli_app",
+      appSecret: "secret",
+    })
   ).rejects.toMatchObject({ code: "invalid_grant" })
   expect(await reconcileLarkConnection("adapter")).toMatchObject({
     id: row.id,
     status: "needs-reauth",
     revision: 1,
   })
-  await expect(getConnectionManager().getCredentials(row.id)).rejects.toMatchObject({
+  await expect(
+    getConnectionManager().getCredentials(row.id, { credentialContext })
+  ).rejects.toMatchObject({
     reason: "needs-reauth",
   })
 })
@@ -491,7 +571,7 @@ it("exposes auth.feishu to a declared consumer, and refuses a second provider's 
     ).rejects.toBeInstanceOf(ConnectionIdentityConflict)
     expect(await listAuthConnections()).toEqual([row])
     expect(getProvider("lark")?.pluginId).toBeNull()
-    expect(await getConnectionManager().getCredentials(row.id)).toEqual({
+    expect(await getConnectionManager().getCredentials(row.id, { credentialContext })).toEqual({
       accessToken: "private-user-token",
       scopes: row.scopes,
     })
@@ -533,7 +613,7 @@ it("uses the native refresh coordinator and changes credentialRevision without c
       expires_in: 7200,
     }),
   })
-  expect(await getConnectionManager().getCredentials(row.id)).toMatchObject({
+  expect(await getConnectionManager().getCredentials(row.id, { credentialContext })).toMatchObject({
     accessToken: "refreshed",
   })
   expect((await listAuthConnections())[0]).toMatchObject({

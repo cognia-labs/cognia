@@ -1,6 +1,12 @@
+import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { appendAudit, type AuditEntryInput } from "./audit"
-import { enqueueOutbound, enqueueOutboundMany, type EnqueueInput } from "@/lib/db/outbound-jobs"
+import {
+  enqueueOutbound,
+  enqueueOutboundMany,
+  type EnqueueInput,
+  type OutboundEnqueueOptions,
+} from "@/lib/db/outbound-jobs"
 import { createDraft, type CreateDraftInput } from "@/lib/db/connector-drafts"
 import type { ConnectorDraftRow, OutboundJobRow, OutboundJobSource } from "@/lib/db/connector-types"
 import { stableJson } from "@/lib/account-sync/data/stable-json"
@@ -90,6 +96,7 @@ type GovernedBase = Omit<
  * One governed delivery. A person's own send (`manual`, `draft-approved`)
  * needs no authorization; every automated source names what authorizes it
  * (ADR-0239, `lib/policy/action-review/plan-delivery.ts`).
+ * These labels govern the audience, never personal credential admission.
  */
 export type GovernedEnqueueInput =
   | (GovernedBase & { source: HumanSource; authorization?: OutboundAuthorization })
@@ -171,10 +178,10 @@ interface WithheldSubject {
 }
 
 export interface ConnectorDeliveryGatewayDependencies {
-  persistOne(input: EnqueueInput, options?: { signal?: AbortSignal }): Promise<OutboundJobRow>
+  persistOne(input: EnqueueInput, options?: OutboundEnqueueOptions): Promise<OutboundJobRow>
   persistMany(
     inputs: readonly EnqueueInput[],
-    options?: { signal?: AbortSignal }
+    options?: OutboundEnqueueOptions
   ): Promise<OutboundJobRow[]>
   getAdapter(adapterId: string): PlatformAdapter | undefined | Promise<PlatformAdapter | undefined>
   piiGate(value: unknown): boolean
@@ -339,7 +346,7 @@ export class ConnectorDeliveryGateway {
    */
   async enqueue(
     input: InThreadEnqueueInput,
-    options?: { signal?: AbortSignal }
+    options?: OutboundEnqueueOptions
   ): Promise<OutboundJobInfo> {
     const [result] = await this.deliver([input as GovernedEnqueueInput], options)
     // `planDelivery` only queues or refuses these; a draft here is a bug.
@@ -355,7 +362,7 @@ export class ConnectorDeliveryGateway {
    */
   async enqueueAuthorized(
     input: GovernedEnqueueInput,
-    options?: { signal?: AbortSignal }
+    options?: OutboundEnqueueOptions
   ): Promise<EnqueueGovernedResult> {
     const [result] = await this.deliver([input], options)
     return result
@@ -366,8 +373,11 @@ export class ConnectorDeliveryGateway {
    * queued. One refused delivery refuses the batch, so nothing a person
    * refused goes out alongside the rest.
    */
-  async enqueueMany(inputs: readonly GovernedEnqueueInput[]): Promise<EnqueueGovernedResult[]> {
-    return this.deliver(inputs)
+  async enqueueMany(
+    inputs: readonly GovernedEnqueueInput[],
+    options?: OutboundEnqueueOptions
+  ): Promise<EnqueueGovernedResult[]> {
+    return this.deliver(inputs, options)
   }
 
   /**
@@ -496,7 +506,11 @@ export class ConnectorDeliveryGateway {
   }
 
   /** Direct wire probe. Never use this for a business send. */
-  async sendDiagnostic(adapterId: string, request: OutboundRequest): Promise<OutboundResult> {
+  async sendDiagnostic(
+    adapterId: string,
+    request: OutboundRequest,
+    localAuthorization?: LocalPersonRun
+  ): Promise<OutboundResult> {
     const adapter = await this.dependencies.getAdapter(adapterId)
     if (!adapter) {
       return {
@@ -504,7 +518,10 @@ export class ConnectorDeliveryGateway {
         error: { code: "adapter_not_found", message: adapterId, retryable: false },
       }
     }
-    const result = await adapter.send(request)
+    const result =
+      localAuthorization === LOCAL_PERSON_RUN
+        ? await adapter.send(request, { localAuthorization })
+        : await adapter.send(request)
     await Promise.resolve(
       this.dependencies.appendAudit({
         adapterId,
@@ -593,7 +610,7 @@ export class ConnectorDeliveryGateway {
 
   private async deliver(
     inputs: readonly GovernedEnqueueInput[],
-    options?: { signal?: AbortSignal }
+    options?: OutboundEnqueueOptions
   ): Promise<EnqueueGovernedResult[]> {
     options?.signal?.throwIfAborted()
     if (inputs.length === 0) return []
@@ -747,7 +764,7 @@ export function getConnectorDeliveryGateway(): ConnectorDeliveryGateway {
  */
 export function enqueueGoverned(
   input: InThreadEnqueueInput,
-  options?: { signal?: AbortSignal }
+  options?: OutboundEnqueueOptions
 ): Promise<OutboundJobInfo> {
   return getConnectorDeliveryGateway().enqueue(input, options)
 }
@@ -765,16 +782,17 @@ export function urgentGoverned(input: GovernedUrgentInput): Promise<OutboundResu
 
 export function enqueueAuthorized(
   input: GovernedEnqueueInput,
-  options?: { signal?: AbortSignal }
+  options?: OutboundEnqueueOptions
 ): Promise<EnqueueGovernedResult> {
   return getConnectorDeliveryGateway().enqueueAuthorized(input, options)
 }
 
 /** Batch variant used by fan-out paths to share one persistence transaction and wake. */
 export function enqueueGovernedMany(
-  inputs: readonly GovernedEnqueueInput[]
+  inputs: readonly GovernedEnqueueInput[],
+  options?: OutboundEnqueueOptions
 ): Promise<EnqueueGovernedResult[]> {
-  return getConnectorDeliveryGateway().enqueueMany(inputs)
+  return getConnectorDeliveryGateway().enqueueMany(inputs, options)
 }
 
 /** The job a delivery was queued as, or `undefined` when it was held as a draft. */

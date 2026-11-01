@@ -15,6 +15,11 @@
  */
 
 import { listIssueEvents } from "@/lib/db/issue-events"
+import {
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
 import { onIssueEvent } from "@/lib/issues/event-bus"
 import {
   applyIssueAction,
@@ -189,7 +194,7 @@ export function createIssuesAPI(
       if (actions.length === 0) throw new Error("Give label names to add or remove")
       return apply(ref, actions)
     },
-    onEvent: (handler, options) => onIssueEvent(handler, options),
+    onEvent: (handler, options) => onIssueEvent(bindPluginCallbacks(pluginId, handler), options),
     registerSyncProvider: (provider) => {
       if (!provider?.id?.trim()) throw new Error("A sync provider needs an id")
       const def = declarations.get(pluginId)?.find((entry) => entry.id === provider.id)
@@ -274,98 +279,102 @@ export function createIssuesAPI(
               ...binding,
               resource: Object.freeze(structuredClone(binding.resource)),
             })
+      const invoke = <T>(
+        binding: Parameters<IssueSyncProvider["pull"]>[0],
+        credentialContext:
+          import("@/lib/execution/personal-credential").PersonalCredentialContext | undefined,
+        signal: AbortSignal | undefined,
+        callback: () => Promise<T>
+      ): Promise<T> =>
+        withPluginExecutionContext(pluginId, credentialContext ?? HOST_BACKGROUND, async () => {
+          if (connectionRef || binding.resource?.captureId) await verify(binding)
+          else check()
+          signal?.throwIfAborted()
+          const result = await withPluginExecutionContext(
+            pluginId,
+            credentialContext ?? HOST_BACKGROUND,
+            callback
+          )
+          if (connectionRef || binding.resource?.captureId) await verify(binding)
+          else check()
+          signal?.throwIfAborted()
+          return result
+        })
       const registered: IssueSyncProvider = {
         ...input,
         id: `plugin:${pluginId}/${def.id}`,
         label: def.label,
-        resource: { ...descriptor, kind: "plugin" },
+        resource: { ...bindPluginCallbacks(pluginId, descriptor), kind: "plugin" },
         prepare: connectionRef
-          ? async (binding) => {
-              await verify(binding)
-              return { provider: registered, connectionRef: binding.connectionRef ?? connectionRef }
-            }
+          ? (binding, credentialContext) =>
+              invoke(binding, credentialContext, undefined, async () => ({
+                provider: registered,
+                connectionRef: binding.connectionRef ?? connectionRef,
+              }))
           : undefined,
         resolveBindings: () => [],
-        pull: async (binding, options) => {
-          if (connectionRef) await verify(binding)
-          else check()
-          options.signal?.throwIfAborted()
-          const result = await input.pull(callbackBinding(binding), options)
-          if (connectionRef) await verify(binding)
-          else check()
-          options.signal?.throwIfAborted()
-          return result
-        },
+        pull: (binding, options) =>
+          invoke(binding, options.credentialContext, options.signal, () =>
+            input.pull(callbackBinding(binding), {
+              since: options.since,
+              full: options.full,
+              signal: options.signal,
+            })
+          ),
         ...(input.pullPage
           ? {
-              pullPage: async (
-                binding: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[0],
-                options: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[1]
-              ) => {
-                if (connectionRef) await verify(binding)
-                else check()
-                options.signal?.throwIfAborted()
-                const result = await input.pullPage!(callbackBinding(binding), options)
-                if (connectionRef) await verify(binding)
-                else check()
-                options.signal?.throwIfAborted()
-                return result
-              },
+              pullPage: (
+                ...[binding, options]: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>
+              ) =>
+                invoke(binding, options.credentialContext, options.signal, () =>
+                  input.pullPage!(callbackBinding(binding), {
+                    mode: options.mode,
+                    cursor: options.cursor,
+                    page: options.page,
+                    signal: options.signal,
+                  })
+                ),
             }
           : {}),
         ...(input.confirmDeparted
           ? {
-              confirmDeparted: async (
-                ...args: Parameters<NonNullable<IssueSyncProvider["confirmDeparted"]>>
-              ) => {
-                if (connectionRef) await verify(args[0])
-                else check()
-                args[2].signal?.throwIfAborted()
-                const result = await input.confirmDeparted!(
-                  callbackBinding(args[0]),
-                  args[1],
-                  args[2]
-                )
-                if (connectionRef) await verify(args[0])
-                else check()
-                args[2].signal?.throwIfAborted()
-                return result
-              },
+              confirmDeparted: (
+                ...[binding, ids, options]: Parameters<
+                  NonNullable<IssueSyncProvider["confirmDeparted"]>
+                >
+              ) =>
+                invoke(binding, options.credentialContext, options.signal, () =>
+                  input.confirmDeparted!(callbackBinding(binding), ids, { signal: options.signal })
+                ),
             }
           : {}),
         ...(input.push
           ? {
-              push: async (...args: Parameters<NonNullable<IssueSyncProvider["push"]>>) => {
-                if (connectionRef) await verify(args[0])
-                else check()
-                args[4].signal?.throwIfAborted()
-                const result = await input.push!(
-                  callbackBinding(args[0]),
-                  args[1],
-                  args[2],
-                  args[3],
-                  args[4]
-                )
-                if (connectionRef) await verify(args[0])
-                else check()
-                args[4].signal?.throwIfAborted()
-                return result
-              },
+              push: (
+                ...[binding, ref, patch, issue, context]: Parameters<
+                  NonNullable<IssueSyncProvider["push"]>
+                >
+              ) =>
+                invoke(binding, context.credentialContext, context.signal, () =>
+                  input.push!(callbackBinding(binding), ref, patch, issue, {
+                    idempotencyKey: context.idempotencyKey,
+                    by: context.by,
+                    editedBy: context.editedBy,
+                    signal: context.signal,
+                  })
+                ),
             }
           : {}),
         ...(input.create
           ? {
-              create: async (
-                binding: Parameters<NonNullable<IssueSyncProvider["create"]>>[0],
-                issue: Parameters<NonNullable<IssueSyncProvider["create"]>>[1]
-              ) => {
-                if (connectionRef || binding.resource?.captureId) await verify(binding)
-                else check()
-                const result = await input.create!(callbackBinding(binding), issue)
-                if (connectionRef || binding.resource?.captureId) await verify(binding)
-                else check()
-                return result
-              },
+              create: (
+                ...[binding, issue, credentialContext]: Parameters<
+                  NonNullable<IssueSyncProvider["create"]>
+                >
+              ) =>
+                invoke(binding, credentialContext, undefined, () =>
+                  input.create!(callbackBinding(binding), issue)
+                ),
             }
           : {}),
       }

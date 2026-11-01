@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * `/projects` — delivery containers.
  *
@@ -152,7 +154,11 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
     if (!workspaceId || !syncAvailability.canSync) return
     setSyncing(true)
     try {
-      const result = await runWorkspaceIssueSync({ projectId: workspaceId, full: true })
+      const result = await runWorkspaceIssueSync({
+        projectId: workspaceId,
+        full: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       const { level, message } = syncSummaryMessage(summarizeSync(result), t)
       toast[level](message)
     } catch (cause) {

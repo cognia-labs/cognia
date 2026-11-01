@@ -1,3 +1,7 @@
+jest.mock("./action-runner", () => ({
+  assertIntegrationJobCredential: jest.fn(async () => undefined),
+}))
+import { assertIntegrationJobCredential } from "./action-runner"
 jest.mock("@/lib/ai/agent/agent-executor", () => ({ executeAgent: jest.fn() }))
 jest.mock("@/lib/db/integrations", () => ({
   getIntegrationAccount: jest.fn(),
@@ -98,6 +102,10 @@ describe("runGithubIssueLoop", () => {
       })
     ).resolves.toMatchObject({ pullRequestNumber: 11, commitSha: "deadbeef" })
 
+    expect(assertIntegrationJobCredential).toHaveBeenCalledWith(
+      "job-1",
+      expect.objectContaining({ id: "account-1" })
+    )
     expect(getIntegrationAccount).toHaveBeenCalledWith("github-delivery", "account-1")
     expect(resolveRequestCredential).toHaveBeenCalledWith("selected-session", {
       connectorAccountId: "account-1",
@@ -282,4 +290,36 @@ describe("runGithubIssueLoop", () => {
     )
     expect(deps.remove).toHaveBeenCalledTimes(1)
   })
+})
+
+it("refuses clone credentials before provider resolution when the job is not admitted", async () => {
+  const deps = dependencies()
+  const resolveRequestCredential = jest.fn()
+  jest
+    .mocked(getIntegrationAccount)
+    .mockResolvedValue({ id: "account-1", enabled: true, providerId: "github-pat" } as never)
+  jest
+    .mocked(getProvider)
+    .mockReturnValue({ getSessions: jest.fn(), resolveRequestCredential } as never)
+  jest.mocked(getIntegrationActionJob).mockResolvedValue(undefined)
+  jest
+    .mocked(assertIntegrationJobCredential)
+    .mockRejectedValueOnce(new Error("personal credential refused"))
+  await expect(
+    runGithubIssueLoop(input, { ...context, authenticatedRequest: deps.request })
+  ).rejects.toThrow("personal credential refused")
+  expect(resolveRequestCredential).not.toHaveBeenCalled()
+})
+
+it("re-admits personal git credentials after agent work and refuses a revoked push", async () => {
+  const deps = dependencies()
+  jest
+    .mocked(deps.resolveCredential)
+    .mockResolvedValueOnce("clone-token")
+    .mockRejectedValueOnce(new Error("personal credential revoked"))
+  await expect(runGithubIssueLoop(input, context, deps)).rejects.toThrow(
+    "personal credential revoked"
+  )
+  expect(deps.executeAgent).toHaveBeenCalledTimes(1)
+  expect(deps.commitAndPush).not.toHaveBeenCalled()
 })

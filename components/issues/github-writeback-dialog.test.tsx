@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -62,7 +63,9 @@ it("names the account the write goes out on before anything is sent", async () =
   // Two connected accounts is normal; which one is about to comment publicly is
   // exactly what a user cannot recover from getting wrong.
   await accountResolved()
-  expect(mockResolveAccount).toHaveBeenCalledWith("acme/one")
+  expect(mockResolveAccount).toHaveBeenCalledWith("acme/one", undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
 })
 
 it("blocks confirmation entirely when no account is connected", async () => {
@@ -98,6 +101,7 @@ it("passes the confirmation through as the approval — nothing else may", async
 
   await waitFor(() => expect(mockRunWriteback).toHaveBeenCalled())
   expect(mockRunWriteback).toHaveBeenCalledWith({
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     target: TARGET,
     action: { kind: "comment", body: "looks good" },
     approval: "user-confirmed",

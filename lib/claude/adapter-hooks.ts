@@ -23,6 +23,7 @@ import { hasInterceptors } from "@/lib/plugin/interceptors"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"
 import type { PluginHooks, PluginMessage } from "@/types/plugin"
 import type { PluginHooksAll } from "@/types/plugin/plugin-hooks"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 function hasListeners(hookName: keyof PluginHooks): boolean {
   // Lifecycle-scoped query against the real singleton — true only when some
@@ -62,7 +63,8 @@ export interface PromptSubmitResultLike {
 export async function dispatchUserPromptSubmit(
   prompt: string,
   sessionId: string,
-  context: PromptSubmitContextLike = {}
+  context: PromptSubmitContextLike = {},
+  execution?: PersonalCredentialContext
 ): Promise<PromptSubmitResultLike> {
   if (!hasEventListeners("onUserPromptSubmit")) {
     return { action: "proceed" }
@@ -71,7 +73,8 @@ export async function dispatchUserPromptSubmit(
     return (await getPluginEventHooks().dispatchUserPromptSubmit(
       prompt,
       sessionId,
-      context as never
+      context as never,
+      ...(execution ? [execution] : [])
     )) as PromptSubmitResultLike
   } catch {
     return { action: "proceed" }
@@ -142,10 +145,16 @@ export async function dispatchPostToolUse(
 }
 
 /** Fired when an assistant message is received from the SDK. */
-export async function dispatchOnAssistantMessage(message: PluginMessage): Promise<PluginMessage> {
+export async function dispatchOnAssistantMessage(
+  message: PluginMessage,
+  execution?: PersonalCredentialContext
+): Promise<PluginMessage> {
   if (!hasListeners("onMessageReceive")) return message
   try {
-    return await getPluginLifecycleHooks().dispatchOnMessageReceive(message)
+    return await getPluginLifecycleHooks().dispatchOnMessageReceive(
+      message,
+      ...(execution ? [execution] : [])
+    )
   } catch {
     return message
   }
@@ -156,10 +165,16 @@ export async function dispatchOnAssistantMessage(message: PluginMessage): Promis
  * semantics: each plugin's `onMessageSend` may return a rewritten message;
  * the final message is what actually leaves. Fail-open on dispatcher errors.
  */
-export async function dispatchOnMessageSend(message: PluginMessage): Promise<PluginMessage> {
+export async function dispatchOnMessageSend(
+  message: PluginMessage,
+  execution?: PersonalCredentialContext
+): Promise<PluginMessage> {
   if (!hasListeners("onMessageSend")) return message
   try {
-    return await getPluginLifecycleHooks().dispatchOnMessageSend(message)
+    return await getPluginLifecycleHooks().dispatchOnMessageSend(
+      message,
+      ...(execution ? [execution] : [])
+    )
   } catch {
     return message
   }
@@ -196,7 +211,11 @@ export function dispatchStreamEnd(sessionId: string, finalContent: string): void
 }
 
 /** Fired when the SDK reports a chat-level error. */
-export function dispatchChatError(sessionId: string, error: Error): void {
+export function dispatchChatError(
+  sessionId: string,
+  error: Error,
+  execution?: PersonalCredentialContext
+): void {
   // Plugin bus: the agent run failed. Emitted unconditionally (the bus has its
   // own subscriber check) — distinct from the `onChatError` hook fan-out below.
   // PII red-line: the bus reaches any `events:subscribe` plugin, so we publish
@@ -206,7 +225,7 @@ export function dispatchChatError(sessionId: string, error: Error): void {
   emitSystemBusEvent(SystemEvents.AGENT_ERROR, { sessionId, error: error.name })
   if (!hasEventListeners("onChatError")) return
   try {
-    getPluginEventHooks().dispatchChatError(sessionId, error)
+    getPluginEventHooks().dispatchChatError(sessionId, error, ...(execution ? [execution] : []))
   } catch {
     // ignore
   }
@@ -244,10 +263,16 @@ export interface ChatResponseDataLike {
 }
 
 /** Fired after the chat reply has been received and persisted. */
-export async function dispatchPostChatReceive(response: ChatResponseDataLike): Promise<unknown> {
+export async function dispatchPostChatReceive(
+  response: ChatResponseDataLike,
+  execution?: PersonalCredentialContext
+): Promise<unknown> {
   if (!hasEventListeners("onPostChatReceive")) return {}
   try {
-    return await getPluginEventHooks().dispatchPostChatReceive(response as never)
+    return await getPluginEventHooks().dispatchPostChatReceive(
+      response as never,
+      ...(execution ? [execution] : [])
+    )
   } catch {
     return {}
   }

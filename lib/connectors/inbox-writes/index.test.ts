@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 import "fake-indexeddb/auto"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 // Dexie `delete()` + `open()` per test is well past the 5 s default hook
 // budget when the suite runs alongside the repo's heavier DB suites.
@@ -393,5 +394,13 @@ describe("manual send atomic acceptance", () => {
     expect((await getDb().messages.get(first.messageId))?.parts).toEqual([
       { type: "text", text: request.text },
     ])
+  })
+})
+
+it("binds local Inbox UI admission outside serialized reply input", async () => {
+  asLocalHost()
+  await sendManualReply(sendInput)
+  expect(enqueueMock.mock.calls.at(-1)?.[1]).toMatchObject({
+    executionContext: { sessionId: SESSION, localAuthorization: LOCAL_PERSON_RUN },
   })
 })

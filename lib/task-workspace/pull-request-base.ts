@@ -5,11 +5,15 @@ import type { WorkspaceBaseSpec } from "./types"
 export async function resolvePullRequestWorkspaceBase(
   repositoryRoot: string,
   base: WorkspaceBaseSpec,
-  providerOverride?: PullRequestProvider
+  providerOverride?: PullRequestProvider,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
 ): Promise<WorkspaceBaseSpec> {
   if (base.kind !== "pullRequest") return base
   const provider =
-    providerOverride ?? (base.provider === "github" ? createGitHubPullRequestProvider() : null)
+    providerOverride ??
+    (base.provider === "github"
+      ? createGitHubPullRequestProvider(undefined, credentialContext)
+      : null)
   if (!provider || provider.id !== base.provider) {
     throw new Error(`Unsupported pull request provider: ${base.provider}`)
   }

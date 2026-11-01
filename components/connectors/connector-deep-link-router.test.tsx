@@ -17,6 +17,11 @@ import { ConnectorDeepLinkRouter } from "./connector-deep-link-router"
 import { isTauri } from "@/lib/tauri"
 import { oauthRegistry } from "@/lib/connectors/oauth-registry"
 import enMessages from "@/i18n/messages/en.json"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  __clearDocsOAuthCompletionsForTests,
+  registerDocsOAuthCompletion,
+} from "@/lib/docs-providers/oauth-deep-link"
 
 /**
  * Every toast here is localized (`connectors.oauth.*`). Asserting against the
@@ -91,10 +96,31 @@ beforeEach(() => {
   mockLaunchDeepLink.mockResolvedValue(null)
   setCapacitor(false)
   oauthRegistry.clear()
+  __clearDocsOAuthCompletionsForTests()
   clearOAuthState()
 })
 
 describe("ConnectorDeepLinkRouter", () => {
+  it("passes Host-local admission to the document OAuth completion without accepting URL proof", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    const completion = jest.fn(async () => undefined)
+    registerDocsOAuthCompletion("google", completion)
+    render(
+      <ConnectorDeepLinkRouter>
+        <div />
+      </ConnectorDeepLinkRouter>
+    )
+    await waitFor(() => expect(capturedDeepLinkHandler).not.toBeNull())
+    capturedDeepLinkHandler!([
+      "cognia://docs-provider/oauth/google?code=c&state=s&executionRunId=forged",
+    ])
+    await waitFor(() =>
+      expect(completion).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: "google", code: "c", state: "s" }),
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
+    )
+  })
   it("does nothing in web mode", async () => {
     mockedIsTauri.mockReturnValue(false)
     render(

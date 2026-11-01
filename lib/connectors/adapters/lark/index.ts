@@ -1,3 +1,10 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
+import type { AdapterSendOptions } from "@/types/connectors/adapter"
 /**
  * Lark adapter factory — Task 89.
  *
@@ -306,12 +313,23 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     return { appId, appSecret }
   }
 
-  async function requireUserSendIdentity(creds: {
-    appId: string
-    appSecret: string
-  }): Promise<string | undefined> {
+  async function requireUserSendIdentity(
+    creds: {
+      appId: string
+      appSecret: string
+    },
+    credentialContext?: PersonalCredentialContext
+  ): Promise<string | undefined> {
     if (opts.sendAsUser !== true) return
-    const token = await getUserAccessToken(opts.id).catch(() => null)
+    const admission = await admitPersonalCredential(credentialContext, {
+      source: "lark-user",
+      person: opts.id,
+    })
+    if (!admission.ok)
+      throw new LarkUserIdentityUnavailableError(
+        new PersonalCredentialRefusedError(admission).message
+      )
+    const token = await getUserAccessToken(opts.id, credentialContext).catch(() => null)
     if (!token) {
       throw new LarkUserIdentityUnavailableError(
         "Lark send-as-user requires reconnecting the user identity"
@@ -319,7 +337,12 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     }
     try {
       return await withUserTokenRefresh(
-        { adapterId: opts.id, ...creds },
+        {
+          adapterId: opts.id,
+          ...creds,
+          credentialContext,
+          expectedAuthorizationEpoch: admission.authorization?.authorizationEpoch,
+        },
         async (current, epoch) => {
           await fetchLarkUserInfo(current)
           return epoch
@@ -377,7 +400,11 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     urlPath: string,
     body?: unknown,
-    reqOpts?: { asUser?: boolean; expectedAuthorizationEpoch?: string }
+    reqOpts?: {
+      asUser?: boolean
+      expectedAuthorizationEpoch?: string
+      credentialContext?: PersonalCredentialContext
+    }
   ): Promise<unknown> {
     const creds = await resolveCredentials()
 
@@ -385,7 +412,9 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     // token is present, refreshing it once on invalidation. Identity is an
     // authorization boundary: never silently downgrade to the bot.
     if (reqOpts?.asUser) {
-      const userToken = await getUserAccessToken(opts.id).catch(() => null)
+      const userToken = await getUserAccessToken(opts.id, reqOpts.credentialContext).catch(
+        () => null
+      )
       if (!userToken) {
         throw new LarkUserIdentityUnavailableError(
           "Lark send-as-user requires reconnecting the user identity"
@@ -397,6 +426,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
             adapterId: opts.id,
             ...creds,
             expectedAuthorizationEpoch: reqOpts.expectedAuthorizationEpoch,
+            credentialContext: reqOpts.credentialContext,
           },
           async (tok) => {
             return sendHttp(method, urlPath, body, tok)
@@ -829,13 +859,17 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     sendAsUser: opts.sendAsUser,
   })
 
-  async function deliverCardRequest(req: OutboundRequest, editMessageId?: string) {
+  async function deliverCardRequest(
+    req: OutboundRequest,
+    editMessageId?: string,
+    credentialContext?: PersonalCredentialContext
+  ) {
     // Identity is a precondition for the whole outbound transaction. Check
     // before media upload so an expired user binding cannot upload bytes
     // under the bot and only then fail the user-authored message send.
     const creds = await resolveCredentials()
     const expectedAuthorizationEpoch = !editMessageId
-      ? await requireUserSendIdentity(creds)
+      ? await requireUserSendIdentity(creds, credentialContext)
       : undefined
     const assertSendIdentity = async () => {
       if (expectedAuthorizationEpoch === undefined) return
@@ -909,6 +943,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       return (await doRequest("transport", call.method, urlPath, call.payload, {
         asUser,
         expectedAuthorizationEpoch,
+        credentialContext,
       })) as {
         data?: { message_id?: string; chat_id?: string }
       } | null
@@ -948,7 +983,26 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     }
   }
 
-  async function send(req: OutboundRequest): Promise<OutboundResult> {
+  async function send(
+    req: OutboundRequest,
+    sendOptions?: AdapterSendOptions
+  ): Promise<OutboundResult> {
+    const identity = sendOptions?.executionIdentity
+    const credentialContext: PersonalCredentialContext = identity
+      ? {
+          sessionId: identity.sessionId,
+          executionRunId: identity.runId,
+          delivery: true,
+          larkContext: {
+            sessionId: identity.sessionId,
+            executionRunId: identity.runId,
+            delivery: true,
+          },
+        }
+      : sendOptions?.localAuthorization === LOCAL_PERSON_RUN
+        ? { localAuthorization: LOCAL_PERSON_RUN }
+        : { executionRunId: "" }
+
     try {
       if (req.metadata.larkEphemeral) {
         return await ephemeral.send(req, async () => {
@@ -973,7 +1027,11 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
             : null
         })
       }
-      const { response: resp, fallbackReason, landedChatId } = await deliverCardRequest(req)
+      const {
+        response: resp,
+        fallbackReason,
+        landedChatId,
+      } = await deliverCardRequest(req, undefined, credentialContext)
       // Surface the real platform message id so the outbound runner persists
       // it on the job row — downstream consumers (workflow send node output,
       // edit/reaction chains, delivery audit) need the `om_…` id, not the
@@ -1454,7 +1512,10 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   }
   /** The same lookup as the connected person; `undefined` without one. */
   async function lookupAsPerson<T>(path: string, read: (resp: unknown) => T | undefined) {
-    const token = await getUserAccessToken(opts.id).catch(() => null)
+    // Route discovery has no Host-verified executing run. Never borrow the
+    // connected person's authorization merely because the bot cannot read it.
+    const credentialContext = { executionRunId: "" }
+    const token = await getUserAccessToken(opts.id, credentialContext).catch(() => null)
     if (!token) return undefined
     // A transport failure of the lookup itself is retried later like the
     // bot's; a token that cannot be refreshed is no answer (the person must
@@ -1462,14 +1523,17 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     let transportFailure: unknown
     try {
       const creds = await resolveCredentials()
-      const resp = await withUserTokenRefresh({ adapterId: opts.id, ...creds }, async (current) => {
-        try {
-          return await sendHttp("GET", path, undefined, current)
-        } catch (err) {
-          if (!(err instanceof LarkApiError)) transportFailure = err
-          throw err
+      const resp = await withUserTokenRefresh(
+        { adapterId: opts.id, ...creds, credentialContext },
+        async (current) => {
+          try {
+            return await sendHttp("GET", path, undefined, current)
+          } catch (err) {
+            if (!(err instanceof LarkApiError)) transportFailure = err
+            throw err
+          }
         }
-      })
+      )
       return read(resp)
     } catch (err) {
       if (err === transportFailure) throw err

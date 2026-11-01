@@ -162,6 +162,32 @@ describe("connector approval review settlement", () => {
   })
   afterAll(fixture.dispose)
 
+  it("round 5: a provider identity cannot mint tool admission, while a Host binding survives send", async () => {
+    const { bindToolCallRun, toolCallExecutionRunId } =
+      await import("@/lib/execution/acting-authority")
+    const options = {
+      turnId: "unbound-provider",
+      execution: { identity: { runId: "wire-person", attemptId: "a1" } },
+    } as Parameters<typeof sendPrompt>[2]
+    callSpy.mockResolvedValue(undefined)
+    await sendPrompt("session-approval", "unbound", options, { transcriptRuntime: "host-owned" })
+    expect(toolCallExecutionRunId("session-approval", "unbound-provider", "a1")).toBe("")
+    bindToolCallRun("session-approval", "bound-provider", "host-current-attempt", "a2")
+    await sendPrompt(
+      "session-approval",
+      "bound",
+      {
+        ...options,
+        turnId: "bound-provider",
+        execution: { ...options!.execution!, identity: { runId: "wire-person", attemptId: "a2" } },
+      },
+      { transcriptRuntime: "host-owned" }
+    )
+    expect(toolCallExecutionRunId("session-approval", "bound-provider", "a2")).toBe(
+      "host-current-attempt"
+    )
+  })
+
   it("routes local model-step approval through the existing response funnel without native IPC", async () => {
     const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
     const controller = new AbortController()
@@ -684,14 +710,18 @@ describe("Claude session commands", () => {
     expect(callSpy).toHaveBeenCalledTimes(1)
   })
   it("binds an existing sidecar turn and attempt to the host execution identity", async () => {
-    const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+    const { bindToolCallRun, toolCallExecutionRunId, isBuiltinToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
     callSpy.mockResolvedValueOnce(undefined)
+    bindToolCallRun("ipc-authority", "host-turn", "host-run", "host-attempt")
     await sendPrompt("ipc-authority", "hello", {
       turnId: "host-turn",
       execution: { identity: { runId: "host-run", attemptId: "host-attempt" } },
     } as never)
     expect(toolCallExecutionRunId("ipc-authority", "host-turn", "host-attempt")).toBe("host-run")
     expect(toolCallExecutionRunId("ipc-authority", "host-turn", "stale-attempt")).toBe("")
+    expect(isBuiltinToolExecutionRun("ipc-authority", "host-run")).toBe(true)
+    expect(isBuiltinToolExecutionRun("ipc-authority", "external-run")).toBe(false)
   })
 
   it("passes durable restored messages through the outbound PII gate", async () => {
@@ -1668,4 +1698,52 @@ it("refuses a desktop dispatch without restarting a capture-owned engine", async
   } finally {
     release()
   }
+})
+
+it("tracks credential maps only after dispatch and forgets them on close", async () => {
+  const { mcpRuntimeConfigurationMatches } = await import("./ipc")
+  const options = {
+    transcriptInvalidationId: "own-generation",
+    mcpServers: {
+      personal: {
+        type: "http" as const,
+        url: "https://x",
+        headers: { Authorization: "Bearer private" },
+      },
+    },
+  }
+  callSpy.mockResolvedValue(undefined)
+  expect(mcpRuntimeConfigurationMatches("credential-transition", options)).toBe(false)
+  const cacheWrites = jest.spyOn(Map.prototype, "set")
+  try {
+    await sendPrompt("credential-transition", "first", options, { transcriptRuntime: "host-owned" })
+    const entry = cacheWrites.mock.calls.find(([key]) => key === "credential-transition")?.[1]
+    expect(entry).toEqual({
+      configuration: expect.stringMatching(/^[a-f0-9]{32}$/),
+      generation: "own-generation",
+    })
+    expect(JSON.stringify(entry)).not.toContain("Bearer private")
+  } finally {
+    cacheWrites.mockRestore()
+  }
+  expect(mcpRuntimeConfigurationMatches("credential-transition", options)).toBe(true)
+  expect(
+    mcpRuntimeConfigurationMatches("credential-transition", {
+      ...options,
+      mcpServers: {
+        personal: { ...options.mcpServers.personal, headers: { Authorization: "Bearer rotated" } },
+      },
+    })
+  ).toBe(false)
+  expect(
+    mcpRuntimeConfigurationMatches("credential-transition", {
+      mcpServers: {},
+      transcriptInvalidationId: "own-generation",
+    })
+  ).toBe(false)
+  expect(
+    mcpRuntimeConfigurationMatches("credential-transition", options, "other-window-generation")
+  ).toBe(false)
+  await closeSession("credential-transition")
+  expect(mcpRuntimeConfigurationMatches("credential-transition", options)).toBe(false)
 })

@@ -1,5 +1,10 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({ configured: false })),
+}))
 import { waitFor } from "@testing-library/react"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import * as database from "@/lib/db/schema"
@@ -28,12 +33,14 @@ import {
   requestersFromRunOrigin,
   runTriggerFromOrigin,
   startToolExecutionRun,
+  startJobExecutionRun,
   finishToolExecutionRun,
   resolveRunActingIdentity,
   LOCAL_PERSON_RUN,
   bindToolCallRun,
   toolCallExecutionRunId,
   activeToolExecutionRunId,
+  isBuiltinToolExecutionRun,
 } from "./acting-authority"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
@@ -61,6 +68,7 @@ const seed = (overrides: Partial<ExecutionRun> = {}): ExecutionRun => ({
 })
 
 beforeEach(async () => {
+  jest.mocked(connectorsLarkUserAuth).mockResolvedValue({ configured: false } as never)
   await getDb().delete()
   __resetDbForTesting()
 })
@@ -102,6 +110,17 @@ it("binds the exact IPC turn and attempt without falling back on unknown or conf
   expect(toolCallExecutionRunId("correlation")).toBeUndefined()
   bindToolCallRun("correlation", "turn", "replacement", "attempt")
   expect(toolCallExecutionRunId("correlation", "turn", "attempt")).toBe("")
+})
+
+it("requires exact Host builtin dispatch proof in addition to run identity", () => {
+  bindToolCallRun("runtime-proof", "external", "external-run")
+  expect(isBuiltinToolExecutionRun("runtime-proof", "external-run")).toBe(false)
+  bindToolCallRun("runtime-proof", "builtin", "builtin-run", "attempt", { builtinRuntime: true })
+  expect(isBuiltinToolExecutionRun("runtime-proof", "builtin-run")).toBe(true)
+  expect(isBuiltinToolExecutionRun("other-session", "builtin-run")).toBe(false)
+  expect(isBuiltinToolExecutionRun("runtime-proof", "external-run")).toBe(false)
+  jest.mocked(database.getDb).mockImplementationOnce(() => ({ name: "another-account" }) as never)
+  expect(isBuiltinToolExecutionRun("runtime-proof", "builtin-run")).toBe(false)
 })
 
 it("releases the host binding even when terminal persistence cannot read storage", async () => {
@@ -792,3 +811,77 @@ it("returns before a stalled observation read and swallows journal write failure
     write.mockRestore()
   }
 })
+
+it("resolves a terminal reply only with explicit delivery provenance and never borrows a live sibling", async () => {
+  await createExecutionRun(seed({ id: "finished", status: "completed" }))
+  expect(await resolveRunActingIdentity("session", "finished")).toBeUndefined()
+  expect(await resolveRunActingIdentity("session", "finished", { delivery: true })).toEqual(
+    identity
+  )
+  expect(await resolveRunActingIdentity("foreign", "finished", { delivery: true })).toBeUndefined()
+  expect(await resolveRunActingIdentity("session", "missing", { delivery: true })).toBeUndefined()
+})
+
+it("keeps deferred jobs on the exact root after their origin completes and checks current requesters", async () => {
+  const origin = await startToolExecutionRun("desktop", { localAuthorization: LOCAL_PERSON_RUN })
+  const job = await startJobExecutionRun("held", { executionRunId: origin.id })
+  await finishToolExecutionRun(origin.id)
+  const { admitPersonalCredential } = await import("./personal-credential")
+  expect(
+    await admitPersonalCredential({ executionRunId: origin.id }, { source: "github-user" })
+  ).toMatchObject({ ok: false })
+  expect(
+    await admitPersonalCredential({ executionRunId: job.id }, { source: "github-user" })
+  ).toMatchObject({ ok: true })
+  expect(job.actingIdentity?.rootRunId).toBe(origin.id)
+  await recordAbsorbedRequester(origin.id, principal)
+  expect(
+    await admitPersonalCredential({ executionRunId: job.id }, { source: "github-user" })
+  ).toMatchObject({ ok: false, reason: "multiple-requesters" })
+})
+it("admits an explicit standalone local run but refuses session mismatch, missing roots and terminal runs", async () => {
+  const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+  const { admitPersonalCredential } = await import("./personal-credential")
+  expect(
+    await admitPersonalCredential({ executionRunId: run.id }, { source: "github-user" })
+  ).toMatchObject({ ok: true })
+  expect(
+    await admitPersonalCredential(
+      { executionRunId: run.id, sessionId: "other" },
+      { source: "github-user" }
+    )
+  ).toMatchObject({ ok: false })
+  await getDb().executionRuns.update(run.id, {
+    actingIdentity: { ...run.actingIdentity!, rootRunId: "missing" },
+  })
+  expect(
+    await admitPersonalCredential({ executionRunId: run.id }, { source: "github-user" })
+  ).toMatchObject({ ok: false })
+})
+it("cannot mint local job authority from an unknown or mismatched parent plus a Host symbol", async () => {
+  const origin = await startToolExecutionRun("s", { localAuthorization: LOCAL_PERSON_RUN })
+  const job = await startJobExecutionRun("unknown-parent", {
+    sessionId: "other",
+    executionRunId: origin.id,
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(job.actingIdentity).toMatchObject({ trigger: "external-event", requesters: [] })
+})
+
+it.each(["schedule", "service"] as const)(
+  "records %s work without converting its manual source into personal authority",
+  async (automation) => {
+    const run = await startJobExecutionRun(`automated-${automation}`, {
+      automation,
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    expect(run.actingIdentity).toMatchObject({
+      trigger: automation === "schedule" ? "schedule" : "external-event",
+      lane: automation === "service" ? "service" : "legacy",
+    })
+    const { admitPersonalCredential } = await import("./personal-credential")
+    expect(
+      await admitPersonalCredential({ executionRunId: run.id }, { source: "lark-user" })
+    ).toMatchObject({ ok: false })
+  }
+)

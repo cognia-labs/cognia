@@ -75,6 +75,8 @@ export interface BuiltInSkillActingSender {
 export type BuiltInSkillActingSenders = readonly BuiltInSkillActingSender[] | "unknown"
 
 export interface BuiltInSkillContext {
+  /** Host outbound delivery of an exact run; never accepted from skill arguments. */
+  delivery?: boolean
   /** The chat session this invocation belongs to. */
   sessionId: string
   /** Exact host execution identity, when supplied by the tool transport. */

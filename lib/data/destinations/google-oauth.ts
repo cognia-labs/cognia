@@ -1,4 +1,10 @@
 /** Drive is a Host contributor: Rust owns all OAuth credentials and transitions. */
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import type { GoogleDriveBackupDestinationSettings } from "@cognia/agent-config-types"
 import {
   listGoogleConnections,
@@ -45,26 +51,37 @@ async function persistBinding(
 }
 
 /** Only a never-bound destination may migrate to a single exact candidate. */
-export async function resolveGoogleDriveConnection(): Promise<AuthConnectionRow | null> {
+export async function resolveGoogleDriveConnection(
+  credentialContext?: PersonalCredentialContext
+): Promise<AuthConnectionRow | null> {
   const settings = (await getBackupDestinationsSettings()).googleDrive
   const clientId = settings?.clientId?.trim()
   if (!settings || !clientId) return null
-  const rows = await listGoogleConnections()
+  const rows = await listGoogleConnections(credentialContext)
   const bound = rows.find((row) => row.id === settings.connectionId)
   if (bound)
-    return matches(bound, clientId) ? resolveGoogleConnection(bound.id, bound.revision) : null
+    return matches(bound, clientId)
+      ? resolveGoogleConnection(bound.id, bound.revision, credentialContext)
+      : null
   if (settings.connectionId !== undefined) return null
   const candidates = rows.filter((row) => matches(row, clientId))
   if (candidates.length !== 1) return null
-  const row = await resolveGoogleConnection(candidates[0].id, candidates[0].revision)
+  const row = await resolveGoogleConnection(
+    candidates[0].id,
+    candidates[0].revision,
+    credentialContext
+  )
   await persistBinding(row, settings)
   return row
 }
 
 /** Bind the precise lineage returned by PollDevice, never another account by coincidence. */
-export async function bindGoogleDriveConnection(lineageId: string): Promise<AuthConnectionRow> {
+export async function bindGoogleDriveConnection(
+  lineageId: string,
+  credentialContext?: PersonalCredentialContext
+): Promise<AuthConnectionRow> {
   const settings = (await getBackupDestinationsSettings()).googleDrive
-  const rows = await listGoogleConnections()
+  const rows = await listGoogleConnections(credentialContext)
   const row = rows.find((value) => value.hostMetadata?.adapterId === lineageId)
   if (!settings || !row || !matches(row, settings.clientId?.trim() ?? ""))
     throw new ConnectionUnavailableError("backup-connection-mismatch")
@@ -72,18 +89,21 @@ export async function bindGoogleDriveConnection(lineageId: string): Promise<Auth
   return row
 }
 
-export async function getGoogleDriveCredentialLease() {
-  const connection = await resolveGoogleDriveConnection()
+export async function getGoogleDriveCredentialLease(credentialContext?: PersonalCredentialContext) {
+  const context = { ...(credentialContext ?? HOST_BACKGROUND) }
+  const decision = await admitPersonalCredential(context, { source: "google-drive-backup" })
+  if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+  const connection = await resolveGoogleDriveConnection(context)
   if (!connection) throw new ConnectionUnavailableError("backup-not-bound")
   const assertCurrent = async () => {
-    await resolveGoogleConnection(connection.id, connection.revision)
+    await resolveGoogleConnection(connection.id, connection.revision, context)
     const cfg = (await getBackupDestinationsSettings()).googleDrive
     if (cfg?.connectionId !== connection.id || cfg.clientId?.trim() !== connection.clientId)
       throw new ConnectionRevisionChanged(connection.id, connection.revision)
   }
   // Built-in Host credential injection does not consume the plugin auth.google grant.
   const credential = await getConnectionManager()
-    .getCredentials(connection.id, { minValidityMs: 60_000 })
+    .getCredentials(connection.id, { minValidityMs: 60_000, credentialContext: context })
     .catch(async (error: unknown) => {
       // A failed refresh can race logout too; retain the typed revision fence.
       await assertCurrent()

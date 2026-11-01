@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Input panels for the add-source flow — one per source type.
  *
@@ -257,7 +259,11 @@ export function LarkSourceInput({
     }
     setBusy(true)
     try {
-      const result = await stageLarkDoc(url.trim(), { adapterId, twinId })
+      const result = await stageLarkDoc(url.trim(), {
+        adapterId,
+        twinId,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       if (result.error) onError(result.error)
       else onStaged(result.staged)
     } finally {

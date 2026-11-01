@@ -4,8 +4,10 @@ describe("PluginToolContext", () => {
   it("carries the originating immutable sandbox runtime reference", () => {
     const context: PluginToolContext = {
       config: {},
+      executionRunId: "host-run",
       sandboxRuntimeRef: "sandbox-runtime:plugin",
     }
+    expect(context.executionRunId).toBe("host-run")
     expect(context.sandboxRuntimeRef).toBe("sandbox-runtime:plugin")
   })
 })

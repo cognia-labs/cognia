@@ -292,6 +292,20 @@ export async function controlSquadRun(
     await (deps.openRecovery ?? defaultOpenRecovery)(runId).catch(() => undefined)
     return { ok: false, reason: "recovery_required", status: "needs_input" }
   }
+  const stopped = await getAgentTeamRun(runId)
+  if (stopped?.status !== "cancelled") {
+    // Publication may have won while the durable controller loaded children.
+    // Its terminal execution and store mirror must keep that same outcome.
+    return {
+      ok: false,
+      reason: !stopped
+        ? "run_not_found"
+        : isTerminalSquadRunStatus(stopped.status)
+          ? "already_terminal"
+          : "not_resumable",
+      status: stopped?.status,
+    }
+  }
   await (deps.denyPendingInterrupts ?? defaultDenyPendingInterrupts)(
     agentTeamExecutionRunId(runId),
     at

@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * The `/issues` surface — the total board.
  *
@@ -548,7 +550,11 @@ export function IssueConsole({
     if (!projectId || syncAvailability.reason) return
     setSyncing(true)
     try {
-      const result = await runWorkspaceIssueSync({ projectId, full: true })
+      const result = await runWorkspaceIssueSync({
+        projectId,
+        full: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       const { level, message } = syncSummaryMessage(summarizeSync(result), t)
       toast[level](message)
       setFederatedTick((tick) => tick + 1)
@@ -667,7 +673,11 @@ export function IssueConsole({
    */
   async function handleWritebackCompleted() {
     if (projectId) {
-      await runWorkspaceGithubSync({ projectId, full: true }).catch(() => undefined)
+      await runWorkspaceGithubSync({
+        projectId,
+        full: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      }).catch(() => undefined)
     }
     setFederatedTick((tick) => tick + 1)
   }

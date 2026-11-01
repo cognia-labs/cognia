@@ -90,6 +90,22 @@ beforeEach(() => {
 })
 
 describe("larkDocsProvider — shape", () => {
+  it("refuses fetch and search without admission before any personal snapshot or API read", async () => {
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
+        { accountId: ACCOUNT }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    await expect(
+      larkDocsProvider.search!("query", { accountId: ACCOUNT, limit: 20 })
+    ).rejects.toMatchObject({
+      code: "notAuthorized",
+    })
+    // Connection metadata may resolve; personal API/credential reads must not.
+    expect(withAuthMock).not.toHaveBeenCalled()
+    expect(fetchDocMock).not.toHaveBeenCalled()
+  })
   it("releases an aborted caller while the initial native authorization snapshot is pending", async () => {
     const controller = new AbortController()
     let finish!: (value: unknown) => void
@@ -100,7 +116,14 @@ describe("larkDocsProvider — shape", () => {
     )
     const reading = larkDocsProvider.fetch(
       { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
-      { accountId: ACCOUNT, signal: controller.signal }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+        signal: controller.signal,
+      }
     )
     let settled = false
     const observed = reading.catch((error: unknown) => {
@@ -131,9 +154,21 @@ describe("larkDocsProvider — shape", () => {
         operation === "fetch"
           ? larkDocsProvider.fetch(
               { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
-              options
+              {
+                ...options,
+                credentialContext: {
+                  localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+                    .LOCAL_PERSON_RUN,
+                },
+              }
             )
-          : larkDocsProvider.search!("query", options)
+          : larkDocsProvider.search!("query", {
+              ...options,
+              credentialContext: {
+                localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+                  .LOCAL_PERSON_RUN,
+              },
+            })
       await expect(reading).rejects.toMatchObject({ name: "AbortError" })
     }
   )
@@ -192,7 +227,14 @@ describe("larkDocsProvider.listAccounts", () => {
           title: "Old",
           accountBinding: { accountId: ACCOUNT, authorizationEpoch: "2" },
         },
-        { accountId: ACCOUNT, expectedAuthorizationEpoch: "2" }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+          expectedAuthorizationEpoch: "2",
+        }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(fetchDocMock).not.toHaveBeenCalled()
@@ -240,7 +282,13 @@ describe("larkDocsProvider.matchRef", () => {
 describe("larkDocsProvider.search", () => {
   it("demands the user identity the Feishu search endpoint requires", async () => {
     runWith({ post: async () => ({ docs_entities: [] }) })
-    await larkDocsProvider.search?.("q", { accountId: ACCOUNT, limit: 10 })
+    await larkDocsProvider.search?.("q", {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      accountId: ACCOUNT,
+      limit: 10,
+    })
     expect(withAuthMock).toHaveBeenCalledWith(
       expect.objectContaining({ adapterId: ADAPTER, identity: "user" }),
       expect.any(Function)
@@ -257,7 +305,16 @@ describe("larkDocsProvider.search", () => {
         ],
       }),
     })
-    expect(await larkDocsProvider.search?.("q", { accountId: ACCOUNT, limit: 10 })).toEqual([
+    expect(
+      await larkDocsProvider.search?.("q", {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+        limit: 10,
+      })
+    ).toEqual([
       { providerId: "lark", kind: "doc", sourceType: "doc", id: "doxcn1", title: "Spec" },
       { providerId: "lark", kind: "sheet", id: "shtcn1", title: "Budget" },
     ])
@@ -266,7 +323,14 @@ describe("larkDocsProvider.search", () => {
   it("surfaces a missing OAuth connection as notAuthorized, not a bot permission error", async () => {
     withAuthMock.mockRejectedValue(new LarkAccessError("notAuthorized", "Acme"))
     await expect(
-      larkDocsProvider.search?.("q", { accountId: ACCOUNT, limit: 10 })
+      larkDocsProvider.search?.("q", {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+        limit: 10,
+      })
     ).rejects.toMatchObject({ name: "DocsProviderError", code: "notAuthorized" })
   })
 })
@@ -282,7 +346,13 @@ describe("larkDocsProvider.fetch — documents", () => {
           title: "Spec",
           accountBinding: { accountId: "other" },
         },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(withAuthMock).not.toHaveBeenCalled()
@@ -307,8 +377,23 @@ describe("larkDocsProvider.fetch — documents", () => {
       fetchDocMock.mockImplementation(
         jest.requireActual("@/lib/twin/ingest/lark-doc-fetcher").fetchLarkDocAsRawSource
       )
-      const hits = await larkDocsProvider.search!("hit", { accountId: ACCOUNT, limit: 10 })
-      await expect(larkDocsProvider.fetch(hits[0], { accountId: ACCOUNT })).resolves.toMatchObject({
+      const hits = await larkDocsProvider.search!("hit", {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+        limit: 10,
+      })
+      await expect(
+        larkDocsProvider.fetch(hits[0], {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        })
+      ).resolves.toMatchObject({
         text: "Fetched search result",
       })
       expect(get).toHaveBeenCalledWith(
@@ -323,7 +408,13 @@ describe("larkDocsProvider.fetch — documents", () => {
     fetchDocMock.mockResolvedValue({ title: "Spec", text: "body" })
     const out = await larkDocsProvider.fetch(
       { providerId: "lark", kind: "doc", id: "doxcn1", title: "stale" },
-      { accountId: ACCOUNT }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      }
     )
     expect(fetchDocMock).toHaveBeenCalledWith(
       "doxcn1",
@@ -352,7 +443,13 @@ describe("larkDocsProvider.fetch — documents", () => {
         title: "T",
         url: "https://acme.feishu.cn/docx/doxcn1",
       },
-      { accountId: ACCOUNT }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      }
     )
     expect(fetchDocMock).toHaveBeenCalledWith(
       "https://acme.feishu.cn/docx/doxcn1",
@@ -364,7 +461,13 @@ describe("larkDocsProvider.fetch — documents", () => {
     fetchDocMock.mockResolvedValue({ title: "Big", text: "x".repeat(MAX_DOC_CHARS + 10) })
     const out = await larkDocsProvider.fetch(
       { providerId: "lark", kind: "doc", id: "d", title: "Big" },
-      { accountId: ACCOUNT }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      }
     )
     expect(out.truncated).toBe(true)
     expect(out.text).toContain("Truncated by Cognia")
@@ -375,7 +478,13 @@ describe("larkDocsProvider.fetch — documents", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "doc", id: "d", title: "x" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ name: "DocsProviderError", code: "noPermission" })
   })
@@ -402,7 +511,12 @@ describe("Lark Wiki resource dispatch", () => {
       title: "Old",
       url: "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789",
     }
-    const result = await larkDocsProvider.fetch(ref, { accountId: ACCOUNT })
+    const result = await larkDocsProvider.fetch(ref, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      accountId: ACCOUNT,
+    })
     expect(result.ref).toEqual({ ...ref, title: "Wiki title" })
     expect(result.text).toBe("Actual document")
   })
@@ -414,7 +528,13 @@ describe("Lark Wiki resource dispatch", () => {
       await expect(
         larkDocsProvider.fetch(
           { providerId: "lark", kind: "wiki", id: "wiki", title: "Wiki" },
-          { accountId: ACCOUNT }
+          {
+            credentialContext: {
+              localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+                .LOCAL_PERSON_RUN,
+            },
+            accountId: ACCOUNT,
+          }
         )
       ).rejects.toMatchObject({ code: "unsupportedType" })
       expect(fetchDocMock).not.toHaveBeenCalled()
@@ -430,7 +550,13 @@ describe("Lark Wiki resource dispatch", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "wiki", id: "wiki", title: "Wiki" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "noPermission" })
   })
@@ -456,7 +582,13 @@ describe("Lark Wiki resource dispatch", () => {
         title: "Old",
         url: "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789",
       }
-      const body = await larkDocsProvider.fetch(ref, { accountId: ACCOUNT })
+      const body = await larkDocsProvider.fetch(ref, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      })
       expect(body.ref).toEqual({ ...ref, title: "Wiki title" })
       expect(body.title).toBe("Wiki title")
       expect(body.format).toBe("csv")
@@ -474,7 +606,14 @@ describe("Lark Wiki resource dispatch", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", id: "d", kind: "doc", title: "Old" },
-        { accountId: ACCOUNT, expectedAuthorizationEpoch: "1" }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+          expectedAuthorizationEpoch: "1",
+        }
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
   })
@@ -503,7 +642,13 @@ describe("larkDocsProvider.fetch — grids", () => {
       await expect(
         larkDocsProvider.fetch(
           { providerId: "lark", kind: "sheet", id: "sheet", title: "Empty" },
-          { accountId: ACCOUNT }
+          {
+            credentialContext: {
+              localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+                .LOCAL_PERSON_RUN,
+            },
+            accountId: ACCOUNT,
+          }
         )
       ).rejects.toMatchObject({ code: "empty" })
     }
@@ -520,7 +665,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "bitable", id: "base", title: "Empty" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "empty" })
   })
@@ -540,7 +691,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     })
     const out = await larkDocsProvider.fetch(
       { providerId: "lark", kind: "sheet", id: "shtcn1", title: "stale" },
-      { accountId: ACCOUNT }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      }
     )
     expect(out.format).toBe("csv")
     expect(out.title).toBe("Budget")
@@ -558,7 +715,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     })
     const out = await larkDocsProvider.fetch(
       { providerId: "lark", kind: "bitable", id: "bascn1", title: "stale" },
-      { accountId: ACCOUNT }
+      {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        accountId: ACCOUNT,
+      }
     )
     expect(out.title).toBe("Road")
     expect(out.text).toBe("## Tasks\nName\nShip")
@@ -569,7 +732,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "sheet", id: "shtcn1", title: "x" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "empty" })
   })
@@ -581,7 +750,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "bitable", id: "b", title: "x" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "notFound" })
   })
@@ -591,7 +766,13 @@ describe("larkDocsProvider.fetch — grids", () => {
     await expect(
       larkDocsProvider.fetch(
         { providerId: "lark", kind: "sheet", id: "s", title: "x" },
-        { accountId: ACCOUNT }
+        {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+          accountId: ACCOUNT,
+        }
       )
     ).rejects.toMatchObject({ code: "rateLimited" })
   })

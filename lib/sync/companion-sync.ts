@@ -28,6 +28,7 @@ import { subscribeResume } from "@/lib/capacitor/app"
 import { subscribe as subscribeNetwork } from "@/lib/capacitor/network"
 import { companionCursorNamespace } from "@/lib/companion/credential-book/legacy-migration"
 import { getDb } from "@/lib/db/schema"
+import { deleteOutboundJobs } from "@/lib/db/outbound-jobs"
 import { transport } from "@/lib/tauri"
 import { getCompanionConfigGeneration, loadCompanionConfig } from "@/lib/tauri/transport-companion"
 import type { Transport } from "@/lib/tauri/transport-types"
@@ -707,12 +708,18 @@ async function resetMirrorsForHostChange(
     const { getDb } = await import("@/lib/db/schema")
     assertCurrent()
     const db = getDb()
+    // Settle any locally owned delivery before clearing execution summaries.
+    // Pure mirrored summaries have no local journal entry and are left alone.
+    await deleteOutboundJobs(db.outboundQueue.toCollection(), { tombstones: false }).catch(
+      () => undefined
+    )
+    assertCurrent()
     await Promise.all(
       SYNC_HANDLER_TABLES.map(async (table) => {
         // `settings` is a singleton the client also writes locally; clearing it
         // would throw away device-local preferences the host never had. The
         // mirrored subset is overwritten by the first pull anyway.
-        if (table === "settings") return
+        if (table === "settings" || table === "outboundQueue") return
         try {
           await (db as unknown as Record<string, { clear: () => Promise<void> }>)[table]?.clear()
         } catch {

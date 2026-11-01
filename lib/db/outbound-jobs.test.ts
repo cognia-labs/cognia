@@ -26,6 +26,8 @@ import {
   recoverStaleSendingJobs,
   sweepTerminalOutboundRows,
   deleteOutboundJob,
+  deleteOutboundJobs,
+  reconcileOutboundJobExecutions,
   findDeliveredByIdempotencyKey,
   findOlderActiveOutboundSibling,
   findNextActiveOutboundSibling,
@@ -42,6 +44,8 @@ import { prepareDraftRow } from "./connector-drafts"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
 import { toDeliveryReceiptRow } from "@/lib/policy/action-review/projection"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 
 const dbFixture = createDbTestFixture()
 
@@ -120,6 +124,9 @@ describe("unclaimed runner transitions", () => {
       status: "deadlettered",
       lastErrorCode: "authorization",
     })
+    expect(await getDb().executionRuns.get(`execution:job:outbound:${waiting.id}`)).toMatchObject({
+      status: "failed",
+    })
 
     const claimed = await job()
     await markSending(claimed.id)
@@ -130,6 +137,30 @@ describe("unclaimed runner transitions", () => {
       })
     ).toBe(false)
     expect((await getDb().outboundQueue.get(claimed.id))?.status).toBe("sending")
+  })
+
+  it("rolls back the authorization hold and draft when execution settlement fails", async () => {
+    const row = await job()
+    const draft = await prepareDraftRow({
+      conversationKey: row.conversationKey,
+      sessionId: "workflow:w1",
+      segments: row.request.segments,
+    })
+    const write = jest
+      .spyOn(getDb().executionRunEvents, "add")
+      .mockRejectedValueOnce(new Error("settlement disk full"))
+    try {
+      await expect(
+        holdOutboundForAuthorization(row.id, { errorCode: "authorization", message: "held", draft })
+      ).rejects.toThrow("settlement disk full")
+      expect(await getDb().outboundQueue.get(row.id)).toMatchObject({ status: "pending" })
+      expect(await getDb().connectorDrafts.count()).toBe(0)
+      expect(await getDb().executionRuns.get(`execution:job:outbound:${row.id}`)).toMatchObject({
+        status: "running",
+      })
+    } finally {
+      write.mockRestore()
+    }
   })
 
   it("lets the runner that holds the claim decide its own sending row, and no one else", async () => {
@@ -279,6 +310,122 @@ describe("outbound-jobs", () => {
     } finally {
       getDb().actionReviewReceipts.hook("creating").unsubscribe(fail)
     }
+  })
+  describe("execution settlement at the durable transition", () => {
+    const execution = (id: string) => getDb().executionRuns.get(`execution:job:outbound:${id}`)
+    const create = () => enqueue({ adapterId: "a", conversationKey: "c", request: makeRequest() })
+
+    it("keeps a replay scoped to its original delivery identity after terminal settlement", async () => {
+      const row = await enqueueOutbound(
+        { adapterId: "a", conversationKey: "c", request: makeRequest(), source: "manual" },
+        { executionContext: { localAuthorization: LOCAL_PERSON_RUN } }
+      )
+      await markDeadlettered(row.id, "offline", "offline")
+      expect(await execution(row.id)).toMatchObject({ status: "failed" })
+      await replayDeadlettered(row.id)
+      await expect(
+        admitPersonalCredential(
+          { executionRunId: `execution:job:outbound:${row.id}`, delivery: true },
+          { source: "lark-user" }
+        )
+      ).resolves.toMatchObject({ ok: true })
+      await expect(
+        admitPersonalCredential(
+          { executionRunId: `execution:job:outbound:${row.id}` },
+          { source: "github-user" }
+        )
+      ).resolves.toMatchObject({ ok: false })
+    })
+
+    it("settles Settings cancellation and plugin veto even without a runner", async () => {
+      const row = await create()
+      await deleteOutboundJob(row.id)
+      expect(await execution(row.id)).toMatchObject({ status: "cancelled" })
+    })
+
+    it("rolls back bulk deletion and prior settlement when a later settlement fails", async () => {
+      const db = getDb()
+      const first = await create()
+      const second = await create()
+      const eventCount = await db.executionRunEvents.count()
+      const append = db.executionRunEvents.add.bind(db.executionRunEvents)
+      const settlement = jest
+        .spyOn(db.executionRunEvents, "add")
+        .mockImplementationOnce(append)
+        .mockRejectedValueOnce(new Error("settlement write failed"))
+      try {
+        await expect(deleteOutboundJobs([first.id, second.id])).rejects.toThrow(
+          "settlement write failed"
+        )
+        for (const row of [first, second]) {
+          expect(await db.outboundQueue.get(row.id)).toBeDefined()
+          expect(await execution(row.id)).toMatchObject({ status: "running" })
+        }
+        expect(await db.executionRunEvents.count()).toBe(eventCount)
+        expect(await db.syncTombstones.count()).toBe(0)
+      } finally {
+        settlement.mockRestore()
+      }
+    })
+
+    it.each(["sent", "deadlettered", "delivery_unknown"] as const)(
+      "atomically settles %s before the runner can stop",
+      async (status) => {
+        const row = await create()
+        if (status === "sent") await markSent(row.id, "remote")
+        else if (status === "deadlettered") await markDeadlettered(row.id, "veto", "blocked")
+        else await markDeliveryUnknown(row.id, "ambiguous", "unknown")
+        expect(await execution(row.id)).toMatchObject({
+          status: status === "sent" ? "completed" : "failed",
+        })
+      }
+    )
+
+    it.each(["delivered", "rejected"] as const)(
+      "settles asynchronous %s receipts",
+      async (status) => {
+        const row = await create()
+        await markSending(row.id)
+        await markAwaitingDeliveryReceipt(row.id, { id: "receipt" })
+        expect(await execution(row.id)).toMatchObject({ status: "running" })
+        await recordOutboundDeliveryStatus({
+          adapterId: "a",
+          conversationKey: "c",
+          timestamp: Date.now(),
+          update: {
+            receiptId: "receipt",
+            status,
+            ...(status === "delivered" ? { platformMessageId: "remote" } : {}),
+          },
+        })
+        expect(await execution(row.id)).toMatchObject({
+          status: status === "delivered" ? "completed" : "failed",
+        })
+      }
+    )
+
+    it("settles soft-cap victims", async () => {
+      const restore = __setOutboundQueueSoftCapForTesting(1)
+      try {
+        const first = await create()
+        await create()
+        expect(await execution(first.id)).toMatchObject({ status: "failed" })
+      } finally {
+        restore()
+      }
+    })
+
+    it("reconciles legacy terminal/missing rows and preserves pending work on startup", async () => {
+      const sent = await create(),
+        missing = await create(),
+        pending = await create()
+      await getDb().outboundQueue.update(sent.id, { status: "sent" })
+      await getDb().outboundQueue.delete(missing.id)
+      await reconcileOutboundJobExecutions()
+      expect(await execution(sent.id)).toMatchObject({ status: "completed" })
+      expect(await execution(missing.id)).toMatchObject({ status: "cancelled" })
+      expect(await execution(pending.id)).toMatchObject({ status: "running" })
+    })
   })
   describe("shared asynchronous delivery receipts", () => {
     it("keeps a provider-reviewed rejection out of replay and preserves its evidence", async () => {
@@ -1702,6 +1849,32 @@ it("rolls back a voice enqueue cancelled inside the write transaction without wa
     expect(wake).not.toHaveBeenCalled()
   } finally {
     table.hook("creating").unsubscribe(cancel)
+    unsubscribe()
+  }
+})
+
+it("publishes the queue wake only after its exact execution identity commits", async () => {
+  const { resolveRunActingIdentity } = await import("@/lib/execution/acting-authority")
+  let observed: Promise<unknown> | undefined
+  const unsubscribe = subscribeOutboundEnqueued(() => {
+    observed = getDb().executionRuns.where("kind").equals("job").first()
+  })
+  try {
+    const job = await enqueueOutbound(
+      {
+        adapterId: "a",
+        conversationKey: "lark:a:c",
+        source: "manual",
+        request: makeRequest(),
+      },
+      { executionContext: { sessionId: "s", localAuthorization: LOCAL_PERSON_RUN } }
+    )
+    expect(await observed).toMatchObject({ id: `execution:job:outbound:${job.id}` })
+    expect(await resolveRunActingIdentity("s", `execution:job:outbound:${job.id}`)).toMatchObject({
+      trigger: "local",
+      authorizingPrincipal: { kind: "local-person" },
+    })
+  } finally {
     unsubscribe()
   }
 })

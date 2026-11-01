@@ -135,11 +135,14 @@ export function registerIssueRunAdapter(
 }
 
 /** Load the target an adapter decides on. */
-export async function loadIssueRunTarget(issueId: string): Promise<IssueRunTarget | undefined> {
+export async function loadIssueRunTarget(
+  issueId: string,
+  credentialContext?: IssueRunTarget["credentialContext"]
+): Promise<IssueRunTarget | undefined> {
   const issue = await getIssue(issueId)
   if (!issue) return undefined
   const project = await getIssueProject(issue.issueProjectId)
-  return { issue, project }
+  return { issue, project, ...(credentialContext ? { credentialContext } : {}) }
 }
 
 export interface IssueRunOption {
@@ -155,9 +158,10 @@ export interface IssueRunOption {
 export async function listIssueRunOptions(
   issueId: string,
   registry: IssueRunRegistry = getIssueRunRegistry(),
-  origin: IssueRunOrigin = "interactive"
+  origin: IssueRunOrigin = "interactive",
+  credentialContext?: IssueRunTarget["credentialContext"]
 ): Promise<IssueRunOption[]> {
-  const target = await loadIssueRunTarget(issueId)
+  const target = await loadIssueRunTarget(issueId, credentialContext)
   if (!target) return []
   const blanket = await trackerVerdict(target, origin)
   const adapters = registry.list()
@@ -200,6 +204,7 @@ async function trackerVerdict(
 }
 
 export interface StartIssueRunInput {
+  credentialContext?: IssueRunTarget["credentialContext"]
   issueId: string
   adapterId: string
   by: IssueActor
@@ -225,7 +230,7 @@ export async function startIssueRun(
   const adapter = registry.get(input.adapterId)
   if (!adapter) throw new IssueRunRefusedError("adapter-missing", input.adapterId)
 
-  const target = await loadIssueRunTarget(input.issueId)
+  const target = await loadIssueRunTarget(input.issueId, input.credentialContext)
   if (!target) throw new Error(`Issue not found: ${input.issueId}`)
 
   const blanket = await trackerVerdict(target, input.origin)

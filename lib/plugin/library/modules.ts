@@ -158,6 +158,19 @@ export class PluginLibraryModules {
     moduleName: string,
     context: FullPluginContext
   ): Promise<T> {
+    const execution = pluginExecutionContext(consumerId) ?? HOST_BACKGROUND
+    return withPluginExecutionContext(providerId, execution, () =>
+      this.importBoundModule<T>(consumerId, providerId, moduleName, context, execution)
+    )
+  }
+
+  private async importBoundModule<T extends Record<string, unknown>>(
+    consumerId: string,
+    providerId: string,
+    moduleName: string,
+    context: FullPluginContext,
+    execution: PersonalCredentialContext
+  ): Promise<T> {
     const started = Date.now()
     let outcome: "success" | "failure" = "failure"
     let version: string | null = null
@@ -265,17 +278,25 @@ export class PluginLibraryModules {
         try {
           const bundle = await this.host.importLibraryEntry(provider, declaration.entry)
           check()
-          if (typeof bundle.default !== "function")
+          const factory = bundle.default
+          if (typeof factory !== "function")
             throw new LibraryModuleError(
               "invalid-module",
               "Library entry must default-export a factory"
             )
-          const instance = (await bundle.default(
-            fenceContext(scopedContext, check)
-          )) as ModuleInstance
+          const instance = bindPluginCallbacks(
+            providerId,
+            (await withPluginExecutionContext(providerId, execution, () =>
+              factory(fenceContext(scopedContext, check))
+            )) as ModuleInstance
+          )
           if (instance && typeof instance.dispose === "function") {
             // Register before checking lifetime so teardown also owns a late factory result.
-            const dispose = child.track(() => instance.dispose!(), "library.dispose")
+            const dispose = child.track(
+              () =>
+                withPluginExecutionContext(providerId, HOST_BACKGROUND, () => instance.dispose!()),
+              "library.dispose"
+            )
             if (
               child.signal.aborted ||
               consumerScope.signal.aborted ||
@@ -296,7 +317,11 @@ export class PluginLibraryModules {
             )
           }
           check()
-          return instance.exports
+          return bindPluginCallbacks(
+            providerId,
+            instance.exports,
+            () => pluginExecutionContext(consumerId) ?? HOST_BACKGROUND
+          )
         } catch (error) {
           instances!.delete(key)
           await child.dispose()
@@ -328,3 +353,10 @@ export class PluginLibraryModules {
     }
   }
 }
+import {
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"

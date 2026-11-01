@@ -18,6 +18,7 @@
  * existing `outboundQueue` row and returns it instead of sending twice.
  */
 
+import type { LocalPersonRun } from "@/lib/execution/acting-authority"
 import type { StoredMessage, MessageReplyTo } from "@cognia/agent-config-types"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
 import { approveDraft, getDraft, rejectDraft } from "@/lib/db/connector-drafts"
@@ -145,11 +146,14 @@ async function findMessageForJob(
 // Host RPC replays may overlap before the first durable write completes.
 const manualReplyWrites = new Map<string, Promise<ManualReplyResult>>()
 
-export async function sendManualReplyLocally(input: ManualReplyInput): Promise<ManualReplyResult> {
+export async function sendManualReplyLocally(
+  input: ManualReplyInput,
+  localAuthorization?: LocalPersonRun
+): Promise<ManualReplyResult> {
   const previous = manualReplyWrites.get(input.idempotencyKey)
   const write = (previous ?? Promise.resolve())
     .catch(() => undefined)
-    .then(() => persistManualReplyLocally(input))
+    .then(() => persistManualReplyLocally(input, localAuthorization))
   manualReplyWrites.set(input.idempotencyKey, write)
   try {
     return await write
@@ -159,7 +163,10 @@ export async function sendManualReplyLocally(input: ManualReplyInput): Promise<M
   }
 }
 
-async function persistManualReplyLocally(input: ManualReplyInput): Promise<ManualReplyResult> {
+async function persistManualReplyLocally(
+  input: ManualReplyInput,
+  localAuthorization?: LocalPersonRun
+): Promise<ManualReplyResult> {
   const existingJob = await findJobByIdempotencyKey(input.idempotencyKey)
   if (existingJob) {
     const existingMessage = await findMessageForJob(input.sessionId, existingJob.id)
@@ -173,19 +180,22 @@ async function persistManualReplyLocally(input: ManualReplyInput): Promise<Manua
 
   const message = buildReplyMessage(input)
   try {
-    const job = await enqueueGoverned({
-      localMessage: message,
-      adapterId: input.adapterId,
-      conversationKey: input.conversationKey,
-      request: {
-        conversationRef: input.conversationRef,
-        segments: input.segments,
-        metadata: { idempotencyKey: input.idempotencyKey },
-        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
+    const job = await enqueueGoverned(
+      {
+        localMessage: message,
+        adapterId: input.adapterId,
+        conversationKey: input.conversationKey,
+        request: {
+          conversationRef: input.conversationRef,
+          segments: input.segments,
+          metadata: { idempotencyKey: input.idempotencyKey },
+          ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+          ...(input.threadId ? { threadId: input.threadId } : {}),
+        },
+        source: "manual",
       },
-      source: "manual",
-    })
+      { executionContext: { sessionId: input.sessionId, localAuthorization } }
+    )
     // The gateway writes the transcript row inside its job transaction, not
     // through `persistMessages`, so the Inbox preview has to be stamped here
     // or the list keeps showing the message before this reply.
@@ -317,7 +327,8 @@ async function resolveApprovalRequest(
  */
 export async function approveDraftLocally(
   draftId: string,
-  options: ApproveDraftLocallyOptions = {}
+  options: ApproveDraftLocallyOptions = {},
+  localAuthorization?: LocalPersonRun
 ): Promise<ApproveDraftResult> {
   const draft = await getDraft(draftId)
   if (!draft) throw new DraftNotFoundError(draftId)
@@ -330,12 +341,15 @@ export async function approveDraftLocally(
   }
   let jobId = existingJob?.id
   if (resolved && !existingJob) {
-    const job = await enqueueGoverned({
-      adapterId: resolved.adapterId,
-      conversationKey: draft.conversationKey,
-      request: resolved.request,
-      source: "draft-approved",
-    })
+    const job = await enqueueGoverned(
+      {
+        adapterId: resolved.adapterId,
+        conversationKey: draft.conversationKey,
+        request: resolved.request,
+        source: "draft-approved",
+      },
+      { executionContext: { sessionId: draft.sessionId, localAuthorization } }
+    )
     jobId = job.id
   }
   await approveDraft(draftId)

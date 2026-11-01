@@ -28,6 +28,7 @@ import type { ResolvedBotDefinition } from "@/lib/bot/installed-bot"
 import { getBot } from "@/lib/plugin/registries/bot-registry"
 import { projectBotInstallationSnapshot } from "@/lib/bot/installation-snapshot"
 import { loggers } from "@/lib/plugin/core/logger"
+import { HOST_BACKGROUND, withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 /** A hook that does not finish within this window counts as failed. */
 export const BOT_LIFECYCLE_HOOK_TIMEOUT_MS = 30_000
@@ -91,7 +92,9 @@ export async function runBotLifecycleHook(input: RunBotLifecycleHookInput): Prom
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
-      Promise.resolve().then(() => hook(context)),
+      Promise.resolve().then(() =>
+        withPluginExecutionContext(pluginId, HOST_BACKGROUND, () => hook(context))
+      ),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`lifecycle hook exceeded ${BOT_LIFECYCLE_HOOK_TIMEOUT_MS}ms`)),

@@ -83,6 +83,7 @@ import { generateEmbedding } from "@cognia/provider-embedding/embedding"
 import { readResolvedPrincipal } from "./principal/resolve"
 import {
   authorityFromPermissionCeiling,
+  bindToolCallRun,
   connectorRequester,
   recordedRunMetadata,
 } from "@/lib/execution/acting-authority"
@@ -2210,14 +2211,26 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           event.platform === "lark"
             ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
             : runTitle
+        const recoveryParent = recoveryParentRunId
+          ? await getDb().executionRuns.get(recoveryParentRunId)
+          : undefined
+        // A recovery anchor is routing data. Only this session's exact prior
+        // execution of this stored inbound message may supply its identity.
+        const verifiedRecoveryParent =
+          recoveryParent?.kind === "agent-turn" &&
+          recoveryParent.sessionId === session.id &&
+          recoveryParent.sourceId === storedMsg.id
+            ? recoveryParent
+            : undefined
         await createExecutionRun({
           id: executionRunId,
           ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
             runId: executionRunId,
+            parent: verifiedRecoveryParent,
             requesters: [connectorRequester(event)],
             authority: authorityFromPermissionCeiling(permissionCeiling),
           }),
-          ...(recoveryParentRunId ? { parentRunId: recoveryParentRunId } : {}),
+          ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
           kind: "agent-turn",
           sourceId: storedMsg.id,
           sessionId: session.id,
@@ -2512,9 +2525,17 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             : contextualPrompt
         let captured: Awaited<ReturnType<RunAndCaptureFn>>
         try {
-          const started = await startForCurrentSource(() =>
-            opts.runAndCapture(session.id, prompt, sendOptions, cap)
-          )
+          const started = await startForCurrentSource(() => {
+            // The stable provider identity may come from a recovery anchor.
+            // Tool authority belongs only to this Host-created journal attempt.
+            bindToolCallRun(
+              session.id,
+              sendOptions.turnId,
+              executionRunId,
+              executionIdentity.attemptId
+            )
+            return opts.runAndCapture(session.id, prompt, sendOptions, cap)
+          })
           if (!started) {
             await runProducer
               .finish("cancelled", Date.now(), "Inbound source changed before dispatch")
@@ -2873,55 +2894,61 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // the receiving bot on any invalid target).
         if (larkGroups) {
           for (const [index, group] of larkGroups.entries()) {
-            await enqueueOutbound({
-              adapterId: outboundTarget.adapterId,
-              conversationKey: outboundTarget.conversationKey,
-              request: {
-                conversationRef: outboundRequest.conversationRef,
-                deliveryTarget: outboundRequest.deliveryTarget,
-                segments: group,
-                // The reply anchor rides on the first message of the turn.
-                ...(index === 0 && quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
-                metadata: {
-                  ...outboundRequest.metadata,
-                  // Multi-part turns need distinct keys — the runner dedupes
-                  // delivered idempotency keys, so sharing `airun:…` across
-                  // parts would drop every part after the first.
-                  idempotencyKey:
-                    larkGroups.length > 1 ? `${idempotencyKey}:part:${index}` : idempotencyKey,
-                  // Card-bearing groups carry the terminal-card marker the
-                  // `onConnectorOutbound` hook exposes as `resultCard`.
-                  ...(group.some((segment) => segment.type === "card")
-                    ? {
-                        resultCard: {
-                          runId: executionRunId,
-                          status: limitStop ? ("interrupted" as const) : ("done" as const),
-                          sourceMessageId: storedMsg.id,
-                        },
-                      }
-                    : {}),
+            await enqueueOutbound(
+              {
+                adapterId: outboundTarget.adapterId,
+                conversationKey: outboundTarget.conversationKey,
+                request: {
+                  conversationRef: outboundRequest.conversationRef,
+                  deliveryTarget: outboundRequest.deliveryTarget,
+                  segments: group,
+                  // The reply anchor rides on the first message of the turn.
+                  ...(index === 0 && quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
+                  metadata: {
+                    ...outboundRequest.metadata,
+                    // Multi-part turns need distinct keys — the runner dedupes
+                    // delivered idempotency keys, so sharing `airun:…` across
+                    // parts would drop every part after the first.
+                    idempotencyKey:
+                      larkGroups.length > 1 ? `${idempotencyKey}:part:${index}` : idempotencyKey,
+                    // Card-bearing groups carry the terminal-card marker the
+                    // `onConnectorOutbound` hook exposes as `resultCard`.
+                    ...(group.some((segment) => segment.type === "card")
+                      ? {
+                          resultCard: {
+                            runId: executionRunId,
+                            status: limitStop ? ("interrupted" as const) : ("done" as const),
+                            sourceMessageId: storedMsg.id,
+                          },
+                        }
+                      : {}),
+                  },
+                },
+                source: "ai-run",
+                authorization: {
+                  kind: "origin-reply",
+                  inboundConversationKey: event.conversationKey,
                 },
               },
-              source: "ai-run",
-              authorization: {
-                kind: "origin-reply",
-                inboundConversationKey: event.conversationKey,
-              },
-            })
+              { executionContext: { sessionId: session.id, executionRunId } }
+            )
           }
         } else {
           try {
-            await enqueueOutbound({
-              adapterId: outboundTarget.adapterId,
-              conversationKey: outboundTarget.conversationKey,
-              request: outboundRequest,
-              source: "ai-run",
-              // The respond-via target is the same chat through a sibling bot.
-              authorization: {
-                kind: "origin-reply",
-                inboundConversationKey: event.conversationKey,
+            await enqueueOutbound(
+              {
+                adapterId: outboundTarget.adapterId,
+                conversationKey: outboundTarget.conversationKey,
+                request: outboundRequest,
+                source: "ai-run",
+                // The respond-via target is the same chat through a sibling bot.
+                authorization: {
+                  kind: "origin-reply",
+                  inboundConversationKey: event.conversationKey,
+                },
               },
-            })
+              { executionContext: { sessionId: session.id, executionRunId } }
+            )
             replyStream?.handoff()
           } catch (error) {
             await replyStream?.cancel()

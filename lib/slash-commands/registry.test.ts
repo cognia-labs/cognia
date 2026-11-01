@@ -1,4 +1,9 @@
 import {
+  pluginExecutionContext,
+  withHostCommandExecution,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
+import {
   registerSlashCommand,
   unregisterSlashCommand,
   unregisterCommandsByPlugin,
@@ -21,6 +26,22 @@ import {
 afterEach(() => {
   __resetSlashCommandsForTesting()
   __resetDiagnosticsStoreForTesting()
+})
+
+it("backgrounds runless Host slash dispatch instead of using the owner exception", async () => {
+  registerSlashCommand({
+    id: "bound-background",
+    name: "Bound",
+    pluginId: "bound-background",
+    source: "plugin",
+    handler: async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("bound-background")).toEqual({ executionRunId: "" })
+      return {}
+    },
+  })
+  await dispatchSlashCommand("/bound-background")
+  expect(pluginExecutionContext("bound-background")).toBeUndefined()
 })
 
 describe("subscribeSlashCommands", () => {
@@ -266,4 +287,59 @@ describe("re-export from lib/chat/slash-command-registry", () => {
     expect(reExport.getSlashCommand("shared")?.id).toBe("shared")
     __resetSlashCommandsForTesting()
   })
+})
+
+it("uses the Host-correlated command attempt without trusting public context fields", async () => {
+  const context = { sessionId: "session", executionRunId: "forged" }
+  registerSlashCommand({
+    id: "bound.command",
+    name: "bound",
+    pluginId: "bound",
+    handler: async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("bound")?.executionRunId).toBe("host-attempt")
+      return { message: "bound" }
+    },
+  })
+  await withHostCommandExecution(
+    context,
+    { sessionId: "session", executionRunId: "host-attempt" },
+    async () => {
+      await expect(dispatchSlashCommand("/bound.command", context)).resolves.toEqual({
+        message: "bound",
+      })
+    }
+  )
+  expect(pluginExecutionContext("bound")).toBeUndefined()
+})
+
+it("does not borrow an awaiting local dispatch for an unrelated runless command", async () => {
+  let release!: () => void
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  registerSlashCommand({
+    id: "background-bound.command",
+    name: "background",
+    pluginId: "background-bound",
+    handler: async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("background-bound")).toEqual({ executionRunId: "" })
+      return { message: "background" }
+    },
+  })
+  const pending = withPluginExecutionContext(
+    "background-bound",
+    { executionRunId: "local-awaiting" },
+    () => waiting
+  )
+  try {
+    await expect(dispatchSlashCommand("/background-bound.command")).resolves.toEqual({
+      message: "background",
+    })
+  } finally {
+    release()
+    await pending
+  }
+  expect(pluginExecutionContext("background-bound")).toBeUndefined()
 })

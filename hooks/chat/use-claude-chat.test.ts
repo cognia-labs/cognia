@@ -5,6 +5,8 @@
  * The hook also wires a long-lived sidecar event handler through `onClaudeMessage`
  * — that handler is exercised indirectly via `send` / `respondToApproval`.
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 jest.mock("@/lib/chat/lifecycle-events", () => ({ publishChatLifecycleEvent: jest.fn() }))
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
@@ -179,6 +181,7 @@ jest.mock("@/lib/policy/action-review/chat-tool-channel", () => {
 })
 
 jest.mock("@/lib/claude/ipc", () => ({
+  mcpRuntimeConfigurationMatches: jest.fn(() => true),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
   closeSession: (id: string) => closeSessionIpcMock(id),
   interruptSession: (id: string) => interruptSessionMock(id),
@@ -464,6 +467,10 @@ jest.mock("@/lib/project-environment/executor", () => ({
 }))
 
 const dispatchUserPromptSubmitMock = jest.fn(async () => ({ action: "proceed" as const }))
+jest.mock("@/lib/db/execution-runs", () => ({
+  ...jest.requireActual("@/lib/db/execution-runs"),
+  getExecutionRun: jest.fn(async () => undefined),
+}))
 const dispatchChatErrorMock = jest.fn()
 const dispatchTokenUsageMock = jest.fn()
 const dispatchPostChatReceiveMock = jest.fn(async () => ({}))
@@ -2492,7 +2499,9 @@ describe("useClaudeChat — actions", () => {
         await result.current.send("hello")
       })
 
-      expect(ensureSessionExecutionBundleMock).toHaveBeenCalled()
+      expect(ensureSessionExecutionBundleMock).toHaveBeenCalledWith(
+        expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+      )
       expect(sendPromptMock).not.toHaveBeenCalled()
       expect(runStandaloneTurnMock).not.toHaveBeenCalled()
       expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
@@ -2814,7 +2823,8 @@ describe("useClaudeChat — actions", () => {
     expect(dispatchUserPromptSubmitMock).toHaveBeenCalledWith(
       "fix this",
       "sess-1",
-      expect.any(Object)
+      expect.any(Object),
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN }
     )
     expect(gateWorkbenchProviderPayloadMock).toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining("private@example.com") })
@@ -5304,7 +5314,12 @@ describe("useClaudeChat — actions", () => {
     await act(async () => {
       await result.current.send("hello")
     })
-    expect(dispatchUserPromptSubmitMock).toHaveBeenCalledWith("hello", "sess-1", expect.any(Object))
+    expect(dispatchUserPromptSubmitMock).toHaveBeenCalledWith(
+      "hello",
+      "sess-1",
+      expect.any(Object),
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN }
+    )
     expect(sendPromptMock).toHaveBeenCalled()
   })
 
@@ -5369,7 +5384,10 @@ describe("useClaudeChat — actions", () => {
       "sess-1",
       expect.objectContaining({ message: "network down", source: "chat" })
     )
-    expect(dispatchChatErrorMock).toHaveBeenCalledWith("sess-1", expect.any(Error))
+    expect(dispatchChatErrorMock).toHaveBeenCalledWith("sess-1", expect.any(Error), {
+      sessionId: "sess-1",
+      executionRunId: expect.any(String),
+    })
   })
 
   it("stop() interrupts the active session", async () => {

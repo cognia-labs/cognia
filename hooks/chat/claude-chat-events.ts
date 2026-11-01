@@ -148,6 +148,7 @@ import {
 } from "./claude-chat-turn-tasks"
 import type { SendFn } from "./claude-chat-turn-tasks"
 import { closeOpenToolParts, hasOpenToolParts } from "@/lib/chat/phantom-run"
+import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 
 async function settleChatTranscript(
   sessionId: string,
@@ -427,6 +428,7 @@ export async function handleEvent(
   const frame = evt as ClaudeEvent & {
     sessionId?: string
     turnId?: string
+    attemptId?: string
     transcriptInvalidationId?: string
   }
   const fenceTranscript = [
@@ -1680,6 +1682,12 @@ export async function handleEvent(
 
       if (turnComplete && isOpen) {
         if (!isCurrentEvent()) return
+        // Pin the Host-correlated attempt before terminal persistence awaits.
+        // An uncorrelated result cannot borrow a newer turn's authority.
+        const hookCredentialContext = {
+          sessionId,
+          executionRunId: toolCallExecutionRunId(sessionId, frame.turnId, frame.attemptId) ?? "",
+        }
         // Streaming sealed. Commit the last visual frame, cancel the
         // fire-and-forget debounced writer, and await one canonical durable
         // snapshot before exposing the idle state. A result envelope commonly
@@ -1721,23 +1729,29 @@ export async function handleEvent(
               } catch {
                 /* fall back to empty content */
               }
-              void dispatchPluginPostChatReceive({
-                sessionId,
-                message: { id: sealedAssistant.id, role: "assistant", content },
-                metadata: {
-                  model: useChatStore.getState().lastSendBySession[sessionId]?.options.model,
+              void dispatchPluginPostChatReceive(
+                {
+                  sessionId,
+                  message: { id: sealedAssistant.id, role: "assistant", content },
+                  metadata: {
+                    model: useChatStore.getState().lastSendBySession[sessionId]?.options.model,
+                  },
                 },
-              })
+                hookCredentialContext
+              )
               // Pipeline hook (W3.3): `onMessageReceive` — plugins may rewrite
               // the sealed assistant message. Applied asynchronously after the
               // seal (store + Dexie) so a slow plugin never blocks the turn.
               void (async () => {
                 try {
-                  const piped = await dispatchPluginAssistantMessage({
-                    id: sealedAssistant.id,
-                    role: "assistant",
-                    content,
-                  })
+                  const piped = await dispatchPluginAssistantMessage(
+                    {
+                      id: sealedAssistant.id,
+                      role: "assistant",
+                      content,
+                    },
+                    hookCredentialContext
+                  )
                   if (!isCurrentEvent()) return
                   if (typeof piped?.content !== "string" || piped.content === content) return
                   const base = useChatStore.getState().sessions[sessionId]?.messages ?? []

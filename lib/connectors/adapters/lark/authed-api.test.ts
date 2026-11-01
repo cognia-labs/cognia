@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   observeTenantServiceData: jest.fn(),
@@ -62,6 +63,18 @@ const refreshUserTokenMock = refreshUserToken as jest.Mock
 
 const ADAPTER = "cai_authed"
 
+it("refuses user identity without admission before reading or dispatching a personal token", async () => {
+  const http = jest.fn()
+  await expect(
+    withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: http }, (api) =>
+      api.get("/private")
+    )
+  ).rejects.toMatchObject({ code: "notAuthorized" })
+  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  expect(getUserAccessToken).not.toHaveBeenCalled()
+  expect(http).not.toHaveBeenCalled()
+})
+
 function ok(data: unknown) {
   return {
     status: 200,
@@ -108,14 +121,21 @@ describe("withLarkAuthedApi — pre-flight", () => {
   it("returns a typed authorization failure when native token lookup fails", async () => {
     jest.mocked(connectorsLarkUserAuth).mockRejectedValueOnce(new Error("native lookup failed"))
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user" }, async () => "x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+        },
+        async () => "x"
+      )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
   })
   it("rejects cancellation before its public promise settles across final continuations", async () => {
     let rejectedPending = 0
     let completedBeforeAbort = 0
-    for (let depth = 0; depth <= 24; depth++) {
+    for (let depth = 0; depth <= 64; depth++) {
       const controller = new AbortController()
       let pendingAtAbort = false
       const abortLater = (remaining: number) =>
@@ -129,7 +149,13 @@ describe("withLarkAuthedApi — pre-flight", () => {
         return ok({ content: "fixture" })
       })
       const reading = withLarkAuthedApi(
-        { adapterId: ADAPTER, identity: "user", signal: controller.signal, httpImpl: http },
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          signal: controller.signal,
+          httpImpl: http,
+        },
         (api) => api.get("/doc")
       )
       const outcome = await reading.then(
@@ -165,7 +191,13 @@ describe("withLarkAuthedApi — pre-flight", () => {
       })
       await expect(
         withLarkAuthedApi(
-          { adapterId: ADAPTER, identity: "user", expectedAuthorizationEpoch, httpImpl: http },
+          {
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+            adapterId: ADAPTER,
+            identity: "user",
+            expectedAuthorizationEpoch,
+            httpImpl: http,
+          },
           async (api) => {
             await api.get("/page-one")
             return api.get("/page-two")
@@ -187,6 +219,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
     await expect(
       withLarkAuthedApi(
         {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
           adapterId: ADAPTER,
           identity: "user",
           expectedAuthorizationEpoch: "epoch-a",
@@ -215,6 +248,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
     await expect(
       withLarkAuthedApi(
         {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
           adapterId: ADAPTER,
           identity: "user",
           expectedAuthorizationEpoch: "epoch-a",
@@ -253,7 +287,13 @@ describe("withLarkAuthedApi — pre-flight", () => {
         return ok({ spreadsheet: { title: "Grid" }, app: { name: "Base" } })
       })
       const reading = withLarkAuthedApi<unknown>(
-        { adapterId: ADAPTER, identity: "user", signal: controller.signal, httpImpl: impl },
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          signal: controller.signal,
+          httpImpl: impl,
+        },
         async (api) =>
           kind === "sheet" ? readLarkSpreadsheet(api, "grid") : readLarkBitable(api, "base")
       )
@@ -280,6 +320,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
     await expect(
       withLarkAuthedApi(
         {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
           adapterId: ADAPTER,
           identity: "user",
           expectedAuthorizationEpoch: "epoch-a",
@@ -297,7 +338,13 @@ describe("withLarkAuthedApi — pre-flight", () => {
     const { impl } = makeHttp([ok({})])
     await expect(
       withLarkAuthedApi(
-        { adapterId: ADAPTER, identity: "user", httpImpl: impl, signal: controller.signal },
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+          signal: controller.signal,
+        },
         (api) => api.get("/x")
       )
     ).rejects.toThrow("stop")
@@ -315,7 +362,13 @@ describe("withLarkAuthedApi — pre-flight", () => {
         })
     )
     const reading = withLarkAuthedApi(
-      { adapterId: ADAPTER, identity: "user", httpImpl: impl, signal: controller.signal },
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+        signal: controller.signal,
+      },
       async (api) => {
         await api.get("/tab-one")
         return api.get("/tab-two")
@@ -332,7 +385,14 @@ describe("withLarkAuthedApi — pre-flight", () => {
   it("refuses outside Tauri when no transport is injected", async () => {
     isTauriMock.mockReturnValue(false)
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user" }, async () => "x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+        },
+        async () => "x"
+      )
     ).rejects.toMatchObject({
       name: "LarkAccessError",
       code: "browserUnsupported",
@@ -344,7 +404,12 @@ describe("withLarkAuthedApi — pre-flight", () => {
     isTauriMock.mockReturnValue(false)
     const { impl } = makeHttp([ok({ ok: true })])
     const out = await withLarkAuthedApi(
-      { adapterId: ADAPTER, identity: "user", httpImpl: impl },
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
       (api) => api.get<{ ok: boolean }>("/open-apis/ping")
     )
     expect(out).toEqual({ ok: true })
@@ -358,7 +423,15 @@ describe("withLarkAuthedApi — pre-flight", () => {
     getAdapterInstanceMock.mockResolvedValue(row)
     const { impl } = makeHttp([])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, async () => "x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        async () => "x"
+      )
     ).rejects.toMatchObject({ code: "noAccount" })
   })
 
@@ -366,7 +439,15 @@ describe("withLarkAuthedApi — pre-flight", () => {
     keyringGetMock.mockResolvedValue(null)
     const { impl } = makeHttp([])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, async () => "x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        async () => "x"
+      )
     ).rejects.toMatchObject({ code: "notAuthorized", account: "Acme Feishu" })
   })
 })
@@ -375,8 +456,14 @@ describe("withLarkAuthedApi — identity order", () => {
   it("prefers the connected user so document ACLs apply as that user", async () => {
     getUserAccessTokenMock.mockResolvedValue("uat-1")
     const { impl, calls } = makeHttp([ok({ n: 1 })])
-    await withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-      api.get("/open-apis/x")
+    await withLarkAuthedApi(
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
+      (api) => api.get("/open-apis/x")
     )
     expect(calls[0].headers?.Authorization).toBe("Bearer uat-1")
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -384,8 +471,14 @@ describe("withLarkAuthedApi — identity order", () => {
 
   it("uses only the explicitly selected bot identity", async () => {
     const { impl, calls } = makeHttp([ok({ n: 1 })])
-    await withLarkAuthedApi({ adapterId: ADAPTER, identity: "bot", httpImpl: impl }, (api) =>
-      api.get("/open-apis/x")
+    await withLarkAuthedApi(
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "bot",
+        httpImpl: impl,
+      },
+      (api) => api.get("/open-apis/x")
     )
     expect(calls[0].headers?.Authorization).toBe("Bearer tat-1")
     expect(getUserAccessTokenMock).not.toHaveBeenCalled()
@@ -396,8 +489,14 @@ describe("withLarkAuthedApi — identity order", () => {
     getUserAccessTokenMock.mockResolvedValue(null)
     const { impl } = makeHttp([])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -408,8 +507,14 @@ describe("withLarkAuthedApi — identity order", () => {
     getUserAccessTokenMock.mockResolvedValue("uat-1")
     const { impl } = makeHttp([{ status: 403, body: JSON.stringify({ code: 1254302, msg: "no" }) }])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toBeInstanceOf(LarkApiError)
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -422,8 +527,14 @@ describe("withLarkAuthedApi — explicit user identity", () => {
     refreshUserTokenMock.mockRejectedValueOnce(new Error("oauth/token refresh rejected"))
     const { impl } = makeHttp([{ status: 401, body: JSON.stringify({ code: 99991663 }) }])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toMatchObject({ code: "notAuthorized", account: "Acme Feishu" })
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -432,7 +543,15 @@ describe("withLarkAuthedApi — explicit user identity", () => {
     getUserAccessTokenMock.mockResolvedValue(null)
     const { impl } = makeHttp([])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, async () => "x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        async () => "x"
+      )
     ).rejects.toMatchObject({ code: "notAuthorized", account: "Acme Feishu" })
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
   })
@@ -445,8 +564,14 @@ describe("withLarkAuthedApi — explicit user identity", () => {
       { status: 401, body: JSON.stringify({ code: 99991663, msg: "invalid" }) },
     ])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toMatchObject({ code: "notAuthorized" })
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -455,8 +580,14 @@ describe("withLarkAuthedApi — explicit user identity", () => {
   it("uses the user identity normally when one is connected", async () => {
     getUserAccessTokenMock.mockResolvedValue("uat-1")
     const { impl, calls } = makeHttp([ok({ n: 1 })])
-    await withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-      api.get("/open-apis/x")
+    await withLarkAuthedApi(
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
+      (api) => api.get("/open-apis/x")
     )
     expect(calls[0].headers?.Authorization).toBe("Bearer uat-1")
   })
@@ -465,8 +596,14 @@ describe("withLarkAuthedApi — explicit user identity", () => {
 describe("withLarkAuthedApi — requests", () => {
   it("builds absolute open.feishu.cn URLs and sends JSON headers", async () => {
     const { impl, calls } = makeHttp([ok({})])
-    await withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-      api.get("/open-apis/docx/v1/documents/tok")
+    await withLarkAuthedApi(
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
+      (api) => api.get("/open-apis/docx/v1/documents/tok")
     )
     expect(calls[0].url).toBe(`${LARK_API_BASE}/open-apis/docx/v1/documents/tok`)
     expect(calls[0].method).toBe("GET")
@@ -476,8 +613,14 @@ describe("withLarkAuthedApi — requests", () => {
 
   it("serializes POST bodies", async () => {
     const { impl, calls } = makeHttp([ok({})])
-    await withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-      api.post("/open-apis/bitable/v1/apps/a/tables/t/records/search", { page_size: 3 })
+    await withLarkAuthedApi(
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
+      (api) => api.post("/open-apis/bitable/v1/apps/a/tables/t/records/search", { page_size: 3 })
     )
     expect(calls[0].method).toBe("POST")
     expect(calls[0].body).toBe(JSON.stringify({ page_size: 3 }))
@@ -488,8 +631,14 @@ describe("withLarkAuthedApi — requests", () => {
       { status: 200, body: JSON.stringify({ code: 1254005, msg: "gone" }) },
     ])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toMatchObject({ name: "LarkApiError", code: 1254005, status: 200 })
   })
@@ -497,8 +646,14 @@ describe("withLarkAuthedApi — requests", () => {
   it("raises LarkApiError with the body snippet when the payload is not JSON", async () => {
     const { impl } = makeHttp([{ status: 502, body: "<html>bad gateway</html>" }])
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toMatchObject({ code: null, status: 502 })
   })
@@ -506,7 +661,12 @@ describe("withLarkAuthedApi — requests", () => {
   it("hands the resolved account to the callback", async () => {
     const { impl } = makeHttp([ok({})])
     const seen = await withLarkAuthedApi(
-      { adapterId: ADAPTER, identity: "user", httpImpl: impl },
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl,
+      },
       async (_api, acct) => acct
     )
     expect(seen).toEqual({ adapterId: ADAPTER, displayName: "Acme Feishu" })
@@ -516,8 +676,15 @@ describe("withLarkAuthedApi — requests", () => {
     const { impl } = makeHttp([{ status: 500, body: JSON.stringify({ code: 1, msg: "boom" }) }])
     const mapError = jest.fn((_err: unknown, account: string) => new Error(`mapped:${account}`))
     await expect(
-      withLarkAuthedApi({ adapterId: ADAPTER, identity: "user", httpImpl: impl, mapError }, (api) =>
-        api.get("/open-apis/x")
+      withLarkAuthedApi(
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          adapterId: ADAPTER,
+          identity: "user",
+          httpImpl: impl,
+          mapError,
+        },
+        (api) => api.get("/open-apis/x")
       )
     ).rejects.toThrow("mapped:Acme Feishu")
     expect(mapError).toHaveBeenCalledTimes(1)
@@ -541,7 +708,12 @@ describe("withLarkAuthedApi — write verbs", () => {
       body: JSON.stringify({ code: 0, data: { echo: req.method, url: req.url, body: req.body } }),
     }))
     const out = await withLarkAuthedApi(
-      { adapterId: ADAPTER, identity: "user", httpImpl: impl as never },
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "user",
+        httpImpl: impl as never,
+      },
       async (api) => [
         await api.patch!("/open-apis/task/v2/tasks/t1", { task: {} }),
         await api.put!("/open-apis/bitable/v1/apps/a/tables/t/records/r", { fields: {} }),
@@ -562,7 +734,13 @@ it("labels and observes explicit bot calls at their actual paths without awaitin
   const { impl, calls } = makeHttp([ok({ n: 1 }), ok({ n: 2 })])
   await expect(
     withLarkAuthedApi(
-      { adapterId: ADAPTER, identity: "bot", sessionId: "im-session", httpImpl: impl },
+      {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: ADAPTER,
+        identity: "bot",
+        sessionId: "im-session",
+        httpImpl: impl,
+      },
       async (api) => {
         await api.get("/open-apis/first")
         return api.post("/open-apis/second", { value: 2 })
@@ -586,7 +764,13 @@ it("labels and observes explicit bot calls at their actual paths without awaitin
 it("does not observe a user-identity call as tenant data", async () => {
   const { impl } = makeHttp([ok({})])
   await withLarkAuthedApi(
-    { adapterId: ADAPTER, identity: "user", sessionId: "im-session", httpImpl: impl },
+    {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: ADAPTER,
+      identity: "user",
+      sessionId: "im-session",
+      httpImpl: impl,
+    },
     (api) => api.get("/open-apis/user")
   )
   expect(observeTenantServiceData).not.toHaveBeenCalled()

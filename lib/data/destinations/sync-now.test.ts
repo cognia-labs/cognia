@@ -27,7 +27,15 @@ jest.mock("@/lib/webdav/passphrase-cache", () => ({
   persistSyncPassphrase: () => persistMock(),
 }))
 
+jest.mock("./index", () => ({
+  dispatchBackupDestination: jest.fn(),
+  readBackupDestinationReadiness: jest.fn(),
+  getBackupDestination: jest.fn(),
+}))
+
 import { runRemoteBackupSyncNow } from "./sync-now"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { dispatchBackupDestination, readBackupDestinationReadiness } from "./index"
 
 beforeEach(() => {
   cache.pass = null
@@ -35,6 +43,30 @@ beforeEach(() => {
 })
 
 describe("runRemoteBackupSyncNow", () => {
+  it("passes invocation admission through both readiness and the actual dispatch path", async () => {
+    const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+    jest.mocked(readBackupDestinationReadiness).mockResolvedValueOnce({ state: "ready" })
+    jest.mocked(dispatchBackupDestination).mockResolvedValueOnce({ ok: true, target: "remote" })
+    await expect(runRemoteBackupSyncNow("github", "pw", { credentialContext })).resolves.toEqual({
+      ok: true,
+      target: "remote",
+    })
+    expect(readBackupDestinationReadiness).toHaveBeenCalledWith(
+      "github",
+      undefined,
+      true,
+      credentialContext
+    )
+    expect(dispatchBackupDestination).toHaveBeenCalledWith(
+      "github",
+      "envelope",
+      expect.any(Object),
+      expect.any(Function),
+      undefined,
+      credentialContext
+    )
+  })
+
   it("requires a passphrase (explicit or cached)", async () => {
     expect(await runRemoteBackupSyncNow("github", "", { dispatch: jest.fn() })).toEqual({
       ok: false,
@@ -59,6 +91,7 @@ describe("runRemoteBackupSyncNow", () => {
         sizeBytes: "envelope".length,
       },
       expect.any(Function),
+      undefined,
       undefined
     )
     expect(phases).toEqual(["building", "encrypting", "uploading", "done"])

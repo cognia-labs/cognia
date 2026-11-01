@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   registerDocsProvider,
   getDocsProviderByPrefix as lookupDocsProviderByPrefix,
@@ -90,6 +91,16 @@ describe("useRemoteDocSearch — host gating", () => {
 })
 
 describe("useRemoteDocSearch — accounts", () => {
+  it("passes Host UI admission when discovering accounts for an opened document picker", async () => {
+    const p = provider()
+    byPrefixMock.mockReturnValue(p)
+    const { result } = renderHook(() => useRemoteDocSearch({ namespace: "lark:", query: "" }))
+    await waitFor(() => expect(result.current.accounts).toHaveLength(1))
+    expect(p.listAccounts).toHaveBeenCalledWith({
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  })
+
   it("keeps the picker mounted when contributed recognition and account subscriptions throw", async () => {
     const stop = jest.fn(() => {
       throw new Error("Broken disposer")
@@ -421,6 +432,7 @@ describe("useRemoteDocSearch — keyword search", () => {
       expect(result.current.items).toEqual([{ ...HIT, accountBinding: { accountId: "cai_1" } }])
     )
     expect(p.search).toHaveBeenCalledWith("spec", {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
       accountId: "cai_1",
       limit: DOC_SEARCH_LIMIT,
       signal: expect.any(AbortSignal),

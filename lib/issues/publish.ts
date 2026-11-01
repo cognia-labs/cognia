@@ -151,7 +151,8 @@ export async function publishIssue(
   issueId: string,
   target: PublishTarget,
   by: IssueActor,
-  provided: Partial<PublishIssueDeps> = {}
+  provided: Partial<PublishIssueDeps> = {},
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
 ): Promise<IssueExternalRef> {
   const deps: PublishIssueDeps = {
     ...DEFAULT_DEPS,
@@ -176,6 +177,7 @@ export async function publishIssue(
 
   if (target.kind === "github") {
     const input = {
+      ...(credentialContext ? { credentialContext } : {}),
       repoFullName: target.repoFullName,
       title: issue.title,
       ...(issue.description?.trim() ? { body: issue.description } : {}),
@@ -186,7 +188,12 @@ export async function publishIssue(
         ? await deps.createGithubIssue(input, {
             resolveAccount: async (repo) => {
               await assertIssueSyncSource(binding)
-              const account = await resolveGithubWritebackAccount(repo, undefined, source.id)
+              const account = await resolveGithubWritebackAccount(
+                repo,
+                undefined,
+                credentialContext,
+                source.id
+              )
               if (!account || account.connectionId !== source.id)
                 throw new KeptCopySourceError("source-disconnected")
               return account
@@ -224,7 +231,7 @@ export async function publishIssue(
   }
   const writeBinding = binding ?? target.binding
   await assertIssueSyncSource(writeBinding)
-  const ref = await provider.create(writeBinding, issue)
+  const ref = await provider.create(writeBinding, issue, credentialContext)
   await assertIssueSyncSource(writeBinding)
   const linked: IssueExternalRef = {
     ...ref,

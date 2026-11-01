@@ -321,6 +321,15 @@ describe("runUsagePresenceRefresh", () => {
 
     const jobs = await getDb().outboundQueue.toArray()
     expect(jobs).toHaveLength(1)
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    const executionRunId = `execution:job:outbound:${jobs[0].id}`
+    expect((await getDb().executionRuns.get(executionRunId))?.actingIdentity).toMatchObject({
+      trigger: "external-event",
+      lane: "service",
+    })
+    expect(
+      await admitPersonalCredential({ executionRunId }, { source: "lark-user" })
+    ).toMatchObject({ ok: false, reason: "service-lane" })
     const seg = jobs[0].request.segments[0] as { type: string; md: string }
     expect(seg.type).toBe("markdown")
     expect(seg.md).toContain("Token Usage / 用量统计")

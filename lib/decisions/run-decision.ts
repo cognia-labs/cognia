@@ -16,6 +16,8 @@
  */
 
 import { hasNoLeakingPiiDeep, redactText } from "@cognia/redact"
+import { HOST_BACKGROUND, withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { loadDecisionSettings } from "@/lib/decisions/config"
 import { getDecisionRegistry } from "@/lib/decisions/host-registry"
 import {
@@ -45,6 +47,7 @@ export const DEFAULT_DECISION_TIMEOUT_MS = 30_000
 const MAX_ERROR_MESSAGE_CHARS = 500
 
 export interface RunDecisionOptions {
+  credentialContext?: PersonalCredentialContext
   /** Explicit provider; defaults to the one selected in settings. */
   providerId?: string
   signal?: AbortSignal
@@ -228,7 +231,14 @@ export async function runDecision(
 
   const started = Date.now()
   const raced = await race(
-    (signal) => provider.decide(request, { signal }),
+    (signal) =>
+      provider.pluginId
+        ? withPluginExecutionContext(
+            provider.pluginId,
+            options.credentialContext ?? HOST_BACKGROUND,
+            () => provider.decide(request, { signal })
+          )
+        : provider.decide(request, { signal }),
     options.timeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS,
     options.signal
   )

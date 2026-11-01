@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/terminal/headless-exec", () => ({ runHeadlessExec: jest.fn() }))
 jest.mock("@/lib/integrations/github-read-credential", () => ({
   resolveGithubReadToken: jest.fn(),
@@ -179,43 +180,47 @@ describe("ghCliToken", () => {
       exitCode: 0,
       output: "gh auth token\r\nghp_abc123XYZ\r\n",
     })
-    expect(await ghCliToken()).toBe("ghp_abc123XYZ")
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      "ghp_abc123XYZ"
+    )
   })
 
   it("extracts a github_pat token", async () => {
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "github_pat_11ABCDEF_xyz" })
-    expect(await ghCliToken()).toBe("github_pat_11ABCDEF_xyz")
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      "github_pat_11ABCDEF_xyz"
+    )
   })
 
   it("returns null on a non-zero exit code", async () => {
     mockExec.mockResolvedValue({ ok: true, exitCode: 1, output: "not logged in" })
-    expect(await ghCliToken()).toBeNull()
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   })
 
   it("returns null when no token-shaped line is present", async () => {
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "error: gh not configured" })
-    expect(await ghCliToken()).toBeNull()
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   })
 
   it("returns null when the command failed", async () => {
     mockExec.mockResolvedValue({ ok: false, reason: "blocked" })
-    expect(await ghCliToken()).toBeNull()
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   })
 
   it("returns null when exec throws", async () => {
     mockExec.mockRejectedValue(new Error("no terminal"))
-    expect(await ghCliToken()).toBeNull()
+    expect(await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   })
 
   it("asks gh for github.com with no hostname flag", async () => {
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "ghp_abc" })
-    await ghCliToken()
+    await ghCliToken(undefined, { localAuthorization: LOCAL_PERSON_RUN })
     expect(mockExec).toHaveBeenCalledWith(expect.objectContaining({ command: "gh auth token" }))
   })
 
   it("asks gh for the enterprise host's own token", async () => {
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "ghp_ent" })
-    expect(await ghCliToken(GHES)).toBe("ghp_ent")
+    expect(await ghCliToken(GHES, { localAuthorization: LOCAL_PERSON_RUN })).toBe("ghp_ent")
     expect(mockExec).toHaveBeenCalledWith(
       expect.objectContaining({ command: "gh auth token --hostname ghe.acme.io" })
     )
@@ -223,7 +228,7 @@ describe("ghCliToken", () => {
 
   it("refuses a host id that is not a plain hostname", async () => {
     const hostile = { ...GHES, id: "ghe.acme.io; rm -rf ~" }
-    expect(await ghCliToken(hostile)).toBeNull()
+    expect(await ghCliToken(hostile, { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
     expect(mockExec).not.toHaveBeenCalled()
   })
 })
@@ -236,16 +241,28 @@ describe("resolveGithubReadTokenForRepo", () => {
 
   it("prefers a connected integration account over the gh CLI", async () => {
     mockAccountToken.mockResolvedValue("ghs_installation")
-    expect(await resolveGithubReadTokenForRepo("acme/app")).toBe("ghs_installation")
-    expect(mockAccountToken).toHaveBeenCalledWith("acme/app", GITHUB_DOT_COM)
+    expect(
+      await resolveGithubReadTokenForRepo("acme/app", undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBe("ghs_installation")
+    expect(mockAccountToken).toHaveBeenCalledWith("acme/app", GITHUB_DOT_COM, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(mockExec).not.toHaveBeenCalled()
   })
 
   it("falls back to the gh CLI for the same host when no account has a token", async () => {
     mockAccountToken.mockResolvedValue(null)
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "ghp_cli" })
-    expect(await resolveGithubReadTokenForRepo("acme/app", GHES)).toBe("ghp_cli")
-    expect(mockAccountToken).toHaveBeenCalledWith("acme/app", GHES)
+    expect(
+      await resolveGithubReadTokenForRepo("acme/app", GHES, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBe("ghp_cli")
+    expect(mockAccountToken).toHaveBeenCalledWith("acme/app", GHES, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(mockExec).toHaveBeenCalledWith(
       expect.objectContaining({ command: "gh auth token --hostname ghe.acme.io" })
     )
@@ -254,7 +271,11 @@ describe("resolveGithubReadTokenForRepo", () => {
   it("falls back to the gh CLI when the account store throws", async () => {
     mockAccountToken.mockRejectedValue(new Error("keyring locked"))
     mockExec.mockResolvedValue({ ok: true, exitCode: 0, output: "ghp_cli" })
-    expect(await resolveGithubReadTokenForRepo("acme/app")).toBe("ghp_cli")
+    expect(
+      await resolveGithubReadTokenForRepo("acme/app", undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toBe("ghp_cli")
   })
 })
 
@@ -283,7 +304,7 @@ describe("createResolveOctokit", () => {
     const getToken = jest.fn(async () => "ghp_ent")
     const build = jest.fn(async () => ({ request: jest.fn() }))
     await createResolveOctokit({ getToken, build })("acme/app", GHES)
-    expect(getToken).toHaveBeenCalledWith("acme/app", GHES)
+    expect(getToken).toHaveBeenCalledWith("acme/app", GHES, undefined)
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ host: GHES }))
   })
 
@@ -445,4 +466,28 @@ describe("createRunPrReview — Prompt Center (ADR-0236)", () => {
       'Check PR #5 in acme/app (b → main): "approved" or "changes_requested" + "body".'
     )
   })
+})
+
+it("never executes gh auth token without Host admission", async () => {
+  const { ghCliToken } = await import("./resolvers")
+  const { runHeadlessExec } = await import("@/lib/terminal/headless-exec")
+  jest.mocked(runHeadlessExec).mockClear()
+  expect(await ghCliToken()).toBeNull()
+  expect(runHeadlessExec).not.toHaveBeenCalled()
+})
+
+it("takes the concrete invocation identity without granting a shared resolver local authority", async () => {
+  const getToken = jest.fn(async (_repo, _host, context) =>
+    context?.localAuthorization === LOCAL_PERSON_RUN ? "pat" : null
+  )
+  const client = { request: jest.fn() }
+  const resolve = createResolveOctokit({ getToken, build: async () => client as never })
+  expect(await resolve("acme/repo", undefined, { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+    client
+  )
+  expect(await resolve("acme/repo", undefined, { executionRunId: "squad-run" })).toBeNull()
+  expect(getToken).toHaveBeenLastCalledWith("acme/repo", GITHUB_DOT_COM, {
+    executionRunId: "squad-run",
+  })
+  expect(await resolve("acme/repo")).toBeNull()
 })

@@ -3,6 +3,7 @@
  * what is pinned here is the gate map, the actor stamp, and how a patch
  * becomes board actions.
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 const mockResolve = jest.fn(async (_ref: string): Promise<unknown> => undefined)
 const mockCreate = jest.fn(async (req: unknown) => ({
@@ -417,4 +418,95 @@ describe("createIssuesAPI", () => {
       /descriptor/
     )
   })
+})
+
+it("projects portable sync options instead of leaking Host admission to plugin callbacks", async () => {
+  const pull = jest.fn(async () => {
+    expect(pluginExecutionContext("p")?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+    return { items: [], notModified: true }
+  })
+  const push = jest.fn(async (..._args: unknown[]) => ({ status: "applied" as const }))
+  const create = jest.fn(async (..._args: unknown[]) => ({ provider: "p", externalId: "1" }))
+  createIssuesAPI("p", {
+    id: "p",
+    issueSyncProviders: [{ id: "private", label: "Private", schemaVersion: 1 }],
+  }).registerSyncProvider({
+    id: "private",
+    label: "Private",
+    pullFields: [],
+    pushFields: [],
+    resource: {
+      label: "Private",
+      schemaVersion: 1,
+      schema: { type: "object", properties: {} },
+      describe: () => ({ key: "private", label: "Private" }),
+    },
+    pull,
+    push,
+    create,
+  } as never)
+  const wrapped = mockRegister.mock
+    .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  await wrapped.pull({} as never, { credentialContext, full: true })
+  await wrapped.push!({} as never, {} as never, {}, {} as never, {
+    idempotencyKey: "k",
+    by: { kind: "agent" },
+    credentialContext,
+  })
+  await wrapped.create!({} as never, {} as never, credentialContext)
+  expect(pull).toHaveBeenCalledWith({}, { full: true, since: undefined, signal: undefined })
+  expect(push.mock.calls[0]).toHaveLength(5)
+  expect(push.mock.calls[0][4]).not.toHaveProperty("credentialContext")
+  expect(create.mock.calls[0]).toHaveLength(2)
+})
+import { pluginExecutionContext } from "../core/invocation-identity"
+
+it("fences cursor and departure callbacks with operation identity and hides Host proof", async () => {
+  const { HOST_BACKGROUND, bindPluginContextCallbacks } =
+    await import("../core/invocation-identity")
+  const seen: unknown[] = []
+  const pullPage = jest.fn(async (..._args: unknown[]) => {
+    seen.push(pluginExecutionContext("cursor-owner"))
+    await Promise.resolve()
+    seen.push(pluginExecutionContext("cursor-owner"))
+    return { items: [], cursor: "next" }
+  })
+  const confirmDeparted = jest.fn(async (..._args: unknown[]) => {
+    seen.push(pluginExecutionContext("cursor-owner"))
+    return []
+  })
+  bindPluginContextCallbacks(
+    "cursor-owner",
+    createIssuesAPI("cursor-owner", {
+      id: "cursor-owner",
+      issueSyncProviders: [{ id: "private", label: "Private", schemaVersion: 1 }],
+    })
+  ).registerSyncProvider({
+    id: "private",
+    label: "Private",
+    pullFields: [],
+    pushFields: [],
+    resource: {
+      label: "Private",
+      schemaVersion: 1,
+      schema: { type: "object", properties: {} },
+      describe: () => ({ key: "private", label: "Private" }),
+    },
+    pull: async () => ({ items: [], notModified: true }),
+    pullPage,
+    confirmDeparted,
+  } as never)
+  const wrapped = mockRegister.mock
+    .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+  const credentialContext = { sessionId: "s", executionRunId: "exact-run" }
+  await wrapped.pullPage!({} as never, { mode: "full", credentialContext })
+  await wrapped.confirmDeparted!({} as never, [], { credentialContext })
+  expect(seen).toEqual([credentialContext, credentialContext, credentialContext])
+  expect(pullPage.mock.calls[0][1]).not.toHaveProperty("credentialContext")
+  expect(confirmDeparted.mock.calls[0][2]).not.toHaveProperty("credentialContext")
+  seen.length = 0
+  await wrapped.pullPage!({} as never, { mode: "full", executionRunId: "forged" } as never)
+  expect(seen).toEqual([HOST_BACKGROUND, HOST_BACKGROUND])
+  expect(pluginExecutionContext("cursor-owner")).toBeUndefined()
 })

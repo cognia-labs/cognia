@@ -477,7 +477,13 @@ export async function runBuiltInSkill(
               metadata: { idempotencyKey: actionId },
             },
           },
-          ...(signal ? [{ signal }] : [])
+          {
+            ...(signal ? { signal } : {}),
+            executionContext: {
+              sessionId: runScope.sessionId,
+              executionRunId: originalRun?.id ?? "",
+            },
+          }
         )
       } catch (error) {
         await getDb().connectorCallbackBindings.bulkDelete([

@@ -17,7 +17,7 @@
  */
 
 import type { IssueProject, IssueRun, IssueRunArtifact } from "@/types/issues"
-import type { IntegrationAccount, IntegrationActionJob } from "@/types/plugin/plugin-integration"
+import type { IntegrationActionJob } from "@/types/plugin/plugin-integration"
 import { createIssueRun } from "@/lib/db/issue-runs"
 import { getIntegrationActionJob } from "@/lib/db/integrations"
 import {
@@ -129,7 +129,7 @@ export function issueProjectLocalRoot(
 
 export interface GithubLoopRunAdapterDeps {
   isAvailable: () => boolean
-  resolveAccount: (repoFullName: string) => Promise<IntegrationAccount | null>
+  resolveAccount: typeof resolveGithubWritebackAccount
   execute: typeof executeIntegrationAction
   approve: typeof approveIntegrationActionJob
   cancelJob: (jobId: string) => Promise<unknown>
@@ -207,7 +207,13 @@ export function createGithubLoopRunAdapter(
       return { ok: false, reason: "no-github-repo", detail: target.issue.githubRef.repoFullName }
     }
     if (!deps.isAvailable()) return { ok: false, reason: "desktop-only" }
-    if (!(await deps.resolveAccount(target.issue.githubRef.repoFullName))) {
+    if (
+      !(await deps.resolveAccount(
+        target.issue.githubRef.repoFullName,
+        undefined,
+        target.credentialContext
+      ))
+    ) {
       return { ok: false, reason: "no-github-account" }
     }
     return { ok: true }
@@ -222,7 +228,11 @@ export function createGithubLoopRunAdapter(
       if (!verdict.ok) throw new Error(`github-loop adapter refused: ${verdict.reason}`)
       const { issue } = target
       const ref = issue.githubRef!
-      const account = await deps.resolveAccount(ref.repoFullName)
+      const account = await deps.resolveAccount(
+        ref.repoFullName,
+        undefined,
+        target.credentialContext
+      )
       if (!account) throw new Error("github-loop adapter refused: no-github-account")
       const head = githubLoopHeadBranch(issue.identifier)
       const stackOnOption = context.options?.[GITHUB_LOOP_STACK_ON_OPTION]
@@ -268,7 +278,8 @@ export function createGithubLoopRunAdapter(
         // click, nor is a wakeup: those are planned as the plugin's own write.
         context.origin !== "wakeup" && context.by.kind === "human"
           ? { kind: "person", surface: context.origin === "im" ? "issue-run-im" : "issue-run" }
-          : undefined
+          : undefined,
+        target.credentialContext
       )
       // The Run dialog IS the confirmation; release the write-tier job.
       if (job.status === "awaiting_approval") job = await deps.approve(job.id)

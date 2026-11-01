@@ -376,6 +376,7 @@ export async function runSquadLifecycle(
   // The root span. Teammate dispatch spans join it through `traceId`, reviews
   // and recovery hang off it, and the terminal reason closes it.
   const team = useAgentTeamStore.getState().teams[teamId]
+  const configuredRuntimeDeps = runtimeDeps
   const rootSpan = startSquadRunSpan({
     runId,
     teamId,
@@ -388,6 +389,10 @@ export async function runSquadLifecycle(
     teamId,
     {
       runId,
+      // Publication belongs inside the real lifecycle's finally, before either
+      // terminal record is written. A hold is persisted before it can settle.
+      beforeCompletion: () =>
+        publishSquadDelivery(teamId, runId, configuredRuntimeDeps, persisted?.executionConstraints),
       storeReader: bindSquadStoreReader(persisted?.executionConstraints),
       storeWriter: bindSquadStoreWriter(),
       runLeadPlanning: runtimeDeps.runLeadPlanning,
@@ -418,7 +423,7 @@ export async function runSquadLifecycle(
   )
 
   if (input.recovery?.signal?.aborted) return result
-  await settleSquadRun(teamId, runId, result, runtimeDeps, persisted?.executionConstraints)
+  await settleSquadRun(teamId, runId, result)
   return result
 }
 
@@ -430,7 +435,7 @@ async function closeSquadRunSpan(
 ): Promise<void> {
   const [{ endSquadRunSpan, squadDuplicateControlCount }, { aggregateAgentTeamRunUsage }] =
     await Promise.all([import("./squad-telemetry"), import("@/lib/db/agent-team-runtime")])
-  const parked = durableRun?.status === "needs_input" || durableRun?.status === "paused"
+  const parked = ["needs_input", "pausing", "paused", "sleeping"].includes(durableRun?.status ?? "")
   // Suites stub the db module without the aggregate. No totals is a span
   // without usage, not a failed settle.
   const totals =
@@ -462,66 +467,27 @@ async function closeSquadRunSpan(
 }
 
 /**
- * Settle after the lifecycle returned: mirror the terminal status, settle the
- * execution row, publish the GitHub stack, emit the scheduler event.
+ * Publish while the real lifecycle still owns a live execution. A policy hold
+ * is durable before that lifecycle chooses its terminal or waiting event.
  */
-async function settleSquadRun(
+async function publishSquadDelivery(
   teamId: string,
   runId: string,
-  result: RunTeamLifecycleResult,
   runtimeDeps: ConfiguredSquadRuntimeDeps,
   constraints?: AgentTeamExecutionConstraints
 ): Promise<void> {
-  const [{ getAgentTeamRun, updateAgentTeamRun }, { settleAgentTeamExecutionRun }] =
-    await Promise.all([
-      import("@/lib/db/agent-team-runtime"),
-      import("@/lib/execution/agent-team-bridge"),
-    ])
-  const durableRun = await getAgentTeamRun(runId).catch(() => undefined)
-  if (
-    result.status === "cancelled" &&
-    durableRun &&
-    !["cancelled", "terminated"].includes(durableRun.status)
-  ) {
-    const { controlDurableRun } = await import("../durable/durable-control")
-    try {
-      await controlDurableRun(runId, "stop")
-    } catch {
-      await parkSquadRecovery(runId, teamId, "stop_unconfirmed")
-      return
-    }
-  }
-
-  const durableStatus: AgentTeamRunStatus | undefined = durableRun?.status
-  if (
-    durableStatus === "cancelled" ||
-    durableStatus === "terminated" ||
-    durableStatus === "failed"
-  ) {
-    result = { ...result, status: durableStatus === "terminated" ? "cancelled" : durableStatus }
-  }
-
-  useAgentTeamStore
-    .getState()
-    .setTeamStatus(
-      teamId,
-      durableStatus === "needs_input" || durableStatus === "paused" ? "paused" : result.status
-    )
-
-  const terminal = ["completed", "failed", "cancelled"].includes(result.status)
-  await closeSquadRunSpan(runId, durableRun, result)
-  if (durableRun && durableStatus !== "needs_input" && durableStatus !== "paused" && terminal) {
-    await settleAgentTeamExecutionRun(
-      durableRun,
-      result.status as "completed" | "failed" | "cancelled"
-    ).catch(() => undefined)
-  }
-
+  const { getAgentTeamRun, updateAgentTeamRunIfCurrent } =
+    await import("@/lib/db/agent-team-runtime")
+  const durableRun = await getAgentTeamRun(runId)
   const team = bindSquadStoreReader(constraints).getTeam(teamId)
   if (
     team &&
     durableRun &&
-    result.status === "completed" &&
+    !["pausing", "paused", "sleeping", "needs_input", "cancelled", "terminated", "failed"].includes(
+      durableRun.status
+    ) &&
+    durableRun.stop?.state !== "requested" &&
+    durableRun.stop?.state !== "unconfirmed" &&
     stackedDeliveryOn(team.config.githubDeliveryPolicy)
   ) {
     const {
@@ -541,7 +507,7 @@ async function settleSquadRun(
       // the outbound policy stopped (ADR-0239 phase 2) waits for a person's
       // "approve and publish"; its draft graph is kept.
       const held = error instanceof StackPublishHeldError
-      await updateAgentTeamRun(runId, {
+      const patch = {
         status: "needs_input",
         recoveryReason: held
           ? error.reason === "held"
@@ -549,14 +515,95 @@ async function settleSquadRun(
             : STACK_PUBLISH_REFUSED_REASON
           : "delivery_failed",
         updatedAt: Date.now(),
-      }).catch(() => undefined)
+      } as const
+      // Stop/pause can win while the provider is in flight. Never replace its
+      // control decision with a late delivery error or approval hold.
+      for (;;) {
+        const current = await getAgentTeamRun(runId)
+        if (
+          !current ||
+          [
+            "pausing",
+            "paused",
+            "sleeping",
+            "needs_input",
+            "cancelled",
+            "terminated",
+            "failed",
+          ].includes(current.status) ||
+          current.stop?.state === "requested" ||
+          current.stop?.state === "unconfirmed"
+        )
+          return
+        if (await updateAgentTeamRunIfCurrent(runId, current, patch)) break
+      }
       useAgentTeamStore.getState().setTeamStatus(teamId, "paused")
       if (!held) console.warn("[agent-team] GitHub delivery failed", { runId, error })
       return
     }
   }
+}
 
-  if (durableStatus !== "needs_input") {
+/** Mirror the settled lifecycle, close its span, and emit the scheduler event. */
+async function settleSquadRun(
+  teamId: string,
+  runId: string,
+  result: RunTeamLifecycleResult
+): Promise<void> {
+  const [{ getAgentTeamRun }, { settleAgentTeamExecutionRun }] = await Promise.all([
+    import("@/lib/db/agent-team-runtime"),
+    import("@/lib/execution/agent-team-bridge"),
+  ])
+  let durableRun = await getAgentTeamRun(runId).catch(() => undefined)
+  if (
+    result.status === "cancelled" &&
+    durableRun &&
+    ![
+      "completed",
+      "failed",
+      "cancelled",
+      "terminated",
+      "needs_input",
+      "pausing",
+      "paused",
+      "sleeping",
+    ].includes(durableRun.status)
+  ) {
+    const { controlDurableRun } = await import("../durable/durable-control")
+    try {
+      await controlDurableRun(runId, "stop")
+    } catch {
+      await parkSquadRecovery(runId, teamId, "stop_unconfirmed")
+      return
+    }
+    durableRun = await getAgentTeamRun(runId).catch(() => undefined)
+  }
+
+  const durableStatus: AgentTeamRunStatus | undefined = durableRun?.status
+  const parked = ["needs_input", "pausing", "paused", "sleeping"].includes(durableStatus ?? "")
+  if (
+    durableStatus === "completed" ||
+    durableStatus === "cancelled" ||
+    durableStatus === "terminated" ||
+    durableStatus === "failed"
+  ) {
+    result = { ...result, status: durableStatus === "terminated" ? "cancelled" : durableStatus }
+  }
+
+  useAgentTeamStore.getState().setTeamStatus(teamId, parked ? "paused" : result.status)
+
+  const terminal = ["completed", "failed", "cancelled"].includes(result.status)
+  await closeSquadRunSpan(runId, durableRun, result)
+
+  // Publication uses this run's credentials; keep it live through delivery,
+  // including a policy hold that a person can release later.
+  if (durableRun && !parked && terminal) {
+    await settleAgentTeamExecutionRun(
+      durableRun,
+      result.status as "completed" | "failed" | "cancelled"
+    ).catch(() => undefined)
+  }
+  if (!parked) {
     void emitTeamCompletedSchedulerEvent(teamId, result.status)
   }
 }

@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   buildAiSdkInitialConversation,
   buildSendOptions,
@@ -12,7 +13,7 @@ import { getSession, updateSession } from "@/lib/db/sessions"
 import { listMessages } from "@/lib/db/messages"
 import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
 import { getDb } from "@/lib/db/schema"
-import { sessionControl } from "@/lib/claude/ipc"
+import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSettings } from "@/lib/db/settings"
 
@@ -24,8 +25,16 @@ jest.mock("@/lib/db/settings", () => ({
   ...jest.requireActual("@/lib/db/settings"),
   getSettings: jest.fn(),
 }))
+import { runtimeRefForSession } from "@/stores/agent/agent-runtime-store"
+jest.mock("@/stores/agent/agent-runtime-store", () => ({
+  ...jest.requireActual("@/stores/agent/agent-runtime-store"),
+  runtimeRefForSession: jest.fn(() => ({ kind: "builtin" })),
+}))
 
-jest.mock("@/lib/claude/ipc", () => ({ sessionControl: jest.fn() }))
+jest.mock("@/lib/claude/ipc", () => ({
+  sessionControl: jest.fn(),
+  mcpRuntimeConfigurationMatches: jest.fn(() => true),
+}))
 
 jest.mock("@/lib/db/schema", () => {
   const actual = jest.requireActual("@/lib/db/schema")
@@ -222,6 +231,7 @@ describe("prepareTranscriptRuntimeSend", () => {
         sdkSessionId: "sdk",
         runtimeTranscriptGeneration: "g1",
       } as never)
+    jest.mocked(mcpRuntimeConfigurationMatches).mockReturnValue(true)
     jest.mocked(listMessages).mockReset().mockResolvedValue([])
     jest.mocked(invalidateTranscriptRuntime).mockReset().mockResolvedValue(undefined)
     jest.mocked(sessionControl).mockReset().mockResolvedValue({
@@ -263,6 +273,36 @@ describe("prepareTranscriptRuntimeSend", () => {
     expect(JSON.stringify(prepared.initialConversation)).toContain("Remember the migration")
     expect(JSON.stringify(prepared.initialConversation)).not.toContain("Continue")
     expect(prepared.expectedRuntimeSessionId).toBeUndefined()
+  })
+
+  it("rebuilds retained OAuth tools from canonical history on a denied or unknown credential map", async () => {
+    jest.mocked(mcpRuntimeConfigurationMatches).mockReturnValue(false)
+    jest
+      .mocked(getSession)
+      .mockResolvedValueOnce({
+        id: "s1",
+        sdkSessionId: "sdk",
+        runtimeTranscriptGeneration: "g1",
+      } as never)
+      .mockResolvedValue({
+        id: "s1",
+        runtimeTranscriptGeneration: "g2",
+        runtimeTranscriptInvalidated: "g2",
+      } as never)
+    jest.mocked(listMessages).mockResolvedValue([
+      { id: "prior", role: "user", parts: [{ type: "text", text: "Retain this history" }] },
+      { id: "current", role: "user", parts: [{ type: "text", text: "New request" }] },
+    ])
+    const prepared = await prepareTranscriptRuntimeSend("s1", {
+      provider: "openai",
+      turnId: "current",
+      mcpServers: {},
+    })
+    expect(prepared.expectedRuntimeSessionId).toBeUndefined()
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("s1")
+    expect(prepared.transcriptInvalidationId).toBe("g2")
+    expect(JSON.stringify(prepared.initialConversation)).toContain("Retain this history")
+    expect(JSON.stringify(prepared.initialConversation)).not.toContain("New request")
   })
 
   it("pins verified live context and removes obsolete initialization history", async () => {
@@ -616,6 +656,62 @@ describe("Claude chat send-option seam", () => {
     )
   })
 
+  it("forwards only the Host proof or this exact upcoming run to credential resolution", async () => {
+    await buildSendOptions({ id: "s1" } as never, "hello", undefined, {
+      runId: "upcoming",
+      turnId: "t",
+      attemptId: "a",
+    })
+    expect(resolveSendOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        personalCredentialContext: expect.objectContaining({
+          sessionId: "s1",
+          executionRunId: "upcoming",
+        }),
+      })
+    )
+    await buildSendOptions({ id: "s1" } as never, "hello", undefined, undefined, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    expect(resolveSendOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        personalCredentialContext: expect.objectContaining({
+          localAuthorization: LOCAL_PERSON_RUN,
+        }),
+      })
+    )
+  })
+
+  it("uses the accepted run instead of a competing Host proof", async () => {
+    await buildSendOptions({ id: "s1" } as never, "hi", undefined, undefined, undefined, {
+      executionRunId: "accepted",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    expect(
+      jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
+    ).toMatchObject({ sessionId: "s1", executionRunId: "accepted" })
+    expect(
+      jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
+    ).not.toHaveProperty("localAuthorization")
+  })
+
+  it("keeps the Host admission while a desktop turn id is still awaiting persistence", async () => {
+    await buildSendOptions(
+      { id: "s1" } as never,
+      "hi",
+      undefined,
+      { runId: "not-persisted-yet", turnId: "turn", attemptId: "a1" },
+      undefined,
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
+    expect(
+      jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
+    ).toMatchObject({ localAuthorization: LOCAL_PERSON_RUN })
+    expect(
+      jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
+    ).not.toHaveProperty("executionRunId")
+  })
+
   it("marks a turn typed in this chat pane as interactive, so it is offered the schedule tools", async () => {
     await buildSendOptions({ id: "s1" } as never, "remind me", undefined, undefined, undefined, {
       interactive: true,
@@ -722,6 +818,33 @@ describe("Claude chat send-option seam", () => {
 
   describe("addressed-turn overrides", () => {
     const lastOptions = () => jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]
+    it("admits OAuth for @claude and builtin Squad overrides in an external session", async () => {
+      jest.mocked(runtimeRefForSession).mockReturnValue({ kind: "external", agentId: "codex" })
+      try {
+        for (const character of [undefined, { id: "squad-member" }]) {
+          await buildSendOptions(
+            { id: "external-session" } as never,
+            "go",
+            undefined,
+            undefined,
+            undefined,
+            { localAuthorization: LOCAL_PERSON_RUN },
+            {
+              runtimeRef: { kind: "builtin" },
+              ...(character ? { character: character as never } : {}),
+            }
+          )
+          expect(lastOptions()?.personalCredentialContext).toMatchObject({
+            localAuthorization: LOCAL_PERSON_RUN,
+            externalEngine: false,
+          })
+        }
+        await buildSendOptions({ id: "external-session" } as never, "go")
+        expect(lastOptions()?.personalCredentialContext?.externalEngine).toBe(true)
+      } finally {
+        jest.mocked(runtimeRefForSession).mockReturnValue({ kind: "builtin" })
+      }
+    })
     const session = {
       id: "s-route",
       model: "session-model",

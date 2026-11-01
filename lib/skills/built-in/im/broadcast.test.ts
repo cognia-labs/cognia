@@ -55,11 +55,14 @@ describe("im.broadcast", () => {
       { conversationKeys: ["qq-official:a:g"], message: "Hello", deliveryMode: "proactive" },
       { sessionId: "s" }
     )
-    expect(mEnqueueMany).toHaveBeenCalledWith([
-      expect.objectContaining({
-        request: expect.objectContaining({ sendOptions: { mode: "proactive" } }),
-      }),
-    ])
+    expect(mEnqueueMany).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          request: expect.objectContaining({ sendOptions: { mode: "proactive" } }),
+        }),
+      ],
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
+    )
   })
   it("fans out to every target with a DISTINCT idempotency key", async () => {
     const keys = ["lark:a1:oc_1", "lark:a1:oc_2", "telegram:a2:chat_9"]

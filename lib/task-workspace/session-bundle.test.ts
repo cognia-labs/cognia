@@ -1,3 +1,8 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { resolvePullRequestWorkspaceBase } from "./pull-request-base"
+jest.mock("./pull-request-base", () => ({
+  resolvePullRequestWorkspaceBase: jest.fn(async (_root, base) => base),
+}))
 const acquireWorkspaceBundle = jest.fn()
 const getWorkspaceBundle = jest.fn()
 
@@ -180,6 +185,25 @@ describe("a session-scoped managed workspace", () => {
 })
 
 describe("ensureSessionExecutionBundle", () => {
+  it("carries the caller's personal admission through PR baseline preparation", async () => {
+    acquireWorkspaceBundle.mockResolvedValue(bundle)
+    getWorkspaceBundle.mockResolvedValue(null)
+    const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+    await ensureSessionExecutionBundle({
+      sessionId: "session-1",
+      context,
+      project,
+      credentialContext,
+      loadProvisioning: async () => undefined,
+    })
+    expect(resolvePullRequestWorkspaceBase).toHaveBeenLastCalledWith(
+      "/repo",
+      { kind: "remoteDefault" },
+      undefined,
+      credentialContext
+    )
+  })
+
   beforeEach(() => {
     jest.clearAllMocks()
     acquireWorkspaceBundle.mockResolvedValue(bundle)

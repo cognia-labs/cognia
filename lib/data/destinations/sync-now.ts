@@ -33,6 +33,7 @@ export type RemoteBackupSyncDestination = Extract<
 >
 
 export interface RemoteBackupSyncNowOptions {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   missingPassphraseMessage?: string
   basePackage?: BackupPackageV3
   producer?: "interval" | "cron"
@@ -81,7 +82,8 @@ export async function runRemoteBackupSyncNow(
       const readiness = await readBackupDestinationReadiness(
         destination,
         opts.signal,
-        Boolean(pass)
+        Boolean(pass),
+        opts.credentialContext
       )
       assertActive()
       if (readiness.state !== "ready") {
@@ -127,7 +129,8 @@ export async function runRemoteBackupSyncNow(
         sizeBytes: body.length,
       },
       assertActive,
-      opts.signal
+      opts.signal,
+      opts.credentialContext
     )
 
     if (!result.cancelled) assertActive()

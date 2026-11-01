@@ -18,6 +18,11 @@ import { detectPlatform } from "@/lib/platform/detect"
 import { createAuthConnectionsAPI } from "@/lib/plugin/auth/connections-api"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { loggers } from "@cognia/logging"
+import {
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
 
 const declarations = new Map<string, readonly PluginDocsProviderDef[]>()
 const registrations = new Map<string, Set<() => void>>()
@@ -107,9 +112,14 @@ export function createDocsProvidersAPI(
         if (!active || activations.get(pluginId) !== activation || !hasPermission("docs:provide"))
           throw new DocsProviderError("notConfigured")
       }
-      const listAccounts = async () => {
+      const listAccounts = async (options?: Pick<DocsProviderCallOptions, "credentialContext">) => {
         check()
-        const [offered, available] = await Promise.all([input.listAccounts(), connections.list()])
+        const [offered, available] = await Promise.all([
+          withPluginExecutionContext(pluginId, options?.credentialContext ?? HOST_BACKGROUND, () =>
+            input.listAccounts()
+          ),
+          connections.list(),
+        ])
         check()
         return offered.flatMap((account) => {
           const connection = available.find(
@@ -131,7 +141,7 @@ export function createDocsProvidersAPI(
         })
       }
       const verify = async (options: DocsProviderCallOptions) => {
-        const accounts = await listAccounts()
+        const accounts = await listAccounts(options)
         if (
           !accounts.some(
             (account) =>
@@ -153,7 +163,11 @@ export function createDocsProvidersAPI(
         try {
           await verify(options)
           if (controller.signal.aborted) throw new DOMException("Read aborted", "AbortError")
-          const value = await invoke(controller.signal)
+          const value = await withPluginExecutionContext(
+            pluginId,
+            options.credentialContext ?? HOST_BACKGROUND,
+            () => invoke(controller.signal)
+          )
           await verify(options)
           if (controller.signal.aborted) throw new DOMException("Read aborted", "AbortError")
           return value
@@ -183,7 +197,9 @@ export function createDocsProvidersAPI(
         if (!active || activations.get(pluginId) !== activation || !hasPermission("docs:provide"))
           return null
         if (!ownsUrl(raw)) return null
-        const matched = input.matchRef(raw)
+        const matched = withPluginExecutionContext(pluginId, HOST_BACKGROUND, () =>
+          input.matchRef(raw)
+        )
         return matched &&
           def.kinds.includes(matched.kind) &&
           matched.id &&
@@ -217,7 +233,7 @@ export function createDocsProvidersAPI(
           check()
           const stopHost = connections.onDidChange(listener)
           try {
-            const stopPlugin = input.subscribeAccounts?.(listener)
+            const stopPlugin = bindPluginCallbacks(pluginId, input.subscribeAccounts)?.(listener)
             return () => {
               try {
                 stopPlugin?.()
@@ -235,7 +251,12 @@ export function createDocsProvidersAPI(
           ? {
               search: (query, options) =>
                 read(options, async (signal) => {
-                  const hits = await input.search!(query, { ...options, signal })
+                  const hits = await input.search!(query, {
+                    accountId: options.accountId,
+                    expectedAuthorizationEpoch: options.expectedAuthorizationEpoch,
+                    limit: options.limit,
+                    signal,
+                  })
                   return hits.map((ref) => {
                     if (!validRef(ref)) throw new DocsProviderError("invalidRef")
                     return { ...ref, providerId }
@@ -247,7 +268,11 @@ export function createDocsProvidersAPI(
           if (ref.providerId !== providerId || !validRef(ref))
             throw new DocsProviderError("invalidRef")
           return read(options, async (signal) => {
-            const content = await input.fetch(ref, { ...options, signal })
+            const content = await input.fetch(ref, {
+              accountId: options.accountId,
+              expectedAuthorizationEpoch: options.expectedAuthorizationEpoch,
+              signal,
+            })
             if (
               content.ref.id !== ref.id ||
               content.ref.kind !== ref.kind ||

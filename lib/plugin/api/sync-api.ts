@@ -27,12 +27,19 @@ import {
   requestExternalSync,
 } from "@/lib/external-services/sync/runtime"
 import type { ExternalSyncDriver, ExternalSyncTarget } from "@/lib/external-services/sync/types"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import {
+  bindPluginCallbacks,
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 
 const activations = new Map<string, { dispose(): void }>()
 interface Registration {
   target: ExternalSyncTarget
   signal: AbortSignal
   driver: ExternalSyncDriver<unknown>
+  driverFor(execution: PersonalCredentialContext): ExternalSyncDriver<unknown>
   ready: Promise<void>
   dispose(): void
 }
@@ -193,15 +200,23 @@ export function createSyncAPI(pluginId: string, runtime: PluginSyncRuntime = {})
         ...(connectionRef ? { connectionRef } : {}),
       })
       const verify = () => verifyConnection(entry)
-      const driver = bridgeSyncDriver(input, {
-        signal: lifetime.signal,
-        check: verify,
-        timeoutMs: runtime.callbackTimeoutMs,
-      }) as ExternalSyncDriver<unknown>
+      // Each operation gets its own callback fence and page state. Queued
+      // cursor work never captures the identity present at registration.
+      const driverFor = (execution: PersonalCredentialContext) =>
+        bridgeSyncDriver(
+          bindPluginCallbacks(pluginId, input, () => execution),
+          {
+            signal: lifetime.signal,
+            check: verify,
+            timeoutMs: runtime.callbackTimeoutMs,
+          }
+        ) as ExternalSyncDriver<unknown>
+      const driver = driverFor(HOST_BACKGROUND)
       let unregister = () => {}
       const entry: Registration = {
         target,
         driver,
+        driverFor,
         signal: lifetime.signal,
         ready: Promise.resolve(),
         dispose() {
@@ -242,6 +257,9 @@ export function createSyncAPI(pluginId: string, runtime: PluginSyncRuntime = {})
       return { dispose: entry.dispose }
     },
     async run(key, options = {}) {
+      // Pin only Host-held provenance before the first await. Public options
+      // (including a forged manual/credential label) confer no authority.
+      const execution = pluginExecutionContext(pluginId) ?? HOST_BACKGROUND
       const entry = get(key)
       const signal = options.signal ? AbortSignal.any([entry.signal, options.signal]) : entry.signal
       try {
@@ -267,10 +285,14 @@ export function createSyncAPI(pluginId: string, runtime: PluginSyncRuntime = {})
         await verifyConnection(entry)
         checkLive(entry)
         signal.throwIfAborted()
-        const result = await runExternalSync(Object.freeze({ ...entry.target }), entry.driver, {
-          mode: options.full ? "full" : "auto",
-          signal,
-        })
+        const result = await runExternalSync(
+          Object.freeze({ ...entry.target }),
+          entry.driverFor(execution),
+          {
+            mode: options.full ? "full" : "auto",
+            signal,
+          }
+        )
         checkLive(entry)
         signal.throwIfAborted()
         return result

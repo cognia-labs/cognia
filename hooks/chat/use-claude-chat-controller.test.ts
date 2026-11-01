@@ -11,6 +11,7 @@ import {
   asideContextForRegenerate,
   resolveChatTurnAttemptIdentity,
   localChatRunAuthorization,
+  chatHookCredentialContext,
   resolveNativeExternalSessionId,
   useClaudeChat,
   userPromptText,
@@ -22,10 +23,42 @@ import {
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { getExecutionRun } from "@/lib/db/execution-runs"
+
+jest.mock("@/lib/db/execution-runs", () => ({
+  ...jest.requireActual("@/lib/db/execution-runs"),
+  getExecutionRun: jest.fn(),
+}))
 
 describe("Claude chat controller seam", () => {
+  it("uses local proof only before a new run and keeps an existing run's identity", async () => {
+    jest.mocked(getExecutionRun).mockResolvedValueOnce(undefined)
+    await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
+      sessionId: "session",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "run" } as never)
+    await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
+      sessionId: "session",
+      executionRunId: "run",
+    })
+    jest.mocked(getExecutionRun).mockRejectedValueOnce(new Error("journal unavailable"))
+    await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
+      sessionId: "session",
+      executionRunId: "run",
+    })
+    await expect(chatHookCredentialContext("session", "run")).resolves.toEqual({
+      sessionId: "session",
+      executionRunId: "run",
+    })
+  })
   it("requires a positive host gesture and refuses automation even if it carries a gesture", () => {
     expect(localChatRunAuthorization()).toBeUndefined()
+    expect(
+      localChatRunAuthorization(
+        JSON.parse(JSON.stringify({ localAuthorization: LOCAL_PERSON_RUN }))
+      )
+    ).toBeUndefined()
     expect(
       localChatRunAuthorization({ localAuthorization: Symbol("host-local-person-run") as never })
     ).toBeUndefined()

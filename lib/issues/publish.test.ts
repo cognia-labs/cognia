@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/issues", () => ({
   getIssue: jest.fn(),
   linkIssueExternal: jest.fn(),
@@ -232,7 +233,7 @@ describe("publishIssue", () => {
       { kind: "human" },
       d
     )
-    expect(create).toHaveBeenCalledWith(binding, issue)
+    expect(create).toHaveBeenCalledWith(binding, issue, undefined)
     expect(ref).toEqual({
       provider: "lark-task",
       externalId: "t9",
@@ -269,3 +270,18 @@ const fixture = createDbTestFixture({ seeded: false })
 beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
+
+it("forwards Host admission to the selected provider creation", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const create = jest.fn(async () => ({ provider: "lark-task", externalId: "new" }))
+  const r = registry({ larkCreate: create })
+  const targets = listPublishTargets(issue, container([tasklist]), r)
+  await publishIssue(
+    issue.id,
+    targets[0],
+    { kind: "human" },
+    { registry: r, getIssue: async () => issue, linkIssueExternal: jest.fn() },
+    credentialContext
+  )
+  expect(create).toHaveBeenCalledWith(targets[0].binding, issue, credentialContext)
+})

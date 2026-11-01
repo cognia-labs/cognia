@@ -9,6 +9,7 @@ import {
   usePluginWorkflowIntegration,
 } from "./workflow-integration"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { HOST_BACKGROUND, pluginExecutionContext } from "../core/invocation-identity"
 import type { PluginMessage } from "@/types/plugin"
 
 // Mock dependencies
@@ -42,7 +43,10 @@ jest.mock("@/stores/plugin-runtime", () => ({
         "test-plugin": {
           status: "enabled",
           hooks: {
-            onChatRequest: jest.fn().mockResolvedValue([{ role: "user", content: "transformed" }]),
+            onChatRequest: jest.fn(async () => {
+              expect(pluginExecutionContext("test-plugin")).toEqual(HOST_BACKGROUND)
+              return [{ role: "user", content: "transformed" }]
+            }),
           },
         },
         "disabled-plugin": {

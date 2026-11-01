@@ -11,6 +11,12 @@ import {
   IPCAbortError,
 } from "./ipc"
 import { TimeoutError } from "@cognia/primitives"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
 import { PLUGIN_MESSAGE_HISTORY_MAX } from "./constants"
 import { pluginHasApiPermission } from "@/lib/plugin/api/permission-api"
 import catalog from "@/packages/plugin-contract/contract/catalog.json"
@@ -49,6 +55,21 @@ const diagModule = require("../contracts/diagnostics-store") as {
 }
 
 describe("PluginIPC", () => {
+  it("binds the recipient to the Host-held caller identity through RPC settlement", async () => {
+    const bridge = new PluginIPC()
+    bridge.expose("target", {
+      read: async () => {
+        await Promise.resolve()
+        return pluginExecutionContext("target")
+      },
+    })
+    const execution = { executionRunId: "service-attempt" }
+    await withPluginExecutionContext("caller", execution, async () => {
+      await expect(bridge.call("caller", "target", "read")).resolves.toEqual(execution)
+    })
+    await expect(bridge.call("caller", "target", "read")).resolves.toEqual(HOST_BACKGROUND)
+    expect(pluginExecutionContext("target")).toBeUndefined()
+  })
   let ipc: PluginIPC
 
   beforeEach(() => {
@@ -310,6 +331,48 @@ describe("PluginIPC", () => {
       mockResumePlugin.mockReset()
       mockPluginRecords.value = {}
     })
+
+    it.each([HOST_BACKGROUND, { executionRunId: "original-service" }])(
+      "pins RPC identity before an asynchronous wake instead of borrowing a later UI invocation: %p",
+      async (original) => {
+        mockPluginRecords.value = { "plugin-a": { status: "suspended" } }
+        let release!: () => void
+        let started!: () => void
+        const waiting = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        const resumed = new Promise<void>((resolve) => {
+          started = resolve
+        })
+        const seen: unknown[] = []
+        mockResumePlugin.mockImplementation(async () => {
+          started()
+          await waiting
+          seen.push(pluginExecutionContext("plugin-a"))
+          ipc.expose("plugin-a", {
+            read: async () => {
+              await Promise.resolve()
+              return pluginExecutionContext("plugin-a")
+            },
+          })
+        })
+        let pending!: Promise<unknown>
+        await withPluginExecutionContext("plugin-b", original, async () => {
+          pending = ipc.call("plugin-b", "plugin-a", "read")
+          await resumed
+        })
+        await withPluginExecutionContext(
+          "plugin-b",
+          { localAuthorization: LOCAL_PERSON_RUN },
+          async () => {
+            release()
+            await expect(pending).resolves.toEqual(original)
+          }
+        )
+        expect(seen).toEqual([original])
+        expect(pluginExecutionContext("plugin-a")).toBeUndefined()
+      }
+    )
 
     it("resumes a suspended target and retries the lookup once", async () => {
       mockPluginRecords.value = { "plugin-a": { status: "suspended" } }

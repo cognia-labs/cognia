@@ -1934,6 +1934,8 @@ export type PluginToolRegistration = Omit<PluginTool, "pluginId"> & {
  * Context passed to tool execution
  */
 export interface PluginToolContext {
+  /** Exact Host-correlated execution run; never taken from tool arguments. */
+  executionRunId?: string
   /** Host-generated logical call identity, stable across this invocation's retries. */
   invocationId?: string
 

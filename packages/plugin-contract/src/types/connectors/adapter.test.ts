@@ -1,4 +1,4 @@
-import type { PlatformAdapter, AdapterMeta } from "./adapter"
+import type { PlatformAdapter, AdapterMeta, AdapterSendOptions } from "./adapter"
 import { buildA2UICapabilityMatrix } from "./capability"
 
 describe("PlatformAdapter", () => {
@@ -32,4 +32,14 @@ describe("PlatformAdapter", () => {
     // Smoke-check the new contract: every component kind reports back.
     expect(a.a2uiCapability().Text).toBe("fallback")
   })
+})
+
+it("keeps delivery identity and local proof outside the serializable outbound payload", () => {
+  const localAuthorization = Symbol("Host UI")
+  const options: AdapterSendOptions = {
+    localAuthorization,
+    executionIdentity: { sessionId: "s", runId: "r" },
+  }
+  expect(options.executionIdentity?.runId).toBe("r")
+  expect(JSON.parse(JSON.stringify(options))).not.toHaveProperty("localAuthorization")
 })

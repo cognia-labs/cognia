@@ -98,6 +98,8 @@ export interface AuthenticationProvider {
     scopes: readonly string[] | undefined,
     options: AuthSessionOptions
   ) => Promise<AuthSession[]>
+  /** Host adapters expose metadata for disconnect without resolving a personal bearer. */
+  getSessionMetadata?: (sessionId: string) => Promise<Omit<AuthSession, "accessToken"> | undefined>
   /** Open the interactive consent flow and return the resulting session. */
   createSession: (scopes: readonly string[], options?: AuthSessionOptions) => Promise<AuthSession>
   /** Resolve a short-lived request credential without exposing it to plugin code. */
@@ -264,8 +266,14 @@ export async function removeSession(providerId: string, sessionId: string): Prom
   const provider = providers.get(providerId)
   if (!provider) return
   // Look up the row so the change-event carries the metadata.
-  const existing = await provider.getSessions(undefined, { silent: true })
-  const session = existing.find((s) => s.id === sessionId)
+  let session: AuthSession | undefined
+  if (provider.getSessionMetadata) {
+    const metadata = await provider.getSessionMetadata(sessionId)
+    if (metadata) session = { ...metadata, accessToken: "" }
+  } else {
+    const existing = await provider.getSessions(undefined, { silent: true })
+    session = existing.find((s) => s.id === sessionId)
+  }
   await provider.removeSession(sessionId)
   if (session) {
     emit({ providerId, added: [], removed: [session], changed: [] })

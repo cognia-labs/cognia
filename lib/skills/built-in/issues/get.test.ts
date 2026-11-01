@@ -105,3 +105,32 @@ describe("issue.get", () => {
     await expect(run({ issue: "VEN-1" })).rejects.toThrow(/another workspace/)
   })
 })
+
+it("uses this skill's run when reporting runnable engines, without borrowing a neighboring run", async () => {
+  const { registerIssueRunAdapter, resetIssueRunRegistry } =
+    await import("@/lib/issues/run/registry")
+  registerIssueRunAdapter({
+    id: "engine-identity",
+    kind: "github-loop",
+    canRun: async (target) =>
+      target.credentialContext?.executionRunId === "exact-read-run"
+        ? { ok: true }
+        : { ok: false, reason: "no-github-account" },
+    start: async () => {
+      throw new Error("read only")
+    },
+    poll: async () => null,
+  })
+  try {
+    const issue = await makeIssue()
+    expect(
+      await skill.execute({ issue: issue.id } as never, {
+        ...CTX,
+        executionRunId: "exact-read-run",
+      })
+    ).toMatchObject({ runnableBy: [{ adapterId: "engine-identity", kind: "github-loop" }] })
+    expect(await run({ issue: issue.id })).toMatchObject({ runnableBy: [] })
+  } finally {
+    resetIssueRunRegistry()
+  }
+})

@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
 import { __setGoogleStatePortForTests } from "./state"
 import { clearGoogleOAuthPending, getGoogleOAuthPending } from "./oauth-pending"
@@ -11,8 +12,10 @@ it("filters expired metadata and cancels a named Host attempt without exposing P
     ],
   })
   __setGoogleStatePortForTests(host.call)
-  expect(await getGoogleOAuthPending(100)).toEqual([host.snapshot.pending[1]])
+  expect(await getGoogleOAuthPending(100, { localAuthorization: LOCAL_PERSON_RUN })).toEqual([
+    host.snapshot.pending[1],
+  ])
   await clearGoogleOAuthPending("current")
-  expect(await getGoogleOAuthPending(100)).toEqual([])
+  expect(await getGoogleOAuthPending(100, { localAuthorization: LOCAL_PERSON_RUN })).toEqual([])
   expect(host.calls).toContainEqual({ action: "cancel", attemptId: "current" })
 })

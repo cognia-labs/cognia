@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { AgentTeamDeliveryNode } from "@/types/agent/agent-team-runtime"
 import type { GitStackLayerState } from "@/types/git"
 import type { Stack } from "@/lib/stack/model"
@@ -413,6 +414,8 @@ describe("outbound authorization of the stack publish (ADR-0239 phase 2)", () =>
       createdAt: 1,
       updatedAt: 1,
     } as never)
+    const { ensureAgentTeamExecutionRun } = await import("@/lib/execution/agent-team-bridge")
+    await ensureAgentTeamExecutionRun((await getDb().agentTeamRuns.get("run-1"))!)
     const team = {
       id: "team-1",
       name: "Team",
@@ -491,8 +494,35 @@ describe("outbound authorization of the stack publish (ADR-0239 phase 2)", () =>
     expect(posted(github)).toHaveLength(2)
     expect((await getDb().agentTeamDeliveryGraphs.get("graph-1"))?.status).toBe("running")
     expect(await getDb().agentTeamRuns.get("run-1")).toMatchObject({ status: "completed" })
+    expect(await getDb().executionRuns.get("execution:team:run-1")).toMatchObject({
+      status: "completed",
+    })
     expect((await getDb().agentTeamRuns.get("run-1"))?.recoveryReason).toBeUndefined()
     expect((await receipts()).map((r) => r.decision.authority)).toContain("human")
+  })
+
+  it("round 4: rolls back durable completion when execution settlement cannot commit", async () => {
+    const { team, options } = await setup(STACKED_DELIVERY_DEFAULTS)
+    await expect(prepareAndPublishGithubStack(team, "run-1", options)).rejects.toThrow(
+      /outbound_held/
+    )
+    const db = getDb()
+    const refuseProjection = () => {
+      throw new Error("execution projection unavailable")
+    }
+    db.executionRuns.hook("updating", refuseProjection)
+    try {
+      await expect(approveAndPublishGithubStack(team, "run-1", options)).rejects.toThrow(
+        "execution projection unavailable"
+      )
+    } finally {
+      db.executionRuns.hook("updating").unsubscribe(refuseProjection)
+    }
+    expect(await db.agentTeamRuns.get("run-1")).toMatchObject({ status: "needs_input" })
+    expect(await db.executionRuns.get("execution:team:run-1")).toMatchObject({ status: "running" })
+    expect(
+      await db.executionRunEvents.where("runId").equals("execution:team:run-1").toArray()
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "run.completed" })]))
   })
 
   it("fences the repositories after a person refuses, until a person approves", async () => {
@@ -555,14 +585,18 @@ describe("approveAndMergeGithubStack records the person's merge (ADR-0239 phase 
         ],
       },
     } as AgentTeam
+    const resolveOctokit = jest.fn(async () => ({ request: github }) as never)
     await approveAndMergeGithubStack(team, "graph-m", {
       resolveTeamRepo: async (path) =>
         path === "/web"
           ? { fullName: "acme/web", host: { id: "github.com" } as never }
           : { fullName: "acme/api", host: { id: "ghe.corp.io" } as never },
-      resolveOctokit: async () => ({ request: github }) as never,
+      resolveOctokit,
       recordWrite,
     }).catch(() => undefined)
+    expect(resolveOctokit).toHaveBeenCalledWith("acme/web", undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     expect(recordWrite).toHaveBeenCalledWith({
       targets: [repositoryTarget("acme/web"), repositoryTarget("ghe.corp.io/acme/api")],
       operation: "github.mergeStack",

@@ -255,3 +255,24 @@ describe("broadcast fan-out", () => {
     expect(hasPermission).not.toHaveBeenCalled()
   })
 })
+import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+
+it("never treats an uncorrelated Host hook as an owner-outside-dispatch callback", async () => {
+  await handlePluginHookExec(
+    {
+      sessionId: "session",
+      execId: "exec",
+      pluginId: "bound-owner",
+      hookId: "onPreCompact",
+      payload: {},
+    },
+    {
+      resolveHandler: () =>
+        (async () => {
+          await Promise.resolve()
+          expect(pluginExecutionContext("bound-owner")).toEqual(HOST_BACKGROUND)
+        }) as never,
+    }
+  )
+  expect(pluginExecutionContext("bound-owner")).toBeUndefined()
+})

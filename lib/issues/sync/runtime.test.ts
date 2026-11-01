@@ -289,3 +289,32 @@ it("an old credential preparation cannot run a newly re-registered target with t
   expect(await runRegisteredIssueSync(mirrorKey)).toMatchObject({ status: "completed" })
   expect(request).toHaveBeenCalledTimes(1)
 })
+
+it("carries direct sync identity per pass and uses Host background for later runless refreshes", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  const { HOST_BACKGROUND } = await import("@/lib/plugin/core/invocation-identity")
+  const { deps, pull, provider } = setup()
+  const currentBinding = { ...binding, resource: { ...binding.resource, captureId: undefined } }
+  deps.importBindings = async () => [currentBinding]
+  const prepare = jest.fn(async () => ({ provider }))
+  provider.prepare = prepare
+  await reconcileIssueSyncRegistrations(deps)
+  const credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext =
+    { localAuthorization: actingAuthority.LOCAL_PERSON_RUN }
+  await runRegisteredIssueSync(importKey, { credentialContext })
+  expect(prepare).toHaveBeenLastCalledWith(currentBinding, credentialContext)
+  expect(pull).toHaveBeenLastCalledWith(
+    currentBinding,
+    expect.objectContaining({ credentialContext })
+  )
+  requestExternalSync(importKey, "manual")
+  await settle()
+  expect(prepare).toHaveBeenLastCalledWith(currentBinding, HOST_BACKGROUND)
+  expect(pull).toHaveBeenLastCalledWith(
+    currentBinding,
+    expect.objectContaining({ credentialContext: HOST_BACKGROUND })
+  )
+  expect(JSON.stringify(await getDb().externalSyncCursors.toArray())).not.toContain(
+    "credentialContext"
+  )
+})

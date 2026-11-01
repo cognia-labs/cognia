@@ -16,6 +16,7 @@ jest.mock("../scheduler-db", () => ({
   schedulerDb: { updateExecution: (execution: unknown) => updateExecution(execution) },
 }))
 
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import {
   executePluginTask,
   cancelPluginTaskExecution,
@@ -148,10 +149,11 @@ describe("executePluginTask — activated handler dispatch", () => {
   })
 
   it("dispatches to the registered handler and forwards the result", async () => {
-    const handler = jest.fn(async () => ({
-      success: true,
-      output: { hello: "world" },
-    }))
+    const handler = jest.fn(async () => {
+      await Promise.resolve()
+      expect(pluginExecutionContext("p")?.executionRunId).toBe("")
+      return { success: true, output: { hello: "world" } }
+    })
     reg.registerPluginTaskHandler("p:h", handler)
 
     const r = await executePluginTask(
@@ -161,6 +163,7 @@ describe("executePluginTask — activated handler dispatch", () => {
     )
     expect(r.success).toBe(true)
     expect(r.output).toEqual({ hello: "world" })
+    expect(pluginExecutionContext("p")).toBeUndefined()
     expect(handler).toHaveBeenCalledTimes(1)
     const call = handler.mock.calls[0] as unknown
     if (!Array.isArray(call) || call.length < 2) {

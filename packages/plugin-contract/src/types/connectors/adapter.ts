@@ -228,6 +228,10 @@ export interface ForwardMessageInput {
 
 /** Host-owned persistence callbacks, separate from cloneable/untrusted request payloads. */
 export interface AdapterSendOptions {
+  /** Host-only delivery identity; never copied from OutboundRequest metadata. */
+  executionIdentity?: { sessionId: string; runId: string }
+  /** In-memory Host UI proof; serialized values cannot grant. */
+  localAuthorization?: symbol
   onPendingReceipt?: (receipt: { id: string }) => Promise<void>
 }
 

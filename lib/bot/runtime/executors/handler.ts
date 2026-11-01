@@ -7,6 +7,7 @@
  */
 
 import { BotExecutorUnavailableError, type BotExecutorFn } from "./types"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 export const runHandlerBot: BotExecutorFn = async (ctx) => {
   const handler = ctx.definition.handler
@@ -18,5 +19,11 @@ export const runHandlerBot: BotExecutorFn = async (ctx) => {
       `Bot "${ctx.definition.id}" declares a handler its plugin did not provide`
     )
   }
-  return handler(ctx)
+  return withPluginExecutionContext(
+    ctx.definition.id.split(":")[0],
+    {
+      executionRunId: ctx.runId,
+    },
+    () => handler(ctx)
+  )
 }

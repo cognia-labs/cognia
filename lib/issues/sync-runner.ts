@@ -64,6 +64,7 @@ export async function resolveWorkspaceGithubBindings(
 }
 
 export interface RunWorkspaceGithubSyncInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Workspace scope. Omit to refresh every bound repo across all workspaces. */
   projectId?: string
   /** Ignore the stored watermark and re-read every issue. */
@@ -133,6 +134,7 @@ export async function runWorkspaceGithubSync(
   syncDeps.runRegistered = async (binding) => {
     const result = await runRegisteredIssueSync(githubMirrorSyncTarget(binding).key, {
       full: binding.full,
+      credentialContext: input.credentialContext,
     })
     return result && "repoFullName" in result ? result : undefined
   }

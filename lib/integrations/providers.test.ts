@@ -5,8 +5,13 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createIntegrationAccount, getIntegrationAccount } from "@/lib/db/integrations"
 import { __resetIntegrationRegistryForTesting, registerIntegrationDefinitions } from "./registry"
 import { checkIntegrationAccountHealth, listIntegrationResources } from "./providers"
+import { setIntegrationAuthenticatedRequestExecutorForTesting } from "./action-runner"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 describe("Integration resource and health providers", () => {
+  afterEach(() => setIntegrationAuthenticatedRequestExecutorForTesting())
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
@@ -36,6 +41,81 @@ describe("Integration resource and health providers", () => {
     await getDb().integrationAccounts.put(account)
     expect(await checkIntegrationAccountHealth("calendar", account.id)).toEqual(account.status)
   })
+
+  it.each([
+    ["Host person", { localAuthorization: LOCAL_PERSON_RUN }, undefined],
+    ["executing run", { sessionId: "session", executionRunId: "run" }, undefined],
+    ["unproven plugin", undefined, undefined],
+    ["verified Bot binding", undefined, { pluginId: "github-delivery", accountId: "bound" }],
+  ] as const)(
+    "preserves %s admission through discovery and health requests",
+    async (_label, context, binding) => {
+      const request = jest.fn().mockResolvedValue({ status: 200, headers: {}, data: {} })
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      registerIntegrationDefinitions({
+        pluginId: "github-delivery",
+        definitions: [
+          {
+            id: "github",
+            label: "GitHub",
+            authStrategies: [],
+            resourceKinds: ["repository"],
+            resourceProvider: { handler: "resources", kinds: ["repository"] },
+            healthProvider: { handler: "health" },
+            eventTypes: [],
+            actions: [],
+          },
+        ],
+        handlers: {},
+        resourceProviders: {
+          github: async (_query, ctx) => {
+            expect(pluginExecutionContext("github-delivery")).toEqual(context ?? HOST_BACKGROUND)
+            await ctx.authenticatedRequest("https://api.github.com/user/repos")
+            return { items: [], syncedAt: "2026-11-01T00:00:00.000Z" }
+          },
+        },
+        accountStatusProviders: {
+          github: async (ctx) => {
+            expect(pluginExecutionContext("github-delivery")).toEqual(context ?? HOST_BACKGROUND)
+            await ctx.authenticatedRequest("https://api.github.com/user")
+            return { health: "healthy", checkedAt: "2026-11-01T00:00:00.000Z" }
+          },
+        },
+      })
+      const account = await createIntegrationAccount("github-delivery", {
+        integrationId: "github",
+        providerId: "github-pat",
+        authSessionId: "session",
+        remoteAccountId: "owner",
+        label: "GitHub",
+      })
+      const verified = binding && { ...binding, accountId: account.id }
+      await listIntegrationResources(
+        "github-delivery",
+        { accountId: account.id, kind: "repository" },
+        context as PersonalCredentialContext | undefined,
+        verified
+      )
+      await checkIntegrationAccountHealth(
+        "github-delivery",
+        account.id,
+        context as PersonalCredentialContext | undefined,
+        verified
+      )
+      expect(request).toHaveBeenCalledTimes(2)
+      for (const call of request.mock.calls) {
+        expect(call).toEqual([
+          "github-delivery",
+          account.id,
+          expect.any(String),
+          expect.objectContaining({
+            credentialContext: context ?? HOST_BACKGROUND,
+            verifiedBotAccount: verified,
+          }),
+        ])
+      }
+    }
+  )
 
   it("bounds discovery pages and persists normalized health state", async () => {
     const resourceProvider = jest.fn(async () => ({

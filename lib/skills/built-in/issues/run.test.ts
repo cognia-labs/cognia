@@ -167,3 +167,22 @@ describe("issue.run", () => {
     await expect(run({ issue: "VEN-1" })).rejects.toThrow(/another workspace/)
   })
 })
+
+it("carries the exact skill run through availability and engine dispatch", async () => {
+  const adapter = fakeAdapter("engine-identity", { ok: true })
+  const canRun = jest.fn(async (target) =>
+    target.credentialContext?.executionRunId === "exact-skill-run"
+      ? ({ ok: true } as const)
+      : ({ ok: false, reason: "no-github-account" } as const)
+  )
+  registerIssueRunAdapter({ ...adapter, canRun })
+  const issue = await makeIssue()
+  expect(
+    await skill.execute({ issue: issue.id } as never, { ...CTX, executionRunId: "exact-skill-run" })
+  ).toMatchObject({ status: "started" })
+  expect(canRun).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      credentialContext: { sessionId: "s1", executionRunId: "exact-skill-run" },
+    })
+  )
+})

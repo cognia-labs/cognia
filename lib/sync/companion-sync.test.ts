@@ -15,6 +15,7 @@ jest.mock("@/lib/tauri/transport-companion", () => ({
 import type { Transport } from "@/lib/tauri/transport-types"
 
 import { getDb, whenSeeded } from "@/lib/db/schema"
+import { enqueueOutbound } from "@/lib/db/outbound-jobs"
 
 import {
   COMPANION_SYNC_DOMAINS,
@@ -1365,6 +1366,34 @@ describe("installWorkflowRunStatusSync", () => {
 })
 
 describe("host isolation (v130)", () => {
+  it("settles outbound jobs before a host-change clear drops execution summaries", async () => {
+    await whenSeeded()
+    const db = getDb()
+    const job = await enqueueOutbound({
+      adapterId: "host-change",
+      conversationKey: "telegram:host-change:1",
+      source: "manual",
+      request: {
+        conversationRef: { platform: "telegram", adapterId: "host-change" },
+        segments: [{ type: "text", text: "queued" }],
+        metadata: { idempotencyKey: "host-change-job" },
+      },
+    })
+    const runId = `execution:job:outbound:${job.id}`
+    const handler = jest.fn().mockResolvedValue(makeOkOutcome("characters", 0, 1))
+    const handlers = [{ table: "characters" as const, run: handler }]
+    await runSyncDown({ transport: makeTransport(), handlers })
+    companionConfig = { deviceId: "delivery-host-b" }
+    await runSyncDown({ transport: makeTransport(), handlers })
+    expect(await db.outboundQueue.get(job.id)).toBeUndefined()
+    expect(
+      (await db.executionRunEvents.where("runId").equals(runId).toArray()).map(
+        (event) => event.type
+      )
+    ).toContain("run.cancelled")
+    expect(await db.syncTombstones.get(["outboundQueue", job.id])).toBeUndefined()
+  })
+
   it("does not resume from a cursor recorded against a different host", async () => {
     // The corruption this closes: re-pairing elsewhere used to resume from the
     // previous host's watermark and ask the new one for "everything since <a

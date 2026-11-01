@@ -16,6 +16,11 @@
  */
 
 import {
+  admitPersonalCredential,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
+import {
   fetchRepoIssues,
   toMirrorRow,
   fetchGithubIssuePage,
@@ -136,7 +141,8 @@ export function iterationExternalId(id: string): string {
 export interface GithubSyncProviderDeps {
   resolveReadClient?: (
     repoFullName: string,
-    connectionRef?: AuthConnectionRef
+    connectionRef?: AuthConnectionRef,
+    credentialContext?: PersonalCredentialContext
   ) => Promise<{
     octokit: OctokitLike
     connectionRef?: ExternalSyncTarget["connectionRef"]
@@ -158,7 +164,8 @@ export interface GithubSyncProviderDeps {
 /** Resolve the client and its exact source together; failed accounts may fall through to gh. */
 export async function resolveGithubSyncReadClient(
   repoFullName: string,
-  connectionRef?: AuthConnectionRef
+  connectionRef?: AuthConnectionRef,
+  credentialContext: PersonalCredentialContext = HOST_BACKGROUND
 ): Promise<{
   octokit: OctokitLike
   connectionRef?: ExternalSyncTarget["connectionRef"]
@@ -167,8 +174,23 @@ export async function resolveGithubSyncReadClient(
   const { githubReadAccountsFor, resolveGithubAccountGitAccess } =
     await import("@/lib/integrations/github-read-credential")
   const { getOctokitForRepo } = await import("@/lib/github/octokit-factory")
-  for (const account of await githubReadAccountsFor(repoFullName)) {
+  for (const account of await githubReadAccountsFor(
+    repoFullName,
+    undefined,
+    undefined,
+    credentialContext
+  )) {
     if (connectionRef && account.connectionId !== connectionRef) continue
+    if (
+      account.providerId === "github-pat" &&
+      !(
+        await admitPersonalCredential(credentialContext, {
+          source: "github-user",
+          person: account.id,
+        })
+      ).ok
+    )
+      continue
     const access = await resolveGithubAccountGitAccess(account).catch(() => null)
     if (!access || access.host.id !== "github.com") continue
     const octokit = await getOctokitForRepo({
@@ -185,7 +207,7 @@ export async function resolveGithubSyncReadClient(
   }
   if (connectionRef) throw new MissingGithubCredentialError(repoFullName)
   const { ghCliToken } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
-  const token = await ghCliToken()
+  const token = await ghCliToken(undefined, credentialContext)
   if (!token) throw new MissingGithubCredentialError(repoFullName)
   return {
     octokit: (await getOctokitForRepo({
@@ -563,16 +585,21 @@ async function fetchPullLinks(
 }
 
 export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): IssueSyncProvider {
-  const resolveOctokitOrNull =
-    deps.resolveOctokitOrNull ??
-    (createResolveOctokit() as (repoFullName: string) => Promise<OctokitLike | null>)
   const execute = deps.execute ?? executeIntegrationAction
   const resolveAccount = deps.resolveAccount ?? resolveGithubWritebackAccount
   const pullPageSize = deps.pullRequestPageSize ?? 50
   const pullCiLimit = deps.pullRequestCiLimit ?? 10
 
-  async function octokitFor(repoFullName: string): Promise<OctokitLike> {
-    const octokit = await resolveOctokitOrNull(repoFullName)
+  async function octokitFor(
+    repoFullName: string,
+    credentialContext: PersonalCredentialContext = HOST_BACKGROUND
+  ): Promise<OctokitLike> {
+    const octokit = await (deps.resolveOctokitOrNull
+      ? deps.resolveOctokitOrNull(repoFullName)
+      : (createResolveOctokit(
+          undefined,
+          credentialContext
+        )(repoFullName) as unknown as Promise<OctokitLike | null>))
     if (!octokit) throw new MissingGithubCredentialError(repoFullName)
     return rateAwareOctokit(octokit)
   }
@@ -582,12 +609,16 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
     completeFullScan: true,
     ...(!deps.resolveOctokitOrNull
       ? {
-          prepare: async (binding: IssueSyncBinding) => {
+          prepare: async (
+            binding: IssueSyncBinding,
+            credentialContext?: PersonalCredentialContext
+          ) => {
             const resource = binding.resource
             if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
             const client = await (deps.resolveReadClient ?? resolveGithubSyncReadClient)(
               resource.repoFullName,
-              binding.connectionRef
+              binding.connectionRef,
+              credentialContext
             )
             return {
               provider: createGithubSyncProvider({
@@ -640,7 +671,7 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const resource = binding.resource
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const [owner, repo] = resource.repoFullName.split("/")
-      const octokit = await octokitFor(resource.repoFullName)
+      const octokit = await octokitFor(resource.repoFullName, options.credentialContext)
       const page = await readIssueSyncSource(binding, () =>
         fetchGithubIssuePage(octokit, {
           ...options,
@@ -679,7 +710,7 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const resource = binding.resource
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const [owner, repo] = resource.repoFullName.split("/")
-      const octokit = await octokitFor(resource.repoFullName)
+      const octokit = await octokitFor(resource.repoFullName, options.credentialContext)
       const departed: string[] = []
       for (const id of [...new Set(ids)].slice(0, 50)) {
         options.signal?.throwIfAborted()
@@ -739,7 +770,11 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const [owner, repo] = resource.repoFullName.split("/")
       if (!owner || !repo) throw new Error(`Invalid repository: ${resource.repoFullName}`)
-      const octokit = await octokitFor(resource.repoFullName)
+      const octokit = await octokitFor(
+        resource.repoFullName,
+        options.credentialContext as
+          import("@/lib/execution/personal-credential").PersonalCredentialContext | undefined
+      )
 
       const [issues, milestones, project] = await Promise.all([
         readIssueSyncSource(binding, () =>
@@ -776,7 +811,11 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       ref: IssueExternalRef,
       patch: RemotePatch,
       issue: Issue,
-      context: { idempotencyKey: string; editedBy?: "person" | "automation" }
+      context: {
+        credentialContext?: PersonalCredentialContext
+        idempotencyKey: string
+        editedBy?: "person" | "automation"
+      }
     ): Promise<PushOutcome> {
       const resource = binding.resource
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
@@ -784,11 +823,12 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const source = await assertIssueSyncSource(binding)
       let capturedClient: OctokitLike | undefined
       const readClient = async () => {
-        if (!source) return octokitFor(resource.repoFullName)
+        if (!source) return octokitFor(resource.repoFullName, context.credentialContext)
         if (!capturedClient) {
           const client = await (deps.resolveReadClient ?? resolveGithubSyncReadClient)(
             resource.repoFullName,
-            source.id
+            source.id,
+            context.credentialContext
           )
           if (client.connectionRef !== source.id)
             throw new KeptCopySourceError("source-disconnected")
@@ -850,8 +890,13 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       if (Object.keys(input).length <= 2) return { status: "applied" }
 
       const account = source
-        ? await resolveAccount(resource.repoFullName, undefined, source.id)
-        : await resolveAccount(resource.repoFullName)
+        ? await resolveAccount(
+            resource.repoFullName,
+            undefined,
+            context.credentialContext,
+            source.id
+          )
+        : await resolveAccount(resource.repoFullName, undefined, context.credentialContext)
       if (!account) throw new MissingGithubCredentialError(resource.repoFullName)
       if (source && account.connectionId !== source.id)
         throw new KeptCopySourceError("source-disconnected")
@@ -866,13 +911,21 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       }
       // A person's own board edit is that person's write to the bound
       // repository; an agent's is planned by the outbound policy (ADR-0239).
-      const job =
+      const credentialContext = context.credentialContext as
+        import("@/lib/execution/personal-credential").PersonalCredentialContext | undefined
+      const job = await execute(
+        GITHUB_DELIVERY_PLUGIN_ID,
+        request,
         context.editedBy === "person"
-          ? await execute(GITHUB_DELIVERY_PLUGIN_ID, request, {
+          ? {
               kind: "person",
               surface: "issue-sync",
-            })
-          : await execute(GITHUB_DELIVERY_PLUGIN_ID, request)
+              localAuthorization: credentialContext?.localAuthorization,
+            }
+          : undefined,
+        credentialContext
+      )
+
       return job.status === "succeeded"
         ? { status: "applied" }
         : { status: "queued", jobId: job.id }

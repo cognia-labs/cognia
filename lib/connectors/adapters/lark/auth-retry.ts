@@ -147,6 +147,7 @@ export function isLarkUserTokenInvalidation(err: unknown): boolean {
 
 export interface UserTokenRefreshContext {
   brand?: "feishu" | "lark"
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   adapterId: string
   appId: string
   appSecret: string

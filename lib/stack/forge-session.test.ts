@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { GitRemote } from "@/types/git"
 import type { OctokitLike } from "@/lib/github/pr-observe/types"
 import { GITHUB_DOT_COM, parseGithubHost, type GithubHost } from "@/lib/github/host"
@@ -183,4 +184,14 @@ describe("openStackForge", () => {
     })
     expect(forge).toEqual({ status: "noRemote" })
   })
+})
+
+it("forwards Host admission to credential resolution and never invents it", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const d = deps({ remotes: [remote("origin", "git@github.com:acme/app.git")] })
+  const resolve = jest.fn(async () => octokit)
+  await openStackForge("/repo", { ...d, octokit: resolve }, credentialContext)
+  expect(resolve).toHaveBeenLastCalledWith("acme/app", GITHUB_DOT_COM, credentialContext)
+  await openStackForge("/repo", { ...d, octokit: resolve })
+  expect(resolve).toHaveBeenLastCalledWith("acme/app", GITHUB_DOT_COM, undefined)
 })

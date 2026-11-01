@@ -1,4 +1,6 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { getAuthConnection } from "@/lib/db/auth-connections"
@@ -299,10 +301,18 @@ it.each(["consumer", "owner"])(
       resolveConnectionPrompt(request.id, { kind: "sign-in" })
     })
     try {
-      const result = await createAuthConnectionsAPI(pluginId, () => true).get({
-        service: "auth.vendor",
+      const credentialContext = { executionRunId: `sign-in-${pluginId}` }
+      const result = await withPluginExecutionContext(pluginId, credentialContext, () =>
+        createAuthConnectionsAPI(pluginId, () => true).get({
+          service: "auth.vendor",
+          scopes: ["read"],
+          interactive: true,
+        })
+      )
+      expect(connectProvider).toHaveBeenCalledWith({
+        providerId: "vendor",
         scopes: ["read"],
-        interactive: true,
+        credentialContext,
       })
       expect(result).toMatchObject({ status: "connected", accountLabel: "Signed in" })
       expect((await getConnectionBinding(pluginId, "vendor"))?.connectionRef).toBe(result!.ref)
@@ -474,13 +484,17 @@ it("reconnects with the scope union, then approves operations at the new revisio
     })
   })
   try {
-    await expect(
-      api().requestGrant(ref, { operations: ["items.request.GET"], scopes: ["extra"] })
-    ).resolves.toMatchObject({ granted: true, connectionRevision: 2 })
+    const credentialContext = { executionRunId: "grant-attempt" }
+    await withPluginExecutionContext("consumer", credentialContext, () =>
+      expect(
+        api().requestGrant(ref, { operations: ["items.request.GET"], scopes: ["extra"] })
+      ).resolves.toMatchObject({ granted: true, connectionRevision: 2 })
+    )
     expect(connectProvider).toHaveBeenCalledWith({
       providerId: "vendor",
       reconnect: ref,
       scopes: ["read", "write", "extra"],
+      credentialContext,
     })
     expect(kinds).toEqual(["add-scopes", "grant"])
     const [projection] = await listServiceConnections({ pluginId: "consumer" })
@@ -732,7 +746,11 @@ it("approval authorizes a calendar action with resource selectors through 3a and
     await expect(
       api().requestGrant(ref, { operations: ["calendar.events.list"], scopes: ["read"] })
     ).resolves.toMatchObject({ granted: true, connectionRevision: 1 })
-    const job = await executeIntegrationAction("consumer", input)
+    const job = await executeIntegrationAction("consumer", input, {
+      kind: "person",
+      surface: "calendar-picker",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
     await expect(runIntegrationActionJob(job.id)).resolves.toMatchObject({ status: "succeeded" })
     expect(proxyFetch).toHaveBeenCalledTimes(1)
     expect(
@@ -833,12 +851,26 @@ it.each([false, true])(
     if (revoke) getProvider("vendor")!.revoke = async () => {}
     await putConnectionBinding("consumer", "vendor", ref)
     await putConnectionBinding("other-consumer", "vendor", ref)
-    await manager.disconnect(ref, { revoke })
+    // Settings disconnects with the person's own proof (connections-panel).
+    await manager.disconnect(ref, {
+      revoke,
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
     expect(await getConnectionBinding("consumer", "vendor")).toBeUndefined()
     expect(await getConnectionBinding("other-consumer", "vendor")).toBeUndefined()
     expect(await api().get({ providerId: "vendor" })).toBeUndefined()
   }
 )
+
+it("refuses a personal revoke without Host proof and keeps the bindings", async () => {
+  getProvider("vendor")!.revoke = async () => {}
+  await putConnectionBinding("consumer", "vendor", ref)
+  await expect(manager.disconnect(ref, { revoke: true })).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+    decision: { reason: "missing-identity" },
+  })
+  expect(await getConnectionBinding("consumer", "vendor")).toBeDefined()
+})
 
 it("approval creates a bound account and current-revision grant, allowing 3a injection until revision changes", async () => {
   const dispose = prompt((request) => {

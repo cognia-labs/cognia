@@ -38,7 +38,10 @@ it("delegates legacy ids to the provider and pins only an available account's cu
       authorizationEpoch: "old-native-nonce",
     })
   ).toEqual({ accountId: "actual-ref", authorizationEpoch: "3" })
-  expect(hook).toHaveBeenCalledWith({ accountId: "legacy", authorizationEpoch: "old-native-nonce" })
+  expect(hook).toHaveBeenCalledWith(
+    { accountId: "legacy", authorizationEpoch: "old-native-nonce" },
+    undefined
+  )
   hook.mockResolvedValue({ ...account, authorizationEpoch: "2" })
   expect(await resolveDocsAccountBinding(provider, { accountId: "legacy" })).toBeUndefined()
 })
@@ -60,4 +63,21 @@ it("keeps providers without a legacy hook strict and avoids the hook for exact m
       { accountId: "actual-ref", authorizationEpoch: "2" }
     )
   ).toBeUndefined()
+})
+
+it("forwards invocation proof to account discovery and legacy binding resolution", async () => {
+  const options = { credentialContext: { executionRunId: "exact-host-attempt" } }
+  const account = { id: "actual", label: "Person", authorizationEpoch: "2" }
+  const listAccounts = jest.fn(async () => [account])
+  const resolveLegacyAccount = jest.fn(async () => account)
+  await expect(
+    resolveDocsAccountBinding(
+      { listAccounts, resolveLegacyAccount } as unknown as DocsProvider,
+      { accountId: "default" },
+      undefined,
+      options
+    )
+  ).resolves.toEqual({ accountId: "actual", authorizationEpoch: "2" })
+  expect(listAccounts).toHaveBeenCalledWith(options)
+  expect(resolveLegacyAccount).toHaveBeenCalledWith({ accountId: "default" }, options)
 })

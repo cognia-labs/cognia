@@ -1,5 +1,7 @@
 "use client"
 
+import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
+
 import { useEffect, useState, useSyncExternalStore } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { listAuthConnections } from "@/lib/db/auth-connections"
@@ -7,6 +9,9 @@ import { listServiceConnections, listCapabilityGrants } from "@/lib/db/external-
 import { listPlugins } from "@/lib/db/plugins"
 import { buildConnectionViews } from "@/lib/external-services/connection-view"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import { listLarkConnections } from "@/lib/connectors/adapters/lark/host-auth"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { useHostProfile } from "@/hooks/use-host-profile"
 import {
   getAuthProviderRevision,
   listProviders,
@@ -20,6 +25,7 @@ import {
 
 /** Manager events cover status/provider changes; Dexie also observes grants and plugin labels. */
 export function useAuthConnections() {
+  const hostProfile = useHostProfile()
   const [revision, setRevision] = useState(0)
   useEffect(() => getConnectionManager().onDidChange(() => setRevision((value) => value + 1)), [])
   const providerRevision = useSyncExternalStore(
@@ -34,6 +40,11 @@ export function useAuthConnections() {
   )
   const result = useLiveQuery(async () => {
     try {
+      // This hook is mounted by the person's Host settings account list.
+      if (hostProfile === "desktop") {
+        await listLarkConnections({ localAuthorization: LOCAL_PERSON_RUN })
+        await listGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+      }
       const connections = await listAuthConnections()
       const projections = await listServiceConnections()
       const grants = (
@@ -54,7 +65,7 @@ export function useAuthConnections() {
     } catch {
       return { rows: [], failed: true }
     }
-  }, [revision, providerRevision, integrationRevision])
+  }, [revision, providerRevision, integrationRevision, hostProfile])
   return {
     rows: result?.rows ?? [],
     loading: result === undefined,

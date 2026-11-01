@@ -11,6 +11,7 @@
  * the shared `withLarkAuthedApi` harness that the doc fetcher itself now uses.
  */
 
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import {
   listLarkConnections,
@@ -53,6 +54,11 @@ async function assertLarkAuthorization(opts: DocsProviderCallOptions) {
     )
   )
   throwIfRequestAborted(opts.signal)
+  const decision = await admitPersonalCredential(opts.credentialContext, {
+    source: "lark-user",
+    person: resolved.adapterId,
+  })
+  if (!decision.ok) throw new DocsProviderError("notAuthorized")
   return resolved
 }
 
@@ -82,8 +88,8 @@ export const larkDocsProvider: DocsProvider = {
   // `connectors_http_request` bridge can reach them. See `DocsProvider.hosts`.
   hosts: ["tauri"],
 
-  async listAccounts(): Promise<DocsProviderAccount[]> {
-    return (await listLarkConnections())
+  async listAccounts(options): Promise<DocsProviderAccount[]> {
+    return (await listLarkConnections(options?.credentialContext))
       .filter((row) => row.status === "connected")
       .map((row) => ({
         id: row.id,
@@ -126,6 +132,7 @@ export const larkDocsProvider: DocsProvider = {
       const refs = await withLarkAuthedApi(
         {
           adapterId,
+          credentialContext: opts.credentialContext,
           identity: "user",
           expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
           signal: opts.signal,
@@ -163,6 +170,7 @@ export const larkDocsProvider: DocsProvider = {
         identity: "user" as const,
         adapterId,
         expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
+        credentialContext: opts.credentialContext,
         signal: opts.signal,
         maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
       }
@@ -179,6 +187,7 @@ export const larkDocsProvider: DocsProvider = {
         const fetched = await fetchLarkDocAsRawSource(docInputFor(bodyRef), {
           adapterId,
           expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
+          credentialContext: opts.credentialContext,
           signal: opts.signal,
           maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
           ...(bodyRef.sourceType === "doc" || bodyRef.sourceType === "docx"

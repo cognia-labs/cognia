@@ -33,8 +33,22 @@ export function runTriggerFromOrigin(origin: { source: string } | undefined): Ru
 export const LOCAL_PERSON_RUN = Symbol("host-local-person-run")
 export type LocalPersonRun = typeof LOCAL_PERSON_RUN
 
+/** Host-owned enqueue context. Automation can only narrow personal authority. */
+export interface JobExecutionContext {
+  sessionId?: string
+  executionRunId?: string
+  localAuthorization?: LocalPersonRun
+  automation?: "schedule" | "service"
+}
+
 const activeToolRuns = new Map<string, string>()
 const toolCallRuns = new Map<string, string>()
+const builtinToolRuns = new Set<string>()
+const toolRunKey = (sessionId: string, runId: string) =>
+  JSON.stringify([getDb().name, sessionId, runId])
+/** Ephemeral Host transport proof; persisted runtime labels cannot recreate it. */
+export const isBuiltinToolExecutionRun = (sessionId: string, runId: string) =>
+  builtinToolRuns.has(toolRunKey(sessionId, runId))
 const toolCallKey = (sessionId: string, turnId: string, attemptId?: string) =>
   JSON.stringify([sessionId, turnId, attemptId ?? null])
 export const activeToolExecutionRunId = (sessionId: string) => activeToolRuns.get(sessionId)
@@ -44,13 +58,18 @@ export function bindToolCallRun(
   sessionId: string,
   turnId: string | undefined,
   runId: string | undefined,
-  attemptId?: string
+  attemptId?: string,
+  hostDispatch?: { builtinRuntime: true }
 ): void {
   if (!turnId) return
   const key = toolCallKey(sessionId, turnId, attemptId)
   const existing = toolCallRuns.get(key)
   toolCallRuns.set(key, existing !== undefined && existing !== runId ? "" : (runId ?? ""))
   if (toolCallRuns.size > 4096) toolCallRuns.delete(toolCallRuns.keys().next().value!)
+  if (runId && hostDispatch?.builtinRuntime === true) {
+    builtinToolRuns.add(toolRunKey(sessionId, runId))
+    if (builtinToolRuns.size > 4096) builtinToolRuns.delete(builtinToolRuns.values().next().value!)
+  }
 }
 
 /** A correlated but unknown turn must not fall back to a newer active run. */
@@ -65,11 +84,12 @@ export function toolCallExecutionRunId(
 
 /** Minimal entry record for host skill/member paths without a chat journal. */
 export async function startToolExecutionRun(
-  sessionId: string,
+  sessionId: string | undefined,
   options: {
     runId?: string
     parentRunId?: string
     localAuthorization?: LocalPersonRun
+    automation?: JobExecutionContext["automation"]
     /** Host-authorized confirmation, anchored to the run that issued the card. */
     confirmedSkill?: { originRunId?: string; requester: PrincipalRefV1; rootSessionId: string }
     title?: string
@@ -80,7 +100,10 @@ export async function startToolExecutionRun(
     await import("@/lib/db/execution-runs")
   if (getDb() !== db) throw new Error("Tool execution database changed")
   const id = options.runId ?? `execution:tool:${crypto.randomUUID()}`
-  const local = options.localAuthorization === LOCAL_PERSON_RUN
+  const local =
+    options.parentRunId === undefined &&
+    !options.automation &&
+    options.localAuthorization === LOCAL_PERSON_RUN
   const now = Date.now()
   const job = id.startsWith("execution:job:")
   const run = await db.transaction(
@@ -123,16 +146,29 @@ export async function startToolExecutionRun(
                 ? { parent: originRoot && { ...originRoot, authority: origin?.authority } }
                 : {}),
             })
-        : recordedRunMetadata(options.parentRunId ? "child" : local ? "local" : "external-event", {
-            runId: id,
-            parent,
-            ...(local
-              ? {
-                  authorizingPrincipal: { kind: "local-person" },
-                  requesters: [{ kind: "local-person" }],
-                }
-              : {}),
-          })
+        : recordedRunMetadata(
+            options.parentRunId
+              ? "child"
+              : local
+                ? "local"
+                : options.automation === "schedule"
+                  ? "schedule"
+                  : "external-event",
+            {
+              runId: id,
+              parent,
+              ...(local
+                ? {
+                    authorizingPrincipal: { kind: "local-person" },
+                    requesters: [{ kind: "local-person" }],
+                  }
+                : {}),
+            }
+          )
+      if (!parent && options.automation === "service" && metadata.actingIdentity) {
+        metadata.actingIdentity.lane = "service"
+        metadata.actingIdentity.actingPrincipal = { kind: "service", ref: id }
+      }
       if (requesterReplay && metadata.actingIdentity && originRoot?.actingIdentity)
         metadata.actingIdentity = {
           ...metadata.actingIdentity,
@@ -165,8 +201,29 @@ export async function startToolExecutionRun(
       return admitted
     }
   )
-  if (!job) activeToolRuns.set(sessionId, id)
+  if (!job && sessionId) activeToolRuns.set(sessionId, id)
   return run
+}
+
+/** Host enqueue only: a job keeps the exact live identity root across waits/retries.
+ * The job id is Host-owned, never an outbound request or plugin argument.
+ */
+export async function startJobExecutionRun(
+  jobId: string,
+  context?: JobExecutionContext,
+  options?: { delivery?: boolean }
+): Promise<ExecutionRun> {
+  const parent =
+    context?.executionRunId !== undefined
+      ? await resolveExecutingRun(context.sessionId, context.executionRunId, options)
+      : undefined
+  return startToolExecutionRun(parent?.sessionId ?? context?.sessionId, {
+    runId: `execution:job:${jobId}`,
+    // An invalid explicit run cannot fall through to the direct UI admission.
+    ...(context?.executionRunId !== undefined
+      ? { parentRunId: parent?.id ?? "" }
+      : { localAuthorization: context?.localAuthorization, automation: context?.automation }),
+  })
 }
 
 export async function finishToolExecutionRun(
@@ -195,29 +252,44 @@ export async function finishToolExecutionRun(
 }
 
 /** Resolve the executing run, never choose the newest of several candidates. */
-export async function resolveRunActingIdentity(sessionId: string, runId?: string) {
+export async function resolveRunActingIdentity(
+  sessionId: string | undefined,
+  runId?: string,
+  options?: { delivery?: boolean }
+) {
   const db = getDb()
-  const run = await resolveExecutingRun(sessionId, runId)
+  const run = await resolveExecutingRun(sessionId, runId, options)
   if (getDb() !== db || !run?.actingIdentity) return undefined
   const root = await identityRoot(db, run)
   return getDb() === db ? root?.actingIdentity : undefined
 }
 
-export async function resolveExecutingRun(sessionId: string, runId?: string) {
+export async function resolveExecutingRun(
+  sessionId: string | undefined,
+  runId?: string,
+  options?: { delivery?: boolean }
+) {
   const db = getDb()
   const { getExecutionRun, listExecutionRuns } = await import("@/lib/db/execution-runs")
   const candidates =
     runId !== undefined
       ? [await getExecutionRun(runId)]
-      : await listExecutionRuns({
-          sessionId,
-          statuses: ["queued", "running", "waiting", "paused"],
-          limit: 2,
-        })
+      : sessionId
+        ? await listExecutionRuns({
+            sessionId,
+            statuses: ["queued", "running", "waiting", "paused"],
+            limit: 2,
+          })
+        : []
   if (candidates.length !== 1 || !candidates[0]) return undefined
   const run = candidates[0]
-  if (run.sessionId !== sessionId || !run.actingIdentity) return undefined
-  if (!["queued", "running", "waiting", "paused"].includes(run.status)) return undefined
+  if ((sessionId !== undefined && run.sessionId !== sessionId) || !run.actingIdentity)
+    return undefined
+  if (
+    !["queued", "running", "waiting", "paused"].includes(run.status) &&
+    !(options?.delivery && runId && ["completed", "failed", "cancelled"].includes(run.status))
+  )
+    return undefined
   if (getDb() !== db) return undefined
   return run
 }

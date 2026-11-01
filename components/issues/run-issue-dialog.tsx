@@ -14,6 +14,7 @@
  * localizes verdicts and collects the per-adapter options.
  */
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { PlayIcon } from "lucide-react"
@@ -118,7 +119,9 @@ export function RunIssueDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void listIssueRunOptions(issueId).then((loaded) => {
+    void listIssueRunOptions(issueId, undefined, "interactive", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    }).then((loaded) => {
       if (cancelled) return
       setOptions(loaded)
       // Default to the first engine that can actually run it.
@@ -156,6 +159,7 @@ export function RunIssueDialog({
     setError(null)
     try {
       const run = await startIssueRun({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         issueId,
         adapterId: selected.adapter.id,
         by: { kind: "human" },

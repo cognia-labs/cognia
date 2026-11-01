@@ -80,7 +80,7 @@ describe("im.create_chat execute", () => {
   it("creates the chat, bootstraps the conversation, and sends the first message", async () => {
     const out = await skill().execute(
       { name: "Project X", memberIds: ["ou_a"], firstMessage: "hello team" },
-      { sessionId: "s" }
+      { sessionId: "s", executionRunId: "exact-create-chat" }
     )
     expect(mCreateChat).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Project X", memberIds: ["ou_a"] })
@@ -99,7 +99,11 @@ describe("im.create_chat execute", () => {
         adapterId: "a1",
         conversationKey: "lark:a1:oc_new",
         source: "skill",
-      })
+      }),
+      {
+        signal: undefined,
+        executionContext: { sessionId: "s", executionRunId: "exact-create-chat" },
+      }
     )
     expect(out).toEqual({
       chatId: "oc_new",
@@ -129,7 +133,8 @@ describe("im.create_chat execute", () => {
     expect(mEnqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         authorizedBy: { receiptId: "req_1", authority: "human", grantScope: "once" },
-      })
+      }),
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
     )
     expect(out).toMatchObject({ firstMessage: "sent" })
   })

@@ -1,3 +1,6 @@
+jest.mock("@/lib/mcp/credential-resolver", () => ({
+  resolveMcpRuntimeCredential: jest.fn(async (server) => ({ server })),
+}))
 import type { McpServer } from "@cognia/agent-config-types"
 
 import { CogniaAcpDynamicMcpController } from "./acp-dynamic-mcp-controller"
@@ -138,4 +141,25 @@ describe("CogniaAcpDynamicMcpController", () => {
       expect(close).not.toHaveBeenCalled()
     })
   })
+})
+
+it("does not open a personal OAuth connection for an external engine", async () => {
+  const { resolveMcpRuntimeCredential } = await import("@/lib/mcp/credential-resolver")
+  const resolve = jest.mocked(resolveMcpRuntimeCredential)
+  const open = jest.fn()
+  resolve.mockRejectedValueOnce(new Error("external-engine"))
+  const controller = new CogniaAcpDynamicMcpController({
+    getServer: async () => ({ ...server, transport: "http", config: { url: "https://x" } }),
+    open,
+  })
+  await expect(
+    controller.connect(
+      { serverId: server.id },
+      { sessionId: "external", signal: new AbortController().signal, notify: jest.fn() }
+    )
+  ).rejects.toThrow("external-engine")
+  expect(resolve).toHaveBeenLastCalledWith(expect.anything(), {
+    credentialContext: { sessionId: "external", externalEngine: true },
+  })
+  expect(open).not.toHaveBeenCalled()
 })

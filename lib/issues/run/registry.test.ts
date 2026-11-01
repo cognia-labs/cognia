@@ -4,6 +4,7 @@
 
 import type { IssueActor, IssueRun } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
 import { createIssueRun, getIssueRun, listIssueRuns } from "@/lib/db/issue-runs"
@@ -546,4 +547,26 @@ describe("wakeup support", () => {
     await checkInIssueRun(run.id, "ok")
     expect((await getIssue(issue.id))!.status).toBe("in_review")
   })
+})
+
+it("preserves Host credential proof for adapter availability and dispatch without inferring it from origin", async () => {
+  const registry = new IssueRunRegistry()
+  const adapter = fakeAdapter({
+    canRun: async (target) =>
+      target.credentialContext?.localAuthorization === LOCAL_PERSON_RUN
+        ? { ok: true }
+        : { ok: false, reason: "no-github-account" },
+  })
+  registry.register(adapter)
+  const issue = await makeIssue()
+  expect((await listIssueRunOptions(issue.id, registry))[0].verdict.ok).toBe(false)
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  expect(
+    (await listIssueRunOptions(issue.id, registry, "interactive", credentialContext))[0].verdict.ok
+  ).toBe(true)
+  await startIssueRun(
+    { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive", credentialContext },
+    registry
+  )
+  expect(adapter.starts[0].credentialContext).toBe(credentialContext)
 })

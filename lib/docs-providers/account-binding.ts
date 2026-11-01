@@ -4,6 +4,7 @@ import type {
   DocsProvider,
   DocsProviderAccount,
   DocsProviderAccountBinding,
+  DocsProviderCallOptions,
   RemoteDocRef,
 } from "./types"
 
@@ -45,12 +46,13 @@ export function accountMatchesBinding(
 export async function resolveDocsAccountBinding(
   provider: DocsProvider,
   binding: DocsProviderAccountBinding,
-  accounts?: readonly DocsProviderAccount[]
+  accounts?: readonly DocsProviderAccount[],
+  options?: Pick<DocsProviderCallOptions, "credentialContext">
 ): Promise<DocsProviderAccountBinding | undefined> {
-  const available = accounts ?? (await provider.listAccounts())
+  const available = accounts ?? (await provider.listAccounts(options))
   const exact = available.find((account) => accountMatchesBinding(account, binding))
   if (exact) return { ...binding }
-  const legacy = await provider.resolveLegacyAccount?.(binding)
+  const legacy = await provider.resolveLegacyAccount?.(binding, options)
   if (
     !legacy ||
     !available.some((account) =>

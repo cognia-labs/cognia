@@ -23,6 +23,7 @@ import { getSettings, saveSettings } from "./settings"
 import { tryBuildProjectKnowledgeDeps } from "@/lib/project-knowledge/runtime/build-deps"
 import { loggers } from "@cognia/logging"
 import { commitTranscriptIndexPage } from "./chat-transcript-index"
+import { enqueueOutbound } from "./outbound-jobs"
 
 const projectDepsMock = tryBuildProjectKnowledgeDeps as jest.Mock
 import {
@@ -147,6 +148,35 @@ describe("project-scope helper", () => {
   })
 
   describe("deleteProjectCascade", () => {
+    it("settles the deleted workspace's outbound executions without touching another workspace", async () => {
+      const db = getDb()
+      const create = async (projectId: string) => {
+        await saveSettings({ activeProjectId: projectId })
+        return enqueueOutbound({
+          adapterId: "workspace-adapter",
+          conversationKey: `telegram:workspace-adapter:${projectId}`,
+          source: "manual",
+          request: {
+            conversationRef: { platform: "telegram", adapterId: "workspace-adapter" },
+            segments: [{ type: "text", text: "queued" }],
+            metadata: { idempotencyKey: crypto.randomUUID() },
+          },
+        })
+      }
+      const removed = await create("A")
+      const keep = await create("B")
+      await deleteProjectCascade("A")
+      expect(await db.outboundQueue.get(removed.id)).toBeUndefined()
+      expect(await db.executionRuns.get(`execution:job:outbound:${removed.id}`)).toMatchObject({
+        status: "cancelled",
+      })
+      expect(await db.outboundQueue.get(keep.id)).toBeDefined()
+      expect(await db.executionRuns.get(`execution:job:outbound:${keep.id}`)).toMatchObject({
+        status: "running",
+      })
+      expect(await db.syncTombstones.get(["outboundQueue", removed.id])).toBeDefined()
+    })
+
     it("leaves only content-free tombstones of the workspace's operation completions", async () => {
       const db = getDb()
       await db.sessions.put({

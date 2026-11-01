@@ -664,7 +664,7 @@ describe("buildSlackAdapter", () => {
     expect(callArgs.historyMaxPages).toBeUndefined()
   })
 
-  it("userToken resolver prefers 'userToken' and falls back to legacy 'user_token'", async () => {
+  it("refuses ambient Slack personal tokens for unproven scheduled presence", async () => {
     const keyring = new Map<string, string>([["user_token", "xoxp-legacy"]])
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       if (cmd === "connectors_keyring_get") {
@@ -681,12 +681,12 @@ describe("buildSlackAdapter", () => {
     const callArgs = mockCreateSlackAdapter.mock.calls[0][0] as {
       userToken: () => Promise<string>
     }
-    // Only the legacy key exists → fallback kicks in.
-    await expect(callArgs.userToken()).resolves.toBe("xoxp-legacy")
+    // Neither key grants personal authority without an admitted requester.
+    await expect(callArgs.userToken()).resolves.toBe("")
 
-    // Canonical key wins once present.
+    // Adding the canonical credential cannot widen the unproven lane.
     keyring.set("userToken", "xoxp-new")
-    await expect(callArgs.userToken()).resolves.toBe("xoxp-new")
+    await expect(callArgs.userToken()).resolves.toBe("")
   })
 })
 

@@ -107,7 +107,7 @@ describe("im.dispatch_task execute — create-new path", () => {
         respondWithTeamId: "team_1",
         memberIds: ["ou_a", "ou_b"],
       },
-      { sessionId: "s" }
+      { sessionId: "s", executionRunId: "exact-dispatch-task" }
     )
 
     expect(mCreateChat).toHaveBeenCalledWith(
@@ -136,7 +136,11 @@ describe("im.dispatch_task execute — create-new path", () => {
         adapterId: "a1",
         conversationKey: "lark:a1:oc_new",
         source: "skill",
-      })
+      }),
+      {
+        signal: undefined,
+        executionContext: { sessionId: "s", executionRunId: "exact-dispatch-task" },
+      }
     )
     const request = mEnqueue.mock.calls[0][0].request
     expect(request.segments).toEqual([
@@ -195,7 +199,8 @@ describe("im.dispatch_task execute — create-new path", () => {
       }
     )
     expect(mEnqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ authorizedBy: expect.objectContaining({ receiptId: "req_1" }) })
+      expect.objectContaining({ authorizedBy: expect.objectContaining({ receiptId: "req_1" }) }),
+      { signal: undefined, executionContext: { sessionId: "s", executionRunId: "" } }
     )
     expect(out).toMatchObject({ brief: "sent", run: "started" })
   })
@@ -278,7 +283,8 @@ describe("im.dispatch_task execute — existing-conversation path", () => {
     expect(mUpsert.mock.calls[0][0]).not.toHaveProperty("teamId")
 
     expect(mEnqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ adapterId: "a2", conversationKey: "lark:a2:oc_ex" })
+      expect.objectContaining({ adapterId: "a2", conversationKey: "lark:a2:oc_ex" }),
+      expect.objectContaining({ executionContext: { sessionId: "s", executionRunId: "" } })
     )
     expect(mEnqueue.mock.calls[0][0].request.conversationRef).toEqual({
       platform: "lark",

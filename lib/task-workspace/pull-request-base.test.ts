@@ -1,3 +1,6 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { createGitHubPullRequestProvider } from "@/lib/review/github-runtime"
+jest.mock("@/lib/review/github-runtime", () => ({ createGitHubPullRequestProvider: jest.fn() }))
 import type { PullRequestProvider } from "@/types/review"
 import { resolvePullRequestWorkspaceBase } from "./pull-request-base"
 
@@ -65,4 +68,17 @@ it("does not contact a provider for non-PR bases", async () => {
     resolvePullRequestWorkspaceBase("/repo", { kind: "remoteDefault" }, adapter)
   ).resolves.toEqual({ kind: "remoteDefault" })
   expect(adapter.resolveCheckout).not.toHaveBeenCalled()
+})
+
+it("forwards Host admission to the default provider without granting unnamed callers", async () => {
+  jest.mocked(createGitHubPullRequestProvider).mockReturnValue(provider() as never)
+  const base = { kind: "pullRequest", provider: "github", repo: "acme/app", number: 42 } as const
+  await resolvePullRequestWorkspaceBase("/repo", base, undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(createGitHubPullRequestProvider).toHaveBeenLastCalledWith(undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  await resolvePullRequestWorkspaceBase("/repo", base)
+  expect(createGitHubPullRequestProvider).toHaveBeenLastCalledWith(undefined, undefined)
 })

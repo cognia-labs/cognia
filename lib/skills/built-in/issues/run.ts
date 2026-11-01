@@ -10,6 +10,7 @@
 import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
+import { resolveBuiltInSkillRunScope } from "../context"
 import type { BuiltInSkill } from "../types"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import { issueRefSchema, resolveIssue, resolveIssueActor, resolveWorkspaceId } from "./_core"
@@ -43,10 +44,12 @@ const skill: BuiltInSkill<typeof schema> = {
     const issue = await resolveIssue(args.issue, workspaceId)
     const by = await resolveIssueActor(ctx)
 
+    const scope = resolveBuiltInSkillRunScope(ctx)
+    const credentialContext = { sessionId: scope.sessionId, executionRunId: scope.runId ?? "" }
     const { listIssueRunOptions, startIssueRun, IssueRunRefusedError } =
       await import("@/lib/issues/run/registry")
     const origin = ctx.imBinding ? "im" : "interactive"
-    const options = await listIssueRunOptions(issue.id, undefined, origin)
+    const options = await listIssueRunOptions(issue.id, undefined, origin, credentialContext)
     const accepting = options.filter((option) => option.verdict.ok)
 
     let adapterId = args.adapterId
@@ -82,6 +85,7 @@ const skill: BuiltInSkill<typeof schema> = {
 
     try {
       const run = await startIssueRun({
+        credentialContext,
         issueId: issue.id,
         adapterId,
         by,

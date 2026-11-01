@@ -18,6 +18,10 @@
  * their own localized error taxonomy; this module owns none.
  */
 
+import {
+  admitPersonalCredential,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
@@ -87,6 +91,7 @@ export interface LarkAuthedApiAccount {
 }
 
 export interface WithLarkAuthedApiOptions {
+  credentialContext?: PersonalCredentialContext
   /** Optional observation context; never used to select an identity. */
   sessionId?: string
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
@@ -124,6 +129,11 @@ export async function withLarkAuthedApi<T>(
           .catch(() => {
             throw new LarkAccessError("notAuthorized")
           })
+      const admission = await admitPersonalCredential(
+        opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
+        { source: "lark-user", person: opts.adapterId }
+      )
+      if (!admission.ok) throw new LarkAccessError("notAuthorized")
       const current = await connectorsLarkUserAuth({
         action: "snapshot",
         adapterId: opts.adapterId,
@@ -153,7 +163,11 @@ export async function withLarkAuthedApi<T>(
     }
     const connection: AuthConnectionRow | undefined =
       opts.identity === "user"
-        ? await resolveLarkConnection(opts.adapterId).catch(() => {
+        ? await resolveLarkConnection(
+            opts.adapterId,
+            undefined,
+            opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined)
+          ).catch(() => {
             throw new LarkAccessError("notAuthorized", row.displayName)
           })
         : undefined
@@ -228,6 +242,8 @@ export async function withLarkAuthedApi<T>(
     }
 
     const ctx = {
+      credentialContext:
+        opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
       adapterId: opts.adapterId,
       appId,
       appSecret,
@@ -238,7 +254,13 @@ export async function withLarkAuthedApi<T>(
     if (opts.identity === "user") {
       let userToken: string | null
       try {
-        userToken = (await getConnectionManager().getCredentials(connection!.id)).accessToken
+        userToken = (
+          await getConnectionManager().getCredentials(connection!.id, {
+            credentialContext:
+              opts.credentialContext ??
+              (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
+          })
+        ).accessToken
       } catch {
         throw new LarkAccessError("notAuthorized", row.displayName)
       }

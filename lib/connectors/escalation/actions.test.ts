@@ -250,7 +250,8 @@ describe("runEscalationAction — urgent (Lark only; inert elsewhere)", () => {
           segments: [{ type: "text", text: SLA_ESCALATION_NOTICE.urgent.text(20) }],
           metadata: { idempotencyKey: "sla-urgent:lark:adp-1:oc_1:1" },
         }),
-      })
+      }),
+      { executionContext: { sessionId: "s1", automation: "service" } }
     )
     expect(d.waitForOutboundTerminal).toHaveBeenCalledWith("job-1", URGENT_NOTICE_TIMEOUT_MS)
     expect(d.urgentGoverned).toHaveBeenCalledWith({
@@ -342,7 +343,8 @@ describe("runEscalationAction — urgent (Lark only; inert elsewhere)", () => {
             },
           ],
         }),
-      })
+      }),
+      { executionContext: { sessionId: "s-ops", automation: "service" } }
     )
     expect(d.urgentGoverned).toHaveBeenCalledWith(
       expect.objectContaining({ conversationKey: "lark:adp-1:oc_ops" })

@@ -70,7 +70,9 @@ export class CogniaAcpDynamicMcpController implements AcpDynamicMcpHostControlle
     if (!server || !server.enabled) {
       throw new Error(`Enabled MCP server ${request.serverId} was not found`)
     }
-    const credential = await resolveMcpRuntimeCredential(server)
+    const credential = await resolveMcpRuntimeCredential(server, {
+      credentialContext: { sessionId: context.sessionId, externalEngine: true },
+    })
     const opened = await (this.deps.open ?? openMcpClient)(credential.server, {
       signal: context.signal,
       surface: "agent-sync",

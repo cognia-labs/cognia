@@ -1,5 +1,6 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import Link from "next/link"
 import { useTranslations } from "next-intl"
@@ -76,7 +77,8 @@ export function PluginBackupDestinationCard({ entry }: { entry: RegisteredBackup
     void readBackupDestinationReadiness(
       entry.id,
       controller.signal,
-      Boolean(passphrase || getSyncPassphrase())
+      Boolean(passphrase || getSyncPassphrase()),
+      { localAuthorization: LOCAL_PERSON_RUN }
     )
       .then((value) => {
         if (!controller.signal.aborted) setReadiness(value)
@@ -108,7 +110,7 @@ export function PluginBackupDestinationCard({ entry }: { entry: RegisteredBackup
       const result = await runRemoteBackupSyncNow(
         entry.id as `plugin:${string}/${string}`,
         passphrase,
-        { signal }
+        { signal, credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }
       )
       if (!signal.aborted) {
         if (result.ok) toast.success(t("succeeded"))
@@ -117,7 +119,9 @@ export function PluginBackupDestinationCard({ entry }: { entry: RegisteredBackup
     })
   const openRestore = () =>
     run(async (signal) => {
-      const rows = await listBackupDestinationSnapshots(entry.id, signal)
+      const rows = await listBackupDestinationSnapshots(entry.id, signal, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
       if (signal.aborted) return
       setSnapshots(rows)
       setRemoteId(rows[0]?.remoteId ?? "")
@@ -134,7 +138,8 @@ export function PluginBackupDestinationCard({ entry }: { entry: RegisteredBackup
           includeApiKey: false,
           onImportStart: () => setImporting(true),
         },
-        signal
+        signal,
+        { localAuthorization: LOCAL_PERSON_RUN }
       )
       if (!signal.aborted) {
         setRestoreOpen(false)

@@ -2,6 +2,7 @@
 import { z } from "zod"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
+import { resolveBuiltInSkillRunScope } from "../context"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import { skillDeliveryAuthorization } from "./_helpers"
 import { findSessionByConversationKey } from "@/lib/connectors/session-bindings"
@@ -69,6 +70,7 @@ const skill: BuiltInSkill<typeof schema> = {
     })
     ctx.signal?.throwIfAborted()
     const { enqueueAuthorized } = await import("@/lib/connectors/delivery-gateway")
+    const runScope = resolveBuiltInSkillRunScope(ctx)
     ctx.signal?.throwIfAborted()
     const result = await enqueueAuthorized(
       {
@@ -83,7 +85,10 @@ const skill: BuiltInSkill<typeof schema> = {
           metadata: { idempotencyKey: `voice:${crypto.randomUUID()}` },
         },
       },
-      { signal: ctx.signal }
+      {
+        signal: ctx.signal,
+        executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+      }
     )
     return { status: result.kind }
   },

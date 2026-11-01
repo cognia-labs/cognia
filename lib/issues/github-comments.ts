@@ -40,12 +40,19 @@ interface RawComment {
 }
 
 export interface FetchGithubIssueCommentsDeps {
-  resolveOctokit: (repoFullName: string) => Promise<OctokitLike | null>
+  resolveOctokit: (
+    repoFullName: string,
+    credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+  ) => Promise<OctokitLike | null>
 }
 
 const DEFAULT_DEPS: FetchGithubIssueCommentsDeps = {
-  resolveOctokit: (repoFullName) =>
-    (createResolveOctokit() as (name: string) => Promise<OctokitLike | null>)(repoFullName),
+  resolveOctokit: (repoFullName, credentialContext) =>
+    (
+      createResolveOctokit(undefined, credentialContext) as (
+        name: string
+      ) => Promise<OctokitLike | null>
+    )(repoFullName),
 }
 
 function toComment(raw: RawComment): GithubIssueComment | null {
@@ -69,11 +76,12 @@ function toComment(raw: RawComment): GithubIssueComment | null {
  */
 export async function fetchGithubIssueComments(
   target: { repoFullName: string; number: number },
-  deps: FetchGithubIssueCommentsDeps = DEFAULT_DEPS
+  deps: FetchGithubIssueCommentsDeps = DEFAULT_DEPS,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
 ): Promise<GithubIssueComments> {
   const [owner, repo] = target.repoFullName.split("/")
   if (!owner || !repo) throw new Error(`Not an "owner/repository" name: ${target.repoFullName}`)
-  const octokit = await deps.resolveOctokit(target.repoFullName)
+  const octokit = await deps.resolveOctokit(target.repoFullName, credentialContext)
   if (!octokit) throw new MissingGithubCredentialError(target.repoFullName)
 
   const comments: GithubIssueComment[] = []

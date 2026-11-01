@@ -22,6 +22,7 @@ import { act, renderHook } from "@testing-library/react"
 import { getDocsProvider } from "@/lib/docs-providers"
 import { getDocsProvider as registryProvider } from "@/lib/docs-providers/registry"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getDb } from "@/lib/db/schema"
 import type { DocsProvider, RemoteDocRef } from "@/lib/docs-providers/types"
 import { useRemoteDocStaging } from "./use-remote-doc-staging"
@@ -47,7 +48,7 @@ it("resolves a legacy binding before fetching and captures the real connection l
   }))
   const provider = {
     listAccounts: async () => [account],
-    resolveLegacyAccount: async () => account,
+    resolveLegacyAccount: jest.fn(async () => account),
     fetch,
   } as unknown as DocsProvider
   jest.mocked(getDocsProvider).mockReturnValue(provider)
@@ -66,6 +67,10 @@ it("resolves a legacy binding before fetching and captures the real connection l
       await result.current({ providerId: "google", accountId: "default", doc })
     ).toBeInstanceOf(File)
   })
+  expect(provider.resolveLegacyAccount).toHaveBeenCalledWith(
+    { accountId: "default", authorizationEpoch: "old-native-nonce" },
+    { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }
+  )
   expect(fetch).toHaveBeenCalledWith(
     expect.objectContaining({ accountBinding: { accountId: account.id, authorizationEpoch: "3" } }),
     expect.objectContaining({ accountId: account.id, expectedAuthorizationEpoch: "3" })

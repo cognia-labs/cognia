@@ -88,8 +88,8 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (sessionId) =>
       sessionId === "desktop" || sessionId === "local"
-        ? { trigger: "local", authorizingPrincipal: { kind: "local-person" } }
-        : { trigger: "requester" }
+        ? { requesters: [], trigger: "local", authorizingPrincipal: { kind: "local-person" } }
+        : { trigger: "requester", requesters: [] }
     )
   jest
     .mocked(resolveBuiltInSkillSessionBinding)
@@ -109,7 +109,17 @@ beforeEach(() => {
             binding: { platform: "lark", adapterId: "lark-1", conversationKey: "chat" },
           } as never)
     )
-  jest.mocked(connectorsLarkUserAuth).mockReset()
+  jest
+    .mocked(connectorsLarkUserAuth)
+    .mockReset()
+    .mockImplementation(
+      async () =>
+        ({
+          configured: true,
+          accessToken: await mockKeyring("lark-1", "user_token"),
+          authorizationEpoch: "local-epoch",
+        }) as never
+    )
   mockGetAdapter.mockReset()
   mockListByType.mockReset()
   mockKeyring.mockReset()
@@ -142,7 +152,7 @@ describe("resolveLarkAuth", () => {
       binding: undefined,
       personalLane: "local-session",
     } as never)
-    mockRunIdentity.mockResolvedValue({ trigger })
+    mockRunIdentity.mockResolvedValue({ trigger, requesters: [] })
     mockListByType.mockResolvedValue([mkAdapter()])
     mockKeyring.mockImplementation(async (_id: string, key: string) =>
       key === "appId" ? "app" : key === "appSecret" ? "secret" : "personal-token"
@@ -181,7 +191,7 @@ describe("resolveLarkAuth", () => {
       rootSession: {},
       binding,
     } as never)
-    mockRunIdentity.mockResolvedValue({ trigger: "requester" })
+    mockRunIdentity.mockResolvedValue({ trigger: "requester", requesters: [] })
     mockGetAdapter.mockResolvedValue(
       mkAdapter({
         settings: {
@@ -221,7 +231,7 @@ describe("resolveLarkAuth", () => {
       env: { LARKSUITE_CLI_USER_ACCESS_TOKEN: "personal-token" },
     })
     expect(mockTenantToken).not.toHaveBeenCalled()
-    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+    expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(1)
   })
 
   it.each(["requester", "external-event"])(
@@ -235,7 +245,7 @@ describe("resolveLarkAuth", () => {
             ({ rootSessionId: id, binding: id === "root" ? binding : undefined }) as never
         )
       const previous = mockRunIdentity.getMockImplementation()
-      mockRunIdentity.mockImplementation(async () => ({ trigger }))
+      mockRunIdentity.mockImplementation(async () => ({ trigger, requesters: [] }))
       mockGetAdapter.mockResolvedValue(
         mkAdapter({
           settings: {

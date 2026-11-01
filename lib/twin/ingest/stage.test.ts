@@ -7,6 +7,7 @@
  */
 
 import "fake-indexeddb/auto"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   commitStagedSources,
   detectChatJsonImporter,
@@ -379,6 +380,7 @@ describe("stageLarkDoc", () => {
     })
     await expect(
       stageLarkDoc("https://fixture.feishu.cn/docx/fixture", {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         adapterId: "fixture",
         signal: controller.signal,
       })
@@ -397,7 +399,10 @@ describe("stageLarkDoc", () => {
       adapterId: "cai_1",
       channel: "api",
     })
-    const result = await stageLarkDoc(DOCX_URL, { adapterId: "cai_1" })
+    const result = await stageLarkDoc(DOCX_URL, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "cai_1",
+    })
     expect(result.staged[0]).toMatchObject({
       kind: "document",
       format: "markdown",
@@ -419,6 +424,7 @@ describe("stageLarkDoc", () => {
       channel: "api",
     })
     const result = await stageLarkDoc("https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789", {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
       adapterId: "cai_1",
     })
     expect(result.staged[0].tags).toContain("lark-wiki")
@@ -426,13 +432,19 @@ describe("stageLarkDoc", () => {
 
   it("surfaces LarkIngestError codes directly", async () => {
     mockFetchLark.mockRejectedValue(new LarkIngestError("larkNoPermission", { account: "Acme" }))
-    const result = await stageLarkDoc(DOCX_URL, { adapterId: "cai_1" })
+    const result = await stageLarkDoc(DOCX_URL, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "cai_1",
+    })
     expect(result.error).toEqual({ code: "larkNoPermission", params: { account: "Acme" } })
   })
 
   it("wraps unexpected failures as larkNetwork", async () => {
     mockFetchLark.mockRejectedValue(new Error("socket hangup"))
-    const result = await stageLarkDoc(DOCX_URL, { adapterId: "cai_1" })
+    const result = await stageLarkDoc(DOCX_URL, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "cai_1",
+    })
     expect(result.error).toEqual({ code: "larkNetwork", params: { reason: "socket hangup" } })
   })
 })
@@ -502,13 +514,19 @@ describe("edge branches", () => {
       adapterId: "cai_1",
       channel: "api",
     })
-    const result = await stageLarkDoc("doxcnAbCdEfGh1234567890", { adapterId: "cai_1" })
+    const result = await stageLarkDoc("doxcnAbCdEfGh1234567890", {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "cai_1",
+    })
     expect(result.staged[0].tags).toEqual(["lark", "lark-doc"])
   })
 
   it("wraps non-Error lark failures", async () => {
     mockFetchLark.mockRejectedValue("nope")
-    const result = await stageLarkDoc("doxcnAbCdEfGh1234567890", { adapterId: "cai_1" })
+    const result = await stageLarkDoc("doxcnAbCdEfGh1234567890", {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "cai_1",
+    })
     expect(result.error).toEqual({ code: "larkNetwork", params: { reason: "nope" } })
   })
 })

@@ -277,3 +277,14 @@ describe("resolvedMcpServerMapToAcpConfigs", () => {
     ).toHaveLength(2)
   })
 })
+
+it("requires the external-engine refusal policy on the canonical MCP map builder", async () => {
+  mockList.mockResolvedValue([
+    server({ id: "p", name: "personal", transport: "http", config: { url: "https://x" } }),
+  ])
+  mockBuildMap.mockResolvedValue({})
+  expect(await resolveAcpMcpServers(["p"])).toEqual([])
+  expect(mockBuildMap).toHaveBeenLastCalledWith(expect.any(Array), {
+    credentialContext: { externalEngine: true },
+  })
+})

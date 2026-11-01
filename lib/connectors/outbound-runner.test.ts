@@ -15,6 +15,28 @@
  */
 
 import "fake-indexeddb/auto"
+jest.mock("./tauri/commands", () => ({
+  ...jest.requireActual("./tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    accessToken: "owner-token",
+    authorizationEpoch: "owner-epoch",
+  })),
+  connectorsHttpRequest: jest.fn(),
+}))
+jest.mock("./voice", () => ({
+  ...jest.requireActual("./voice"),
+  synthesizeConnectorVoice: jest.fn(async () => ({
+    type: "voice",
+    url: "data:audio/mpeg;base64,AQID",
+    mimeType: "audio/mpeg",
+  })),
+}))
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 // Delegate to the real outbound-jobs module by default so every existing test
 // keeps its real DB behavior; individual tests override `markSending` (to
 // simulate losing the atomic claim) or `listDueNow` (to simulate a persistent
@@ -70,6 +92,7 @@ jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
 const mockPiiDeep = jest.fn(() => true)
 const mockTrackEvent = jest.fn().mockResolvedValue(true)
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (...args: unknown[]) => mockPiiDeep(...(args as [])),
   hasNoLeakingPii: () => true,
 }))
@@ -123,7 +146,7 @@ it("blocks a later conversation job until its pending provider head settles", as
   }
 })
 
-function makeAdapter(id: string, send: () => Promise<OutboundResult>): PlatformAdapter {
+function makeAdapter(id: string, send: PlatformAdapter["send"]): PlatformAdapter {
   return {
     id,
     meta: {
@@ -697,15 +720,31 @@ describe("outbound-runner — authorization mode transitions", () => {
 })
 
 describe("outbound-runner — plugin onConnectorOutbound", () => {
+  it("startup reconciles sent and deleted jobs before draining", async () => {
+    const sent = await enqueue("a", "c"),
+      missing = await enqueue("a", "c")
+    await getDb().outboundQueue.update(sent.id, { status: "sent" })
+    await getDb().outboundQueue.delete(missing.id)
+    await runOnce(new Map())
+    expect(await getDb().executionRuns.get(`execution:job:outbound:${sent.id}`)).toMatchObject({
+      status: "completed",
+    })
+    expect(await getDb().executionRuns.get(`execution:job:outbound:${missing.id}`)).toMatchObject({
+      status: "cancelled",
+    })
+  })
   it("drops the job and audits when a plugin blocks it (send not called)", async () => {
     mockConnectorDecision.mockResolvedValue({ action: "block", reason: "policy" })
     const adapterId = "a_block"
     const send = jest.fn(async () => ({ ok: true, platformMessageId: "x" }))
     const adapter = makeAdapter(adapterId, send)
-    await enqueue(adapterId, `telegram:${adapterId}:chat`)
+    const job = await enqueue(adapterId, `telegram:${adapterId}:chat`)
     await runOnce(new Map([[adapterId, adapter]]))
     expect(adapter.send).not.toHaveBeenCalled()
     expect(await getDb().outboundQueue.count()).toBe(0)
+    expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
+      status: "cancelled",
+    })
     const audits = await listRecent(adapterId)
     expect(audits.some((a) => a.kind === "plugin.outbound_blocked")).toBe(true)
   })
@@ -1933,7 +1972,10 @@ describe("outbound-runner — structural scheduler budgets", () => {
     })
 
     const jobs = await waitForJobs((rows) => rows.every((row) => row.status === "sent"))
-    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    // Queue settlement precedes the job execution's final journal write.
+    // Observe lane disposal itself rather than assuming it finishes in 20 ms.
+    for (let i = 0; i < 50 && snapshots.at(-1)?.laneCount !== 0; i++)
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
     controller.abort()
     await promise
 
@@ -2946,6 +2988,456 @@ describe("outbound-runner — recipient-only Lark cards", () => {
         lastErrorCode: mode === "failover" ? "circuit_open" : "rate_limited",
       })
       expect(await getDb().outboundQueue.count()).toBe(2)
+    }
+  )
+})
+
+it("binds the exact outbound execution and refuses source or request metadata as personal proof", async () => {
+  const adapterId = "delivery-identity"
+  const conversationKey = `lark:${adapterId}:chat`
+  const adapter = makeAdapter(adapterId, async () => ({ ok: true, platformMessageId: "sent" }))
+  await upsertByConversationKey({ conversationKey, sessionId: "reply-session" } as never)
+  const origin = await startToolExecutionRun("reply-session", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const base = await enqueue(adapterId, conversationKey)
+  // Every persisted label is untrusted, including automatic producers' manual jobs.
+  for (const source of ["manual", "draft-approved", "ai-run"] as const) {
+    const job = await enqueueOutbound({
+      adapterId,
+      conversationKey,
+      source,
+      request: {
+        ...base.request,
+        metadata: {
+          idempotencyKey: crypto.randomUUID(),
+          sourceMessageId: origin.sourceId,
+          resultCard: { runId: origin.id, status: "done" },
+        },
+      },
+    })
+    await runOnce(new Map([[adapterId, adapter]]))
+    const options = jest.mocked(adapter.send).mock.calls.at(-1)?.[1]
+    expect(options?.localAuthorization).toBeUndefined()
+    expect(options?.executionIdentity).toBeUndefined()
+    expect(
+      (await getDb().executionRuns.get(`execution:job:outbound:${job.id}`))?.actingIdentity
+    ).toMatchObject({ trigger: "external-event", requesters: [] })
+  }
+  const local = await enqueueOutbound(
+    {
+      adapterId,
+      conversationKey,
+      source: "manual",
+      request: { ...base.request, metadata: { idempotencyKey: "host-manual" } },
+    },
+    { executionContext: { sessionId: "reply-session", localAuthorization: LOCAL_PERSON_RUN } }
+  )
+  await runOnce(new Map([[adapterId, adapter]]))
+  expect(adapter.send).toHaveBeenLastCalledWith(expect.any(Object), {
+    executionIdentity: { sessionId: "reply-session", runId: `execution:job:outbound:${local.id}` },
+  })
+})
+
+it("delivers a recovered owner attempt with the exact inherited root despite repeated source ids", async () => {
+  const adapterId = "owner-recovery"
+  const conversationKey = `lark:${adapterId}:chat`
+  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+  const adapter = makeAdapter(adapterId, async (_req, options) => {
+    const decision = await admitPersonalCredential(
+      {
+        sessionId: options?.executionIdentity?.sessionId,
+        executionRunId: options?.executionIdentity?.runId ?? "",
+        delivery: true,
+      },
+      { source: "lark-user" }
+    )
+    return decision.ok
+      ? { ok: true, platformMessageId: "owner-sent" }
+      : { ok: false, error: { code: "identity_refused", message: "refused", retryable: false } }
+  })
+  const first = await startToolExecutionRun("reply-session", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  await getDb().executionRuns.update(first.id, { sourceId: "same-inbound" })
+  const attempt = await startToolExecutionRun("reply-session", { parentRunId: first.id })
+  await getDb().executionRuns.update(attempt.id, { sourceId: "same-inbound" })
+  await finishToolExecutionRun(first.id)
+  await finishToolExecutionRun(attempt.id)
+  const job = await enqueueOutbound(
+    {
+      adapterId,
+      conversationKey,
+      source: "ai-run",
+      request: {
+        conversationRef: { platform: "lark", adapterId },
+        segments: [{ type: "text", text: "reply" }],
+        metadata: { idempotencyKey: "owner-continue", sourceMessageId: "same-inbound" },
+      },
+    },
+    { executionContext: { sessionId: "reply-session", executionRunId: attempt.id } }
+  )
+  await runOnce(new Map([[adapterId, adapter]]))
+  expect((await getDb().outboundQueue.get(job.id))?.status).toBe("sent")
+  const delivery = await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)
+  expect(delivery).toMatchObject({
+    parentRunId: attempt.id,
+    actingIdentity: { rootRunId: first.id },
+  })
+})
+
+describe("round 5: personal outbound producer identity", () => {
+  async function setupPersonalDelivery(
+    identity: "local" | "owner" | "unverified",
+    id = "personal-producer"
+  ) {
+    await seedInstance(id, {
+      type: "lark",
+      settings: { connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" } },
+    })
+    const conversationKey = `lark:${id}:oc_target`
+    const conversationRef = { platform: "lark" as const, adapterId: id, chatId: "oc_target" }
+    const deliveryTarget = {
+      address: {
+        platform: "lark" as const,
+        adapterId: id,
+        containerId: "oc_target",
+        conversationKey,
+        scopeKind: "group" as const,
+      },
+      conversationRef,
+      refreshedAt: Date.now(),
+    }
+    const sessionId = `origin-${id}`
+    await getDb().sessions.put({
+      id: sessionId,
+      updatedAt: Date.now(),
+      platformConversationKey: conversationKey,
+      platformBinding: {
+        platform: "lark",
+        adapterId: id,
+        conversationKey,
+        conversationRef,
+        deliveryTarget,
+      },
+    } as never)
+    const originSessionId = identity === "local" ? `desktop-${id}` : sessionId
+    if (originSessionId !== sessionId)
+      await getDb().sessions.put({ id: originSessionId, updatedAt: Date.now() } as never)
+    const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+    const { createExecutionRun } = await import("@/lib/db/execution-runs")
+    const originId = `execution:agent:${id}`
+    await createExecutionRun({
+      id: originId,
+      sessionId: originSessionId,
+      sourceId: "producer",
+      kind: "agent-turn",
+      title: "Producer",
+      status: "running",
+      currentRevision: 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      ...recordedRunMetadata(
+        identity === "local" ? "local" : identity === "owner" ? "requester" : "external-event",
+        {
+          runId: originId,
+          ...(identity === "local"
+            ? {
+                authorizingPrincipal: { kind: "local-person" as const },
+                requesters: [{ kind: "local-person" as const }],
+              }
+            : identity === "owner"
+              ? {
+                  requesters: [
+                    {
+                      kind: "platform" as const,
+                      platform: "lark",
+                      adapterId: id,
+                      remoteUserId: "ou_owner",
+                    },
+                  ],
+                }
+              : {}),
+        }
+      ),
+    })
+    const { getUserAccessToken } = await import("./adapters/lark/auth")
+    const adapter = makeAdapter(id, async (_request, options) => {
+      const context = {
+        sessionId: options?.executionIdentity?.sessionId,
+        executionRunId: options?.executionIdentity?.runId ?? "",
+        delivery: true,
+      }
+      const token = await getUserAccessToken(id, { ...context, larkContext: context as never })
+      return token === "owner-token"
+        ? { ok: true, platformMessageId: "personal-sent" }
+        : { ok: false, error: { code: "identity_refused", message: "refused", retryable: false } }
+    })
+    adapter.meta.type = "lark"
+    adapter.meta.capabilities = ["send.text", "send.voice", "chat.create"]
+    adapter.voiceFormats = () => ["audio/mpeg"]
+    adapter.createChat = jest.fn(async () => ({ chatId: "oc_created" }))
+    return { adapter, sessionId: originSessionId, originId, conversationKey, deliveryTarget }
+  }
+
+  it.each(["owner", "unverified", "unknown", "child"] as const)(
+    "delivers a dispatcher HITL card only with its verified %s execution",
+    async (identity) => {
+      const fixture = await setupPersonalDelivery(
+        identity === "unverified" ? "unverified" : "owner",
+        `confirmation-${identity}`
+      )
+      const { createLarkAdapter } = await import("./adapters/lark")
+      const { connectorsHttpRequest } = await import("./tauri/commands")
+      const http = jest.mocked(connectorsHttpRequest)
+      http.mockReset().mockImplementation(async ({ url }) => {
+        if (!url.includes("/authen/v1/user_info") && !url.includes("/im/v1/messages"))
+          throw new Error(`Unexpected Lark request: ${url}`)
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            code: 0,
+            data: { open_id: "ou_owner", message_id: "confirmation-sent" },
+          }),
+        }
+      })
+      fixture.adapter = createLarkAdapter({
+        id: fixture.adapter.id,
+        displayName: "Confirmation adapter",
+        appId: async () => "cli_confirmation",
+        appSecret: async () => "fixture-secret",
+        verificationToken: async () => "fixture-verification",
+        selfBotOpenId: "ou_bot",
+        sendAsUser: true,
+        transport: "webhook",
+      })
+      await import("@/lib/skills/built-in/im/broadcast")
+      const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
+      const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
+        await import("@/lib/claude/agents/subagent-approval-routes")
+      let executionRunId = identity === "unknown" ? "missing-run" : fixture.originId
+      let sessionId = fixture.sessionId
+      if (identity === "child") {
+        const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
+        executionRunId = (
+          await startJobExecutionRun("confirmation-child", {
+            sessionId,
+            executionRunId: fixture.originId,
+          })
+        ).id
+        sessionId = "ephemeral-confirmation-child"
+        registerSubagentApprovalRoute(sessionId, {
+          parentSessionId: fixture.sessionId,
+          runId: "confirmation-child",
+          subagentId: "confirmation",
+          backgrounded: false,
+        })
+      }
+      try {
+        const result = await runBuiltInSkill(
+          "im.broadcast",
+          { conversationKeys: [fixture.conversationKey], message: "Confirm this message" },
+          {
+            sessionId,
+            ...(identity === "child" ? {} : { executionRunId }),
+            imBinding: {
+              adapterId: fixture.adapter.id,
+              platform: "lark",
+              conversationKey: fixture.conversationKey,
+            },
+            imOverrideRow: { allowedBuiltInSkillIds: ["im.broadcast"] } as never,
+          }
+        )
+        expect(result.status).toBe("pending_hitl")
+        const [job] = await getDb().outboundQueue.toArray()
+        expect(job.request.segments[0].type).toBe("a2ui")
+        // A deferred confirmation survives the originating turn ending.
+        await finishToolExecutionRun(fixture.originId)
+        if (identity === "child") await finishToolExecutionRun(executionRunId)
+        await runOnce(new Map([[fixture.adapter.id, fixture.adapter]]))
+        const admitted = identity === "owner" || identity === "child"
+        expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+          status: admitted ? "sent" : "deadlettered",
+          ...(admitted ? { platformMessageId: "confirmation-sent" } : {}),
+        })
+        expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
+          ...(identity === "unknown" ? {} : { parentRunId: executionRunId }),
+          status: admitted ? "completed" : "failed",
+        })
+        if (admitted) {
+          expect(http).toHaveBeenCalled()
+          for (const [request] of http.mock.calls)
+            expect(request.headers?.Authorization).toBe("Bearer owner-token")
+        } else expect(http).not.toHaveBeenCalled()
+      } finally {
+        http.mockReset()
+        clearSubagentApprovalRoute(sessionId)
+      }
+    }
+  )
+
+  it.each([
+    ["im.broadcast", "local"],
+    ["im.broadcast", "owner"],
+    ["im.broadcast", "unverified"],
+    ["im.send_voice", "local"],
+    ["im.send_voice", "owner"],
+    ["im.send_voice", "unverified"],
+    ["im.create_chat", "local"],
+    ["im.dispatch_task", "local"],
+    ["im.broadcast", "child"],
+    ["im.send_voice", "child"],
+    ["im.create_chat", "child"],
+    ["im.dispatch_task", "child"],
+  ] as const)(
+    "%s goes through enqueue, runner and real Lark admission as %s",
+    async (skillId, identity) => {
+      const fixture = await setupPersonalDelivery(identity === "child" ? "local" : identity)
+      const { registerRunningAdapter, unregisterRunningAdapter } = await import("./lifecycle")
+      registerRunningAdapter(fixture.adapter.id, {
+        adapter: fixture.adapter,
+        abortController: new AbortController(),
+        restart: async () => undefined,
+      })
+      await import("@/lib/skills/built-in/im/broadcast")
+      await import("@/lib/skills/built-in/im/send-voice")
+      await import("@/lib/skills/built-in/im/create-chat")
+      await import("@/lib/skills/built-in/im/dispatch-task")
+      const { getSharedBuiltInSkillRegistry } = await import("@/lib/skills/built-in/registry")
+      const args =
+        skillId === "im.broadcast"
+          ? { conversationKeys: [fixture.conversationKey], message: "Hello" }
+          : skillId === "im.send_voice"
+            ? { conversationKey: fixture.conversationKey, text: "Hello" }
+            : skillId === "im.create_chat"
+              ? {
+                  name: "New chat",
+                  memberIds: ["ou_owner"],
+                  firstMessage: "Hello",
+                  adapterId: fixture.adapter.id,
+                }
+              : {
+                  title: "Task",
+                  brief: "Hello",
+                  existingConversationKey: fixture.conversationKey,
+                  respondWithCharacterId: "character",
+                  startRun: false,
+                }
+      let parentId = fixture.originId
+      let context: { sessionId: string; executionRunId?: string } = {
+        sessionId: fixture.sessionId,
+        executionRunId: fixture.originId,
+      }
+      const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
+        await import("@/lib/claude/agents/subagent-approval-routes")
+      if (identity === "child") {
+        const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
+        const child = await startJobExecutionRun("producer-child", context)
+        parentId = child.id
+        context = { sessionId: "ephemeral-producer-child" }
+        registerSubagentApprovalRoute(context.sessionId, {
+          parentSessionId: fixture.sessionId,
+          runId: "producer-child",
+          subagentId: "producer",
+          backgrounded: false,
+        })
+      }
+      try {
+        await getSharedBuiltInSkillRegistry().get(skillId)!.execute(args, context)
+        const [job] = await getDb().outboundQueue.toArray()
+        expect(job).toBeDefined()
+        // Deferred delivery must not depend on the originating turn staying live.
+        await finishToolExecutionRun(fixture.originId)
+        if (parentId !== fixture.originId) await finishToolExecutionRun(parentId)
+        await runOnce(new Map([[fixture.adapter.id, fixture.adapter]]))
+        expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
+          status: identity === "unverified" ? "deadlettered" : "sent",
+        })
+        expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
+          parentRunId: parentId,
+        })
+      } finally {
+        clearSubagentApprovalRoute(context.sessionId)
+        unregisterRunningAdapter(fixture.adapter.id)
+      }
+    }
+  )
+
+  it.each(["failover", "balanced"] as const)(
+    "%s inherits the exact original job before settlement",
+    async (mode) => {
+      const fixture = await setupPersonalDelivery("local", `reroute-${mode}`)
+      const siblingId = `sibling-${mode}`
+      await seedInstance(fixture.adapter.id, {
+        type: "lark",
+        settings: { connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" } },
+        failoverAdapterIds: [siblingId],
+        balanceAdapterIds: [siblingId],
+        outboundTuning: {
+          breakerMinEvents: 1,
+          ...(mode === "balanced" ? { rateCapacity: 1, rateRefillPerSec: 0.001 } : {}),
+        },
+      })
+      await seedInstance(siblingId, {
+        type: "lark",
+        settings: { connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" } },
+      })
+      const sibling = makeAdapter(siblingId, fixture.adapter.send)
+      sibling.meta.type = "lark"
+      if (mode === "failover")
+        fixture.adapter.send = jest.fn(async () => ({
+          ok: false,
+          error: { code: "platform_5xx", message: "failed", retryable: false },
+        }))
+      const { enqueueGovernedMany } = await import("./delivery-gateway")
+      const results = await enqueueGovernedMany(
+        ["head", "tail"].map((key) => ({
+          adapterId: fixture.adapter.id,
+          conversationKey: fixture.conversationKey,
+          source: "manual",
+          request: {
+            conversationRef: fixture.deliveryTarget.conversationRef,
+            deliveryTarget: fixture.deliveryTarget,
+            segments: [{ type: "text", text: "Hello" }],
+            metadata: { idempotencyKey: `${mode}-${key}` },
+          },
+        })),
+        { executionContext: { sessionId: fixture.sessionId, executionRunId: fixture.originId } }
+      )
+      const original = results[1]
+      expect(original.kind).toBe("queued")
+      if (original.kind !== "queued") throw new Error("Expected queued job")
+      await finishToolExecutionRun(fixture.originId)
+      const adapters = new Map([
+        [fixture.adapter.id, fixture.adapter],
+        [siblingId, sibling],
+      ])
+      const runner = createRunner(adapters)
+      let jobs: OutboundJobRow[]
+      try {
+        jobs = await waitForJobs((rows) =>
+          rows.some(
+            (job) =>
+              job.adapterId === siblingId &&
+              (job.status === "sent" || job.status === "deadlettered")
+          )
+        )
+      } finally {
+        runner.stop()
+        await runner.promise
+      }
+      const replacement = jobs.find((job) => job.adapterId === siblingId)!
+      expect(replacement).toMatchObject({ status: "sent" })
+      expect(
+        await getDb().executionRuns.get(`execution:job:outbound:${replacement.id}`)
+      ).toMatchObject({
+        parentRunId: `execution:job:outbound:${original.job.id}`,
+        actingIdentity: { rootRunId: fixture.originId },
+      })
+      expect(
+        await getDb().executionRuns.get(`execution:job:outbound:${original.job.id}`)
+      ).toMatchObject({ status: "failed" })
     }
   )
 })

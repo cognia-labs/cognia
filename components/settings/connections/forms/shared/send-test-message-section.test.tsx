@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 
@@ -262,7 +263,8 @@ describe("SendTestMessageSection", () => {
         "sl-1",
         expect.objectContaining({
           conversationRef: expect.objectContaining({ channelId: "C123" }),
-        })
+        }),
+        LOCAL_PERSON_RUN
       )
     })
     expect(mockEnqueue).not.toHaveBeenCalled()

@@ -43,6 +43,7 @@ const MAX_TIMEOUT_MS = 5 * 60 * 1000
 const LARK_CLI_EXIT_HITL_REQUIRED = 10
 
 export interface ExecLarkCliInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   context?: BuiltInSkillContext
   /**
    * Subcommand argv excluding the binary name. e.g.
@@ -123,6 +124,7 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
       adapterId: input.adapterId,
       identity: input.identity ?? (requiresUser ? "user" : undefined),
       context: input.context,
+      credentialContext: input.credentialContext,
     }))
   if (!auth.ok) {
     return {

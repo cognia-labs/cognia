@@ -78,7 +78,10 @@ export interface ResolveAcpMcpServersOptions {
   /** The run's workspace; omitted means the active one. */
   scope?: WorkspaceCapabilityScope
   listServers?: (scope?: WorkspaceCapabilityScope) => Promise<McpServer[]>
-  buildServerMap?: (servers: McpServer[]) => Promise<Record<string, McpServerWireConfig>>
+  buildServerMap?: (
+    servers: McpServer[],
+    deps?: import("@/lib/mcp/run-server-map").RunMcpServerMapDeps
+  ) => Promise<Record<string, McpServerWireConfig>>
 }
 
 /** True when the server has any per-tool deny or ask rule an ACP child cannot enforce. */
@@ -122,7 +125,7 @@ export async function resolveAcpMcpServers(
   if (chosen.length === 0) return []
   const buildServerMap =
     options.buildServerMap ?? (await import("@/lib/mcp/run-server-map")).buildRunMcpServerMap
-  const map = await buildServerMap(chosen)
+  const map = await buildServerMap(chosen, { credentialContext: { externalEngine: true } })
   const out: AcpMcpServerConfig[] = []
   for (const [name, config] of Object.entries(map)) {
     const acp = mcpServerToAcpConfig({

@@ -14,6 +14,10 @@
  * null and the loop stays inert.
  */
 
+import {
+  admitPersonalCredential,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import { gitDefaultBranch, gitRemotes } from "@/lib/git/commands"
 import { parseForgeRemote } from "@/lib/stack/forge/remote"
 import { getOctokitForRepo } from "@/lib/github/octokit-factory"
@@ -126,7 +130,11 @@ const HOSTNAME_RE = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/
  * (`--hostname`): plain `gh auth token` answers for github.com, and that token
  * is useless — and should never be sent — to an enterprise server.
  */
-export async function ghCliToken(host: GithubHost = GITHUB_DOT_COM): Promise<string | null> {
+export async function ghCliToken(
+  host: GithubHost = GITHUB_DOT_COM,
+  credentialContext?: PersonalCredentialContext
+): Promise<string | null> {
+  if (!(await admitPersonalCredential(credentialContext, { source: "github-user" })).ok) return null
   let command = "gh auth token"
   if (!isGithubDotCom(host)) {
     if (!HOSTNAME_RE.test(host.id)) return null
@@ -161,21 +169,31 @@ export async function ghCliToken(host: GithubHost = GITHUB_DOT_COM): Promise<str
  */
 export async function resolveGithubReadTokenForRepo(
   repoFullName: string,
-  host: GithubHost = GITHUB_DOT_COM
+  host: GithubHost = GITHUB_DOT_COM,
+  credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
   try {
     const { resolveGithubReadToken } = await import("@/lib/integrations/github-read-credential")
-    const fromAccount = await resolveGithubReadToken(repoFullName, host)
+    const fromAccount = await resolveGithubReadToken(
+      repoFullName,
+      host,
+      undefined,
+      credentialContext
+    )
     if (fromAccount) return fromAccount
   } catch {
     // Fall through to the CLI: a broken account store must not also take the
     // `gh` credential away.
   }
-  return ghCliToken(host)
+  return ghCliToken(host, credentialContext)
 }
 
 export interface ResolveOctokitDeps {
-  getToken: (repoFullName: string, host: GithubHost) => Promise<string | null>
+  getToken: (
+    repoFullName: string,
+    host: GithubHost,
+    credentialContext?: PersonalCredentialContext
+  ) => Promise<string | null>
   build: (opts: {
     repoFullName: string
     mode: "pat"
@@ -198,10 +216,15 @@ export function createResolveOctokit(
     // headers are `string | number | undefined` (vs. OctokitLike's narrower
     // `string | undefined`), so bridge across the minimal interface here.
     build: (opts) => getOctokitForRepo(opts) as unknown as Promise<OctokitLike>,
-  }
-): (repoFullName: string, host?: GithubHost) => Promise<OctokitLike | null> {
-  return async (repoFullName, host = GITHUB_DOT_COM) => {
-    const token = await deps.getToken(repoFullName, host).catch(() => null)
+  },
+  credentialContext?: PersonalCredentialContext
+): (
+  repoFullName: string,
+  host?: GithubHost,
+  context?: PersonalCredentialContext
+) => Promise<OctokitLike | null> {
+  return async (repoFullName, host = GITHUB_DOT_COM, context = credentialContext) => {
+    const token = await deps.getToken(repoFullName, host, context).catch(() => null)
     if (!token) return null
     try {
       return await deps.build({ repoFullName, mode: "pat", pat: { token }, host })

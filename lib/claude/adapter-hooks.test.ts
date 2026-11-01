@@ -8,6 +8,7 @@ import {
   dispatchPreToolUse,
   dispatchPostToolUse,
   dispatchOnAssistantMessage,
+  dispatchOnMessageSend,
   dispatchStreamStart,
   dispatchStreamChunk,
   dispatchStreamEnd,
@@ -17,6 +18,8 @@ import {
   __hasEventListenersForTests,
   __hasListenersForTests,
 } from "./adapter-hooks"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"
 import {
   registerInterceptor,
@@ -101,6 +104,23 @@ beforeEach(() => {
 })
 
 describe("adapter-hooks", () => {
+  it("carries Host identity through the message pipeline without exposing it to plugins", async () => {
+    const seen: unknown[] = []
+    const message = { id: "message", role: "user" as const, content: "hello" }
+    const onMessageSend = jest.fn(async (input) => {
+      await Promise.resolve()
+      seen.push(pluginExecutionContext("p1"))
+      return input
+    })
+    seedPlugins({ p1: { status: "enabled", hooks: { onMessageSend } } })
+    const execution = { sessionId: "session", localAuthorization: LOCAL_PERSON_RUN } as const
+    await dispatchOnMessageSend(message, execution)
+    expect(seen).toEqual([execution])
+    expect(onMessageSend).toHaveBeenCalledWith(message)
+    expect(pluginExecutionContext("p1")).toBeUndefined()
+    await dispatchOnMessageSend(message)
+    expect(seen.at(-1)).toEqual({ executionRunId: "" })
+  })
   it("forwards dispatchUserPromptSubmit and returns the proceed default when no plugin overrides", async () => {
     enableAllEventHooks()
     const spy = jest

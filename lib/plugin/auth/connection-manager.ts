@@ -1,3 +1,11 @@
+import {
+  pluginExecutionContext,
+  pluginDispatchContext,
+  withPluginExecutionContext,
+  readPluginCredentialAccess,
+  restrictPluginCredentialContext,
+  type PluginCredentialAccess,
+} from "@/lib/plugin/core/invocation-identity"
 import type {
   AuthConnectionIdentity,
   AuthConnectionMetadata,
@@ -17,6 +25,27 @@ import {
 import { getDb } from "@/lib/db/schema"
 import { getPlugin } from "@/lib/db/plugins"
 import { isClientSecretRequired } from "./client-secrets"
+import { ConsumerTokenReadDenied } from "./consumer-token-read-policy"
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
+import type { IntegrationBotBindingRef } from "@/types/plugin/plugin-integration"
+
+function callProvider<T>(
+  provider: AuthenticationProvider,
+  context: PersonalCredentialContext | undefined,
+  task: () => T
+): T {
+  return provider.pluginId
+    ? withPluginExecutionContext(
+        provider.pluginId,
+        context ?? pluginDispatchContext(provider.pluginId),
+        task
+      )
+    : task()
+}
 import {
   queueAccessTeardown,
   runAccessTeardown,
@@ -60,15 +89,60 @@ export interface HostDeviceAuthorization {
   cancel(): Promise<void>
 }
 
+export interface ConnectionCredentialOptions {
+  minValidityMs?: number
+  /** Issued by the Host API, never deserialized from plugin options. */
+  pluginAccess?: PluginCredentialAccess
+  credentialContext?: PersonalCredentialContext
+}
+
+/** Opaque, request-scoped Host proof; a serialized object cannot authorize a driver. */
+export interface HostConnectionCredentialAuthorization {
+  readonly __hostConnectionCredentialAuthorization: unique symbol
+}
+const driverAuthorizations = new WeakMap<
+  object,
+  {
+    adapterId: string
+    assertCurrent: () => Promise<void>
+    context?: () => PersonalCredentialContext | undefined
+  }
+>()
+
+export async function assertHostConnectionCredentialAuthorization(
+  authorization: HostConnectionCredentialAuthorization,
+  adapterId: string
+): Promise<void> {
+  const verified = driverAuthorizations.get(authorization)
+  if (!verified || verified.adapterId !== adapterId)
+    throw new ConnectionUnavailableError("credential-admission-missing")
+  await verified.assertCurrent()
+}
+
+/** A row grant cannot authorize global legacy identity hydration. */
+export async function hostConnectionCredentialContext(
+  authorization: HostConnectionCredentialAuthorization,
+  adapterId: string
+): Promise<PersonalCredentialContext | undefined> {
+  await assertHostConnectionCredentialAuthorization(authorization, adapterId)
+  return driverAuthorizations.get(authorization)?.context?.()
+}
+
 /** Built-in controllers keep their own CAS/keyring authority; never copy their tokens. */
 export interface HostConnectionDriver {
   publisher: string
   synchronize?(row: AuthConnectionRow): Promise<void>
-  getCredentials(row: AuthConnectionRow): Promise<AuthCredentialSet>
-  disconnect(row: AuthConnectionRow): Promise<void>
+  getCredentials(
+    row: AuthConnectionRow,
+    authorization: HostConnectionCredentialAuthorization
+  ): Promise<AuthCredentialSet>
+  disconnect(
+    row: AuthConnectionRow,
+    options?: { credentialContext?: PersonalCredentialContext }
+  ): Promise<void>
   reauthorize?(
     ref: AuthConnectionRef,
-    options: { ingressBase?: string | null }
+    options: { ingressBase?: string | null; credentialContext?: PersonalCredentialContext }
   ): Promise<void | HostDeviceAuthorization>
 }
 const hostDrivers = new Map<string, HostConnectionDriver>()
@@ -134,6 +208,7 @@ interface ConnectOptions {
    * a key that may still be in use elsewhere.
    */
   discardOnFailure?: boolean
+  credentialContext?: PersonalCredentialContext
   reconnect?: AuthConnectionRef
   signal?: AbortSignal
   expectedRevision?: number
@@ -522,7 +597,9 @@ export class AuthConnectionManager {
         const target = await this.store.get(options.reconnect)
         if (target && !terminal(target)) options = { ...options, expectedRevision: target.revision }
       }
-      description = await registered.describe(credentials)
+      description = await callProvider(registered, options.credentialContext, () =>
+        registered.describe!(credentials)
+      )
       if (
         !description ||
         !description.issuer ||
@@ -568,7 +645,9 @@ export class AuthConnectionManager {
     description?: AuthIdentityDescription
   ): Promise<void> {
     try {
-      const identity = description ?? (await provider.describe?.(credentials))
+      const identity =
+        description ??
+        (await callProvider(provider, undefined, () => provider.describe?.(credentials)))
       if (!identity) return
       await this.revokeBestEffort(provider, {
         ref: crypto.randomUUID() as AuthConnectionRef,
@@ -735,8 +814,81 @@ export class AuthConnectionManager {
   }
   async getCredentials(
     ref: AuthConnectionRef,
-    options: { minValidityMs?: number } = {}
+    options: ConnectionCredentialOptions = {}
   ): Promise<AuthCredentialSet> {
+    const access = options.pluginAccess && readPluginCredentialAccess(options.pluginAccess)
+    // Pin before the first store await. A proof/read cannot borrow a later
+    // invocation of the same plugin, even when that later run is local-person.
+    const initial = access ? pluginExecutionContext(access.pluginId) : undefined
+    const captured = access?.context ?? initial ?? options.credentialContext
+    const pinned = restrictPluginCredentialContext(
+      restrictPluginCredentialContext(captured, initial),
+      options.credentialContext
+    )
+    const credentialContext = () =>
+      restrictPluginCredentialContext(
+        pinned,
+        access ? pluginExecutionContext(access.pluginId) : undefined
+      )
+    const assertAdmission = async () => {
+      const row = await this.requireRow(ref)
+      if (access && row.ownerPluginId !== access.pluginId) {
+        // A run authorizes personal authority, never a consumer operation.
+        // Raw session reads carry no operation grant; use the granted request API.
+        if (!access.assertConsumerAccess)
+          throw new ConsumerTokenReadDenied(access.pluginId, row.providerId)
+        await access.assertConsumerAccess(row.id)
+      }
+      if (row.principalKind !== "user") return
+      const context = credentialContext()
+      if (access && context === undefined) {
+        // The provider's own sessions are plugin-held material (phase 5/6).
+        // A consumer has already proved its exact operation's live grant above.
+        return
+      }
+      const decision = await admitPersonalCredential(context, {
+        source:
+          row.hostMetadata && row.providerId === "lark"
+            ? "lark-user"
+            : row.hostMetadata && row.providerId === "google"
+              ? "google-docs"
+              : "integration-user",
+        person: row.hostMetadata?.adapterId ?? row.id,
+      })
+      if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+    }
+    const credentials = await this.readCredentials(ref, options, assertAdmission, credentialContext)
+    await assertAdmission()
+    return credentials
+  }
+
+  /** ADR-0243 phase 5 owns explicit operator Bot bindings; reverify, never trust a label. */
+  async getCredentialsForBotBinding(
+    ref: AuthConnectionRef,
+    pluginId: string,
+    binding: IntegrationBotBindingRef
+  ): Promise<AuthCredentialSet> {
+    const acceptedBinding = { runId: binding.runId, slotId: binding.slotId }
+    const assertAdmission = async () => {
+      const { resolveBotIntegrationBinding } =
+        await import("@/lib/plugin/api/bot-integration-binding")
+      const verified = await resolveBotIntegrationBinding(pluginId, acceptedBinding)
+      if (verified.account.connectionId !== ref)
+        throw new ConnectionUnavailableError("bot-binding-changed")
+      await this.requireRow(ref)
+    }
+    const credentials = await this.readCredentials(ref, {}, assertAdmission)
+    await assertAdmission()
+    return credentials
+  }
+
+  private async readCredentials(
+    ref: AuthConnectionRef,
+    options: ConnectionCredentialOptions,
+    assertAdmission: () => Promise<void>,
+    credentialContext?: () => PersonalCredentialContext | undefined
+  ): Promise<AuthCredentialSet> {
+    await assertAdmission()
     let row = await this.requireRow(ref)
     if (row.status === "needs-reauth") throw new ConnectionUnavailableError("needs-reauth")
     let provider = await this.requireProvider(row)
@@ -744,22 +896,40 @@ export class AuthConnectionManager {
       row = await this.getConnection(ref, row.revision)
       const driver = hostDrivers.get(row.providerId)
       if (!driver) throw new ConnectionUnavailableError("provider-unavailable")
-      const credentials = await driver.getCredentials(row)
-      await this.getConnection(ref, row.revision)
-      return credentials
+      const authorization = {} as HostConnectionCredentialAuthorization
+      driverAuthorizations.set(authorization, {
+        adapterId: row.hostMetadata!.adapterId,
+        assertCurrent: assertAdmission,
+        context: credentialContext,
+      })
+      try {
+        const credentials = await driver.getCredentials(row, authorization)
+        await assertAdmission()
+        await this.getConnection(ref, row.revision)
+        return credentials
+      } finally {
+        driverAuthorizations.delete(authorization)
+      }
     }
     if (row.legacySessionId) {
-      const session = (await provider.getSessions(undefined, { silent: true })).find(
-        (session) => session.id === row.legacySessionId
-      )
+      await assertAdmission()
+      const session = (
+        await callProvider(provider, credentialContext?.(), () =>
+          provider.getSessions(undefined, { silent: true })
+        )
+      ).find((session) => session.id === row.legacySessionId)
       if (!session) throw new ConnectionUnavailableError("legacy-session-missing")
+      await assertAdmission()
       const resolved = provider.resolveRequestCredential
-        ? await provider.resolveRequestCredential(session.id, {
-            connectorAccountId: ref,
-            origin: row.issuer,
-          })
+        ? await callProvider(provider, credentialContext?.(), () =>
+            provider.resolveRequestCredential!(session.id, {
+              connectorAccountId: ref,
+              origin: row.issuer,
+            })
+          )
         : session
       await this.requireRow(ref)
+      await assertAdmission()
       return {
         accessToken: resolved.accessToken,
         expiresAt: "expiresAt" in resolved ? resolved.expiresAt : undefined,
@@ -767,6 +937,7 @@ export class AuthConnectionManager {
       }
     }
     const read = async () => {
+      await assertAdmission()
       const snapshot = await this.credentials.read(ref)
       if (snapshot.tombstoned || !snapshot.credentials)
         throw new ConnectionUnavailableError("credentials-removed")
@@ -794,7 +965,8 @@ export class AuthConnectionManager {
         }
         let refreshed: AuthCredentialSet
         try {
-          refreshed = await this.refresh(provider, context)
+          await assertAdmission()
+          refreshed = await this.refresh(provider, context, credentialContext?.())
         } catch (error) {
           if (invalidGrant(error))
             await this.mutate(ref, async () => {
@@ -840,6 +1012,7 @@ export class AuthConnectionManager {
               updatedAt: this.now(),
             })
             if (!available) throw new ConnectionUnavailableError("provider-unavailable")
+            await assertAdmission()
             return refreshed
           })
         } catch (error) {
@@ -866,9 +1039,46 @@ export class AuthConnectionManager {
       "lineage"
     )
   }
-  async disconnect(ref: AuthConnectionRef, options: { revoke?: boolean } = {}): Promise<void> {
+  async disconnect(
+    ref: AuthConnectionRef,
+    options: {
+      revoke?: boolean
+      credentialContext?: PersonalCredentialContext
+      pluginAccess?: PluginCredentialAccess
+    } = {}
+  ): Promise<void> {
+    const access = options.pluginAccess && readPluginCredentialAccess(options.pluginAccess)
+    const initial = access ? pluginExecutionContext(access.pluginId) : undefined
+    const captured = access?.context ?? initial ?? options.credentialContext
+    const pinned = restrictPluginCredentialContext(
+      restrictPluginCredentialContext(captured, initial),
+      options.credentialContext
+    )
+    const credentialContext = () =>
+      restrictPluginCredentialContext(
+        pinned,
+        access ? pluginExecutionContext(access.pluginId) : undefined
+      )
+    const assertPersonalRevocation = async (row: AuthConnectionRow) => {
+      if (row.principalKind !== "user") return
+      const context = credentialContext()
+      if (access && access.pluginId === row.ownerPluginId && context === undefined) return
+      const decision = await admitPersonalCredential(context, {
+        source: "integration-user",
+        person: row.id,
+      })
+      if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+    }
     const hostRow = await this.store.get(ref)
     if (hostRow?.hostMetadata) {
+      // Google revoke uses a personal token. Refuse before publishing a local
+      // tombstone, so an unproven background cleanup remains retryable.
+      if (hostRow.providerId === "google" && hostRow.principalKind === "user") {
+        const decision = await admitPersonalCredential(credentialContext(), {
+          source: "google-docs",
+        })
+        if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+      }
       let retired = hostRow
       await this.mutate(ref, async () => {
         const current = await this.store.get(ref)
@@ -885,22 +1095,28 @@ export class AuthConnectionManager {
       })
       const driver = hostDrivers.get(hostRow.providerId)
       if (!driver) throw new ConnectionUnavailableError("provider-unavailable")
-      await driver.disconnect(retired)
+      const context = credentialContext()
+      if (context) await driver.disconnect(retired, { credentialContext: context })
+      else await driver.disconnect(retired)
       return
     }
     let context: AuthLineageContext | undefined
     let provider: AuthenticationProvider | undefined
     let legacySessionId: string | undefined
     let disconnected = false
+    let revocationRow: AuthConnectionRow | undefined
     await this.mutate(ref, async () => {
       const row = await this.store.get(ref)
       if (!row || row.status === "revoked") return
-      disconnected = true
       try {
         provider = await this.requireProvider(row)
       } catch {
         provider = undefined
       }
+      if (options.revoke && provider && (provider.revoke || row.legacySessionId))
+        await assertPersonalRevocation(row)
+      disconnected = true
+      revocationRow = row
       legacySessionId = row.legacySessionId
       let previous = legacySessionId
         ? ({ raw: null, revision: 0 } as import("./connection-credentials").CredentialSnapshot)
@@ -945,11 +1161,19 @@ export class AuthConnectionManager {
     let failure: unknown
     try {
       if (options.revoke && provider) {
+        if (revocationRow && (context || legacySessionId))
+          await assertPersonalRevocation(revocationRow)
         if (context && provider.revoke) {
-          await boundedRevoke(() => provider!.revoke!(context!))
+          await boundedRevoke(() =>
+            callProvider(provider!, credentialContext(), () => provider!.revoke!(context!))
+          )
           revoked = true
         } else if (legacySessionId) {
-          await boundedRevoke(() => provider!.removeSession(legacySessionId!))
+          await boundedRevoke(() =>
+            callProvider(provider!, credentialContext(), () =>
+              provider!.removeSession(legacySessionId!)
+            )
+          )
           revoked = true
         }
       }
@@ -1040,20 +1264,26 @@ export class AuthConnectionManager {
     context: AuthLineageContext
   ): Promise<void> {
     try {
-      if (provider.revoke) await boundedRevoke(() => provider.revoke!(context))
+      if (provider.revoke)
+        await boundedRevoke(() =>
+          callProvider(provider, undefined, () => provider.revoke!(context))
+        )
     } catch {
       console.warn("Auth lineage revocation failed")
     }
   }
   private async refresh(
     provider: AuthenticationProvider,
-    context: AuthLineageContext
+    context: AuthLineageContext,
+    credentialContext?: PersonalCredentialContext
   ): Promise<AuthCredentialSet> {
     const controller = new AbortController()
     let timedOut = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const pending = Promise.resolve().then(() =>
-      provider.refresh!({ ...context, signal: controller.signal })
+      callProvider(provider, credentialContext, () =>
+        provider.refresh!({ ...context, signal: controller.signal })
+      )
     )
     // Providers that ignore AbortSignal may finish after the lock is released.
     // Never commit such a result; best-effort revoke the credentials instead.
@@ -1175,10 +1405,12 @@ export const createConnectionFromCredentials = (
   credentials: AuthCredentialSet,
   options?: ConnectOptions
 ) => getConnectionManager().createConnectionFromCredentials(provider, credentials, options)
-export const getCredentials = (ref: AuthConnectionRef, options?: { minValidityMs?: number }) =>
+export const getCredentials = (ref: AuthConnectionRef, options?: ConnectionCredentialOptions) =>
   getConnectionManager().getCredentials(ref, options)
-export const disconnect = (ref: AuthConnectionRef, options?: { revoke?: boolean }) =>
-  getConnectionManager().disconnect(ref, options)
+export const disconnect = (
+  ref: AuthConnectionRef,
+  options?: { revoke?: boolean; credentialContext?: PersonalCredentialContext }
+) => getConnectionManager().disconnect(ref, options)
 export const markProviderUnavailable = (providerId: string) =>
   getConnectionManager().markProviderUnavailable(providerId)
 export const ensureLegacyConnection = (providerId: string, session: AuthSession) =>
@@ -1200,8 +1432,10 @@ export async function forgetProfileAuthSecrets(
     secrets?: typeof accountAuthSecrets
     provider?: typeof getProvider
     providerIdentity?: typeof providerIdentity
+    credentialContext?: PersonalCredentialContext
   } = {}
 ): Promise<ProfileAuthCleanupReport> {
+  const credentialContext = options.credentialContext && { ...options.credentialContext }
   const report: ProfileAuthCleanupReport = { failures: [], tokensMayRemainLive: false }
   for (const kind of ["auth-connections", "auth-attempts"] as const) {
     try {
@@ -1229,12 +1463,21 @@ export async function forgetProfileAuthSecrets(
                   owner.publisher === expected.publisher &&
                   owner.contractMajor === expected.contractMajor
                 ) {
+                  if (!["bot", "service"].includes(lineage.identity.principal.kind)) {
+                    const decision = await admitPersonalCredential(credentialContext, {
+                      source: "integration-user",
+                      person: lineage.identity.principal.id,
+                    })
+                    if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+                  }
                   const context = {
                     ...lineage,
                     credentialRevision: record.revision,
                     credentials: record.credentials,
                   }
-                  await boundedRevoke(() => provider.revoke!(context))
+                  await boundedRevoke(() =>
+                    callProvider(provider, credentialContext, () => provider.revoke!(context))
+                  )
                 } else {
                   throw new Error("Auth provider unavailable for profile revocation")
                 }

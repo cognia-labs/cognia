@@ -13,6 +13,8 @@
  * mechanism for a different subsystem and must not be shared.
  */
 
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+
 export const DOCS_OAUTH_PATH_RE = /^cognia:\/\/docs-provider\/oauth\/([^?#/]+)/
 
 export interface DocsOAuthCallback {
@@ -24,7 +26,10 @@ export interface DocsOAuthCallback {
 }
 
 /** Completes one provider's authorization-code exchange. Throws on failure. */
-export type DocsOAuthCompletion = (callback: DocsOAuthCallback) => Promise<void>
+export type DocsOAuthCompletion = (
+  callback: DocsOAuthCallback,
+  credentialContext?: PersonalCredentialContext
+) => Promise<void>
 
 const completions = new Map<string, DocsOAuthCompletion>()
 
@@ -86,13 +91,16 @@ export type DocsOAuthOutcome =
  * Run the exchange for a deep link. Never throws — the caller renders the
  * outcome, and a failed OAuth must not take the app down.
  */
-export async function completeDocsOAuthDeepLink(raw: string): Promise<DocsOAuthOutcome> {
+export async function completeDocsOAuthDeepLink(
+  raw: string,
+  credentialContext?: PersonalCredentialContext
+): Promise<DocsOAuthOutcome> {
   const parsed = parseDocsOAuthDeepLink(raw)
   if (!parsed) return { status: "ignored" }
   const completion = completions.get(parsed.providerId)
   if (!completion) return { status: "unknown-provider", providerId: parsed.providerId }
   try {
-    await completion(parsed)
+    await completion(parsed, credentialContext)
     return { status: "ok", providerId: parsed.providerId }
   } catch (err) {
     return {

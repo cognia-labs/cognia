@@ -4,6 +4,8 @@ import "fake-indexeddb/auto"
 
 import { conversationKeyPrefix, reapAdapterResidue } from "./adapter-residue"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { enqueueOutbound, markFailed, markSent } from "@/lib/db/outbound-jobs"
+import { removeAdapterInstance } from "./remove-adapter-instance"
 
 beforeEach(async () => {
   await getDb().delete()
@@ -121,6 +123,46 @@ describe("conversationKeyPrefix", () => {
 })
 
 describe("reapAdapterResidue", () => {
+  it("settles waiting and retrying outbound executions through real adapter removal", async () => {
+    const db = getDb()
+    await db.adapterInstances.put({ id: TARGET.id, type: TARGET.type } as never)
+    const create = (adapterId: string) =>
+      enqueueOutbound({
+        adapterId,
+        conversationKey: `telegram:${adapterId}:42`,
+        source: "manual",
+        nextAttemptAt: Date.now() + 86_400_000,
+        request: {
+          conversationRef: { platform: "telegram", adapterId, channelId: "42" },
+          segments: [{ type: "text", text: "queued" }],
+          metadata: { idempotencyKey: crypto.randomUUID() },
+        },
+      })
+    const waiting = await create(TARGET.id)
+    const retrying = await create(TARGET.id)
+    await markFailed(retrying.id, "offline", "retry later", Date.now() + 86_400_000)
+    const sent = await create(TARGET.id)
+    await markSent(sent.id, "remote-message")
+    const keep = await create(KEEP)
+
+    const result = await removeAdapterInstance(TARGET)
+
+    expect(result.residue.failed).not.toContain("outboundQueue")
+    expect(result.residue.reaped.outboundQueue).toBe(3)
+    expect(await db.adapterInstances.get(TARGET.id)).toBeUndefined()
+    expect((await db.outboundQueue.toArray()).map((row) => row.id)).toEqual([keep.id])
+    for (const job of [waiting, retrying, sent, keep]) {
+      expect(await db.executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
+        status: job.id === keep.id ? "running" : job.id === sent.id ? "completed" : "cancelled",
+      })
+    }
+    expect(
+      (await db.syncTombstones.where("table").equals("outboundQueue").toArray()).map(
+        (row) => row.id
+      )
+    ).toEqual(expect.arrayContaining([waiting.id, retrying.id, sent.id]))
+  })
+
   it("removes the target's rows from every adapter-keyed table", async () => {
     await seed()
     const report = await reapAdapterResidue(TARGET)

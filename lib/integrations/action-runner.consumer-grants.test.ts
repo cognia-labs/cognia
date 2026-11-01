@@ -1,5 +1,23 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import {
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
+import {
+  invokePluginTool,
+  __setInvokePluginToolDepsForTesting,
+} from "@/lib/plugin/core/invoke-plugin-tool"
+import {
+  registerIntegrationsForPlugin,
+  unregisterIntegrationsForPlugin,
+} from "@/lib/plugin/bridge/integrations-bridge"
+import type { PluginManifest, PluginTool } from "@/types/plugin"
+import {
+  LOCAL_PERSON_RUN,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+} from "@/lib/execution/acting-authority"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import {
   bindIntegrationAccountConnection,
@@ -16,7 +34,11 @@ import {
   registerExternalServices,
   unregisterExternalServicesByPlugin,
 } from "@/lib/external-services/catalog"
-import { __resetIntegrationRegistryForTesting, registerIntegrationDefinitions } from "./registry"
+import {
+  __resetIntegrationRegistryForTesting,
+  registerIntegrationDefinitions,
+  listRegisteredIntegrations,
+} from "./registry"
 import {
   AuthConnectionManager,
   ConnectionUnavailableError,
@@ -38,6 +60,7 @@ import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plu
 import type { CapabilityGrant } from "@/types/external-service"
 import { proxyFetch } from "@/lib/network/proxy-fetch"
 import { createIntegrationsAPI } from "@/lib/plugin/api/integrations-api"
+import * as botBinding from "@/lib/plugin/api/bot-integration-binding"
 import {
   ConsumerGrantRequired,
   authenticatedIntegrationRequest,
@@ -46,6 +69,10 @@ import {
 } from "./action-runner"
 
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
+jest.mock("@/lib/plugin/api/bot-integration-binding", () => ({
+  ...jest.requireActual("@/lib/plugin/api/bot-integration-binding"),
+  resolveBotIntegrationBinding: jest.fn(),
+}))
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
   ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
   getConnectionManager: jest.fn(),
@@ -113,7 +140,7 @@ async function setup(owner = "provider-owner", header = false) {
     describe: async () => ({
       issuer: "https://api.example.test",
       clientId: "client",
-      principal: { id: "user", kind: "user" as const },
+      principal: { id: "service", kind: "service" as const },
       accountLabel: "User",
       scopes: ["read"],
     }),
@@ -582,3 +609,224 @@ it("allows a restored connection to recover the account's previous unavailable h
     status: 200,
   })
 })
+
+it("revalidates the exact Bot connection binding before releasing a Host-held user credential", async () => {
+  await setup(consumer)
+  rows.get(ref)!.principalKind = "user"
+  const read = jest.spyOn(manager, "getCredentials")
+  const boundRead = jest.spyOn(manager, "getCredentialsForBotBinding")
+  const resolve = jest
+    .mocked(botBinding.resolveBotIntegrationBinding)
+    .mockResolvedValue({ account: { connectionId: ref } } as never)
+  const binding = { runId: "bot-run", slotId: "installed-slot" }
+  const verified = {
+    pluginId: consumer,
+    accountId,
+    binding: { pluginId: "bot", ref: binding },
+  }
+  await expect(
+    authenticatedIntegrationRequest(consumer, accountId, url, undefined, undefined, verified)
+  ).resolves.toMatchObject({ status: 200 })
+  expect(boundRead).toHaveBeenCalledWith(ref, "bot", binding)
+  expect(read).not.toHaveBeenCalled()
+  resolve.mockResolvedValue({ account: { connectionId: "different-connection" } } as never)
+  await expect(
+    authenticatedIntegrationRequest(consumer, accountId, url, undefined, undefined, verified)
+  ).rejects.toThrow("bot-binding-changed")
+  expect(proxyFetch).toHaveBeenCalledTimes(1)
+})
+
+it("gates a user-scoped connection before getCredentials, independent of consumer ownership", async () => {
+  await setup(consumer)
+  rows.get(ref)!.principalKind = "user"
+  const read = jest.spyOn(manager, "getCredentials")
+  const run = await startToolExecutionRun("im", { runId: "not-owner" })
+  await getDb().executionRuns.update(run.id, {
+    actingIdentity: {
+      schemaVersion: 1,
+      rootRunId: run.id,
+      lane: "legacy",
+      trigger: "requester",
+      authorityRevision: 0,
+      requesters: [
+        { kind: "platform", platform: "lark", adapterId: "connected", remoteUserId: "not-owner" },
+      ],
+    },
+  })
+  await expect(
+    authenticatedIntegrationRequest(consumer, accountId, url, undefined, {
+      sessionId: "im",
+      executionRunId: run.id,
+    })
+  ).rejects.toThrow("Personal credential integration-user refused")
+  expect(read).not.toHaveBeenCalled()
+  await expect(
+    authenticatedIntegrationRequest(consumer, accountId, url, undefined, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+  ).resolves.toMatchObject({ status: 200 })
+  expect(read).toHaveBeenCalledTimes(1)
+})
+
+it("a connectionRef consumer grant admits outside a run but omitted or forged plugin fields cannot escape the Host-bound run", async () => {
+  await setup()
+  rows.get(ref)!.principalKind = "user"
+  await grant()
+  const api = createIntegrationsAPI(consumer, () => true)
+  await expect(
+    api.authenticatedRequest(accountId, url, { connectionRef: ref })
+  ).resolves.toMatchObject({ status: 200 })
+  jest.mocked(proxyFetch).mockClear()
+  const run = await startToolExecutionRun(undefined, { runId: "consumer-refused" })
+  await withPluginExecutionContext(consumer, { executionRunId: run.id }, async () => {
+    for (const init of [
+      { connectionRef: ref },
+      {
+        connectionRef: ref,
+        executionRunId: undefined,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      },
+    ]) {
+      await expect(api.authenticatedRequest(accountId, url, init)).rejects.toMatchObject({
+        name: "PersonalCredentialRefusedError",
+      })
+    }
+  })
+  expect(proxyFetch).not.toHaveBeenCalled()
+})
+
+it.each([true, false])(
+  "keeps the verified parent tool to child job identity through the real promoted integration bridge (local-person: %s)",
+  async (localPerson) => {
+    await setup()
+    rows.get(ref)!.principalKind = "user"
+    const definition = listRegisteredIntegrations(consumer)[0]
+    const tools: PluginTool[] = []
+    let handlerContext: ReturnType<typeof pluginExecutionContext>
+    await registerIntegrationsForPlugin(
+      consumer,
+      {
+        id: consumer,
+        name: "Business",
+        version: "1.0.0",
+        type: "frontend",
+        capabilities: ["integrations"],
+        integrations: [definition],
+      } as PluginManifest,
+      {
+        list: async (
+          _input: unknown,
+          context: Parameters<
+            import("@/types/plugin/plugin-integration").IntegrationActionHandler
+          >[1]
+        ) => {
+          handlerContext = pluginExecutionContext(consumer)
+          return context.authenticatedRequest(url, { connectionRef: ref })
+        },
+      },
+      (tool) => {
+        tools.push(tool)
+        return () => {}
+      }
+    )
+    await grant({ operationPatterns: ["items.list"] })
+    const parent = await startToolExecutionRun(undefined, {
+      runId: "promoted-local-parent",
+      ...(localPerson
+        ? { localAuthorization: LOCAL_PERSON_RUN }
+        : { automation: "service" as const }),
+    })
+    const tool = tools[0]
+    __setInvokePluginToolDepsForTesting({
+      getManager: () => ({
+        getPlugin: () => ({ status: "enabled", manifest: {} }),
+        getRegistry: () => ({ getTool: () => tool }),
+        handleActivationEvent: async () => {},
+      }),
+      getGuard: () => ({ getTier: () => "silent", checkWithConsent: async () => true }),
+      getBroker: () => ({ request: async () => true }),
+      resolveSandboxRuntimeRef: () => undefined,
+    } as never)
+    try {
+      const reply = await invokePluginTool(
+        consumer,
+        tool.name,
+        { accountId },
+        { executionRunId: parent.id }
+      )
+      expect(handlerContext?.executionRunId).toMatch(/^execution:job:integration:/)
+      expect(reply.result).toMatchObject({ status: localPerson ? "succeeded" : "failed" })
+      const jobRun = await getDb().executionRuns.get(handlerContext!.executionRunId!)
+      expect(jobRun).toMatchObject({
+        parentRunId: parent.id,
+        actingIdentity: { rootRunId: parent.id },
+        status: localPerson ? "completed" : "failed",
+      })
+      if (localPerson) {
+        expect(proxyFetch).toHaveBeenCalledTimes(1)
+        expect(
+          new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers).get("authorization")
+        ).toBe("Bearer host-credential")
+      } else {
+        expect(proxyFetch).not.toHaveBeenCalled()
+      }
+      expect(pluginExecutionContext(consumer)).toBeUndefined()
+    } finally {
+      __setInvokePluginToolDepsForTesting(null)
+      await unregisterIntegrationsForPlugin(consumer)
+    }
+  }
+)
+
+it.each(["api", "host", "outside"] as const)(
+  "pins raw authenticated requests before the first account await (%s)",
+  async (entry) => {
+    await setup()
+    rows.get(ref)!.principalKind = "user"
+    await grant()
+    const table = getDb().integrationAccounts
+    const row = await table.get(accountId)
+    let unblock!: (value: typeof row) => void
+    const gate = new Promise<typeof row>((resolve) => {
+      unblock = resolve
+    })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    jest.spyOn(table, "get").mockImplementationOnce(() => {
+      entered()
+      return gate as never
+    })
+    const origin = await startToolExecutionRun(undefined, {
+      runId: "deferred-request-origin",
+      automation: "service",
+    })
+    const later = await startToolExecutionRun(undefined, {
+      runId: "deferred-request-local",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const api = createIntegrationsAPI(consumer, () => true)
+    let pending!: Promise<unknown>
+    const begin = async () => {
+      pending =
+        entry === "host"
+          ? authenticatedIntegrationRequest(consumer, accountId, url, { connectionRef: ref })
+          : api.authenticatedRequest(accountId, url, { connectionRef: ref })
+      await started
+    }
+    try {
+      if (entry === "outside") await begin()
+      else await withPluginExecutionContext(consumer, { executionRunId: origin.id }, begin)
+      await finishToolExecutionRun(origin.id)
+      await withPluginExecutionContext(consumer, { executionRunId: later.id }, async () => {
+        unblock(row)
+        await expect(pending).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+      })
+      expect(proxyFetch).not.toHaveBeenCalled()
+    } finally {
+      unblock(row)
+      await pending?.catch(() => undefined)
+    }
+  }
+)

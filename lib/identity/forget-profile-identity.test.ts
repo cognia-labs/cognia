@@ -172,3 +172,11 @@ it.each(["report", "throw"])(
     expect(unbindHost).toHaveBeenCalledWith("deleted", undefined)
   }
 )
+
+it("forwards only the Host proof captured by the confirmed profile deletion", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  const credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext =
+    { localAuthorization: actingAuthority.LOCAL_PERSON_RUN }
+  await forgetProfileCloudIdentity("inactive", { credentialContext, hostBound: false })
+  expect(forgetProfileAuthSecrets).toHaveBeenCalledWith("inactive", { credentialContext })
+})

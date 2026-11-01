@@ -319,6 +319,7 @@ async function runToolEnabled(
       useSettingsStore.getState().settings
     const sessionRow = (await sessionsDb.getSession(session.id)) ?? session
     const sendOptions = await buildOpts.resolveSendOptions({
+      personalCredentialContext: { sessionId: session.id, executionRunId: execution.id },
       session: sessionRow,
       character,
       appSettings: appSettings ?? null,

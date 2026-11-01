@@ -6,6 +6,14 @@
  */
 
 import { invoke } from "@tauri-apps/api/core"
+import {
+  hostCommandExecution,
+  pluginExecutionContext,
+  pluginDispatchContext,
+  bindPluginCallbacks,
+  withHostCommandExecution,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 import type { SlashCommandContext } from "@/lib/slash-commands/registry"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import stagedPluginCatalog from "@/lib/plugin/distribution/bundled-plugins.generated.json"
@@ -1097,10 +1105,30 @@ export class PluginManager {
     command: string,
     args: Record<string, unknown> = {}
   ): Promise<T> {
-    if (this.config.nodeHostInvoker) {
-      return this.config.nodeHostInvoker<T>(command, args)
+    const dispatch = () =>
+      this.config.nodeHostInvoker
+        ? this.config.nodeHostInvoker<T>(command, args)
+        : invoke<T>(command, args)
+    if (
+      typeof args.pluginId === "string" &&
+      [
+        "plugin_python_call",
+        "plugin_python_call_tool",
+        "plugin_python_call_hook",
+        "plugin_python_push_config",
+        "plugin_python_eval",
+        "plugin_python_import",
+        "plugin_python_module_call",
+        "plugin_python_module_getattr",
+      ].includes(command)
+    ) {
+      return withPluginExecutionContext(
+        args.pluginId,
+        pluginDispatchContext(args.pluginId),
+        dispatch
+      )
     }
-    return invoke<T>(command, args)
+    return dispatch()
   }
 
   private requirePythonGeneration(pluginId: string): string {
@@ -4204,8 +4232,10 @@ export class PluginManager {
       // lazy activation forever.
       let hooks: PluginHooks | undefined
       if (typeof definition.activate === "function") {
+        const execution = pluginExecutionContext(pluginId)
+        const activate = async () => definition.activate!(context)
         const activation = this.getPluginDisposableScope(pluginId).trackPendingWork(
-          Promise.resolve(definition.activate(context)),
+          execution ? withPluginExecutionContext(pluginId, execution, activate) : activate(),
           "plugin.activate"
         )
         hooks =
@@ -4428,11 +4458,16 @@ export class PluginManager {
       if (dep && dep.status !== "enabled") {
         // Each dependency gets its OWN progress entry keyed by depId, running
         // 0/7 → 7/7 independently while this plugin sits at `dependencies`.
-        if ((await this.getPluginLifecycleState(depId)).intent === "disabled") {
-          await this.setPluginIntent(depId, "enabled", "dependency")
-        } else {
-          await this.enablePlugin(depId, "dependency", { activationParentId: pluginId })
+        const activate = async () => {
+          if ((await this.getPluginLifecycleState(depId)).intent === "disabled") {
+            await this.setPluginIntent(depId, "enabled", "dependency")
+          } else {
+            await this.enablePlugin(depId, "dependency", { activationParentId: pluginId })
+          }
         }
+        const execution = pluginExecutionContext(pluginId)
+        if (execution) await withPluginExecutionContext(depId, execution, activate)
+        else await activate()
       }
     }
 
@@ -5170,7 +5205,11 @@ export class PluginManager {
             return this.hooksManager.dispatchOnResume(pluginId)
         }
       }
-      await withTimeout(dispatch(), LIFECYCLE_HOOK_TIMEOUT_MS, `plugin.${hook}:${pluginId}`)
+      const execution = pluginExecutionContext(pluginId)
+      const pending = execution
+        ? withPluginExecutionContext(pluginId, execution, dispatch)
+        : dispatch()
+      await withTimeout(pending, LIFECYCLE_HOOK_TIMEOUT_MS, `plugin.${hook}:${pluginId}`)
     } catch (error) {
       loggers.manager.warn(`[plugin:${pluginId}] ${hook} hook threw (ignored):`, error)
       recordSilentFailure(
@@ -5931,7 +5970,7 @@ export class PluginManager {
 
   async handleActivationEvent(
     event: PluginActivationRuntimeEvent,
-    options?: { initiatorPluginId?: string; targetPluginId?: string }
+    options?: { initiatorPluginId?: string; targetPluginId?: string; hostCommandContext?: object }
   ): Promise<void> {
     const store = usePluginStore.getState()
     const initiator = options?.initiatorPluginId
@@ -6022,11 +6061,20 @@ export class PluginManager {
         // A suspended plugin is resumed (fires onResume, reuses its preserved
         // permissions/i18n) rather than re-enabled, so it sees a transparent
         // wake — not a fresh enable.
-        if (plugin.status === "suspended") {
-          await this.resumePlugin(pluginId, `activation:${event}`)
-        } else {
-          await this.enablePlugin(pluginId, `activation:${event}`)
+        const activate = async () => {
+          if (plugin.status === "suspended") {
+            await this.resumePlugin(pluginId, `activation:${event}`)
+          } else {
+            await this.enablePlugin(pluginId, `activation:${event}`)
+          }
         }
+        const execution =
+          hostCommandExecution(options?.hostCommandContext) ??
+          (options?.initiatorPluginId
+            ? pluginExecutionContext(options.initiatorPluginId)
+            : undefined)
+        if (execution) await withPluginExecutionContext(pluginId, execution, activate)
+        else await activate()
         breaker.recordSuccess()
       } catch (error) {
         // No longer swallowed: surface the failure everywhere the user/auditor
@@ -6374,13 +6422,19 @@ export class PluginManager {
         // Forward the invoking session/character. Without it a plugin has no
         // way to bill its model calls to the session the user typed in — and on
         // the CLI, where nothing is ambient, it simply cannot reach a provider.
-        const result = await this.hooksManager.dispatchOnCommand(manifestCommand.id, argv, {
+        const invocation = {
           rawArgs: args,
           ...(ctx?.sessionId ? { sessionId: ctx.sessionId } : {}),
           ...(ctx?.characterId ? { characterId: ctx.characterId } : {}),
           ...(ctx?.signal ? { signal: ctx.signal } : {}),
           ...(ctx?.reportProgress ? { reportProgress: ctx.reportProgress } : {}),
-        })
+        }
+        const dispatch = () =>
+          this.hooksManager.dispatchOnCommand(manifestCommand.id, argv, invocation)
+        const execution = hostCommandExecution(ctx) ?? pluginExecutionContext(pluginId)
+        const result = execution
+          ? await withHostCommandExecution(invocation, execution, dispatch)
+          : await dispatch()
         if (!result) return { message: `Plugin command not handled: /${commandName}` }
         // A handler that returned its own message OWNS the response: the host's
         // generic acknowledgement would otherwise replace a real answer (a
@@ -6586,7 +6640,10 @@ export class PluginManager {
       if (!entries?.length) continue
       for (const entry of entries) {
         try {
-          descriptor.registerEntry(entry, { pluginId, installRoot: plugin.path ?? "" })
+          descriptor.registerEntry(bindPluginCallbacks(pluginId, entry), {
+            pluginId,
+            installRoot: plugin.path ?? "",
+          })
         } catch (err) {
           loggers.manager.warn(`[plugin:${pluginId}] failed to register ${cap} ${entry.id}:`, err)
         }
@@ -6603,9 +6660,10 @@ export class PluginManager {
       pluginId,
       manifest: plugin.manifest,
       installRoot: plugin.path ?? "",
-      importer: (entry: string) => this.loader.importEntry(entry, pluginId, plugin.path),
+      importer: async (entry: string) =>
+        bindPluginCallbacks(pluginId, await this.loader.importEntry(entry, pluginId, plugin.path)),
       resolveAsset: await createPluginAssetResolver(pluginId),
-      moduleExports: this.loader.getModuleExports(pluginId) ?? {},
+      moduleExports: bindPluginCallbacks(pluginId, this.loader.getModuleExports(pluginId) ?? {}),
       hasPermission: (permission: string) => context.permissions.hasPermission(permission as never),
       registerAgentTool: (tool: PluginTool) => {
         this.registry.registerTool(pluginId, tool)
@@ -7684,7 +7742,9 @@ export class PluginManager {
     if (typeof exported !== "function") {
       throw new Error(`IDE_PROVIDER_HANDLER_MISSING: ${pluginId}.${handler}`)
     }
-    return (await exported(...args)) as T
+    return withPluginExecutionContext(pluginId, pluginDispatchContext(pluginId), () =>
+      exported(...args)
+    ) as Promise<T>
   }
 
   /**

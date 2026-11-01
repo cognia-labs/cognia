@@ -6,6 +6,7 @@ import { createIntegrationAccount, listIntegrationAccounts } from "@/lib/db/inte
 import { getProvider, getSession } from "@/lib/plugin/auth/auth-provider-registry"
 import { getRegisteredIntegration } from "./registry"
 import { checkIntegrationAccountHealth } from "./providers"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("@/lib/platform/detect", () => ({ isHeadlessHost: jest.fn() }))
 jest.mock("@/lib/credentials/keyring-store", () => ({ createKeyringStore: jest.fn() }))
@@ -63,7 +64,13 @@ beforeEach(() => {
 })
 
 it("consumes only the encrypted reference, verifies identity, checkpoints and scrubs the receipt", async () => {
-  const result = await connectGithubAccountFromSecret(input)
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const result = await connectGithubAccountFromSecret(input, credentialContext)
+  expect(checkIntegrationAccountHealth).toHaveBeenCalledWith(
+    "github-delivery",
+    "account",
+    credentialContext
+  )
   expect(result).toEqual({ accountId: "account", login: "MaxQian888", health: "healthy" })
   expect(createKeyringStore).toHaveBeenCalledWith("integration-github-credentials")
   expect(store.load).toHaveBeenCalledWith(key)

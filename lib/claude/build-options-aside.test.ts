@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { buildRunMcpServerMap } from "@/lib/mcp/run-server-map"
+jest.mock("@/lib/mcp/run-server-map", () => ({ buildRunMcpServerMap: jest.fn(async () => ({})) }))
+
 import type { ChatSession, Character, AppSettings } from "@cognia/agent-config-types"
 import {
   resolveSendOptions,
@@ -18,7 +22,7 @@ import { externalAgentProviderId } from "@/lib/ai/agent/external/session/session
 import { getSession } from "@/lib/db/sessions"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
-import { buildMcpServerMapResolved } from "@/lib/db/mcp-servers"
+import { listEnabledMcpServers, buildMcpServerMapResolved } from "@/lib/db/mcp-servers"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import {
   __clearAllDispatchContextsForTesting,
@@ -55,6 +59,7 @@ jest.mock("@/lib/db/mcp-servers", () => ({
   buildMcpServerMap: jest.fn(() => ({})),
   buildMcpServerMapResolved: jest.fn(async () => ({})),
   listEnabledMcpServers: jest.fn(async () => []),
+  resolveMcpDisallowedToolNames: jest.fn(async () => []),
 }))
 jest.mock("@/lib/db/teams", () => ({ getTeam: jest.fn(async () => null) }))
 
@@ -245,6 +250,39 @@ describe("session-bound aside capability grants", () => {
     expect(opts.claudeAgentSdk?.tools).toContain("Read")
     expect(session.model).toBe("agent-model")
     expect(session.characterId).toBe("external-persona")
+  })
+
+  it("retains personal OAuth after the actual external-parent permission Aside fallback", async () => {
+    jest.mocked(runtimeRefForSession).mockReturnValue({ kind: "external", agentId: "pi" })
+    mockGetExternalAgent.mockReturnValue({
+      config: { protocol: "acp" },
+      capabilities: { permissionModes: ["default"] },
+    })
+    recordResolvedPermissionCeiling(parent.id, {
+      permissionMode: "acceptEdits",
+      disallowedTools: ["Write"],
+    })
+    jest
+      .mocked(listEnabledMcpServers)
+      .mockResolvedValueOnce([{ id: "private", name: "Private" }] as never)
+    jest.mocked(buildRunMcpServerMap).mockImplementationOnce(async (_servers, options) => {
+      expect(options?.credentialContext?.externalEngine).toBe(false)
+      return { Private: { type: "http", url: "https://private" } }
+    })
+    const opts = await resolveSendOptions({
+      session: aside({ asideWriteAccess: true, providerOverride: externalAgentProviderId("pi") }),
+      externalRuntimeId: "pi",
+      personalCredentialContext: { localAuthorization: LOCAL_PERSON_RUN, externalEngine: true },
+      agentMode: null,
+    })
+    expect(resolvedSessionAsideRuntime(opts)).toEqual({ kind: "builtin" })
+    expect(buildRunMcpServerMap).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN, externalEngine: false },
+      })
+    )
+    expect(opts.mcpServers).toHaveProperty("Private")
   })
 
   it("keeps a plan-attested external parent without imposing builtin tool names", async () => {

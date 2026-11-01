@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { listPlugins } from "@/lib/db/plugins"
@@ -108,7 +110,13 @@ export function ConnectionsPanel() {
                   busy || supportFor(provider.id, provider.pluginId)?.availability === "blocked"
                 }
                 onClick={() =>
-                  void run(() => connectProvider({ providerId: provider.id, scopes: [] }))
+                  void run(() =>
+                    connectProvider({
+                      providerId: provider.id,
+                      scopes: [],
+                      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+                    })
+                  )
                 }
               >
                 {t("connections.signIn", { provider: provider.label })}
@@ -149,6 +157,7 @@ export function ConnectionsPanel() {
                 if (driver?.reauthorize) {
                   const result = await driver.reauthorize(view.connection.id, {
                     ingressBase: ingress.base,
+                    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
                   })
                   if (result) {
                     if (mounted.current) setAuthorization(result)
@@ -159,11 +168,19 @@ export function ConnectionsPanel() {
                     providerId: view.connection.providerId,
                     reconnect: view.connection.id,
                     scopes: [...view.connection.scopes],
+                    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
                   })
                 }
               })
             }
-            onDisconnect={() => void run(() => disconnect(view.connection.id, { revoke: true }))}
+            onDisconnect={() =>
+              void run(() =>
+                disconnect(view.connection.id, {
+                  revoke: true,
+                  credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+                })
+              )
+            }
             onRevokeConsumer={(pluginId) =>
               void run(() => revokeConsumerAccess(view.connection.id, pluginId))
             }

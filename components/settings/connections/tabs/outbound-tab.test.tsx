@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type {
   AdapterInstanceRow,
   ConnectorAuditRow,
@@ -395,6 +396,18 @@ describe("OutboundTab — row expand (Task P2.2) + deadletter age (P2.3)", () =>
 })
 
 describe("OutboundTab — bulk-retry deadlettered (Task 5.2)", () => {
+  it("clears every dead letter through the atomic deletion and execution lifecycle", async () => {
+    const user = userEvent.setup()
+    setupQueries({ jobs: [deadletteredJob, deadletteredJob2] })
+    render(<OutboundTab />)
+    await user.click(screen.getByRole("button", { name: /filter dead-lettered/i }))
+    await user.click(screen.getByRole("button", { name: /^clear \(/i }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /^delete all$/i }))
+    await waitFor(() => expect(mockDeleteOutboundJob).toHaveBeenCalledTimes(2))
+    expect(mockDeleteOutboundJob.mock.calls).toEqual([[deadletteredJob.id], [deadletteredJob2.id]])
+  })
   it("does not show the bulk-retry trigger unless filter is 'deadlettered'", () => {
     setupQueries({ jobs: [deadletteredJob, deadletteredJob2] })
     render(<OutboundTab />)

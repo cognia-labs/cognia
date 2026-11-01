@@ -96,7 +96,15 @@ jest.mock("@/lib/runtime/standalone-mode", () => ({
   isStandaloneChatMode: () => mockStandaloneChatMode(),
 }))
 
+jest.mock("@/lib/claude/adapter-hooks", () => ({
+  ...jest.requireActual("@/lib/claude/adapter-hooks"),
+  dispatchPostChatReceive: jest.fn(async () => ({})),
+  dispatchOnAssistantMessage: jest.fn(async (message) => message),
+}))
+
 import { registerCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import { dispatchPostChatReceive, dispatchOnAssistantMessage } from "@/lib/claude/adapter-hooks"
+import { bindToolCallRun } from "@/lib/execution/acting-authority"
 
 it("routes a late native prediction to its requesting session without a transcript write", async () => {
   const store = useChatStore.getState()
@@ -173,6 +181,55 @@ describe("connector ingress during chat streaming", () => {
     mockPersistMessages.mockClear()
   })
   afterEach(() => useChatStore.getState().clear())
+
+  it.each([true, false])(
+    "pins Host attempt identity for sealed reply hooks (correlated=%s)",
+    async (correlated) => {
+      const post = jest.mocked(dispatchPostChatReceive).mockClear()
+      const receive = jest.mocked(dispatchOnAssistantMessage).mockClear()
+      const turnId = `reply-${correlated}`
+      bindToolCallRun(sessionId, turnId, "exact-host-run", "attempt-1")
+      useChatStore.getState().setLastSend(sessionId, {
+        content: "question",
+        options: { turnId },
+        attemptIndex: 0,
+      })
+      applySdkEventMock.mockReturnValueOnce({ messages: [inbound, assistant], turnComplete: true })
+      const registry = new SessionCoalescingRegistry({
+        onCommit: (id, messages) => useChatStore.getState().replaceSessionMessages(id, messages),
+        onPersist: jest.fn(),
+        persistDelayMs: 0,
+      })
+      try {
+        await handleEvent(
+          {
+            type: "event",
+            sessionId,
+            event: { type: "result" },
+            ...(correlated ? { turnId, attemptId: "attempt-1" } : {}),
+          } as never,
+          { current: sessionId },
+          { current: [] },
+          { current: new Map() },
+          { current: new Map() },
+          { current: null },
+          {
+            messagesMirrorRef: { current: new Map() },
+            registry,
+            getExecutionHandle: () => undefined,
+          }
+        )
+        const execution = { sessionId, executionRunId: correlated ? "exact-host-run" : "" }
+        expect(post).toHaveBeenCalledWith(expect.any(Object), execution)
+        expect(receive).toHaveBeenCalledWith(
+          expect.objectContaining({ id: assistant.id }),
+          execution
+        )
+      } finally {
+        registry.clear()
+      }
+    }
+  )
 
   it("merges committed ingress into an older mirror before applying the next stream event", async () => {
     const mirror = { current: new Map([[sessionId, [assistant]]]) }

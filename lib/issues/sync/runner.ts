@@ -21,6 +21,7 @@ import { resolvePluginSyncBindings } from "./plugin-resources"
 import { reconcileIssueSyncRegistrations, runRegisteredIssueSync } from "./runtime"
 
 export interface RunWorkspaceIssueSyncInput {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Workspace scope. Omit to sweep every workspace. */
   projectId?: string
   /** Only this provider's bindings (the mirror still runs unless `mirror: false`). */
@@ -77,6 +78,7 @@ export async function runWorkspaceIssueSync(
     input.mirror === false
       ? { repoCount: 0, results: [], failures: [] }
       : await runMirror({
+          ...(input.credentialContext ? { credentialContext: input.credentialContext } : {}),
           ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.full ? { full: true } : {}),
         })
@@ -119,6 +121,7 @@ export async function runWorkspaceIssueSync(
         ...(input.full ? { full: true } : {}),
         signal,
         ...(deps.reconcile ? { reconcile: deps.reconcile } : {}),
+        ...(input.credentialContext ? { credentialContext: input.credentialContext } : {}),
       })
       if (outcome && "binding" in outcome && !signal.aborted) {
         outcomes.push(outcome)

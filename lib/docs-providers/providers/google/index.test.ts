@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/auth-providers/google/host-auth", () => ({
   listGoogleConnections: jest.fn(),
   resolveGoogleConnection: jest.fn(),
@@ -53,7 +54,7 @@ beforeEach(() => {
     if (!row) throw new Error("connection changed")
     return { ...row }
   })
-  getCredentials.mockResolvedValue({ accessToken: "ephemeral-access" })
+  getCredentials.mockReset().mockResolvedValue({ accessToken: "ephemeral-access" })
   jest
     .mocked(getConnectionManager)
     .mockReturnValue({ getCredentials, onDidChange: jest.fn(() => jest.fn()) } as never)
@@ -133,7 +134,11 @@ it("reads through the Host credential driver and resolves a real document title"
   ])
   const result = await googleDocsProvider.fetch(
     { providerId: "google", kind: "doc", id: ID, title: ID },
-    { accountId: "connection", expectedAuthorizationEpoch: "1" }
+    {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      accountId: "connection",
+      expectedAuthorizationEpoch: "1",
+    }
   )
   expect(result).toMatchObject({
     title: "Spec",
@@ -141,7 +146,10 @@ it("reads through the Host credential driver and resolves a real document title"
     format: "markdown",
     truncated: false,
   })
-  expect(getCredentials).toHaveBeenCalledWith("connection", { minValidityMs: 60_000 })
+  expect(getCredentials).toHaveBeenCalledWith("connection", {
+    minValidityMs: 60_000,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(urls.some((url) => url.includes("fields=name"))).toBe(true)
 })
 
@@ -153,9 +161,12 @@ it("returns an actual connection binding when a stored default ref is reopened",
       kind: "doc",
       id: ID,
       title: "Spec",
-      accountBinding: { accountId: "default", authorizationEpoch: "legacy" },
+      accountBinding: {
+        accountId: "default",
+        authorizationEpoch: "legacy",
+      },
     },
-    { accountId: "default" }
+    { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "default" }
   )
   expect(result.ref.accountBinding).toEqual({ accountId: "connection", authorizationEpoch: "1" })
 })
@@ -222,7 +233,12 @@ it.each(["doc", "sheet", "search"])(
       }
     }
     __setGoogleProviderDepsForTests({ http })
-    const opts = { accountId: "connection", expectedAuthorizationEpoch: "1", limit: 20 }
+    const opts: import("@/lib/docs-providers/types").DocsProviderSearchOptions = {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      accountId: "connection",
+      expectedAuthorizationEpoch: "1",
+      limit: 20,
+    }
     const pending =
       operation === "search"
         ? googleDocsProvider.search!("spec", opts)
@@ -250,7 +266,7 @@ it("drops an identity change during credential acquisition before any HTTP", asy
   __setGoogleProviderDepsForTests({ http })
   const pending = googleDocsProvider.fetch(
     { providerId: "google", kind: "doc", id: ID, title: "Spec" },
-    { accountId: "connection" }
+    { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
   )
   for (let i = 0; i < 30 && !finish; i++) await Promise.resolve()
   expect(finish).toBeDefined()
@@ -267,7 +283,11 @@ it("does not invalidate a read when only credentials rotate", async () => {
     (
       await googleDocsProvider.fetch(
         { providerId: "google", kind: "doc", id: ID, title: "Spec" },
-        { accountId: "connection", expectedAuthorizationEpoch: "1" }
+        {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          accountId: "connection",
+          expectedAuthorizationEpoch: "1",
+        }
       )
     ).text
   ).toBe("body")
@@ -279,7 +299,7 @@ it("clamps large Docs and rejects empty or unsupported content", async () => {
     (
       await googleDocsProvider.fetch(
         { providerId: "google", kind: "doc", id: ID, title: "Spec" },
-        { accountId: "connection" }
+        { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
       )
     ).truncated
   ).toBe(true)
@@ -287,13 +307,13 @@ it("clamps large Docs and rejects empty or unsupported content", async () => {
   await expect(
     googleDocsProvider.fetch(
       { providerId: "google", kind: "doc", id: ID, title: "Spec" },
-      { accountId: "connection" }
+      { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
     )
   ).rejects.toMatchObject({ code: "empty" })
   await expect(
     googleDocsProvider.fetch(
       { providerId: "google", kind: "bitable", id: ID, title: "Spec" },
-      { accountId: "connection" }
+      { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
     )
   ).rejects.toMatchObject({ code: "unsupportedType" })
 })
@@ -314,7 +334,7 @@ it("reads visible Sheet cells as CSV and returns search refs", async () => {
   expect(
     await googleDocsProvider.fetch(
       { providerId: "google", kind: "sheet", id: ID, title: ID },
-      { accountId: "connection" }
+      { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
     )
   ).toMatchObject({ title: "Budget", format: "csv", text: "## Q3\na,b" })
   stubHttp([
@@ -327,7 +347,13 @@ it("reads visible Sheet cells as CSV and returns search refs", async () => {
       },
     ],
   ])
-  expect(await googleDocsProvider.search!("spec", { accountId: "connection", limit: 5 })).toEqual([
+  expect(
+    await googleDocsProvider.search!("spec", {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      accountId: "connection",
+      limit: 5,
+    })
+  ).toEqual([
     {
       providerId: "google",
       kind: "doc",
@@ -343,7 +369,7 @@ it("preserves permission errors from document readers", async () => {
   await expect(
     googleDocsProvider.fetch(
       { providerId: "google", kind: "doc", id: ID, title: "Spec" },
-      { accountId: "connection" }
+      { credentialContext: { localAuthorization: LOCAL_PERSON_RUN }, accountId: "connection" }
     )
   ).rejects.toMatchObject({ code: "noPermission" })
 })
@@ -362,10 +388,31 @@ it("does not acquire credentials for pre-aborted requests and releases pending a
   const pendingController = new AbortController()
   getCredentials.mockImplementationOnce(() => new Promise(() => undefined))
   const searching = googleDocsProvider.search!("q", {
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     accountId: "connection",
     limit: 20,
     signal: pendingController.signal,
   })
   pendingController.abort()
   await expect(searching).rejects.toMatchObject({ name: "AbortError" })
+})
+
+it("refuses an unproven Google read before credentials or user HTTP, and preserves the local legacy default read", async () => {
+  const http = jest.fn(async () => ({ status: 200, headers: {}, body: "body" }))
+  __setGoogleProviderDepsForTests({ http })
+  await expect(
+    googleDocsProvider.search!("private", { accountId: "default", limit: 1 })
+  ).rejects.toMatchObject({ code: "notAuthorized" })
+  expect(getCredentials).not.toHaveBeenCalled()
+  expect(http).not.toHaveBeenCalled()
+  await expect(
+    googleDocsProvider.fetch(
+      { providerId: "google", kind: "doc", id: ID, title: "Spec" },
+      { accountId: "default", credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }
+    )
+  ).resolves.toMatchObject({ text: "body" })
+  expect(getCredentials).toHaveBeenCalledWith("connection", {
+    minValidityMs: 60_000,
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
 })

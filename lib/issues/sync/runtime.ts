@@ -3,6 +3,8 @@
  * Keeping ownership here prevents a workspace-scoped run from unregistering
  * another workspace's bindings. Factories always resolve the current binding.
  */
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import {
   hasExternalSyncRegistration,
   registerExternalSync,
@@ -41,7 +43,10 @@ interface Registration {
   dispose: () => void
   deps: IssueSyncRuntimeDeps
   controllers: Set<AbortController>
-  prepare: (signal: AbortSignal) => Promise<PreparedRegistration | undefined>
+  prepare: (
+    signal: AbortSignal,
+    credentialContext?: PersonalCredentialContext
+  ) => Promise<PreparedRegistration | undefined>
 }
 const registrations = new Map<string, Registration>()
 let revision = 0
@@ -93,7 +98,7 @@ export function reconcileIssueSyncRegistrations(
             unregister()
             for (const controller of entry.controllers) controller.abort()
           },
-          prepare: async (signal) => {
+          prepare: async (signal, credentialContext = HOST_BACKGROUND) => {
             const current = () =>
               registrations.get(key) === entry &&
               hasExternalSyncRegistration(key) &&
@@ -109,7 +114,11 @@ export function reconcileIssueSyncRegistrations(
                 entry.dispose()
                 return undefined
               }
-              const value = await prepareGithubMirrorSync(binding, entry.deps.mirrorDeps)
+              const value = await prepareGithubMirrorSync(
+                binding,
+                entry.deps.mirrorDeps,
+                credentialContext
+              )
               if (!current()) return undefined
               // Credential preparation can await a keyring/provider while the user unbinds.
               const stillBound = (await read()).some(
@@ -139,7 +148,7 @@ export function reconcileIssueSyncRegistrations(
             }
             const providerSignal = registry.signal(provider.id, provider)
             providerSignal.addEventListener("abort", entry.dispose, { once: true })
-            const value = await prepareIssueSync(binding, provider, { signal })
+            const value = await prepareIssueSync(binding, provider, { signal, credentialContext })
             if (!current()) return undefined
             const stillBound = (await read()).some(
               (candidate) => issueSyncTarget(candidate).key === key
@@ -181,6 +190,7 @@ export async function runRegisteredIssueSync(
     full?: boolean
     now?: () => number
     signal?: AbortSignal
+    credentialContext?: PersonalCredentialContext
     reconcile?: typeof reconcileBinding
   } = {}
 ): Promise<SyncRepoIssuesResult | ReconcileOutcome | undefined> {
@@ -195,13 +205,14 @@ export async function runRegisteredIssueSync(
     hasExternalSyncRegistration(key) &&
     !controller.signal.aborted
   try {
-    const prepared = await entry.prepare(controller.signal)
+    const prepared = await entry.prepare(controller.signal, options.credentialContext)
     if (!prepared || !current()) return undefined
     if (prepared.kind === "import" && options.reconcile) {
       const result = await options.reconcile(prepared.binding, prepared.provider, {
         ...(options.full ? { full: true } : {}),
         ...(options.now ? { now: options.now } : {}),
         signal: controller.signal,
+        credentialContext: options.credentialContext ?? HOST_BACKGROUND,
       })
       return current() ? result : undefined
     }

@@ -138,23 +138,26 @@ describe("executeImPushTask", () => {
       new AbortController().signal
     )
     expect(r.success).toBe(true)
-    expect(deps.enqueue).toHaveBeenCalledWith({
-      adapterId: "lark-1",
-      conversationKey: "c1",
-      request: {
-        conversationRef: { chatId: "oc_1" },
-        deliveryTarget,
-        segments: [{ type: "text", text: "Good morning" }],
-        metadata: { idempotencyKey: "task-im:exec-im" },
+    expect(deps.enqueue).toHaveBeenCalledWith(
+      {
+        adapterId: "lark-1",
+        conversationKey: "c1",
+        request: {
+          conversationRef: { chatId: "oc_1" },
+          deliveryTarget,
+          segments: [{ type: "text", text: "Good morning" }],
+          metadata: { idempotencyKey: "task-im:exec-im" },
+        },
+        source: "manual",
+        // Nobody watches the push when it fires: the task's own origin decides.
+        authorization: {
+          kind: "unattended",
+          ownerRef: "task:task-im",
+          origin: { rootSessionId: "task:task-im", instructionEpoch: expect.any(String) },
+        },
       },
-      source: "manual",
-      // Nobody watches the push when it fires: the task's own origin decides.
-      authorization: {
-        kind: "unattended",
-        ownerRef: "task:task-im",
-        origin: { rootSessionId: "task:task-im", instructionEpoch: expect.any(String) },
-      },
-    })
+      { executionContext: { automation: "schedule" } }
+    )
     expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ kind: "notify.im_pushed" }))
     expect(r.output).toMatchObject({ jobId: "job-1", adapterId: "lark-1", segments: 1 })
   })
@@ -174,7 +177,8 @@ describe("executeImPushTask", () => {
       expect.objectContaining({
         conversationKey: "c2",
         request: expect.objectContaining({ segments, metadata: { idempotencyKey: "k9" } }),
-      })
+      }),
+      { executionContext: { automation: "schedule" } }
     )
   })
 

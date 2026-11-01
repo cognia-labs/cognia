@@ -3,6 +3,7 @@
  * Renderer-side IPC handler for `plugin_tool_exec` events from the sidecar.
  */
 
+import { hostCommandExecution } from "@/lib/plugin/core/invocation-identity"
 import {
   __setPluginToolResolverForTesting,
   __setWebToolDepsForTesting,
@@ -740,7 +741,18 @@ describe("handlePluginToolExec — unified invokePluginTool path", () => {
     })
     expect(execute).toHaveBeenCalledWith(
       { hello: "world" },
-      expect.objectContaining({ sessionId: "session-1", config: { token: "t" } })
+      expect.objectContaining({
+        sessionId: "session-1",
+        config: { token: "t" },
+        executionRunId: "",
+      })
+    )
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("session-1", "plugin-turn", "exact-plugin-run", "a1")
+    await handlePluginToolExec(makeRequest({ turnId: "plugin-turn", attemptId: "a1" }))
+    expect(execute).toHaveBeenLastCalledWith(
+      { hello: "world" },
+      expect.objectContaining({ executionRunId: "exact-plugin-run" })
     )
   })
 
@@ -928,12 +940,16 @@ describe("handlePluginToolExec — built-in skill fallback", () => {
     })
 
     const controller = new AbortController()
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("session-1", "fallback-turn", "exact-run", "fallback-attempt")
     const response = await handlePluginToolExec(
       makeRequest({
         name: "fallback_test",
         args: { x: "y" },
         abortSignal: controller.signal,
-        runId: "exact-run",
+        runId: "forged-personal-run",
+        turnId: "fallback-turn",
+        attemptId: "fallback-attempt",
       })
     )
 
@@ -1282,10 +1298,24 @@ describe("handlePluginToolExec — Skill / SlashCommand built-ins", () => {
   })
 
   it("routes the SlashCommand tool to the slash dispatcher with the session id", async () => {
-    const dispatch = jest.fn().mockResolvedValue({ message: "ran" })
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("sess-Z", "slash-turn", "exact-slash-attempt", "slash-attempt")
+    const dispatch = jest.fn(async (_line, context) => {
+      expect(hostCommandExecution(context)).toEqual({
+        sessionId: "sess-Z",
+        executionRunId: "exact-slash-attempt",
+      })
+      return { message: "ran" }
+    })
     __setSlashToolDepsForTesting(() => ({ dispatch }))
     const response = await handlePluginToolExec(
-      makeRequest({ name: "SlashCommand", args: { command: "/status" }, sessionId: "sess-Z" })
+      makeRequest({
+        name: "SlashCommand",
+        args: { command: "/status", executionRunId: "forged" },
+        sessionId: "sess-Z",
+        turnId: "slash-turn",
+        attemptId: "slash-attempt",
+      })
     )
     expect(dispatch).toHaveBeenCalledWith("/status", { sessionId: "sess-Z" })
     expect(response.result).toBe("ran")
@@ -1537,10 +1567,14 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
       // This routing fixture has no live PluginManager. Resolve an empty plugin
       // registry so its absence does not throw before the Task fallback is reached.
       freshSet({ getTool: () => undefined })
+      const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+      bindToolCallRun("sess-T", `turn-${name}`, "issuer-run", "attempt-T")
       const response = await freshHandle({
         type: "plugin_tool_exec",
         sessionId: "sess-T",
-        runId: "issuer-run",
+        runId: "forged-personal-run",
+        turnId: `turn-${name}`,
+        attemptId: "attempt-T",
         toolUseId: "use-T",
         name,
         args: { subagent_type: "researcher", prompt: "go" },
@@ -1567,6 +1601,7 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
       type: "plugin_tool_exec",
       sessionId: "sess-T",
       turnId: "unknown-turn",
+      runId: "forged-personal-run",
       toolUseId: "use-T",
       name: "dispatch_agent",
       args: { subagentId: "reader", prompt: "go" },

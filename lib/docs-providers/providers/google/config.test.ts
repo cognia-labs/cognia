@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn(), saveSettings: jest.fn() }))
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
@@ -49,7 +50,7 @@ it("sends the preference hint for native migration and derives readiness from me
     credentialRevision: "c1",
     needsIdentity: false,
   })
-  expect(await getGoogleDocsSettings()).toMatchObject({
+  expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toMatchObject({
     clientId: "client",
     connected: true,
     accountEmail: "person@example.com",
@@ -57,7 +58,9 @@ it("sends the preference hint for native migration and derives readiness from me
   })
   expect(host.calls).toContainEqual({ action: "snapshot", legacyClientId: "client" })
   host.snapshot.lineages[0].status = "needs-reauth"
-  expect(await getGoogleDocsSettings()).toMatchObject({ connected: false })
+  expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toMatchObject({
+    connected: false,
+  })
 })
 
 it("does not trust stale preferences while the credential owner cannot confirm them", async () => {
@@ -67,12 +70,17 @@ it("does not trust stale preferences while the credential owner cannot confirm t
   host.handle = async () => {
     throw new Error("Host unavailable")
   }
-  expect(await getGoogleDocsSettings()).toEqual({ clientId: "client", connected: false })
+  expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toEqual({
+    clientId: "client",
+    connected: false,
+  })
 })
 
 it("survives a settings read failure", async () => {
   jest.mocked(getSettings).mockRejectedValue(new Error("db closed"))
-  expect(await getGoogleDocsSettings()).toMatchObject({ connected: false })
+  expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toMatchObject({
+    connected: false,
+  })
 })
 
 it("writes and clears client-keyed secrets through Rust and never reads a secret", async () => {
@@ -100,7 +108,7 @@ it("applies patches through the queued settings updater and preserves sibling pr
   jest.mocked(getSettings).mockResolvedValue({
     docsProviders: { google: { clientId: "old" }, future: { connected: true } },
   } as never)
-  await updateGoogleDocsSettings({ clientId: "new" })
+  await updateGoogleDocsSettings({ clientId: "new" }, { localAuthorization: LOCAL_PERSON_RUN })
   expect(saveSettings).toHaveBeenCalledWith(expect.any(Function))
   expect(await jest.mocked(saveSettings).mock.results[0].value).toMatchObject({
     docsProviders: { google: { clientId: "new" }, future: { connected: true } },
@@ -109,17 +117,19 @@ it("applies patches through the queued settings updater and preserves sibling pr
 
 it("notifies committed settings only and releases observers", async () => {
   const listener = jest.fn()
-  const stop = subscribeGoogleDocsSettings(listener)
+  const stop = subscribeGoogleDocsSettings(listener, { localAuthorization: LOCAL_PERSON_RUN })
   try {
-    await updateGoogleDocsSettings({ clientId: "new" })
+    await updateGoogleDocsSettings({ clientId: "new" }, { localAuthorization: LOCAL_PERSON_RUN })
     expect(listener).toHaveBeenLastCalledWith(
       expect.objectContaining({ clientId: "new", connected: false })
     )
     jest.mocked(saveSettings).mockRejectedValueOnce(new Error("save failed"))
-    await expect(updateGoogleDocsSettings({ clientId: "bad" })).rejects.toThrow("save failed")
+    await expect(
+      updateGoogleDocsSettings({ clientId: "bad" }, { localAuthorization: LOCAL_PERSON_RUN })
+    ).rejects.toThrow("save failed")
     expect(listener).toHaveBeenCalledTimes(1)
     stop()
-    await updateGoogleDocsSettings({ clientId: "other" })
+    await updateGoogleDocsSettings({ clientId: "other" }, { localAuthorization: LOCAL_PERSON_RUN })
     expect(listener).toHaveBeenCalledTimes(1)
   } finally {
     stop()
@@ -127,11 +137,16 @@ it("notifies committed settings only and releases observers", async () => {
 })
 
 it("does not let an observer undo a committed preference save", async () => {
-  const stop = subscribeGoogleDocsSettings(() => {
-    throw new Error("observer")
-  })
+  const stop = subscribeGoogleDocsSettings(
+    () => {
+      throw new Error("observer")
+    },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
   try {
-    await expect(updateGoogleDocsSettings({ clientId: "new" })).resolves.toMatchObject({
+    await expect(
+      updateGoogleDocsSettings({ clientId: "new" }, { localAuthorization: LOCAL_PERSON_RUN })
+    ).resolves.toMatchObject({
       clientId: "new",
     })
   } finally {

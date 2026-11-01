@@ -18,6 +18,7 @@ import {
   unregisterDocsProvider,
 } from "./registry"
 import type { DocsProvider } from "./types"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 const mockDetectPlatform = detectPlatform as jest.MockedFunction<typeof detectPlatform>
 
@@ -54,6 +55,16 @@ describe("docs provider registry", () => {
       mentionPrefix: provider.mentionPrefix,
     })
     expect(listDocsProviders()).toEqual([getDocsProvider(provider.id)])
+  })
+
+  it("preserves Host invocation admission through the managed account-list wrapper", async () => {
+    const listAccounts = jest.fn(async (_options?: unknown) => [])
+    registerDocsProvider(stubProvider({ listAccounts }))
+    const options = { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } } as const
+    await getDocsProvider("stub")!.listAccounts(options)
+    expect(listAccounts).toHaveBeenCalledWith(options)
+    await getDocsProvider("stub")!.listAccounts()
+    expect(listAccounts).toHaveBeenLastCalledWith(undefined)
   })
 
   it("returns undefined for an unknown id", () => {

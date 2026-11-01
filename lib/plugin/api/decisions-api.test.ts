@@ -3,6 +3,7 @@ jest.mock("@/lib/decisions/config", () => ({ loadDecisionSettings: jest.fn() }))
 jest.mock("@/lib/decisions/run-decision", () => ({ runDecision: jest.fn() }))
 
 import { createDecisionRegistry } from "@/lib/decisions/registry"
+import { HOST_BACKGROUND, pluginExecutionContext } from "../core/invocation-identity"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import type { DecisionProviderResponse, DecisionResult } from "@/types/decisions"
 import type { PluginDecisionProviderInput } from "@/types/plugin/plugin-decisions"
@@ -59,6 +60,7 @@ describe("createDecisionsAPI", () => {
       providerId: "laya:laya-local",
       signal: controller.signal,
       callerPluginId: "consumer",
+      credentialContext: undefined,
     })
   })
 
@@ -104,6 +106,25 @@ describe("createDecisionsAPI", () => {
     const { rt } = runtime({ selectedProviderId: async () => null })
     await expect(createDecisionsAPI("bare", rt).getSelectedProviderId()).resolves.toBeNull()
   })
+})
+
+it("backgrounds a registered decision provider when no Host operation is proven", async () => {
+  const registry = createDecisionRegistry()
+  registerPluginDecisionProvider(
+    "owner",
+    {
+      ...input("bound"),
+      decide: async () => {
+        expect(pluginExecutionContext("owner")).toEqual(HOST_BACKGROUND)
+        return { ok: true, answers: {} }
+      },
+    },
+    registry
+  )
+  await registry
+    .get("owner:bound")!
+    .decide({ state: {}, questions: {} }, { signal: new AbortController().signal })
+  expect(pluginExecutionContext("owner")).toBeUndefined()
 })
 
 describe("registerPluginDecisionProvider", () => {

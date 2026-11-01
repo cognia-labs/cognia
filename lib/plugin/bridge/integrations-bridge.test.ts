@@ -221,12 +221,12 @@ describe("Integration manifest bridge", () => {
 
     await tools[0].execute(
       { accountId: "acct-1", issueId: "1" },
-      { sessionId: "s1", invocationId: "invocation-1" }
+      { sessionId: "s1", invocationId: "invocation-1", executionRunId: "exact-run" }
     )
     expect(executeIntegrationAction).toHaveBeenLastCalledWith(
       "example-delivery",
       expect.objectContaining({ source: "chat", idempotencyKey: "invocation-1:issue.comment" }),
-      { kind: "tool-call", sessionId: "s1" }
+      { kind: "tool-call", sessionId: "s1", executionRunId: "exact-run" }
     )
     // The bridge's own automatic approval; a held job ignores it.
     expect(approveIntegrationActionJob).toHaveBeenLastCalledWith("job-1")

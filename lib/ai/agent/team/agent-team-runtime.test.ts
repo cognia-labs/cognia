@@ -16,6 +16,23 @@
 // native task-workspace crate. A fake keeps the durable dispatch path honest
 // (leases are opened and settled) without a Registry.
 const abortWorkspaceMock = jest.fn(async () => undefined)
+jest.mock("@/lib/git/commands", () => ({
+  ...jest.requireActual("@/lib/git/commands"),
+  gitStackSetParent: jest.fn(async () => undefined),
+  gitStackValidate: jest.fn(async () => [
+    { branch: "a", parent: "main", head: "sha-a", containsParent: true, checkedOutIn: null },
+    { branch: "b", parent: "a", head: "sha-b", containsParent: true, checkedOutIn: null },
+  ]),
+}))
+let outboundSettings: object = { agentPermissions: {} }
+jest.mock("@/lib/policy/action-review/plan-context", () => ({
+  ...jest.requireActual("@/lib/policy/action-review/plan-context"),
+  readAppSettings: () => outboundSettings,
+}))
+jest.mock("@/lib/integrations/outbound-hold", () => ({
+  pushHeldIntegrationJob: jest.fn(async () => undefined),
+  withdrawHeldIntegrationJob: jest.fn(),
+}))
 const executeEnvironmentMock = jest.fn(async () => ({ success: true }))
 const getProjectEnvironmentVersionMock = jest.fn()
 jest.mock("@/lib/db/project-environments", () => ({
@@ -23,9 +40,14 @@ jest.mock("@/lib/db/project-environments", () => ({
   getProjectEnvironmentVersion: (...args: unknown[]) => getProjectEnvironmentVersionMock(...args),
 }))
 const updateRunIfCurrentMock = jest.fn()
+const beforeListChildrenMock = jest.fn(async () => undefined)
 jest.mock("@/lib/db/agent-team-runtime", () => ({
   ...jest.requireActual("@/lib/db/agent-team-runtime"),
   settleAgentTeamRunIfCurrent: (...args: unknown[]) => updateRunIfCurrentMock(...args),
+  listAgentTeamChildRuns: async (...args: unknown[]) => {
+    await beforeListChildrenMock()
+    return jest.requireActual("@/lib/db/agent-team-runtime").listAgentTeamChildRuns(...args)
+  },
 }))
 jest.mock("./workspace/registry-controller", () => ({
   AgentTeamRegistryWorkspaceController: class FakeController {
@@ -106,6 +128,20 @@ const resolveTeamTwinRuntimeMock = resolveTeamTwinRuntime as jest.Mock
 
 import { getDb } from "@/lib/db/schema"
 import { createSquadRunRecords } from "./squad/squad-run-records"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  approveAndPublishGithubStack,
+  prepareAndPublishGithubStack,
+} from "./delivery/github-delivery-adapter"
+import { runSquadLifecycle } from "./squad/squad-lifecycle-runner"
+import { controlSquadRun } from "./squad/squad-control"
+import { watchSquadRunSettlement } from "./squad/watch-squad-run"
+import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
+import { createDeliveryGraphService } from "./delivery/delivery-graph"
+import { STACKED_DELIVERY_DEFAULTS } from "@/lib/stack/team-policy"
+import { createIntegrationAccount } from "@/lib/db/integrations"
+import { resolveGithubReadToken } from "@/lib/integrations/github-read-credential"
+import { GITHUB_DOT_COM } from "@/lib/github/host"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {
   runTeamLifecycle,
@@ -280,6 +316,8 @@ async function pendingReviews(kind: SquadReviewKind) {
 
 beforeAll(dbFixture.initialize)
 beforeEach(async () => {
+  outboundSettings = { agentPermissions: {} }
+  beforeListChildrenMock.mockReset().mockResolvedValue(undefined)
   getProjectEnvironmentVersionMock
     .mockReset()
     .mockImplementation(
@@ -337,6 +375,330 @@ describe("parseProposedPlan", () => {
 })
 
 describe("runTeamLifecycle (F-path synthesizer)", () => {
+  it.each(["success", "failure", "cancel", "cancel-race"] as const)(
+    "round 4: real Squad hold, approval/publish %s releases its settlement watcher",
+    async (outcome) => {
+      const runId = `held-publish-${outcome}`
+      const team = {
+        ...baseTeam,
+        taskIds: ["publish-task"],
+        config: {
+          ...baseTeam.config,
+          workingDir: "/repo",
+          githubDeliveryPolicy: STACKED_DELIVERY_DEFAULTS,
+        },
+      }
+      const previousStore = useAgentTeamStore.getState()
+      useAgentTeamStore.setState({
+        teams: { [team.id]: team },
+        teammates: { [lead.id]: lead, w1: worker("w1") },
+        tasks: { "publish-task": task("publish-task") },
+      })
+      let stop: (() => void) | undefined
+      try {
+        await createSquadRunRecords({
+          runId,
+          teamId: team.id,
+          objective: "Publish",
+          origin: "interactive",
+          startedAt: Date.now(),
+          localAuthorization: LOCAL_PERSON_RUN,
+          executionConstraints: {
+            version: 1,
+            teamConfig: team.config,
+            origin: "interactive",
+            triggeredFrom: { source: "ui" },
+            requirePlanApprovalFloor: false,
+          },
+        })
+        await createDeliveryGraphService({}).create({
+          id: `graph-${runId}`,
+          runId,
+          repositories: [
+            {
+              repositoryId: "primary",
+              baseBranch: "main",
+              layers: [
+                { id: "layer-a", branch: "a", title: "A" },
+                { id: "layer-b", branch: "b", title: "B" },
+              ],
+            },
+          ],
+        })
+        const account = await createIntegrationAccount("github-delivery", {
+          integrationId: "github",
+          providerId: "github-pat",
+          authSessionId: "pat",
+          remoteAccountId: "me",
+          label: "PAT",
+        })
+        const request = jest.fn(async (route: string) => {
+          if (outcome === "failure" && route.startsWith("POST"))
+            throw new Error("publish unavailable")
+          return route.startsWith("GET")
+            ? { status: 200, headers: {}, data: [] }
+            : {
+                status: 201,
+                headers: {},
+                data: {
+                  number: 1,
+                  html_url: "https://github.com/acme/repo/pull/1",
+                  head: { sha: "sha" },
+                },
+              }
+        })
+        const resolveTeamRepo = async () => ({
+          fullName: "acme/repo",
+          defaultBranch: "main",
+          defaultBranchExists: true,
+        })
+        const resolveOctokit: NonNullable<RunTeamLifecycleDeps["resolvePrObserveOctokit"]> = async (
+          repo,
+          _host,
+          context
+        ) => {
+          const token = await resolveGithubReadToken(
+            repo,
+            GITHUB_DOT_COM,
+            {
+              listAccounts: async () => [account],
+              hostForSession: async () => GITHUB_DOT_COM,
+              resolveToken: async () => "personal-pat",
+            },
+            context
+          )
+          expect(token).toBe("personal-pat")
+          return token ? { request } : null
+        }
+        outboundSettings = {
+          agentPermissions: { outboundAuthorizationByCategory: { github: "enforce" } },
+        }
+        ;(executeAgent as jest.Mock).mockResolvedValue({ channel: "text", text: "done" })
+        const deps = buildDeps(team, [task("publish-task")], [lead, worker("w1")])
+        await runSquadLifecycle(
+          { teamId: team.id, runId },
+          {
+            runtimeDeps: {
+              runLeadPlanning: deps.runLeadPlanning,
+              notifierDeps: deps.notifierDeps,
+              resolveTeamRepo,
+              resolvePrObserveOctokit: resolveOctokit,
+            },
+          }
+        )
+        expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+          status: "needs_input",
+          recoveryReason: "delivery_awaiting_approval",
+        })
+        expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+          status: "waiting",
+        })
+        expect(request.mock.calls.filter(([route]) => route.startsWith("POST"))).toHaveLength(0)
+        const settled = jest.fn()
+        stop = watchSquadRunSettlement({
+          executionRunId: `execution:team:${runId}`,
+          onSettled: settled,
+          subscribeDexie: false,
+          pollIntervalMs: 5,
+        })
+        if (outcome === "cancel") {
+          await controlSquadRun(runId, "stop")
+        } else if (outcome === "cancel-race") {
+          let release!: () => void
+          let entered!: () => void
+          const blocked = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const started = new Promise<void>((resolve) => {
+            entered = resolve
+          })
+          beforeListChildrenMock.mockImplementationOnce(async () => {
+            entered()
+            await blocked
+          })
+          const stopping = controlSquadRun(runId, "stop")
+          await started
+          try {
+            await approveAndPublishGithubStack(team, runId, { resolveTeamRepo, resolveOctokit })
+          } finally {
+            release()
+          }
+          await expect(stopping).resolves.toMatchObject({
+            ok: false,
+            reason: "already_terminal",
+            status: "completed",
+          })
+        } else {
+          const publish = approveAndPublishGithubStack(team, runId, {
+            resolveTeamRepo,
+            resolveOctokit,
+          })
+          if (outcome === "failure") await expect(publish).rejects.toThrow("publish unavailable")
+          else await expect(publish).resolves.toBe(`graph-${runId}`)
+        }
+        const status =
+          outcome === "success" || outcome === "cancel-race"
+            ? "completed"
+            : outcome === "cancel"
+              ? "cancelled"
+              : "failed"
+        expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({ status })
+        expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({ status })
+        const deadline = Date.now() + 1_000
+        while (settled.mock.calls.length === 0 && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        expect(settled).toHaveBeenCalledTimes(1)
+        expect(settled).toHaveBeenCalledWith(status)
+      } finally {
+        stop?.()
+        useAgentTeamStore.setState(previousStore, true)
+      }
+    }
+  )
+  it.each(["hold", "failure"] as const)(
+    "settles the real finally after publication %s without leaking its execution",
+    async (mode) => {
+      const runId = `publish-${mode}`
+      await createSquadRunRecords({
+        runId,
+        teamId: baseTeam.id,
+        objective: "Publish",
+        origin: "interactive",
+        startedAt: Date.now(),
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      ;(executeAgent as jest.Mock).mockResolvedValue({ channel: "text", text: "done" })
+      const operation = runTeamLifecycle(baseTeam.id, {
+        ...buildDeps(baseTeam, [task("publish-task")], [lead, worker("w1")]),
+        runId,
+        beforeCompletion: async () => {
+          if (mode === "failure") throw new Error("publication failed")
+          await getDb().agentTeamRuns.update(runId, {
+            status: "needs_input",
+            recoveryReason: "delivery_awaiting_approval",
+          })
+        },
+      })
+      if (mode === "failure") await expect(operation).rejects.toThrow("publication failed")
+      else await operation
+      expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+        status: mode === "hold" ? "waiting" : "failed",
+      })
+      expect(getInflightController(baseTeam.id)).toBeUndefined()
+    }
+  )
+  it("publishes with PAT in the real finally before terminal settlement", async () => {
+    const runId = "run-publish-finally"
+    await createSquadRunRecords({
+      runId,
+      teamId: baseTeam.id,
+      objective: "Publish",
+      origin: "interactive",
+      startedAt: Date.now(),
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    // The real finally calls the real publisher and PAT resolver before its
+    // terminal writes. Only git/native and provider boundaries are substituted.
+    await createDeliveryGraphService({}).create({
+      id: "publish-graph",
+      runId,
+      repositories: [
+        {
+          repositoryId: "primary",
+          baseBranch: "main",
+          layers: [
+            { id: "publish-a", branch: "a", title: "A" },
+            { id: "publish-b", branch: "b", title: "B" },
+          ],
+        },
+      ],
+    })
+    const account = await createIntegrationAccount("github-delivery", {
+      integrationId: "github",
+      providerId: "github-pat",
+      authSessionId: "pat-session",
+      remoteAccountId: "me",
+      label: "PAT",
+    })
+    let pullNumber = 0
+    const request = jest.fn(async (route: string) =>
+      route.startsWith("GET")
+        ? { status: 200, headers: {}, data: [] }
+        : {
+            status: 201,
+            headers: {},
+            data: {
+              number: ++pullNumber,
+              html_url: `https://github.com/acme/repo/pull/${pullNumber}`,
+              head: { sha: `sha-${pullNumber}` },
+            },
+          }
+    )
+    ;(executeAgent as jest.Mock).mockResolvedValue({ channel: "text", text: "done" })
+    const result = await runTeamLifecycle(baseTeam.id, {
+      ...buildDeps(baseTeam, [task("publish-task")], [lead, worker("w1")]),
+      runId,
+      beforeCompletion: async () => {
+        expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+          status: "running",
+        })
+        await expect(
+          prepareAndPublishGithubStack(
+            {
+              ...baseTeam,
+              config: { ...baseTeam.config, githubDeliveryPolicy: STACKED_DELIVERY_DEFAULTS },
+            },
+            runId,
+            {
+              resolveTeamRepo: async () => ({
+                fullName: "acme/repo",
+                defaultBranch: "main",
+                defaultBranchExists: true,
+              }),
+              resolveOctokit: async (repo, _host, context) => {
+                const token = await resolveGithubReadToken(
+                  repo,
+                  GITHUB_DOT_COM,
+                  {
+                    listAccounts: async () => [account],
+                    hostForSession: async () => GITHUB_DOT_COM,
+                    resolveToken: async () => "pat",
+                  },
+                  context
+                )
+                expect(token).toBe("pat")
+                return token ? { request } : null
+              },
+              recordParent: async () => {},
+              validateLayers: async () => [
+                {
+                  branch: "a",
+                  parent: "main",
+                  head: "sha-a",
+                  containsParent: true,
+                  checkedOutIn: null,
+                },
+                {
+                  branch: "b",
+                  parent: "a",
+                  head: "sha-b",
+                  containsParent: true,
+                  checkedOutIn: null,
+                },
+              ],
+              planDeps: { settings: () => ({ agentPermissions: {} }) },
+            }
+          )
+        ).resolves.toBe("publish-graph")
+      },
+    })
+    expect(result.status).toBe("completed")
+    expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({ status: "completed" })
+    expect(pullNumber).toBe(2)
+    expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+      status: "completed",
+    })
+  })
   it("registers a defensive copy of workflow knowledge authority for all teammate turns", async () => {
     const observed: unknown[] = []
     const knowledgeAccess = {

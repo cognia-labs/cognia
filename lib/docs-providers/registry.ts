@@ -85,7 +85,7 @@ function managedProvider(source: DocsProvider): DocsProvider {
       untrack()
     }
   }
-  provider.listAccounts = () => run(undefined, () => source.listAccounts())
+  provider.listAccounts = (options) => run(undefined, () => source.listAccounts(options))
   provider.matchRef = (input) => {
     if (providers.get(provider.id) !== provider) return null
     try {

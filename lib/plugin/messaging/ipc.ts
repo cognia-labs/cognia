@@ -338,9 +338,20 @@ export class PluginIPC {
     if (subs) {
       for (const sub of subs) {
         if (sub.pluginId === targetId) {
-          if (!sub.filter || sub.filter(senderId)) {
+          if (
+            !sub.filter ||
+            withPluginExecutionContext(
+              sub.pluginId,
+              pluginExecutionContext(senderId) ?? HOST_BACKGROUND,
+              () => sub.filter!(senderId)
+            )
+          ) {
             try {
-              sub.handler(data, senderId)
+              withPluginExecutionContext(
+                sub.pluginId,
+                pluginExecutionContext(senderId) ?? HOST_BACKGROUND,
+                () => sub.handler(data, senderId)
+              )
             } catch (error) {
               loggers.manager.error(`[IPC] Handler error in ${targetId}:`, error)
             }
@@ -388,9 +399,20 @@ export class PluginIPC {
           sub.pluginId !== senderId &&
           (!allowedReceivers || allowedReceivers.has(sub.pluginId))
         ) {
-          if (!sub.filter || sub.filter(senderId)) {
+          if (
+            !sub.filter ||
+            withPluginExecutionContext(
+              sub.pluginId,
+              pluginExecutionContext(senderId) ?? HOST_BACKGROUND,
+              () => sub.filter!(senderId)
+            )
+          ) {
             try {
-              sub.handler(data, senderId)
+              withPluginExecutionContext(
+                sub.pluginId,
+                pluginExecutionContext(senderId) ?? HOST_BACKGROUND,
+                () => sub.handler(data, senderId)
+              )
             } catch (error) {
               loggers.manager.error(`[IPC] Broadcast handler error in ${sub.pluginId}:`, error)
             }
@@ -527,10 +549,13 @@ export class PluginIPC {
     args: unknown[] = [],
     options: PluginIPCCallOptions = {}
   ): Promise<T> {
-    if (Object.hasOwn(this.libraryContracts.get(targetPluginId)?.methods ?? {}, methodName)) {
-      return this.callLibrary<T>(callerId, targetPluginId, methodName, args, options)
-    }
-    return this.dispatchCall<T>(callerId, targetPluginId, methodName, args, options)
+    const execution = pluginExecutionContext(callerId) ?? HOST_BACKGROUND
+    return withPluginExecutionContext(targetPluginId, execution, () => {
+      if (Object.hasOwn(this.libraryContracts.get(targetPluginId)?.methods ?? {}, methodName)) {
+        return this.callLibrary<T>(callerId, targetPluginId, methodName, args, options, execution)
+      }
+      return this.dispatchCall<T>(callerId, targetPluginId, methodName, args, options, execution)
+    })
   }
 
   private async callLibrary<T>(
@@ -538,7 +563,8 @@ export class PluginIPC {
     targetPluginId: string,
     methodName: string,
     args: unknown[],
-    options: PluginIPCCallOptions
+    options: PluginIPCCallOptions,
+    execution: PersonalCredentialContext
   ): Promise<T> {
     const declaredContract = this.libraryContracts.get(targetPluginId)!
     const declaration = declaredContract.methods[methodName]
@@ -609,6 +635,7 @@ export class PluginIPC {
         methodName,
         input,
         options,
+        execution,
         (value) => {
           checkLifetime()
           const output = cloneLibraryJson(value, this.config.maxMessageSize)
@@ -650,6 +677,7 @@ export class PluginIPC {
     methodName: string,
     args: unknown[],
     options: PluginIPCCallOptions,
+    execution: PersonalCredentialContext,
     validateResult?: (value: unknown) => T
   ): Promise<T> {
     let methodMap = this.exposedMethods.get(targetPluginId)
@@ -719,7 +747,9 @@ export class PluginIPC {
     const handlerPromise = (async () => {
       let result: unknown
       try {
-        result = await method.handler(...args)
+        result = await withPluginExecutionContext(targetPluginId, execution, () =>
+          method.handler(...args)
+        )
       } catch (error) {
         throw new Error(
           `RPC call to ${targetPluginId}.${methodName} failed: ${
@@ -950,9 +980,16 @@ export class PluginIPC {
       if (subs) {
         for (const sub of subs) {
           if (sub.pluginId === message.targetId) {
-            if (!sub.filter || sub.filter(message.senderId)) {
+            if (
+              !sub.filter ||
+              withPluginExecutionContext(sub.pluginId, HOST_BACKGROUND, () =>
+                sub.filter!(message.senderId)
+              )
+            ) {
               try {
-                sub.handler(message.payload, message.senderId)
+                withPluginExecutionContext(sub.pluginId, HOST_BACKGROUND, () =>
+                  sub.handler(message.payload, message.senderId)
+                )
               } catch (error) {
                 loggers.manager.error(`[IPC] Delivery error to ${message.targetId}:`, error)
               }
@@ -1185,3 +1222,9 @@ export function createIPCAPI(pluginId: string, signal?: AbortSignal): PluginIPCA
     },
   }
 }
+import {
+  HOST_BACKGROUND,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "../core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"

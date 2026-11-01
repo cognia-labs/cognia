@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   isMissingGithubCredential,
   MissingGithubCredentialError,
@@ -27,6 +28,11 @@ afterEach(() => dispose())
 const mockListIssueProjects = jest.fn()
 jest.mock("@/lib/db/issue-projects", () => ({
   listIssueProjects: (...args: unknown[]) => mockListIssueProjects(...args),
+}))
+
+jest.mock("./sync/providers/github", () => ({
+  ...jest.requireActual("./sync/providers/github"),
+  resolveGithubSyncReadClient: jest.fn(),
 }))
 
 const mockCreateResolveOctokit = jest.fn()
@@ -272,4 +278,22 @@ describe("runWorkspaceGithubSync", () => {
       expect(await getDb().githubIssueMirror.where("repoFullName").equals("acme/b").count()).toBe(0)
     }
   )
+})
+
+it("keeps manual mirror admission per operation and backgrounds the next run", async () => {
+  const { HOST_BACKGROUND } = await import("@/lib/plugin/core/invocation-identity")
+  const provider = await import("./sync/providers/github")
+  const read = jest.mocked(provider.resolveGithubSyncReadClient).mockResolvedValue({
+    octokit: { request: async () => ({ status: 200, headers: {}, data: [] }) },
+  })
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const deps = { resolveBindings: async () => [{ repoFullName: "o/r", issueProjectId: "c" }] }
+  try {
+    await runWorkspaceGithubSync({ credentialContext }, deps)
+    expect(read).toHaveBeenLastCalledWith("o/r", undefined, credentialContext)
+    await runWorkspaceGithubSync({}, deps)
+    expect(read).toHaveBeenLastCalledWith("o/r", undefined, HOST_BACKGROUND)
+  } finally {
+    read.mockReset()
+  }
 })

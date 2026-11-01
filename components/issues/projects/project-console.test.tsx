@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
@@ -382,7 +383,13 @@ describe("ProjectConsole", () => {
       await act(async () => {
         sync.onSelect()
       })
-      await waitFor(() => expect(mockRunSync).toHaveBeenCalledWith({ projectId: "w1", full: true }))
+      await waitFor(() =>
+        expect(mockRunSync).toHaveBeenCalledWith({
+          projectId: "w1",
+          full: true,
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        })
+      )
       expect(toastCalls).toContainEqual(["success", "sync.parts.written:4"])
     })
   })

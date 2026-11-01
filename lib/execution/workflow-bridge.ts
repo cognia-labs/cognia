@@ -109,6 +109,23 @@ export async function syncWorkflowExecutionRun(
   let run = await getExecutionRun(runId)
   if (!run) {
     const trigger = recordedWorkflowTrigger(sourceRun)
+    const parentSourceId = sourceRun.lineage?.retryOfRunId ?? sourceRun.lineage?.parentRunId
+    const parentSource = parentSourceId ? await getDb().workflowRuns.get(parentSourceId) : undefined
+    const candidateParent = parentSourceId
+      ? await getExecutionRun(workflowExecutionRunId(parentSourceId))
+      : undefined
+    // Lineage is routing data, not permission to inherit another workflow's
+    // identity. Use the same verified parent for both metadata and the link.
+    const parent =
+      parentSource &&
+      candidateParent?.sourceId === parentSource.id &&
+      candidateParent.kind === executionKindForWorkflowRun(parentSource) &&
+      candidateParent.sessionId === parentSource.triggeredBy?.sessionId &&
+      candidateParent.projectId === parentSource.projectId &&
+      parentSource.projectId === sourceRun.projectId &&
+      (!sourceRun.lineage?.retryOfRunId || parentSource.workflowId === sourceRun.workflowId)
+        ? candidateParent
+        : undefined
     try {
       await createExecutionRun({
         id: runId,
@@ -117,11 +134,7 @@ export async function syncWorkflowExecutionRun(
           authority: authorityFromPermissionCeiling(sourceRun.securityContext?.permissionCeiling),
           requesters: trigger === "requester" ? workflowRequesters(sourceRun) : [],
           ...(trigger === "external-event" ? { eventActors: workflowEventActors(sourceRun) } : {}),
-          parent: sourceRun.lineage?.parentRunId
-            ? await getExecutionRun(workflowExecutionRunId(sourceRun.lineage.parentRunId)).catch(
-                () => undefined
-              )
-            : undefined,
+          parent,
         }),
         kind: executionKindForWorkflowRun(sourceRun),
         // A retry is a REPLACEMENT, not a stranger: `lineage.retryOfRunId` is
@@ -129,9 +142,7 @@ export async function syncWorkflowExecutionRun(
         // derived here rather than coordinated with whoever pressed the button.
         // That also makes a retry started from the desktop history view join
         // the same chain as one driven through the run-control gate.
-        ...(sourceRun.lineage?.retryOfRunId
-          ? { parentRunId: workflowExecutionRunId(sourceRun.lineage.retryOfRunId) }
-          : {}),
+        ...(parent ? { parentRunId: parent.id } : {}),
         sourceId: sourceRun.id,
         sessionId: sourceRun.triggeredBy?.sessionId,
         projectId: sourceRun.projectId,

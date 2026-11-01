@@ -10,6 +10,7 @@ import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 import { projectBotInstallationSnapshot } from "@/lib/bot/installation-snapshot"
 import { loggers } from "@/lib/plugin/core/logger"
+import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 
 import {
   BOT_LIFECYCLE_HOOK_TIMEOUT_MS,
@@ -114,6 +115,7 @@ describe("runBotLifecycleHook", () => {
     await getDb().botInstallations.add(row)
     let seen: BotLifecycleContextV1 | undefined
     const onInstall = jest.fn((ctx: BotLifecycleContextV1) => {
+      expect(pluginExecutionContext("acme")).toEqual(HOST_BACKGROUND)
       seen = ctx
     })
     registerBot(

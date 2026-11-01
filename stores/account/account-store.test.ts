@@ -3230,3 +3230,18 @@ describe("device-managed mobile workspace", () => {
     expect(mockCreateRegistryAccount).not.toHaveBeenCalled()
   })
 })
+
+it("forwards captured Host credential identity through confirmed profile deletion", async () => {
+  const actingAuthority = await import("@/lib/execution/acting-authority")
+  mockListAccounts.mockResolvedValue([account("acct_alpha", "Alpha"), account("acct_beta", "Beta")])
+  mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+  const store = makeStore()
+  await store.getState().load()
+  const credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext =
+    { localAuthorization: actingAuthority.LOCAL_PERSON_RUN }
+  await store.getState().deleteAccount("acct_beta", { credentialContext })
+  expect(mockForgetCloudIdentity).toHaveBeenCalledWith("acct_beta", {
+    hostBound: false,
+    credentialContext,
+  })
+})

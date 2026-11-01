@@ -1,5 +1,8 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { PersonalCredentialRefusedError } from "@/lib/execution/personal-credential"
+
 import type {
   McpUiResourceCsp,
   McpUiResourcePermissions,
@@ -16,6 +19,7 @@ import {
   callMcpAppTool,
   getMcpAppToolRisk,
   loadMcpAppForTool,
+  resolveMcpAppToolCredentialContext,
   promoteMcpAppDownload,
   type LoadedMcpApp,
 } from "@/lib/mcp/apps-runtime"
@@ -50,17 +54,22 @@ export function ManagedMcpAppCard({
 
   useEffect(() => {
     let disposed = false
-    void loadMcpAppForTool(namespacedToolName, sessionId)
+    void resolveMcpAppToolCredentialContext(sessionId, part.toolCallId)
+      .then((credentialContext) =>
+        disposed
+          ? undefined
+          : loadMcpAppForTool(namespacedToolName, sessionId, { credentialContext })
+      )
       .then((loaded) => {
         if (!disposed) setApp(loaded)
       })
-      .catch(() => {
-        if (!disposed) setLoadError(true)
+      .catch((error: unknown) => {
+        if (!disposed && !(error instanceof PersonalCredentialRefusedError)) setLoadError(true)
       })
     return () => {
       disposed = true
     }
-  }, [namespacedToolName, sessionId])
+  }, [namespacedToolName, sessionId, part.toolCallId])
 
   const requested = useMemo(() => requestedApprovals(app?.csp, app?.permissions), [app])
   const allApproved = requested.every((entry) => approved.has(entry.id))
@@ -113,6 +122,7 @@ export function ManagedMcpAppCard({
     async (request: { name: string; arguments?: Record<string, unknown> }) => {
       if (!app) return { isError: true, content: [] }
       return callMcpAppTool({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         serverId: app.server.id,
         toolName: request.name,
         args: request.arguments,
@@ -209,7 +219,9 @@ export function ManagedMcpAppCard({
               size="sm"
               variant="outline"
               onClick={() => {
-                void promoteMcpAppDownload(app.server, sessionId, contents).then((saved) => {
+                void promoteMcpAppDownload(app.server, sessionId, contents, {
+                  credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+                }).then((saved) => {
                   if (saved > 0) {
                     setQuarantine((current) =>
                       current.filter((_, candidate) => candidate !== index)

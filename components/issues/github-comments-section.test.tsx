@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 jest.mock("@/lib/issues/github-comments", () => ({ fetchGithubIssueComments: jest.fn() }))
@@ -49,7 +50,7 @@ describe("GithubCommentsSection", () => {
     }))
     render(<GithubCommentsSection target={target} load={load} />)
     await user.click(screen.getByTestId("issue-github-comments-load"))
-    expect(load).toHaveBeenCalledWith(target)
+    expect(load).toHaveBeenCalledWith(target, undefined, { localAuthorization: LOCAL_PERSON_RUN })
     expect(await screen.findByText("<b>not html</b>")).toBeInTheDocument()
     expect(screen.getByText("octocat")).toBeInTheDocument()
     expect(screen.getByText("githubComments.unknownAuthor")).toBeInTheDocument()

@@ -50,6 +50,11 @@ import { isHeadlessHost } from "@/lib/platform/detect"
 import { subscribePythonPluginEvents } from "@/lib/plugin/python/event-bus"
 import type { PythonPluginEvent } from "@/lib/plugin/python/log-buffer"
 import { capturePythonRuntimeGeneration } from "@/lib/plugin/python/runtime-generation"
+import {
+  bindPluginCallbacks,
+  pluginDispatchContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 
 /** Python symbol the SDK registers to route contribution method calls. */
 export const PYTHON_CONTRIBUTION_DISPATCH = "__cognia_dispatch_contribution__"
@@ -158,10 +163,16 @@ function bindTransport(
   call: PythonCallTransport
   generation: string | null
 } {
-  if (call) return { call, generation: null }
-  const generation = capturePythonRuntimeGeneration(pluginId)
+  const generation = call ? null : capturePythonRuntimeGeneration(pluginId)
+  const transport: PythonCallTransport =
+    call ?? ((id, functionName, args) => defaultCall(id, generation!, functionName, args))
   return {
-    call: (id, functionName, args) => defaultCall(id, generation, functionName, args),
+    // Retain the native callback even if a stream consumer stops before the
+    // Python transport settles. Never borrow an unrelated awaiting invocation.
+    call: (id, functionName, args) =>
+      withPluginExecutionContext(pluginId, pluginDispatchContext(pluginId), () =>
+        transport(id, functionName, args)
+      ),
     generation,
   }
 }
@@ -206,7 +217,7 @@ export function createPythonBackedProxy<T extends object>(options: PythonBackedP
       streamMethod(options, call, subscribe, generation, newStreamId(), method, args)
   }
 
-  return proxy as T
+  return bindPluginCallbacks(options.pluginId, proxy) as T
 }
 
 async function* streamMethod(

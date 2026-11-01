@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   registerDocsProvider,
   getDocsProvider as lookupDocsProvider,
@@ -150,8 +151,11 @@ describe("useRemoteDocStaging", () => {
         providerId: "plugin:staging/docs",
         accountBinding: { accountId: "a", authorizationEpoch: "1" },
       }
+      const listAccounts = jest.fn(async () => [
+        { id: "a", label: "Alice", authorizationEpoch: "1" },
+      ])
       getProviderMock.mockReturnValue({
-        listAccounts: async () => [{ id: "a", label: "Alice", authorizationEpoch: "1" }],
+        listAccounts,
         fetch: async () => content({ ref: doc }),
       })
       const intake = jest.fn(
@@ -170,6 +174,9 @@ describe("useRemoteDocStaging", () => {
       const { stage } = renderStaging(intake)
       await expect(stage({ providerId: doc.providerId, accountId: "a", doc })).resolves.toBeNull()
       expect(intake).toHaveBeenCalledTimes(1)
+      expect(listAccounts).toHaveBeenCalledWith({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       expect(await getDb().remoteDocumentConnections.count()).toBe(0)
     }
   )
@@ -353,6 +360,7 @@ describe("useRemoteDocStaging", () => {
     const result = await stage({ providerId: "lark", accountId: "cai_1", doc: REF })
 
     expect(fetchDoc).toHaveBeenCalledWith(REF, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
       accountId: "cai_1",
       signal: expect.any(AbortSignal),
     })

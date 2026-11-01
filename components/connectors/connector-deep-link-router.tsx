@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect } from "react"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { isTauri } from "@/lib/tauri"
@@ -170,7 +171,7 @@ export function ConnectorDeepLinkRouter({ children }: { children: React.ReactNod
         return
       }
       const { completeDocsOAuthDeepLink } = await import("@/lib/docs-providers/oauth-deep-link")
-      const outcome = await completeDocsOAuthDeepLink(raw)
+      const outcome = await completeDocsOAuthDeepLink(raw, { localAuthorization: LOCAL_PERSON_RUN })
       if (outcome.status === "ok") {
         toast.success(tDocs("settings.connectSucceeded"))
       } else if (outcome.status === "failed") {

@@ -1,4 +1,5 @@
 "use client"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 /**
  * Google Drive backup destination card (Settings → Data). The user supplies
@@ -116,13 +117,16 @@ export function GoogleDriveBackupCard() {
   useEffect(() => {
     let active = true
     void (async () => {
-      await resolveGoogleDriveConnection()
+      await resolveGoogleDriveConnection({ localAuthorization: LOCAL_PERSON_RUN })
       if (!active) return
-      const rows = await listGoogleConnections()
+      const rows = await listGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
       if (!active) return
       const settings = await getBackupDestinationsSettings()
       if (!active) return
-      const metadata = await googleState({ action: "snapshot" })
+      const metadata = await googleState(
+        { action: "snapshot" },
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
       if (!active) return
       setSnapshot(metadata)
       setConnection(
@@ -190,7 +194,9 @@ export function GoogleDriveBackupCard() {
     try {
       let authorization: HostDeviceAuthorization | void
       if (reauthorize && connection) {
-        authorization = await getHostConnectionDriver("google")?.reauthorize?.(connection.id, {})
+        authorization = await getHostConnectionDriver("google")?.reauthorize?.(connection.id, {
+          credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        })
       } else {
         const reply = await googleState({
           action: "beginDevice",
@@ -198,7 +204,9 @@ export function GoogleDriveBackupCard() {
           scopes: GOOGLE_DRIVE_AUTH_SCOPES,
         })
         if (!reply.attempt) throw new Error("device-challenge-missing")
-        authorization = createGoogleDeviceAuthorization(reply.attempt)
+        authorization = createGoogleDeviceAuthorization(reply.attempt, {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
       }
       // A challenge arriving after unmount still belongs to this caller to cancel.
       if (controller.signal.aborted) {
@@ -220,7 +228,10 @@ export function GoogleDriveBackupCard() {
     if (!connection) return
     setBusy(true)
     try {
-      await getConnectionManager().disconnect(connection.id, { revoke: true })
+      await getConnectionManager().disconnect(connection.id, {
+        revoke: true,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       await updateBackupDestinationsSettings((current) => ({
         ...current,
         googleDrive:
@@ -250,7 +261,10 @@ export function GoogleDriveBackupCard() {
     }
     setBusy(true)
     try {
-      const result = await runRemoteBackupSyncNow("googledrive", "", { onProgress: setPhase })
+      const result = await runRemoteBackupSyncNow("googledrive", "", {
+        onProgress: setPhase,
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      })
       if (result.ok) {
         setLastSyncAt(new Date().toISOString())
         toast.success(t("syncDone"))
@@ -335,7 +349,9 @@ export function GoogleDriveBackupCard() {
           onAuthorized={async () => {
             if (!("lineageId" in challenge) || typeof challenge.lineageId !== "string")
               throw new Error("authorized-lineage-missing")
-            const bound = await bindGoogleDriveConnection(challenge.lineageId)
+            const bound = await bindGoogleDriveConnection(challenge.lineageId, {
+              localAuthorization: LOCAL_PERSON_RUN,
+            })
             setConnection(bound)
             toast.success(t("connected"))
           }}

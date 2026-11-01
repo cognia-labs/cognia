@@ -18,6 +18,7 @@ import { z } from "zod"
 import type { ConversationReference } from "@/types/connectors/event"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillContext } from "../types"
+import { resolveBuiltInSkillRunScope } from "../context"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import {
   previewText,
@@ -206,19 +207,26 @@ const skill: BuiltInSkill<typeof schema> = {
     } else {
       const { enqueueAuthorized } = await import("@/lib/connectors/delivery-gateway")
       const { newIdempotencyKey } = await import("@/types/connectors/outbound")
-      const delivered = await enqueueAuthorized({
-        adapterId: target.adapterId,
-        conversationKey: target.conversationKey,
-        request: {
-          conversationRef: target.conversationRef,
-          segments: [{ type: "text", text: messageText }],
-          metadata: { idempotencyKey: newIdempotencyKey() },
+      const runScope = resolveBuiltInSkillRunScope(ctx)
+      const delivered = await enqueueAuthorized(
+        {
+          adapterId: target.adapterId,
+          conversationKey: target.conversationKey,
+          request: {
+            conversationRef: target.conversationRef,
+            segments: [{ type: "text", text: messageText }],
+            metadata: { idempotencyKey: newIdempotencyKey() },
+          },
+          source: "skill",
+          authorization: skillDeliveryAuthorization(ctx, "im.dispatch_task", {
+            createdConversation: target.created,
+          }),
         },
-        source: "skill",
-        authorization: skillDeliveryAuthorization(ctx, "im.dispatch_task", {
-          createdConversation: target.created,
-        }),
-      })
+        {
+          signal: ctx.signal,
+          executionContext: { sessionId: runScope.sessionId, executionRunId: runScope.runId ?? "" },
+        }
+      )
       brief = delivered.kind === "drafted" ? "drafted" : "sent"
     }
 

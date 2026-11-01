@@ -347,7 +347,12 @@ describe("dispatchPlanStepNode — tool_call", () => {
       "web-tools",
       "web_fetch",
       { url: "x" },
-      expect.objectContaining({ signal, reason: "plan:tool_call", sessionId: "ses" })
+      expect.objectContaining({
+        signal,
+        reason: "plan:tool_call",
+        sessionId: "ses",
+        executionRunId: "execution:plan:p1",
+      })
     )
     expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
     expect(calls[1].patch).toMatchObject({ result: '{"ok":1}' })
@@ -431,7 +436,13 @@ describe("dispatchPlanStepNode — mcp_tool_call", () => {
     const res = await dispatchPlanStepNode(ctx, "s1", signal)
 
     expect(invokeMcpToolMock).toHaveBeenCalledWith(
-      expect.objectContaining({ serverId: "srv1", toolName: "screenshot", args: { a: 1 }, signal })
+      expect.objectContaining({
+        serverId: "srv1",
+        toolName: "screenshot",
+        args: { a: 1 },
+        signal,
+        credentialContext: { executionRunId: `execution:plan:${ctx.plan.id}` },
+      })
     )
     expect(mcpHooks.dispatchMCPServerConnect).toHaveBeenCalledWith("srv1", "srv1")
     expect(mcpHooks.dispatchMCPToolCall).toHaveBeenCalledWith("srv1", "screenshot", { a: 1 })

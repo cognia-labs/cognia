@@ -1,4 +1,5 @@
 /** Shared ownership check for CLI skills and the adapter's user-token HTTP path. */
+import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import enSkillMessages from "@/i18n/messages/en/skills.json"
 import { currentLocale } from "@/lib/i18n/runtime-translator"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
@@ -37,7 +38,11 @@ export class LarkActingIdentityError extends Error {
 /** Resolve the executing identity root, including host-registered child routes. */
 export async function resolveLarkRunIdentity(ctx: BuiltInSkillContext) {
   const scope = resolveBuiltInSkillRunScope(ctx)
-  return resolveRunActingIdentity(scope.sessionId, scope.runId)
+  return resolveRunActingIdentity(
+    scope.sessionId,
+    scope.runId,
+    ctx.delivery ? { delivery: true } : undefined
+  )
 }
 
 /** Literal catalog message, shared by the HTTP gate and user-only CLI calls. */
@@ -47,7 +52,7 @@ export async function larkPersonalAccessHint(): Promise<string> {
     : enSkillMessages.actingIdentity.personalAccessPhases
 }
 
-export async function assertLarkActingIdentity(
+export async function verifyLarkImOwnerAuthorization(
   adapterId: string,
   ctx?: BuiltInSkillContext
 ): Promise<VerifiedLarkUserAuthorization | undefined> {
@@ -102,10 +107,26 @@ export async function assertLarkActingIdentity(
       throw refusal(ownerName)
     // Only the host's verified Confirm callback can replace the current run's actors.
     // Otherwise refresh the job view so a newly steered sender cannot use stale context.
-    const senders = ctx.hitlBypass
-      ? (ctx.actingSenders ?? "unknown")
-      : (await resolveBuiltInSkillTurnActors(binding.conversationKey, adapterId, rootSessionId))
-          .actingSenders
+    const deliverySenders =
+      ctx.delivery && ctx.executionRunId
+        ? identity.requesters.map((principal) =>
+            principal.kind === "platform" &&
+            principal.platform === "lark" &&
+            principal.adapterId === adapterId
+              ? {
+                  remoteUserId: principal.remoteUserId,
+                  ...(principal.unionId ? { unionId: principal.unionId } : {}),
+                }
+              : undefined
+          )
+        : undefined
+    if (deliverySenders?.some((sender) => !sender)) throw refusal(ownerName)
+    const senders = deliverySenders
+      ? deliverySenders.filter((sender): sender is NonNullable<typeof sender> => !!sender)
+      : ctx.hitlBypass
+        ? (ctx.actingSenders ?? "unknown")
+        : (await resolveBuiltInSkillTurnActors(binding.conversationKey, adapterId, rootSessionId))
+            .actingSenders
     if (
       senders === "unknown" ||
       senders.length === 0 ||
@@ -142,4 +163,33 @@ export async function assertLarkActingIdentity(
     if (err instanceof LarkActingIdentityError) throw err
     throw refusal()
   }
+}
+
+/** All personal Lark consumers share the Host credential choke point. */
+export async function assertLarkActingIdentity(
+  adapterId: string,
+  ctx?: BuiltInSkillContext
+): Promise<VerifiedLarkUserAuthorization | undefined> {
+  const scope = ctx ? resolveBuiltInSkillRunScope(ctx) : undefined
+  const decision = await admitPersonalCredential(
+    scope
+      ? {
+          sessionId: scope.sessionId,
+          executionRunId: scope.runId,
+          larkContext: ctx,
+          ...(ctx?.delivery ? { delivery: true } : {}),
+        }
+      : undefined,
+    { source: "lark-user", person: adapterId }
+  )
+  if (!decision.ok) {
+    if (decision.cause instanceof LarkActingIdentityError) throw decision.cause
+    throw new LarkActingIdentityError(undefined, await larkPersonalAccessHint())
+  }
+  if (decision.authorization) return decision.authorization
+  // A local-person run still captures token+epoch atomically. Never fall back
+  // to a separately read user_token after the admission decision.
+  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+  if (!snapshot.configured || !snapshot.accessToken || !snapshot.authorizationEpoch) return
+  return { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
 }

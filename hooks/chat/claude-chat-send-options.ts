@@ -46,7 +46,7 @@ import { materializeMessageMedia } from "@/lib/chat/media/normalize-message-medi
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { withReplyContextLines } from "@/lib/chat/reply-to"
 import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
-import { sessionControl } from "@/lib/claude/ipc"
+import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc"
 import type { RuntimeSessionStatus } from "@cognia/agent-config-types"
 import { renderBranchSeed } from "@/lib/chat/branch-session"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
@@ -94,6 +94,20 @@ export async function prepareTranscriptRuntimeSend(
       "ai-sdk"
   let prepared = options
   let lostRetainedContext = false
+  if (
+    usesAiSdk &&
+    !preparation.skipHydration &&
+    session &&
+    !mcpRuntimeConfigurationMatches(sessionId, options, session.runtimeTranscriptGeneration)
+  ) {
+    // Reuse the existing durable engine-generation fence. Another window must
+    // not mistake its stale credential map for proof about this replacement.
+    await invalidateTranscriptRuntime(sessionId)
+    assertDatabaseCurrent()
+    session = await getSession(sessionId)
+    assertDatabaseCurrent()
+    lostRetainedContext = true
+  }
   const protectedNativeResume =
     !isExternalAgentProviderId(options.provider) &&
     options.contentSafety?.injectionProtection === true &&
@@ -157,6 +171,7 @@ export async function prepareTranscriptRuntimeSend(
     assertDatabaseCurrent()
     if (
       runtime?.retained === true &&
+      mcpRuntimeConfigurationMatches(sessionId, options, runtime.transcriptInvalidationId) &&
       runtime.runtimeAdapter === "ai-sdk" &&
       runtime.sdkSessionId === session.sdkSessionId &&
       runtime.provider === options.provider &&
@@ -331,6 +346,9 @@ export async function buildSendOptions(
    * run nobody created.
    */
   dispatch?: {
+    /** Accepted Host run; never inferred from the session or client labels. */
+    executionRunId?: string
+    localAuthorization?: import("@/lib/execution/acting-authority").LocalPersonRun
     routerFusionSurface?: "chat"
     /**
      * The turn will be handed to the HostState host rather than dispatched
@@ -610,6 +628,16 @@ export async function buildSendOptions(
     // Only a turn typed in this chat pane can answer a built-in skill's
     // approval dialog; see `dispatch.interactive`.
     interactiveChat: dispatch?.interactive === true,
+    personalCredentialContext: {
+      ...(dispatch?.executionRunId !== undefined && session
+        ? { sessionId: session.id, executionRunId: dispatch.executionRunId }
+        : dispatch?.localAuthorization
+          ? { localAuthorization: dispatch.localAuthorization }
+          : session
+            ? { sessionId: session.id, executionRunId: turnIdentity?.runId ?? "" }
+            : {}),
+      externalEngine: Boolean(externalRuntimeId),
+    },
     postCompaction,
     session: turnSession,
     character: turnCharacter,

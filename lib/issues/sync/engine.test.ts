@@ -1,6 +1,8 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 
 const mockAfterCycleRead = jest.fn()
 const mockAfterLabelRead = jest.fn()
@@ -306,9 +308,21 @@ describe("reconcileBinding: import", () => {
     await reconcileBinding(binding(), provider)
     await reconcileBinding(binding(), provider)
     await reconcileBinding(binding(), provider, { full: true })
-    expect(pulls[0]).toEqual({ full: true, signal: expect.any(AbortSignal) })
-    expect(pulls[1]).toEqual({ since: 1_000, signal: expect.any(AbortSignal) })
-    expect(pulls[2]).toEqual({ full: true, signal: expect.any(AbortSignal) })
+    expect(pulls[0]).toEqual({
+      full: true,
+      signal: expect.any(AbortSignal),
+      credentialContext: HOST_BACKGROUND,
+    })
+    expect(pulls[1]).toEqual({
+      since: 1_000,
+      signal: expect.any(AbortSignal),
+      credentialContext: HOST_BACKGROUND,
+    })
+    expect(pulls[2]).toEqual({
+      full: true,
+      signal: expect.any(AbortSignal),
+      credentialContext: HOST_BACKGROUND,
+    })
   })
 })
 
@@ -1411,7 +1425,10 @@ it("limits confirmed departures to the requested binding refs", async () => {
   })
   provider.pullPage = async () => ({ items: [], deleted: ["o/r#2"], cursor: "2" })
   expect(await reconcileBinding(b, provider)).toMatchObject({ status: "completed", tombstoned: 0 })
-  expect(confirm).toHaveBeenCalledWith(b, ["o/r#2"], { signal: expect.any(AbortSignal) })
+  expect(confirm).toHaveBeenCalledWith(b, ["o/r#2"], {
+    signal: expect.any(AbortSignal),
+    credentialContext: HOST_BACKGROUND,
+  })
   expect((await getIssue(local.id))?.externalRefs?.[0]?.departedAt).toBeUndefined()
   expect((await getIssue(other.id))?.externalRefs?.[0]?.departedAt).toBeUndefined()
 })
@@ -1557,4 +1574,36 @@ it("does not tombstone unowned or differently owned refs that this full scan did
     (await getIssueByExternalKey("fake", "o/r#4"))?.externalRefs?.[0].departedAt
   ).toBeUndefined()
   expect((await getIssueByExternalKey("fake", "o/r#3"))?.externalRefs?.[0].departedAt).toBeDefined()
+})
+
+it("passes ephemeral credential authority into a provider pull without persisting it", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const f = fake()
+  const pull = jest.fn(async () => ({ items: [], notModified: true }))
+  const b = binding()
+  await reconcileBinding(b, { ...f.provider, pull }, { credentialContext })
+  expect(pull).toHaveBeenCalledWith(b, expect.objectContaining({ credentialContext }))
+  expect(JSON.stringify(await getDb().issues.toArray())).not.toContain("credentialContext")
+})
+
+it("binds preparation, cursor pulls and departure checks to the Host operation", async () => {
+  const { HOST_BACKGROUND } = await import("@/lib/plugin/core/invocation-identity")
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const { provider } = fake()
+  const pullPage = jest.fn(async () => ({ items: [remote()], cursor: "1" }))
+  const confirmDeparted = jest.fn(async (_binding: unknown, ids: string[]) => ids)
+  const prepare = jest.fn(async () => ({ provider }))
+  Object.assign(provider, { pullPage, confirmDeparted, prepare, completeFullScan: true })
+  const b = binding()
+  await reconcileBinding(b, provider, { credentialContext })
+  expect(prepare).toHaveBeenLastCalledWith(b, credentialContext)
+  expect(pullPage).toHaveBeenLastCalledWith(b, expect.objectContaining({ credentialContext }))
+  pullPage.mockResolvedValueOnce({ items: [], cursor: "2" })
+  await reconcileBinding(b, provider, { full: true })
+  expect(prepare).toHaveBeenLastCalledWith(b, HOST_BACKGROUND)
+  expect(confirmDeparted).toHaveBeenLastCalledWith(
+    b,
+    ["o/r#1"],
+    expect.objectContaining({ credentialContext: HOST_BACKGROUND })
+  )
 })

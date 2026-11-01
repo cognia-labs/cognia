@@ -23,6 +23,11 @@ import type { BackupDestination } from "@/types/scheduler"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
 import { createKeyringStore, type KeyringStore } from "@/lib/credentials/keyring-store"
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 
 export const BACKUP_DESTINATION_KEYRING_NAMESPACE = "backup-destinations"
 export const GITHUB_TOKEN_KEY = "github-token"
@@ -131,9 +136,15 @@ export function resolveGithubBackupConfig(
 }
 
 export async function getGithubBackupToken(
-  credential: NonNullable<GithubBackupDestinationSettings["credential"]>
+  credential: NonNullable<GithubBackupDestinationSettings["credential"]>,
+  credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
+  const assertPersonal = async () => {
+    const decision = await admitPersonalCredential(credentialContext, { source: "github-user" })
+    if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+  }
   if (credential.kind === "keyring") {
+    await assertPersonal()
     return backupDestinationSecrets().load(GITHUB_TOKEN_KEY)
   }
   // Reuse an existing GitHub auth session (built-in github-pat / github-app
@@ -142,10 +153,24 @@ export async function getGithubBackupToken(
   const { getProvider } = await import("@/lib/plugin/auth/auth-provider-registry")
   const provider = getProvider(credential.providerId)
   if (!provider) return null
+  if (provider.management === "host") {
+    const { getConnectionManager } = await import("@/lib/plugin/auth/connection-manager")
+    const ref =
+      credential.sessionId as import("@cognia/plugin-contract/types/plugin/plugin-auth").AuthConnectionRef
+    const manager = getConnectionManager()
+    const row = await manager.getConnection(ref)
+    if (row.providerId !== credential.providerId) return null
+    return (await manager.getCredentials(ref, { credentialContext })).accessToken
+  }
+  const service =
+    credential.providerId === "github-app" &&
+    provider.pluginId === null &&
+    Boolean(provider.resolveRequestCredential)
+  if (!service) await assertPersonal()
   const sessions = await provider.getSessions(undefined, { silent: true })
   const session = sessions.find((s) => s.id === credential.sessionId)
   if (!session) return null
-  if (credential.providerId === "github-app" && provider.resolveRequestCredential) {
+  if (provider.resolveRequestCredential) {
     const resolved = await provider.resolveRequestCredential(session.id, {
       connectorAccountId: session.account.id,
       origin: "https://api.github.com",
@@ -198,7 +223,8 @@ export type BackupDestinationReadiness =
 
 /** Shared list for scheduling/settings; key readiness is owned by the Host. */
 export async function describeBackupDestinationReadiness(
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  credentialContext?: PersonalCredentialContext
 ): Promise<BackupDestinationReadiness[]> {
   const { listBackupDestinations, readBackupDestinationReadiness } = await import("./index")
   return [
@@ -207,7 +233,7 @@ export async function describeBackupDestinationReadiness(
       listBackupDestinations().map(async (entry) => ({
         destination: entry.id,
         label: entry.label,
-        ...(await readBackupDestinationReadiness(entry.id, signal)),
+        ...(await readBackupDestinationReadiness(entry.id, signal, undefined, credentialContext)),
       }))
     )),
   ]

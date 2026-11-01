@@ -1,7 +1,9 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 
-const controlDurableRun = jest.fn(async (_runId: string, _action: string) => undefined)
+const controlDurableRun = jest.fn(async (runId: string, action: string) => {
+  if (action === "stop") await getDb().agentTeamRuns.update(runId, { status: "cancelled" })
+})
 jest.mock("../durable/durable-control", () => ({
   controlDurableRun: (runId: string, action: string) => controlDurableRun(runId, action),
 }))
@@ -16,6 +18,7 @@ jest.mock("@/stores/agent/agent-team-store", () => ({
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createRunInterrupt } from "@/lib/execution/run-control"
+import { runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
 import type { AgentTeamCheckpoint, AgentTeamChildRun } from "@/types/agent/agent-team-runtime"
 import { assessSquadRunReplay, controlSquadRun, controlSquadTeam } from "./squad-control"
 import { createSquadRunRecords } from "./squad-run-records"
@@ -50,7 +53,7 @@ function child(id: string, status: AgentTeamChildRun["status"]): AgentTeamChildR
     taskId: `task-${id}`,
     repositoryId: "primary",
     status,
-    ...(status !== "queued" ? { startedAt: 1 } : {}),
+    ...(status !== "queued" ? { startedAt: 1 } : { dispatchEpoch: 0 }),
     attempt: 1,
     resourceUsage: {
       promptTokens: 0,
@@ -58,7 +61,7 @@ function child(id: string, status: AgentTeamChildRun["status"]): AgentTeamChildR
       totalTokens: 0,
       wallTimeMs: 0,
       toolTimeMs: 0,
-      attempts: 1,
+      attempts: status === "queued" ? 0 : 1,
       failures: 0,
     },
     createdAt: 1,
@@ -307,6 +310,21 @@ describe("controlSquadRun", () => {
     expect(interrupt?.status).toBe("expired")
     expect(setTeamStatus).toHaveBeenCalledWith("team-1", "cancelled")
     expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("cancelled")
+  })
+
+  it("round 4: keeps the winning publication's terminal control result", async () => {
+    await seedRun("needs_input")
+    controlDurableRun.mockImplementationOnce(async () => {
+      await getDb().agentTeamRuns.update(RUN, { status: "completed" })
+      await runEventJournal.append(EXECUTION, semanticRunEvent("run.completed", {}))
+    })
+    expect(await controlSquadRun(RUN, "stop")).toMatchObject({
+      ok: false,
+      reason: "already_terminal",
+      status: "completed",
+    })
+    expect(setTeamStatus).not.toHaveBeenCalledWith("team-1", "cancelled")
+    expect((await getDb().executionRuns.get(EXECUTION))?.status).toBe("completed")
   })
 
   it("addresses a team through its live run", async () => {

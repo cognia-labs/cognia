@@ -23,6 +23,8 @@ jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
   detectPlatform: jest.fn(() => "web"),
 }))
+import { HOST_BACKGROUND, pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn() }))
@@ -109,6 +111,31 @@ afterEach(() => {
   setHostAuthBackend(null)
   jest.useRealTimers()
 })
+
+it.each([
+  HOST_BACKGROUND,
+  { executionRunId: "sign-in-service" },
+  { localAuthorization: LOCAL_PERSON_RUN } as const,
+])(
+  "binds auth provider callbacks to the exact Host sign-in identity: %p",
+  async (credentialContext) => {
+    const seen: unknown[] = []
+    for (const name of ["authorize", "exchange", "describe"] as const) {
+      const original = provider[name]!
+      Object.assign(provider, {
+        [name]: async (...args: unknown[]) => {
+          await Promise.resolve()
+          seen.push(pluginExecutionContext("owner"))
+          expect(args[0]).not.toHaveProperty("credentialContext")
+          return Reflect.apply(original, provider, args)
+        },
+      })
+    }
+    await connectProvider({ providerId: "acme", scopes: ["read"], credentialContext })
+    expect(seen).toEqual([credentialContext, credentialContext, credentialContext])
+    expect(pluginExecutionContext("owner")).toBeUndefined()
+  }
+)
 
 it("creates a PKCE connection through authorize, single acceptance, exchange and describe", async () => {
   const ref = await connectProvider({ providerId: "acme", scopes: ["read"] })
@@ -531,7 +558,11 @@ it("stores an API key through the connection coordinator without exchange or ref
     configuration: { apiKey: "host-key" },
   })
   expect(provider.describe).toHaveBeenCalledWith({ accessToken: "host-key", scopes: ["read"] })
-  expect(await getConnectionManager().getCredentials(ref)).toEqual({
+  expect(
+    await getConnectionManager().getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toEqual({
     accessToken: "host-key",
     scopes: ["read"],
   })
@@ -583,7 +614,11 @@ it("never revokes a user-supplied API key when connecting fails", async () => {
   ).rejects.toMatchObject({ name: "ReconnectIdentityMismatch" })
   expect(provider.describe).toHaveBeenCalled()
   expect(provider.revoke).not.toHaveBeenCalled()
-  expect(await getConnectionManager().getCredentials(ref)).toMatchObject({
+  expect(
+    await getConnectionManager().getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({
     accessToken: "first-key",
   })
 })
@@ -602,7 +637,11 @@ it("does not let a confidential token endpoint block API-key sign-in in the brow
     method: "api-key",
     configuration: { apiKey: "browser-key" },
   })
-  expect(await getConnectionManager().getCredentials(ref)).toMatchObject({
+  expect(
+    await getConnectionManager().getCredentials(ref, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({
     accessToken: "browser-key",
   })
   await expect(

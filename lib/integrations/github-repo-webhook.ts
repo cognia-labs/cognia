@@ -1,3 +1,8 @@
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 /**
  * Repository webhooks for GitHub personal-access-token accounts.
  *
@@ -48,8 +53,14 @@ export interface GithubRepoWebhookDeps {
 async function hostRequest<T>(
   account: IntegrationAccount,
   path: string,
-  init: { method?: string; body?: Record<string, unknown> } = {}
+  init: { method?: string; body?: Record<string, unknown> } = {},
+  credentialContext?: PersonalCredentialContext
 ): Promise<{ status: number; data: T }> {
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "github-user",
+    person: account.id,
+  })
+  if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const provider = getProvider(account.providerId)
   if (!provider?.resolveRequestCredential) {
     throw new Error(`Auth provider "${account.providerId}" cannot resolve a credential`)
@@ -76,10 +87,10 @@ async function hostRequest<T>(
   return { status: response.status, data }
 }
 
-function defaultDeps(): GithubRepoWebhookDeps {
+function defaultDeps(credentialContext?: PersonalCredentialContext): GithubRepoWebhookDeps {
   const store = createKeyringStore("integration-ingress")
   return {
-    request: hostRequest,
+    request: (account, path, init) => hostRequest(account, path, init, credentialContext),
     loadSecret: (handle) => store.load(handle),
     updateAccount: updateIntegrationAccount,
     now: Date.now,
@@ -111,6 +122,7 @@ export class GithubRepoWebhookError extends Error {
 }
 
 export interface ConfigureGithubRepoWebhookInput {
+  credentialContext?: PersonalCredentialContext
   account: IntegrationAccount
   repoFullName: string
   /** The PUBLIC delivery URL — never the loopback listener address. */
@@ -159,7 +171,7 @@ export async function configureGithubRepoWebhook(
   const wanted = repoHookEvents(input.eventTypes)
   if (wanted.length === 0) return { status: "skipped", reason: "no-repository-events" }
 
-  const deps = provided ?? defaultDeps()
+  const deps = provided ?? defaultDeps(input.credentialContext)
   const secret = await deps.loadSecret(endpoint.secretHandle)
   if (!secret) {
     throw new GithubRepoWebhookError("no-secret", "The webhook secret is missing from the keyring")

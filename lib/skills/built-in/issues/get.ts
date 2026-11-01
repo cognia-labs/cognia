@@ -10,6 +10,7 @@
 import { z } from "zod"
 
 import { registerBuiltInSkill } from "../registry"
+import { resolveBuiltInSkillRunScope } from "../context"
 import type { BuiltInSkill } from "../types"
 import { issueRefSchema, resolveIssue, resolveWorkspaceId, summariseIssue } from "./_core"
 
@@ -47,12 +48,19 @@ const skill: BuiltInSkill<typeof schema> = {
     const { listIssueRuns } = await import("@/lib/db/issue-runs")
     const { listIssueRunOptions } = await import("@/lib/issues/run/registry")
 
+    const scope = resolveBuiltInSkillRunScope(ctx)
+    const credentialContext = { sessionId: scope.sessionId, executionRunId: scope.runId ?? "" }
     const [container, events, runs, options] = await Promise.all([
       getIssueProject(issue.issueProjectId),
       listIssueEvents({ issueId: issue.id, descending: true, limit: args.activityLimit ?? 10 }),
       listIssueRuns({ issueId: issue.id }),
       // Never let a misbehaving adapter turn a read into a failure.
-      listIssueRunOptions(issue.id).catch(() => []),
+      listIssueRunOptions(
+        issue.id,
+        undefined,
+        ctx.imBinding ? "im" : "interactive",
+        credentialContext
+      ).catch(() => []),
     ])
 
     return {

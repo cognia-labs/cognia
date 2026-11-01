@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { ThreadHandoffTicket } from "@cognia/agent-config-types/thread-handoff"
@@ -36,7 +37,7 @@ jest.mock("@/lib/remote-host/code-supply/result-return", () => {
   }
 })
 jest.mock("@/lib/review/github-runtime", () => ({
-  createGitHubPullRequestProvider: () => ({ id: "github" }),
+  createGitHubPullRequestProvider: jest.fn(() => ({ id: "github" })),
 }))
 const openExternal = jest.fn(async () => {})
 const revealInExplorer = jest.fn(async () => {})
@@ -257,5 +258,13 @@ describe("HandedOffBanner", () => {
     )
     expect(screen.getByTestId("handed-off-bring-back")).not.toBeDisabled()
     expect(screen.queryByTestId("handed-off-result")).not.toBeInTheDocument()
+  })
+})
+
+it("passes Host-local admission when the person opens a returned-work review", async () => {
+  const { createGitHubPullRequestProvider } = await import("@/lib/review/github-runtime")
+  render(<HandedOffBanner session={session()} />)
+  expect(createGitHubPullRequestProvider).toHaveBeenLastCalledWith(undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
   })
 })

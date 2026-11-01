@@ -3,6 +3,12 @@
  */
 
 import { invoke } from "@tauri-apps/api/core"
+import {
+  bindPluginCallbacks,
+  bindPluginContextCallbacks,
+  HOST_BACKGROUND,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 import { toast } from "sonner"
 import { createPluginSystemLogger, loggers } from "./logger"
 import { usePluginModalStore } from "@/stores/plugin-runtime/plugin-modal-store"
@@ -164,6 +170,7 @@ import { createAgentConfigAPI } from "../api/agent-config-api"
 import { createWorkspaceAPI } from "../api/workspace-api"
 import { createModalAPI } from "../api/modal-api"
 import { createWebviewAPI } from "../api/webview-api"
+import { pluginExecutionContext } from "./invocation-identity"
 import { createAuthAPI, getHostPkceTokenRequestExemptKeys } from "../api/auth-api"
 import { createUriAPI } from "../api/uri-api"
 import { createRemoteDesktopAPI } from "../api/remote-desktop-api"
@@ -333,10 +340,10 @@ export function createPluginContext(
   if (options?.enableDebug) {
     const debugger_ = getPluginDebugger()
     debugger_.startSession(pluginId, options.generation ?? 0)
-    return debugger_.createDebugContext(pluginId, baseContext)
+    return debugger_.createDebugContext(pluginId, bindPluginContextCallbacks(pluginId, baseContext))
   }
 
-  return baseContext
+  return bindPluginContextCallbacks(pluginId, baseContext)
 }
 
 /**
@@ -534,12 +541,15 @@ export function createFullPluginContext(
     hasPermission: (permission) => permissionsAPI.hasPermission(permission),
   })
   scope.track(() => revokePluginFileHandles(pluginId), "ctx.files.handles")
-  const scopedContext = withPluginDisposableScope(
-    scope,
-    "ctx",
-    governedContext,
-    manager.isPluginLedgerV2Enabled?.() === false ? {} : PLUGIN_RESOURCE_EFFECTS
-  ) as FullPluginContext
+  const scopedContext = bindPluginContextCallbacks(
+    pluginId,
+    withPluginDisposableScope(
+      scope,
+      "ctx",
+      governedContext,
+      manager.isPluginLedgerV2Enabled?.() === false ? {} : PLUGIN_RESOURCE_EFFECTS
+    ) as FullPluginContext
+  )
   // Capture every host guard before publishing the mutable plugin context.
   // Re-reading ctx.network would let a plugin intercept and replay genuine
   // PKCE provenance by replacing fetch (or the entire namespace).
@@ -1068,6 +1078,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
         ...(opts?.signal ? { signal: opts.signal } : {}),
         ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts?.messageId ? { messageId: opts.messageId } : {}),
+        ...pluginExecutionContext(pluginId),
         reason: `plugin ${pluginId} invoked tool ${name}`,
       })
       return result
@@ -1088,6 +1099,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
         ...(opts?.signal ? { signal: opts.signal } : {}),
         ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts?.messageId ? { messageId: opts.messageId } : {}),
+        ...pluginExecutionContext(pluginId),
         reason: `plugin ${pluginId} invoked dependency tool ${dependencyId}/${name}`,
       })
       return result
@@ -3514,7 +3526,14 @@ export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
       registerNodeExecutor({
         kind: prefixed as never,
         typeVersion: def.typeVersion,
-        execute: def.execute,
+        execute: (ctx) =>
+          withPluginExecutionContext(
+            pluginId,
+            {
+              executionRunId: `execution:workflow:${ctx.runId}`,
+            },
+            () => def.execute(ctx)
+          ),
         retryable: def.retryable,
         timeoutMs: def.timeoutMs,
         // Tag the owner so the registry's first-wins-cross-plugin policy can
@@ -3555,7 +3574,7 @@ export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
         kind: prefixed,
         typeVersion: def.typeVersion,
         pluginId,
-        def,
+        def: bindPluginCallbacks(pluginId, def, () => HOST_BACKGROUND),
         instances: new Map(),
       }
       registerPluginTrigger(reg)

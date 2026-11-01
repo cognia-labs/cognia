@@ -1,3 +1,4 @@
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import Dexie from "dexie"
 import { create, type UseBoundStore, type StoreApi } from "zustand"
 
@@ -138,6 +139,7 @@ export interface CreateLocalAccountInput {
 }
 
 export interface DeleteLocalAccountOptions {
+  credentialContext?: PersonalCredentialContext
   replacementAccountId?: string
 }
 
@@ -313,7 +315,7 @@ export interface AccountStoreDependencies {
    */
   forgetCloudIdentity: (
     localAccountId: string,
-    options: { hostBound: boolean }
+    options: { hostBound: boolean; credentialContext?: PersonalCredentialContext }
   ) => Promise<ProfileCloudIdentityCleanup>
 }
 
@@ -409,7 +411,10 @@ export function createAccountStore(
     migrateLocalContentDatabase: migrateLocalAccountContentDatabase,
     forgetCloudIdentity: async (localAccountId, options) => {
       const { forgetProfileCloudIdentity } = await import("@/lib/identity/forget-profile-identity")
-      return forgetProfileCloudIdentity(localAccountId, { hostBound: options.hostBound })
+      return forgetProfileCloudIdentity(localAccountId, {
+        hostBound: options.hostBound,
+        ...(options.credentialContext ? { credentialContext: options.credentialContext } : {}),
+      })
     },
     clearSubscriptionRuntime: async (localAccountId) => {
       if (!isTauri() && !isCapacitor()) {
@@ -1750,6 +1755,7 @@ export function createAccountStore(
       },
 
       deleteAccount: async (localAccountId, options = {}) => {
+        const credentialContext = options.credentialContext && { ...options.credentialContext }
         set({ error: null })
         try {
           const wasActive = get().activeAccountId === localAccountId
@@ -1769,6 +1775,7 @@ export function createAccountStore(
           }
           const cloudIdentity = await dependencies.forgetCloudIdentity(localAccountId, {
             hostBound: wasUnlocked,
+            ...(credentialContext ? { credentialContext } : {}),
           })
           if (wasActive && wasUnlocked) {
             await get().lock()

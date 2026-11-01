@@ -3,6 +3,7 @@
  * (covered in stage.test.ts); these tests verify each panel's wiring:
  * parameters passed, busy handling, error vs staged callbacks.
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -191,6 +192,7 @@ describe("LarkSourceInput", () => {
 
     await waitFor(() =>
       expect(stageLarkMock).toHaveBeenCalledWith("doxcnAbCdEfGh1234567890", {
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         adapterId: "cai_solo",
         twinId: props.twinId,
       })

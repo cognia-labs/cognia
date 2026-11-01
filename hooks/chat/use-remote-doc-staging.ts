@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * Turn a picked remote document into a staged composer attachment (ADR-0134).
  *
@@ -169,19 +171,21 @@ export function useRemoteDocStaging({
         if (!expected) return Promise.resolve(live())
         const attempt = ++validationVersion
         verified = false
-        validation = provider.listAccounts().then(
-          (accounts) => {
-            if (attempt === validationVersion) {
-              verified = accounts.some((account) => accountMatchesBinding(account, expected))
-              if (!verified) controller.abort()
+        validation = provider
+          .listAccounts({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+          .then(
+            (accounts) => {
+              if (attempt === validationVersion) {
+                verified = accounts.some((account) => accountMatchesBinding(account, expected))
+                if (!verified) controller.abort()
+              }
+              return verified && live()
+            },
+            () => {
+              if (attempt === validationVersion) controller.abort()
+              return false
             }
-            return verified && live()
-          },
-          () => {
-            if (attempt === validationVersion) controller.abort()
-            return false
-          }
-        )
+          )
         return validation
       }
       const current = () => live() && verified
@@ -199,7 +203,9 @@ export function useRemoteDocStaging({
           if (item.doc.providerId !== item.providerId) throw new DocsProviderError("invalidRef")
           assertRemoteDocBinding(item.doc, item.accountId, binding?.authorizationEpoch)
           if (binding && provider.resolveLegacyAccount) {
-            const resolved = await resolveDocsAccountBinding(provider, binding)
+            const resolved = await resolveDocsAccountBinding(provider, binding, undefined, {
+              credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+            })
             if (!resolved) throw new DocsProviderError("notAuthorized")
             binding = resolved
             accountId = resolved.accountId
@@ -214,6 +220,7 @@ export function useRemoteDocStaging({
           }
           content = await provider.fetch(doc, {
             accountId,
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
             ...(binding?.authorizationEpoch
               ? { expectedAuthorizationEpoch: binding.authorizationEpoch }
               : {}),

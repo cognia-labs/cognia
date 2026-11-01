@@ -51,6 +51,7 @@ import { getIntegrationAccount } from "@/lib/db/integrations"
 import { appendIssueEvent } from "@/lib/db/issue-events"
 import type { Issue, IssueExternalRef, IssueStatus, IssueSyncField } from "@/types/issues"
 import { externalKeyOf, ISSUE_SYNC_FIELDS, statusCategoryOf, syncActorFor } from "@/types/issues"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import { runExternalSync } from "@/lib/external-services/sync/core"
 import type { ExternalSyncTarget, ExternalSyncDriver } from "@/lib/external-services/sync/types"
 import type { LabelRow } from "@/types/labels"
@@ -75,6 +76,7 @@ import type {
 } from "./types"
 
 export interface ReconcileOptions {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   full?: boolean
   now?: () => number
   signal?: AbortSignal
@@ -424,6 +426,7 @@ async function pushPatch(
   patch: RemotePatch,
   syncedAt: number,
   tally: ReconcileOutcome,
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext,
   signal?: AbortSignal
 ): Promise<void> {
   if (!provider.push || ref.departedAt !== undefined || Object.keys(patch).length === 0) return
@@ -439,6 +442,7 @@ async function pushPatch(
   const source = await assertIssueSyncSource(binding)
   const writeBinding = source ? { ...binding, connectionRef: source.id } : binding
   const outcome = await provider.push(writeBinding, ref, patch, issue, {
+    credentialContext: credentialContext ?? HOST_BACKGROUND,
     idempotencyKey: pushIdempotencyKey(issue.id, patch),
     by,
     editedBy,
@@ -698,6 +702,7 @@ export async function prepareIssueSync(
   provider: IssueSyncProvider,
   options: ReconcileOptions = {}
 ) {
+  const credentialContext = options.credentialContext ?? HOST_BACKGROUND
   const sourceConnection = await resolveIssueSyncSource(binding)
   if (sourceConnection) binding = { ...binding, connectionRef: sourceConnection.id }
   const now = options.now ?? Date.now
@@ -723,7 +728,7 @@ export async function prepareIssueSync(
     const stored = await getDb().externalSyncCursors.get(target.key)
     if (stored?.owner === target.owner) target.connectionRef = stored.connectionRef
   } else if (!options.signal?.aborted && provider.prepare) {
-    const prepared = await provider.prepare(binding)
+    const prepared = await provider.prepare(binding, credentialContext)
     provider = prepared.provider
     if (prepared.connectionRef) target.connectionRef = prepared.connectionRef
     if (target.connectionRef) {
@@ -781,7 +786,10 @@ export async function prepareIssueSync(
       // An unsuccessful batch leaves all its refs untouched for a later run.
       // Unchecked ids stay linked until a later full scan.
       const allowed = new Set(checking)
-      const confirmed = await provider.confirmDeparted(binding, checking, { signal })
+      const confirmed = await provider.confirmDeparted(binding, checking, {
+        signal,
+        credentialContext,
+      })
       signal.throwIfAborted()
       removed = new Set(confirmed.filter((id) => allowed.has(id)))
     }
@@ -806,6 +814,7 @@ export async function prepareIssueSync(
           const previous =
             input.cursor ?? (await getDb().externalSyncCursors.get(target.key))?.cursor
           fetched = await provider.pullPage(binding, {
+            credentialContext,
             ...input,
             ...(previous !== undefined ? { cursor: previous } : {}),
           })
@@ -814,6 +823,7 @@ export async function prepareIssueSync(
           // The legacy adapter uses only the committed cursor, never ref timestamps.
           const previous = (await getDb().externalSyncCursors.get(target.key))?.cursor
           const pulled = await provider.pull(binding, {
+            credentialContext,
             ...(input.mode === "incremental" && input.cursor !== undefined
               ? { since: Number(input.cursor) }
               : {}),
@@ -929,7 +939,17 @@ export async function prepareIssueSync(
       for (const { issue, ref, patch, syncedAt } of pending) {
         if (deleted.includes(ref.externalId)) continue
         signal.throwIfAborted()
-        await pushPatch(binding, provider, issue, ref, patch, syncedAt, tally, signal)
+        await pushPatch(
+          binding,
+          provider,
+          issue,
+          ref,
+          patch,
+          syncedAt,
+          tally,
+          credentialContext,
+          signal
+        )
       }
       if (fetched.links?.length) await linkRemote(binding, fetched.links, tally, signal)
       signal.throwIfAborted()
@@ -978,7 +998,17 @@ export async function prepareIssueSync(
               addToPatch(patch, field, localFieldValue(issue, field, context))
           }
           const watermark = events.reduce((max, event) => Math.max(max, event.ts), now())
-          await pushPatch(binding, provider, issue, ref, patch, watermark, tally, signal)
+          await pushPatch(
+            binding,
+            provider,
+            issue,
+            ref,
+            patch,
+            watermark,
+            tally,
+            credentialContext,
+            signal
+          )
         }
       }
     },

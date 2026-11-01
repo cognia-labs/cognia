@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+
 /**
  * The GitHub conversation of an issue, read on demand.
  *
@@ -39,7 +41,10 @@ export function GithubCommentsSection({
   async function read() {
     setState({ status: "loading" })
     try {
-      setState({ status: "loaded", result: await load(target) })
+      setState({
+        status: "loaded",
+        result: await load(target, undefined, { localAuthorization: LOCAL_PERSON_RUN }),
+      })
     } catch (cause) {
       setState({ status: "error", noCredential: isMissingGithubCredential(cause) })
     }

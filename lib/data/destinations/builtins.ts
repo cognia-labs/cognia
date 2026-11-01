@@ -16,6 +16,7 @@ import { resolveGoogleDriveConnection } from "./google-oauth"
 import { saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
 import { resolveWebDavConfig } from "@/lib/webdav/config"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { RegisteredBackupDestination } from "./registry"
 
 function descriptor(
@@ -31,7 +32,7 @@ function descriptor(
         : id === "github"
           ? settings.backupDestinations?.github?.enabled === true
           : settings.backupDestinations?.googleDrive?.enabled === true,
-    async readiness(signal) {
+    async readiness(signal, credentialContext) {
       signal.throwIfAborted()
       if (id === "webdav")
         return (await resolveWebDavConfig())
@@ -41,14 +42,14 @@ function descriptor(
       if (id === "github") {
         const config = resolveGithubBackupConfig(settings.github)
         if (!config) return { state: "needs-setup", reasonKey: "github" }
-        return (await getGithubBackupToken(config.credential))
+        return (await getGithubBackupToken(config.credential, credentialContext))
           ? { state: "ready" }
           : { state: "needs-auth", reasonKey: "github" }
       }
       const config = resolveGoogleDriveBackupConfig(settings.googleDrive, { requireEnabled: false })
       if (!config) return { state: "needs-setup", reasonKey: "googledrive" }
-      const connection = await resolveGoogleDriveConnection()
-      const snapshot = await googleState({ action: "snapshot" })
+      const connection = await resolveGoogleDriveConnection(credentialContext)
+      const snapshot = await googleState({ action: "snapshot" }, credentialContext)
       if (
         !snapshot.clients.some(
           (client) => client.clientId === config.clientId && client.hasClientSecret
@@ -59,19 +60,25 @@ function descriptor(
     },
     ...(id === "googledrive"
       ? {
-          async list(signal: AbortSignal) {
+          async list(signal: AbortSignal, credentialContext?: PersonalCredentialContext) {
             return (await import("./google-drive")).listGoogleDriveSnapshots({
               assertActive: () => signal.throwIfAborted(),
+              credentialContext,
             })
           },
-          async download(remoteId: string, signal: AbortSignal) {
+          async download(
+            remoteId: string,
+            signal: AbortSignal,
+            credentialContext?: PersonalCredentialContext
+          ) {
             return (await import("./google-drive")).downloadGoogleDriveSnapshot(remoteId, {
               assertActive: () => signal.throwIfAborted(),
+              credentialContext,
             })
           },
         }
       : {}),
-    async upload({ body, meta }, signal, assertOwner) {
+    async upload({ body, meta }, signal, assertOwner, credentialContext) {
       const assertActive = () => {
         signal.throwIfAborted()
         assertOwner?.()
@@ -90,10 +97,10 @@ function descriptor(
           : id === "github"
             ? await (
                 await import("./github")
-              ).uploadSnapshotToGithub(json, snapshot, { assertActive })
+              ).uploadSnapshotToGithub(json, snapshot, { assertActive, credentialContext })
             : await (
                 await import("./google-drive")
-              ).uploadSnapshotToGoogleDrive(json, snapshot, { assertActive })
+              ).uploadSnapshotToGoogleDrive(json, snapshot, { assertActive, credentialContext })
       assertActive()
       if (!result.ok) throw new Error(result.error)
       if (id === "webdav") {

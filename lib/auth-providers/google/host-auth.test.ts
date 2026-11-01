@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
 import { waitFor } from "@testing-library/react"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
@@ -126,7 +127,7 @@ beforeEach(async () => {
 })
 
 it("reconciles identities idempotently and registers auth.google 1.0.0 without secrets in Dexie or metadata", async () => {
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   expect(row).toMatchObject({
     providerId: "google",
     ownerPluginId: null,
@@ -141,7 +142,7 @@ it("reconciles identities idempotently and registers auth.google 1.0.0 without s
     credentialRevision: 1,
     hostMetadata: { adapterId: "native-lineage", authorizationEpoch: "nonce-1" },
   })
-  expect(await reconcileGoogleConnections()).toEqual([row])
+  expect(await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })).toEqual([row])
   expect(getProvider("google")?.pluginId).toBeNull()
   expect(hostAuthProviderServices()).toContainEqual({
     providerId: "google",
@@ -156,16 +157,20 @@ it("reconciles identities idempotently and registers auth.google 1.0.0 without s
 })
 
 it("changes credentialRevision only on refresh and revision only on authorization changes", async () => {
-  const [first] = await reconcileGoogleConnections()
+  const [first] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   snapshot.lineages[0].credentialRevision = "credential-2"
-  expect((await reconcileGoogleConnections())[0]).toMatchObject({
+  expect(
+    (await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN }))[0]
+  ).toMatchObject({
     id: first.id,
     revision: 1,
     credentialRevision: 2,
   })
   snapshot.lineages[0].revision = "nonce-2"
   snapshot.lineages[0].scopes.push("new.scope")
-  expect((await reconcileGoogleConnections())[0]).toMatchObject({
+  expect(
+    (await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN }))[0]
+  ).toMatchObject({
     id: first.id,
     revision: 2,
     credentialRevision: 2,
@@ -180,7 +185,7 @@ it("keeps different OAuth clients as independent connections for the same princi
     clientId: "backup-client",
     method: "device-code",
   })
-  const rows = await reconcileGoogleConnections()
+  const rows = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   expect(rows).toHaveLength(2)
   expect(new Set(rows.map((row) => row.id)).size).toBe(2)
   expect(rows.map((row) => row.clientId).sort()).toEqual(["backup-client", "desktop-client"])
@@ -189,17 +194,17 @@ it("keeps different OAuth clients as independent connections for the same princi
 it.each(["disconnected", "missing"])(
   "tombstones a native %s lineage without recreating it",
   async (status) => {
-    const [row] = await reconcileGoogleConnections()
+    const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
     if (status === "missing") snapshot.lineages = []
     else snapshot.lineages[0].status = "disconnected"
-    await reconcileGoogleConnections()
-    await reconcileGoogleConnections()
+    await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+    await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
     expect(await getAuthConnection(row.id)).toMatchObject({ status: "tombstoned", revision: 2 })
   }
 )
 
 it("orders snapshot reads with other windows so a stale disconnect cannot tombstone a newer reauthorization", async () => {
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   snapshot.lineages[0] = {
     ...snapshot.lineages[0],
     status: "disconnected",
@@ -231,7 +236,7 @@ it("orders snapshot reads with other windows so a stale disconnect cannot tombst
     "provider-reconcile"
   )
   await otherWindowEntered
-  const stale = reconcileGoogleConnections()
+  const stale = reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   try {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(snapshotReads()).toBe(readsBefore)
@@ -271,20 +276,30 @@ it("orders snapshot reads with other windows so a stale disconnect cannot tombst
 })
 
 it("retains invalid_grant as needs-reauth until a new authorization nonce", async () => {
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   snapshot.lineages[0].status = "needs-reauth"
-  expect((await reconcileGoogleConnections())[0]).toMatchObject({
+  expect(
+    (await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN }))[0]
+  ).toMatchObject({
     id: row.id,
     status: "needs-reauth",
     revision: 1,
   })
-  expect((await reconcileGoogleConnections())[0].status).toBe("needs-reauth")
-  await expect(getConnectionManager().getCredentials(row.id)).rejects.toMatchObject({
+  expect(
+    (await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN }))[0].status
+  ).toBe("needs-reauth")
+  await expect(
+    getConnectionManager().getCredentials(row.id, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).rejects.toMatchObject({
     reason: "needs-reauth",
   })
   snapshot.lineages[0].status = "connected"
   snapshot.lineages[0].revision = "reauthorized"
-  expect((await reconcileGoogleConnections())[0]).toMatchObject({
+  expect(
+    (await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN }))[0]
+  ).toMatchObject({
     id: row.id,
     status: "connected",
     revision: 2,
@@ -292,16 +307,26 @@ it("retains invalid_grant as needs-reauth until a new authorization nonce", asyn
 })
 
 it("gets access credentials only from Rust and discards a nonce that moved during the request", async () => {
-  const [row] = await reconcileGoogleConnections()
-  expect(await getConnectionManager().getCredentials(row.id)).toMatchObject({
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+  expect(
+    await getConnectionManager().getCredentials(row.id, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).toMatchObject({
     accessToken: "private-access",
     scopes: ["docs.read"],
   })
-  expect(googleState).toHaveBeenCalledWith({
-    action: "accessToken",
-    lineageId: "native-lineage",
-    minValidityMs: 60_000,
-  })
+  expect(googleState).toHaveBeenCalledWith(
+    {
+      action: "accessToken",
+      lineageId: "native-lineage",
+      minValidityMs: 60_000,
+    },
+    expect.objectContaining({
+      connectionAuthorization: expect.any(Object),
+      lineageId: "native-lineage",
+    })
+  )
   const native = jest.mocked(googleState).getMockImplementation()!
   jest.mocked(googleState).mockImplementation(async (input) =>
     input.action === "accessToken"
@@ -316,15 +341,32 @@ it("gets access credentials only from Rust and discards a nonce that moved durin
         }
       : native(input)
   )
-  await expect(getConnectionManager().getCredentials(row.id)).rejects.toMatchObject({
+  await expect(
+    getConnectionManager().getCredentials(row.id, {
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+    })
+  ).rejects.toMatchObject({
     reason: "authorization-changed",
   })
 })
 
 it("disconnects through the native lineage without importing refresh material", async () => {
-  const [row] = await reconcileGoogleConnections()
-  await getConnectionManager().disconnect(row.id)
-  expect(googleState).toHaveBeenCalledWith({ action: "disconnect", lineageId: "native-lineage" })
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+  await expect(getConnectionManager().disconnect(row.id)).rejects.toMatchObject({
+    name: "PersonalCredentialRefusedError",
+  })
+  expect(await getAuthConnection(row.id)).toMatchObject({ status: "connected" })
+  expect(googleState).not.toHaveBeenCalledWith(
+    expect.objectContaining({ action: "disconnect" }),
+    expect.anything()
+  )
+  await getConnectionManager().disconnect(row.id, {
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
+  expect(googleState).toHaveBeenCalledWith(
+    { action: "disconnect", lineageId: "native-lineage" },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
   expect(await getAuthConnection(row.id)).toMatchObject({ status: "tombstoned" })
   await expect(resolveGoogleConnection(row.id)).rejects.toMatchObject({
     name: "ConnectionUnavailableError",
@@ -332,10 +374,10 @@ it("disconnects through the native lineage without importing refresh material", 
 })
 
 it("reauthorizes through Begin with the native client, scopes, lineage and actual callback port", async () => {
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   snapshot.lineages[0].status = "needs-reauth"
   jest.mocked(connectorsEnsureServer).mockResolvedValue("127.0.0.1:7843")
-  await authorizeGoogleConnection(row.id)
+  await authorizeGoogleConnection(row.id, { localAuthorization: LOCAL_PERSON_RUN })
   expect(googleState).toHaveBeenCalledWith({
     action: "begin",
     clientId: "desktop-client",
@@ -352,27 +394,35 @@ it("passes the backup client hint alongside the Docs client during reconciliatio
     docsProviders: { google: { clientId: "desktop-client" } },
     backupDestinations: { googleDrive: { enabled: true, clientId: " backup-client " } },
   } as never)
-  await reconcileGoogleConnections()
-  expect(googleState).toHaveBeenCalledWith({
-    action: "snapshot",
-    legacyClientId: "desktop-client",
-    legacyBackupClientId: "backup-client",
-  })
+  await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+  expect(googleState).toHaveBeenCalledWith(
+    {
+      action: "snapshot",
+      legacyClientId: "desktop-client",
+      legacyBackupClientId: "backup-client",
+    },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
 })
 
 it.each(["desktop", "headless"])(
-  "reconciles on %s boot and native change signals and stops its subscription",
+  "does not issue user-authenticated snapshots on unproven %s boot or change signals, and stops its subscription",
   async (host) => {
     jest.mocked(isTauri).mockReturnValue(host === "desktop")
     jest.mocked(isHeadlessHost).mockReturnValue(host === "headless")
     const stop = startGoogleHostAuth()
     try {
-      await waitFor(async () => expect(await listAuthConnections("google")).toHaveLength(1))
+      await waitFor(() => expect(subscribeGoogleStateChanged).toHaveBeenCalledTimes(1))
+      expect(googleState).not.toHaveBeenCalled()
       snapshot.lineages[0].status = "disconnected"
       jest.mocked(subscribeGoogleStateChanged).mock.calls.at(-1)![0]()
-      await waitFor(async () =>
-        expect((await listAuthConnections("google"))[0].status).toBe("tombstoned")
-      )
+      await reconcileGoogleConnections()
+      expect(googleState).not.toHaveBeenCalled()
+      expect(await listAuthConnections("google")).toEqual([])
+      await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+      expect(googleState).toHaveBeenCalledWith(expect.objectContaining({ action: "snapshot" }), {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
     } finally {
       stop()
     }
@@ -388,7 +438,7 @@ it("does not start the provider from a browser that cannot invoke the Rust comma
 })
 
 it("requires the business consumer grant at injection for auth.google and exposes only metadata", async () => {
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   const api = createAuthConnectionsAPI("business", () => true)
   const selected = await api.get({ service: "auth.google", scopes: ["docs.read"] })
   expect(selected).toMatchObject({ ref: row.id, providerId: "google" })
@@ -458,18 +508,22 @@ it("requires the business consumer grant at injection for auth.google and expose
       headers: { "content-type": "application/json" },
     })
   )
+  jest.mocked(googleState).mockClear()
   expect((await authenticatedIntegrationRequest("business", account.id, url)).data).toEqual({
     title: "Doc",
   })
   expect(new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers).get("authorization")).toBe(
     "Bearer private-access"
   )
+  expect(jest.mocked(googleState).mock.calls.map(([input]) => input.action)).toEqual([
+    "accessToken",
+  ])
   expect(JSON.stringify(await api.list())).not.toMatch(/private-access|refreshToken|hostMetadata/)
 })
 
 it("reauthorizes device-code lineages through the Host driver without starting loopback", async () => {
   snapshot.lineages[0].method = "device-code"
-  const [row] = await reconcileGoogleConnections()
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
   const answer = jest.mocked(googleState).getMockImplementation()!
   jest.mocked(googleState).mockImplementation(async (input) =>
     input.action === "beginDevice"
@@ -485,7 +539,9 @@ it("reauthorizes device-code lineages through the Host driver without starting l
         }
       : answer(input)
   )
-  const authorization = await getHostConnectionDriver("google")!.reauthorize!(row.id, {})
+  const authorization = await getHostConnectionDriver("google")!.reauthorize!(row.id, {
+    credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+  })
   expect(googleState).toHaveBeenCalledWith({
     action: "beginDevice",
     clientId: "desktop-client",
@@ -500,13 +556,16 @@ it("reauthorizes device-code lineages through the Host driver without starting l
 })
 
 it("adapts device polls, applies slow_down and reconciles the exact authorized lineage before resolving", async () => {
-  const authorization = createGoogleDeviceAuthorization({
-    attemptId: "device",
-    userCode: "ABCD",
-    verificationUrl: "https://google.com/device",
-    expiresAt: Date.now() + 60_000,
-    interval: 5,
-  })
+  const authorization = createGoogleDeviceAuthorization(
+    {
+      attemptId: "device",
+      userCode: "ABCD",
+      verificationUrl: "https://google.com/device",
+      expiresAt: Date.now() + 60_000,
+      interval: 5,
+    },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
   jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: "pending" })
   expect(await authorization.poll()).toEqual({ status: "pending", intervalSeconds: 5 })
   jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: "slow_down" })
@@ -520,20 +579,46 @@ it("adapts device polls, applies slow_down and reconciles the exact authorized l
   expect((await listAuthConnections("google"))[0].hostMetadata?.authorizationEpoch).toBe(
     "reauthorized"
   )
-  expect(googleState).toHaveBeenCalledWith({ action: "pollDevice", attemptId: "device" })
+  expect(googleState).toHaveBeenCalledWith(
+    { action: "pollDevice", attemptId: "device" },
+    { localAuthorization: LOCAL_PERSON_RUN }
+  )
 })
 
 it.each(["denied", "expired"] as const)(
   "passes through device poll %s without authorizing",
   async (status) => {
-    const authorization = createGoogleDeviceAuthorization({
-      attemptId: "device",
-      userCode: "ABCD",
-      verificationUrl: "https://google.com/device",
-      expiresAt: Date.now() + 60_000,
-    })
+    const authorization = createGoogleDeviceAuthorization(
+      {
+        attemptId: "device",
+        userCode: "ABCD",
+        verificationUrl: "https://google.com/device",
+        expiresAt: Date.now() + 60_000,
+      },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
     jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: status })
     expect(await authorization.poll()).toMatchObject({ status })
     expect(authorization.lineageId).toBeUndefined()
   }
 )
+
+it("refuses unproven and non-person Google reads before the native token exit, including a forged driver authorization", async () => {
+  const [row] = await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+  const run = await startToolExecutionRun(undefined, { runId: "google-external" })
+  jest.mocked(googleState).mockClear()
+  for (const credentialContext of [undefined, { executionRunId: run.id }]) {
+    await expect(
+      getConnectionManager().getCredentials(row.id, { credentialContext })
+    ).rejects.toMatchObject({
+      name: "PersonalCredentialRefusedError",
+      decision: { source: "google-docs" },
+    })
+  }
+  await expect(
+    getHostConnectionDriver("google")!.getCredentials(row, {} as never)
+  ).rejects.toMatchObject({ reason: "credential-admission-missing" })
+  expect(
+    jest.mocked(googleState).mock.calls.some(([request]) => request.action === "accessToken")
+  ).toBe(false)
+})

@@ -14,7 +14,7 @@
  * ai-run reply.
  */
 
-import Dexie, { type Table } from "dexie"
+import Dexie, { type Collection, type Table } from "dexie"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import type {
   ConnectorDraftRow,
@@ -40,6 +40,7 @@ import { recordTombstones } from "@/lib/sync/tombstones"
 import { append as appendConnectorAudit } from "./connector-audit"
 import { resolveScopeProjectId } from "./project-scope"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
+import { jobExecutionTables, settleJobExecutionInsideTransaction } from "./execution-runs"
 
 /**
  * Companion fan-out (ADR-0131 inbox relay). Every status write below stamps
@@ -204,9 +205,15 @@ export interface EnqueueInput {
   receipt?: ActionReviewReceiptRow
 }
 
+/** In-memory Host proof, kept outside the serializable delivery request. */
+export interface OutboundEnqueueOptions {
+  signal?: AbortSignal
+  executionContext?: import("@/lib/execution/acting-authority").JobExecutionContext
+}
+
 export async function enqueueOutbound(
   input: EnqueueInput,
-  options?: { signal?: AbortSignal }
+  options?: OutboundEnqueueOptions
 ): Promise<OutboundJobRow> {
   return (await enqueueOutboundMany([input], options))[0]
 }
@@ -218,7 +225,7 @@ export async function enqueueOutbound(
  */
 export async function enqueueOutboundMany(
   inputs: readonly EnqueueInput[],
-  options: { now?: number; signal?: AbortSignal } = {}
+  options: OutboundEnqueueOptions & { now?: number } = {}
 ): Promise<OutboundJobRow[]> {
   options.signal?.throwIfAborted()
   if (inputs.length === 0) return []
@@ -227,6 +234,8 @@ export async function enqueueOutboundMany(
   // transaction outside that stale ambient zone or the send can be lost with
   // TransactionInactiveError.
   return Dexie.ignoreTransaction(async () => {
+    const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
+    await import("./execution-runs")
     const now = options.now ?? Date.now()
     const db = getDb()
     const conversationKeys = Array.from(new Set(inputs.map((input) => input.conversationKey)))
@@ -243,6 +252,8 @@ export async function enqueueOutboundMany(
     const tables: Table[] = [db.outboundQueue]
     if (inputs.some((input) => input.localMessage)) tables.push(db.messages)
     if (inputs.some((input) => input.receipt)) tables.push(db.actionReviewReceipts)
+    // Bind before the queue row becomes visible to any runner or wake.
+    tables.push(db.executionRuns, db.executionRunEvents, db.notificationProjectionWork)
     let abortTransaction: (() => void) | undefined
     const rows = await db
       .transaction("rw", tables, () => {
@@ -319,6 +330,11 @@ export async function enqueueOutboundMany(
                   batchReceipts
                 )
             }
+            for (const row of created) {
+              await startJobExecutionRun(`outbound:${row.id}`, options.executionContext, {
+                delivery: true,
+              })
+            }
             return created
           })
         })
@@ -394,7 +410,7 @@ export async function holdOutboundForAuthorization(
   hold: { errorCode: string; message: string; draft?: ConnectorDraftRow; claimed?: boolean }
 ): Promise<boolean> {
   const db = getDb()
-  const tables: Table[] = [db.outboundQueue]
+  const tables: Table[] = [db.outboundQueue, ...jobExecutionTables(db)]
   if (hold.draft) tables.push(db.connectorDrafts)
   const held = await db.transaction("rw", tables, async () => {
     const row = await db.outboundQueue.get(jobId)
@@ -407,6 +423,7 @@ export async function holdOutboundForAuthorization(
       lastError: hold.message,
       updatedAt: Date.now(),
     })
+    await settleOutboundJobExecution(db, jobId)
     return true
   })
   if (held) {
@@ -424,6 +441,34 @@ export function isOutboundTerminal(
   if (status === "delivery_unknown" && pendingReceipt && pendingReceipt.resolvedAt === undefined)
     return false
   return status === "sent" || status === "deadlettered" || status === "delivery_unknown"
+}
+
+async function settleOutboundJobExecution(db: ReturnType<typeof getDb>, jobId: string) {
+  const row = await db.outboundQueue.get(jobId)
+  if (row && !isOutboundTerminal(row.status, row.pendingReceipt)) return
+  await settleJobExecutionInsideTransaction(
+    db,
+    `outbound:${jobId}`,
+    !row ? "cancelled" : row.status === "sent" ? "completed" : "failed"
+  )
+}
+
+/** Startup repair for executions left behind by older writers or interrupted upgrades. */
+export async function reconcileOutboundJobExecutions(): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
+    const runs = await db.executionRuns
+      .where("kind")
+      .equals("job")
+      .filter(
+        (run) =>
+          run.id.startsWith("execution:job:outbound:") &&
+          !["completed", "failed", "cancelled"].includes(run.status)
+      )
+      .toArray()
+    for (const run of runs)
+      await settleOutboundJobExecution(db, run.id.slice("execution:job:outbound:".length))
+  })
 }
 
 /**
@@ -555,11 +600,16 @@ async function enforceQueueSoftCap(now: number): Promise<void> {
     .limit(overflow)
     .toArray()
   for (const job of victims) {
-    await db.outboundQueue.update(job.id, {
-      status: "deadlettered",
-      lastErrorCode: "queue_capped",
-      lastError: `outboundQueue exceeded soft cap of ${outboundQueueSoftCap}`,
-      updatedAt: now,
+    await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
+      const current = await db.outboundQueue.get(job.id)
+      if (current?.status !== "pending") return
+      await db.outboundQueue.update(job.id, {
+        status: "deadlettered",
+        lastErrorCode: "queue_capped",
+        lastError: `outboundQueue exceeded soft cap of ${outboundQueueSoftCap}`,
+        updatedAt: now,
+      })
+      await settleOutboundJobExecution(db, job.id)
     })
     invalidate(job.conversationKey)
     try {
@@ -607,27 +657,42 @@ export async function sweepTerminalOutboundRows(opts?: {
     .limit(batchLimit)
     .toArray()
   if (victims.length === 0) return 0
-  const ids = victims.map((r) => r.id)
-  await db.transaction("rw", db.outboundQueue, db.syncTombstones, async () => {
-    await db.outboundQueue.bulkDelete(ids)
-    // Paired clients mirror the delivery-status projection; without the
-    // tombstone a swept row stays in their outbound list for good.
-    await recordTombstones("outboundQueue", ids, now)
-  })
-  return victims.length
+  return deleteOutboundJobs(
+    victims.map((r) => r.id),
+    { now }
+  )
 }
 
 /**
- * Remove one outbound job: an operator cancel, or a plugin guard blocking the
- * send. Paired clients mirror `outboundQueue` as a status projection, and hear
- * about a removed job only through the tombstone written here.
+ * Delete jobs and settle their executions atomically, including bulk cleanup.
+ * A collection is resolved inside the transaction so adapter/workspace clears
+ * cannot remove rows that were never settled. Mirror-only cleanup suppresses
+ * tombstones; the journal owner check preserves mirrored Host executions.
  */
-export async function deleteOutboundJob(id: string): Promise<void> {
+export async function deleteOutboundJobs(
+  jobs: readonly string[] | Collection<OutboundJobRow, string>,
+  options: { tombstones?: boolean; now?: number } = {}
+): Promise<number> {
   const db = getDb()
-  await db.transaction("rw", db.outboundQueue, db.syncTombstones, async () => {
-    await db.outboundQueue.delete(id)
-    await recordTombstones("outboundQueue", [id])
-  })
+  return db.transaction(
+    "rw",
+    [db.outboundQueue, db.syncTombstones, ...jobExecutionTables(db)],
+    async () => {
+      const ids = "primaryKeys" in jobs ? await jobs.primaryKeys() : [...jobs]
+      if (ids.length === 0) return 0
+      for (const id of ids) await settleOutboundJobExecution(db, id)
+      await db.outboundQueue.bulkDelete(ids)
+      for (const id of ids)
+        await settleJobExecutionInsideTransaction(db, `outbound:${id}`, "cancelled")
+      if (options.tombstones !== false) await recordTombstones("outboundQueue", ids, options.now)
+      return ids.length
+    }
+  )
+}
+
+/** Operator cancellation or plugin veto uses the same settlement as bulk cleanup. */
+export async function deleteOutboundJob(id: string): Promise<void> {
+  await deleteOutboundJobs([id])
 }
 
 /**
@@ -965,10 +1030,14 @@ export async function unclaimSending(
  * adapter round-trip.
  */
 export async function markSent(jobId: string, platformMessageId: string): Promise<void> {
-  await getDb().outboundQueue.update(jobId, {
-    status: "sent",
-    platformMessageId,
-    updatedAt: Date.now(),
+  const db = getDb()
+  await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
+    await db.outboundQueue.update(jobId, {
+      status: "sent",
+      platformMessageId,
+      updatedAt: Date.now(),
+    })
+    await settleOutboundJobExecution(db, jobId)
   })
   invalidate()
 }
@@ -1028,7 +1097,8 @@ export async function markDeliveryUnknown(
   errorCode: string,
   message: string
 ): Promise<void> {
-  await getDb().transaction("rw", getDb().outboundQueue, async () => {
+  const db = getDb()
+  await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
     if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
     await getDb().outboundQueue.update(jobId, {
       status: "delivery_unknown",
@@ -1036,6 +1106,7 @@ export async function markDeliveryUnknown(
       lastError: message,
       updatedAt: Date.now(),
     })
+    await settleOutboundJobExecution(db, jobId)
   })
   invalidate()
 }
@@ -1081,14 +1152,17 @@ async function settleStatusReceipt(
     )
     .toArray()
   if (matches.length !== 1 || evidence.conflict) {
-    for (const row of matches)
-      if (row.status === "delivery_unknown")
+    for (const row of matches) {
+      if (row.status === "delivery_unknown") {
         await db.outboundQueue.update(row.id, {
           lastErrorCode: "receipt_conflict",
           lastError: "Conflicting provider receipt; operator reconciliation required",
           pendingReceipt: { ...row.pendingReceipt!, resolvedAt: Date.now() },
           updatedAt: Date.now(),
         })
+        await settleOutboundJobExecution(db, row.id)
+      }
+    }
     return undefined
   }
   const row = matches[0]
@@ -1139,6 +1213,7 @@ async function settleStatusReceipt(
     pendingReceipt: { ...row.pendingReceipt, resolvedAt: now },
     updatedAt: now,
   })
+  await settleOutboundJobExecution(db, row.id)
   await db.inboundLedger.update(statusReceiptKey(adapterId, conversationKey, receiptId), {
     deliveryStatus: { ...evidence, resolvedAt: now },
   })
@@ -1181,10 +1256,13 @@ export async function markAwaitingDeliveryReceipt(
   const db = getDb()
   const result = await db.transaction(
     "rw",
-    db.outboundQueue,
-    db.inboundLedger,
-    db.connectorAudit,
-    db.conversationOverrides,
+    [
+      db.outboundQueue,
+      db.inboundLedger,
+      db.connectorAudit,
+      db.conversationOverrides,
+      ...jobExecutionTables(db),
+    ],
     async () => {
       const row = await db.outboundQueue.get(jobId)
       if (!row || row.syncedFromHost)
@@ -1202,6 +1280,7 @@ export async function markAwaitingDeliveryReceipt(
         })
       }
       await settleStatusReceipt(row.adapterId, row.conversationKey, receipt.id)
+      await settleOutboundJobExecution(db, jobId)
       return db.outboundQueue.get(jobId)
     }
   )
@@ -1229,10 +1308,13 @@ export async function recordOutboundDeliveryStatus(
     key = statusReceiptKey(adapterId, conversationKey, update.receiptId)
   const result = await db.transaction(
     "rw",
-    db.outboundQueue,
-    db.inboundLedger,
-    db.connectorAudit,
-    db.conversationOverrides,
+    [
+      db.outboundQueue,
+      db.inboundLedger,
+      db.connectorAudit,
+      db.conversationOverrides,
+      ...jobExecutionTables(db),
+    ],
     async () => {
       const prior = await db.inboundLedger.get(key)
       if (
@@ -1298,7 +1380,8 @@ export async function markDeadlettered(
   message: string,
   reroute?: { toJobId: string; mechanism: "failover" | "balanced" }
 ): Promise<void> {
-  await getDb().transaction("rw", getDb().outboundQueue, async () => {
+  const db = getDb()
+  await db.transaction("rw", [db.outboundQueue, ...jobExecutionTables(db)], async () => {
     if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
     await getDb().outboundQueue.update(jobId, {
       status: "deadlettered",
@@ -1309,6 +1392,7 @@ export async function markDeadlettered(
         ? { reroutedToJobId: reroute.toJobId, reroutedMechanism: reroute.mechanism }
         : {}),
     })
+    await settleOutboundJobExecution(db, jobId)
   })
   invalidate()
 }

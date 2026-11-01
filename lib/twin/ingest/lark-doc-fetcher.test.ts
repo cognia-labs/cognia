@@ -69,6 +69,10 @@ describe("kept source authority", () => {
       fetchLarkDocAsRawSource(DOCX_URL, {
         adapterId: ADAPTER,
         sourceProvenance: source,
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         httpImpl: http,
       })
     ).rejects.toMatchObject({ code: "source-disconnected" })
@@ -78,13 +82,19 @@ describe("kept source authority", () => {
       await fetchLarkDocAsRawSource(DOCX_URL, {
         adapterId: ADAPTER,
         sourceProvenance: source,
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         httpImpl: http,
       })
     ).toMatchObject({
       accountBinding: { accountId: "restored", authorizationEpoch: "2" },
       text: "Kept body",
     })
-    expect(resolveLarkConnection).toHaveBeenCalledWith("restored-adapter")
+    expect(resolveLarkConnection).toHaveBeenCalledWith("restored-adapter", undefined, {
+      localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+    })
   })
   it("drops a result whose source disconnected during the remote read", async () => {
     await restore()
@@ -100,6 +110,10 @@ describe("kept source authority", () => {
       fetchLarkDocAsRawSource(DOCX_URL, {
         adapterId: ADAPTER,
         sourceProvenance: source,
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         httpImpl: http,
       })
     ).rejects.toMatchObject({ code: "source-disconnected" })
@@ -111,6 +125,10 @@ describe("kept source authority", () => {
       fetchLarkDocAsRawSource(DOCX_URL, {
         adapterId: ADAPTER,
         sourceProvenance: source,
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         httpImpl: http,
       })
     ).rejects.toMatchObject({ code: "larkNotFound" })
@@ -120,6 +138,10 @@ describe("kept source authority", () => {
       fetchLarkDocAsRawSource(DOCX_URL, {
         adapterId: ADAPTER,
         sourceProvenance: source,
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         httpImpl: http,
       })
     ).rejects.toMatchObject({ code: "source-deleted" })
@@ -130,25 +152,20 @@ describe("kept source authority", () => {
 jest.mock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
-// This transport unit suite uses a stable Host identity; lifecycle is covered in stage.test.ts.
+jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
-  resolveLarkConnection: jest.fn(async () => ({
-    id: "lark-fixture",
-    revision: 1,
-    status: "connected",
-    hostMetadata: { adapterId: "cai_test1", authorizationEpoch: "twin-fixture" },
-  })),
+  resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
 }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => {
-  const getToken = jest.requireMock("@/lib/connectors/adapters/lark/auth").getUserAccessToken
+  const manager = {
+    getConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+    getCredentials: jest.fn(async () => ({ accessToken: await getUserAccessTokenMock(ADAPTER) })),
+  }
   return {
-    getConnectionManager: () => ({
-      getConnection: async () => ({ id: "lark-fixture", revision: 1 }),
-      getCredentials: async () => ({ accessToken: await getToken("cai_test1") }),
-    }),
+    ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
+    getConnectionManager: () => manager,
   }
 })
-jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
@@ -167,6 +184,7 @@ jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
 }))
 
 import { isTauri } from "@/lib/tauri"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
@@ -191,6 +209,9 @@ it("never starts CLI execution when cancelled during its lazy import", async () 
   execLarkCli.mockResolvedValue({ status: "ok", adapterId: ADAPTER, data: "fixture body" })
   const controller = new AbortController()
   const reading = fetchLarkDocAsRawSource(DOCX_URL, {
+    credentialContext: {
+      localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+    },
     adapterId: ADAPTER,
     channel: "cli",
     signal: controller.signal,
@@ -224,6 +245,10 @@ it.each(["api", "cli"] as const)(
         }
       }
       const reading = fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
         adapterId: ADAPTER,
         channel,
         signal: controller.signal,
@@ -264,6 +289,9 @@ it("does not start a CLI read for an already cancelled ingestion", async () => {
   const exec = jest.fn()
   await expect(
     fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
       adapterId: ADAPTER,
       channel: "cli",
       signal: controller.signal,
@@ -310,6 +338,10 @@ function makeHttp(routes: Array<[match: string, resp: unknown]>) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest
+    .mocked(resolveLarkConnection)
+    .mockReset()
+    .mockResolvedValue({ id: "host-ref", revision: 1 } as never)
   ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async () => ({
     configured: true,
     authorizationEpoch: "twin-fixture",
@@ -339,7 +371,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ["/raw_content", ok({ content: "A real body" })],
       ["/documents/", ok({ document: { title: "Bounded Twin doc" } })],
     ])
-    await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
+    await fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      httpImpl: http,
+    })
     expect(http).toHaveBeenCalled()
     for (const [request] of http.mock.calls) {
       expect(request.maxResponseBytes).toBe(MAX_REMOTE_DOC_RESPONSE_BYTES)
@@ -353,7 +391,15 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ["/documents/", ok({ document: { title: "Search hit" } })],
     ])
     await expect(
-      fetchLarkDocAsRawSource(token, { adapterId: ADAPTER, kind: "docx", httpImpl: http })
+      fetchLarkDocAsRawSource(token, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        kind: "docx",
+        httpImpl: http,
+      })
     ).resolves.toMatchObject({ docToken: token, objType: "docx", text: "search result body" })
     expect(http).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -364,7 +410,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
 
   it("rejects unparseable input", async () => {
     await expectCode(
-      fetchLarkDocAsRawSource("https://example.com/post", { adapterId: ADAPTER }),
+      fetchLarkDocAsRawSource("https://example.com/post", {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+      }),
       "larkInvalidUrl"
     )
   })
@@ -374,7 +426,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ["/raw_content", ok({ content: "Hello body" })],
       ["/documents/doxcn", ok({ document: { title: "Spec" } })],
     ])
-    const doc = await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
+    const doc = await fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      httpImpl: http,
+    })
     expect(doc).toMatchObject({
       title: "Spec",
       text: "Hello body",
@@ -382,6 +440,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       objType: "docx",
       adapterId: ADAPTER,
       channel: "api",
+    })
+    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, undefined, {
+      localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+    })
+    expect(getConnectionManager().getCredentials).toHaveBeenCalledWith("host-ref", {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
     })
     for (const call of http.mock.calls) {
       expect(call[0].headers?.Authorization).toBe("Bearer user-token")
@@ -398,7 +464,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ],
       ["/raw_content", ok({ content: "wiki body" })],
     ])
-    const doc = await fetchLarkDocAsRawSource(WIKI_URL, { adapterId: ADAPTER, httpImpl: http })
+    const doc = await fetchLarkDocAsRawSource(WIKI_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      httpImpl: http,
+    })
     expect(doc).toMatchObject({
       title: "Wiki page",
       text: "wiki body",
@@ -414,7 +486,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ["/wiki/v2/spaces/get_node", ok({ node: { obj_token: "sht1", obj_type: "sheet" } })],
     ])
     await expect(
-      fetchLarkDocAsRawSource(WIKI_URL, { adapterId: ADAPTER, httpImpl: http })
+      fetchLarkDocAsRawSource(WIKI_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      })
     ).rejects.toMatchObject({ code: "larkUnsupportedType", params: { type: "sheet" } })
   })
 
@@ -433,7 +512,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       .mockResolvedValueOnce("user-token") // presence check
       .mockResolvedValueOnce("user-token") // first attempt
       .mockResolvedValue("user-token-2") // after refresh
-    const doc = await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
+    const doc = await fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      httpImpl: http,
+    })
     expect(doc.text).toBe("after refresh")
     expect(refreshUserTokenMock).toHaveBeenCalledTimes(1)
   })
@@ -442,7 +527,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
     getUserAccessTokenMock.mockResolvedValue(null)
     const http = makeHttp([])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNotAuthorized"
     )
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -455,7 +547,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
     )
     const http = jest.fn(async (_request: TauriHttpRequest) => larkFail(401, 99991677))
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNotAuthorized"
     )
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
@@ -472,7 +571,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
   ])("maps HTTP %s / code %s to %s", async (status, code, expected) => {
     const http = makeHttp([["/", larkFail(status as number, code as number)]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       expected as string
     )
   })
@@ -480,7 +586,13 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
   it("throws larkBrowserUnsupported outside Tauri without touching the network", async () => {
     isTauriMock.mockReturnValue(false)
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+      }),
       "larkBrowserUnsupported"
     )
     expect(getAdapterInstanceMock).not.toHaveBeenCalled()
@@ -489,12 +601,26 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
   it("throws larkNoAccount for missing or disabled adapters", async () => {
     getAdapterInstanceMock.mockResolvedValue(undefined)
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: makeHttp([]) }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: makeHttp([]),
+      }),
       "larkNoAccount"
     )
     getAdapterInstanceMock.mockResolvedValue({ id: ADAPTER, type: "lark", enabled: false })
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: makeHttp([]) }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: makeHttp([]),
+      }),
       "larkNoAccount"
     )
   })
@@ -502,7 +628,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
   it("throws larkNotAuthorized when app credentials are missing", async () => {
     keyringGetMock.mockResolvedValue(null)
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: makeHttp([]) }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: makeHttp([]),
+      }),
       "larkNotAuthorized"
     )
   })
@@ -513,7 +646,14 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       ["/documents/doxcn", ok({ document: { title: "T" } })],
     ])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkEmptyDoc"
     )
   })
@@ -523,7 +663,14 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
   it("maps a non-JSON error body to larkNetwork with the HTTP status", async () => {
     const http = makeHttp([["/", { status: 502, headers: {}, body: "<html>bad gateway</html>" }]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNetwork"
     )
   })
@@ -535,6 +682,9 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
       return ok({ content: "legacy body" })
     })
     const doc = await fetchLarkDocAsRawSource("https://acme.feishu.cn/docs/doccnLegacyToken12345", {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
       adapterId: ADAPTER,
       httpImpl: http,
     })
@@ -550,7 +700,14 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
     getUserAccessTokenMock.mockResolvedValue(null)
     const http = makeHttp([["/", larkFail(401, 99991663)]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNotAuthorized"
     )
   })
@@ -558,7 +715,14 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
   it("rejects wiki nodes lacking an obj_token", async () => {
     const http = makeHttp([["/wiki/v2/spaces/get_node", ok({ node: {} })]])
     await expect(
-      fetchLarkDocAsRawSource(WIKI_URL, { adapterId: ADAPTER, httpImpl: http })
+      fetchLarkDocAsRawSource(WIKI_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      })
     ).rejects.toMatchObject({ code: "larkUnsupportedType", params: { type: "unknown" } })
   })
 })
@@ -578,27 +742,17 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       })),
     }))
     try {
-      const doc = await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli" })
+      const doc = await fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+      })
       expect(doc).toMatchObject({ text: "cli markdown body", channel: "cli" })
     } finally {
       jest.dontMock("@/lib/skills/built-in/lark/exec-lark-cli")
-    }
-  })
-
-  it("maps a failing dynamic import to larkCliUnavailable", async () => {
-    // Purge the ok-mock cached by the previous dynamic import.
-    jest.resetModules()
-    jest.doMock("@/lib/skills/built-in/lark/exec-lark-cli", () => {
-      throw new Error("module unavailable in this bundle")
-    })
-    try {
-      await expectCode(
-        fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli" }),
-        "larkCliUnavailable"
-      )
-    } finally {
-      jest.dontMock("@/lib/skills/built-in/lark/exec-lark-cli")
-      jest.resetModules()
     }
   })
 
@@ -611,7 +765,13 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       ["/raw_content", ok({ content: "body" })],
       ["/documents/doxcn", ok({ document: {} })],
     ])
-    const doc = await fetchLarkDocAsRawSource(WIKI_URL, { adapterId: ADAPTER, httpImpl: http })
+    const doc = await fetchLarkDocAsRawSource(WIKI_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      httpImpl: http,
+    })
     expect(doc.title).toBe("doxcnResolvedToken123456")
     expect(http).toHaveBeenCalledTimes(3)
   })
@@ -621,7 +781,14 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       ["/", { status: 200, headers: {}, body: JSON.stringify({ code: 999 }) }],
     ])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNetwork"
     )
   })
@@ -632,7 +799,14 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
   ])("maps bare HTTP %s with unknown code to %s", async (status, code, expected) => {
     const http = makeHttp([["/", larkFail(status as number, code as number)]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       expected as string
     )
   })
@@ -640,7 +814,14 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("maps business not-found codes even on HTTP 200", async () => {
     const http = makeHttp([["/", larkFail(200, 1254005)]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNotFound"
     )
   })
@@ -648,7 +829,14 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("handles an empty error body", async () => {
     const http = makeHttp([["/", { status: 500, headers: {}, body: "" }]])
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      }),
       "larkNetwork"
     )
   })
@@ -660,6 +848,9 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       data: { markdown: "wiki md", document: { title: "Nested title" } },
     }))
     const doc = await fetchLarkDocAsRawSource(WIKI_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
       adapterId: ADAPTER,
       channel: "cli",
       execImpl: exec,
@@ -671,7 +862,14 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("maps a bare 403 with an unknown business code to larkNoPermission", async () => {
     const http = makeHttp([["/", larkFail(403, 555555)]])
     await expect(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        httpImpl: http,
+      })
     ).rejects.toMatchObject({ code: "larkNoPermission", params: { account: "Acme Lark" } })
   })
 
@@ -680,7 +878,15 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       throw new Error("execFile is not a function")
     })
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+        execImpl: exec,
+      }),
       "larkCliUnavailable"
     )
   })
@@ -692,7 +898,15 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       message: "no adapter",
     }))
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+        execImpl: exec,
+      }),
       "larkCliUnavailable"
     )
   })
@@ -704,6 +918,9 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       data: { data: { markdown: "# Title\n\nBody", title: "Doc via CLI" } },
     }))
     const doc = await fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
       adapterId: ADAPTER,
       channel: "cli",
       execImpl: exec,
@@ -724,7 +941,15 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       message: "not installed",
     }))
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+        execImpl: exec,
+      }),
       "larkCliUnavailable"
     )
   })
@@ -736,7 +961,15 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
       message: "exit 1",
     }))
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+        execImpl: exec,
+      }),
       "larkNetwork"
     )
   })
@@ -744,7 +977,15 @@ describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("throws larkEmptyDoc when the cli payload has no text", async () => {
     const exec = jest.fn(async () => ({ status: "ok" as const, adapterId: ADAPTER, data: "" }))
     await expectCode(
-      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec }),
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        credentialContext: {
+          localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+            .LOCAL_PERSON_RUN,
+        },
+        adapterId: ADAPTER,
+        channel: "cli",
+        execImpl: exec,
+      }),
       "larkEmptyDoc"
     )
   })
@@ -817,7 +1058,14 @@ it("reports CLI output truncation without creating a partial source", async () =
     message: "Output exceeded limit",
   })
   await expect(
-    fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel: "cli", execImpl: exec })
+    fetchLarkDocAsRawSource(DOCX_URL, {
+      credentialContext: {
+        localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      },
+      adapterId: ADAPTER,
+      channel: "cli",
+      execImpl: exec,
+    })
   ).rejects.toMatchObject({ code: "larkOutputTruncated" })
 })
 
@@ -833,6 +1081,10 @@ it.each(["# Partial Markdown", '{"document":{"content":"partial'])(
     try {
       await expect(
         fetchLarkDocAsRawSource(DOCX_URL, {
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
           adapterId: ADAPTER,
           channel: "cli",
           execImpl: (input) =>
@@ -854,3 +1106,42 @@ it.each(["# Partial Markdown", '{"document":{"content":"partial'])(
     }
   }
 )
+
+it.each(["api", "cli"] as const)(
+  "refuses agent twin ingest through %s without local admission",
+  async (channel) => {
+    const execImpl = jest.fn()
+    const httpImpl = jest.fn()
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, channel, execImpl, httpImpl })
+    ).rejects.toMatchObject({ code: "larkNotAuthorized" })
+    expect(execImpl).not.toHaveBeenCalled()
+    expect(httpImpl).not.toHaveBeenCalled()
+  }
+)
+
+// Reset the isolated module graph only after the tests that share the original Host symbol.
+it("maps a failing dynamic import to larkCliUnavailable", async () => {
+  await jest.isolateModulesAsync(async () => {
+    jest.resetModules()
+    jest.doMock("@/lib/skills/built-in/lark/exec-lark-cli", () => {
+      throw new Error("module unavailable in this bundle")
+    })
+    try {
+      const { fetchLarkDocAsRawSource: fetchDoc } = await import("./lark-doc-fetcher")
+      await expectCode(
+        fetchDoc(DOCX_URL, {
+          adapterId: ADAPTER,
+          channel: "cli",
+          credentialContext: {
+            localAuthorization: jest.requireActual("@/lib/execution/acting-authority")
+              .LOCAL_PERSON_RUN,
+          },
+        }),
+        "larkCliUnavailable"
+      )
+    } finally {
+      jest.dontMock("@/lib/skills/built-in/lark/exec-lark-cli")
+    }
+  })
+})

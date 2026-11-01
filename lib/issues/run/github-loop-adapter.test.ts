@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 /**
  * @jest-environment jsdom
  */
@@ -102,7 +103,7 @@ function run(over: Partial<IssueRun> = {}): IssueRun {
 }
 
 function makeDeps(over: Partial<GithubLoopRunAdapterDeps> = {}) {
-  const executed: Array<[string, unknown, unknown?]> = []
+  const executed: Array<[string, unknown, unknown?, unknown?]> = []
   const approved: string[] = []
   const cancelled: string[] = []
   const runs: Parameters<GithubLoopRunAdapterDeps["createRun"]>[0][] = []
@@ -111,8 +112,8 @@ function makeDeps(over: Partial<GithubLoopRunAdapterDeps> = {}) {
   const deps: GithubLoopRunAdapterDeps = {
     isAvailable: () => true,
     resolveAccount: async () => account,
-    execute: async (pluginId, input, caller) => {
-      executed.push([pluginId, input, caller])
+    execute: async (pluginId, input, caller, credentialContext) => {
+      executed.push([pluginId, input, caller, credentialContext])
       return job()
     },
     approve: async (id) => {
@@ -191,7 +192,7 @@ describe("start", () => {
     await expect(adapter.start(target(), { by: HUMAN, origin: "interactive" })).rejects.toThrow(
       "no-github-account"
     )
-    expect(resolveAccount).toHaveBeenCalledWith("octo/repo")
+    expect(resolveAccount).toHaveBeenCalledWith("octo/repo", undefined, undefined)
     expect(harness.executed).toHaveLength(0)
   })
   it("enqueues runIssueLoop with an idempotency key, approves the write, records the run", async () => {
@@ -575,4 +576,19 @@ describe("start — stacked mode", () => {
     )
     expect(runs).toHaveLength(1)
   })
+})
+
+it("carries explicit Host admission from availability through the queued Issue Loop", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  const resolveAccount = jest.fn(async (_repo, _selection, context) =>
+    context?.localAuthorization === LOCAL_PERSON_RUN ? account : null
+  )
+  const harness = makeDeps({ resolveAccount })
+  const adapter = createGithubLoopRunAdapter(harness.deps)
+  expect(await adapter.canRun(target())).toMatchObject({ ok: false })
+  const admitted = { ...target(), credentialContext }
+  expect(await adapter.canRun(admitted)).toEqual({ ok: true })
+  await adapter.start(admitted, { by: HUMAN, origin: "interactive" })
+  expect(resolveAccount).toHaveBeenLastCalledWith("octo/repo", undefined, credentialContext)
+  expect(harness.executed[0][3]).toBe(credentialContext)
 })

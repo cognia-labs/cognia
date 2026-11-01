@@ -11,6 +11,7 @@
 
 import Dexie, { type Transaction } from "dexie"
 import type { PluginDexieMigrationDef } from "@/types/plugin"
+import { bindPluginCallbacks, HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import type { PluginDexieMeta } from "./meta"
 import { loggers } from "@/lib/plugin/core/logger"
 
@@ -117,8 +118,11 @@ export async function runPluginMigrations(
           ? moduleExports[migration.upgrade]
           : undefined
         if (typeof handler === "function") {
-          upgradeHandlers[migration.upgrade] =
-            handler as MigrationContext["upgradeHandlers"][string]
+          upgradeHandlers[migration.upgrade] = bindPluginCallbacks(
+            pluginId,
+            handler,
+            () => HOST_BACKGROUND
+          ) as MigrationContext["upgradeHandlers"][string]
         }
       }
       await Dexie.waitFor(

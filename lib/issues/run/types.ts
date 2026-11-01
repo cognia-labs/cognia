@@ -42,6 +42,8 @@ export function isNamedRunOrigin(origin: IssueRunOrigin): boolean {
 
 /** Everything an adapter needs to decide and to start. */
 export interface IssueRunTarget {
+  /** Host-only, transient credential admission; never stored on IssueRun. */
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   issue: Issue
   /** The delivery container, when it still exists. */
   project: IssueProject | undefined

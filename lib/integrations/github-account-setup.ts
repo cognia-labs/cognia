@@ -7,6 +7,7 @@ import { createIntegrationAccount, listIntegrationAccounts } from "@/lib/db/inte
 import { getProvider, getSession } from "@/lib/plugin/auth/auth-provider-registry"
 import { getRegisteredIntegration } from "./registry"
 import { checkIntegrationAccountHealth } from "./providers"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 const pluginId = "github-delivery"
 const integrationId = "github"
@@ -28,7 +29,10 @@ interface SetupResult {
   health: string
 }
 
-async function connect(input: z.infer<typeof inputSchema>): Promise<SetupResult> {
+async function connect(
+  input: z.infer<typeof inputSchema>,
+  credentialContext?: PersonalCredentialContext
+): Promise<SetupResult> {
   const integration = getRegisteredIntegration(pluginId, integrationId)
   const provider = getProvider(providerId)
   if (
@@ -107,18 +111,21 @@ async function connect(input: z.infer<typeof inputSchema>): Promise<SetupResult>
       accountId: account.id,
     })
   )
-  const status = await checkIntegrationAccountHealth(pluginId, account.id)
+  const status = await checkIntegrationAccountHealth(pluginId, account.id, credentialContext)
   return { accountId: account.id, login: identity.login, health: status.health }
 }
 
-export async function connectGithubAccountFromSecret(raw: unknown): Promise<SetupResult> {
+export async function connectGithubAccountFromSecret(
+  raw: unknown,
+  credentialContext?: PersonalCredentialContext
+): Promise<SetupResult> {
   if (!isHeadlessHost())
     throw new Error("GitHub credential setup requires the owning Headless host")
   const input = inputSchema.parse(raw)
   // Serialize setup operations across identities too: one host owns the account mutation.
   const previous = active.get("host")
   const result = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() =>
-    connect(input)
+    connect(input, credentialContext)
   )
   active.set("host", result)
   try {

@@ -8,6 +8,7 @@ import {
   sessionTurnLockKey,
 } from "@/lib/execution/session-turn-lock"
 import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
@@ -528,6 +529,23 @@ export function localChatRunAuthorization(options?: {
     options.backgroundDelivery === undefined
     ? LOCAL_PERSON_RUN
     : undefined
+}
+
+/** A retry of an existing run keeps its authority even after a person clicks. */
+export async function chatHookCredentialContext(
+  sessionId: string,
+  executionRunId: string,
+  localAuthorization?: LocalPersonRun
+): Promise<PersonalCredentialContext> {
+  if (localAuthorization === LOCAL_PERSON_RUN) {
+    try {
+      const { getExecutionRun } = await import("@/lib/db/execution-runs")
+      if (!(await getExecutionRun(executionRunId))) return { sessionId, localAuthorization }
+    } catch {
+      // A failed journal read cannot prove that this is a new local action.
+    }
+  }
+  return { sessionId, executionRunId }
 }
 
 export function resolveChatTurnAttemptIdentity(input: {
@@ -2580,6 +2598,7 @@ export function useClaudeChat() {
                 ? {}
                 : { routerFusionSurface: "chat" as const }),
               ...(hostStateForeseen ? { hostState: true } : {}),
+              localAuthorization: localChatRunAuthorization(callOptions),
               interactive:
                 !callOptions?.sharedRequest &&
                 (!callOptions?.skipUserAppend || Boolean(callOptions?.regenerateBranch)),
@@ -2802,12 +2821,18 @@ export function useClaudeChat() {
       }
 
       let effectiveContent: SendContent = turnContent
+      const hookExecution = await chatHookCredentialContext(
+        sessionId,
+        executionRunId,
+        localAuthorization
+      )
       const promptText = userPromptText(turnContent, turnManifest?.length ?? 0)
       const promptDecision = await dispatchPluginUserPromptSubmit(
         promptText,
         sessionId,
         // Cast — the dispatcher's structural shape accepts any subset.
-        {} as never
+        {} as never,
+        hookExecution
       )
       if (promptDecision.action === "block") {
         store.getState().setSessionDiagnostic(
@@ -2848,11 +2873,14 @@ export function useClaudeChat() {
       // onUserPromptSubmit so a block decision wins over a rewrite.
       {
         const outboundText = userPromptText(effectiveContent, turnManifest?.length ?? 0)
-        const piped = await dispatchPluginMessageSend({
-          id: `${sessionId}:outbound`,
-          role: "user",
-          content: outboundText,
-        })
+        const piped = await dispatchPluginMessageSend(
+          {
+            id: `${sessionId}:outbound`,
+            role: "user",
+            content: outboundText,
+          },
+          hookExecution
+        )
         if (typeof piped?.content === "string" && piped.content !== outboundText) {
           effectiveContent = rewriteUserPromptText(
             effectiveContent,
@@ -4107,6 +4135,9 @@ export function useClaudeChat() {
         try {
           const binding = await ensureSessionExecutionBundle({
             sessionId,
+            credentialContext: localAuthorization
+              ? { localAuthorization }
+              : { sessionId, executionRunId: turnIdentity.runId },
             context: executionContext,
             project,
           })
@@ -4871,7 +4902,7 @@ export function useClaudeChat() {
               detail: `${diagnostic.code}: ${message}`,
             })
           }
-          if (error) dispatchPluginChatError(sessionId, error)
+          if (error) dispatchPluginChatError(sessionId, error, { sessionId, executionRunId })
         }
 
         const gatewayController = !hostSelection ? new AbortController() : undefined
@@ -6203,7 +6234,7 @@ export function useClaudeChat() {
             })
         )
         // Notify plugins; fire-and-forget — host already surfaced the error.
-        dispatchPluginChatError(sessionId, error)
+        dispatchPluginChatError(sessionId, error, { sessionId, executionRunId })
         // Local pre-sidecar failure — close the agent-trace span we just
         // opened so it doesn't dangle (no result event will ever land).
         if (sendOptions.spanId) {

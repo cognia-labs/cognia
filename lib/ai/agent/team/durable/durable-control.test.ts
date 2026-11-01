@@ -124,6 +124,63 @@ describe("durable AgentTeam run controls", () => {
     expect((await getDb().agentTeamChildRuns.get("child-1"))?.stop?.state).toBe("unconfirmed")
     expect((await getAgentTeamRun("run-1"))?.completedAt).toBeUndefined()
   })
+
+  it("round 4: does not overwrite terminal settlement while child control is pending", async () => {
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const operation = controlDurableRun("run-1", "pause", {
+      coordinator: {
+        setRunPaused: jest.fn(),
+        pauseChild: async () => {
+          entered()
+          await blocked
+        },
+      } as never,
+      now: () => 10,
+    })
+    await started
+    await getDb().agentTeamRuns.update("run-1", { status: "completed", updatedAt: 11 })
+    release()
+    await operation
+    expect(await getAgentTeamRun("run-1")).toMatchObject({ status: "completed", updatedAt: 11 })
+  })
+
+  it.each([false, true])(
+    "preserves completed publication while stop control awaits (child failure=%s)",
+    async (fails) => {
+      let release!: () => void
+      let entered!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const started = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const operation = controlDurableRun("run-1", "stop", {
+        coordinator: {
+          setRunPaused: jest.fn(),
+          terminateChild: async () => {
+            entered()
+            await blocked
+            if (fails) throw new Error("late stop failure")
+            await getDb().agentTeamChildRuns.update("child-1", { status: "terminated" })
+          },
+        } as never,
+        now: () => 10,
+      })
+      await started
+      await getDb().agentTeamRuns.update("run-1", { status: "completed", updatedAt: 11 })
+      release()
+      await operation
+      expect(await getAgentTeamRun("run-1")).toMatchObject({ status: "completed", updatedAt: 11 })
+    }
+  )
 })
 
 describe("steering a durable run", () => {

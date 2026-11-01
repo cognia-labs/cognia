@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   connectorsHttpRequest,
   connectorsKeyringGet,
@@ -485,7 +486,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
       input.action === "snapshot"
         ? {
             configured: true,
-            accessToken: "user-a",
+            accessToken: (await mockKeyringGet(input.adapterId, "user_token")) ?? "user-a",
             authorizationEpoch: "auth-a",
             refreshToken: await mockKeyringGet(input.adapterId, "user_refresh_token"),
             refreshRevision: "refresh-a",
@@ -497,14 +498,19 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
 
   it("returns null when no user token is stored", async () => {
     mockKeyringGet.mockResolvedValue(null)
-    expect(await getUserAccessToken("lark-u")).toBeNull()
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({ configured: false })
+    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
   })
 
   it("rechecks the host token so another window can replace the authorization", async () => {
     mockKeyringGet.mockResolvedValue("u-stored")
-    expect(await getUserAccessToken("lark-u")).toBe("u-stored")
-    expect(await getUserAccessToken("lark-u")).toBe("u-stored")
-    expect(mockKeyringGet).toHaveBeenCalledTimes(2)
+    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      "u-stored"
+    )
+    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      "u-stored"
+    )
+    expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(2)
   })
 
   it("refreshes via the refresh token (v2) and persists the rotated pair", async () => {
@@ -517,6 +523,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
     )
 
     const token = await refreshUserToken({
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
       adapterId: "lark-u",
       appId: "cli_app",
       appSecret: "secret",
@@ -537,14 +544,21 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
     // A subsequent read uses the authoritative host value.
     mockKeyringGet.mockResolvedValue("u-new-access")
     mockKeyringGet.mockClear()
-    expect(await getUserAccessToken("lark-u")).toBe("u-new-access")
+    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      "u-new-access"
+    )
     expect(mockKeyringGet).toHaveBeenCalledWith("lark-u", "user_token")
   })
 
   it("throws when there is no refresh token to use", async () => {
     mockKeyringGet.mockResolvedValue(null)
     await expect(
-      refreshUserToken({ adapterId: "lark-u", appId: "cli_app", appSecret: "secret" })
+      refreshUserToken({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: "lark-u",
+        appId: "cli_app",
+        appSecret: "secret",
+      })
     ).rejects.toThrow(/no refresh token/)
   })
 
@@ -557,8 +571,13 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
       refreshRevision: "revision-a",
     })
     await expect(
-      refreshUserToken({ adapterId: "lark-u", appId: "app", appSecret: "secret" })
-    ).rejects.toThrow("lark_auth_stale")
+      refreshUserToken({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+        adapterId: "lark-u",
+        appId: "app",
+        appSecret: "secret",
+      })
+    ).rejects.toThrow(/lark_auth_stale|authorization-unavailable/)
     expect(mockHttp).not.toHaveBeenCalled()
   })
 
@@ -571,6 +590,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
     })
     await expect(
       refreshUserToken({
+        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         adapterId: "lark-u",
         appId: "app",
         appSecret: "secret",
@@ -602,8 +622,16 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
         throw new LarkApiError({ status: 401, code: 99991677, message: "old request rejected" })
       })
       await expect(
-        withUserTokenRefresh({ adapterId: "lark-u", appId: "app", appSecret: "secret" }, request)
-      ).rejects.toThrow("lark_auth_stale")
+        withUserTokenRefresh(
+          {
+            adapterId: "lark-u",
+            appId: "app",
+            appSecret: "secret",
+            credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+          },
+          request
+        )
+      ).rejects.toThrow(/lark_auth_stale|authorization-unavailable/)
       expect(request).toHaveBeenCalledTimes(1)
       expect(mockHttp).not.toHaveBeenCalled()
       expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(

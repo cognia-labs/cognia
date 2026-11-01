@@ -14,6 +14,7 @@ import {
   hasPendingConnectionCleanup,
 } from "@/lib/db/external-services"
 import { getPlugin } from "@/lib/db/plugins"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { listRegisteredIntegrations } from "@/lib/integrations/registry"
 import {
   AuthConnectionApiError,
@@ -134,6 +135,7 @@ export function createAuthConnectionsAPI(
   return {
     list,
     async get(request) {
+      const credentialContext = pluginExecutionContext(pluginId)
       check()
       request = { ...request, scopes: [...(request.scopes ?? [])] }
       if (Boolean(request.providerId) === Boolean(request.service))
@@ -206,7 +208,9 @@ export function createAuthConnectionsAPI(
           ))
         )
           return undefined
-        const ref = await checked(() => connectProvider({ providerId: provider.id, scopes }))
+        const ref = await checked(() =>
+          connectProvider({ providerId: provider.id, scopes, credentialContext })
+        )
         const row = await connected(ref)
         if (row) selected = connectionMetadata(row)
       } else if (candidates.length > 1 && request.interactive) {
@@ -237,6 +241,7 @@ export function createAuthConnectionsAPI(
       return connectionMetadata(current)
     },
     async requestGrant(ref, request) {
+      const credentialContext = pluginExecutionContext(pluginId)
       check()
       if (await checked(() => hasPendingConnectionCleanup(ref, pluginId)))
         return { granted: false, reason: "connection-unavailable" }
@@ -280,6 +285,7 @@ export function createAuthConnectionsAPI(
             providerId: before.providerId,
             reconnect: ref,
             scopes: union,
+            credentialContext,
           })
         )
         connection = await connected(ref)

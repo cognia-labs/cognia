@@ -12,11 +12,12 @@
 
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
-import { getTenantToken, getUserAccessToken } from "./auth"
+import { getTenantToken } from "./auth"
 import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
+import { resolveBuiltInSkillRunScope } from "@/lib/skills/built-in/context"
 
 const LARK_API_BASE = "https://open.feishu.cn/open-apis"
 
@@ -116,11 +117,23 @@ export async function larkUserRequest(
   context?: BuiltInSkillContext
 ): Promise<unknown | null> {
   const verified = await assertLarkActingIdentity(adapterId, context)
-  const userToken = verified?.accessToken ?? (await getUserAccessToken(adapterId).catch(() => null))
+  const userToken = verified?.accessToken
   if (!userToken) return null
+  const scope = context ? resolveBuiltInSkillRunScope(context) : undefined
   let firstAttempt = true
   return withUserTokenRefresh(
-    { adapterId, ...creds, expectedAuthorizationEpoch: verified?.authorizationEpoch },
+    {
+      adapterId,
+      ...creds,
+      expectedAuthorizationEpoch: verified?.authorizationEpoch,
+      credentialContext: scope
+        ? {
+            sessionId: scope.sessionId,
+            executionRunId: scope.runId,
+            larkContext: context,
+          }
+        : undefined,
+    },
     (token) => {
       const requestToken = verified && firstAttempt ? verified.accessToken : token
       firstAttempt = false

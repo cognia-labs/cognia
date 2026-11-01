@@ -13,6 +13,7 @@
  * field more recently. That is the honest default for a table with no clock.
  */
 
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import { assertIssueSyncSource, readIssueSyncSource } from "../kept-copy-source"
 import type {
@@ -52,7 +53,11 @@ import {
 export const LARK_BITABLE_PROVIDER_ID = "lark-bitable"
 
 export interface LarkBitableProviderDeps {
-  withApi?: <T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) => Promise<T>
+  withApi?: <T>(
+    adapterId: string,
+    fn: (api: LarkAuthedApi) => Promise<T>,
+    credentialContext?: PersonalCredentialContext
+  ) => Promise<T>
   /** Pin all calls in a prepared pass to this authorization. */
   expectedAuthorizationEpoch?: string
   now?: () => number
@@ -158,9 +163,11 @@ export function createLarkBitableSyncProvider(
   const withApi = <T>(
     binding: IssueSyncBinding,
     fn: (api: LarkAuthedApi) => Promise<T>,
+    credentialContext?: PersonalCredentialContext,
     signal?: AbortSignal
   ): Promise<T> =>
     withIssueLarkBindingApi(binding, fn, {
+      credentialContext,
       signal,
       expectedAuthorizationEpoch: deps.expectedAuthorizationEpoch,
       withApi: deps.withApi,
@@ -174,7 +181,10 @@ export function createLarkBitableSyncProvider(
     fullScanOnly: true,
     ...(!deps.withApi && !deps.expectedAuthorizationEpoch
       ? {
-          prepare: async (binding: IssueSyncBinding) => {
+          prepare: async (
+            binding: IssueSyncBinding,
+            credentialContext?: PersonalCredentialContext
+          ) => {
             const resource = binding.resource
             if (resource.kind !== "lark-bitable") throw new Error("Invalid Lark binding")
             const { resolveLarkConnection, larkConnectionAdapter } =
@@ -183,7 +193,8 @@ export function createLarkBitableSyncProvider(
               ? await larkConnectionAdapter(binding.connectionRef)
               : undefined
             const connection =
-              restored?.connection ?? (await resolveLarkConnection(resource.adapterId))
+              restored?.connection ??
+              (await resolveLarkConnection(resource.adapterId, undefined, credentialContext))
             if (restored) binding.resource = { ...resource, adapterId: restored.adapterId }
             const epoch = connection.hostMetadata?.authorizationEpoch
             if (!epoch) throw new Error("Lark authorization epoch unavailable")
@@ -254,6 +265,7 @@ export function createLarkBitableSyncProvider(
             ...(listed.nextPage ? { nextPage: listed.nextPage } : { cursor: String(now()) }),
           }
         },
+        options.credentialContext,
         options.signal
       )
     },
@@ -262,19 +274,24 @@ export function createLarkBitableSyncProvider(
       const resource = binding.resource
       if (resource.kind !== "lark-bitable") throw new Error("not a lark-bitable binding")
       const pulledAt = now()
-      return withApi(binding, async (api) => {
-        const { records, truncated } = await readIssueSyncSource(binding, () =>
-          listBitableRecords(api, resource.appToken, resource.tableId)
-        )
-        const items = records
-          .map((record) => bitableRecordToRemote(record, resource.fieldMap, pulledAt))
-          .filter((item): item is RemoteIssue => item !== null)
-          .filter(
-            (item) =>
-              options.full || options.since === undefined || item.remoteUpdatedAt >= options.since
+      return withApi(
+        binding,
+        async (api) => {
+          const { records, truncated } = await readIssueSyncSource(binding, () =>
+            listBitableRecords(api, resource.appToken, resource.tableId)
           )
-        return { items, notModified: false, truncated }
-      })
+          const items = records
+            .map((record) => bitableRecordToRemote(record, resource.fieldMap, pulledAt))
+            .filter((item): item is RemoteIssue => item !== null)
+            .filter(
+              (item) =>
+                options.full || options.since === undefined || item.remoteUpdatedAt >= options.since
+            )
+          return { items, notModified: false, truncated }
+        },
+        options.credentialContext,
+        options.signal
+      )
     },
 
     async push(
@@ -282,7 +299,7 @@ export function createLarkBitableSyncProvider(
       ref: IssueExternalRef,
       patch: RemotePatch,
       _issue: Issue,
-      context: { signal?: AbortSignal }
+      context: { signal?: AbortSignal; credentialContext?: PersonalCredentialContext }
     ): Promise<PushOutcome> {
       const resource = binding.resource
       if (resource.kind !== "lark-bitable") throw new Error("not a lark-bitable binding")
@@ -295,21 +312,29 @@ export function createLarkBitableSyncProvider(
         binding,
         (api) =>
           updateBitableRecord(api, resource.appToken, resource.tableId, ref.externalId, fields),
+        context.credentialContext,
         context.signal
       )
       return { status: "applied", remoteUpdatedAt: now() }
     },
 
-    async create(binding: IssueSyncBinding, issue: Issue): Promise<IssueExternalRef> {
+    async create(
+      binding: IssueSyncBinding,
+      issue: Issue,
+      credentialContext?: PersonalCredentialContext
+    ): Promise<IssueExternalRef> {
       const resource = binding.resource
       if (resource.kind !== "lark-bitable") throw new Error("not a lark-bitable binding")
-      const recordId = await withApi(binding, (api) =>
-        createBitableRecord(
-          api,
-          resource.appToken,
-          resource.tableId,
-          bitableFieldsFromIssue(issue, resource.fieldMap)
-        )
+      const recordId = await withApi(
+        binding,
+        (api) =>
+          createBitableRecord(
+            api,
+            resource.appToken,
+            resource.tableId,
+            bitableFieldsFromIssue(issue, resource.fieldMap)
+          ),
+        credentialContext
       )
       if (!recordId) throw new Error("Bitable did not return the created record")
       return {

@@ -2,6 +2,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
 import { outboundReceipt } from "@/lib/policy/action-review/outbound-receipt"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { ConnectorDraftRow, OutboundJobRow } from "@/lib/db/connector-types"
 import { subscribeOutboundEnqueued, type EnqueueInput } from "@/lib/db/outbound-jobs"
 import type {
@@ -118,6 +119,21 @@ function gatewayWith(overrides: Partial<ConnectorDeliveryGatewayDependencies> = 
 }
 
 describe("ConnectorDeliveryGateway", () => {
+  it("round 5: forwards exact Host execution and cancellation for batch enqueue", async () => {
+    const { gateway, deps } = gatewayWith()
+    const options = {
+      executionContext: { sessionId: "origin", executionRunId: "exact-attempt" },
+      signal: new AbortController().signal,
+    }
+    await gateway.enqueueMany([input("skill"), input("skill")], options)
+    expect(deps.persistMany).toHaveBeenCalledWith(expect.any(Array), options)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      gateway.enqueueMany([input("skill")], { ...options, signal: controller.signal })
+    ).rejects.toMatchObject({ name: "AbortError" })
+  })
+
   it.each(["ai-run", "workflow", "skill", "plugin"] as const)(
     "fails closed before persistence for automated source %s",
     async (source) => {
@@ -448,6 +464,8 @@ describe("ConnectorDeliveryGateway", () => {
       platformMessageId: "remote-1",
     })
     expect(send).toHaveBeenCalledWith(request)
+    await gateway.sendDiagnostic("adapter-1", request, LOCAL_PERSON_RUN)
+    expect(send).toHaveBeenLastCalledWith(request, { localAuthorization: LOCAL_PERSON_RUN })
   })
 
   it("returns the existing structured error when a diagnostic adapter is absent", async () => {
@@ -915,4 +933,12 @@ describe("gateway atomic authorization provenance", () => {
       authorization: value.authorization,
     })
   })
+})
+
+it("forwards opaque Host execution proof outside the cloned request", async () => {
+  const { gateway, deps } = gatewayWith()
+  const executionContext = { sessionId: "s", localAuthorization: LOCAL_PERSON_RUN } as const
+  await gateway.enqueue(input("manual") as InThreadEnqueueInput, { executionContext })
+  expect(deps.persistOne).toHaveBeenCalledWith(expect.any(Object), { executionContext })
+  expect(jest.mocked(deps.persistOne).mock.calls[0][0]).not.toHaveProperty("executionContext")
 })

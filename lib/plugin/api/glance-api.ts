@@ -27,6 +27,7 @@
 "use client"
 
 import { loggers } from "@cognia/logging"
+import { bindPluginCallbacks } from "../core/invocation-identity"
 import type {
   PluginCapability,
   PluginGlanceAPI,
@@ -119,7 +120,7 @@ export function createGlanceAPI({
     // calls it at once, before handing back the disposer) nor the host.
     const safe = (visible: boolean) => {
       try {
-        handler(visible)
+        return bindPluginCallbacks(pluginId, handler)(visible)
       } catch (error) {
         recordSilentFailure(
           pluginId,

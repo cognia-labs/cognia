@@ -11,6 +11,7 @@
  * Plugin event hooks are intentionally NOT fired here — each caller owns its
  * hook semantics. The helper is a pure tool-invoke seam with injectable deps.
  */
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { McpServer } from "@cognia/agent-config-types"
 
 import { type McpClientInfo, openMcpClient } from "./transport"
@@ -31,6 +32,7 @@ export class McpServerNotFoundError extends Error {
 }
 
 export interface InvokeMcpToolInput {
+  credentialContext?: PersonalCredentialContext
   serverId: string
   toolName: string
   args?: Record<string, unknown>
@@ -89,9 +91,23 @@ export async function invokeMcpTool(
     deps.getServer ?? (async (id) => (await import("@/lib/db/mcp-servers")).getMcpServer(id))
   const server = await getServer(serverId)
   if (!server) throw new McpServerNotFoundError(serverId)
+  if (input.authProvider) {
+    const { admitPersonalCredential, PersonalCredentialRefusedError } =
+      await import("@/lib/execution/personal-credential")
+    const decision = await admitPersonalCredential(input.credentialContext, {
+      source: "mcp-oauth",
+      person: server.id,
+    })
+    if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
+  }
   const runtimeCredential = input.authProvider
     ? { server }
-    : await (await import("./credential-resolver")).resolveMcpRuntimeCredential(server)
+    : await (
+        await import("./credential-resolver")
+      ).resolveMcpRuntimeCredential(server, {
+        credentialContext:
+          input.credentialContext ?? (input.scopeId ? { sessionId: input.scopeId } : undefined),
+      })
 
   const args = (input.args && typeof input.args === "object" ? input.args : {}) as Record<
     string,

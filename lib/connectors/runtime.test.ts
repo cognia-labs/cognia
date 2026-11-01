@@ -22,6 +22,12 @@
  */
 
 import "fake-indexeddb/auto"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { connectorsLarkUserAuth } from "./tauri/commands"
+jest.mock("./tauri/commands", () => ({
+  ...jest.requireActual("./tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({ configured: false })),
+}))
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createAdapterInstance, getAdapterInstance } from "@/lib/db/adapter-instances"
@@ -2341,6 +2347,141 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     expect(await getDb().outboundQueue.toArray()).toHaveLength(0)
   })
 
+  it("round 5: recovery dispatch binds tool admission to the current attempt, never provider identity", async () => {
+    const event = makeEvent({
+      conversationKey: "telegram:adapter_1:tool-recovery",
+      messageId: "same-recovery",
+    })
+    await callHandler(makeEvent({ ...event, messageId: "seed-tool-recovery" }), "manual-store")
+    const session = await getDb()
+      .sessions.filter((row) => row.platformBinding?.conversationKey === event.conversationKey)
+      .first()
+    await getDb().sessions.update(session!.id, { sdkSessionId: "recovery-tool-sdk" })
+    await callHandler(event, "ai-run")
+    const origin = await getDb().executionRuns.where("kind").equals("agent-turn").first()
+    const anchor = (
+      await getDb().executionRunEvents.where("runId").equals(origin!.id).toArray()
+    ).find((row) => row.type === "run.started")!.payload.recoveryAnchor as Record<string, unknown>
+    const { createExecutionRun } = await import("@/lib/db/execution-runs")
+    const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+    const foreignId = `${origin!.id}:foreign-person`
+    const forgedFingerprint = (
+      await resolveRecoveryExecutionSpec(
+        (DEFAULT_RUN_AND_CAPTURE as jest.Mock).mock.calls[0][2],
+        origin!.sessionId!,
+        { runId: foreignId, attemptId: "tool-recovery-attempt" },
+        true
+      )
+    ).executionFingerprint
+    await createExecutionRun({
+      ...origin!,
+      id: foreignId,
+      sourceId: "different-source",
+      status: "running",
+      ...recordedRunMetadata("local", {
+        runId: foreignId,
+        authorizingPrincipal: { kind: "local-person" },
+        requesters: [{ kind: "local-person" }],
+      }),
+    })
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    expect(
+      await admitPersonalCredential(
+        { sessionId: origin!.sessionId, executionRunId: foreignId },
+        { source: "github-user" }
+      )
+    ).toMatchObject({ ok: true })
+    const { transport } = await import("@/lib/tauri")
+    const transportCall = jest.spyOn(transport, "call").mockResolvedValue(undefined)
+    const { registerBuiltInSkill, getSharedBuiltInSkillRegistry } =
+      await import("@/lib/skills/built-in/registry")
+    const { z } = await import("zod")
+    const tool = jest.fn(
+      async (_args: unknown, context: import("@/lib/skills/built-in/types").BuiltInSkillContext) =>
+        admitPersonalCredential(context, { source: "github-user" })
+    )
+    registerBuiltInSkill({
+      id: "recovery.identity",
+      family: "recovery",
+      label: { en: "Identity", "zh-CN": "身份" },
+      description: { en: "Identity", "zh-CN": "身份" },
+      platforms: "any",
+      mutation: "read",
+      imAccess: "always",
+      mcpToolName: "recovery_identity",
+      inputSchema: z.object({}),
+      execute: tool,
+    })
+    const { sendPrompt } = await import("@/lib/claude/ipc")
+    const { handlePluginToolExec, __setPluginToolResolverForTesting } =
+      await import("@/lib/claude/plugin-tool-ipc")
+    __setPluginToolResolverForTesting({ getTool: () => undefined })
+    let dispatched = false
+    let toolResponse: unknown
+    let providerRunId: string | undefined
+    let attemptAdmission: unknown
+    ;(DEFAULT_RUN_AND_CAPTURE as jest.Mock).mockImplementationOnce(
+      async (sessionId, prompt, options) => {
+        dispatched = true
+        providerRunId = options.execution.identity.runId
+        await sendPrompt(sessionId, prompt, options, { transcriptRuntime: "host-owned" })
+        const attemptId = `${origin!.id}:attempt:tool-recovery-attempt`
+        attemptAdmission = await admitPersonalCredential(
+          { sessionId, executionRunId: attemptId },
+          { source: "github-user" }
+        )
+        toolResponse = await handlePluginToolExec({
+          type: "plugin_tool_exec",
+          sessionId,
+          toolUseId: "recovery-tool",
+          name: "recovery_identity",
+          args: {},
+          turnId: options.turnId,
+          attemptId: options.execution.identity.attemptId,
+          runId: foreignId,
+        })
+        return { text: "refused", messageId: "recovery-tool-reply" }
+      }
+    )
+    try {
+      await callHandler(
+        makeEvent({
+          ...event,
+          channelData: {
+            recoveryIntent: "continue_safely",
+            dispatchIntent: "steer-replay",
+            recoveryAnchor: {
+              ...anchor,
+              executionFingerprint: forgedFingerprint,
+              executionIdentityRunId: foreignId,
+              executionJournalRunId: foreignId,
+              attemptId: "tool-recovery-attempt",
+            },
+          },
+        }),
+        "ai-run"
+      )
+      expect({
+        dispatched,
+        recovery: (await getDb().executionRunEvents.toArray())
+          .filter((row) => row.type === "run.recovery_required")
+          .map((row) => row.payload),
+      }).toEqual({ dispatched: true, recovery: [] })
+      expect(tool).toHaveBeenCalledTimes(1)
+      expect(providerRunId).toBe(foreignId)
+      expect(attemptAdmission).toMatchObject({ ok: false })
+      expect(tool).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ executionRunId: `${origin!.id}:attempt:tool-recovery-attempt` })
+      )
+      expect(toolResponse).toMatchObject({ result: { status: "ok", data: { ok: false } } })
+    } finally {
+      transportCall.mockRestore()
+      __setPluginToolResolverForTesting(null)
+      getSharedBuiltInSkillRegistry().unregister("recovery.identity")
+    }
+  })
+
   it("continues a terminal run in a linked immutable journal run", async () => {
     const conversationKey = "telegram:adapter_1:chat_resume_existing_run"
     const event = makeEvent({ conversationKey, messageId: "same-message" })
@@ -2446,7 +2587,126 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       type: "markdown",
       md: "partial resumed",
     })
+    const deliveryJob = (await getDb().outboundQueue.toArray()).at(-1)!
+    const deliveryRun = await getDb().executionRuns.get(`execution:job:outbound:${deliveryJob.id}`)
+    expect(deliveryRun).toMatchObject({
+      sessionId: session!.id,
+      parentRunId: resumedRun!.id,
+      actingIdentity: { rootRunId: run!.actingIdentity!.rootRunId },
+    })
     window.localStorage.removeItem("cognia-agent-execution-flags-v1")
+  })
+
+  it("admits the owner reply from the exact continue_safely attempt sharing its source message", async () => {
+    const conversationKey = "lark:adapter_lark:oc_recovery"
+    const event = makeEvent({
+      platform: "lark",
+      adapterId: "adapter_lark",
+      conversationKey,
+      conversationRef: { platform: "lark", adapterId: "adapter_lark", chatId: "oc_recovery" },
+      sender: {
+        id: "owner",
+        platform: "lark",
+        adapterId: "adapter_lark",
+        remoteUserId: "ou_owner",
+        displayName: "Owner",
+      },
+      messageId: "owner-recovery-message",
+    })
+    await putInstance("adapter_lark", {
+      type: "lark",
+      settings: {
+        connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" },
+      },
+    } as never)
+    jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+      configured: true,
+      authorizationEpoch: "owner-epoch",
+      accessToken: "owner-token",
+    } as never)
+    await callHandler(makeEvent({ ...event, messageId: "owner-seed" }), "manual-store")
+    const session = await getDb()
+      .sessions.filter((row) => row.platformBinding?.conversationKey === conversationKey)
+      .first()
+    await getDb().sessions.update(session!.id, { sdkSessionId: "owner-sdk-resume" })
+    await upsertByConversationKey({ conversationKey, sessionId: session!.id, liveActivity: false })
+    await callHandler(event, "ai-run")
+    const origin = await getDb().executionRuns.where("kind").equals("agent-turn").first()
+    const anchor = (
+      await getDb().executionRunEvents.where("runId").equals(origin!.id).toArray()
+    ).find((row) => row.type === "run.started")!.payload.recoveryAnchor as Record<string, unknown>
+    const { parseAgentRunRecoveryAnchor } =
+      await import("@/lib/ai/agent/recovery/reconcile-crashed-runs")
+    expect(parseAgentRunRecoveryAnchor(anchor)).toEqual(anchor)
+    await callHandler(
+      makeEvent({
+        ...event,
+        channelData: {
+          recoveryIntent: "continue_safely",
+          dispatchIntent: "steer-replay",
+          recoveryAnchor: { ...anchor, attemptId: "owner-recovery-attempt" },
+        },
+      }),
+      "ai-run"
+    )
+    const attempts = await getDb().executionRuns.where("kind").equals("agent-turn").toArray()
+    expect(attempts).toHaveLength(2)
+    const resumed = attempts.find((run) => run.id !== origin!.id)!
+    expect(resumed.sourceId).toBe(origin!.sourceId)
+    const deliveries = await getDb().executionRuns.where("kind").equals("job").toArray()
+    const delivery = deliveries.find((run) => run.parentRunId === resumed.id)!
+    expect(delivery).toMatchObject({
+      actingIdentity: { rootRunId: origin!.id, trigger: "requester" },
+    })
+    const { getUserAccessToken } = await import("./adapters/lark/auth")
+    const context = { sessionId: resumed.sessionId!, executionRunId: delivery.id, delivery: true }
+    expect(await getUserAccessToken("adapter_lark", { ...context, larkContext: context })).toBe(
+      "owner-token"
+    )
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const unrelated = await startToolExecutionRun(session!.id, {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await callHandler(
+      makeEvent({
+        ...event,
+        channelData: {
+          recoveryIntent: "continue_safely",
+          dispatchIntent: "steer-replay",
+          recoveryAnchor: {
+            ...anchor,
+            executionJournalRunId: unrelated.id,
+            attemptId: "foreign-source-attempt",
+          },
+        },
+      }),
+      "ai-run"
+    )
+    const unproven = await getDb().executionRuns.get(`${origin!.id}:attempt:foreign-source-attempt`)
+    const unprovenContext = {
+      sessionId: session!.id,
+      executionRunId: unproven!.id,
+      delivery: true,
+    }
+    // Exercise the real createExecutionRun: its parent lookup must not undo
+    // the recovery anchor's source/session/kind checks.
+    expect(unproven?.parentRunId).toBeUndefined()
+    expect(unproven?.actingIdentity).toMatchObject({
+      rootRunId: unproven!.id,
+      trigger: "child",
+    })
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    expect(await admitPersonalCredential(unprovenContext, { source: "github-user" })).toMatchObject(
+      {
+        ok: false,
+      }
+    )
+    expect(
+      await getUserAccessToken("adapter_lark", {
+        ...unprovenContext,
+        larkContext: unprovenContext,
+      })
+    ).toBeNull()
   })
 
   it("audits a bounded freeze timeout before enqueueing the independent final reply", async () => {
@@ -4492,8 +4752,9 @@ describe("installRuntime — ai-run Lark result card", () => {
         title: "帮我 查看发布进度",
         status: "completed",
       })
+      // Outbound delivery journals its own job run; read this agent run's event.
       const started = (await getDb().executionRunEvents.toArray()).find(
-        (item) => item.type === "run.started"
+        (item) => item.type === "run.started" && item.runId === run.id
       )
       expect(started?.payload).toMatchObject({
         locale: "zh-CN",

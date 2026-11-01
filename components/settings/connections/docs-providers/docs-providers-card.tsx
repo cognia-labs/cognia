@@ -25,6 +25,7 @@
 
 import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
 import { useCallback, useEffect, useState, useRef } from "react"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { toast } from "sonner"
@@ -144,7 +145,9 @@ function LarkDocsRow() {
     const reload = () => {
       const attempt = ++version
       void larkDocsProvider
-        .listAccounts()
+        .listAccounts({
+          credentialContext: reach.available ? { localAuthorization: LOCAL_PERSON_RUN } : undefined,
+        })
         .then((accounts) => {
           if (!cancelled && attempt === version) {
             setCount(accounts.length)
@@ -164,7 +167,7 @@ function LarkDocsRow() {
       cancelled = true
       stop?.()
     }
-  }, [])
+  }, [reach.available])
 
   return (
     <section className="space-y-1.5" data-testid="docs-provider-lark">
@@ -242,12 +245,15 @@ function GoogleDocsRow() {
     const apply = (settings: Awaited<ReturnType<typeof getGoogleDocsSettings>>) => {
       if (!cancelled) setClientId(settings.clientId ?? "")
     }
-    const unsubscribe = subscribeGoogleDocsSettings((settings) => {
-      ++revision
-      apply(settings)
-    })
+    const unsubscribe = subscribeGoogleDocsSettings(
+      (settings) => {
+        ++revision
+        apply(settings)
+      },
+      { localAuthorization: LOCAL_PERSON_RUN }
+    )
     const initialRevision = revision
-    void getGoogleDocsSettings()
+    void getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })
       .then((settings) => {
         if (revision === initialRevision) apply(settings)
       })
@@ -264,8 +270,14 @@ function GoogleDocsRow() {
     if (inert) return
     let current = true
     // Reconciliation finishes legacy migration before reading secret metadata.
-    void listGoogleConnections()
-      .then(async (rows) => [await googleState({ action: "snapshot" }), rows] as const)
+    void listGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
+      .then(
+        async (rows) =>
+          [
+            await googleState({ action: "snapshot" }, { localAuthorization: LOCAL_PERSON_RUN }),
+            rows,
+          ] as const
+      )
       .then(
         ([next, rows]) => {
           if (!current) return
@@ -312,7 +324,7 @@ function GoogleDocsRow() {
 
   const saveSecret = async () => {
     const id = clientId.trim()
-    await updateGoogleDocsSettings({ clientId: id })
+    await updateGoogleDocsSettings({ clientId: id }, { localAuthorization: LOCAL_PERSON_RUN })
     await saveGoogleClientSecret(clientSecret.trim(), id)
     setClientSecret("")
   }
@@ -322,7 +334,7 @@ function GoogleDocsRow() {
       { action: "connect" },
       async () => {
         const id = clientId.trim()
-        await updateGoogleDocsSettings({ clientId: id })
+        await updateGoogleDocsSettings({ clientId: id }, { localAuthorization: LOCAL_PERSON_RUN })
         if (clientSecret.trim()) {
           await saveGoogleClientSecret(clientSecret.trim(), id)
           setClientSecret("")
@@ -338,7 +350,9 @@ function GoogleDocsRow() {
     run(
       { action: "disconnect", connectionId: connection.id },
       async () => {
-        const outcome = await disconnectGoogleDocs(connection.hostMetadata!.adapterId)
+        const outcome = await disconnectGoogleDocs(connection.hostMetadata!.adapterId, {
+          localAuthorization: LOCAL_PERSON_RUN,
+        })
         if (outcome.revoked) toast.success(t("settings.disconnectRevoked"))
         else if (outcome.reason !== "not-connected")
           toast.warning(
@@ -414,7 +428,7 @@ function GoogleDocsRow() {
                         async () => {
                           const result = await getHostConnectionDriver("google")?.reauthorize?.(
                             connection.id,
-                            {}
+                            { credentialContext: { localAuthorization: LOCAL_PERSON_RUN } }
                           )
                           if (result) {
                             if (mounted.current) setAuthorization(result)

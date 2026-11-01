@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 const callMock = jest.fn()
 jest.mock("@/lib/tauri", () => ({ transport: { call: (...a: unknown[]) => callMock(...a) } }))
 jest.mock("@/lib/claude/builtin-mcp/runtime-context", () => ({
@@ -32,19 +33,29 @@ describe("oauth-tauri wrappers", () => {
 
   it("mcpOAuthLoadEntry returns undefined when there is no access token", async () => {
     callMock.mockResolvedValue(null)
-    expect(await mcpOAuthLoadEntry("srv")).toBeUndefined()
+    expect(
+      await mcpOAuthLoadEntry("srv", undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toBeUndefined()
     callMock.mockResolvedValue({ access_token: null })
-    expect(await mcpOAuthLoadEntry("srv")).toBeUndefined()
+    expect(
+      await mcpOAuthLoadEntry("srv", undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toBeUndefined()
   })
 
   it("mcpOAuthLoadEntry projects the token + expiry", async () => {
     callMock.mockResolvedValue({ access_token: "t", expires_at_ms: 9 })
-    expect(await mcpOAuthLoadEntry("srv")).toEqual({ accessToken: "t", expiresAtMs: 9 })
+    expect(
+      await mcpOAuthLoadEntry("srv", undefined, undefined, { localAuthorization: LOCAL_PERSON_RUN })
+    ).toEqual({ accessToken: "t", expiresAtMs: 9 })
   })
 
   it("falls back to the one-release legacy name key", async () => {
     callMock.mockResolvedValueOnce(null).mockResolvedValueOnce({ access_token: "legacy" })
-    expect(await mcpOAuthLoadEntry("mcp-id", "old-name")).toEqual({
+    expect(
+      await mcpOAuthLoadEntry("mcp-id", "old-name", undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).toEqual({
       accessToken: "legacy",
       expiresAtMs: undefined,
     })
@@ -60,7 +71,7 @@ describe("oauth-tauri wrappers", () => {
 
   it("mcpOAuthRefresh projects the refreshed token and resolves the helper path", async () => {
     callMock.mockResolvedValue({ access_token: "new", expires_at_ms: null })
-    expect(await mcpOAuthRefresh("srv", desc)).toEqual({
+    expect(await mcpOAuthRefresh("srv", desc, { localAuthorization: LOCAL_PERSON_RUN })).toEqual({
       accessToken: "new",
       expiresAtMs: undefined,
     })
@@ -105,4 +116,14 @@ describe("oauth-tauri wrappers", () => {
     expect(callMock).toHaveBeenNthCalledWith(2, "mcp_oauth_clear", { serverName: "srv" })
     expect(callMock).toHaveBeenNthCalledWith(3, "mcp_oauth_clear", { serverName: "old-name" })
   })
+})
+
+it("refuses native personal bearer reads and refreshes without Host admission", async () => {
+  await expect(mcpOAuthLoadEntry("personal")).rejects.toMatchObject({
+    decision: { reason: "missing-identity" },
+  })
+  await expect(
+    mcpOAuthRefresh("personal", { transport: "http", config: { url: "https://x" } })
+  ).rejects.toMatchObject({ decision: { reason: "missing-identity" } })
+  expect(callMock).not.toHaveBeenCalled()
 })

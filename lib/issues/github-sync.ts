@@ -1,4 +1,6 @@
 /** GitHub mirror pages share the durable incremental-sync checkpoint and exclusion. */
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
 import {
   fetchGithubIssuePage,
   githubIssuePageUsedOffset,
@@ -25,7 +27,11 @@ export interface SyncRepoIssuesDeps {
   /** Workspace sweeps execute only a still-registered, freshly resolved target. */
   runRegistered?: (input: SyncRepoIssuesInput) => Promise<SyncRepoIssuesResult | undefined>
   resolveOctokit?: (repoFullName: string) => Promise<OctokitLike>
-  resolveReadClient?: (repoFullName: string) => Promise<{
+  resolveReadClient?: (
+    repoFullName: string,
+    connectionRef?: ExternalSyncTarget["connectionRef"],
+    credentialContext?: PersonalCredentialContext
+  ) => Promise<{
     octokit: OctokitLike
     connectionRef?: ExternalSyncTarget["connectionRef"]
     consumerPluginId?: string
@@ -85,7 +91,8 @@ export function githubMirrorSyncTarget(
 /** Also used by push registration: credentials and binding are resolved anew per run. */
 export async function prepareGithubMirrorSync(
   input: SyncRepoIssuesInput,
-  deps: SyncRepoIssuesDeps = {}
+  deps: SyncRepoIssuesDeps = {},
+  credentialContext: PersonalCredentialContext = HOST_BACKGROUND
 ) {
   const target = githubMirrorSyncTarget(input)
   const table = getDb().externalSyncCursors
@@ -123,7 +130,7 @@ export async function prepareGithubMirrorSync(
       : await (
           deps.resolveReadClient ??
           (await import("./sync/providers/github")).resolveGithubSyncReadClient
-        )(input.repoFullName)
+        )(input.repoFullName, undefined, credentialContext)
     octokit = client.octokit
     target.connectionRef = client.connectionRef
     consumerPluginId = client.consumerPluginId

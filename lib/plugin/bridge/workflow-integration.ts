@@ -9,6 +9,7 @@ import { getPluginEventHooks } from "../messaging/hooks-system"
 import type { PluginMessage } from "@/types/plugin"
 import type { PluginHooksAll } from "@/types/plugin/plugin-hooks"
 import { loggers } from "../core/logger"
+import { HOST_BACKGROUND, withPluginExecutionContext } from "../core/invocation-identity"
 
 /**
  * Workflow integration for plugins
@@ -32,7 +33,9 @@ export class PluginWorkflowIntegration {
       const hooks = plugin.hooks as PluginHooksAll
       if (hooks.onChatRequest) {
         try {
-          const transformed = await hooks.onChatRequest(messages, model)
+          const transformed = await withPluginExecutionContext(pluginId, HOST_BACKGROUND, () =>
+            hooks.onChatRequest!(messages, model)
+          )
           if (Array.isArray(transformed)) {
             messages = transformed
           }

@@ -21,6 +21,10 @@
  * Accounts that are disabled or whose credential is known revoked are skipped.
  */
 
+import {
+  admitPersonalCredential,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import { listAllIntegrationAccounts } from "@/lib/db/integrations"
 import { GITHUB_DOT_COM, type GithubHost } from "@/lib/github/host"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
@@ -73,13 +77,16 @@ function rank(account: IntegrationAccount, owner: string): number {
 export async function githubReadAccountsFor(
   repoFullName: string,
   host: GithubHost = GITHUB_DOT_COM,
-  deps: Pick<GithubReadCredentialDeps, "listAccounts" | "hostForSession"> = DEFAULT_DEPS
+  deps: Pick<GithubReadCredentialDeps, "listAccounts" | "hostForSession"> = DEFAULT_DEPS,
+  credentialContext?: PersonalCredentialContext
 ): Promise<IntegrationAccount[]> {
   const owner = repoFullName.split("/")[0]?.trim().toLowerCase() ?? ""
   const accounts = await deps.listAccounts().catch(() => [] as IntegrationAccount[])
+  const admission = await admitPersonalCredential(credentialContext, { source: "github-user" })
   const eligible: IntegrationAccount[] = []
   for (const account of accounts) {
     if (!GITHUB_PROVIDER_IDS.has(account.providerId)) continue
+    if (account.providerId === "github-pat" && !admission.ok) continue
     if (!account.enabled || account.health === "revoked") continue
     const accountHost = await deps.hostForSession(account.authSessionId).catch(() => undefined)
     // An account whose session cannot be read is not "github.com by default":
@@ -106,6 +113,8 @@ export async function resolveGithubAccountGitAccess(
   account: IntegrationAccount,
   deps: Pick<GithubReadCredentialDeps, "hostForSession" | "resolveToken"> = DEFAULT_DEPS
 ): Promise<{ host: GithubHost; token: string }> {
+  // Explicit operator-selected Bot credentialBindings remain unchanged until
+  // ADR-0243 phase 5 supplies bound-person consent, scope and needs_setup.
   if (!GITHUB_PROVIDER_IDS.has(account.providerId))
     throw new Error("The bound account is not a GitHub account")
   if (!account.enabled || account.health === "revoked")
@@ -124,10 +133,21 @@ export async function resolveGithubAccountGitAccess(
 export async function resolveGithubReadToken(
   repoFullName: string,
   host: GithubHost = GITHUB_DOT_COM,
-  deps: GithubReadCredentialDeps = DEFAULT_DEPS
+  deps: GithubReadCredentialDeps = DEFAULT_DEPS,
+  credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
-  const accounts = await githubReadAccountsFor(repoFullName, host, deps)
+  const accounts = await githubReadAccountsFor(repoFullName, host, deps, credentialContext)
   for (const account of accounts) {
+    if (
+      account.providerId === "github-pat" &&
+      !(
+        await admitPersonalCredential(credentialContext, {
+          source: "github-user",
+          person: account.id,
+        })
+      ).ok
+    )
+      continue
     const token = await deps.resolveToken(account, host).catch(() => null)
     if (token) return token
   }

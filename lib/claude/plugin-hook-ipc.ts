@@ -30,6 +30,8 @@ import type { PluginHooksAll } from "@/types/plugin/plugin-hooks"
 import { createLogger } from "@cognia/logging"
 import { transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
 import { dispatchGuard } from "@/lib/plugin/interceptors/dispatch"
+import { HOST_BACKGROUND, withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 const log = createLogger("claude.plugin-hook-ipc")
 
@@ -66,6 +68,8 @@ export interface PluginHookExecOutcome {
 }
 
 export interface HandlePluginHookDeps {
+  /** Host-correlated execution only; the wire request cannot supply proof. */
+  credentialContext?: PersonalCredentialContext
   /** Resolve a live plugin's hook handler. Defaults to the shared registry. */
   resolveHandler?: typeof getPluginHookHandler
   /** Does `pluginId` hold `permission`? Injected so this stays testable. */
@@ -117,6 +121,7 @@ export async function handlePluginHookExec(
               part: await transformModelStreamPart(req.payload.part, {
                 operationId,
                 sessionId: req.sessionId,
+                credentialContext: deps.credentialContext ?? HOST_BACKGROUND,
               }),
             },
           }
@@ -128,14 +133,19 @@ export async function handlePluginHookExec(
             sessionId: req.sessionId,
             step: req.payload.step,
           },
-          { operationId, sessionId: req.sessionId, collectApprovals: true }
+          {
+            operationId,
+            sessionId: req.sessionId,
+            collectApprovals: true,
+            credentialContext: deps.credentialContext ?? HOST_BACKGROUND,
+          }
         )
         return { result: verdict }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
     }
-    return runBroadcast(req, resolveHandler)
+    return runBroadcast(req, resolveHandler, deps.credentialContext)
   }
 
   const handler = resolveHandler(req.pluginId, req.hookId)
@@ -159,7 +169,11 @@ export async function handlePluginHookExec(
   }
 
   try {
-    const result = await handler(req.payload as never)
+    const result = await withPluginExecutionContext(
+      req.pluginId,
+      deps.credentialContext ?? HOST_BACKGROUND,
+      () => handler(req.payload as never)
+    )
     return { result: result ?? null }
   } catch (e) {
     log.warn("plugin_hook_failed", { plugin: req.pluginId, hook: req.hookId, error: String(e) })
@@ -178,7 +192,8 @@ export async function handlePluginHookExec(
  */
 async function runBroadcast(
   req: PluginHookExecRequest,
-  resolveHandler: typeof getPluginHookHandler
+  resolveHandler: typeof getPluginHookHandler,
+  credentialContext?: PersonalCredentialContext
 ): Promise<PluginHookExecOutcome> {
   const contributors = listHookContributors(req.hookId as keyof PluginHooksAll)
   if (contributors.length === 0) return { result: null }
@@ -189,7 +204,11 @@ async function runBroadcast(
     const handler = resolveHandler(pluginId, req.hookId)
     if (!handler) continue
     try {
-      const value = await handler(req.payload as never)
+      const value = await withPluginExecutionContext(
+        pluginId,
+        credentialContext ?? HOST_BACKGROUND,
+        () => handler(req.payload as never)
+      )
       if (value && typeof value === "object") {
         if (req.hookId === "onPreCompact") compaction.push(value as PreCompactResult)
         else Object.assign(merged, value)

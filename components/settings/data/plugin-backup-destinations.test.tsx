@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/settings/data.json"
@@ -65,6 +66,7 @@ it("offers a generic plugin card with history, settings and Host backup but no r
   await waitFor(() =>
     expect(runRemoteBackupSyncNow).toHaveBeenCalledWith("plugin:fake/archive", "typed-pass", {
       signal: expect.any(AbortSignal),
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
     })
   )
 })
@@ -76,7 +78,8 @@ it("offers snapshots and forwards ciphertext restore to the Host after confirmat
   expect(await screen.findByRole("dialog")).toBeInTheDocument()
   expect(listBackupDestinationSnapshots).toHaveBeenCalledWith(
     "plugin:fake/archive",
-    expect.any(AbortSignal)
+    expect.any(AbortSignal),
+    { localAuthorization: LOCAL_PERSON_RUN }
   )
   const dialog = screen.getByRole("dialog")
   expect(within(dialog).getByRole("combobox", { name: "Snapshot" })).toHaveTextContent(
@@ -93,7 +96,8 @@ it("offers snapshots and forwards ciphertext restore to the Host after confirmat
         includeApiKey: false,
         onImportStart: expect.any(Function),
       },
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { localAuthorization: LOCAL_PERSON_RUN }
     )
   )
 })
