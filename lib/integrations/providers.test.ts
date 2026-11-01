@@ -13,6 +13,30 @@ describe("Integration resource and health providers", () => {
     __resetIntegrationRegistryForTesting()
   })
 
+  it("keeps a missing migration connection's needs-attention reason without attempting a provider read", async () => {
+    const account = {
+      id: "unmatched",
+      pluginId: "calendar",
+      integrationId: "calendar",
+      providerId: "legacy",
+      authSessionId: "old",
+      remoteAccountId: "remote",
+      label: "Calendar",
+      enabled: true,
+      health: "degraded" as const,
+      status: {
+        health: "degraded" as const,
+        code: "legacy-connection-unmatched",
+        checkedAt: "2026-11-01T00:00:00.000Z",
+        recoveryAction: "reconnect" as const,
+      },
+      createdAt: "2026-11-01T00:00:00.000Z",
+      updatedAt: "2026-11-01T00:00:00.000Z",
+    }
+    await getDb().integrationAccounts.put(account)
+    expect(await checkIntegrationAccountHealth("calendar", account.id)).toEqual(account.status)
+  })
+
   it("bounds discovery pages and persists normalized health state", async () => {
     const resourceProvider = jest.fn(async () => ({
       items: [{ kind: "repository", id: "cognia/app", name: "cognia/app" }],

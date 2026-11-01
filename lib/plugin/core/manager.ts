@@ -46,6 +46,10 @@ import {
   type PluginServiceEvaluation,
   type PluginServiceRecord,
 } from "@/lib/plugin/core/service-registry"
+import {
+  hostAuthProviderServices,
+  subscribeHostAuthProviderServices,
+} from "@/lib/plugin/auth/connection-access"
 import { PluginRegistry } from "@/lib/plugin/core/registry"
 import {
   createFullPluginContext,
@@ -916,6 +920,12 @@ export class PluginManager {
   private readonly lifecycleCoordinator: PluginLifecycleCoordinator
   private readonly managerId: string
   private readonly serviceRegistry: PluginServiceRegistry
+  private readonly hostServiceRegistrations = new Map<
+    string,
+    { signature: string; dispose: () => void }
+  >()
+  private hostServiceUpdates: Promise<void> = Promise.resolve()
+  private hostServicesStop?: () => void
   private readonly optionalServiceRefreshes = new Set<string>()
   private readonly pendingOptionalServiceConsumers = new Map<string, string[]>()
   private readonly optionalServiceSubscriptions = new Map<
@@ -1030,6 +1040,52 @@ export class PluginManager {
     this.compatibilityRuntime = {
       cogniaVersion: config.hostVersion || "0.1.0",
       nodeVersion: typeof process !== "undefined" ? process.versions?.node : undefined,
+    }
+    this.syncHostServices()
+    this.hostServicesStop = subscribeHostAuthProviderServices(() => {
+      this.syncHostServices()
+      const unavailable = Object.values(usePluginStore.getState().plugins).filter(
+        (plugin) => this.evaluatePluginServices(plugin).required.length > 0
+      )
+      this.hostServiceUpdates = this.hostServiceUpdates
+        .then(async () => {
+          if (this.disposed || !this.runtimeServicesEnabled()) return
+          for (const plugin of unavailable) {
+            const lifecycle = await this.getPluginLifecycleState(plugin.manifest.id)
+            if (
+              lifecycle.intent === "disabled" ||
+              !["active", "activating"].includes(lifecycle.actual)
+            )
+              continue
+            await this.withLifecycleLock(plugin.manifest.id, async () => {
+              await this.disablePluginInner(plugin.manifest.id, "service-draining")
+              const stopped = await this.getPluginLifecycleState(plugin.manifest.id)
+              if (stopped.actual === "dirty") throw new PluginDirtyRuntimeError(plugin.manifest.id)
+              await this.setActualState(plugin.manifest.id, "waiting")
+            })
+          }
+          await this.resumeWaitingServiceConsumers()
+        })
+        .catch((error: unknown) => {
+          loggers.manager.error("Host service lifecycle reconciliation failed", error)
+        })
+    })
+  }
+
+  private syncHostServices(): void {
+    const providers = hostAuthProviderServices()
+    for (const [id, registration] of this.hostServiceRegistrations) {
+      const provider = providers.find((item) => item.providerId === id)
+      if (provider && JSON.stringify(provider.services) === registration.signature) continue
+      registration.dispose()
+      this.hostServiceRegistrations.delete(id)
+    }
+    for (const provider of providers) {
+      if (this.hostServiceRegistrations.has(provider.providerId)) continue
+      this.hostServiceRegistrations.set(provider.providerId, {
+        signature: JSON.stringify(provider.services),
+        dispose: this.serviceRegistry.registerHostProvider(provider.providerId, provider.services),
+      })
     }
   }
 
@@ -1235,6 +1291,7 @@ export class PluginManager {
     )
     try {
       for (const consumerId of consumerIds) {
+        if (this.evaluatePluginServices(store.plugins[consumerId]).required.length === 0) continue
         const lifecycle = await this.getPluginLifecycleState(consumerId)
         if (lifecycle.intent === "disabled") continue
         await this.withLifecycleLock(consumerId, async () => {
@@ -3836,6 +3893,7 @@ export class PluginManager {
   }
 
   private async loadPluginInner(pluginId: string): Promise<void> {
+    this.syncHostServices()
     const store = usePluginStore.getState()
     const plugin = store.plugins[pluginId]
 
@@ -5340,6 +5398,10 @@ export class PluginManager {
       )
     }
     this.stopIdleSweep()
+    this.hostServicesStop?.()
+    this.hostServicesStop = undefined
+    for (const registration of this.hostServiceRegistrations.values()) registration.dispose()
+    this.hostServiceRegistrations.clear()
     this.vscodeActivationTriggersStop?.()
     this.vscodeActivationTriggersStop = undefined
     this.vscodeWebviewRestorationStop?.()

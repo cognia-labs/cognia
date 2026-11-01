@@ -1,4 +1,4 @@
-import { FeishuApiError, FeishuCalendarClient } from "./api"
+import { calendarApiOrigin, FeishuApiError, FeishuCalendarClient } from "./api"
 import type { IntegrationProviderContext } from "@cognia/plugin-sdk/api/integration"
 
 function fixture() {
@@ -21,6 +21,117 @@ const EVENT = {
 }
 
 describe("FeishuCalendarClient", () => {
+  it("ES-32 preserves recurrence exceptions on reads and rejects exception-set writes", async () => {
+    const f = fixture()
+    const event = {
+      event_id: "series",
+      recurrence: "FREQ=WEEKLY;BYDAY=MO",
+      recurring_event_id: "parent",
+      original_time: "1793408400",
+      status: "cancelled",
+    }
+    f.reply({ code: 0, data: { items: [event], has_more: false, sync_token: "s" } })
+    expect((await f.client.listEvents("primary")).items).toEqual([event])
+    await expect(
+      f.client.updateEvent("primary", "series", { recurrence_exceptions: ["1793408400"] })
+    ).rejects.toThrow()
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
+
+  it("ES-32 preserves IANA timezones and all-day date boundaries in round trips", async () => {
+    const f = fixture()
+    for (const event of [
+      EVENT,
+      { start_time: { date: "2026-11-01" }, end_time: { date: "2026-11-02" } },
+    ]) {
+      f.reply({ code: 0, data: { event: { event_id: "e", ...event } } })
+      expect(await f.client.createEvent("primary", event, "job")).toEqual({
+        event_id: "e",
+        ...event,
+      })
+      expect(JSON.parse(f.request.mock.calls.at(-1)![1]!.body!)).toEqual(event)
+    }
+  })
+
+  it("ES-32 maps reminders and explicit notification side effects to native fields", async () => {
+    const f = fixture()
+    const event = {
+      ...EVENT,
+      reminders: [{ minutes: 10 }, { minutes: 0 }],
+      need_notification: true,
+    }
+    f.reply({ code: 0, data: { event: { event_id: "e", ...event } } })
+    expect(await f.client.createEvent("primary", event, "job")).toEqual({ event_id: "e", ...event })
+    expect(JSON.parse(f.request.mock.calls[0][1]!.body!)).toEqual(event)
+    f.reply({
+      code: 0,
+      data: { event: { event_id: "e", reminders: [], need_notification: false } },
+    })
+    await f.client.updateEvent("primary", "e", { reminders: [], need_notification: false })
+    expect(JSON.parse(f.request.mock.calls[1][1]!.body!)).toEqual({
+      reminders: [],
+      need_notification: false,
+    })
+    await expect(
+      f.client.updateEvent("primary", "e", { push_subscription: true })
+    ).rejects.toThrow()
+  })
+
+  it("ES-32 preserves room availability results and maps every RSVP status", async () => {
+    const f = fixture()
+    const query = {
+      time_min: "2026-11-01T09:00:00Z",
+      time_max: "2026-11-01T10:00:00Z",
+      room_id: "room",
+      need_rsvp_status: true,
+    }
+    const result = {
+      freebusy_list: [
+        { start_time: query.time_min, end_time: query.time_max, rsvp_status: "accept" },
+      ],
+    }
+    f.reply({ code: 0, data: result })
+    expect(await f.client.freebusy(query)).toEqual(result)
+    expect(JSON.parse(f.request.mock.calls[0][1]!.body!)).toEqual(query)
+    for (const status of ["accept", "decline", "tentative"] as const) {
+      f.reply({ code: 0, data: {} })
+      await f.client.replyEvent("primary", "event", status)
+      expect(JSON.parse(f.request.mock.calls.at(-1)![1]!.body!)).toEqual({ rsvp_status: status })
+    }
+    await expect(
+      f.client.addAttendees(
+        "primary",
+        "event",
+        Array.from({ length: 101 }, (_, index) => ({ type: "resource", room_id: `room-${index}` }))
+      )
+    ).rejects.toThrow("100 rooms")
+  })
+
+  it.each([
+    ["https://accounts.feishu.cn", "https://open.feishu.cn"],
+    ["https://accounts.larksuite.com", "https://open.larksuite.com"],
+  ])("derives calendar deployment from %s", async (issuer, origin) => {
+    expect(calendarApiOrigin(issuer)).toBe(origin)
+    const f = fixture()
+    const client = new FeishuCalendarClient(
+      f.request as IntegrationProviderContext["authenticatedRequest"],
+      undefined,
+      issuer
+    )
+    f.reply({ code: 0, data: { calendar_list: [], has_more: false } })
+    await client.listCalendars()
+    expect(new URL(f.request.mock.calls[0][0]).origin).toBe(origin)
+  })
+
+  it.each([
+    "https://accounts.feishu.cn.evil.test",
+    "http://accounts.feishu.cn",
+    "https://user@accounts.feishu.cn",
+    "https://accounts.feishu.cn/other",
+  ])("rejects an unsupported issuer %s", (issuer) => {
+    expect(() => calendarApiOrigin(issuer)).toThrow("issuer")
+  })
+
   it("fails on an HTTP-200 provider error and preserves the sync-expiry code", async () => {
     const { client, reply } = fixture()
     reply({ code: 190008, msg: "page_token or sync_token expired" })

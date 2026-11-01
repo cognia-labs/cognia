@@ -54,7 +54,7 @@ describe("Feishu plugin distribution", () => {
     }
   )
 
-  it("curates both packages with a satisfiable required dependency", async () => {
+  it("curates both packages while calendar requires the auth service rather than one provider", async () => {
     const curated = JSON.parse(
       await readFile("lib/plugin/distribution/browser-builtins.json", "utf8")
     )
@@ -62,9 +62,9 @@ describe("Feishu plugin distribution", () => {
     const assets = JSON.parse(
       await readFile("lib/plugin/core/browser-builtin-assets.generated.json", "utf8")
     )
-    expect(assets.entries["feishu-calendar"].manifest.dependencies).toEqual({
-      "feishu-auth": "^1.0.0",
-    })
+    const calendar = JSON.parse(await readFile("plugins/feishu-calendar/plugin.json", "utf8"))
+    expect(calendar.requiresServices).toEqual({ "auth.feishu": "^1.0.0" })
+    expect(calendar.dependencies).toBeUndefined()
     expect(assets.entries["feishu-auth"].manifest.authProviders).toContainEqual({
       id: "feishu-user-oauth",
       label: "Feishu user OAuth",

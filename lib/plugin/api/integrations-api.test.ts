@@ -68,6 +68,20 @@ jest.mock("./bot-integration-binding", () => ({
 }))
 
 describe("ctx.integrations", () => {
+  it("keeps migration available during activation before Integration registration", async () => {
+    const api = createIntegrationsAPI("example-delivery", () => true)
+    await expect(
+      api.migrateLegacy({
+        id: "activation-migration",
+        integrationId: "not-yet-registered",
+        accounts: [],
+        subscriptions: [],
+        workflowKindAliases: {},
+        rebindLegacyConnections: { service: "auth.example" },
+      })
+    ).resolves.toMatchObject({ migratedAccounts: 0, alreadyApplied: false })
+  })
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

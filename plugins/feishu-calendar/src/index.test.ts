@@ -17,6 +17,7 @@ function fixture() {
       pluginId: "feishu-calendar",
       integrationId: "feishu-calendar",
       accountId: "account",
+      connection: { ref: "ref", issuer: "https://accounts.feishu.cn", revision: 1 },
       jobId: "job-stable",
       signal: new AbortController().signal,
       authenticatedRequest: request,
@@ -25,11 +26,27 @@ function fixture() {
 }
 
 describe("Feishu Calendar plugin", () => {
-  it("declares a shared auth dependency and real exported action/resource/health handlers", () => {
-    expect(calendar.manifest.dependencies).toEqual({ "feishu-auth": "^1.0.0" })
-    expect(calendar.feishuCalendarIntegration.authStrategies[0].providerId).toBe(
-      "feishu-user-oauth"
+  it("ES-32 labels unsupported features and exposes no active exception or push controls", () => {
+    expect(calendar.feishuCalendarIntegration.limitations).toEqual([
+      "recurrenceExceptionEditing",
+      "nativePushNotifications",
+    ])
+    expect(calendar.feishuCalendarIntegration.actions.map((action) => action.id)).not.toEqual(
+      expect.arrayContaining(["editException", "subscribePush"])
     )
+    expect(
+      calendar.feishuCalendarIntegration.actions.some((action) => /exception|push/i.test(action.id))
+    ).toBe(false)
+  })
+  it("declares a service consumer with no provider credentials and real handlers", () => {
+    expect(calendar.manifest.dependencies).toBeUndefined()
+    expect(calendar.manifest.requiresServices).toEqual({ "auth.feishu": "^1.0.0" })
+    expect(calendar.feishuCalendarIntegration.authStrategies[0]).toMatchObject({
+      type: "connection",
+      service: "auth.feishu",
+    })
+    expect(calendar.feishuCalendarIntegration.authStrategies[0].configSchema).toBeUndefined()
+    expect(calendar.feishuCalendarIntegration.authStrategies[0].providerId).toBeUndefined()
     for (const action of calendar.feishuCalendarIntegration.actions) {
       expect(typeof calendar[action.handler as keyof typeof calendar]).toBe("function")
     }
@@ -96,6 +113,7 @@ describe("Feishu Calendar plugin", () => {
     const context = {
       storage: { get: jest.fn(), set: jest.fn() },
       integrations: {
+        migrateLegacy: jest.fn(),
         listAccounts: jest.fn(async () => []),
         listSubscriptions: jest.fn(),
         authenticatedRequest: jest.fn(),
@@ -159,6 +177,16 @@ describe("Feishu Calendar plugin", () => {
     })
     const publishEvent = jest.fn()
     const context = {
+      auth: {
+        connections: {
+          get: async () => ({
+            ref: "ref",
+            status: "connected",
+            issuer: "https://accounts.feishu.cn",
+            revision: 1,
+          }),
+        },
+      },
       storage: {
         get: async (key: string) => values.get(key),
         set: async (key: string, value: unknown) => {
@@ -166,7 +194,8 @@ describe("Feishu Calendar plugin", () => {
         },
       },
       integrations: {
-        listAccounts: async () => [{ id: "account", enabled: true }],
+        migrateLegacy: jest.fn(),
+        listAccounts: async () => [{ id: "account", enabled: true, connectionId: "ref" }],
         listSubscriptions: async () => [
           { enabled: true, resourceKind: "calendar", resourceId: "cal" },
         ],

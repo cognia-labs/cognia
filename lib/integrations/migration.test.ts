@@ -5,6 +5,10 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import { migrateLegacyIntegration, rollbackIntegrationMigration } from "./migration"
 import { pruneIntegrationRetention } from "@/lib/db/integrations"
+import { getPlugin } from "@/lib/db/plugins"
+import { registerLegacySessionMigration } from "@/lib/plugin/auth/legacy-session-migrations"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 import {
   getProvider,
   registerAuthenticationProvider,
@@ -14,6 +18,197 @@ import {
 beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
+})
+
+describe("legacy connection rebinding", () => {
+  const plan = {
+    id: "calendar-connection-v1",
+    integrationId: "calendar",
+    accounts: [],
+    subscriptions: [],
+    workflowKindAliases: {},
+    rebindLegacyConnections: { service: "auth.calendar" },
+  }
+  async function setup(matched = true, concurrentEdit = false) {
+    const db = getDb()
+    const ref = "calendar-ref" as AuthConnectionRef
+    const account = {
+      id: "old-account",
+      pluginId: "calendar-consumer",
+      integrationId: "calendar",
+      providerId: "calendar-legacy",
+      providerOwnerPluginId: "calendar-owner",
+      authSessionId: "old-session",
+      remoteAccountId: "remote",
+      label: "Calendar",
+      enabled: true,
+      health: "healthy" as const,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    }
+    await db.integrationAccounts.put(account)
+    const subscription = {
+      id: "old-subscription",
+      pluginId: "calendar-consumer",
+      integrationId: "calendar",
+      accountId: account.id,
+      resourceKind: "calendar",
+      resourceId: "cal",
+      eventTypes: ["updated"],
+      enabled: true,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    }
+    await db.integrationSubscriptions.put(subscription)
+    const issue = {
+      id: "linked-issue",
+      identifier: "CAL-1",
+      externalRefs: [
+        { provider: "calendar", externalId: "event", meta: { accountId: account.id } },
+      ],
+    }
+    await db.issues.put(issue as never)
+    await db.authConnections.put({
+      id: ref,
+      providerId: account.providerId,
+      ownerPluginId: "calendar-owner",
+      publisher: null,
+      contractMajor: 1,
+      issuer: "https://accounts.feishu.cn",
+      clientId: "app",
+      principalId: "remote",
+      principalKind: "user",
+      accountLabel: "Calendar",
+      scopes: [],
+      revision: 1,
+      credentialRevision: 1,
+      lineageId: "lineage",
+      identityKey: "identity",
+      legacySessionId: "old-session",
+      status: "connected",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    jest.mocked(getPlugin).mockImplementation(
+      async (id) =>
+        ({
+          manifest:
+            id === "calendar-owner"
+              ? { providesServices: { "auth.calendar": "1.0.0" } }
+              : { requiresServices: { "auth.calendar": "^1.0.0" } },
+        }) as never
+    )
+    const disposeProvider = registerAuthenticationProvider({
+      id: account.providerId,
+      pluginId: "calendar-owner",
+      label: "Calendar",
+      getSessions: async () => [],
+      createSession: async () => {
+        throw new Error("unused")
+      },
+      removeSession: async () => {},
+    })
+    const disposeMigration = registerLegacySessionMigration("calendar-owner", account.providerId, {
+      migrate: async () => {},
+      aliases: async () => {
+        if (concurrentEdit) await db.integrationAccounts.update(account.id, { label: "User edit" })
+        return matched ? new Map([["old-session", ref]]) : new Map()
+      },
+    })
+    return {
+      db,
+      ref,
+      account,
+      subscription,
+      issue,
+      dispose: () => {
+        disposeMigration()
+        disposeProvider()
+        releaseAuthProviderOwnership("calendar-owner")
+      },
+    }
+  }
+
+  it("rebinds once through the alias ledger, preserving subscriptions and external refs, and rolls back", async () => {
+    const f = await setup()
+    try {
+      expect(await migrateLegacyIntegration("calendar-consumer", plan)).toMatchObject({
+        migratedAccounts: 1,
+        alreadyApplied: false,
+      })
+      expect(await f.db.integrationAccounts.get(f.account.id)).toMatchObject({
+        ...f.account,
+        connectionId: f.ref,
+        health: "unknown",
+        updatedAt: expect.any(String),
+      })
+      expect(await f.db.integrationSubscriptions.get(f.subscription.id)).toEqual(f.subscription)
+      expect(await f.db.issues.get(f.issue.id)).toEqual(f.issue)
+      expect(await migrateLegacyIntegration("calendar-consumer", plan)).toMatchObject({
+        alreadyApplied: true,
+      })
+      expect(
+        (await f.db.integrationAudit.toArray()).filter((row) => row.kind.endsWith(".backup"))
+      ).toHaveLength(1)
+      expect(await rollbackIntegrationMigration("calendar-consumer", plan.id)).toMatchObject({
+        conflictedIds: { accounts: [], subscriptions: [], workflows: [] },
+      })
+      expect(await f.db.integrationAccounts.get(f.account.id)).toEqual(f.account)
+      expect(await f.db.integrationSubscriptions.get(f.subscription.id)).toEqual(f.subscription)
+    } finally {
+      f.dispose()
+    }
+  })
+
+  it("records needs-attention without inventing a connection or dropping any data", async () => {
+    const f = await setup(false)
+    try {
+      expect(await migrateLegacyIntegration("calendar-consumer", plan)).toMatchObject({
+        migratedAccounts: 0,
+      })
+      expect(await f.db.integrationAccounts.get(f.account.id)).toMatchObject({
+        authSessionId: "old-session",
+        status: { code: "legacy-connection-unmatched", recoveryAction: "reconnect" },
+      })
+      expect(await f.db.integrationAccounts.get(f.account.id)).not.toHaveProperty("connectionId")
+      expect(await f.db.integrationSubscriptions.get(f.subscription.id)).toEqual(f.subscription)
+      expect(await f.db.issues.get(f.issue.id)).toEqual(f.issue)
+      expect(
+        (await f.db.integrationAudit.toArray()).some((row) => row.kind.endsWith("needs-attention"))
+      ).toBe(true)
+      expect(
+        (await f.db.integrationAudit.toArray()).some((row) => row.kind.endsWith("completed"))
+      ).toBe(false)
+    } finally {
+      f.dispose()
+    }
+  })
+
+  it.each(["concurrent-edit", "duplicate-connection"])(
+    "rolls back all migration work on %s conflict",
+    async (mode) => {
+      const f = await setup(true, mode === "concurrent-edit")
+      try {
+        if (mode === "duplicate-connection")
+          await f.db.integrationAccounts.put({
+            ...f.account,
+            id: "other-account",
+            connectionId: f.ref,
+            remoteAccountId: "other",
+          })
+        await expect(migrateLegacyIntegration("calendar-consumer", plan)).rejects.toThrow(
+          "migration conflict"
+        )
+        expect(await f.db.integrationAccounts.get(f.account.id)).not.toHaveProperty("connectionId")
+        if (mode === "concurrent-edit")
+          expect((await f.db.integrationAccounts.get(f.account.id))?.label).toBe("User edit")
+        expect(await f.db.integrationSubscriptions.get(f.subscription.id)).toEqual(f.subscription)
+        expect(await f.db.integrationAudit.count()).toBe(0)
+      } finally {
+        f.dispose()
+      }
+    }
+  )
 })
 
 it.each(["migration-provider-owner", null, undefined])(

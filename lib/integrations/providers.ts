@@ -5,7 +5,11 @@ import type {
   IntegrationResourcePage,
   IntegrationResourceQuery,
 } from "@/types/plugin/plugin-integration"
-import { authenticatedIntegrationRequest, integrationApiBaseUrl } from "./action-runner"
+import {
+  authenticatedIntegrationRequest,
+  integrationApiBaseUrl,
+  integrationConnectionMetadata,
+} from "./action-runner"
 import {
   getIntegrationAccountStatusProvider,
   getIntegrationResourceProvider,
@@ -19,7 +23,9 @@ async function providerContext(
   /** ADR-0176: the deployment this account's credential belongs to. */
   apiBaseUrl?: string
 ): Promise<IntegrationProviderContext> {
+  const account = await requireAccount(pluginId, accountId)
   return {
+    connection: await integrationConnectionMetadata(account),
     pluginId,
     integrationId,
     accountId,
@@ -68,18 +74,38 @@ export async function checkIntegrationAccountHealth(
   accountId: string
 ): Promise<IntegrationAccountStatus> {
   const account = await requireAccount(pluginId, accountId)
+  if (!account.connectionId && account.status?.code === "legacy-connection-unmatched")
+    return account.status
   const provider = getIntegrationAccountStatusProvider(pluginId, account.integrationId)
   if (!provider) {
     throw new Error(`Integration "${account.integrationId}" does not provide health checks`)
   }
-  const status = await provider(
-    await providerContext(
-      pluginId,
-      account.integrationId,
-      account.id,
-      await integrationApiBaseUrl(account)
+  let status: IntegrationAccountStatus
+  try {
+    status = await provider(
+      await providerContext(
+        pluginId,
+        account.integrationId,
+        account.id,
+        await integrationApiBaseUrl(account)
+      )
     )
-  )
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !["ConnectionUnavailableError", "ConnectionRevisionChanged"].includes(error.name)
+    )
+      throw error
+    status = {
+      health: "degraded",
+      code:
+        error.name === "ConnectionRevisionChanged"
+          ? "connection-revision-changed"
+          : "connection-unavailable",
+      checkedAt: new Date().toISOString(),
+      recoveryAction: "reauthorize",
+    }
+  }
   const normalized = {
     ...status,
     requiredPermissions: status.requiredPermissions

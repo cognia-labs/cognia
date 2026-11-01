@@ -1,5 +1,13 @@
 {
   "accounts": {
+    "reviewReadAccess": "检查读取授权",
+    "reviewWriteAccess": "检查写入授权",
+    "connectionReasons": {
+      "grantRequired": "日历权限未获批准或已被撤销。请检查读取授权后恢复同步。",
+      "revisionChanged": "连接已变更。请重新检查授权后恢复同步；原游标已保留。",
+      "unavailable": "连接已断开或认证提供方不可用。请重新连接后恢复同步。",
+      "migrationNeedsAttention": "没有已迁移的连接与此旧账户匹配。请恢复原连接；订阅和同步游标均已保留。"
+    },
     "add": "添加账号",
     "advanced": "高级",
     "approvedOrigin": "已授权的 self-hosted HTTPS origin（可选）",
@@ -59,6 +67,10 @@
   },
   "browsePlugins": "浏览插件",
   "description": "统一管理 Marketplace 账号、资源级事件订阅、审批、健康状态和审计，且不向插件暴露凭据。",
+  "limitations": {
+    "recurrenceExceptionEditing": "只读：读取和同步保留重复日程的例外信息。不支持编辑单次重复实例或例外集合，界面没有执行这些操作的控件。",
+    "nativePushNotifications": "不支持：原生推送和本地提醒调度未启用。日程提醒和通知标记仅传递给日历服务。"
+  },
   "disable": "停用",
   "emptyPlugins": "请先安装支持 Integration 的 Marketplace 插件。",
   "enable": "启用",

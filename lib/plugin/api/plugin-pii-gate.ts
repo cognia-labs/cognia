@@ -208,24 +208,13 @@ function sanitizeValue(
 
 function sanitizeNetworkBody(
   pluginId: string,
-  url: string,
   body: unknown,
   policy: PluginEgressPiiPolicy,
   host: PluginNetworkEgressContext
 ): unknown {
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const fields = body as Record<string, unknown>
-    // Interim compatibility boundary until ADR-0246's host-coordinated refresh
-    // lands: only the bundled Feishu provider's exact JSON refresh request.
-    // Permissions, allowlist and audit remain enforced by the caller.
-    const exemptKeys =
-      host.oauthTokenKeys ??
-      (host.isBuiltin &&
-      pluginId === "feishu-auth" &&
-      url === "https://open.feishu.cn/open-apis/authen/v2/oauth/token" &&
-      fields.grant_type === "refresh_token"
-        ? new Set(["client_secret", "refresh_token"])
-        : undefined)
+    const exemptKeys = host.oauthTokenKeys
     if (exemptKeys) {
       return Object.fromEntries(
         Object.entries(fields).map(([key, value]) => [
@@ -357,10 +346,10 @@ export function sanitizePluginNetworkEgress(
       isJson = false
     }
     body = isJson
-      ? JSON.stringify(sanitizeNetworkBody(pluginId, input.url, parsed, policy, host))
+      ? JSON.stringify(sanitizeNetworkBody(pluginId, parsed, policy, host))
       : sanitizeString(pluginId, "ctx.network.body", rawBody, policy)
   } else if (body !== undefined) {
-    body = sanitizeNetworkBody(pluginId, input.url, body, policy, host)
+    body = sanitizeNetworkBody(pluginId, body, policy, host)
   }
 
   return {

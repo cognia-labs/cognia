@@ -809,7 +809,11 @@ function validateIntegrations(
       } else {
         authStrategyIds.add(strategy.id)
       }
-      if (!["oauth2", "api-key", "personal-access-token", "app"].includes(String(strategy.type))) {
+      if (
+        !["oauth2", "api-key", "personal-access-token", "app", "connection"].includes(
+          String(strategy.type)
+        )
+      ) {
         pushError(
           `${strategyField}.type`,
           "manifest.integrations.auth_strategy.type.invalid",
@@ -823,12 +827,38 @@ function validateIntegrations(
           `${strategyField}.label is required`
         )
       }
-      if (typeof strategy.providerId !== "string" || !ID_PATTERN.test(strategy.providerId)) {
+      if (
+        strategy.type === "connection"
+          ? typeof strategy.service !== "string" ||
+            !ID_PATTERN.test(strategy.service) ||
+            strategy.providerId !== undefined ||
+            !Object.hasOwn(manifest.requiresServices ?? {}, strategy.service)
+          : typeof strategy.providerId !== "string" || !ID_PATTERN.test(strategy.providerId)
+      ) {
         pushError(
           `${strategyField}.providerId`,
           "manifest.integrations.auth_strategy.provider.invalid",
           `${strategyField}.providerId is invalid`
         )
+      }
+      if (strategy.consumerOperations !== undefined) {
+        const operations = strategy.consumerOperations
+        if (
+          !isPlainObject(operations) ||
+          (["read", "write"] as const).some(
+            (kind) =>
+              !Array.isArray(operations[kind]) ||
+              operations[kind].some(
+                (id: unknown) => typeof id !== "string" || !id || id.includes("*")
+              )
+          )
+        ) {
+          pushError(
+            `${strategyField}.consumerOperations`,
+            "manifest.integrations.auth_strategy.operations.invalid",
+            "Consumer operations must be exact ids grouped into read and write"
+          )
+        }
       }
       if (
         strategy.scopes !== undefined &&

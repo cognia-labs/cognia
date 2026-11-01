@@ -13,6 +13,8 @@ export interface PluginServiceRecord {
   serviceId: string
   version: string
   providerPluginId: string
+  /** Host records have a namespaced identity, never an installed plugin id. */
+  hostProviderId?: string
   generation: number
   status: PluginServiceStatus
   realmId: string
@@ -71,6 +73,8 @@ type Listener = (snapshot: readonly PluginServiceRecord[]) => void
 /** Host-local metadata graph. It never exposes a generic service invocation channel. */
 export class PluginServiceRegistry {
   private readonly records = new Map<string, PluginServiceRecord>()
+  private readonly hostRecords = new Map<string, PluginServiceRecord>()
+  private hostGeneration = 0
   private readonly listeners = new Set<Listener>()
   private readonly realmOverridableServices: ReadonlySet<string>
 
@@ -78,6 +82,39 @@ export class PluginServiceRegistry {
     this.realmOverridableServices = new Set(
       options.realmOverridableServices ?? REALM_OVERRIDABLE_PLUGIN_SERVICES
     )
+  }
+
+  registerHostProvider(providerId: string, services: Record<string, string>): () => void {
+    for (const version of Object.values(services)) {
+      if (!satisfiesConstraint(version, `=${version}`))
+        throw new Error("Host services require an exact semver version")
+    }
+    const generation = ++this.hostGeneration
+    const keys: string[] = []
+    for (const [serviceId, version] of Object.entries(services)) {
+      const key = JSON.stringify([providerId, serviceId])
+      keys.push(key)
+      this.hostRecords.set(key, {
+        serviceId,
+        version,
+        providerPluginId: `host:${providerId}`,
+        hostProviderId: providerId,
+        generation,
+        status: "available",
+        realmId: "global",
+      })
+    }
+    this.emit()
+    return () => {
+      let changed = false
+      for (const key of keys) {
+        if (this.hostRecords.get(key)?.generation === generation) {
+          this.hostRecords.delete(key)
+          changed = true
+        }
+      }
+      if (changed) this.emit()
+    }
   }
 
   beginProvider(
@@ -154,7 +191,11 @@ export class PluginServiceRegistry {
     if (changed) this.emit()
   }
 
-  getProvider(serviceId: string, realm: RealmLookup = "global"): PluginServiceRecord | undefined {
+  getProvider(
+    serviceId: string,
+    realm: RealmLookup = "global",
+    constraint?: string
+  ): PluginServiceRecord | undefined {
     const context: PluginRealmContext =
       typeof realm === "string" ? { realmId: validatePluginRealmId(realm) } : realm
     const lookup =
@@ -163,7 +204,20 @@ export class PluginServiceRegistry {
         : (["global"] as PluginRealmId[])
     for (const realmId of lookup) {
       const record = this.records.get(this.key(realmId, serviceId))
-      if (record?.status === "available") return { ...record }
+      if (
+        record?.status === "available" &&
+        (!constraint || satisfiesConstraint(record.version, constraint))
+      )
+        return { ...record }
+      if (realmId === "global") {
+        for (const host of this.hostRecords.values()) {
+          if (
+            host.serviceId === serviceId &&
+            (!constraint || satisfiesConstraint(host.version, constraint))
+          )
+            return { ...host }
+        }
+      }
     }
     return undefined
   }
@@ -234,6 +288,14 @@ export class PluginServiceRegistry {
     for (const manifest of entries) {
       const targets = new Set<string>()
       for (const serviceId of Object.keys(manifest.requiresServices ?? {})) {
+        if (
+          [...this.hostRecords.values()].some(
+            (host) =>
+              host.serviceId === serviceId &&
+              satisfiesConstraint(host.version, manifest.requiresServices![serviceId])
+          )
+        )
+          continue
         const candidates = providers.get(serviceId) ?? []
         if (candidates.length === 1) targets.add(candidates[0])
       }
@@ -258,9 +320,9 @@ export class PluginServiceRegistry {
   }
 
   snapshot(): PluginServiceRecord[] {
-    return Array.from(this.records.values(), (record) => ({ ...record })).sort((a, b) =>
-      `${a.realmId}:${a.serviceId}`.localeCompare(`${b.realmId}:${b.serviceId}`)
-    )
+    return Array.from([...this.records.values(), ...this.hostRecords.values()], (record) => ({
+      ...record,
+    })).sort((a, b) => `${a.realmId}:${a.serviceId}`.localeCompare(`${b.realmId}:${b.serviceId}`))
   }
 
   subscribe(listener: Listener): () => void {
@@ -274,7 +336,8 @@ export class PluginServiceRegistry {
   ): PluginServiceRequirementIssue[] {
     const issues: PluginServiceRequirementIssue[] = []
     for (const [serviceId, constraint] of Object.entries(requirements)) {
-      const provider = this.getProvider(serviceId, realm)
+      const provider =
+        this.getProvider(serviceId, realm, constraint) ?? this.getProvider(serviceId, realm)
       if (!provider) {
         issues.push({ serviceId, constraint, kind: "missing" })
       } else if (!satisfiesConstraint(provider.version, constraint)) {

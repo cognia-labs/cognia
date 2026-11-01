@@ -6,20 +6,51 @@ import { getPlugin } from "@/lib/db/plugins"
 import { getAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
 import { getAuthProviderOwner } from "./auth-provider-registry"
 import { ConnectionUnavailableError, getConnectionManager } from "./connection-manager"
+import type { IntegrationAuthStrategy } from "@cognia/plugin-contract/types/plugin/plugin-integration"
+import { satisfiesConstraint } from "@/lib/plugin/package/dependency-resolver"
 
-/**
- * Host-only registration seam. Intentionally empty until built-in Lark/Google
- * become Host providers (ADR-0246 P5/P6); no provider-name heuristics.
- */
-const hostProviderServices = new Map<string, Set<string>>()
+/** Host-only service inventory, also projected into each manager's service registry. */
+const hostProviderServices = new Map<string, Map<string, string>>()
+const hostServiceListeners = new Set<() => void>()
 
-export function registerHostAuthProviderService(providerId: string, serviceId: string): () => void {
-  const services = hostProviderServices.get(providerId) ?? new Set<string>()
-  services.add(serviceId)
-  hostProviderServices.set(providerId, services)
+export function hostAuthProviderServices(): Array<{
+  providerId: string
+  services: Record<string, string>
+}> {
+  return [...hostProviderServices].map(([providerId, services]) => ({
+    providerId,
+    services: Object.fromEntries(services),
+  }))
+}
+
+export function subscribeHostAuthProviderServices(listener: () => void): () => void {
+  hostServiceListeners.add(listener)
   return () => {
+    hostServiceListeners.delete(listener)
+  }
+}
+
+export function registerHostAuthProviderService(
+  providerId: string,
+  serviceId: string,
+  version = "1.0.0"
+): () => void {
+  if (!satisfiesConstraint(version, `=${version}`))
+    throw new Error("Host services require an exact semver version")
+  const services = hostProviderServices.get(providerId) ?? new Map<string, string>()
+  if (services.has(serviceId))
+    throw new Error(`Host service ${serviceId} already registered by ${providerId}`)
+  services.set(serviceId, version)
+  hostProviderServices.set(providerId, services)
+  for (const listener of hostServiceListeners) listener()
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
     services.delete(serviceId)
-    if (!services.size) hostProviderServices.delete(providerId)
+    if (!services.size && hostProviderServices.get(providerId) === services)
+      hostProviderServices.delete(providerId)
+    for (const listener of hostServiceListeners) listener()
   }
 }
 
@@ -55,10 +86,45 @@ export function connectionMetadata(row: AuthConnectionRow): AuthConnectionMetada
 }
 
 /** Installed rows retain a raw manifest; only object service maps name services. */
-function serviceIds(value: unknown): string[] {
+function serviceMap(value: unknown): Record<string, string> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.keys(value)
-    : []
+    ? Object.fromEntries(
+        Object.entries(value).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string"
+        )
+      )
+    : {}
+}
+
+function acceptsService(
+  manifest: { requiresServices?: unknown; optionalServices?: unknown } | undefined,
+  id: string,
+  version: string
+): boolean {
+  return [
+    serviceMap(manifest?.requiresServices)[id],
+    serviceMap(manifest?.optionalServices)[id],
+  ].some((constraint) => constraint !== undefined && satisfiesConstraint(version, constraint))
+}
+
+export async function authStrategyMatchesProvider(
+  strategy: IntegrationAuthStrategy,
+  providerId: string,
+  consumerPluginId: string
+): Promise<boolean> {
+  if (strategy.type !== "connection") return strategy.providerId === providerId
+  if (!strategy.service) return false
+  const owner = getAuthProviderOwner(providerId)
+  if (owner === undefined) return false
+  const services =
+    owner === null
+      ? Object.fromEntries(hostProviderServices.get(providerId) ?? [])
+      : serviceMap((await getPlugin(owner))?.manifest.providesServices)
+  const version = services[strategy.service]
+  return (
+    version !== undefined &&
+    acceptsService((await getPlugin(consumerPluginId))?.manifest, strategy.service, version)
+  )
 }
 
 /** Each public API supplies its permission fence, also across manifest lookups. */
@@ -81,16 +147,15 @@ export function connectionAccess(pluginId: string, check: () => void) {
     if (owner === undefined || owner !== row.ownerPluginId) return false
     const services =
       owner === null
-        ? [...(hostProviderServices.get(row.providerId) ?? [])]
-        : serviceIds((await checked(() => getPlugin(owner)))?.manifest.providesServices)
-    if (service !== undefined && !services.includes(service)) return false
+        ? Object.fromEntries(hostProviderServices.get(row.providerId) ?? [])
+        : serviceMap((await checked(() => getPlugin(owner)))?.manifest.providesServices)
+    if (service !== undefined && services[service] === undefined) return false
     if (owner === pluginId) return true
     const consumer = await checked(() => getPlugin(pluginId))
-    const requested = new Set([
-      ...serviceIds(consumer?.manifest.requiresServices),
-      ...serviceIds(consumer?.manifest.optionalServices),
-    ])
-    return services.some((id) => (service === undefined || id === service) && requested.has(id))
+    return Object.entries(services).some(
+      ([id, version]) =>
+        (service === undefined || id === service) && acceptsService(consumer?.manifest, id, version)
+    )
   }
 
   async function connected(ref: AuthConnectionRef): Promise<AuthConnectionRow | undefined> {

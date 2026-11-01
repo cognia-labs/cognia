@@ -35,6 +35,10 @@ import {
   updateIntegrationActionJob,
 } from "@/lib/db/integrations"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
+import {
+  authStrategyMatchesProvider,
+  connectionMetadata,
+} from "@/lib/plugin/auth/connection-access"
 import { proxyFetch } from "@/lib/network/proxy-fetch"
 import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import {
@@ -141,8 +145,19 @@ async function authorizeAccountConnection(
       throw new ConnectionUnavailableError("provider-owner-changed")
   } catch (error) {
     // A revision race is not an outage: the caller re-authorizes at the new revision.
-    if (error instanceof ConnectionUnavailableError)
-      await updateIntegrationAccount(account.pluginId, account.id, { health: "revoked" })
+    if (error instanceof ConnectionUnavailableError || error instanceof ConnectionRevisionChanged)
+      await updateIntegrationAccount(account.pluginId, account.id, {
+        health: error instanceof ConnectionUnavailableError ? "revoked" : "degraded",
+        status: {
+          health: "degraded",
+          code:
+            error instanceof ConnectionUnavailableError
+              ? "connection-unavailable"
+              : "connection-revision-changed",
+          checkedAt: new Date().toISOString(),
+          recoveryAction: "reauthorize",
+        },
+      })
     throw error
   }
   // Availability is authoritative on the Host connection. A previous outage
@@ -193,6 +208,15 @@ async function authorizeAccountConnection(
     })
     if (authorization.decision === "allow") return connection
   }
+  await updateIntegrationAccount(account.pluginId, account.id, {
+    health: "degraded",
+    status: {
+      health: "degraded",
+      code: "consumer-grant-required",
+      checkedAt: new Date().toISOString(),
+      recoveryAction: "review-permissions",
+    },
+  })
   throw required()
 }
 
@@ -293,6 +317,7 @@ type AuthenticatedRequestExecutor = <T>(
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
     operation?: RequestOperation
+    connectionRef?: AuthConnectionRef
   }
 ) => Promise<{ status: number; headers: Record<string, string>; data: T }>
 
@@ -369,6 +394,7 @@ async function defaultAuthenticatedRequest<T>(
   connectorAccountId: string,
   input: string,
   init: {
+    connectionRef?: AuthConnectionRef
     method?: string
     headers?: Record<string, string>
     body?: string
@@ -379,8 +405,15 @@ async function defaultAuthenticatedRequest<T>(
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
   if (!account) throw new Error(`Integration account "${connectorAccountId}" is disabled`)
+  if (init.connectionRef !== undefined && account.connectionId !== init.connectionRef)
+    throw new ConnectionUnavailableError("connection-binding-changed")
   const registered = getRegisteredIntegration(pluginId, account.integrationId)
   if (!registered) throw new Error(`Integration "${account.integrationId}" is not registered`)
+  if (
+    !account.connectionId &&
+    registered.definition.authStrategies.every((strategy) => strategy.type === "connection")
+  )
+    throw new ConnectionUnavailableError("connection-required")
   const url = new URL(input)
   // ADR-0176. The third source is the deployment this account's own credential
   // belongs to. A plugin manifest can only declare the vendor's public origin,
@@ -442,9 +475,13 @@ async function defaultAuthenticatedRequest<T>(
     throw new Error(`Credential handle for account "${connectorAccountId}" is unavailable`)
   }
 
-  const strategy = registered.definition.authStrategies.find(
-    (candidate) => candidate.providerId === account.providerId
-  )
+  let strategy
+  for (const candidate of registered.definition.authStrategies) {
+    if (await authStrategyMatchesProvider(candidate, account.providerId, pluginId)) {
+      strategy = candidate
+      break
+    }
+  }
   if (!strategy) {
     throw new Error(`Auth strategy for provider "${account.providerId}" is not registered`)
   }
@@ -568,6 +605,7 @@ export async function authenticatedIntegrationRequest<T>(
   connectorAccountId: string,
   input: string,
   init?: {
+    connectionRef?: AuthConnectionRef
     method?: string
     headers?: Record<string, string>
     body?: string
@@ -582,6 +620,7 @@ export async function authenticatedIntegrationRequest<T>(
         headers: init.headers ? { ...init.headers } : undefined,
         body: init.body,
         signal: init.signal,
+        connectionRef: init.connectionRef,
       }
     : undefined
   if (request?.signal?.aborted) throw new Error("Action cancelled or timed out")
@@ -1047,6 +1086,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
         input: job.input,
       })
     const context: IntegrationActionHandlerContext = {
+      connection: jobAccount ? await integrationConnectionMetadata(jobAccount) : undefined,
       pluginId: job.pluginId,
       integrationId: job.integrationId,
       accountId: job.accountId,
@@ -1239,6 +1279,17 @@ export async function integrationApiBaseUrl(account: {
   } catch {
     return undefined
   }
+}
+
+/** Credential-free metadata for deployment-aware integration handlers. */
+export async function integrationConnectionMetadata(
+  account: Pick<IntegrationAccount, "connectionId">
+) {
+  return account.connectionId
+    ? connectionMetadata(
+        await getConnectionManager().getConnection(account.connectionId as AuthConnectionRef)
+      )
+    : undefined
 }
 
 export function setIntegrationAuthenticatedRequestExecutorForTesting(

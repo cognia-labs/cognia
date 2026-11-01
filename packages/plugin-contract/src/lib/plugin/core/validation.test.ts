@@ -1130,6 +1130,40 @@ describe("Plugin Validation", () => {
       expect(validatePluginManifest(manifest).errors).toEqual([])
     })
 
+    it("accepts a declared connection service and refuses provider ambiguity or wildcard consumer operations", () => {
+      const manifest = createValidManifest()
+      manifest.capabilities = ["integrations"]
+      manifest.requiresServices = { "auth.calendar": "^1.0.0" }
+      manifest.integrations = [
+        {
+          id: "calendar",
+          label: "Calendar",
+          authStrategies: [
+            {
+              id: "connection",
+              type: "connection",
+              label: "Host connection",
+              service: "auth.calendar",
+              consumerOperations: { read: ["calendar.request.GET"], write: ["calendar.create"] },
+            },
+          ],
+          resourceKinds: [],
+          actions: [],
+          eventTypes: [],
+        },
+      ]
+      expect(validatePluginManifest(manifest).errors).toEqual([])
+      manifest.integrations[0].authStrategies[0].providerId = "fixed-provider"
+      expect(validatePluginManifest(manifest).errors).toContainEqual(
+        expect.stringContaining("providerId")
+      )
+      delete manifest.integrations[0].authStrategies[0].providerId
+      manifest.integrations[0].authStrategies[0].consumerOperations!.write = ["calendar.*"]
+      expect(validatePluginManifest(manifest).errors).toContainEqual(
+        expect.stringContaining("exact ids")
+      )
+    })
+
     it("rejects malformed Integration auth strategies and credential injection", () => {
       const manifest = createValidManifest()
       manifest.capabilities = ["integrations"]

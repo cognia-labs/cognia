@@ -3,6 +3,9 @@ import {
   connectionAccess,
   connectionMetadata,
   registerHostAuthProviderService,
+  hostAuthProviderServices,
+  subscribeHostAuthProviderServices,
+  authStrategyMatchesProvider,
 } from "./connection-access"
 import { getAuthProviderOwner } from "./auth-provider-registry"
 import { getPlugin } from "@/lib/db/plugins"
@@ -54,6 +57,69 @@ it("starts with an empty Host provider/service map and supports explicit registr
     dispose()
   }
   expect(await access.visible(row)).toBe(false)
+})
+
+it("publishes versioned Host services and old disposers cannot remove a replacement", async () => {
+  const listener = jest.fn()
+  const stop = subscribeHostAuthProviderServices(listener)
+  const dispose = registerHostAuthProviderService("versioned-host", "auth.vendor", "1.2.0")
+  expect(hostAuthProviderServices()).toContainEqual({
+    providerId: "versioned-host",
+    services: { "auth.vendor": "1.2.0" },
+  })
+  dispose()
+  const replacement = registerHostAuthProviderService("versioned-host", "auth.vendor", "2.0.0")
+  dispose()
+  expect(hostAuthProviderServices()).toContainEqual({
+    providerId: "versioned-host",
+    services: { "auth.vendor": "2.0.0" },
+  })
+  replacement()
+  stop()
+  expect(listener).toHaveBeenCalledTimes(4)
+  expect(() => registerHostAuthProviderService("invalid", "auth.vendor", "^1.0.0")).toThrow(
+    "exact semver"
+  )
+})
+
+it("matches connection strategies by declared service rather than a fixed provider id", async () => {
+  const strategy = {
+    id: "connection",
+    type: "connection" as const,
+    label: "Connection",
+    service: "auth.vendor",
+  }
+  expect(await authStrategyMatchesProvider(strategy, "vendor", "required")).toBe(true)
+  jest.mocked(getAuthProviderOwner).mockReturnValue(null)
+  const dispose = registerHostAuthProviderService("host-vendor", "auth.vendor")
+  try {
+    expect(await authStrategyMatchesProvider(strategy, "host-vendor", "required")).toBe(true)
+  } finally {
+    dispose()
+  }
+  expect(await authStrategyMatchesProvider(strategy, "host-vendor", "required")).toBe(false)
+})
+
+it("does not select an incompatible Host connection when another provider satisfies the service", async () => {
+  jest.mocked(getAuthProviderOwner).mockReturnValue(null)
+  const dispose = registerHostAuthProviderService("future-host", "auth.vendor", "2.0.0")
+  try {
+    expect(
+      await connectionAccess("required", () => {}).visible(
+        { providerId: "future-host", ownerPluginId: null },
+        "auth.vendor"
+      )
+    ).toBe(false)
+    expect(
+      await authStrategyMatchesProvider(
+        { id: "connection", type: "connection", label: "Connection", service: "auth.vendor" },
+        "future-host",
+        "required"
+      )
+    ).toBe(false)
+  } finally {
+    dispose()
+  }
 })
 
 it("refuses changed or unknown provider owners", async () => {

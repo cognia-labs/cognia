@@ -1,4 +1,8 @@
-import { AuthConnectionApiError, connectionAccess } from "@/lib/plugin/auth/connection-access"
+import {
+  AuthConnectionApiError,
+  authStrategyMatchesProvider,
+  connectionAccess,
+} from "@/lib/plugin/auth/connection-access"
 import type {
   IntegrationAccount,
   IntegrationAccountRef,
@@ -109,7 +113,15 @@ export function createIntegrationsAPI(
           )
         if (
           row.providerId !== input.providerId ||
-          !definition.authStrategies.some((strategy) => strategy.providerId === row.providerId)
+          !(await checked(async () =>
+            (
+              await Promise.all(
+                definition.authStrategies.map((strategy) =>
+                  authStrategyMatchesProvider(strategy, row.providerId, pluginId)
+                )
+              )
+            ).some(Boolean)
+          ))
         )
           throw new AuthConnectionApiError(
             "provider-mismatch",

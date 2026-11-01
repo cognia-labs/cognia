@@ -13,11 +13,26 @@
   "engines": {
     "cognia": ">=0.1.0"
   },
-  "dependencies": {
-    "feishu-auth": "^1.0.0"
+  "requiresServices": {
+    "auth.feishu": "^1.0.0"
+  },
+  "networkAccess": {
+    "rules": [
+      {
+        "domain": "open.feishu.cn",
+        "methods": ["GET", "POST", "PATCH", "DELETE"],
+        "paths": ["/open-apis/calendar/v4/*"]
+      },
+      {
+        "domain": "open.larksuite.com",
+        "methods": ["GET", "POST", "PATCH", "DELETE"],
+        "paths": ["/open-apis/calendar/v4/*"]
+      }
+    ]
   },
   "capabilities": ["integrations", "scheduler"],
   "permissions": [
+    "auth:consume",
     "integrations:read",
     "integrations:events",
     "integrations:execute",

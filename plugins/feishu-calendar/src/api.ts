@@ -2,8 +2,16 @@
 import { z } from "zod"
 import type { IntegrationProviderContext } from "@cognia/plugin-sdk/api/integration"
 
-export const FEISHU_API_ORIGIN = "https://open.feishu.cn"
-const API_ROOT = `${FEISHU_API_ORIGIN}/open-apis/calendar/v4`
+/** The only deployment mapping. Refuse unknown issuers rather than sending credentials elsewhere. */
+export function calendarApiOrigin(issuer: string): string {
+  const origins: Record<string, string> = {
+    "https://accounts.feishu.cn": "https://open.feishu.cn",
+    "https://accounts.larksuite.com": "https://open.larksuite.com",
+  }
+  const origin = origins[issuer.replace(/\/$/, "")]
+  if (!origin) throw new Error("Unsupported calendar connection issuer")
+  return origin
+}
 
 const identifier = z
   .string()
@@ -310,10 +318,14 @@ function pagination(value: Record<string, unknown>) {
 }
 
 export class FeishuCalendarClient {
+  private readonly apiRoot: string
   constructor(
     private readonly authenticatedRequest: IntegrationProviderContext["authenticatedRequest"],
-    private readonly signal?: AbortSignal
-  ) {}
+    private readonly signal?: AbortSignal,
+    issuer = "https://accounts.feishu.cn"
+  ) {
+    this.apiRoot = `${calendarApiOrigin(issuer)}/open-apis/calendar/v4`
+  }
 
   private async request(
     path: string,
@@ -326,8 +338,9 @@ export class FeishuCalendarClient {
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined) params.set(key, String(value))
     }
-    const response = await this.authenticatedRequest(`${API_ROOT}${path}?${params}`, {
+    const response = await this.authenticatedRequest(`${this.apiRoot}${path}?${params}`, {
       method,
+      ...(this.signal ? { signal: this.signal } : {}),
       ...(body === undefined
         ? {}
         : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),

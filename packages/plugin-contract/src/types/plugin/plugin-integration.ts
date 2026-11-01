@@ -7,18 +7,26 @@
  */
 
 import type { OutboundJobAuthorization } from "../../lib/db/connector-types"
+import type { AuthConnectionMetadata, AuthConnectionRef } from "./plugin-auth"
 
 export type IntegrationActionRisk = "read" | "write" | "destructive"
 export type IntegrationActionIdempotency = "required" | "supported" | "none"
-export type IntegrationAuthKind = "oauth2" | "api-key" | "personal-access-token" | "app"
+export type IntegrationAuthKind =
+  "oauth2" | "api-key" | "personal-access-token" | "app" | "connection"
 
 export interface IntegrationAuthStrategy {
   id: string
   type: IntegrationAuthKind
   label: string
   /** Auth provider registered through `ctx.auth`; tokens stay host-owned. */
-  providerId: string
+  providerId?: string
+  /** Connection strategies select a declared auth service through the Host picker. */
+  service?: string
+  /** Exact consumer operations, consented separately for reads and writes. */
+  consumerOperations?: { read: string[]; write: string[] }
   scopes?: string[]
+  /** Additional remote scopes requested only for write consent. */
+  writeScopes?: string[]
   configSchema?: Record<string, unknown>
   /**
    * Declarative host-side credential injection. The plugin selects the
@@ -120,6 +128,8 @@ export type IntegrationIngressVerification =
   IntegrationHmacSha256Verification | IntegrationStaticTokenVerification
 
 export interface PluginIntegrationDef {
+  /** Stable limitation codes rendered by the Host; unsupported controls remain inert. */
+  limitations?: string[]
   id: string
   label: string
   description?: string
@@ -231,6 +241,8 @@ export type IntegrationEventNormalizer = (
   | Promise<IntegrationEventEnvelope | IntegrationEventEnvelope[]>
 
 export interface IntegrationRequestInit {
+  /** Fail closed if the account is no longer bound to this Host connection. */
+  connectionRef?: AuthConnectionRef
   /**
    * Connection-backed raw requests require a consumer grant for
    * <integrationId>.request.<UPPERCASE_METHOD> (default GET).
@@ -248,6 +260,7 @@ export interface IntegrationRequestInit {
 }
 
 export interface IntegrationActionHandlerContext {
+  connection?: AuthConnectionMetadata
   pluginId: string
   integrationId: string
   accountId: string
@@ -270,6 +283,7 @@ export interface IntegrationActionHandlerContext {
 }
 
 export interface IntegrationProviderContext {
+  connection?: AuthConnectionMetadata
   pluginId: string
   integrationId: string
   accountId: string
@@ -528,6 +542,11 @@ export interface IntegrationMigrationPlan {
   accounts: Array<IntegrationAccountInput & { id: string }>
   subscriptions: Array<IntegrationSubscriptionInput & { id: string }>
   workflowKindAliases: Record<string, string>
+  /** Rebind existing rows in place using the Host's legacy-session alias ledger.
+   * The Host validates ownership and performs a compare-and-swap transaction.
+   * No credentials, aliases, subscriptions or cursors are supplied by the plugin.
+   */
+  rebindLegacyConnections?: { service: string }
 }
 
 export interface IntegrationMigrationResult {

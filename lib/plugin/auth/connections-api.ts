@@ -15,7 +15,12 @@ import {
 } from "@/lib/db/external-services"
 import { getPlugin } from "@/lib/db/plugins"
 import { listRegisteredIntegrations } from "@/lib/integrations/registry"
-import { AuthConnectionApiError, connectionAccess, connectionMetadata } from "./connection-access"
+import {
+  AuthConnectionApiError,
+  authStrategyMatchesProvider,
+  connectionAccess,
+  connectionMetadata,
+} from "./connection-access"
 import { getConnectionManager } from "./connection-manager"
 import { getProvider, listProviders } from "./auth-provider-registry"
 import { connectProvider } from "./connect"
@@ -32,16 +37,27 @@ const HTTP_METHODS = new Set([
   "TRACE",
 ])
 
-function targetOperations(pluginId: string, providerId: string, operations: string[]) {
+async function targetOperations(pluginId: string, providerId: string, operations: string[]) {
   const targets = new Map<PluginIntegrationDef, ConnectionGrantOperation[]>()
+  const definitions = []
+  for (const definition of listRegisteredIntegrations(pluginId)) {
+    if (
+      (
+        await Promise.all(
+          definition.authStrategies.map((strategy) =>
+            authStrategyMatchesProvider(strategy, providerId, pluginId)
+          )
+        )
+      ).some(Boolean)
+    )
+      definitions.push(definition)
+  }
   for (const operation of operations) {
     // CapabilityGrant uses pattern syntax. A consumer can approve exact ids
     // only, even when its own manifest attempts to declare a wildcard id.
     if (operation.includes("*"))
       throw new AuthConnectionApiError("unknown-operation", `Operation must be exact: ${operation}`)
-    const matches = listRegisteredIntegrations(pluginId).flatMap((definition) => {
-      if (!definition.authStrategies.some((strategy) => strategy.providerId === providerId))
-        return []
+    const matches = definitions.flatMap((definition) => {
       const actions = definition.actions.filter(
         (candidate) => (candidate.operationId ?? `${definition.id}.${candidate.id}`) === operation
       )
@@ -234,7 +250,8 @@ export function createAuthConnectionsAPI(
       const scopes = [...new Set(request.scopes ?? [])]
       let connection = await connected(ref)
       if (!connection) return { granted: false, reason: "connection-unavailable" }
-      const targets = targetOperations(pluginId, connection.providerId, operations)
+      const providerId = connection.providerId
+      const targets = await checked(() => targetOperations(pluginId, providerId, operations))
       if (!scopes.every((scope) => connection?.scopes.includes(scope))) {
         const before = connection
         const provider = getProvider(before.providerId)
@@ -298,7 +315,9 @@ export function createAuthConnectionsAPI(
       const current = await connected(ref)
       if (!current || current.revision !== connection.revision)
         return { granted: false, reason: "connection-unavailable" }
-      const currentTargets = targetOperations(pluginId, current.providerId, operations)
+      const currentTargets = await checked(() =>
+        targetOperations(pluginId, current.providerId, operations)
+      )
       if (
         [...targets.keys()].some((definition) => !currentTargets.has(definition)) ||
         JSON.stringify([...targets.values()]) !== JSON.stringify([...currentTargets.values()])

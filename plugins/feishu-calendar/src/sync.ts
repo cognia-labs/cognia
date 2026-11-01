@@ -1,12 +1,18 @@
 import type { PluginContext } from "@cognia/plugin-sdk"
 
-import { FeishuApiError, FeishuCalendarClient } from "./api"
+import { FeishuApiError } from "./api"
+import { calendarAccessCode, calendarConnection, connectedCalendarClient } from "./connection"
 
 export type CalendarSyncHost = {
+  auth: PluginContext["auth"]
   storage: Pick<PluginContext["storage"], "get" | "set">
   integrations: Pick<
     PluginContext["integrations"],
-    "authenticatedRequest" | "publishEvent" | "listAccounts" | "listSubscriptions"
+    | "authenticatedRequest"
+    | "publishEvent"
+    | "listAccounts"
+    | "listSubscriptions"
+    | "checkAccountHealth"
   >
 }
 
@@ -82,10 +88,8 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
       startedAt: new Date().toISOString(),
     }
     await host.storage.set(key, state)
-    const client = new FeishuCalendarClient(
-      (url, init) => host.integrations.authenticatedRequest(accountId, url, init),
-      signal
-    )
+    const client = await connectedCalendarClient(host, accountId, signal)
+    const revision = (await calendarConnection(host, accountId)).revision
     let resets = 0
 
     while (true) {
@@ -191,6 +195,22 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
           }
         }
         checkAbort(signal)
+        // Event publication can await local projections after the final page.
+        // Recheck the read grant through the Host before committing its cursor.
+        const health = await host.integrations.checkAccountHealth(accountId)
+        if (health.health !== "healthy")
+          throw Object.assign(new Error("Calendar read access is unavailable"), {
+            name:
+              health.code === "consumer-grant-required"
+                ? "ConsumerGrantRequired"
+                : "CalendarConnectionUnavailable",
+          })
+        const latest = await calendarConnection(host, accountId)
+        if (latest.revision !== revision)
+          throw Object.assign(new Error("Calendar connection revision changed"), {
+            name: "ConnectionRevisionChanged",
+          })
+        checkAbort(signal)
         await host.storage.set<SyncState>(key, {
           version: 1,
           syncToken: terminalToken,
@@ -243,13 +263,10 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
           (s) => s.enabled && !s.resourceId && (!s.resourceKind || s.resourceKind === "calendar")
         )
       ) {
-        const client = new FeishuCalendarClient(
-          (url, init) => host.integrations.authenticatedRequest(account.id, url, init),
-          signal
-        )
         const seen = new Set<string>()
         let cursor: string | undefined
         try {
+          const client = await connectedCalendarClient(host, account.id, signal)
           do {
             checkAbort(signal)
             if (seen.size > 1000) throw new Error("Calendar discovery page limit exceeded")
@@ -260,21 +277,27 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
               throw new Error("Repeated calendar discovery page token")
             if (cursor) seen.add(cursor)
           } while (cursor)
-        } catch {
+        } catch (error) {
           checkAbort(signal)
-          errors.push(`Calendar discovery failed for account ${account.id}`)
+          if (calendarAccessCode(error)) await host.integrations.checkAccountHealth(account.id)
+          errors.push(
+            `Calendar discovery failed for account ${account.id}: ${calendarAccessCode(error) ?? "calendar-unavailable"}`
+          )
+          continue
         }
       }
       for (const calendarId of calendars) {
         try {
           results.push(await syncCalendar(account.id, calendarId, signal))
-        } catch {
+        } catch (error) {
           checkAbort(signal)
           // Account/calendar ids are operational metadata; payloads and provider
           // error bodies stay out of scheduled-task logs.
+          if (calendarAccessCode(error)) await host.integrations.checkAccountHealth(account.id)
           errors.push(
-            `Calendar synchronization failed for account ${account.id}, calendar ${calendarId}`
+            `Calendar synchronization failed for account ${account.id}, calendar ${calendarId}: ${calendarAccessCode(error) ?? "calendar-unavailable"}`
           )
+          if (calendarAccessCode(error)) break
         }
       }
     }

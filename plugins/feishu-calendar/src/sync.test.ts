@@ -10,6 +10,19 @@ function fixture() {
     return { inserted }
   })
   const host = {
+    auth: {
+      connections: {
+        get: jest.fn(async () => ({
+          ref: "ref-a",
+          revision: 1,
+          status: "connected",
+          issuer: "https://accounts.feishu.cn",
+        })),
+        list: jest.fn(async () => [
+          { ref: "ref-b", revision: 1, status: "connected", issuer: "https://accounts.feishu.cn" },
+        ]),
+      },
+    },
     storage: {
       get: jest.fn(async (key: string) => structuredClone(values.get(key))),
       set: jest.fn(async (key: string, value: unknown) => {
@@ -19,7 +32,14 @@ function fixture() {
     integrations: {
       authenticatedRequest: request,
       publishEvent,
-      listAccounts: jest.fn(async () => [{ id: "a", enabled: true }]),
+      listAccounts: jest.fn(async () => [
+        { id: "a", enabled: true, connectionId: "ref-a" },
+        { id: "b", enabled: false, connectionId: "ref-b" },
+      ]),
+      checkAccountHealth: jest.fn(async () => ({
+        health: "healthy",
+        checkedAt: "2026-11-01T00:00:00Z",
+      })),
       listSubscriptions: jest.fn(async () => [
         { accountId: "a", enabled: true, resourceKind: "calendar", resourceId: "cal" },
       ]),
@@ -44,6 +64,69 @@ function fixture() {
 const event = (summary = "Meeting") => ({ event_id: "ev", summary, status: "confirmed" })
 
 describe("Feishu calendar incremental sync", () => {
+  it.each(["ConsumerGrantRequired", "ConnectionRevisionChanged", "ConnectionUnavailableError"])(
+    "keeps the completed cursor when %s stops a read and does not prompt in background",
+    async (name) => {
+      const f = fixture()
+      f.page([], "old-cursor")
+      const sync = createCalendarSync(f.host)
+      await sync.syncCalendar("a", "cal")
+      f.request.mockRejectedValueOnce(Object.assign(new Error("Host refused read"), { name }))
+      const result = await sync.syncSubscriptions()
+      expect(result.errors).toHaveLength(1)
+      expect(result.errors[0]).toMatch(
+        /consumer-grant-required|connection-revision-changed|connection-unavailable/
+      )
+      expect([...f.values.values()][0]).toMatchObject({ syncToken: "old-cursor" })
+      expect(f.host.integrations.checkAccountHealth).toHaveBeenCalledWith("a")
+      expect(f.host.auth.connections.get).toHaveBeenCalledWith({
+        service: "auth.feishu",
+        scopes: ["calendar:calendar:readonly"],
+      })
+    }
+  )
+
+  it("retains its cursor when the connection revision changes during event publication", async () => {
+    const f = fixture()
+    f.page([], "old-cursor")
+    const sync = createCalendarSync(f.host)
+    await sync.syncCalendar("a", "cal")
+    f.page([event()], "must-not-commit")
+    f.publishEvent.mockImplementationOnce(async () => {
+      jest.mocked(f.host.auth.connections.get).mockResolvedValue({
+        ref: "ref-a",
+        status: "connected",
+        revision: 2,
+        issuer: "https://accounts.feishu.cn",
+      } as never)
+      return { inserted: true }
+    })
+    await expect(sync.syncCalendar("a", "cal")).rejects.toMatchObject({
+      name: "ConnectionRevisionChanged",
+    })
+    expect([...f.values.values()][0]).toMatchObject({ syncToken: "old-cursor" })
+  })
+
+  it("retains its cursor when the read grant is revoked during event publication", async () => {
+    const f = fixture()
+    f.page([], "old-cursor")
+    const sync = createCalendarSync(f.host)
+    await sync.syncCalendar("a", "cal")
+    f.page([event()], "must-not-commit")
+    f.publishEvent.mockImplementationOnce(async () => {
+      jest.mocked(f.host.integrations.checkAccountHealth).mockResolvedValue({
+        health: "degraded",
+        code: "consumer-grant-required",
+        checkedAt: "2026-11-01T00:00:00Z",
+      })
+      return { inserted: true }
+    })
+    await expect(sync.syncCalendar("a", "cal")).rejects.toMatchObject({
+      name: "ConsumerGrantRequired",
+    })
+    expect([...f.values.values()][0]).toMatchObject({ syncToken: "old-cursor" })
+  })
+
   it("paginates a full scan and persists the terminal sync token for the next scan", async () => {
     const f = fixture()
     f.page([event()], "", "p2")

@@ -1,106 +1,102 @@
 # Feishu Calendar Integration
 
-Feishu Calendar is a frontend Integration plugin that depends on the shared
-`feishu-auth` provider plugin. The supported authorization host is Cognia
-Desktop. Tokens stay in the authentication plugin's secure storage; calendar
-handlers use the host's account-bound `authenticatedRequest` broker.
+Feishu Calendar consumes `auth.feishu@^1.0.0` through a Host connection and a
+consumer grant. Either the `feishu-auth` plugin or built-in Lark can supply the
+connection. There is no hard plugin dependency: service availability and version
+matching determine activation, and waiting consumers resume when a provider
+appears. The scheduled `syncSubscribedCalendars` task remains enabled by default.
 
-## Connect
+## Connect and consent
 
-1. Enable **Feishu Calendar** in Plugins. Its required `feishu-auth` dependency
-   activates first. Both packages are included in the first-party curation.
-2. In the Feishu developer console, create/configure an application with user
-   authorization and the scopes `offline_access`, `calendar:calendar:readonly`
-   and `calendar:calendar`. Publish/approve those scopes as your tenant requires.
-3. Deploy Cognia's static `/plugin-auth/callback` page at an HTTPS URL and
-   register that exact URL as the application's OAuth redirect URI. Loopback
-   HTTP is accepted for local development. No callback server is started by
-   this plugin, and a `cognia://` URI is not the Feishu redirect URI.
-4. Open Integrations, select Feishu Calendar, and add an account with the App ID,
-   App Secret and registered redirect URI. Complete consent in the system
-   browser, then follow **Return to Cognia** on the callback page. State and
-   PKCE are checked before the token exchange. Keep the app open during sign-in.
-5. Add a subscription for one selectable calendar or the whole account. Choose
-   created/updated/deleted event types and optionally the Calendar event Inbox
-   projection. Account-wide subscriptions enumerate all accessible calendars.
+1. Configure an account in the Host's Feishu/Lark connection UI. The Host owns
+   App ID, App Secret, redirect URI, credentials and refresh. Calendar has no
+   credential configuration form and never calls `auth.getSession`.
+2. In Integrations, add a Feishu Calendar account. The Host picker selects a
+   connection using `auth.connections.get({ service: "auth.feishu", scopes })`.
+   Approve calendar reads. Review write access separately if you need mutations.
+3. Add a subscription for a chosen calendar or the whole account. The existing
+   list-events action accepts an explicit query window (`startTime`/`endTime`);
+   incremental subscriptions keep the complete cursor stream rather than using
+   a truncated window response.
 
-Deleting the last account reference removes the locally stored session. To
-revoke application consent remotely, use Feishu's authorized-app management.
-The plugin does not invent or call an undocumented remote revocation API.
+Read consent requests exactly `listCalendars`, `listEvents`, `getEvent`,
+`getFreebusy`, `syncCalendar` and `request.GET`, prefixed with
+`feishu-calendar.`, under `calendar:calendar:readonly`. Write consent requests
+exactly `createEvent`, `updateEvent`, `deleteEvent`, `replyEvent`,
+`addAttendees` and `removeAttendees` under `calendar:calendar`. There is no
+wildcard or raw POST/PATCH/DELETE grant. Actions retain their existing risk,
+resource selectors, approval and idempotency checks in the Host action broker.
+Free/busy uses a POST endpoint but is a read action.
 
-## Calendar operations
+Every request uses `integrations.authenticatedRequest` with its account's
+`connectionRef`. `calendarApiOrigin` is the single deployment mapping:
+`https://accounts.feishu.cn` → `https://open.feishu.cn`;
+`https://accounts.larksuite.com` → `https://open.larksuite.com`.
+Other issuers are refused. Network rules permit only calendar v4 paths on those
+two deployments, without auth/token endpoints.
 
-Actions become Agent tools and Workflow nodes through the existing Integration
-bridge: list calendars/events, read/create/update/delete an event, free/busy,
-RSVP, add/remove attendees (including meeting rooms), and synchronize now.
-Action inputs use the native Feishu event field names inside `event`/`patch`;
-list options use `pageToken`, `syncToken`, `anchorTime`, `startTime`, `endTime`
-and `pageSize`. Times use Unix **seconds** strings or all-day `YYYY-MM-DD`
-dates. Recurrence, IANA timezones and explicit field clears are supported.
+## Migration and synchronization
 
-Writes enter the existing approval/action broker; deletion is destructive.
-Create uses the durable action job ID as Feishu's `idempotency_key`. The action
-runner owns retries. Writes without provider-level replay safety are declared
-non-retryable. Calendar resource selectors bind scoped grants to `calendarId`.
+Activation calls `integrations.migrateLegacy` with ledger id
+`feishu-calendar-host-connections-v1`. The Host reads 5b's legacy-session alias
+map and rebinds existing integration accounts in place. Account ids, labels,
+externalRefs, subscriptions and account/calendar cursor keys remain stable.
+The ledger and snapshots survive audit pruning. Compare-and-swap checks refuse
+concurrent account/connection changes and duplicate bindings; the transaction
+rolls back on conflict. No alias match records `legacy-connection-unmatched`
+needs-attention, retains all original data and permits a later retry. Rollback
+preserves post-migration user edits and reports conflicts.
 
-## Incremental synchronization
+The five-minute task uses full scans followed by incremental `sync_token`
+reads. Only a completed scan commits its terminal cursor. Pending generations
+make deliveries stable after a retry; checkpoints contain ids/fingerprints, not
+event content or credentials. Expired tokens (190008) cause one full rescan;
+missing entries and cancellation records produce tombstones.
 
-An enabled plugin task polls subscribed calendars every 300 seconds. It reads
-only remote data and publishes canonical `calendar.event.created`,
-`calendar.event.updated` and `calendar.event.deleted` Integration events.
-Workflow/Inbox projections use the host's durable event broker.
+Revoked grants, changed connection revisions and disconnected connections stop
+sync without advancing its completed cursor. Background work never prompts for
+new consent. Integrations shows the reason and read/write review controls.
+The Host also rechecks grants after an in-flight response before releasing data.
+A saved account retains its own connection even if another account is selected
+for new work. The existing single-instance overlap guard remains; cross-process
+sync leases are outside this phase.
 
-The first scan reads all available events with `anchor_time=0`, including
-historical entries, and emits existing live events as created. The terminal
-`sync_token` is saved only after every page and event publication succeeds.
-Subsequent scans use that token. A failed scan retries from the previous
-completed cursor; a persisted generation gives redeliveries stable IDs.
-Checkpoints contain event IDs/fingerprints, not event descriptions or tokens.
+## ES-32 behavior table
 
-Expired tokens (`190008`) trigger one bounded full rescan and reconcile missing
-events as deletions. Tombstones, repeated page tokens, cancellation, plugin
-disposal and overlapping calls are covered by tests. Inbox thread identity
-contains both calendar and event IDs. One active plugin instance owns scans;
-the storage API does not provide a cross-process compare-and-swap lease.
+All rows use the existing Integration action/resource/event interfaces in
+`feishu-calendar`. The migration above preserves their account references.
+Tests exercise the actual `FeishuCalendarClient` with stubbed API responses.
+Supported means the mapping is verified locally, not that live vendor acceptance
+has been performed.
 
-Time-window listing and incremental listing are different modes in Feishu:
-`start_time`/`end_time` cannot be combined with pagination, sync or anchor
-parameters. A time-window response may be truncated by Feishu; use the sync
-path for complete traversal. Native push webhooks are not used by this plugin.
+| Capability / old calendar entry         | Status      | Exact public interface and native mapping                                                                                                                                                                                                                                          | Test pin                                                                                                                                                                                                                                                                                        |
+| --------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Recurring series                        | supported   | `createEvent` / `updateEvent` pass `recurrence` (RFC 5545 RRULE) unchanged; an empty string clears it. No local expansion.                                                                                                                                                         | `api.test.ts: supports all-day events and recurrence`; `preserves explicit patch clears and false values`                                                                                                                                                                                       |
+| Recurrence exceptions                   | read-only   | `listEvents` / `getEvent` preserve native exception identifiers, `recurring_event_id`, `original_time` and cancellation records. No dedicated exception-set editing/instance-expansion interface; extra exception-set write fields are refused. UI labels that operation inactive. | `api.test.ts: ES-32 preserves recurrence exceptions on reads and rejects exception-set writes`; `index.test.ts: ES-32 labels unsupported features and exposes no active exception or push controls`                                                                                             |
+| Timezone and all-day                    | supported   | Pass IANA `start_time.timezone` / `end_time.timezone` and Unix seconds strings unchanged. All-day uses `date: YYYY-MM-DD` with an exclusive end date, optionally UTC; mixed representations, invalid zones/dates and reversed ranges are refused.                                  | `api.test.ts: ES-32 preserves IANA timezones and all-day date boundaries in round trips`; `rejects invalid event boundaries before sending`                                                                                                                                                     |
+| Attendees and RSVP                      | supported   | `addAttendees` → POST `events/{id}/attendees` with typed `user_id` / `chat_id`; `removeAttendees` → POST `attendees/batch_delete` with `attendee_ids`; `replyEvent` → POST `events/{id}/reply` with `rsvp_status: accept/decline/tentative`.                                       | `api.test.ts: adds typed invitees and removes by attendee IDs`; `sends delete and RSVP to their native endpoints`                                                                                                                                                                               |
+| Free/busy                               | supported   | `getFreebusy` → POST `freebusy/list`, with RFC 3339 `time_min` / `time_max`, exactly one `user_id` or `room_id`, at most 90 days; return the native result unchanged.                                                                                                              | `api.test.ts: uses the freebusy endpoint with exactly one user or room and at most 90 days`                                                                                                                                                                                                     |
+| Rooms                                   | supported   | `addAttendees` maps `type: resource` to `room_id` (at most 100 rooms per call). Native response remains authoritative for booking/approval; no synthetic successful booking. Room availability uses the free/busy mapping above.                                                   | `api.test.ts: adds typed invitees and removes by attendee IDs`; `ES-32 preserves room availability results and maps every RSVP status`                                                                                                                                                          |
+| Reminders and remote notification flag  | supported   | `createEvent` / `updateEvent` pass `reminders: [{ minutes }]` and explicit `need_notification`; empty reminders and false are retained. The service owns any notification side effect.                                                                                             | `api.test.ts: ES-32 maps reminders and explicit notification side effects to native fields`                                                                                                                                                                                                     |
+| Native push / local reminder scheduling | unsupported | Polling only; no push registration or local timer control is active. The UI labels these inert and strict inputs reject push fields.                                                                                                                                               | `api.test.ts: ES-32 maps reminders and explicit notification side effects to native fields`; `index.test.ts: ES-32 labels unsupported features and exposes no active exception or push controls`; `integrations-hub.test.ts: labels inactive calendar features and connection recovery reasons` |
 
-## Shared foundation versus library modules
+## Validation and distribution
 
-`dependencies: { "feishu-auth": "^1.0.0" }` expresses the runtime dependency.
-The foundation registers `feishu-user-oauth`; this Integration references that
-provider in `authStrategies`. Another Feishu service can depend on the same
-plugin and request its own scopes without receiving copied refresh tokens.
-The generic account form currently creates a new consent session when adding
-an account; automatic selection/reuse of an existing session is not claimed.
+Co-located tests cover both real provider adapters through the Host connection,
+consent, credential injection, deployment selection and in-flight revocation.
+Protocol responses and native credential snapshots are stubbed. Live OAuth,
+calendar writes and native keychain acceptance still need a configured account.
 
-`library.modules` is suitable for pure shared helpers. Such modules are
-instantiated in the consumer's context, so they should not own a shared login
-singleton or the provider's secret namespace. The existing native auth registry
-provides that singleton boundary without a new IPC token API.
-
-## Verification and sources
-
-Run the co-located tests with the repository's `pnpm test` entry point.
-Protocol tests use deterministic broker responses; a real sign-in and calendar
-round trip require a configured Feishu app, callback deployment and user login.
-
-- [Feishu OAuth authorization code](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)
-- [Feishu user token](https://open.feishu.cn/document/authentication-management/access-token/get-user-access-token)
-- [Feishu event listing and incremental cursor](https://open.feishu.cn/document/server-docs/calendar-v4/calendar-event/list)
-- [Feishu event creation](https://open.feishu.cn/document/server-docs/calendar-v4/calendar-event/create)
+Source/manifest changes require the bundled plugin artifact producer before a
+release. It is deliberately not run in this phase; `authoring-kit.json` must not
+be edited. Standalone package tests build only their isolated test packages.
 
 ## 中文说明
 
-启用飞书日历插件会先启用其必需依赖 `feishu-auth`。在 Integrations 中填写
-App ID、App Secret 和已部署并登记的 HTTPS `/plugin-auth/callback` 地址，完成
-浏览器授权后点击“返回 Cognia”。认证凭证由基础插件安全保管；日历插件通过
-宿主请求代理读写，不复制 token。
-
-为指定日历或整个账号建立订阅后，每五分钟进行增量同步。首次同步会产生历史
-现有日程的创建事件；同步成功后才提交游标，失败可重放，失效游标自动全量修复。
-支持日程读写、忙闲、RSVP 和参会人/会议室操作。实际飞书联调需提供应用配置和
-交互登录；当前声明的认证支持范围是桌面宿主。
+日历只消费 Host 的 `auth.feishu` 连接，可使用 `feishu-auth` 或内置 Lark。
+在 Host 配置认证应用，在 Integrations 选择连接并分别批准读取与写入；日历不再
+收集 App ID、App Secret 或回调地址。订阅选择日历；按时间窗口查询与增量同步
+分开处理。旧账户通过 alias ledger 原地重绑，保留订阅、externalRefs 和游标；
+无匹配时标记待处理，冲突时事务回滚。撤权、断连或连接修订变化都会停止同步，
+保留已完成游标并显示恢复原因。重复例外集合的编辑、原生推送及本地提醒调度未
+开放，界面明确标注为只读或未启用。

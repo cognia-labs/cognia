@@ -48,6 +48,10 @@ import {
   syncIntegrationIngressRoutes,
 } from "@/lib/integrations/ingress-client"
 import { getSession as getAuthSession } from "@/lib/plugin/auth/auth-provider-registry"
+import { createAuthConnectionsAPI } from "@/lib/plugin/auth/connections-api"
+import { createIntegrationsAPI } from "@/lib/plugin/api/integrations-api"
+import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import type { PluginPermission } from "@/types/plugin"
 import {
   discoverGithubAppInstallations,
   type GithubAppInstallationOption,
@@ -92,6 +96,12 @@ const GITHUB_STATUS_TRANSLATIONS = {
   permissions_missing: "accounts.statusMessages.permissionsMissing",
   remote_reconciliation_unavailable: "accounts.statusMessages.remoteReconciliationUnavailable",
   webhook_verified: "accounts.statusMessages.webhookVerified",
+} as const
+const CONNECTION_STATUS_TRANSLATIONS = {
+  "consumer-grant-required": "accounts.connectionReasons.grantRequired",
+  "connection-revision-changed": "accounts.connectionReasons.revisionChanged",
+  "connection-unavailable": "accounts.connectionReasons.unavailable",
+  "legacy-connection-unmatched": "accounts.connectionReasons.migrationNeedsAttention",
 } as const
 
 const GITHUB_EVENT_TRANSLATIONS = {
@@ -259,6 +269,12 @@ export function IntegrationsHub() {
     setBusy(true)
     setError(undefined)
     try {
+      if (selectedStrategy.type === "connection") {
+        await authorizeConnection(selected.pluginId, selected.definition.id, false)
+        setLabel("")
+        return
+      }
+      if (!selectedStrategy.providerId) throw new Error("provider")
       const properties = (selectedStrategy.configSchema?.properties ?? {}) as Record<
         string,
         Record<string, unknown>
@@ -287,6 +303,58 @@ export function IntegrationsHub() {
       setLabel("")
       setAuthConfiguration({})
       setDedicatedAppConfirmed(false)
+    } catch {
+      setError(t("errors.accountSetup"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function authorizeConnection(
+    pluginId: string,
+    integrationId: string,
+    write: boolean,
+    expectedRef?: string
+  ) {
+    const definition = entries.find(
+      (entry) => entry.pluginId === pluginId && entry.definition.id === integrationId
+    )?.definition
+    const strategy = definition?.authStrategies.find((item) => item.type === "connection")
+    if (!strategy?.service || !strategy.consumerOperations) throw new Error("connection strategy")
+    const allowed = (permission: string) =>
+      getPermissionGuard().check(pluginId, permission as PluginPermission)
+    const auth = createAuthConnectionsAPI(pluginId, allowed)
+    const connection = await auth.get({
+      service: strategy.service,
+      scopes: strategy.scopes,
+      interactive: true,
+    })
+    if (!connection || (expectedRef && connection.ref !== expectedRef))
+      throw new Error("connection")
+    const grant = await auth.requestGrant(connection.ref, {
+      operations: write ? strategy.consumerOperations.write : strategy.consumerOperations.read,
+      scopes: write ? strategy.writeScopes : strategy.scopes,
+    })
+    if (!grant.granted) throw new Error(grant.reason)
+    const api = createIntegrationsAPI(pluginId, allowed)
+    const account = (await api.listAccounts(integrationId)).find(
+      (row) => row.connectionId === connection.ref
+    )
+    if (!account) throw new Error("account")
+    if (label && !expectedRef) await api.updateAccount(account.id, { label })
+    await api.checkAccountHealth(account.id)
+  }
+
+  async function reviewConnectionAccess(
+    pluginId: string,
+    integrationId: string,
+    write: boolean,
+    ref?: string
+  ) {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await authorizeConnection(pluginId, integrationId, write, ref)
     } catch {
       setError(t("errors.accountSetup"))
     } finally {
@@ -514,6 +582,11 @@ export function IntegrationsHub() {
                 </CardHeader>
                 <CardContent className="space-y-3 text-xs text-muted-foreground">
                   <p>{definition.description}</p>
+                  {definition.limitations?.map((limitation) => (
+                    <p key={limitation} role="note">
+                      {t(`limitations.${limitation}`)}
+                    </p>
+                  ))}
                   <div className="flex flex-wrap gap-1">
                     {definition.authStrategies.map((strategy, index) => (
                       <Badge key={strategy.id} variant={index === 0 ? "default" : "outline"}>
@@ -735,6 +808,11 @@ export function IntegrationsHub() {
                             account.status.code as keyof typeof GITHUB_STATUS_TRANSLATIONS
                           ]
                         : undefined
+                    const connectionStatusTranslation = account.status?.code
+                      ? CONNECTION_STATUS_TRANSLATIONS[
+                          account.status.code as keyof typeof CONNECTION_STATUS_TRANSLATIONS
+                        ]
+                      : undefined
                     return (
                       <div key={account.id} className="space-y-2 rounded border p-3">
                         <div className="flex items-center justify-between gap-3">
@@ -745,6 +823,42 @@ export function IntegrationsHub() {
                             </p>
                           </div>
                           <div className="flex gap-2">
+                            {accountDefinition?.authStrategies.some(
+                              (strategy) => strategy.type === "connection"
+                            ) && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy || !account.connectionId}
+                                  onClick={() =>
+                                    reviewConnectionAccess(
+                                      account.pluginId,
+                                      account.integrationId,
+                                      false,
+                                      account.connectionId
+                                    )
+                                  }
+                                >
+                                  {t("accounts.reviewReadAccess")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy || !account.connectionId}
+                                  onClick={() =>
+                                    reviewConnectionAccess(
+                                      account.pluginId,
+                                      account.integrationId,
+                                      true,
+                                      account.connectionId
+                                    )
+                                  }
+                                >
+                                  {t("accounts.reviewWriteAccess")}
+                                </Button>
+                              </>
+                            )}
                             <Button
                               size="sm"
                               variant="outline"
@@ -823,7 +937,9 @@ export function IntegrationsHub() {
                               {t("accounts.missingPermissions")}: {missing.join(", ")}
                             </p>
                           )}
-                          {githubStatusTranslation ? (
+                          {connectionStatusTranslation ? (
+                            <p role="status">{t(connectionStatusTranslation)}</p>
+                          ) : githubStatusTranslation ? (
                             <p>{t(githubStatusTranslation)}</p>
                           ) : account.pluginId !== "github-delivery" && account.status?.message ? (
                             <p>{account.status.message}</p>

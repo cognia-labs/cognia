@@ -1,5 +1,13 @@
 {
   "accounts": {
+    "reviewReadAccess": "Review read access",
+    "reviewWriteAccess": "Review write access",
+    "connectionReasons": {
+      "grantRequired": "Calendar access was not granted or was revoked. Review read access to resume sync.",
+      "revisionChanged": "The connection changed. Review access before resuming sync; the previous cursor was kept.",
+      "unavailable": "The connection is disconnected or its provider is unavailable. Reconnect to resume sync.",
+      "migrationNeedsAttention": "No migrated connection matches this legacy account. Restore its original connection; subscriptions and sync cursors were kept."
+    },
     "add": "Add account",
     "advanced": "Advanced",
     "approvedOrigin": "Approved self-hosted HTTPS origin (optional)",
@@ -59,6 +67,10 @@
   },
   "browsePlugins": "Browse plugins",
   "description": "Manage Marketplace accounts, scoped event subscriptions, approvals, health, and audit without exposing credentials to plugins.",
+  "limitations": {
+    "recurrenceExceptionEditing": "Read-only: recurring exceptions are preserved in reads and sync. Editing one occurrence or an exception set is unsupported; no control performs that operation.",
+    "nativePushNotifications": "Unsupported: native push delivery and local reminder scheduling are inactive. Event reminders and notification flags are sent only to the calendar service."
+  },
   "disable": "Disable",
   "emptyPlugins": "Install an Integration-capable Marketplace plugin to begin.",
   "enable": "Enable",

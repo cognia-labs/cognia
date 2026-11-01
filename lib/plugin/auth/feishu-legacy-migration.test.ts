@@ -27,7 +27,14 @@ import { createFeishuAuthProvider, FEISHU_PROVIDER_ID } from "@/plugins/feishu-a
 import manifest from "@/plugins/feishu-auth/plugin.json"
 import * as calendar from "@/plugins/feishu-calendar/src/index"
 import type { IntegrationActionHandler } from "@cognia/plugin-sdk/api/integration"
-import { FeishuCalendarClient } from "@/plugins/feishu-calendar/src/api"
+import { createCalendarSync, type CalendarSyncHost } from "@/plugins/feishu-calendar/src/sync"
+import { requestCalendarAccess } from "@/plugins/feishu-calendar/src/connection"
+import {
+  registerExternalServices,
+  unregisterExternalServicesByPlugin,
+} from "@/lib/external-services/catalog"
+import { subscribeConnectionPrompts, resolveConnectionPrompt } from "./connection-prompts"
+import { revokeConsumerAccess } from "./revoke-consumer-access"
 import { reconcileLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 
@@ -532,41 +539,165 @@ it("does not replay a legacy refresh whose remote outcome is unknown", async () 
   expect(oldSecrets.has(key)).toBe(false)
 })
 
-it("serves calendar's existing authenticated request using its migrated session handle", async () => {
-  legacy()
-  register()
-  await owner().getSessions(FEISHU_PROVIDER_ID)
-  registerIntegrationDefinitions({
-    pluginId: "feishu-calendar",
-    definitions: [calendar.feishuCalendarIntegration],
-    handlers: Object.fromEntries(
-      calendar.feishuCalendarIntegration.actions.map((action) => [
-        `feishu-calendar:${action.id}`,
-        calendar[action.handler as keyof typeof calendar] as IntegrationActionHandler,
-      ])
-    ),
-    resourceProviders: { "feishu-calendar": calendar.listCalendarResources },
-    accountStatusProviders: { "feishu-calendar": calendar.checkCalendarHealth },
-  })
-  const account = await createIntegrationAccount("feishu-calendar", {
-    integrationId: "feishu-calendar",
-    providerId: FEISHU_PROVIDER_ID,
-    authSessionId: "legacy-one",
-    remoteAccountId: "app-one:ou_one",
-    label: "Person",
-  })
-  jest.mocked(proxyFetch).mockResolvedValue(
-    new Response(JSON.stringify({ code: 0, data: { calendar_list: [], has_more: false } }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
+it.each(["feishu-auth", "lark"] as const)(
+  "syncs the calendar through the real %s Host connection after consent, and stops on revocation without advancing its cursor",
+  async (provider) => {
+    const values = new Map<string, unknown>()
+    let legacyAccountId: string | undefined
+    jest
+      .mocked(getPlugin)
+      .mockImplementation(
+        async (id) =>
+          ({ manifest: id === "feishu-calendar" ? calendar.manifest : manifest }) as never
+      )
+    if (provider === "feishu-auth") {
+      legacy()
+      register()
+      await owner().getSessions(FEISHU_PROVIDER_ID)
+      const legacyAccount = await createIntegrationAccount("feishu-calendar", {
+        integrationId: "feishu-calendar",
+        providerId: FEISHU_PROVIDER_ID,
+        authSessionId: "legacy-one",
+        remoteAccountId: "app-one:ou_one",
+        label: "Person",
+      })
+      legacyAccountId = legacyAccount.id
+      values.set(`calendar-sync:${JSON.stringify([legacyAccountId, "cal"])}`, {
+        version: 1,
+        syncToken: "legacy-cursor",
+        fingerprints: {},
+      })
+    } else {
+      jest
+        .mocked(connectorsKeyringGet)
+        .mockImplementation(async (_adapter, key) =>
+          key === "appId" ? "app-one" : "builtin-secret"
+        )
+      jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+        configured: true,
+        authorizationEpoch: "epoch-one",
+        accessToken: "builtin-access",
+        refreshRevision: "native-one",
+        scopes,
+      } as never)
+      await getDb().adapterInstances.put({
+        id: "calendar-adapter",
+        type: "lark",
+        enabled: true,
+        displayName: "Work",
+        settings: {
+          brand: "lark",
+          connectedUser: {
+            openId: "ou_one",
+            tenantKey: "tenant-one",
+            authorizationEpoch: "epoch-one",
+          },
+        },
+      } as never)
+      await reconcileLarkConnection("calendar-adapter")
+    }
+    registerIntegrationDefinitions({
+      pluginId: "feishu-calendar",
+      definitions: [calendar.feishuCalendarIntegration],
+      handlers: Object.fromEntries(
+        calendar.feishuCalendarIntegration.actions.map((action) => [
+          `feishu-calendar:${action.id}`,
+          calendar[action.handler as keyof typeof calendar] as IntegrationActionHandler,
+        ])
+      ),
+      resourceProviders: { "feishu-calendar": calendar.listCalendarResources },
+      accountStatusProviders: { "feishu-calendar": calendar.checkCalendarHealth },
     })
-  )
-  const api = createIntegrationsAPI("feishu-calendar", () => true)
-  const client = new FeishuCalendarClient((url, options) =>
-    api.authenticatedRequest(account.id, url, options)
-  )
-  expect(await client.listCalendars()).toMatchObject({ calendar_list: [], has_more: false })
-  expect(new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers).get("authorization")).toBe(
-    "Bearer user-token"
-  )
-})
+    registerExternalServices("feishu-calendar", calendar.manifest.services!)
+    jest.mocked(proxyFetch).mockImplementation(
+      async (url) =>
+        new Response(
+          JSON.stringify({
+            code: 0,
+            data: String(url).includes("/events?")
+              ? { items: [], has_more: false, sync_token: "saved-cursor" }
+              : { calendar_list: [], has_more: false },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        )
+    )
+    const api = createIntegrationsAPI("feishu-calendar", () => true)
+    await api.migrateLegacy({
+      id: "calendar-host-test",
+      integrationId: "feishu-calendar",
+      accounts: [],
+      subscriptions: [],
+      workflowKindAliases: {},
+      rebindLegacyConnections: { service: "auth.feishu" },
+    })
+    const auth = createAuthAPI("feishu-calendar", { hasPermission: () => true })
+    const approvals: string[][] = []
+    const stopPrompt = subscribeConnectionPrompts(({ current }) => {
+      if (current?.kind !== "grant") return
+      approvals.push(current.operations.map((operation) => operation.id))
+      resolveConnectionPrompt(current.id, { kind: "approved" })
+    })
+    const host = {
+      auth,
+      integrations: api,
+      storage: {
+        get: async (key: string) =>
+          values.has(key) ? structuredClone(values.get(key)) : undefined,
+        set: async (key: string, value: unknown) => {
+          values.set(key, structuredClone(value))
+        },
+      },
+    } as CalendarSyncHost
+    try {
+      expect(await requestCalendarAccess(host)).toBe(true)
+      expect(approvals).toHaveLength(1)
+      const [account] = await api.listAccounts("feishu-calendar")
+      expect(account.connectionId).toBeDefined()
+      if (legacyAccountId) expect(account.id).toBe(legacyAccountId)
+      const sync = createCalendarSync(host)
+      await expect(sync.syncCalendar(account.id, "cal")).resolves.toMatchObject({ pages: 1 })
+      const checkpoint = [...values.values()][0]
+      expect(checkpoint).toMatchObject({ syncToken: "saved-cursor" })
+      const call = jest.mocked(proxyFetch).mock.calls[0]!
+      if (legacyAccountId)
+        expect(new URL(String(call[0])).searchParams.get("sync_token")).toBe("legacy-cursor")
+      expect(new URL(String(call[0])).origin).toBe(
+        provider === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn"
+      )
+      expect(new Headers(call[1]?.headers).get("authorization")).toBe(
+        provider === "lark" ? "Bearer builtin-access" : "Bearer user-token"
+      )
+      const count = jest.mocked(proxyFetch).mock.calls.length
+      jest.mocked(proxyFetch).mockImplementationOnce(async () => {
+        await revokeConsumerAccess(
+          account.connectionId as import("@cognia/plugin-contract/types/plugin/plugin-auth").AuthConnectionRef,
+          "feishu-calendar"
+        )
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: { items: [], has_more: false, sync_token: "must-not-commit" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      })
+      await expect(sync.syncCalendar(account.id, "cal")).rejects.toMatchObject({
+        name: "ConsumerGrantRequired",
+      })
+      expect((await api.listAccounts("feishu-calendar"))[0].status?.code).toBe(
+        "consumer-grant-required"
+      )
+      expect([...values.values()][0]).toMatchObject({ syncToken: "saved-cursor" })
+      await expect(sync.syncCalendar(account.id, "cal")).rejects.toThrow()
+      expect([...values.values()][0]).toMatchObject({ syncToken: "saved-cursor" })
+      expect(jest.mocked(proxyFetch)).toHaveBeenCalledTimes(count + 1)
+      expect(approvals).toHaveLength(1)
+    } finally {
+      stopPrompt()
+      unregisterExternalServicesByPlugin("feishu-calendar")
+    }
+  }
+)

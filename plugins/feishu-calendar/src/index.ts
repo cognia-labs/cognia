@@ -20,6 +20,14 @@ import {
   type FeishuAttendeeInput,
 } from "./api"
 import { createCalendarSync } from "./sync"
+import {
+  CALENDAR_SERVICE,
+  READ_SCOPES,
+  WRITE_SCOPES,
+  READ_OPERATIONS,
+  WRITE_OPERATIONS,
+  calendarAccessCode,
+} from "./connection"
 
 const id = { type: "string", minLength: 1, maxLength: 1024 }
 const schema = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -56,34 +64,18 @@ export const feishuCalendarIntegration: PluginIntegrationDef = {
     "Read and manage Feishu calendar events; synchronize subscribed calendars incrementally.",
   authStrategies: [
     {
-      id: "user-oauth",
-      type: "oauth2",
-      label: "Feishu user OAuth",
-      providerId: "feishu-user-oauth",
-      scopes: ["offline_access", "calendar:calendar:readonly", "calendar:calendar"],
+      id: "connection",
+      type: "connection",
+      label: "Host calendar connection",
+      service: CALENDAR_SERVICE,
+      scopes: READ_SCOPES,
+      writeScopes: WRITE_SCOPES,
+      consumerOperations: { read: READ_OPERATIONS, write: WRITE_OPERATIONS },
       requestAuth: { type: "bearer" },
-      configSchema: schema(
-        {
-          clientId: { type: "string", title: "Feishu App ID", minLength: 1 },
-          clientSecret: {
-            type: "string",
-            title: "Feishu App Secret",
-            format: "secret",
-            minLength: 1,
-          },
-          redirectUri: {
-            type: "string",
-            title: "Registered OAuth redirect URI",
-            format: "uri",
-            description:
-              "HTTP(S) URL of your deployed Cognia /plugin-auth/callback page, registered in Feishu.",
-          },
-        },
-        ["clientId", "clientSecret", "redirectUri"]
-      ),
     },
   ],
-  allowedOrigins: ["https://open.feishu.cn"],
+  allowedOrigins: ["https://open.feishu.cn", "https://open.larksuite.com"],
+  limitations: ["recurrenceExceptionEditing", "nativePushNotifications"],
   resourceKinds: ["calendar"],
   resourceProvider: { handler: "listCalendarResources", kinds: ["calendar"] },
   healthProvider: { handler: "checkCalendarHealth" },
@@ -177,8 +169,20 @@ export const feishuCalendarIntegration: PluginIntegrationDef = {
   ],
 }
 
-const client = (context: Parameters<IntegrationActionHandler>[1]) =>
-  new FeishuCalendarClient(context.authenticatedRequest, context.signal)
+const client = (
+  context: Parameters<IntegrationActionHandler>[1] | Parameters<IntegrationAccountStatusProvider>[0]
+) => {
+  if (!context.connection)
+    throw Object.assign(new Error("Calendar connection unavailable"), {
+      name: "CalendarConnectionUnavailable",
+    })
+  return new FeishuCalendarClient(
+    (url, init) =>
+      context.authenticatedRequest(url, { ...init, connectionRef: context.connection!.ref }),
+    "signal" in context ? context.signal : undefined,
+    context.connection.issuer
+  )
+}
 export const listCalendars: IntegrationActionHandler = (input, context) =>
   client(context).listCalendars(input.options as CalendarListOptions | undefined)
 export const listEvents: IntegrationActionHandler = (input, context) =>
@@ -223,7 +227,7 @@ export const syncCalendar: IntegrationActionHandler = (input, context) => {
 
 export const listCalendarResources: IntegrationResourceProvider = async (query, context) => {
   if (query.kind !== "calendar") throw new Error("Unsupported Feishu Calendar resource kind")
-  const page = await new FeishuCalendarClient(context.authenticatedRequest).listCalendars({
+  const page = await client(context).listCalendars({
     cursor: query.cursor,
     limit: query.limit,
   })
@@ -241,18 +245,20 @@ export const listCalendarResources: IntegrationResourceProvider = async (query, 
 export const checkCalendarHealth: IntegrationAccountStatusProvider = async (context) => {
   const checkedAt = new Date().toISOString()
   try {
-    await new FeishuCalendarClient(context.authenticatedRequest).listCalendars({ limit: 50 })
+    await client(context).listCalendars({ limit: 50 })
     return { health: "healthy", checkedAt, lastHealthyAt: checkedAt }
   } catch (error) {
     return {
       health: "degraded",
       checkedAt,
       code:
-        error instanceof FeishuApiError
+        calendarAccessCode(error) ??
+        (error instanceof FeishuApiError
           ? `feishu-${error.code ?? error.status}`
-          : "calendar-unavailable",
+          : "calendar-unavailable"),
       recoveryAction:
-        error instanceof FeishuApiError && (error.status === 401 || error.status === 403)
+        calendarAccessCode(error) ||
+        (error instanceof FeishuApiError && (error.status === 401 || error.status === 403))
           ? "reauthorize"
           : "retry",
     }
@@ -262,14 +268,41 @@ export const checkCalendarHealth: IntegrationAccountStatusProvider = async (cont
 export const manifest = definePluginManifest({
   ...manifestJson,
   integrations: [feishuCalendarIntegration],
+  services: [
+    {
+      id: "calendar",
+      label: "Feishu Calendar",
+      fallbackPolicy: "never",
+      providers: [
+        {
+          id: "api",
+          kind: "integration",
+          contributionId: "feishu-calendar",
+          priority: 1,
+          surfaces: ["chat", "workflow"],
+        },
+      ],
+    },
+  ],
 })
 export default definePlugin({
   manifest,
   activate: async (context: PluginContext) => {
+    const migrate = () =>
+      context.integrations.migrateLegacy({
+        id: "feishu-calendar-host-connections-v1",
+        integrationId: "feishu-calendar",
+        accounts: [],
+        subscriptions: [],
+        workflowKindAliases: {},
+        rebindLegacyConnections: { service: CALENDAR_SERVICE },
+      })
+    await migrate()
     sync = createCalendarSync(context, context.lifecycle.signal)
     const current = sync
     context.lifecycle.onDispose(
       context.scheduler.registerHandler("syncSubscribedCalendars", async (_args, task) => {
+        await migrate()
         const result = await current.syncSubscriptions(task.signal)
         return {
           success: result.errors.length === 0,

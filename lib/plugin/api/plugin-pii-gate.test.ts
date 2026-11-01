@@ -9,6 +9,13 @@ import {
   sanitizePluginNetworkEgress,
 } from "./plugin-pii-gate"
 import { secretRef } from "@cognia/plugin-sdk"
+import { createPluginContext } from "@/lib/plugin/core/context"
+import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import type { Plugin } from "@/types/plugin"
+import type { PluginManager } from "@/lib/plugin/core/manager"
+jest.mock("@/lib/plugin/security/account-runtime-gate", () => ({
+  pluginRuntimeAccountAvailable: () => true,
+}))
 
 describe("assertNoLeakingPii", () => {
   it("passes clean text through", () => {
@@ -45,6 +52,52 @@ describe("assertNoLeakingPii", () => {
 })
 
 describe("sanitizePluginNetworkEgress", () => {
+  it("blocks a real builtin plugin network.fetch refresh request before transport", async () => {
+    const pluginId = "feishu-auth"
+    const url = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+    const previousFetch = globalThis.fetch
+    const fetch = jest.fn(async () => new Response("{}", { status: 200 }))
+    globalThis.fetch = fetch
+    const guard = getPermissionGuard()
+    guard.registerPlugin(pluginId, ["network:fetch"])
+    guard.setTier(pluginId, "network:fetch", "silent")
+    try {
+      const context = createPluginContext(
+        {
+          manifest: {
+            id: pluginId,
+            type: "frontend",
+            permissions: ["network:fetch"],
+            networkAccess: {
+              rules: [
+                {
+                  domain: "open.feishu.cn",
+                  methods: ["POST"],
+                  paths: ["/open-apis/authen/v2/oauth/token"],
+                },
+              ],
+            },
+          },
+          source: "builtin",
+          config: {},
+          path: "builtin://feishu-auth",
+        } as Plugin,
+        { createPluginServicesAPI: () => ({}) } as PluginManager
+      )
+      await expect(
+        context.network.fetch(url, {
+          method: "POST",
+          body: { grant_type: "refresh_token", refresh_token: "alice@example.com" },
+          piiPolicy: "block",
+        })
+      ).rejects.toBeInstanceOf(PluginPiiError)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      guard.unregisterPlugin(pluginId)
+      globalThis.fetch = previousFetch
+    }
+  })
+
   it("pins the transitional host default to observe", () => {
     expect(DEFAULT_LITERAL_CREDENTIAL_POLICY).toBe("observe")
   })
@@ -146,7 +199,7 @@ describe("sanitizePluginNetworkEgress", () => {
     ).toThrow(/credential reference/)
   })
 
-  it("preserves bundled Feishu refresh credentials while still redacting other fields", () => {
+  it("gates bundled Feishu network refresh credentials like any plugin request", () => {
     const result = sanitizePluginNetworkEgress(
       "feishu-auth",
       {
@@ -162,8 +215,8 @@ describe("sanitizePluginNetworkEgress", () => {
     )
     expect(result.body).toEqual({
       grant_type: "refresh_token",
-      client_secret: "sk-proj-abcdefghijklmnopqrstuv",
-      refresh_token: "alice@example.com",
+      client_secret: expect.not.stringContaining("sk-proj-"),
+      refresh_token: "<EMAIL_001>",
       note: "<EMAIL_001>",
     })
   })
@@ -317,7 +370,7 @@ describe("sanitizePluginNetworkEgress", () => {
     expect(result.body).toEqual({ grant_type: "refresh_token", refresh_token: "<EMAIL_001>" })
   })
 
-  it("keeps the Feishu refresh exception JSON-only and limited to refresh credentials", () => {
+  it("gates Feishu refresh credentials in both JSON and form bodies", () => {
     const fields = {
       grant_type: "refresh_token",
       refresh_token: "alice@example.com",
@@ -334,6 +387,7 @@ describe("sanitizePluginNetworkEgress", () => {
     )
     expect(JSON.parse(result.body as string)).toEqual({
       ...fields,
+      refresh_token: "<EMAIL_001>",
       code: "<EMAIL_001>",
       code_verifier: "<EMAIL_001>",
     })

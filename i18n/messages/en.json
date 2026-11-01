@@ -23678,6 +23678,12 @@
         "token": "Personal access token"
       },
       "configured": "Configured",
+      "connectionReasons": {
+        "grantRequired": "Calendar access was not granted or was revoked. Review read access to resume sync.",
+        "migrationNeedsAttention": "No migrated connection matches this legacy account. Restore its original connection; subscriptions and sync cursors were kept.",
+        "revisionChanged": "The connection changed. Review access before resuming sync; the previous cursor was kept.",
+        "unavailable": "The connection is disconnected or its provider is unavailable. Reconnect to resume sync."
+      },
       "credentialHandle": "Credential handle",
       "dedicatedAppConfirmation": "I confirm this is a dedicated integration app.",
       "discoverInstallations": "Discover installations",
@@ -23693,6 +23699,8 @@
       "rateLimitReset": "Rate limit resets",
       "recommended": "Recommended",
       "remoteAccountId": "Remote account ID",
+      "reviewReadAccess": "Review read access",
+      "reviewWriteAccess": "Review write access",
       "selectAuthStrategy": "Select an authentication method",
       "selectInstallation": "Select an installation",
       "selectIntegration": "Select an integration",
@@ -23742,6 +23750,10 @@
       "unknown": "Unknown"
     },
     "installed": "Installed integrations",
+    "limitations": {
+      "nativePushNotifications": "Unsupported: native push delivery and local reminder scheduling are inactive. Event reminders and notification flags are sent only to the calendar service.",
+      "recurrenceExceptionEditing": "Read-only: recurring exceptions are preserved in reads and sync. Editing one occurrence or an exception set is unsupported; no control performs that operation."
+    },
     "remove": "Remove",
     "risk": {
       "destructive": "Destructive",

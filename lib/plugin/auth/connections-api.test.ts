@@ -244,6 +244,41 @@ it("is wired through ctx.auth and lists metadata only for visible connections", 
   expect(await connections.list({ service: "other" })).toEqual([])
 })
 
+it("consents a service-based Integration strategy through the same Host consumer grant path", async () => {
+  const definition = getRegisteredIntegration("consumer", "items")!.definition
+  registerIntegrationDefinitions({
+    pluginId: "consumer",
+    definitions: [
+      {
+        ...definition,
+        authStrategies: [
+          {
+            id: "connection",
+            type: "connection",
+            label: "Host connection",
+            service: "auth.vendor",
+          },
+        ],
+      },
+    ],
+    handlers: { "items:list": async () => ({}) },
+  })
+  const stop = prompt((request) => resolveConnectionPrompt(request.id, { kind: "approved" }))
+  try {
+    expect((await api().get({ service: "auth.vendor", scopes: ["read"] }))?.ref).toBe(ref)
+    expect(
+      await api().requestGrant(ref, { operations: ["items.request.GET"], scopes: ["read"] })
+    ).toMatchObject({ granted: true })
+    const [account] = await listIntegrationAccounts("consumer")
+    expect(account.connectionId).toBe(ref)
+    await expect(
+      authenticatedIntegrationRequest("consumer", account.id, url, { connectionRef: ref })
+    ).resolves.toMatchObject({ status: 200 })
+  } finally {
+    stop()
+  }
+})
+
 it("binds a single match and reuses it after a second connection appears", async () => {
   expect((await api().get({ providerId: "vendor", scopes: ["read"] }))?.ref).toBe(ref)
   await addConnection("Second")

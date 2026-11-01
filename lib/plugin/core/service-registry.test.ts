@@ -5,6 +5,26 @@ import {
 } from "./service-registry"
 
 describe("PluginServiceRegistry", () => {
+  it("matches either Host or plugin service versions and preserves the other provider on removal", () => {
+    const registry = new PluginServiceRegistry()
+    const removeHost = registry.registerHostProvider("lark", { "auth.feishu": "1.0.0" })
+    registry.beginProvider("feishu-auth", 1, { "auth.feishu": "2.0.0" })
+    registry.publishProvider("feishu-auth", 1)
+    expect(registry.snapshot()).toHaveLength(2)
+    expect(registry.evaluate({ "auth.feishu": "^1.0.0" }).required).toEqual([])
+    expect(registry.evaluate({ "auth.feishu": "^2.0.0" }).required).toEqual([])
+    expect(registry.evaluate({ "auth.feishu": "^3.0.0" }).required).toMatchObject([
+      { kind: "version-mismatch" },
+    ])
+    removeHost()
+    expect(registry.evaluate({ "auth.feishu": "^1.0.0" }).required).toMatchObject([
+      { kind: "version-mismatch" },
+    ])
+    expect(registry.isAvailable("auth.feishu")).toBe(true)
+    registry.removeProvider("feishu-auth", 1)
+    expect(registry.isAvailable("auth.feishu")).toBe(false)
+  })
+
   it("publishes only after provider commit and returns metadata only", () => {
     const registry = new PluginServiceRegistry()
     registry.beginProvider("workspace", 4, { "workspace.backend": "1.2.0" })

@@ -198,6 +198,25 @@ describe("Integration action runner", () => {
     return account
   }
 
+  it("preserves the requested connection ref and refuses a changed account binding before transport", async () => {
+    const account = await setup()
+    setIntegrationAuthenticatedRequestExecutorForTesting()
+    await expect(
+      authenticatedIntegrationRequest(
+        "example-delivery",
+        account.id,
+        "https://api.example.test/issues/1",
+        {
+          connectionRef:
+            "different-ref" as import("@cognia/plugin-contract/types/plugin/plugin-auth").AuthConnectionRef,
+        }
+      )
+    ).rejects.toMatchObject({
+      name: "ConnectionUnavailableError",
+      reason: "connection-binding-changed",
+    })
+  })
+
   function deferred<T>() {
     let resolve!: (value: T) => void
     const promise = new Promise<T>((done) => {

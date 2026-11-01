@@ -23678,6 +23678,12 @@
         "token": "个人访问令牌"
       },
       "configured": "已配置",
+      "connectionReasons": {
+        "grantRequired": "日历权限未获批准或已被撤销。请检查读取授权后恢复同步。",
+        "migrationNeedsAttention": "没有已迁移的连接与此旧账户匹配。请恢复原连接；订阅和同步游标均已保留。",
+        "revisionChanged": "连接已变更。请重新检查授权后恢复同步；原游标已保留。",
+        "unavailable": "连接已断开或认证提供方不可用。请重新连接后恢复同步。"
+      },
       "credentialHandle": "凭据句柄",
       "dedicatedAppConfirmation": "我确认这是专用的集成应用。",
       "discoverInstallations": "发现安装实例",
@@ -23693,6 +23699,8 @@
       "rateLimitReset": "速率限制重置时间",
       "recommended": "推荐",
       "remoteAccountId": "远端账号 ID",
+      "reviewReadAccess": "检查读取授权",
+      "reviewWriteAccess": "检查写入授权",
       "selectAuthStrategy": "选择认证方式",
       "selectInstallation": "选择安装实例",
       "selectIntegration": "选择 Integration",
@@ -23742,6 +23750,10 @@
       "unknown": "未知"
     },
     "installed": "已安装的 Integration",
+    "limitations": {
+      "nativePushNotifications": "不支持：原生推送和本地提醒调度未启用。日程提醒和通知标记仅传递给日历服务。",
+      "recurrenceExceptionEditing": "只读：读取和同步保留重复日程的例外信息。不支持编辑单次重复实例或例外集合，界面没有执行这些操作的控件。"
+    },
     "remove": "移除",
     "risk": {
       "destructive": "破坏性",

@@ -1,6 +1,11 @@
 import { getNativeSelect, selectOption } from "@/lib/testing/select-option"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { IntegrationsHub } from "./integrations-hub"
+import { createAuthConnectionsAPI } from "@/lib/plugin/auth/connections-api"
+import { createIntegrationsAPI } from "@/lib/plugin/api/integrations-api"
+import { feishuCalendarIntegration } from "@/plugins/feishu-calendar/src/index"
+jest.mock("@/lib/plugin/auth/connections-api", () => ({ createAuthConnectionsAPI: jest.fn() }))
+jest.mock("@/lib/plugin/api/integrations-api", () => ({ createIntegrationsAPI: jest.fn() }))
 
 let mockPlatform = "tauri"
 let mockHasEntries = true
@@ -121,6 +126,73 @@ beforeEach(() => {
   mockEntries = undefined
   mockJobs = []
   jest.clearAllMocks()
+})
+
+describe("connection service consumers", () => {
+  const account = {
+    id: "calendar-account",
+    pluginId: "feishu-calendar",
+    integrationId: "feishu-calendar",
+    connectionId: "calendar-ref",
+    label: "Work calendar",
+    enabled: true,
+    health: "degraded",
+    status: { code: "consumer-grant-required" },
+  }
+  it("labels inactive calendar features and connection recovery reasons", async () => {
+    mockEntries = [{ pluginId: "feishu-calendar", definition: feishuCalendarIntegration }]
+    mockAccounts = [account]
+    await act(async () => {
+      render(<IntegrationsHub />)
+    })
+    expect(screen.getByRole("status")).toHaveTextContent("Review read access to resume sync")
+    expect(screen.getAllByRole("note")).toHaveLength(2)
+    expect(screen.getByText(/Read-only: recurring exceptions/)).toBeInTheDocument()
+    expect(screen.getByText(/Unsupported: native push/)).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /exception|push/i })).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Review write access" })).toBeEnabled()
+  })
+
+  it("uses the Host picker without credential fields and consents reads and writes separately", async () => {
+    mockEntries = [{ pluginId: "feishu-calendar", definition: feishuCalendarIntegration }]
+    mockAccounts = [account]
+    const get = jest.fn(async () => ({ ref: "calendar-ref" }))
+    const requestGrant = jest.fn(async () => ({ granted: true }))
+    const health = jest.fn()
+    jest.mocked(createAuthConnectionsAPI).mockReturnValue({ get, requestGrant } as never)
+    jest
+      .mocked(createIntegrationsAPI)
+      .mockReturnValue({ listAccounts: async () => [account], checkAccountHealth: health } as never)
+    render(<IntegrationsHub />)
+    await selectOption(screen.getByLabelText("Integration"), "feishu-calendar:feishu-calendar")
+    fireEvent.click(screen.getByRole("button", { name: /Host calendar connection/ }))
+    expect(
+      screen.queryByLabelText(/App Secret|App ID|redirect URI|Auth provider ID/i)
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Validate and add" }))
+    await waitFor(() => expect(health).toHaveBeenCalledTimes(1))
+    expect(get).toHaveBeenCalledWith({
+      service: "auth.feishu",
+      scopes: ["calendar:calendar:readonly"],
+      interactive: true,
+    })
+    expect(requestGrant.mock.calls[0]).toEqual([
+      "calendar-ref",
+      {
+        operations: feishuCalendarIntegration.authStrategies[0].consumerOperations!.read,
+        scopes: ["calendar:calendar:readonly"],
+      },
+    ])
+    fireEvent.click(screen.getByRole("button", { name: "Review write access" }))
+    await waitFor(() => expect(health).toHaveBeenCalledTimes(2))
+    expect(requestGrant.mock.calls[1]).toEqual([
+      "calendar-ref",
+      {
+        operations: feishuCalendarIntegration.authStrategies[0].consumerOperations!.write,
+        scopes: ["calendar:calendar"],
+      },
+    ])
+  })
 })
 
 describe("approvals and jobs", () => {
