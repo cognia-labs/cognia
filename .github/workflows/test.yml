@@ -773,6 +773,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26.x
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build workspace-bound DSH file reader
+        run: node scripts/build/stage-dsh-ops-runtime.mjs
       - name: Cache isolated runtime downloads
         uses: actions/cache@v6
         with:
@@ -789,7 +792,7 @@ jobs:
           npm install --prefix "$DSH_TEST_ROOT" --ignore-scripts --no-audit --no-fund --prefer-offline
       - name: Run launcher and service smoke suites
         working-directory: ${{ env.DSH_TEST_ROOT }}
-        run: node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs
+        run: node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs managed-plugins.test.mjs
 
   sidecar:
     needs: jest-plan
@@ -1646,6 +1649,8 @@ jobs:
       # src-tauri — excluded here. So the tests run with every standard
       # `tauri-host` turned on (what those crates' old defaults compiled), and
       # a separate check proves each crate still builds Tauri-free.
+      - name: Prepare generated DSH source payload
+        run: node scripts/build/stage-dsh-ops-runtime.mjs
       - name: Run Rust tests (all crates except src-tauri)
         run: cargo test --locked --workspace --exclude cognia-next --no-fail-fast --features "$(node scripts/gates/check-rust-architecture.mjs --print-ci-features)"
       - name: Check the default (Tauri-free) feature set compiles

@@ -6,6 +6,8 @@
   "description": "Cognia-owned DeepSeek Harness host composition. Installed into an isolated runtime home, never into the Cognia workspace.",
   "license": "MIT",
   "dependencies": {
+    "dsh-ops": "0.4.4",
+    "@liustack/modlens": "3.27.2",
     "@deepseek-ai/dsh": "0.2.1-rc.2",
     "@deepseek-ai/dsh-sdk-minimal": "0.2.1-rc.2",
     "@deepseek-ai/dsh-sdk-app": "0.2.1-rc.2",

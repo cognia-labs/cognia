@@ -60,9 +60,19 @@ describe("gatewayModelSlots", () => {
       config("goose"),
       config("copilot-cli"),
       config("aider", "aider-cli"),
-      config("deepseek-harness-acp"),
     ])
       expect(gatewayModelSlots(source)).toEqual([])
+  })
+
+  it("offers a managed vision helper on all DSH transports without child models", () => {
+    for (const source of [
+      config("deepseek-harness-readonly", "dsh-sdk"),
+      config("deepseek-harness-workspace", "dsh-sdk"),
+      config("deepseek-harness-acp"),
+    ]) {
+      expect(ids(source)).toEqual(["aux.vision"])
+      expect(gatewayModelSlots(source)[0].kind).toBe("auxiliary")
+    }
   })
 
   it("has no slots for a configuration that cannot use Cognia models", () => {

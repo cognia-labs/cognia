@@ -15,11 +15,11 @@ product/runtime dependency closure, including optional and peer dependencies,
 and must be refreshed together on the next supported release upgrade. The installer
 retains a lockfile and validates its digest.
 
-The current Cognia certification is **conformance suite 6**. Earlier channels
+The current Cognia certification is **conformance suite 7**. Earlier channels
 require an updated host and reinstall for boot-scoped ownership and protected
 configuration/module loading. Stop older hosts and restart the system when
 their descendant retirement cannot be established before adopting this channel.
-This does not upgrade the upstream DSH release or enable additional native plugins.
+This keeps the upstream DSH release pinned and adds two bounded backend adapters.
 
 Installers retain `sessions/` and `dsh-home/` when replacing runtime code. Each
 stage has its own `installId`, directory and readiness marker; finalize requires
@@ -102,6 +102,58 @@ service forwards `session/request_permission` to Cognia. Neither SDK composition
 advertises an interactive approval capability.
 
 ## Cognia tools and model gateway
+
+### Managed dsh-ops and ModLens backends
+
+`managed-plugins.mjs` is a protected, digest-covered startup module. It adapts
+**dsh-ops 0.4.4** and **ModLens 3.27.2** without enabling their default Cordis
+bundles, native Web client, provider discovery or shared user settings.
+
+All three profiles register nine read-only `ops_*` tools: `inspect_local_file`,
+`read_files`, `glob`, `grep`, `stat`, `diff`, `read_table`, `read_docx` and
+`read_pdf`. Reads are workspace-bound, reject credential stores and use the
+upstream definitions/projections. Shell, mutations, result storage, dynamic
+discovery and PTC remain absent. macOS arm64/x64 and Linux x64 are enabled;
+Linux ARM64 remains unavailable in this adapter pending runtime acceptance.
+
+The published worker traverses ancestors from `/`, which the Host correctly
+denies under workspace-only reads. Cognia builds a workspace-anchored variant
+from immutable upstream revision `fc11890f7668c9912fcde1df1ca89810e1cbc031`.
+It retains component-wise no-follow opens and rejects mutations, storage and
+other tool names at the native protocol boundary. The build script verifies the
+source archive digest and uses upstream `Cargo.lock` with `--locked`. Generated
+Target-named `ops-worker-<platform>`, receipt and MIT license are bundled; each
+installer selects its platform and copies them to stable installed filenames.
+Different target builds share no publication paths. The executable and receipt
+enter the Node/Rust composition digest. Rust/curl/tar are **build-time** needs;
+installed runtimes do not compile, patch or download a worker on tool calls.
+Prepare manually with `node scripts/build/stage-dsh-ops-runtime.mjs` from the
+repository root before standalone Cargo source-payload tests; native bridge
+staging, agent-dsh package builds and the dedicated CI jobs also do it. Browser
+development can omit Rust; native package builds require it. Verified source is
+refreshed without rewriting identical files, preserving Cargo's warm build.
+
+`modlens_read_image` accepts a local workspace image plus optional focus text.
+It opens without following leaf or ancestor symlinks and stages bounded bytes
+in a fresh private directory under the already-writable `DSH_HOME`. Its fixed
+CLI has a private HOME, narrow Node filesystem permissions and no child/addon/
+worker permission. The module fence rejects writable code; the network facade
+allows only the exact managed chat-completions endpoint and refuses redirects.
+No image URLs, attachment-ID recovery, automatic paste/vision-provider wrappers,
+ambient CLI logins, provider fallbacks or external settings UI are mounted.
+
+Choose **ModLens vision model** (`aux.vision`) in the existing Cognia model-role
+settings when the primary model is text-only. The selector enters the task's
+normal gateway lease and PII path; the primary model remains unchanged. Without
+an override, an image-capable primary is reused. The existing gateway tools and
+streaming admission requirements also apply to the vision model. Direct
+DeepSeek-only sessions have no vision route and fail closed for ModLens; dsh-ops
+reads remain available. Existing native file writes, shell preapproval, ACP
+permissions and boot-scoped maintenance ownership keep their current contracts.
+
+These are bounded backend integrations; arbitrary DSH plugin installation remains
+unsupported. Local tests and native macOS flow use loopback providers, not real
+accounts or packaged desktop acceptance.
 
 `launcher.mjs` also exports a Cordis startup plugin, mounted through the overlay's
 relative `./launcher.mjs` entry. Both transports wait for `cogniaServicesReady`,

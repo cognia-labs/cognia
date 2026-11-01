@@ -1498,6 +1498,63 @@ describe("isolated gateway task configuration", () => {
     }
   )
 
+  it("admits the explicit ModLens vision model without changing the DSH primary", () => {
+    const modelPlan: TaskModelPlan = {
+      version: 3,
+      primaryModelId: "plain",
+      models: ["plain", "vision"],
+      slots: { "aux.vision": { modelId: "vision", source: "config" } },
+      bindings: { plain: binding, vision: { ...binding, modelId: "vision-provider-model" } },
+      fingerprint: "vision-fixture",
+    }
+    const input = {
+      config: config("deepseek-harness-readonly", "dsh-sdk"),
+      binding,
+      taskId: "dsh-vision",
+      endpoint: "http://localhost/v1",
+      secret: "lease",
+      model: "plain",
+      settings,
+      ownerAccountId: null,
+      modelPlan,
+      modelMetadataById: {
+        plain: { id: "plain", supportsVision: false },
+        vision: { id: "vision", supportsVision: true },
+      },
+    }
+    const prepared = buildGatewayTaskConfig(input)
+    const env = prepared.config.process!.env!
+    expect(prepared.model).toBe("plain")
+    expect(JSON.parse(env.COGNIA_DSH_GATEWAY_CONFIG).visionModel).toBe("vision")
+    expect(JSON.parse(env.COGNIA_DSH_GATEWAY_CONFIG).providers.cognia.models).toEqual([
+      { id: "plain", name: "plain", input: ["text"] },
+      { id: "vision", name: "vision", input: ["text", "image"] },
+    ])
+    expect(() =>
+      buildGatewayTaskConfig({
+        ...input,
+        modelMetadataById: { ...input.modelMetadataById, vision: { id: "vision" } },
+      })
+    ).toThrow(/vision-capable/)
+    for (const unsupported of [{ supportsTools: false }, { supportsStreaming: false }]) {
+      expect(() =>
+        buildGatewayTaskConfig({
+          ...input,
+          modelMetadataById: {
+            ...input.modelMetadataById,
+            vision: { id: "vision", supportsVision: true, ...unsupported },
+          },
+        })
+      ).toThrow(/existing Cognia gateway/)
+    }
+    expect(() =>
+      buildGatewayTaskConfig({
+        ...input,
+        modelPlan: { ...modelPlan, models: ["plain"] },
+      })
+    ).toThrow(/not admitted/)
+  })
+
   it("keeps DSH text-only unknown models conservative and rejects unsupported protocols", () => {
     const prepared = buildGatewayTaskConfig({
       config: config("deepseek-harness-readonly", "dsh-sdk"),
@@ -1516,6 +1573,7 @@ describe("isolated gateway task configuration", () => {
     ])
     expect(env.COGNIA_DSH_CONTEXT_WINDOW).toBeUndefined()
     expect(env.COGNIA_DSH_MAX_TOKENS).toBeUndefined()
+    expect(env.COGNIA_DSH_VISION_MODEL).toBeUndefined()
     expect(canUseCogniaModels(config("deepseek-harness-readonly", "a2a"))).toBe(false)
     expect(canUseCogniaModels(config("deepseek-harness-readonly", "dsh-sdk", "http"))).toBe(false)
   })

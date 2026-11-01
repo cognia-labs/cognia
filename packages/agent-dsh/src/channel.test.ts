@@ -204,6 +204,16 @@ describe("profile classification", () => {
         profileId === "cognia-acp" ? "disabled" : "enabled"
       )
       expect(byId.acp.status).toBe(profileId === "cognia-acp" ? "enabled" : "not-composed")
+      expect(byId["dsh-ops"]).toMatchObject({
+        packageName: "dsh-ops",
+        status: "conditional",
+        condition: "ops-worker",
+      })
+      expect(byId.modlens).toMatchObject({
+        packageName: "@liustack/modlens",
+        status: "conditional",
+        condition: "vision-model",
+      })
     }
   })
 

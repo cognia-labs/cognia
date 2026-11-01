@@ -200,7 +200,12 @@ export function profileTransport(profileId: DshProfileId): DshTransport {
 
 export type DshPluginStatus = "enabled" | "disabled" | "conditional" | "not-composed"
 export type DshPluginCondition =
-  "direct-provider" | "cognia-gateway" | "mcp-servers" | "windows-only"
+  | "direct-provider"
+  | "cognia-gateway"
+  | "mcp-servers"
+  | "windows-only"
+  | "ops-worker"
+  | "vision-model"
 
 /** Certified composition, not a report of installed packages or a live session. */
 export interface DshProfilePlugin {
@@ -298,6 +303,13 @@ export function dshPluginsForProfile(profileId: DshProfileId): readonly DshProfi
       acp ? "enabled" : "not-composed"
     ),
     { id: "cognia-services", packageName: "./launcher.mjs", status: "enabled" },
+    { id: "dsh-ops", packageName: "dsh-ops", status: "conditional", condition: "ops-worker" },
+    {
+      id: "modlens",
+      packageName: "@liustack/modlens",
+      status: "conditional",
+      condition: "vision-model",
+    },
     { id: "filesystem", packageName: "@deepseek-ai/dsh-fs-local", status: "disabled" },
     {
       id: "terminal-pwsh",

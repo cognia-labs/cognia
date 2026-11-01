@@ -25,6 +25,13 @@ export async function createMockDeepSeek({
       requests.push(input)
       const index = requests.length
       const content = await reply(input, index)
+      if (input.stream === false) {
+        response.writeHead(200, { "Content-Type": "application/json" })
+        response.end(
+          JSON.stringify({ choices: [{ message: content, finish_reason: "stop" }], usage: {} })
+        )
+        return
+      }
       response.writeHead(200, { "Content-Type": "text/event-stream" })
       if (request.url === "/v1/messages") {
         const send = (event) =>

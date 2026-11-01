@@ -223,8 +223,21 @@ async function main() {
     )
   for (const name of pi || opencode
     ? []
-    : ["launcher.mjs", "host.root.yml", "host.sdk-readonly.yml"])
-    fs.copyFileSync(path.join(source, name), path.join(runtimeHome, name))
+    : [
+        "launcher.mjs",
+        "managed-plugins.mjs",
+        "ops-worker",
+        "ops-worker.json",
+        "host.root.yml",
+        "host.sdk-readonly.yml",
+      ])
+    fs.copyFileSync(
+      path.join(
+        source,
+        name.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+      ),
+      path.join(runtimeHome, name)
+    )
   const host = new NodeExternalAgentBackend({
     workspacesRoot: workspace,
     ...(!pi && !opencode ? { dataRoot } : {}),

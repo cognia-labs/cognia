@@ -388,8 +388,16 @@ export function installManagedModulePolicy(policy) {
     export * from ${JSON.stringify(policy.appBootUrl)};
     export const { boot, loadProfile, readProfilePatches, loadEnv, loadLayeredEnv } = createManagedAppBoot(upstream, ${JSON.stringify(policy)}, createLaunchEnvironmentSnapshot);
   `)}`
+  const pluginNetworkFacade = policy.modlensCliUrl
+    ? `data:text/javascript,${encodeURIComponent(`
+      import { fetch as nativeFetch } from ${JSON.stringify(policy.undiciUrl)};
+      export * from ${JSON.stringify(policy.undiciUrl)};
+      import { managedPluginFetch } from ${JSON.stringify(policy.launcherUrl)};
+      export const fetch = (input, init) => managedPluginFetch(nativeFetch, input, init);
+    `)}`
+    : undefined
   const admittedUrl = (url) => {
-    if (url.startsWith("node:") || url === facade) return url
+    if (url.startsWith("node:") || url === facade || url === pluginNetworkFacade) return url
     if (!url.startsWith("file:")) throw new Error("Unmanaged DeepSeek Harness module URL")
     const original = new URL(url)
     const filename = realpathSync(fileURLToPath(original))
@@ -406,6 +414,8 @@ export function installManagedModulePolicy(policy) {
   return registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === "@deepseek-ai/dsh-app-boot") return { url: facade, shortCircuit: true }
+      if (specifier === "undici" && context.parentURL === policy.modlensCliUrl)
+        return { url: pluginNetworkFacade, shortCircuit: true }
       const resolved = nextResolve(specifier, context)
       return { ...resolved, url: admittedUrl(resolved.url) }
     },
@@ -413,6 +423,14 @@ export function installManagedModulePolicy(policy) {
       return nextLoad(admittedUrl(url), context)
     },
   })
+}
+
+/** The pinned ModLens CLI may POST only to its admitted gateway, without redirects. */
+export async function managedPluginFetch(fetch, input, init) {
+  const expected = new URL(`${process.env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`)
+  if (typeof input !== "string" || new URL(input).href !== expected.href || init?.method !== "POST")
+    throw new Error("Managed ModLens network target refused")
+  return fetch(input, { ...init, redirect: "error" })
 }
 
 export function prepareManagedModulePolicy(
@@ -603,7 +621,7 @@ export function resolveCogniaServices(env, workspace, profile) {
 // wait for its readiness service, so no prompt can race MCP discovery or route
 // registration. Importing the plugin never executes the CLI entry below.
 export const name = "cognia-services"
-export const inject = ["tools", "llm"]
+export const inject = ["tools", "llm", "fs"]
 export async function apply(ctx) {
   const services = resolveCogniaServices(
     process.env,
@@ -612,12 +630,14 @@ export async function apply(ctx) {
   )
   if (services.gateway) {
     const adapter = await import("@deepseek-ai/dsh-llm-pi-ai")
-    await ctx.plugin(adapter, services.gateway)
+    await ctx.plugin(adapter, { providers: services.gateway.providers })
   }
   if (services.mcp.length) {
     const bridge = await import("@deepseek-ai/dsh-mcp-client")
     for (const config of services.mcp) await ctx.plugin(bridge, config)
   }
+  const { mountManagedPlugins } = await import("./managed-plugins.mjs")
+  await mountManagedPlugins(ctx)
   // allowedTools is preapproval, not a visibility mask. Broker authorization
   // owns those grants and extra roots; native tools keep the profile sandbox.
   ctx.provide("cogniaServicesReady", { ready: true })

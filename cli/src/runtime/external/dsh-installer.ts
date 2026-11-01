@@ -32,15 +32,32 @@ import { createRuntimeHasher, hashHex } from "../crypto-hasher"
 export const RUNTIME_ARTIFACTS = [
   "package.json",
   "launcher.mjs",
+  "managed-plugins.mjs",
+  "ops-worker",
+  "ops-worker.json",
+  "ops-worker.LICENSE",
   "host.root.yml",
   "host.sdk-readonly.yml",
   "host.sdk-workspace.yml",
   "host.acp.yml",
 ] as const
 
+/** Source payloads coexist across build targets; installed names stay stable. */
+export function runtimeArtifactSourceName(
+  artifact: string,
+  platform = `${process.platform}-${process.arch}`
+): string {
+  return artifact.startsWith("ops-worker")
+    ? artifact.replace("ops-worker", `ops-worker-${platform}`)
+    : artifact
+}
+
 /** Files whose bytes make up the composition digest, in a stable order. */
 const COMPOSITION_DIGEST_FILES = [
   "launcher.mjs",
+  "managed-plugins.mjs",
+  "ops-worker",
+  "ops-worker.json",
   "host.root.yml",
   "host.sdk-readonly.yml",
   "host.sdk-workspace.yml",
@@ -703,7 +720,7 @@ export async function stageDshInstall(
   const staging = `${runtimeHomeFor(dataRoot)}.staging-${installId}`
 
   for (const artifact of RUNTIME_ARTIFACTS) {
-    if (!fs.existsSync(path.join(sourceDir, artifact))) {
+    if (!fs.existsSync(path.join(sourceDir, runtimeArtifactSourceName(artifact)))) {
       throw new DshInstallError(`Runtime artifact missing from source: ${artifact}`)
     }
   }
@@ -713,7 +730,10 @@ export async function stageDshInstall(
     recoverPrevious(dataRoot)
     fs.mkdirSync(staging)
     for (const artifact of RUNTIME_ARTIFACTS) {
-      fs.copyFileSync(path.join(sourceDir, artifact), path.join(staging, artifact))
+      fs.copyFileSync(
+        path.join(sourceDir, runtimeArtifactSourceName(artifact)),
+        path.join(staging, artifact)
+      )
     }
     fs.mkdirSync(path.join(staging, "dsh-home"))
     await (options.runNpmInstall ?? defaultNpmInstall)(staging)

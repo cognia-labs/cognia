@@ -147,8 +147,8 @@ const SPECS = {
       import { createRequire } from "node:module"
       const require = createRequire(import.meta.url)
       const packageRoot = path.dirname(require.resolve("@cognia/agent-dsh/package.json"))
-      for (const file of ["launcher.mjs", "package.json", "host.root.yml", "host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"]) {
-        if (!fs.existsSync(path.join(packageRoot, "runtime", file))) throw new Error("missing managed runtime asset: " + file)
+      for (const file of ["launcher.mjs", "managed-plugins.mjs", "ops-worker", "ops-worker.json", "ops-worker.LICENSE", "package.json", "host.root.yml", "host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"]) {
+        if (!fs.existsSync(path.join(packageRoot, "runtime", file.replace(/^ops-worker/, "ops-worker-" + process.platform + "-" + process.arch)))) throw new Error("missing managed runtime asset: " + file)
       }
       const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"))
       if (Object.keys(pkg.dependencies).some((name) => name.startsWith("@deepseek-ai/"))) throw new Error("runtime dependencies must stay isolated")

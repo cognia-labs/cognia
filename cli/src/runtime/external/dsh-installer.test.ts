@@ -13,6 +13,7 @@ import {
   gatherDshRuntimeFacts,
   DshInstallError,
   RUNTIME_ARTIFACTS,
+  runtimeArtifactSourceName,
   computeCompositionDigest,
   doctorInstalledDshRuntime,
   dshHomeFor,
@@ -38,7 +39,7 @@ beforeEach(() => {
   dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-data-"))
   sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-src-"))
   for (const artifact of RUNTIME_ARTIFACTS) {
-    fs.writeFileSync(path.join(sourceDir, artifact), `# ${artifact}\n`)
+    fs.writeFileSync(path.join(sourceDir, runtimeArtifactSourceName(artifact)), `# ${artifact}\n`)
   }
 })
 
@@ -57,25 +58,40 @@ function install(overrides: Partial<Parameters<typeof installDshRuntime>[0]> = {
 }
 
 describe("computeCompositionDigest", () => {
+  beforeEach(() => {
+    const home = runtimeHomeFor(dataRoot)
+    fs.mkdirSync(home)
+    for (const artifact of RUNTIME_ARTIFACTS) {
+      fs.copyFileSync(
+        path.join(sourceDir, runtimeArtifactSourceName(artifact)),
+        path.join(home, artifact)
+      )
+    }
+  })
+
   it("is stable for identical content", () => {
-    expect(computeCompositionDigest(sourceDir)).toBe(computeCompositionDigest(sourceDir))
+    expect(computeCompositionDigest(runtimeHomeFor(dataRoot))).toBe(
+      computeCompositionDigest(runtimeHomeFor(dataRoot))
+    )
   })
 
   it("changes when a composition changes", () => {
-    const before = computeCompositionDigest(sourceDir)
-    fs.writeFileSync(path.join(sourceDir, "host.sdk-readonly.yml"), "# tampered\n")
-    expect(computeCompositionDigest(sourceDir)).not.toBe(before)
+    const home = runtimeHomeFor(dataRoot)
+    const before = computeCompositionDigest(home)
+    fs.writeFileSync(path.join(home, "host.sdk-readonly.yml"), "# tampered\n")
+    expect(computeCompositionDigest(home)).not.toBe(before)
   })
 
   it("distinguishes content moved between files", () => {
     // Length and name are folded in, so a byte swap cannot collide.
-    const before = computeCompositionDigest(sourceDir)
-    fs.writeFileSync(path.join(sourceDir, "host.sdk-readonly.yml"), "AB")
-    fs.writeFileSync(path.join(sourceDir, "host.sdk-workspace.yml"), "")
-    const first = computeCompositionDigest(sourceDir)
-    fs.writeFileSync(path.join(sourceDir, "host.sdk-readonly.yml"), "")
-    fs.writeFileSync(path.join(sourceDir, "host.sdk-workspace.yml"), "AB")
-    expect(computeCompositionDigest(sourceDir)).not.toBe(first)
+    const home = runtimeHomeFor(dataRoot)
+    const before = computeCompositionDigest(home)
+    fs.writeFileSync(path.join(home, "host.sdk-readonly.yml"), "AB")
+    fs.writeFileSync(path.join(home, "host.sdk-workspace.yml"), "")
+    const first = computeCompositionDigest(home)
+    fs.writeFileSync(path.join(home, "host.sdk-readonly.yml"), "")
+    fs.writeFileSync(path.join(home, "host.sdk-workspace.yml"), "AB")
+    expect(computeCompositionDigest(home)).not.toBe(first)
     expect(first).not.toBe(before)
   })
 })
@@ -284,6 +300,22 @@ describe("installDshRuntime", () => {
     expect(
       fs.readFileSync(path.join(runtimeHomeFor(dataRoot), CHANNEL_MANIFEST_FILE), "utf8")
     ).toBe(first)
+  })
+
+  it("selects target-owned source payloads without sharing architecture output names", () => {
+    expect(runtimeArtifactSourceName("ops-worker", "darwin-arm64")).toBe("ops-worker-darwin-arm64")
+    expect(runtimeArtifactSourceName("ops-worker.json", "linux-x64")).toBe(
+      "ops-worker-linux-x64.json"
+    )
+    expect(runtimeArtifactSourceName("launcher.mjs", "linux-x64")).toBe("launcher.mjs")
+  })
+
+  it("binds the plugin bridge into the certified composition", async () => {
+    await install()
+    const home = runtimeHomeFor(dataRoot)
+    const before = computeCompositionDigest(home)
+    fs.appendFileSync(path.join(home, "managed-plugins.mjs"), "// tampered bridge\n")
+    expect(computeCompositionDigest(home)).not.toBe(before)
   })
 
   it("installs the artifacts and writes a channel manifest", async () => {

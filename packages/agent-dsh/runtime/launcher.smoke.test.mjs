@@ -58,8 +58,21 @@ for (const mutation of ["module", "configuration-race", "late-dotenv"])
       let mutationObserved = false
       try {
         symlinkSync(modules, join(root, "node_modules"), "dir")
-        for (const file of ["launcher.mjs", "host.root.yml", "host.sdk-readonly.yml"])
-          copyFileSync(join(source, file), join(root, file))
+        for (const file of [
+          "launcher.mjs",
+          "managed-plugins.mjs",
+          "ops-worker",
+          "ops-worker.json",
+          "host.root.yml",
+          "host.sdk-readonly.yml",
+        ])
+          copyFileSync(
+            join(
+              source,
+              file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+            ),
+            join(root, file)
+          )
         const profile = join(root, "dsh-home", "profiles", "cognia-sdk-readonly")
         const shadow = join(profile, "node_modules", "@deepseek-ai", "dsh-sdk-app")
         mkdirSync(shadow, { recursive: true })
@@ -236,8 +249,21 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
           },
         })
         symlinkSync(modules, join(root, "node_modules"), "dir")
-        for (const file of ["launcher.mjs", "host.root.yml", `host.${profile}.yml`])
-          copyFileSync(join(source, file), join(root, file))
+        for (const file of [
+          "launcher.mjs",
+          "managed-plugins.mjs",
+          "ops-worker",
+          "ops-worker.json",
+          "host.root.yml",
+          `host.${profile}.yml`,
+        ])
+          copyFileSync(
+            join(
+              source,
+              file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+            ),
+            join(root, file)
+          )
         // This must never be read by the product CLI; launcher boots inside DSH_HOME.
         writeFileSync(join(root, ".env"), "DSH_HOME=/unmanaged-home\n")
         child = spawn(

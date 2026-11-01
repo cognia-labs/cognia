@@ -27,6 +27,10 @@ use sha2::{Digest, Sha256};
 const RUNTIME_ARTIFACTS: &[&str] = &[
     "package.json",
     "launcher.mjs",
+    "managed-plugins.mjs",
+    "ops-worker",
+    "ops-worker.json",
+    "ops-worker.LICENSE",
     "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
@@ -38,6 +42,9 @@ const RUNTIME_ARTIFACTS: &[&str] = &[
 /// installer, including order.
 const COMPOSITION_DIGEST_FILES: &[&str] = &[
     "launcher.mjs",
+    "managed-plugins.mjs",
+    "ops-worker",
+    "ops-worker.json",
     "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
@@ -45,6 +52,12 @@ const COMPOSITION_DIGEST_FILES: &[&str] = &[
 ];
 
 const CHANNEL_MANIFEST_FILE: &str = "cognia-channel.json";
+fn source_artifact_name(artifact: &str) -> String {
+    artifact.strip_prefix("ops-worker").map_or_else(
+        || artifact.to_owned(),
+        |suffix| format!("ops-worker-{}{suffix}", platform_key()),
+    )
+}
 const RUNTIME_DIR: &str = "deepseek-harness";
 const DSH_HOME_DIR: &str = "dsh-home";
 const INSTALL_MARKER: &str = ".cognia-install.json";
@@ -871,7 +884,7 @@ pub async fn stage_install(
 ) -> Result<DshInstallDigests, String> {
     let _maintenance = acquire_maintenance(data_root)?;
     for artifact in RUNTIME_ARTIFACTS {
-        if !source_dir.join(artifact).exists() {
+        if !source_dir.join(source_artifact_name(artifact)).exists() {
             return Err(format!("runtime artifact missing from source: {artifact}"));
         }
     }
@@ -880,8 +893,11 @@ pub async fn stage_install(
     let staging = staging_dir(data_root, &install_id)?;
     std::fs::create_dir(&staging).map_err(|e| format!("cannot create staging dir: {e}"))?;
     for artifact in RUNTIME_ARTIFACTS {
-        std::fs::copy(source_dir.join(artifact), staging.join(artifact))
-            .map_err(|e| format!("cannot copy {artifact}: {e}"))?;
+        std::fs::copy(
+            source_dir.join(source_artifact_name(artifact)),
+            staging.join(artifact),
+        )
+        .map_err(|e| format!("cannot copy {artifact}: {e}"))?;
     }
     // Created up front so the launcher's containment check has a real directory
     // to canonicalize rather than falling back to a lexical path.
@@ -1172,11 +1188,24 @@ mod tests {
             .to_path_buf();
         let source = source_dir_from_root(&root).expect("package-owned DSH runtime source");
         for artifact in RUNTIME_ARTIFACTS {
-            assert!(source.join(artifact).is_file(), "missing {artifact}");
+            assert!(
+                source.join(source_artifact_name(artifact)).is_file(),
+                "missing {artifact}"
+            );
         }
     }
 
     fn seed_source(dir: &Path) {
+        for artifact in RUNTIME_ARTIFACTS {
+            std::fs::write(
+                dir.join(source_artifact_name(artifact)),
+                format!("# {artifact}\n"),
+            )
+            .unwrap();
+        }
+    }
+
+    fn seed_runtime(dir: &Path) {
         for artifact in RUNTIME_ARTIFACTS {
             std::fs::write(dir.join(artifact), format!("# {artifact}\n")).unwrap();
         }
@@ -1198,7 +1227,7 @@ mod tests {
     #[test]
     fn composition_digest_is_stable_and_content_sensitive() {
         let tmp = tempfile::tempdir().unwrap();
-        seed_source(tmp.path());
+        seed_runtime(tmp.path());
         let first = compute_composition_digest(tmp.path()).unwrap();
         assert_eq!(first, compute_composition_digest(tmp.path()).unwrap());
 
@@ -1210,7 +1239,7 @@ mod tests {
     fn composition_digest_distinguishes_content_moved_between_files() {
         // Name and length are folded in, so a byte swap cannot collide.
         let tmp = tempfile::tempdir().unwrap();
-        seed_source(tmp.path());
+        seed_runtime(tmp.path());
         std::fs::write(tmp.path().join("host.sdk-readonly.yml"), "AB").unwrap();
         std::fs::write(tmp.path().join("host.sdk-workspace.yml"), "").unwrap();
         let first = compute_composition_digest(tmp.path()).unwrap();
@@ -1227,6 +1256,9 @@ mod tests {
         // documented framing: name \0 length \0 content, per file, in order.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("launcher.mjs"), "a").unwrap();
+        std::fs::write(tmp.path().join("managed-plugins.mjs"), "plugins").unwrap();
+        std::fs::write(tmp.path().join("ops-worker"), "worker").unwrap();
+        std::fs::write(tmp.path().join("ops-worker.json"), "receipt").unwrap();
         std::fs::write(tmp.path().join("host.root.yml"), "root").unwrap();
         std::fs::write(tmp.path().join("host.sdk-readonly.yml"), "b").unwrap();
         std::fs::write(tmp.path().join("host.sdk-workspace.yml"), "c").unwrap();
@@ -1235,6 +1267,9 @@ mod tests {
         let mut expected = Sha256::new();
         for (name, content) in [
             ("launcher.mjs", "a"),
+            ("managed-plugins.mjs", "plugins"),
+            ("ops-worker", "worker"),
+            ("ops-worker.json", "receipt"),
             ("host.root.yml", "root"),
             ("host.sdk-readonly.yml", "b"),
             ("host.sdk-workspace.yml", "c"),
@@ -1250,6 +1285,9 @@ mod tests {
             compute_composition_digest(tmp.path()).unwrap(),
             hex(expected.finalize())
         );
+        let before = compute_composition_digest(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("managed-plugins.mjs"), "tampered").unwrap();
+        assert_ne!(before, compute_composition_digest(tmp.path()).unwrap());
     }
 
     #[test]
@@ -1366,7 +1404,7 @@ mod tests {
         let install_id = uuid::Uuid::new_v4().to_string();
         let staging = staging_dir(data_root, &install_id).unwrap();
         std::fs::create_dir_all(&staging).unwrap();
-        seed_source(&staging);
+        seed_runtime(&staging);
         std::fs::write(staging.join("package-lock.json"), "lock").unwrap();
         let marker = InstallMarker {
             schema_version: 1,
