@@ -240,6 +240,11 @@ export interface IntegrationRequestInit {
   method?: string
   headers?: Record<string, string>
   body?: string
+  /**
+   * Cancels the Host transport, not just the result. Honoured where the plugin
+   * runs in the Host's own realm; out-of-process plugin hosts cannot carry it.
+   */
+  signal?: AbortSignal
 }
 
 export interface IntegrationActionHandlerContext {

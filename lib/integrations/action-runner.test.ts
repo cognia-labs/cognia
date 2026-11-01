@@ -1065,6 +1065,43 @@ describe("Integration action runner", () => {
     }
   })
 
+  it("passes a plugin AbortSignal to the Host transport and refuses an already-aborted request", async () => {
+    const executor = jest.fn(
+      async <T>(
+        _plugin: string,
+        _account: string,
+        _input: string,
+        init?: { signal?: AbortSignal }
+      ) => ({
+        status: 200,
+        headers: {},
+        data: { aborted: init?.signal?.aborted } as T,
+      })
+    )
+    setIntegrationAuthenticatedRequestExecutorForTesting(executor as never)
+    try {
+      const controller = new AbortController()
+      await authenticatedIntegrationRequest(
+        "example-delivery",
+        "acct",
+        "https://api.example.test/x",
+        {
+          signal: controller.signal,
+        }
+      )
+      expect(executor.mock.calls[0]?.[3]?.signal).toBe(controller.signal)
+      controller.abort()
+      await expect(
+        authenticatedIntegrationRequest("example-delivery", "acct", "https://api.example.test/x", {
+          signal: controller.signal,
+        })
+      ).rejects.toThrow(/cancelled/)
+      expect(executor).toHaveBeenCalledTimes(1)
+    } finally {
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+    }
+  })
+
   it("resolves short-lived credentials inside the host request boundary", async () => {
     setIntegrationAuthenticatedRequestExecutorForTesting()
     registerIntegrationDefinitions({

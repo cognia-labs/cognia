@@ -559,6 +559,7 @@ export async function authenticatedIntegrationRequest<T>(
     method?: string
     headers?: Record<string, string>
     body?: string
+    signal?: AbortSignal
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   // Snapshot public fields before any await. Runtime callers cannot supply
@@ -568,8 +569,10 @@ export async function authenticatedIntegrationRequest<T>(
         method: init.method,
         headers: init.headers ? { ...init.headers } : undefined,
         body: init.body,
+        signal: init.signal,
       }
     : undefined
+  if (request?.signal?.aborted) throw new Error("Action cancelled or timed out")
   await planAuthenticatedRequest(
     pluginId,
     connectorAccountId,
