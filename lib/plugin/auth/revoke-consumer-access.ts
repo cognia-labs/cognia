@@ -1,15 +1,24 @@
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getDb } from "@/lib/db/schema"
+import { queueAccessTeardown, runAccessTeardown } from "@/lib/external-services/access-teardown"
 
 /** Host-only removal, atomic across projected grants and the saved account selection. */
 export async function revokeConsumerAccess(
   ref: AuthConnectionRef,
-  consumerPluginId: string
+  consumerPluginId: string,
+  options: { removeAccounts?: boolean } = {}
 ): Promise<void> {
   const db = getDb()
+  const target = { kind: "consumer" as const, ref, consumerPluginId }
   await db.transaction(
     "rw",
-    [db.integrationAccounts, db.serviceConnections, db.capabilityGrants, db.connectionBindings],
+    [
+      db.integrationAccounts,
+      db.serviceConnections,
+      db.capabilityGrants,
+      db.connectionBindings,
+      db.integrationAudit,
+    ],
     async () => {
       const accounts = await db.integrationAccounts
         .filter((row) => row.connectionId === ref)
@@ -36,6 +45,8 @@ export async function revokeConsumerAccess(
         .equals(ref)
         .filter((row) => row.consumerPluginId === consumerPluginId)
         .delete()
+      await queueAccessTeardown(target, options)
     }
   )
+  await runAccessTeardown(target)
 }

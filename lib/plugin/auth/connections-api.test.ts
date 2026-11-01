@@ -3,15 +3,17 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { getAuthConnection } from "@/lib/db/auth-connections"
 import { getConnectionBinding, putConnectionBinding } from "@/lib/db/connection-bindings"
-import { listIntegrationAccounts } from "@/lib/db/integrations"
+import { createIntegrationAccount, listIntegrationAccounts } from "@/lib/db/integrations"
 import { listConsumerGrants, listServiceConnections } from "@/lib/db/external-services"
 import {
   registerExternalServices,
   unregisterExternalServicesByPlugin,
+  listExternalServices,
 } from "@/lib/external-services/catalog"
 import {
   registerIntegrationDefinitions,
   __resetIntegrationRegistryForTesting,
+  getRegisteredIntegration,
 } from "@/lib/integrations/registry"
 import {
   authenticatedIntegrationRequest,
@@ -33,6 +35,8 @@ import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credent
 import { createAuthConnectionsAPI } from "./connections-api"
 import { connectProvider } from "./connect"
 import { revokeConsumerAccess } from "./revoke-consumer-access"
+import { registerDerivedDataPurger } from "@/lib/external-services/derived-data-registry"
+import { sweepAccessTeardowns } from "@/lib/external-services/access-teardown"
 import {
   resolveConnectionPrompt,
   subscribeConnectionPrompts,
@@ -212,6 +216,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   unregisterExternalServicesByPlugin("consumer")
+  unregisterExternalServicesByPlugin("other-consumer")
   __resetAuthRegistryForTesting()
   __resetIntegrationRegistryForTesting()
 })
@@ -500,6 +505,32 @@ it("revoking a consumer fences later requests and preserves another consumer's g
   const [projection] = await listServiceConnections({ pluginId: "consumer" })
   const [grant] = await listConsumerGrants(projection.id, "consumer")
   await getDb().capabilityGrants.put({ ...grant, id: "other", consumerPluginId: "other-consumer" })
+  registerExternalServices(
+    "other-consumer",
+    listExternalServices("consumer").map((entry) => entry.definition)
+  )
+  registerIntegrationDefinitions({
+    pluginId: "other-consumer",
+    definitions: [getRegisteredIntegration("consumer", "items")!.definition],
+    handlers: { "items:list": async () => ({}) },
+  })
+  const secondAccount = await createIntegrationAccount("other-consumer", {
+    integrationId: "items",
+    providerId: "vendor",
+    connectionId: ref,
+    authSessionId: ref,
+    remoteAccountId: "Account",
+    label: "Account",
+  })
+  const [secondProjection] = await listServiceConnections({ pluginId: "other-consumer" })
+  await getDb().capabilityGrants.put({
+    ...grant,
+    id: "second-consumer-grant",
+    consumerPluginId: "other-consumer",
+    connectionId: secondProjection.id,
+    accountId: secondAccount.id,
+    providerFingerprint: secondProjection.providerFingerprint,
+  })
   const [account] = await listIntegrationAccounts("consumer")
   await expect(authenticatedIntegrationRequest("consumer", account.id, url)).resolves.toMatchObject(
     { status: 200 }
@@ -510,6 +541,43 @@ it("revoking a consumer fences later requests and preserves another consumer's g
   await expect(authenticatedIntegrationRequest("consumer", account.id, url)).rejects.toBeInstanceOf(
     ConsumerGrantRequired
   )
+  await expect(
+    authenticatedIntegrationRequest("other-consumer", secondAccount.id, url)
+  ).resolves.toMatchObject({ status: 200, data: { items: [1] } })
+})
+
+it("blocks regrant during cleanup and restores the account only after fresh consent", async () => {
+  const approve = prompt((request) => resolveConnectionPrompt(request.id, { kind: "approved" }))
+  const purge = jest.fn().mockRejectedValueOnce(new Error("temporary")).mockResolvedValue(undefined)
+  const dispose = registerDerivedDataPurger({ id: "regrant-retry", purge })
+  try {
+    await api().requestGrant(ref, { operations: ["items.request.GET"] })
+    const [account] = await listIntegrationAccounts("consumer")
+    await revokeConsumerAccess(ref, "consumer")
+    expect(await api().requestGrant(ref, { operations: ["items.request.GET"] })).toEqual({
+      granted: false,
+      reason: "connection-unavailable",
+    })
+    expect(await api().get({ providerId: "vendor" })).toBeUndefined()
+    await sweepAccessTeardowns()
+    expect(await api().requestGrant(ref, { operations: ["items.request.GET"] })).toEqual({
+      granted: true,
+      ref,
+      connectionRevision: 1,
+      operations: ["items.request.GET"],
+      scopes: [],
+    })
+    await expect(
+      authenticatedIntegrationRequest("consumer", account.id, url)
+    ).resolves.toMatchObject({ status: 200 })
+    await sweepAccessTeardowns()
+    await expect(
+      authenticatedIntegrationRequest("consumer", account.id, url)
+    ).resolves.toMatchObject({ status: 200 })
+  } finally {
+    approve()
+    dispose()
+  }
 })
 
 it.each(["denied", "dismissed"] as const)(

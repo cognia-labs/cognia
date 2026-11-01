@@ -94,6 +94,7 @@ import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lif
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
 import { clearPythonLogs, getPythonLogs } from "@/lib/plugin/python/log-buffer"
 import { loggers } from "@/lib/plugin/core/logger"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 
 const mockTransportCall = jest.fn()
 const mockTransportSubscribe = jest.fn()
@@ -3461,6 +3462,47 @@ describe("PluginManager", () => {
   })
 
   describe("uninstallPlugin", () => {
+    it("revokes provider connections while registered, before deactivating the plugin", async () => {
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const order: string[] = []
+      const auth = getConnectionManager()
+      const revoke = jest
+        .spyOn(auth, "uninstallProviderConnections")
+        .mockImplementation(async (pluginId) => {
+          expect(pluginId).toBe("to-remove")
+          order.push("revoke")
+        })
+      const unload = jest
+        .spyOn(
+          manager as unknown as { unloadPluginInner(pluginId: string): Promise<void> },
+          "unloadPluginInner"
+        )
+        .mockImplementation(async () => {
+          order.push("unload")
+        })
+      mockGetState.mockReturnValue({
+        plugins: {
+          "to-remove": {
+            manifest: createManifest("to-remove"),
+            status: "enabled",
+            source: "local",
+            path: "/plugins/to-remove",
+            config: {},
+          },
+        },
+        uninstallPlugin: jest.fn(async () => undefined),
+        setPluginError: jest.fn(),
+        setPluginStatus: jest.fn(),
+      })
+      mockInvoke.mockResolvedValue(undefined)
+      try {
+        await manager.uninstallPlugin("to-remove")
+        expect(order).toEqual(["revoke", "unload"])
+      } finally {
+        revoke.mockRestore()
+        unload.mockRestore()
+      }
+    })
     it.each([false, true])(
       "releases provider ownership on uninstall with purgeData=%s",
       async (purgeData) => {

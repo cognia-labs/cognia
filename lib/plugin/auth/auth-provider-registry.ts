@@ -102,6 +102,21 @@ export function getAuthProviderOwner(providerId: string): string | null | undefi
   return owners.get(providerId) ?? getProvider(providerId)?.pluginId
 }
 
+/** Includes disabled imperative providers whose ownership survives deactivation. */
+export function hasAuthProviderOwnership(pluginId: string): boolean {
+  const owners = parseOwners(
+    ownershipStore
+      ? ownershipStore.read()
+      : typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem(OWNER_STORAGE_KEY)
+  )
+  return (
+    [...owners.values()].includes(pluginId) ||
+    listProviders().some((provider) => provider.pluginId === pluginId)
+  )
+}
+
 /** Host registrations bind an id in host Storage, including declarative contributions. */
 export function registerAuthenticationProvider(provider: AuthenticationProvider): () => void {
   const existing = getProvider(provider.id)

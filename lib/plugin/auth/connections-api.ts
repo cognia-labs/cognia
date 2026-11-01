@@ -7,8 +7,12 @@ import {
   putConnectionBinding,
   removeConnectionBinding,
 } from "@/lib/db/connection-bindings"
-import { createIntegrationAccount } from "@/lib/db/integrations"
-import { listServiceConnections, putCapabilityGrant } from "@/lib/db/external-services"
+import { createIntegrationAccount, updateIntegrationAccount } from "@/lib/db/integrations"
+import {
+  listServiceConnections,
+  putCapabilityGrant,
+  hasPendingConnectionCleanup,
+} from "@/lib/db/external-services"
 import { getPlugin } from "@/lib/db/plugins"
 import { listRegisteredIntegrations } from "@/lib/integrations/registry"
 import { AuthConnectionApiError, connectionAccess, connectionMetadata } from "./connection-access"
@@ -92,7 +96,11 @@ export function createAuthConnectionsAPI(
         'ctx.auth.connections requires the "auth:consume" permission to be granted and not revoked.'
       )
   }
-  const { checked, visible, connected } = connectionAccess(pluginId, check)
+  const { checked, visible, connected: readConnected } = connectionAccess(pluginId, check)
+  const connected: typeof readConnected = async (ref) =>
+    (await checked(() => hasPendingConnectionCleanup(ref, pluginId)))
+      ? undefined
+      : readConnected(ref)
   const name = async () => {
     const manifest = (await checked(() => getPlugin(pluginId)))?.manifest
     return typeof manifest?.name === "string" ? manifest.name : pluginId
@@ -214,6 +222,8 @@ export function createAuthConnectionsAPI(
     },
     async requestGrant(ref, request) {
       check()
+      if (await checked(() => hasPendingConnectionCleanup(ref, pluginId)))
+        return { granted: false, reason: "connection-unavailable" }
       if (
         !Array.isArray(request.operations) ||
         !request.operations.length ||
@@ -332,6 +342,9 @@ export function createAuthConnectionsAPI(
             })
           )
         }
+        await checked(() =>
+          updateIntegrationAccount(pluginId, account.id, { enabled: true, health: "unknown" })
+        )
       }
       const final = await connected(ref)
       if (!final || final.revision !== current.revision)

@@ -6,6 +6,34 @@ import type {
 } from "@/types/external-service"
 
 import { getDb } from "./schema"
+import type { DerivedDataTarget } from "@/lib/external-services/derived-data-registry"
+
+/** Cleanup is an access generation barrier: new work waits for the old generation to disappear. */
+export async function hasPendingConnectionCleanup(
+  ref: string,
+  consumerPluginId: string
+): Promise<boolean> {
+  return (
+    (await getDb()
+      .integrationAudit.where("kind")
+      .equals("access.cleanup.pending")
+      .filter((row) => {
+        const target = row.detail?.target as DerivedDataTarget | undefined
+        return target?.kind === "plugin-data"
+          ? target.pluginId === consumerPluginId
+          : target?.ref === ref &&
+              (target.kind === "connection" || target.consumerPluginId === consumerPluginId)
+      })
+      .count()) > 0
+  )
+}
+
+export class ConnectionAccessCleanupPending extends Error {
+  constructor() {
+    super("Connection access cleanup is still pending")
+    this.name = "ConnectionAccessCleanupPending"
+  }
+}
 
 function nowIso(): string {
   return new Date().toISOString()
@@ -125,13 +153,32 @@ export async function putCapabilityGrant(grant: CapabilityGrant): Promise<Capabi
   ) {
     throw new Error("Capability grant connectionRevision must be a positive integer")
   }
-  const connection = await getServiceConnection(grant.connectionId)
-  if (!connection) throw new Error(`Service connection "${grant.connectionId}" was not found`)
-  if (connection.providerFingerprint !== grant.providerFingerprint) {
-    throw new Error("Capability grant fingerprint does not match the service connection")
-  }
-  await getDb().capabilityGrants.put(grant)
-  return grant
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    db.serviceConnections,
+    db.capabilityGrants,
+    db.integrationAudit,
+    async () => {
+      const connection = await getServiceConnection(grant.connectionId)
+      if (!connection) throw new Error(`Service connection "${grant.connectionId}" was not found`)
+      if (connection.providerFingerprint !== grant.providerFingerprint) {
+        throw new Error("Capability grant fingerprint does not match the service connection")
+      }
+      if (
+        grant.consumerPluginId &&
+        connection.providerRef.kind === "integration" &&
+        connection.providerRef.authConnectionRef &&
+        (await hasPendingConnectionCleanup(
+          connection.providerRef.authConnectionRef,
+          grant.consumerPluginId
+        ))
+      )
+        throw new ConnectionAccessCleanupPending()
+      await db.capabilityGrants.put(grant)
+      return grant
+    }
+  )
 }
 
 export async function listCapabilityGrants(
@@ -236,9 +283,16 @@ export async function removePluginExternalServiceState(
   const mcpServerIds = connections.flatMap((row) =>
     row.providerRef.kind === "mcp" ? [row.providerRef.serverId] : []
   )
-  const integrationAccountIds = connections.flatMap((row) =>
-    row.providerRef.kind === "integration" ? [row.providerRef.accountId] : []
-  )
+  const integrationAccountIds = [
+    ...new Set([
+      ...connections.flatMap((row) =>
+        row.providerRef.kind === "integration" ? [row.providerRef.accountId] : []
+      ),
+      ...(await db.integrationAccounts.where("pluginId").equals(pluginId).toArray()).map(
+        (row) => row.id
+      ),
+    ]),
+  ]
   const browserProfileIds = connections.flatMap((row) =>
     row.providerRef.kind === "browser" ? [row.providerRef.profileId] : []
   )

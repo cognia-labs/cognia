@@ -35225,12 +35225,14 @@
       "routing": "Opening…"
     },
     "delete": {
-      "body": "\"{name}\" will be stopped and removed from this device, including its files, tools and scheduled jobs. Its connected accounts, saved credentials, browser profiles and integration history are removed too, so you will need to sign in again after reinstalling.",
+      "body": "\"{name}\" will be stopped and removed from this device, including its files, tools and scheduled jobs. Its own integration accounts, saved credentials and browser profiles are removed. Security and action audit records are kept.",
       "cancel": "Cancel",
-      "cascadeHint": "Also delete the plugin's stored data, permission grants and analytics counters. Without this, its stored data is kept so a reinstall can reuse it. Accounts and credentials are removed either way.",
+      "cascadeHint": "Also delete the plugin's stored data, derived caches, permission grants and analytics counters. Without this, its stored data is kept for reinstalling. Access grants and plugin-owned credentials are removed either way. Copies you chose to keep remain yours.",
       "cascadeLabel": "Also wipe stored data",
       "confirm": "Uninstall",
       "confirming": "Uninstalling…",
+      "consumerAccess": "Its access grants are removed, while shared sign-in connections stay available to other plugins.",
+      "providerAccess": "Revocation of its sign-in connections is attempted where supported, and the connections are removed locally. Plugins using them lose access. If the provider is unavailable or revocation fails, vendor revocation cannot be confirmed.",
       "title": "Uninstall plugin?"
     },
     "dependencies": {

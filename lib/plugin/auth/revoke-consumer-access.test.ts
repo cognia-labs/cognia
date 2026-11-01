@@ -68,4 +68,5 @@ it("removes only this consumer's grants and bindings for this Host connection, i
     connectionRef: other,
   })
   expect(await db.serviceConnections.count()).toBe(3)
+  expect(await db.integrationAudit.where("kind").equals("access.cleanup.pending").count()).toBe(0)
 })

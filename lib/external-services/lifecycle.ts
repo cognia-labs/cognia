@@ -17,6 +17,10 @@ import {
   updateMcpServer,
 } from "@/lib/db/mcp-servers"
 import { deleteIntegrationAccount } from "@/lib/integrations/ingress-client"
+import { getDb } from "@/lib/db/schema"
+import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
+import { queueAccessTeardown, runAccessTeardown } from "./access-teardown"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { deleteMcpCredentials } from "@/lib/mcp/credentials"
 import { sha256Hex } from "@/lib/share/hash"
 import type { ServiceConnection } from "@/types/external-service"
@@ -192,6 +196,32 @@ export async function suspendPluginExternalServices(pluginId: string): Promise<n
   return suspendPluginServiceConnections(pluginId)
 }
 
+/** Revoke a consumer, never its shared Host connections. Runs before runtime teardown. */
+export async function removePluginConnectionAccess(
+  pluginId: string,
+  purgeData = false
+): Promise<void> {
+  if (!hasExternalServicePersistence()) return
+  const db = getDb()
+  const refs = new Set<AuthConnectionRef>()
+  for (const account of await db.integrationAccounts.where("pluginId").equals(pluginId).toArray())
+    if (account.connectionId) refs.add(account.connectionId as AuthConnectionRef)
+  for (const binding of await db.connectionBindings
+    .filter((row) => row.consumerPluginId === pluginId)
+    .toArray())
+    refs.add(binding.connectionRef)
+  for (const ref of refs) await revokeConsumerAccess(ref, pluginId, { removeAccounts: true })
+  await db.transaction("rw", db.connectionBindings, db.capabilityGrants, async () => {
+    await db.connectionBindings.filter((row) => row.consumerPluginId === pluginId).delete()
+    await db.capabilityGrants.filter((row) => row.consumerPluginId === pluginId).delete()
+  })
+  if (purgeData) {
+    const target = { kind: "plugin-data" as const, pluginId }
+    await queueAccessTeardown(target)
+    await runAccessTeardown(target)
+  }
+}
+
 /** Terminal lifecycle cleanup including provider-owned credentials and profiles. */
 export async function purgePluginExternalServices(pluginId: string): Promise<void> {
   if (!hasExternalServicePersistence()) return
@@ -202,6 +232,27 @@ export async function purgePluginExternalServices(pluginId: string): Promise<voi
     await deleteMcpServer(serverId)
   }
   for (const accountId of removed.integrationAccountIds) {
+    // Keep the account/route identity while a best-effort purger still owes
+    // work. A startup retry can then find data beyond the dead-letter window.
+    const account = await getDb().integrationAccounts.get(accountId)
+    if (
+      account?.connectionId &&
+      (await getDb()
+        .integrationAudit.where("kind")
+        .equals("access.cleanup.pending")
+        .filter((row) => {
+          const target = row.detail?.target as
+            | { kind?: string; ref?: string; consumerPluginId?: string; pluginId?: string }
+            | undefined
+          return target?.kind === "plugin-data"
+            ? target.pluginId === pluginId
+            : target !== undefined &&
+                target.ref === account.connectionId &&
+                (target.kind === "connection" || target.consumerPluginId === pluginId)
+        })
+        .count())
+    )
+      continue
     await deleteIntegrationAccount(pluginId, accountId)
   }
   for (const profileId of removed.browserProfileIds) {

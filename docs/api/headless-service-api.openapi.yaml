@@ -108323,6 +108323,9 @@ paths:
                   type: string
                   example: ""
                   description: Also accepted as `routeId`.
+                purge:
+                  type: boolean
+                  description: Also purge pending deliveries and dead letters. Defaults to false.
                 routeId:
                   type: string
                   example: ""

@@ -18,6 +18,11 @@ import { usePluginUninstall } from "@/hooks/plugins/use-plugin-uninstall"
 import { usePluginsStore } from "@/stores/plugins"
 
 import { PluginDeleteDialogHost } from "./plugin-delete-dialog-host"
+import {
+  claimAuthProviderOwnership,
+  releaseAuthProviderOwnership,
+  setAuthProviderOwnershipStore,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
 const uninstallMock = jest.fn<Promise<boolean>, [{ pluginId: string; name: string }, unknown]>()
 
@@ -35,6 +40,29 @@ function queue(...ids: string[]) {
 }
 
 describe("PluginDeleteDialogHost", () => {
+  it("uses provider copy for a disabled imperative provider with persisted ownership", () => {
+    let owners: string | null = null
+    setAuthProviderOwnershipStore({
+      read: () => owners,
+      write: (value) => {
+        owners = value
+      },
+    })
+    try {
+      claimAuthProviderOwnership("vendor", "p1")
+      queue("p1")
+      render(<PluginDeleteDialogHost />)
+      expect(screen.getByRole("alertdialog")).toHaveTextContent(
+        "Revocation of its sign-in connections"
+      )
+      expect(screen.getByRole("alertdialog")).not.toHaveTextContent(
+        "shared sign-in connections stay"
+      )
+    } finally {
+      releaseAuthProviderOwnership("p1")
+      setAuthProviderOwnershipStore(null)
+    }
+  })
   it("stays closed until the store names a target", () => {
     render(<PluginDeleteDialogHost />)
     expect(screen.queryByRole("alertdialog")).toBeNull()

@@ -29,6 +29,8 @@ pub enum SpoolError {
     Full,
     #[error("integration ingress spool body is unavailable")]
     Corrupt,
+    #[error("integration ingress route was removed")]
+    RouteRetired,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +97,19 @@ impl IntegrationSpool {
     }
 
     pub fn enqueue(&self, delivery: &SpoolDelivery) -> Result<EnqueueOutcome, SpoolError> {
-        let conn = self.conn()?.lock();
+        let mut connection = self.conn()?.lock();
+        // Serialize the retired-route check and insert with purge in other
+        // spool instances/processes sharing this database, as well as this one.
+        let conn =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let retired: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM integration_ingress_retired_routes WHERE route_id = ?1)",
+            params![delivery.route_id],
+            |row| row.get(0),
+        )?;
+        if retired {
+            return Err(SpoolError::RouteRetired);
+        }
         let duplicate: Option<i64> = conn
             .query_row(
                 "SELECT 1 FROM integration_ingress_spool WHERE route_id = ?1 AND delivery_id = ?2",
@@ -135,6 +149,10 @@ impl IntegrationSpool {
                 delivery.received_at,
             ],
         ) {
+            let _ = keyring_secrets::clear(SECRET_NAMESPACE, &secret_key);
+            return Err(error.into());
+        }
+        if let Err(error) = conn.commit() {
             let _ = keyring_secrets::clear(SECRET_NAMESPACE, &secret_key);
             return Err(error.into());
         }
@@ -212,6 +230,48 @@ impl IntegrationSpool {
             keyring_secrets::clear(SECRET_NAMESPACE, &secret_key).map_err(SpoolError::Secret)?;
         }
         Ok(())
+    }
+
+    /// Terminal route removal includes every pending delivery and dead letter.
+    /// Clear each encrypted body before its row so failed secret deletion keeps
+    /// a durable retry handle. Independent rows are still attempted on failure.
+    pub fn purge_route(&self, route_id: &str) -> Result<usize, SpoolError> {
+        let conn = self.conn()?.lock();
+        // A webhook handler may already hold a cloned route when unregister
+        // runs. Its late enqueue must fail, including after a Host restart.
+        conn.execute(
+            "INSERT OR IGNORE INTO integration_ingress_retired_routes(route_id) VALUES (?1)",
+            params![route_id],
+        )?;
+        let rows = {
+            let mut statement = conn.prepare(
+                "SELECT delivery_id, secret_key FROM integration_ingress_spool WHERE route_id = ?1",
+            )?;
+            let rows = statement.query_map(params![route_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut purged = 0;
+        let mut failed = false;
+        for (delivery_id, secret_key) in rows {
+            if keyring_secrets::clear(SECRET_NAMESPACE, &secret_key).is_err() {
+                failed = true;
+                continue;
+            }
+            match conn.execute(
+                "DELETE FROM integration_ingress_spool WHERE route_id = ?1 AND delivery_id = ?2",
+                params![route_id, delivery_id],
+            ) {
+                Ok(count) => purged += count,
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            // Never include vendor payloads or secret-store error text.
+            return Err(SpoolError::Secret("route purge incomplete".into()));
+        }
+        Ok(purged)
     }
 
     pub fn nack(&self, route_id: &str, delivery_id: &str) -> Result<(), SpoolError> {
@@ -370,6 +430,9 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_integration_spool_status
             ON integration_ingress_spool(status, next_attempt_at);
+        CREATE TABLE IF NOT EXISTS integration_ingress_retired_routes (
+            route_id TEXT PRIMARY KEY NOT NULL
+        );
         "#,
     )
 }
@@ -394,6 +457,69 @@ mod tests {
             received_at: "2026-07-28T00:00:00.000Z".into(),
             attempts: 0,
         }
+    }
+
+    #[test]
+    fn purge_route_removes_all_pending_and_deadletters_and_preserves_other_routes() {
+        let spool = IntegrationSpool::open_in_memory();
+        for index in 0..503 {
+            let mut row = delivery();
+            row.route_id = "purged-route".into();
+            row.delivery_id = format!("delivery-{index}");
+            spool.enqueue(&row).unwrap();
+            if index != 0 {
+                for _ in 0..5 {
+                    spool.nack(&row.route_id, &row.delivery_id).unwrap();
+                }
+            }
+        }
+        let mut other = delivery();
+        other.route_id = "kept-route".into();
+        spool.enqueue(&other).unwrap();
+        assert_eq!(spool.purge_route("purged-route").unwrap(), 503);
+        assert_eq!(spool.purge_route("purged-route").unwrap(), 0);
+        let mut late = delivery();
+        late.route_id = "purged-route".into();
+        assert!(matches!(
+            spool.enqueue(&late),
+            Err(SpoolError::RouteRetired)
+        ));
+        assert!(spool.deadletters(1000).unwrap().is_empty());
+        assert_eq!(spool.pending(10).unwrap().len(), 1);
+        for index in 0..503 {
+            assert!(keyring_secrets::get(
+                SECRET_NAMESPACE,
+                &secret_key("purged-route", &format!("delivery-{index}"))
+            )
+            .unwrap()
+            .is_none());
+        }
+        assert!(keyring_secrets::get(
+            SECRET_NAMESPACE,
+            &secret_key("kept-route", &other.delivery_id)
+        )
+        .unwrap()
+        .is_some());
+    }
+
+    #[test]
+    fn terminal_route_fence_survives_spool_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("spool.sqlite");
+        let mut row = delivery();
+        row.route_id = "retired-after-restart".into();
+        {
+            let spool = IntegrationSpool::open(path.clone());
+            spool.enqueue(&row).unwrap();
+            assert_eq!(spool.purge_route(&row.route_id).unwrap(), 1);
+        }
+        let reopened = IntegrationSpool::open(path);
+        assert!(matches!(
+            reopened.enqueue(&row),
+            Err(SpoolError::RouteRetired)
+        ));
+        assert_eq!(reopened.purge_route(&row.route_id).unwrap(), 0);
+        assert!(reopened.pending(10).unwrap().is_empty());
     }
 
     #[test]

@@ -17,6 +17,7 @@ import type {
   IntegrationIngressDeadLetter,
   IntegrationIngressDeadLetterDetail,
   IntegrationIngressVerification,
+  IntegrationIngressEndpoint,
   IntegrationVerifiedDelivery,
 } from "@/types/plugin/plugin-integration"
 
@@ -61,6 +62,18 @@ function supportsIntegrationExecution(): boolean {
   return platform === "tauri" || platform === "headless"
 }
 
+/** Ordinary disable/reload keeps the encrypted spool; terminal access removal purges it. */
+export async function unregisterIngress(
+  endpoint: Pick<IntegrationIngressEndpoint, "routeId">,
+  options: { purge?: boolean } = {}
+): Promise<void> {
+  if (!supportsIntegrationExecution()) return
+  await transport.call("integration_ingress_unregister", {
+    routeId: endpoint.routeId,
+    ...(options.purge ? { purge: true } : {}),
+  })
+}
+
 /** Resolve the local/tunnel URL for a registered Integration ingress route. */
 export async function getIntegrationIngressPublicUrl(routeId: string): Promise<string | undefined> {
   if (!supportsIntegrationExecution()) return undefined
@@ -75,6 +88,7 @@ export async function syncIntegrationIngressRoutes(): Promise<number> {
   const accounts = await db.integrationAccounts.toArray()
   let registered = 0
   for (const account of accounts) {
+    if (!account.enabled) continue
     const endpoint =
       account.ingressEndpoint ?? (await getIntegrationIngressEndpoint(account.pluginId, account.id))
     if (!endpoint) continue
@@ -117,7 +131,8 @@ export async function drainIntegrationIngress(): Promise<number> {
     const subscription = byRoute.get(delivery.routeId)
     let stage: IngressDeliveryStage = "route"
     try {
-      if (!subscription) throw new Error(`Integration ingress route "${delivery.routeId}" is stale`)
+      if (!subscription || !subscription.enabled || !subscription.ingressEndpoint?.enabled)
+        throw new Error(`Integration ingress route "${delivery.routeId}" is stale`)
       const normalizer = getIntegrationEventNormalizer(
         subscription.pluginId,
         subscription.integrationId
@@ -281,9 +296,7 @@ export async function deleteIntegrationAccount(pluginId: string, accountId: stri
       await deleteIntegrationSubscription(pluginId, subscription.id)
     }
   }
-  if (endpoint && supportsIntegrationExecution()) {
-    await transport.call("integration_ingress_unregister", { routeId: endpoint.routeId })
-  }
+  if (endpoint) await unregisterIngress(endpoint, { purge: true })
   if (endpoint) {
     await createKeyringStore("integration-ingress").delete(endpoint.secretHandle)
   }
@@ -295,7 +308,7 @@ export async function deleteIntegrationAccount(pluginId: string, accountId: stri
         candidate.authSessionId === account.authSessionId
     )
     .first()
-  if (!sharedCredential) {
+  if (!account.connectionId && !sharedCredential) {
     await removeSession(account.providerId, account.authSessionId)
   }
 }

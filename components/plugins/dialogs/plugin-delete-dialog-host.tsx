@@ -13,6 +13,12 @@
 
 import { usePluginUninstall } from "@/hooks/plugins/use-plugin-uninstall"
 import { usePluginsStore } from "@/stores/plugins"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
+import { useSyncExternalStore } from "react"
+import {
+  hasAuthProviderOwnership,
+  subscribeAuthProviders,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
 import { PluginDeleteDialog } from "./plugin-delete-dialog"
 
@@ -21,6 +27,19 @@ export function PluginDeleteDialogHost() {
   const setDeleteTarget = usePluginsStore((s) => s.setDeleteTarget)
   const advanceDeleteQueue = usePluginsStore((s) => s.advanceDeleteQueue)
   const uninstall = usePluginUninstall()
+  const declaresAuth = usePluginStore((s) => {
+    const manifest = target ? s.plugins[target.pluginId]?.manifest : undefined
+    return (
+      Object.keys(manifest?.providesServices ?? {}).some((service) =>
+        service.startsWith("auth.")
+      ) || Boolean(manifest?.authProviders?.length)
+    )
+  })
+  const ownsAuth = useSyncExternalStore(
+    subscribeAuthProviders,
+    () => (target ? hasAuthProviderOwnership(target.pluginId) : false),
+    () => false
+  )
 
   // Reads the queue at call time rather than from a render-time snapshot: the
   // answer can land after the queue changed (a batch bar dismissal clears it).
@@ -36,6 +55,7 @@ export function PluginDeleteDialogHost() {
       key={target?.pluginId ?? "none"}
       open={target !== null}
       pluginName={target?.name ?? ""}
+      providesAuth={declaresAuth || ownsAuth}
       onCancel={advance}
       onConfirm={async ({ cascade }) => {
         if (!target) return

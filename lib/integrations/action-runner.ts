@@ -378,8 +378,7 @@ async function defaultAuthenticatedRequest<T>(
   } = {}
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
-  if (!account || !account.enabled)
-    throw new Error(`Integration account "${connectorAccountId}" is disabled`)
+  if (!account) throw new Error(`Integration account "${connectorAccountId}" is disabled`)
   const registered = getRegisteredIntegration(pluginId, account.integrationId)
   if (!registered) throw new Error(`Integration "${account.integrationId}" is not registered`)
   const url = new URL(input)
@@ -405,6 +404,7 @@ async function defaultAuthenticatedRequest<T>(
     (init.method ?? "GET").toUpperCase(),
     init.operation
   )
+  if (!account.enabled) throw new Error(`Integration account "${connectorAccountId}" is disabled`)
   const provider = getProvider(account.providerId)
   if (!provider) {
     if (connection) {
@@ -1188,6 +1188,15 @@ export async function cancelIntegrationActionJob(
   })
   if (cancelled.status === "cancelled") runningControllers.get(jobId)?.abort()
   return cancelled
+}
+
+/** Host access teardown also aborts local executors; other windows observe the durable cancellation. */
+export async function cancelIntegrationActionJobsForAccounts(accountIds: string[]): Promise<void> {
+  const { getDb } = await import("@/lib/db/schema")
+  const jobs = await getDb().integrationActionJobs.where("accountId").anyOf(accountIds).toArray()
+  const results = await Promise.allSettled(jobs.map((job) => cancelIntegrationActionJob(job.id)))
+  if (results.some((result) => result.status === "rejected"))
+    throw new Error("Integration action cancellation incomplete")
 }
 
 /**

@@ -52,6 +52,26 @@ describe("external service persistence", () => {
     await getDb().open()
   })
 
+  it("includes unprojected integration accounts in terminal plugin cleanup", async () => {
+    await getDb().integrationAccounts.put({
+      id: "unprojected",
+      pluginId: "plugin-1",
+      integrationId: "items",
+      providerId: "vendor",
+      authSessionId: "unused",
+      connectionId: "shared",
+      remoteAccountId: "remote",
+      label: "Account",
+      enabled: true,
+      health: "unknown",
+      createdAt: "",
+      updatedAt: "",
+    })
+    expect((await removePluginExternalServiceState("plugin-1")).integrationAccountIds).toEqual([
+      "unprojected",
+    ])
+  })
+
   afterEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

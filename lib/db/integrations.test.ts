@@ -26,6 +26,7 @@ import {
   listIntegrationSubscriptions,
   listRunnableIntegrationActionJobs,
   pruneIntegrationRetention,
+  removeIntegrationAccount,
   setIntegrationAccountOutboundRecipients,
   updateIntegrationAccount,
   updateIntegrationSubscription,
@@ -40,6 +41,38 @@ describe("Integration persistence", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("keeps cancelled bound-account writes as security records after uninstall", async () => {
+    const account = await createIntegrationAccount("consumer", {
+      integrationId: "items",
+      providerId: "vendor",
+      authSessionId: "unused",
+      connectionId: "shared",
+      remoteAccountId: "remote",
+      label: "Account",
+    })
+    const job = await enqueueIntegrationActionJob({
+      pluginId: "consumer",
+      integrationId: "items",
+      accountId: account.id,
+      actionId: "write",
+      status: "running",
+      risk: "write",
+      source: "manual",
+      input: {},
+      attempts: 1,
+      maxAttempts: 3,
+    })
+    await cancelIntegrationActionJobRecord(job.id)
+    await removeIntegrationAccount("consumer", account.id)
+    expect(await getIntegrationActionJob(job.id)).toMatchObject({
+      status: "cancelled",
+      remoteOutcome: "unknown",
+    })
+    expect(
+      await claimIntegrationActionJob(job.id, { owner: "later", leaseMs: 1000 })
+    ).toBeUndefined()
   })
 
   it("creates and narrowly binds connection-backed accounts without changing legacy handles", async () => {

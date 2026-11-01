@@ -4903,6 +4903,13 @@ export class PluginManager {
         // so this is a no-op for it. Log-only: uninstall cannot be vetoed.
         await this.safeDispatchLifecycleHook(pluginId, "onUninstall")
 
+        // Providers must still be registered to revoke vendor grants. Disable
+        // is temporary; terminal uninstall alone destroys Host credentials.
+        const { getConnectionManager } = await import("@/lib/plugin/auth/connection-manager")
+        await getConnectionManager().uninstallProviderConnections(pluginId)
+        const { removePluginConnectionAccess } = await import("@/lib/external-services/lifecycle")
+        await removePluginConnectionAccess(pluginId, options?.purgeData)
+
         // Unload first
         if (["loaded", "enabled", "disabled"].includes(plugin.status)) {
           // Inner variant — we already hold this plugin's lifecycle lock (W6.4).

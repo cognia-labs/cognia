@@ -159,10 +159,10 @@ export async function publishIntegrationEvent(
     throw new Error(`Integration event type "${event.eventType}" is not declared`)
   }
   const account = await getIntegrationAccount(pluginId, event.accountId)
-  if (!account || account.integrationId !== event.integrationId) {
+  if (!account || !account.enabled || account.integrationId !== event.integrationId) {
     throw new Error(`Integration account "${event.accountId}" does not belong to this integration`)
   }
-  const stored = await insertIntegrationEvent(event)
+  const stored = await insertIntegrationEvent(event, undefined, { requireActiveAccount: true })
   if (stored.inserted) {
     return { inserted: true, ...(await projectStoredEvent(stored.row, { retry: false })) }
   }
@@ -237,6 +237,8 @@ async function projectStoredEvent(
   ): Promise<void> {
     if (steps[step].status === "complete") return
     try {
+      const account = await getIntegrationAccount(pluginId, event.accountId)
+      if (!account?.enabled) return
       steps[step] = (await body()) ?? { status: "complete" }
     } catch (error) {
       steps[step] = { ...steps[step], status: "pending", errorCode: projectionErrorCode(error) }
@@ -327,35 +329,48 @@ async function projectStoredEvent(
     }
   })
 
-  const recorded = await recordIntegrationEventProjection(row.id, steps)
   const pendingSteps = INTEGRATION_PROJECTION_STEPS.filter(
     (step) => steps[step].status !== "complete"
   )
 
-  await appendIntegrationAudit({
-    pluginId,
-    integrationId: event.integrationId,
-    accountId: event.accountId,
-    kind: `event.${event.eventType}`,
-    outcome: pendingSteps.length === 0 ? "succeeded" : "failed",
-    detail: {
-      eventId: event.id,
-      deliveryId: event.deliveryId,
-      workflowDispatches,
-      inboxProjections,
-      botDeliveries,
-      ...(pendingSteps.length > 0
-        ? {
-            pendingSteps,
-            projectionState: recorded?.projectionState,
-            errorCodes: Object.fromEntries(
-              pendingSteps.map((step) => [step, steps[step].errorCode ?? "pending"])
-            ),
-          }
-        : {}),
-      ...(options.retry ? { retry: true } : {}),
-    },
-  })
+  // Share the access writer's tables: an in-flight projection cannot recreate
+  // an event summary after terminal cleanup removed its event/account.
+  const db = getDb()
+  await db.transaction(
+    "rw",
+    db.integrationAccounts,
+    db.integrationEvents,
+    db.integrationAudit,
+    async () => {
+      if (!(await getIntegrationAccount(pluginId, event.accountId))?.enabled) return
+      const recorded = await recordIntegrationEventProjection(row.id, steps)
+      if (!recorded) return
+      await appendIntegrationAudit({
+        pluginId,
+        integrationId: event.integrationId,
+        accountId: event.accountId,
+        kind: `event.${event.eventType}`,
+        outcome: pendingSteps.length === 0 ? "succeeded" : "failed",
+        detail: {
+          eventId: event.id,
+          deliveryId: event.deliveryId,
+          workflowDispatches,
+          inboxProjections,
+          botDeliveries,
+          ...(pendingSteps.length > 0
+            ? {
+                pendingSteps,
+                projectionState: recorded?.projectionState,
+                errorCodes: Object.fromEntries(
+                  pendingSteps.map((step) => [step, steps[step].errorCode ?? "pending"])
+                ),
+              }
+            : {}),
+          ...(options.retry ? { retry: true } : {}),
+        },
+      })
+    }
+  )
   return {
     workflowDispatches,
     inboxProjections,

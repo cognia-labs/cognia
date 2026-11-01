@@ -270,15 +270,23 @@ pub fn integration_ingress_register_for_state(
 pub async fn integration_ingress_unregister(
     state: State<'_, WorkflowState>,
     route_id: String,
+    purge: Option<bool>,
 ) -> Result<(), String> {
-    integration_ingress_unregister_for_state(state.inner(), route_id)
+    integration_ingress_unregister_for_state(state.inner(), route_id, purge)
 }
 
 pub fn integration_ingress_unregister_for_state(
     state: &WorkflowState,
     route_id: String,
+    purge: Option<bool>,
 ) -> Result<(), String> {
     state.webhook.unregister_integration(&route_id);
+    if purge.unwrap_or(false) {
+        state
+            .integration_spool
+            .purge_route(&route_id)
+            .map_err(|_| "Integration ingress route purge failed".to_string())?;
+    }
     Ok(())
 }
 
@@ -611,6 +619,28 @@ mod tests {
     use super::*;
     use crate::workflow::state::WorkflowState;
     use serde_json::json;
+
+    #[test]
+    fn integration_ingress_unregister_preserves_spool_unless_purge_requested() {
+        let (state, _) = WorkflowState::open_in_memory_for_testing();
+        let row = super::super::integration_spool::SpoolDelivery {
+            route_id: "command-purge-route".into(),
+            delivery_id: "delivery".into(),
+            event_type: None,
+            headers: Default::default(),
+            body: "private".into(),
+            received_at: "2026-11-01T00:00:00Z".into(),
+            attempts: 0,
+        };
+        state.integration_spool.enqueue(&row).unwrap();
+        for purge in [None, Some(false)] {
+            integration_ingress_unregister_for_state(&state, row.route_id.clone(), purge).unwrap();
+            assert_eq!(state.integration_spool.pending(10).unwrap().len(), 1);
+        }
+        integration_ingress_unregister_for_state(&state, row.route_id.clone(), Some(true)).unwrap();
+        assert!(state.integration_spool.pending(10).unwrap().is_empty());
+        integration_ingress_unregister_for_state(&state, row.route_id.clone(), Some(true)).unwrap();
+    }
 
     // Tauri's `State<'_, T>` is opaque, so the unit tests poke the underlying
     // mirror + cron through `WorkflowState` directly. The command bodies

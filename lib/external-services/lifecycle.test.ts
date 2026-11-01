@@ -5,6 +5,7 @@ import type { PluginManifest } from "@/types/plugin"
 import {
   managedMcpPresetFingerprint,
   purgePluginExternalServices,
+  removePluginConnectionAccess,
   reconcilePluginExternalServiceConnections,
   suspendPluginExternalServices,
 } from "./lifecycle"
@@ -88,6 +89,7 @@ describe("external service managed lifecycle", () => {
     expect(globalThis.indexedDB).toBeUndefined()
     await expect(suspendPluginExternalServices("figma-plugin")).resolves.toBe(0)
     await expect(purgePluginExternalServices("figma-plugin")).resolves.toBeUndefined()
+    await expect(removePluginConnectionAccess("figma-plugin", true)).resolves.toBeUndefined()
   })
 
   it("creates a pending server and connection without connecting", async () => {

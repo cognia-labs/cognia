@@ -16,6 +16,7 @@ import {
   claimAuthProviderOwnership,
   getProvider,
   getAuthProviderOwner,
+  hasAuthProviderOwnership,
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
   setAuthProviderOwnershipStore,
@@ -67,6 +68,8 @@ describe("host auth provider ownership", () => {
 
   it("survives registry restarts and protects unrelated owners during uninstall", () => {
     registerAuthenticationProvider(provider("owner"))()
+    expect(hasAuthProviderOwnership("owner")).toBe(true)
+    expect(hasAuthProviderOwnership("unrelated")).toBe(false)
     registerAuthenticationProvider(provider("other", "other-provider"))()
     __resetAuthRegistryForTesting()
     expect(getAuthProviderOwner("acme")).toBe("owner")

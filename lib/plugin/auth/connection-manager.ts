@@ -16,6 +16,11 @@ import {
 import { getDb } from "@/lib/db/schema"
 import { getPlugin } from "@/lib/db/plugins"
 import {
+  queueAccessTeardown,
+  runAccessTeardown,
+  sweepAccessTeardowns,
+} from "@/lib/external-services/access-teardown"
+import {
   authConnectionIdentityKey,
   findAuthConnection,
   getAuthConnection,
@@ -193,6 +198,7 @@ function invalidGrant(error: unknown): boolean {
 
 /** Host authority. Each instance may be a different tab; only storage CAS decides commits. */
 export class AuthConnectionManager {
+  private readonly hostPersistence: boolean
   private readonly store: AuthConnectionStore
   private readonly credentials: ConnectionCredentialStore
   private readonly lock: typeof withAuthLock
@@ -201,6 +207,7 @@ export class AuthConnectionManager {
   private readonly now: () => number
   private readonly listeners = new Set<ConnectionListener>()
   constructor(options: ManagerOptions = {}) {
+    this.hostPersistence = !options.store
     const database = options.store ? undefined : getDb()
     this.store = options.store ?? {
       get: (ref) => database!.authConnections.get(ref),
@@ -214,10 +221,24 @@ export class AuthConnectionManager {
           "rw",
           database!.authConnections,
           database!.connectionBindings,
+          database!.integrationAudit,
+          database!.plugins,
           async () => {
+            if (!terminal(row) && row.ownerPluginId) {
+              const fence = await database!.integrationAudit.get(
+                `host-provider-uninstall:${row.ownerPluginId}`
+              )
+              if (fence) {
+                const installed = await database!.plugins.get(row.ownerPluginId)
+                if (!installed || installed.createdAt === fence.detail?.installCreatedAt)
+                  throw new ConnectionUnavailableError("provider-uninstalling")
+              }
+            }
             await database!.authConnections.put(row)
             if (terminal(row))
               await database!.connectionBindings.where("connectionRef").equals(row.id).delete()
+            if (terminal(row) || row.status === "needs-reauth")
+              await queueAccessTeardown({ kind: "connection", ref: row.id })
           }
         )
       },
@@ -264,6 +285,15 @@ export class AuthConnectionManager {
         listener(metadata(row), kind)
       } catch {
         console.warn("Auth connection listener failed")
+      }
+    }
+    if (this.hostPersistence && (terminal(row) || row.status === "needs-reauth")) {
+      // Access is already published. Local cleanup failures remain in the
+      // durable journal and must not undo it or prevent vendor revocation.
+      try {
+        await runAccessTeardown({ kind: "connection", ref: row.id })
+      } catch {
+        console.warn("Auth access cleanup pending")
       }
     }
   }
@@ -690,6 +720,54 @@ export class AuthConnectionManager {
         }
       } catch {
         console.warn("Auth tombstone cleanup failed")
+      }
+    }
+    if (this.hostPersistence) await sweepAccessTeardowns()
+  }
+
+  /** Uninstall runs before provider deactivation. Disable never calls this. */
+  async uninstallProviderConnections(pluginId: string): Promise<void> {
+    if (this.hostPersistence) {
+      const db = getDb()
+      await db.transaction("rw", db.authConnections, db.integrationAudit, db.plugins, async () => {
+        const installed = await db.plugins.get(pluginId)
+        await db.integrationAudit.put({
+          id: `host-provider-uninstall:${pluginId}`,
+          pluginId,
+          integrationId: "__host__",
+          kind: "auth.provider-uninstalling",
+          outcome: "allowed",
+          createdAt: new Date(this.now()).toISOString(),
+          detail: { installCreatedAt: installed?.createdAt },
+        })
+      })
+    }
+    for (const row of await this.store.list()) {
+      if (row.ownerPluginId !== pluginId) continue
+      if (terminal(row)) {
+        await this.mutate(row.id, () => this.credentials.delete(row.id))
+        continue
+      }
+      let vendorRevocation = "unavailable"
+      try {
+        await this.disconnect(row.id, { revoke: true })
+        if ((await this.store.get(row.id))?.status === "revoked") vendorRevocation = "succeeded"
+      } catch {
+        vendorRevocation = "failed"
+      }
+      // Uninstall is terminal even when disabled or the vendor is offline.
+      // A later provider owner must never inherit credentials or old refs.
+      await this.disconnect(row.id)
+      await this.mutate(row.id, () => this.credentials.delete(row.id))
+      if (this.hostPersistence) {
+        const { appendIntegrationAudit } = await import("@/lib/db/integrations")
+        await appendIntegrationAudit({
+          pluginId,
+          integrationId: "__host__",
+          kind: "auth.provider-uninstalled",
+          outcome: vendorRevocation === "succeeded" ? "succeeded" : "denied",
+          detail: { connectionRef: row.id, vendorRevocation },
+        })
       }
     }
   }

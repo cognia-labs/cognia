@@ -13,10 +13,19 @@ import {
 import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credentials"
 import { authConnectionIdentityKey, type AuthConnectionRow } from "@/lib/db/auth-connections"
 import type { AuthenticationProvider } from "./auth-provider-registry"
-import type { AuthCredentialSet } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import type {
+  AuthCredentialSet,
+  AuthLineageContext,
+} from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getPlugin } from "@/lib/db/plugins"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
+import { registerDerivedDataPurger } from "@/lib/external-services/derived-data-registry"
+import {
+  createIntegrationAccount,
+  createIntegrationSubscription,
+  enqueueIntegrationActionJob,
+} from "@/lib/db/integrations"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 
@@ -131,6 +140,44 @@ it("atomically removes all default-store bindings when a connection becomes term
       }),
     })
     const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
+    const account = await createIntegrationAccount("consumer", {
+      integrationId: "items",
+      providerId: f.provider.id,
+      authSessionId: "unused",
+      connectionId: ref,
+      remoteAccountId: "user",
+      label: "User",
+    })
+    await createIntegrationSubscription("consumer", {
+      integrationId: "items",
+      accountId: account.id,
+      eventTypes: ["changed"],
+    })
+    const job = await enqueueIntegrationActionJob({
+      pluginId: "consumer",
+      integrationId: "items",
+      accountId: account.id,
+      actionId: "write",
+      input: {},
+      status: "running",
+      risk: "write",
+      source: "manual",
+      attempts: 1,
+      maxAttempts: 3,
+      remoteWriteStartedAt: "2026-11-01T00:00:00Z",
+    })
+    await getDb().integrationEvents.put({
+      schemaVersion: 1,
+      id: "derived-event",
+      pluginId: "consumer",
+      integrationId: "items",
+      accountId: account.id,
+      deliveryId: "delivery",
+      eventType: "changed",
+      payload: {},
+      occurredAt: "",
+      receivedAt: "",
+    })
     await getDb().connectionBindings.bulkPut(
       ["one", "two"].map((consumerPluginId) => ({
         consumerPluginId,
@@ -143,6 +190,168 @@ it("atomically removes all default-store bindings when a connection becomes term
     await manager.disconnect(ref)
     expect(await getDb().connectionBindings.count()).toBe(0)
     expect((await getDb().authConnections.get(ref))?.status).toBe("tombstoned")
+    expect(
+      await getDb().integrationSubscriptions.where("accountId").equals(account.id).count()
+    ).toBe(0)
+    expect(await getDb().integrationActionJobs.get(job.id)).toMatchObject({
+      status: "cancelled",
+      remoteOutcome: "unknown",
+    })
+    expect(await getDb().integrationEvents.get("derived-event")).toBeUndefined()
+  } finally {
+    await dbFixture.dispose()
+  }
+})
+
+it("startup retries a failed local purge after vendor revocation without revoking twice", async () => {
+  const dbFixture = createDbTestFixture()
+  await dbFixture.initialize()
+  const purge = jest.fn().mockRejectedValue(new Error("temporary"))
+  const dispose = registerDerivedDataPurger({ id: "retry-test", purge })
+  try {
+    const f = fixture()
+    f.provider.revoke = jest.fn(async () => {})
+    const manager = new AuthConnectionManager({
+      credentials: f.credentials,
+      provider: (id) => f.providers.get(id),
+      providerIdentity: async (provider) => ({
+        providerId: provider.id,
+        ownerPluginId: provider.pluginId,
+        publisher: "pub",
+        contractMajor: 1,
+      }),
+    })
+    const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
+    await manager.disconnect(ref, { revoke: true })
+    expect(await getDb().authConnections.get(ref)).toMatchObject({ status: "revoked" })
+    expect(
+      await getDb().integrationAudit.where("kind").equals("access.cleanup.pending").count()
+    ).toBe(1)
+    purge.mockResolvedValue(undefined)
+    await manager.sweepTombstoned()
+    expect(f.provider.revoke).toHaveBeenCalledTimes(1)
+    expect(
+      await getDb().integrationAudit.where("kind").equals("access.cleanup.pending").count()
+    ).toBe(0)
+  } finally {
+    dispose()
+    await dbFixture.dispose()
+  }
+})
+
+it.each([true, false])(
+  "provider uninstall loaded=%s removes credentials and retires refs",
+  async (loaded) => {
+    const f = fixture()
+    f.provider.revoke = jest.fn(async () => {})
+    const refs = [await f.manager.createConnectionFromCredentials(f.provider, fresh)]
+    f.provider.describe = jest.fn(async () => ({
+      issuer: "https://issuer",
+      clientId: "second-client",
+      principal: { kind: "user" as const, id: "user" },
+      accountLabel: "Second",
+      scopes: ["read"],
+    }))
+    refs.push(await f.manager.createConnectionFromCredentials(f.provider, fresh))
+    if (!loaded) {
+      f.providers.clear()
+      await f.manager.markProviderUnavailable(f.provider.id)
+    }
+    await f.manager.uninstallProviderConnections("owner")
+    await f.manager.uninstallProviderConnections("owner")
+    expect(f.provider.revoke).toHaveBeenCalledTimes(loaded ? 2 : 0)
+    expect(f.tokens.size).toBe(0)
+    for (const ref of refs)
+      expect(f.rows.get(ref)).toMatchObject({
+        status: loaded ? "revoked" : "tombstoned",
+        identityKey: `tombstoned:${ref}`,
+      })
+    f.providers.set(f.provider.id, { ...f.provider, pluginId: "new-owner" })
+    const next = await f.manager.createConnectionFromCredentials(
+      f.providers.get(f.provider.id)!,
+      fresh
+    )
+    expect(refs).not.toContain(next)
+  }
+)
+
+it("provider disable/enable round-trip keeps credentials and revision", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const before = await f.credentials.read(ref)
+  f.providers.clear()
+  await f.manager.markProviderUnavailable(f.provider.id)
+  expect(f.rows.get(ref)).toMatchObject({ status: "provider-unavailable", revision: 1 })
+  expect(await f.credentials.read(ref)).toEqual(before)
+  f.providers.set(f.provider.id, f.provider)
+  await f.manager.restoreProvider(f.provider.id)
+  expect(f.rows.get(ref)).toMatchObject({ status: "connected", revision: 1 })
+  expect(await f.credentials.read(ref)).toEqual(before)
+})
+
+it("fences a sign-in publishing during provider uninstall across manager instances", async () => {
+  const dbFixture = createDbTestFixture()
+  await dbFixture.initialize()
+  try {
+    const f = fixture()
+    const options = {
+      credentials: f.credentials,
+      provider: (id: string) => f.providers.get(id),
+      providerIdentity: async (provider: AuthenticationProvider) => ({
+        providerId: provider.id,
+        ownerPluginId: provider.pluginId,
+        publisher: "pub",
+        contractMajor: 1,
+      }),
+    }
+    const manager = new AuthConnectionManager(options)
+    const second = new AuthConnectionManager(options)
+    const first = await manager.createConnectionFromCredentials(f.provider, fresh)
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    f.provider.revoke = jest.fn(async (context: AuthLineageContext) => {
+      if (context.ref === first) {
+        entered.resolve()
+        await release.promise
+      }
+    })
+    const uninstall = manager.uninstallProviderConnections("owner")
+    await entered.promise
+    f.provider.describe = jest.fn(async () => ({
+      issuer: "https://issuer",
+      clientId: "late-client",
+      principal: { kind: "user" as const, id: "user" },
+      accountLabel: "Late",
+      scopes: ["read"],
+    }))
+    await expect(
+      second.createConnectionFromCredentials(f.provider, { ...fresh, accessToken: "late" })
+    ).rejects.toThrow("provider-uninstalling")
+    release.resolve()
+    await uninstall
+    expect(await getDb().authConnections.count()).toBe(1)
+    expect(f.tokens.size).toBe(0)
+    expect(
+      await getDb().integrationAudit.where("kind").equals("auth.provider-uninstalled").first()
+    ).toMatchObject({ detail: { vendorRevocation: "succeeded" } })
+    // A fresh installation of the same package is a new owner generation.
+    await getDb().plugins.put({
+      id: "owner",
+      createdAt: Date.now(),
+    } as import("@/lib/db/plugin-types").PluginRow)
+    const reinstalled = await second.createConnectionFromCredentials(f.provider, fresh)
+    expect(reinstalled).not.toBe(first)
+    f.providers.clear()
+    await second.markProviderUnavailable(f.provider.id)
+    await second.uninstallProviderConnections("owner")
+    expect(f.tokens.size).toBe(0)
+    expect(
+      await getDb()
+        .integrationAudit.where("kind")
+        .equals("auth.provider-uninstalled")
+        .filter((row) => row.detail?.vendorRevocation === "unavailable")
+        .count()
+    ).toBe(1)
   } finally {
     await dbFixture.dispose()
   }

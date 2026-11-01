@@ -35,6 +35,7 @@ import {
   approveIntegrationActionJob,
   authenticatedIntegrationRequest,
   cancelIntegrationActionJob,
+  cancelIntegrationActionJobsForAccounts,
   executeIntegrationAction,
   drainIntegrationActionJobs,
   runIntegrationActionJob,
@@ -220,6 +221,25 @@ describe("Integration action runner", () => {
       source: "manual",
     })
   }
+
+  it("access teardown aborts an in-flight executor and cancels only the affected account", async () => {
+    const entered = deferred<IntegrationActionHandlerContext>()
+    const release = deferred<void>()
+    const account = await setup(async (_input, context) => {
+      entered.resolve(context)
+      await release.promise
+      return {}
+    })
+    const active = await queue(account.id)
+    const other = await queue("other-account")
+    const execution = runIntegrationActionJob(active.id)
+    const context = await entered.promise
+    await cancelIntegrationActionJobsForAccounts([account.id])
+    expect(context.signal.aborted).toBe(true)
+    release.resolve()
+    expect(await execution).toMatchObject({ status: "cancelled" })
+    expect(await getIntegrationActionJob(other.id)).toMatchObject({ status: "queued" })
+  })
 
   it("claims one queued job once when two executors race", async () => {
     const handler = jest.fn(async () => ({ updated: true }))

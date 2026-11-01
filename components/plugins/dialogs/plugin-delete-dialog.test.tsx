@@ -13,6 +13,8 @@ jest.mock("next-intl", () => ({
 }))
 
 import { PluginDeleteDialog } from "./plugin-delete-dialog"
+import en from "@/i18n/messages/en/plugins/delete.json"
+import zh from "@/i18n/messages/zh-CN/plugins/delete.json"
 
 function deferred() {
   let resolve!: () => void
@@ -23,10 +25,35 @@ function deferred() {
 }
 
 describe("PluginDeleteDialog", () => {
+  it.each([true, false])(
+    "renders provider-specific access copy for providesAuth=%s in both locales",
+    (providesAuth) => {
+      render(
+        <PluginDeleteDialog
+          open
+          pluginName="Alpha"
+          providesAuth={providesAuth}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      )
+      expect(screen.getByRole("alertdialog")).toHaveTextContent(
+        providesAuth ? "providerAccess" : "consumerAccess"
+      )
+      expect(screen.getByRole("alertdialog")).not.toHaveTextContent(
+        providesAuth ? "consumerAccess" : "providerAccess"
+      )
+      for (const messages of [en, zh]) {
+        expect(messages.providerAccess).toBeTruthy()
+        expect(messages.consumerAccess).toBeTruthy()
+        expect(messages.cascadeHint).toBeTruthy()
+      }
+    }
+  )
   it("renders title and body when open", () => {
     render(<PluginDeleteDialog open pluginName="Alpha" onCancel={() => {}} onConfirm={() => {}} />)
     expect(screen.getByText("title")).toBeInTheDocument()
-    expect(screen.getByText("body:Alpha")).toBeInTheDocument()
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("body:Alpha")
   })
 
   it("renders the confirm action with the destructive variant", () => {

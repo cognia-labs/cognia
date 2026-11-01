@@ -8,11 +8,22 @@ import {
 } from "./connection-bindings"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getDb } from "./schema"
+import { queueAccessTeardown, runAccessTeardown } from "@/lib/external-services/access-teardown"
 
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 beforeEach(fixture.restore)
 afterAll(fixture.dispose)
+
+it("does not bind a new access generation while old consumer cleanup is pending", async () => {
+  const ref = "pending-ref" as AuthConnectionRef
+  const target = { kind: "consumer" as const, ref, consumerPluginId: "consumer" }
+  await queueAccessTeardown(target)
+  expect(await putConnectionBinding("consumer", "p", ref)).toBe(false)
+  expect(await putConnectionBinding("other", "p", ref)).toBe(true)
+  await runAccessTeardown(target)
+  expect(await putConnectionBinding("consumer", "p", ref)).toBe(true)
+})
 
 it("persists one selection per consumer/provider and preserves its creation time", async () => {
   await putConnectionBinding("consumer", "p", "first" as AuthConnectionRef)

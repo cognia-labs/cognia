@@ -24,6 +24,8 @@ import {
   listServiceConnections,
   putServiceConnection,
   removeServiceConnection,
+  hasPendingConnectionCleanup,
+  ConnectionAccessCleanupPending,
 } from "./external-services"
 import { listExternalCapabilities, listExternalServices } from "@/lib/external-services/catalog"
 import { sha256Hex } from "@/lib/share/hash"
@@ -142,34 +144,44 @@ export async function createIntegrationAccount(
   const db = getDb()
   // Serialize find/create with its projection across tabs and both public
   // entry points. No caller can observe a half-created bound account.
-  return db.transaction("rw", db.integrationAccounts, db.serviceConnections, async () => {
-    if (input.connectionId !== undefined) {
-      const existing = await db.integrationAccounts
-        .where("[pluginId+integrationId]")
-        .equals([pluginId, input.integrationId])
-        .filter(
-          (account) =>
-            account.connectionId === input.connectionId && account.providerId === input.providerId
+  return db.transaction(
+    "rw",
+    db.integrationAccounts,
+    db.serviceConnections,
+    db.integrationAudit,
+    async () => {
+      if (input.connectionId !== undefined) {
+        if (await hasPendingConnectionCleanup(input.connectionId, pluginId))
+          throw new ConnectionAccessCleanupPending()
+        const existing = await db.integrationAccounts
+          .where("[pluginId+integrationId]")
+          .equals([pluginId, input.integrationId])
+          .filter(
+            (account) =>
+              account.connectionId === input.connectionId && account.providerId === input.providerId
+          )
+          .first()
+        if (existing) {
+          await projectIntegrationAccount(existing)
+          return existing
+        }
+      } else if (
+        await db.integrationAccounts
+          .where("[pluginId+integrationId+remoteAccountId]")
+          .equals([pluginId, input.integrationId, input.remoteAccountId])
+          .first()
+      ) {
+        // Preserve the old unique-index behavior for legacy callers. Bound
+        // accounts use the connection identity rather than a bare principal id.
+        throw new Dexie.ConstraintError(
+          "Integration account already exists for this remote account"
         )
-        .first()
-      if (existing) {
-        await projectIntegrationAccount(existing)
-        return existing
       }
-    } else if (
-      await db.integrationAccounts
-        .where("[pluginId+integrationId+remoteAccountId]")
-        .equals([pluginId, input.integrationId, input.remoteAccountId])
-        .first()
-    ) {
-      // Preserve the old unique-index behavior for legacy callers. Bound
-      // accounts use the connection identity rather than a bare principal id.
-      throw new Dexie.ConstraintError("Integration account already exists for this remote account")
+      await db.integrationAccounts.add(row)
+      await projectIntegrationAccount(row)
+      return row
     }
-    await db.integrationAccounts.add(row)
-    await projectIntegrationAccount(row)
-    return row
-  })
+  )
 }
 
 export async function listIntegrationAccounts(
@@ -227,9 +239,15 @@ export async function updateIntegrationAccount(
   >
 ): Promise<IntegrationAccountRow> {
   const db = getDb()
-  const row = await db.transaction("rw", db.integrationAccounts, async () => {
+  const row = await db.transaction("rw", db.integrationAccounts, db.integrationAudit, async () => {
     const existing = await getIntegrationAccount(pluginId, accountId)
     if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
+    if (
+      patch.enabled === true &&
+      existing.connectionId &&
+      (await hasPendingConnectionCleanup(existing.connectionId, pluginId))
+    )
+      throw new ConnectionAccessCleanupPending()
     const updated = {
       ...existing,
       ...withoutRecipientList(patch),
@@ -353,7 +371,10 @@ export async function removeIntegrationAccount(pluginId: string, accountId: stri
       await db.integrationAccounts.delete(accountId)
       await db.integrationSubscriptions.where("accountId").equals(accountId).delete()
       await db.integrationEvents.where("accountId").equals(accountId).delete()
-      await db.integrationActionJobs.where("accountId").equals(accountId).delete()
+      // Bound-account cancellations and unknown outcomes are security records;
+      // keep their idempotency evidence after the account is removed.
+      if (!existing.connectionId)
+        await db.integrationActionJobs.where("accountId").equals(accountId).delete()
     }
   )
   await Promise.all(connections.map((connection) => removeServiceConnection(connection.id)))
@@ -509,10 +530,16 @@ export type InsertIntegrationEventResult =
  */
 export async function insertIntegrationEvent(
   event: IntegrationEventEnvelope,
-  now = Date.now()
+  now = Date.now(),
+  options: { requireActiveAccount?: boolean } = {}
 ): Promise<InsertIntegrationEventResult> {
   const db = getDb()
-  return db.transaction("rw", db.integrationEvents, async () => {
+  return db.transaction("rw", db.integrationEvents, db.integrationAccounts, async () => {
+    if (options.requireActiveAccount) {
+      const account = await db.integrationAccounts.get(event.accountId)
+      if (!account?.enabled || account.pluginId !== event.pluginId)
+        throw new Error("Integration account unavailable")
+    }
     const existing = await db.integrationEvents
       .where("[accountId+deliveryId]")
       .equals([event.accountId, event.deliveryId])
@@ -695,7 +722,10 @@ export async function cancelIntegrationActionJobRecord(
       status: "cancelled",
       nextAttemptAt: undefined,
       error: patch.error ?? "Cancelled by user",
-      ...(job.remoteWriteStartedAt ? { remoteOutcome: "unknown" } : {}),
+      ...(job.remoteWriteStartedAt ||
+      (job.status === "running" && job.remoteWriteStartedAt !== null)
+        ? { remoteOutcome: "unknown" as const }
+        : {}),
       updatedAt: nowIso(),
     }
     await db.integrationActionJobs.put(cancelled)
@@ -830,7 +860,12 @@ export async function pruneIntegrationRetention(now = Date.now()): Promise<{
     .integrationAudit.where("createdAt")
     .below(auditCutoff)
     // These rows are the migration ledger and rollback snapshots, not disposable logs.
-    .filter((row) => !/^migration\..+\.(backup|completed)$/.test(row.kind))
+    .filter(
+      (row) =>
+        !/^migration\..+\.(backup|completed)$/.test(row.kind) &&
+        row.kind !== "access.cleanup.pending" &&
+        row.kind !== "auth.provider-uninstalling"
+    )
     .delete()
   return { events, audit }
 }

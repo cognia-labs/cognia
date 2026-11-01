@@ -37,11 +37,18 @@ import { Spinner } from "@/components/ui/spinner"
 interface Props {
   open: boolean
   pluginName: string
+  providesAuth?: boolean
   onCancel: () => void
   onConfirm: (options: { cascade: boolean }) => void | Promise<void>
 }
 
-export function PluginDeleteDialog({ open, pluginName, onCancel, onConfirm }: Props) {
+export function PluginDeleteDialog({
+  open,
+  pluginName,
+  providesAuth = false,
+  onCancel,
+  onConfirm,
+}: Props) {
   const t = useTranslations("plugins.delete")
   const [cascade, setCascade] = useState(false)
   const [pending, setPending] = useState(false)
@@ -68,7 +75,10 @@ export function PluginDeleteDialog({ open, pluginName, onCancel, onConfirm }: Pr
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("title")}</AlertDialogTitle>
-          <AlertDialogDescription>{t("body", { name: pluginName })}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {t("body", { name: pluginName })}{" "}
+            {t(providesAuth ? "providerAccess" : "consumerAccess")}
+          </AlertDialogDescription>
         </AlertDialogHeader>
 
         <div className="flex items-start gap-2 rounded-md border p-3">

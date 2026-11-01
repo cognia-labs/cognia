@@ -93,6 +93,117 @@ describe("Integration event publication", () => {
     return { account, subscription }
   }
 
+  it("rejects late ingress and skips stored projections after access teardown disabled the account", async () => {
+    const { account } = await setup()
+    const event = {
+      schemaVersion: 1 as const,
+      id: "late",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "late",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    await insertIntegrationEvent(event, 1)
+    await getDb().integrationAccounts.update(account.id, { enabled: false })
+    await expect(publishIntegrationEvent("example-delivery", event)).rejects.toThrow(
+      "does not belong"
+    )
+    await recoverIntegrationEventProjections({ now: Date.now() })
+    expect(dispatchTrigger).not.toHaveBeenCalled()
+    expect(
+      await getDb()
+        .sessions.filter((row) => row.integrationBinding?.accountId === account.id)
+        .count()
+    ).toBe(0)
+  })
+
+  it("fences a publisher whose account read completed before teardown", async () => {
+    const { account } = await setup()
+    const db = getDb()
+    const original = db.integrationAccounts.get.bind(db.integrationAccounts)
+    let release!: () => void
+    let entered!: () => void
+    const paused = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const read = jest.spyOn(db.integrationAccounts, "get").mockImplementationOnce((async () => {
+      const snapshot = await original(account.id)
+      entered()
+      await paused
+      return snapshot
+    }) as never)
+    const event = {
+      schemaVersion: 1 as const,
+      id: "raced",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "raced",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    const publishing = publishIntegrationEvent("example-delivery", event)
+    const rejected = expect(publishing).rejects.toThrow("Integration account unavailable")
+    try {
+      await started
+      await db.integrationAccounts.update(account.id, { enabled: false })
+      await db.integrationEvents.where("accountId").equals(account.id).delete()
+      release()
+      await rejected
+      expect(await db.integrationEvents.get(event.id)).toBeUndefined()
+      expect(await db.integrationAudit.where("kind").equals("event.issue.updated").count()).toBe(0)
+    } finally {
+      release()
+      read.mockRestore()
+    }
+  })
+
+  it("does not recreate event audit after an in-flight projection is purged", async () => {
+    const { account } = await setup()
+    let release!: () => void
+    let entered!: () => void
+    const paused = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    dispatchTrigger.mockImplementationOnce(async () => {
+      entered()
+      await paused
+    })
+    const event = {
+      schemaVersion: 1 as const,
+      id: "projecting",
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId: account.id,
+      deliveryId: "projecting",
+      eventType: "issue.updated",
+      occurredAt: "",
+      receivedAt: "",
+      payload: {},
+    }
+    const publishing = publishIntegrationEvent("example-delivery", event)
+    await started
+    await getDb().integrationAccounts.update(account.id, { enabled: false })
+    await getDb().integrationEvents.where("accountId").equals(account.id).delete()
+    release()
+    await publishing
+    expect(await getDb().integrationAudit.where("kind").equals("event.issue.updated").count()).toBe(
+      0
+    )
+  })
+
   it("fans a normalized event to Workflow and a host-owned Inbox thread once", async () => {
     const { account, subscription } = await setup()
     const event = {

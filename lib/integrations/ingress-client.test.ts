@@ -9,7 +9,21 @@ import {
   listIntegrationIngressDeadletters,
   requeueIntegrationIngressDeadletter,
   syncIntegrationIngressRoutes,
+  unregisterIngress,
 } from "./ingress-client"
+
+it("purges only on terminal unregister and preserves spool on ordinary disable", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("tauri")
+  await unregisterIngress({ routeId: "terminal" }, { purge: true })
+  expect(transport.call).toHaveBeenCalledWith("integration_ingress_unregister", {
+    routeId: "terminal",
+    purge: true,
+  })
+  await unregisterIngress({ routeId: "temporary" })
+  expect(transport.call).toHaveBeenCalledWith("integration_ingress_unregister", {
+    routeId: "temporary",
+  })
+})
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 
 const subscription = {
@@ -147,6 +161,28 @@ it("syncs one account-level generic Rust ingress route", async () => {
       }
     ).input.subscriptionId
   ).toBeUndefined()
+})
+
+it("does not register or normalize a disabled account's route", async () => {
+  account.enabled = false
+  try {
+    expect(await syncIntegrationIngressRoutes()).toBe(0)
+    expect(await drainIntegrationIngress()).toBe(0)
+    expect(mockNormalizer).not.toHaveBeenCalled()
+    expect(mockedCall).not.toHaveBeenCalledWith("integration_ingress_register", expect.anything())
+  } finally {
+    account.enabled = true
+  }
+})
+
+it("does not normalize a disabled endpoint", async () => {
+  account.ingressEndpoint.enabled = false
+  try {
+    expect(await drainIntegrationIngress()).toBe(0)
+    expect(mockNormalizer).not.toHaveBeenCalled()
+  } finally {
+    account.ingressEndpoint.enabled = true
+  }
 })
 
 it("normalizes, persists, and only then acknowledges spooled deliveries", async () => {

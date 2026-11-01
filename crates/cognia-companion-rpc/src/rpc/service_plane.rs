@@ -1509,10 +1509,11 @@ pub(super) async fn dispatch(
 
         "integration_ingress_unregister" => {
             let route_id: String = required_aliased(&args, "route_id", "routeId")?;
+            let purge: Option<bool> = optional(&args, "purge")?;
             {
                 let workflow = workflow_state(host)?;
                 cognia_scheduling::workflow::commands::integration_ingress_unregister_for_state(
-                    workflow, route_id,
+                    workflow, route_id, purge,
                 )
             }
             .map(|_| Value::Null)
@@ -2841,6 +2842,47 @@ fn announce_sweep(swept: usize, host: &dyn crate::rpc_host::RpcHost) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn integration_ingress_unregister_passes_purge_and_accepts_route_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = bound_state(temp.path().into());
+        let host = crate::headless::HeadlessServices::stub_for_tests();
+        for key in ["route_id", "routeId"] {
+            let row = cognia_scheduling::workflow::integration_spool::SpoolDelivery {
+                route_id: format!("rpc-purge-{key}"),
+                delivery_id: "delivery".into(),
+                event_type: None,
+                headers: Default::default(),
+                body: "private".into(),
+                received_at: "2026-11-01T00:00:00Z".into(),
+                attempts: 0,
+            };
+            host.workflow.integration_spool.enqueue(&row).unwrap();
+            for purge in [None, Some(false), Some(true)] {
+                let mut args = json!({});
+                args[key] = json!(row.route_id);
+                if let Some(purge) = purge {
+                    args["purge"] = json!(purge);
+                }
+                dispatch(
+                    "integration_ingress_unregister",
+                    args,
+                    &state,
+                    &host,
+                    "operator",
+                    None,
+                    Some("service"),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    host.workflow.integration_spool.pending(10).unwrap().len(),
+                    usize::from(purge != Some(true))
+                );
+            }
+        }
+    }
 
     #[test]
     fn p6a_org_commands_never_enable_the_desktop_host() {
