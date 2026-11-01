@@ -31,6 +31,8 @@ import { deleteIssueRunsForIssues } from "./issue-runs"
 import { cascadeIssueWakeups } from "./issues"
 import { deleteIssueCyclesForWorkspace } from "./issue-cycles"
 import { recordTombstones } from "@/lib/sync/tombstones"
+import { resourceKey } from "@/lib/issues/sync/bindings"
+import { pluginResourceForStorage } from "@/lib/issues/sync/plugin-resources"
 
 function newIssueProjectId(): string {
   return `iprj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -59,6 +61,10 @@ export async function listTakenProjectKeys(): Promise<Set<string>> {
 }
 
 export async function createIssueProject(input: CreateIssueProjectInput): Promise<IssueProject> {
+  const resources =
+    input.resources?.map((resource) =>
+      resource.kind === "plugin" ? pluginResourceForStorage(resource) : resource
+    ) ?? []
   const db = getDb()
   const name = input.name.trim()
   if (!name) throw new Error("Project name is required")
@@ -87,7 +93,7 @@ export async function createIssueProject(input: CreateIssueProjectInput): Promis
     ...(input.lead ? { lead: input.lead } : {}),
     ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
     ...(input.targetDate !== undefined ? { targetDate: input.targetDate } : {}),
-    resources: input.resources ?? [],
+    resources,
     ...(input.icon ? { icon: input.icon } : {}),
     createdAt: now,
     updatedAt: now,
@@ -185,11 +191,25 @@ export async function updateIssueProject(
 /** Add a resource reference. Idempotent — re-adding the same target no-ops. */
 export async function addIssueProjectResource(
   id: string,
-  resource: IssueProjectResource
+  resource: IssueProjectResource,
+  previous?: IssueProjectResource
 ): Promise<void> {
+  if (resource.kind === "plugin") resource = pluginResourceForStorage(resource)
   const db = getDb()
   const existing = await db.issueProjects.get(id)
   if (!existing) return
+  if (previous) {
+    if (!existing.resources.some((candidate) => sameResource(candidate, previous)))
+      throw new Error("The resource being edited is no longer available")
+    await db.issueProjects.put({
+      ...existing,
+      resources: existing.resources.map((candidate) =>
+        sameResource(candidate, previous) ? resource : candidate
+      ),
+      updatedAt: Date.now(),
+    })
+    return
+  }
   if (existing.resources.some((candidate) => sameResource(candidate, resource))) return
   await db.issueProjects.put({
     ...existing,
@@ -219,6 +239,9 @@ function sameResource(a: IssueProjectResource, b: IssueProjectResource): boolean
   }
   if (a.kind === "workspace-root" && b.kind === "workspace-root") {
     return a.rootId === b.rootId
+  }
+  if (a.kind === "plugin" && b.kind === "plugin") {
+    return a.providerId === b.providerId && resourceKey(a) === resourceKey(b)
   }
   return false
 }

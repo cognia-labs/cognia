@@ -29,6 +29,7 @@ import { saveManagedTask } from "@/lib/scheduler/managed-tasks"
 import type { ScheduledTask, TaskExecutionConfig, TaskNotificationConfig } from "@/types/scheduler"
 import { resolveWorkspaceGithubBindings } from "./sync-runner"
 import { resolveWorkspaceSyncBindings } from "@/lib/issues/sync/runner"
+import { listIssueProjects } from "@/lib/db/issue-projects"
 
 export const GITHUB_ISSUE_SYNC_TASK_ID = "github-issue-sync::singleton"
 
@@ -106,7 +107,14 @@ export async function syncGithubIssueSchedule(): Promise<SyncGithubIssueSchedule
   // task exists as long as anything at all is bound.
   const bindings = [
     ...(await resolveWorkspaceGithubBindings()),
-    ...(await resolveWorkspaceSyncBindings()),
+    ...(await resolveWorkspaceSyncBindings()).filter(
+      (binding) => !binding.providerId.startsWith("plugin:")
+    ),
+    // Saved plugin bindings outlive provider activation. Keep their cadence on
+    // restart/disable, so late activation can resume without reopening the dialog.
+    ...(await listIssueProjects()).flatMap((project) =>
+      project.resources.filter((resource) => resource.kind === "plugin")
+    ),
   ]
   const existing = await schedulerDb.getTask(GITHUB_ISSUE_SYNC_TASK_ID)
 

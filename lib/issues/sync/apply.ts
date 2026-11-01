@@ -109,12 +109,16 @@ export function fieldValuesDiffer(a: RemoteFieldValue, b: RemoteFieldValue): boo
 }
 
 /** Resolve label names to rows in the `issue` scope, creating what is missing. */
-export async function ensureIssueLabels(names: readonly string[]): Promise<LabelRow[]> {
+export async function ensureIssueLabels(
+  names: readonly string[],
+  signal?: AbortSignal
+): Promise<LabelRow[]> {
   const existing = await listLabels("issue")
   const byName = new Map(existing.map((row) => [row.name.toLowerCase(), row]))
   const out: LabelRow[] = []
   const seen = new Set<string>()
   for (const raw of names) {
+    signal?.throwIfAborted()
     const name = raw.trim()
     const key = name.toLowerCase()
     if (!name || seen.has(key)) continue
@@ -132,6 +136,7 @@ export async function ensureIssueLabels(names: readonly string[]): Promise<Label
 }
 
 export interface ApplyRemoteFieldOptions {
+  signal?: AbortSignal
   /** Append a `synced_in` event naming the provider. Off when a person resolves a conflict. */
   record?: boolean
   provider?: string
@@ -152,6 +157,7 @@ export async function applyRemoteField(
   by: IssueActor,
   options: ApplyRemoteFieldOptions = {}
 ): Promise<boolean> {
+  options.signal?.throwIfAborted()
   switch (field) {
     case "title":
       if (typeof value !== "string" || !value.trim()) return false
@@ -184,12 +190,14 @@ export async function applyRemoteField(
       break
     case "labels": {
       const names = Array.isArray(value) ? value : []
-      const rows = await ensureIssueLabels(names)
+      const rows = await ensureIssueLabels(names, options.signal)
       const wanted = new Set(rows.map((row) => row.id))
       for (const id of issue.labelIds) {
+        options.signal?.throwIfAborted()
         if (!wanted.has(id)) await removeIssueLabel(issue.id, id, by)
       }
       for (const id of wanted) {
+        options.signal?.throwIfAborted()
         if (!issue.labelIds.includes(id)) await addIssueLabel(issue.id, id, by)
       }
       break
@@ -208,6 +216,7 @@ export async function applyRemoteField(
     }
   }
   if (options.record !== false && options.provider) {
+    options.signal?.throwIfAborted()
     await appendIssueEvent({
       issueId: issue.id,
       payload: { kind: "synced_in", provider: options.provider, field, by },

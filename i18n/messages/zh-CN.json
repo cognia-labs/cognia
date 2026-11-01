@@ -24327,6 +24327,7 @@
       "description": "描述",
       "descriptionHint": "作为上下文共享给本项目中每一个任务的 Agent。",
       "directoryHint": "只能引用已挂载到当前工作区的目录。",
+      "editResource": "编辑资源",
       "empty": "还没有项目",
       "emptyHint": "项目用于归集同一交付物的议题，并携带每次 Agent 运行都能看到的上下文。",
       "field": {
@@ -24369,12 +24370,14 @@
       "projectV2Hint": "项目 URL 中的编号。它的迭代会成为这里的迭代。",
       "projectV2Invalid": "请填写项目 URL 中的整数编号。",
       "projectV2Number": "Projects v2 看板（可选）",
+      "providerUnavailable": "提供方不可用",
       "removeResource": "移除资源",
       "repoHint": "该仓库的 issue 会以只读行的形式出现在看板上。",
       "repoInvalid": "请使用 owner/repository 形式。",
       "repoPlaceholder": "owner/repository",
       "repoTaken": "该仓库已绑定到某个项目。",
       "resourceBitable": "飞书多维表格数据表",
+      "resourceConfigInvalid": "请检查资源配置",
       "resourceDirectory": "本地目录",
       "resourceKind": "类型",
       "resourceKindLabel": {
@@ -24383,9 +24386,12 @@
         "lark-tasklist": "飞书任务清单",
         "workspace-root": "目录"
       },
+      "resourceMapping": "字段与状态映射",
+      "resourceNeedsAttention": "资源需要处理",
       "resourceRepo": "GitHub 仓库",
       "resourceTasklist": "飞书任务清单",
       "resources": "资源",
+      "saveResource": "保存资源",
       "startDate": "开始日期",
       "status": {
         "backlog": "待办池",
@@ -34646,6 +34652,7 @@
         "im-rate-source": "即时通讯速率来源",
         "importers": "导入器",
         "integrations": "集成",
+        "issue-sync-provider": "议题同步提供方",
         "limits-source": "用量限额来源",
         "link-matcher": "链接匹配器",
         "lsp-server": "语言服务器",

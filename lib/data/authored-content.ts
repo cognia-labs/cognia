@@ -10,6 +10,8 @@ import { workflowVersionDigest } from "@/lib/workflow/versioning/version-snapsho
 import type { BackupStreamSection } from "./stream-format"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { createPagedTablePageIterator } from "./paged-table-reader"
+import { pluginResourceForStorage } from "@cognia/plugin-contract/lib/issues/sync/resources"
+import type { IssueProjectResource } from "@/types/issues"
 
 export const AUTHORED_CONTENT_TABLES = [
   "projects",
@@ -100,8 +102,18 @@ function portableRow(
   value: AuthoredContentRow,
   includeSecrets: boolean
 ): AuthoredContentRow {
+  // Validate before generic secret stripping: invalid portable config must be refused,
+  // not silently changed into a different remote binding on restore or export.
+  const resources =
+    name === "issueProjects" && Array.isArray(value.resources)
+      ? value.resources.map((resource: IssueProjectResource) =>
+          resource.kind === "plugin" ? pluginResourceForStorage(resource) : undefined
+        )
+      : undefined
   const serialized = JSON.parse(JSON.stringify(value)) as AuthoredContentRow
   const row = (includeSecrets ? serialized : deepStripSecrets(serialized)) as AuthoredContentRow
+  if (resources && Array.isArray(row.resources))
+    row.resources = row.resources.map((resource, index) => resources[index] ?? resource)
   if (name === "projects") {
     delete row.workspaceProvisioning
     delete row.defaultEnvironmentId
@@ -210,6 +222,9 @@ export function remapAuthoredReferences(
   if (Array.isArray(value)) return value.map((entry) => remapAuthoredReferences(entry, maps, table))
   if (!value || typeof value !== "object" || value instanceof Date) return value
   const record = value as Record<string, unknown>
+  // Plugin resource IDs name remote records, even when they match a local row ID.
+  if (table === "issueProjects" && record.kind === "plugin")
+    return pluginResourceForStorage(record as Extract<IssueProjectResource, { kind: "plugin" }>)
   return Object.fromEntries(
     Object.entries(record).map(([key, entry]) => {
       let target = RELATIONS[key]

@@ -42,6 +42,7 @@ interface ContributionManifestShape {
   aiProviders?: Array<{ id?: string; name?: string }>
   decisionProviders?: Array<{ id?: string; label?: string }>
   docsProviders?: Array<{ id?: string; label?: string }>
+  issueSyncProviders?: Array<{ id?: string; label?: string }>
   workspaceBackends?: Array<{ id?: string; label?: string; name?: string }>
   messageRenderers?: Array<{ partType?: string; id?: string; label?: string; name?: string }>
   linkMatchers?: Array<{ id?: string; label?: string }>
@@ -144,6 +145,8 @@ export function getContributionsForCapability(
       return compact(asArray(m.aiProviders).map((s) => entry(s.id, s.name)))
     case "docs-provider":
       return compact(asArray(m.docsProviders).map((s) => entry(s.id, s.label)))
+    case "issue-sync-provider":
+      return compact(asArray(m.issueSyncProviders).map((s) => entry(s.id, s.label)))
     case "decision-provider":
       return compact(asArray(m.decisionProviders).map((s) => entry(s.id, s.label)))
     case "media":

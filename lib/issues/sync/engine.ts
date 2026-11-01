@@ -62,6 +62,7 @@ import type {
 export interface ReconcileOptions {
   full?: boolean
   now?: () => number
+  signal?: AbortSignal
 }
 
 /**
@@ -100,7 +101,8 @@ export async function bindingWatermark(binding: IssueSyncBinding): Promise<numbe
 
 async function upsertCycles(
   binding: IssueSyncBinding,
-  cycles: readonly RemoteCycle[]
+  cycles: readonly RemoteCycle[],
+  signal?: AbortSignal
 ): Promise<Map<string, string>> {
   const byExternalId = new Map<string, string>()
   // An external record may be imported into more than one workspace. Never
@@ -109,6 +111,7 @@ async function upsertCycles(
     (cycle) => cycle.issueProjectId === binding.issueProjectId
   )
   for (const remote of cycles) {
+    signal?.throwIfAborted()
     const matches = (externalId: string) =>
       owned.find((cycle) =>
         cycle.externalRefs.some(
@@ -195,11 +198,13 @@ async function importRemote(
   binding: IssueSyncBinding,
   remote: RemoteIssue,
   cycleIdOf: (externalId: string) => string | undefined,
-  now: number
+  now: number,
+  signal?: AbortSignal
 ): Promise<void> {
   const by = syncActorFor(binding.providerId)
-  const labels = remote.labels?.length ? await ensureIssueLabels(remote.labels) : []
+  const labels = remote.labels?.length ? await ensureIssueLabels(remote.labels, signal) : []
   const cycleId = remote.cycleExternalId ? cycleIdOf(remote.cycleExternalId) : undefined
+  signal?.throwIfAborted()
   await createIssue({
     projectId: binding.projectId,
     issueProjectId: binding.issueProjectId,
@@ -222,7 +227,7 @@ async function importRemote(
         ...(remote.label ? { label: remote.label } : {}),
         syncedAt: now,
         remoteUpdatedAt: remote.remoteUpdatedAt,
-        meta: { binding: binding.key, ...(remote.meta ?? {}) },
+        meta: { ...(remote.meta ?? {}), binding: binding.key },
       },
     ],
   })
@@ -267,7 +272,8 @@ async function reconcileItem(
   remote: RemoteIssue,
   context: FieldContext,
   now: number,
-  tally: ReconcileOutcome
+  tally: ReconcileOutcome,
+  signal?: AbortSignal
 ): Promise<{ patch: RemotePatch; pushFields: IssueSyncField[]; watermark: number }> {
   const by = syncActorFor(binding.providerId, provider.label)
   const ref = refOf(local, binding, remote.externalId)
@@ -282,6 +288,7 @@ async function reconcileItem(
   // examined, or that edit looks new again next time and is pushed twice.
   const watermark = events.reduce((max, event) => Math.max(max, event.ts), now)
   const runActive = await hasActiveIssueRun(local.id)
+  signal?.throwIfAborted()
 
   const patch: RemotePatch = {}
   const pushFields: IssueSyncField[] = []
@@ -291,6 +298,7 @@ async function reconcileItem(
     const remoteValue = remoteFieldValue(remote, field)
     if (remoteValue === undefined || !provider.pullFields.includes(field)) continue
     const current = (await fresh(local.id)) ?? local
+    signal?.throwIfAborted()
     const localValue = localFieldValue(current, field, context)
     if (!fieldValuesDiffer(localValue, remoteValue)) continue
     if (
@@ -335,10 +343,12 @@ async function reconcileItem(
     }
 
     if (winner === "remote") {
+      signal?.throwIfAborted()
       const applied = await applyRemoteField(current, field, remoteValue, by, {
         provider: binding.providerId,
         cycleIdOf: context.cycleIdOf,
         runActive,
+        signal,
       })
       if (applied) touched = true
     } else if (canPush) {
@@ -410,7 +420,8 @@ async function pushPatch(
   ref: IssueExternalRef,
   patch: RemotePatch,
   syncedAt: number,
-  tally: ReconcileOutcome
+  tally: ReconcileOutcome,
+  signal?: AbortSignal
 ): Promise<void> {
   if (!provider.push || Object.keys(patch).length === 0) return
   const by = syncActorFor(binding.providerId, provider.label)
@@ -421,11 +432,14 @@ async function pushPatch(
     ref.syncedAt ?? 0,
     patchFields(patch)
   )
+  signal?.throwIfAborted()
   const outcome = await provider.push(binding, ref, patch, issue, {
     idempotencyKey: pushIdempotencyKey(issue.id, patch),
     by,
     editedBy,
+    signal,
   })
+  signal?.throwIfAborted()
   if (outcome.status === "queued") {
     tally.queued += 1
     return
@@ -445,7 +459,8 @@ async function pushPatch(
 async function linkRemote(
   binding: IssueSyncBinding,
   links: readonly RemoteLink[],
-  tally: ReconcileOutcome
+  tally: ReconcileOutcome,
+  signal?: AbortSignal
 ): Promise<void> {
   if (links.length === 0) return
   const db = getDb()
@@ -472,6 +487,7 @@ async function linkRemote(
       }
     }
     for (const issue of targets.values()) {
+      signal?.throwIfAborted()
       const already = (issue.externalKeys ?? []).includes(
         externalKeyOf({ provider: link.provider, externalId: link.externalId })
       )
@@ -490,9 +506,11 @@ async function linkRemote(
         tally.linked += 1
       }
       if (link.prState) {
+        signal?.throwIfAborted()
         await recordIssuePullRequestState(issue.id, link.externalId, link.prState, by)
       }
       if (link.ciState) {
+        signal?.throwIfAborted()
         await recordIssuePullRequestChecks(issue.id, link.externalId, link.ciState, by)
       }
     }
@@ -519,18 +537,22 @@ export async function reconcileBinding(
   }
 
   const since = options.full ? undefined : await bindingWatermark(binding)
+  options.signal?.throwIfAborted()
   const pulled = await provider.pull(binding, {
     ...(since !== undefined ? { since } : {}),
     ...(options.full ? { full: true } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   })
+  options.signal?.throwIfAborted()
   tally.notModified = pulled.notModified
   tally.truncated = pulled.truncated ?? false
 
   if (pulled.cycles?.length) {
-    await upsertCycles(binding, pulled.cycles)
+    await upsertCycles(binding, pulled.cycles, options.signal)
     tally.cycles = pulled.cycles.length
   }
   const context = await buildFieldContext(binding)
+  options.signal?.throwIfAborted()
 
   const pending = new Map<
     string,
@@ -540,8 +562,9 @@ export async function reconcileBinding(
 
   for (const remote of pulled.items) {
     const local = await getIssueByExternalKey(binding.providerId, remote.externalId)
+    options.signal?.throwIfAborted()
     if (!local) {
-      await importRemote(binding, remote, context.cycleIdOf, stamp)
+      await importRemote(binding, remote, context.cycleIdOf, stamp, options.signal)
       tally.created += 1
       continue
     }
@@ -553,9 +576,11 @@ export async function reconcileBinding(
       remote,
       context,
       stamp,
-      tally
+      tally,
+      options.signal
     )
     const current = (await fresh(local.id)) ?? local
+    options.signal?.throwIfAborted()
     const ref = refOf(current, binding, remote.externalId)
     if (!ref) continue
     if (Object.keys(patch).length > 0) {
@@ -564,7 +589,7 @@ export async function reconcileBinding(
       await touchIssueExternalRef(current.id, ref, {
         syncedAt: watermark,
         remoteUpdatedAt: remote.remoteUpdatedAt,
-        meta: { ...(ref.meta ?? {}), binding: binding.key, ...(remote.meta ?? {}) },
+        meta: { ...(ref.meta ?? {}), ...(remote.meta ?? {}), binding: binding.key },
       })
     }
   }
@@ -593,10 +618,11 @@ export async function reconcileBinding(
   }
 
   for (const { issue, ref, patch, syncedAt } of pending.values()) {
-    await pushPatch(binding, provider, issue, ref, patch, syncedAt, tally)
+    await pushPatch(binding, provider, issue, ref, patch, syncedAt, tally, options.signal)
   }
 
-  if (pulled.links?.length) await linkRemote(binding, pulled.links, tally)
+  if (pulled.links?.length) await linkRemote(binding, pulled.links, tally, options.signal)
+  options.signal?.throwIfAborted()
 
   return tally
 }

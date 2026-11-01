@@ -31,7 +31,13 @@ import {
 } from "@/lib/issues/service"
 import { registerIssueSyncProvider } from "@/lib/issues/sync/registry"
 import { ensureIssueLabels } from "@/lib/issues/sync/apply"
-import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
+import { createGuardedAPI, getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import type { PluginManifest } from "@/types/plugin"
+import type { PluginIssueSyncProviderDef, IssueSyncProvider } from "@/lib/issues/sync/types"
+import {
+  assertPortableIssueSyncConfig,
+  validatePluginIssueSyncProviderDef,
+} from "@cognia/plugin-contract/lib/issues/sync/resources"
 import { ISSUE_STAGE_MAX, type IssueActor } from "@/types/issues"
 import type { PluginIssuesAPI } from "@cognia/plugin-contract/lib/plugin/api/issues-api"
 export type {
@@ -53,7 +59,45 @@ async function requireIssue(ref: string) {
   return issue
 }
 
-export function createIssuesAPI(pluginId: string): PluginIssuesAPI {
+const declarations = new Map<string, readonly PluginIssueSyncProviderDef[]>()
+const registrations = new Map<string, Set<() => void>>()
+const activations = new Map<string, symbol>()
+
+export function registerIssueSyncProviderDeclarationsForPlugin(
+  manifest: Pick<PluginManifest, "id" | "issueSyncProviders">
+): void {
+  const defs = manifest.issueSyncProviders ?? []
+  const ids = new Set<string>()
+  for (const def of defs) {
+    const errors = validatePluginIssueSyncProviderDef(def)
+    if (errors.length) throw new Error(errors.join("; "))
+    if (ids.has(def.id)) throw new Error("Duplicate issue-sync provider declaration")
+    ids.add(def.id)
+  }
+  declarations.set(
+    manifest.id,
+    defs.map((def) => ({ ...def }))
+  )
+}
+
+export function clearIssueSyncProvidersForPlugin(pluginId: string): void {
+  activations.delete(pluginId)
+  declarations.delete(pluginId)
+  for (const dispose of [...(registrations.get(pluginId) ?? [])]) dispose()
+  registrations.delete(pluginId)
+}
+
+export function createIssuesAPI(
+  pluginId: string,
+  manifest?: Pick<PluginManifest, "id" | "issueSyncProviders">
+): PluginIssuesAPI {
+  clearIssueSyncProvidersForPlugin(pluginId)
+  registerIssueSyncProviderDeclarationsForPlugin({
+    id: pluginId,
+    issueSyncProviders: manifest?.issueSyncProviders,
+  })
+  const activation = Symbol(pluginId)
+  activations.set(pluginId, activation)
   const by = pluginIssueActor(pluginId)
 
   async function apply(
@@ -144,20 +188,89 @@ export function createIssuesAPI(pluginId: string): PluginIssuesAPI {
     onEvent: (handler, options) => onIssueEvent(handler, options),
     registerSyncProvider: (provider) => {
       if (!provider?.id?.trim()) throw new Error("A sync provider needs an id")
-      return registerIssueSyncProvider(provider)
+      const def = declarations.get(pluginId)?.find((entry) => entry.id === provider.id)
+      if (!def)
+        throw new Error("Issue-sync provider must be declared in manifest.issueSyncProviders")
+      if (activations.get(pluginId) !== activation)
+        throw new Error("Issue-sync provider activation is unavailable")
+      const descriptor = provider.resource
+      if (
+        !descriptor ||
+        descriptor.schemaVersion !== def.schemaVersion ||
+        descriptor.label !== def.label ||
+        typeof descriptor.describe !== "function" ||
+        descriptor.schema?.type !== "object" ||
+        !descriptor.schema.properties ||
+        typeof provider.pull !== "function" ||
+        (descriptor.kind && descriptor.kind !== "plugin")
+      )
+        throw new Error("Issue-sync provider does not match its manifest descriptor")
+      // A resource form must never solicit a device-local identity or secret.
+      assertPortableIssueSyncConfig(descriptor.schema as unknown as Record<string, unknown>)
+      const input = { ...provider }
+      let active = true
+      const check = () => {
+        if (
+          !active ||
+          activations.get(pluginId) !== activation ||
+          !getPermissionGuard().check(pluginId, "issue:write")
+        )
+          throw new Error("Issue-sync provider unavailable or permission denied: issue:write")
+      }
+      check()
+      const registered: IssueSyncProvider = {
+        ...input,
+        id: `plugin:${pluginId}/${def.id}`,
+        label: def.label,
+        resource: { ...descriptor, kind: "plugin" },
+        resolveBindings: () => [],
+        pull: async (binding, options) => {
+          check()
+          const result = await input.pull(binding, options)
+          check()
+          options.signal?.throwIfAborted()
+          return result
+        },
+        ...(input.push
+          ? {
+              push: async (...args: Parameters<NonNullable<IssueSyncProvider["push"]>>) => {
+                check()
+                const result = await input.push!(...args)
+                check()
+                args[4].signal?.throwIfAborted()
+                return result
+              },
+            }
+          : {}),
+      }
+      const unregister = registerIssueSyncProvider(registered)
+      const owned = registrations.get(pluginId) ?? new Set<() => void>()
+      registrations.set(pluginId, owned)
+      const dispose = () => {
+        active = false
+        unregister()
+        owned.delete(dispose)
+      }
+      owned.add(dispose)
+      return dispose
     },
   }
 
-  return createGuardedAPI(pluginId, api, {
-    get: "issue:read",
-    list: "issue:read",
-    listEvents: "issue:read",
-    onEvent: "issue:read",
-    create: "issue:write",
-    update: "issue:write",
-    assign: "issue:write",
-    comment: "issue:write",
-    label: "issue:write",
-    registerSyncProvider: "issue:write",
-  })
+  return createGuardedAPI(
+    pluginId,
+    api,
+    {
+      get: "issue:read",
+      list: "issue:read",
+      listEvents: "issue:read",
+      onEvent: "issue:read",
+      create: "issue:write",
+      update: "issue:write",
+      assign: "issue:write",
+      comment: "issue:write",
+      label: "issue:write",
+      registerSyncProvider: "issue:write",
+    },
+    { consentExempt: ["registerSyncProvider"] }
+  )
 }

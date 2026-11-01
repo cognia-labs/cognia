@@ -3,11 +3,13 @@
  * (spec 2026-09-06 D9).
  *
  * Runtime operations live on `ctx.issues`. What ships here is the shape of
- * that surface plus the domain vocabulary an author needs to satisfy it, so
- * every export below is a type: the host owns the behaviour, and the same
+ * that surface plus the domain vocabulary and definition helper authors need.
+ * The host owns the behaviour, and the same
  * `lib/issues/service.ts` gate that refuses a move on the board refuses it
  * for a plugin.
  */
+
+export { defineIssueSyncProvider } from "../define/define-issue-sync-provider"
 
 export type {
   PluginIssuesAPI,
@@ -26,6 +28,10 @@ export type { IssueWire } from "@cognia/plugin-contract/lib/issues/service"
 export type {
   IssueSyncBinding,
   IssueSyncProvider,
+  PluginIssueSyncProvider,
+  PluginIssueSyncProviderDef,
+  IssueSyncResourceDescriptor,
+  IssueSyncResourceSchema,
   PullOptions,
   PullResult,
   PushOutcome,
@@ -46,6 +52,7 @@ export type {
   IssueOrigin,
   IssuePriority,
   IssueProject,
+  IssueProjectResource,
   IssueStatus,
   IssueSyncField,
 } from "@cognia/plugin-contract/types/issues/index"

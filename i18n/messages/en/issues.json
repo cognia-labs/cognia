@@ -374,7 +374,13 @@
     "larkDesktopOnly": "Lark can only be reached from the desktop app.",
     "larkNotAuthorized": "{account} is not authorised. Reconnect it in Settings, Connections.",
     "childrenDoneInstruction": "When sub-issues finish",
-    "childrenDoneInstructionHint": "What an agent is asked to do when a parent's sub-issues are all finished. Leave empty to use the built-in instruction; a parent can override it."
+    "childrenDoneInstructionHint": "What an agent is asked to do when a parent's sub-issues are all finished. Leave empty to use the built-in instruction; a parent can override it.",
+    "providerUnavailable": "Provider unavailable",
+    "resourceNeedsAttention": "Resource needs attention",
+    "resourceMapping": "Field and status mapping",
+    "resourceConfigInvalid": "Check the resource configuration",
+    "editResource": "Edit resource",
+    "saveResource": "Save resource"
   },
   "workspace": {
     "title": "Workspace",

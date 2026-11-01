@@ -1,6 +1,14 @@
 import { getContributionsForCapability, getAllContributions } from "./capability-contributions"
 
 describe("getContributionsForCapability", () => {
+  it("projects issue-sync declaration labels", () => {
+    expect(
+      getContributionsForCapability(
+        { issueSyncProviders: [{ id: "tracker", label: "Tracker" }] },
+        "issue-sync-provider"
+      )
+    ).toEqual([{ id: "tracker", label: "Tracker" }])
+  })
   it("projects document provider manifest labels", () => {
     expect(
       getContributionsForCapability(

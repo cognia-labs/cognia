@@ -38,6 +38,27 @@ function renderInspector(over: Partial<React.ComponentProps<typeof ProjectInspec
 }
 
 describe("ProjectInspector", () => {
+  it("keeps an unavailable plugin resource visible and allows editing it", async () => {
+    const { props } = renderInspector({
+      onEditResource: jest.fn(),
+      project: project({
+        resources: [
+          {
+            kind: "plugin",
+            providerId: "plugin:inspector/tracker",
+            schemaVersion: 1,
+            config: { project: "remote" },
+            name: "Remote",
+          },
+        ],
+      }),
+    })
+    expect(screen.getByText("projects.providerUnavailable")).toBeInTheDocument()
+    expect(screen.getByText("Remote")).toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole("button", { name: "projects.editResource" }))
+    expect(props.onEditResource).toHaveBeenCalledWith(0)
+    expect(props.onRemoveResource).not.toHaveBeenCalled()
+  })
   describe("editing", () => {
     it("renames", async () => {
       const user = userEvent.setup()

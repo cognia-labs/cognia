@@ -45,6 +45,15 @@ function make(over: Partial<Parameters<typeof createIssue>[0]> = {}) {
 
 const noContext = { labelsById: new Map(), cycleExternalIdOf: () => undefined }
 
+it("does not create labels or mutate an issue for an aborted provider lifetime", async () => {
+  const signal = AbortSignal.abort()
+  const issue = await make()
+  await expect(ensureIssueLabels(["aborted-label"], signal)).rejects.toThrow()
+  await expect(applyRemoteField(issue, "title", "Late title", SYNC, { signal })).rejects.toThrow()
+  expect(await listLabels("issue")).toEqual([])
+  expect((await getIssue(issue.id))!.title).toBe("t")
+})
+
 describe("remoteFieldValue / localFieldValue / fieldValuesDiffer", () => {
   it("normalises both sides into one comparable shape", async () => {
     const remote: RemoteIssue = {

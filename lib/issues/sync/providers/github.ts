@@ -515,6 +515,16 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
   return {
     id: GITHUB_SYNC_PROVIDER_ID,
     label: "GitHub",
+    resource: {
+      label: "GitHub",
+      kind: "github-repo",
+      schemaVersion: 1,
+      schema: { type: "object", properties: {} },
+      describe: (config) => ({
+        key: String(config.repoFullName),
+        label: String(config.repoFullName),
+      }),
+    },
     pullFields: GITHUB_PULL_FIELDS,
     pushFields: GITHUB_PUSH_FIELDS,
 

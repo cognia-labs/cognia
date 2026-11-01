@@ -168,6 +168,7 @@ VALID_CAPABILITIES = (
     "canvas",
     "ai-provider",
     "docs-provider",
+    "issue-sync-provider",
     "decision-provider",
     "themes",
     "commands",
@@ -263,6 +264,9 @@ CAPABILITY_FIELDS = {
     ],
     "docs-provider": [
         "docsProviders",
+    ],
+    "issue-sync-provider": [
+        "issueSyncProviders",
     ],
     "decision-provider": [
         "decisionProviders",
@@ -465,6 +469,7 @@ CAPABILITY_SUPPORT = {
     "canvas": "supported",
     "ai-provider": "supported",
     "docs-provider": "supported",
+    "issue-sync-provider": "supported",
     "decision-provider": "supported",
     "themes": "supported",
     "commands": "supported",
@@ -546,6 +551,7 @@ CAPABILITY_INTRODUCED_VERSIONS = {
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
     "docs-provider": "0.1.0",
+    "issue-sync-provider": "0.1.0",
     "decision-provider": "0.1.0",
     "themes": "0.1.0",
     "commands": "0.1.0",
@@ -627,6 +633,7 @@ CAPABILITY_MINIMUM_HOST_VERSIONS = {
     "canvas": "0.1.0",
     "ai-provider": "0.1.0",
     "docs-provider": "0.1.0",
+    "issue-sync-provider": "0.1.0",
     "decision-provider": "0.1.0",
     "themes": "0.1.0",
     "commands": "0.1.0",
@@ -772,6 +779,14 @@ MANIFEST_CONTRIBUTIONS = [
         "field": "docsProviders",
         "capabilities": [
             "docs-provider",
+        ],
+        "execution": "javascript",
+        "pythonExecution": "unsupported",
+    },
+    {
+        "field": "issueSyncProviders",
+        "capabilities": [
+            "issue-sync-provider",
         ],
         "execution": "javascript",
         "pythonExecution": "unsupported",

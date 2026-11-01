@@ -26,6 +26,8 @@ jest.mock("./sync-runner", () => ({
     mockResolveBindings(...args),
 }))
 const mockResolveSyncBindings = jest.fn(async (): Promise<unknown[]> => [])
+const mockListProjects = jest.fn(async (): Promise<unknown[]> => [])
+jest.mock("@/lib/db/issue-projects", () => ({ listIssueProjects: () => mockListProjects() }))
 jest.mock("./sync/runner", () => ({
   resolveWorkspaceSyncBindings: (...args: Parameters<typeof mockResolveSyncBindings>) =>
     mockResolveSyncBindings(...args),
@@ -41,7 +43,37 @@ const oneBinding = [{ repoFullName: "acme/one", issueProjectId: "p1" }]
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockListProjects.mockResolvedValue([])
   mockGetTask.mockResolvedValue(null)
+})
+
+it("keeps plugin cadence before activation and does not double-count after registration", async () => {
+  mockResolveBindings.mockResolvedValue([])
+  mockResolveSyncBindings.mockResolvedValue([])
+  mockListProjects.mockResolvedValue([
+    {
+      resources: [
+        {
+          kind: "plugin",
+          providerId: "plugin:acme/tracker",
+          schemaVersion: 1,
+          config: { project: "remote" },
+        },
+      ],
+    },
+  ])
+  await expect(syncGithubIssueSchedule()).resolves.toEqual({ action: "created", bindingCount: 1 })
+  mockGetTask.mockResolvedValue({
+    id: GITHUB_ISSUE_SYNC_TASK_ID,
+    notification: { channels: ["none"], dueReminder: false },
+  })
+  mockResolveSyncBindings.mockResolvedValue([{ providerId: "plugin:acme/tracker" }])
+  await expect(syncGithubIssueSchedule()).resolves.toEqual({ action: "kept", bindingCount: 1 })
+  mockResolveSyncBindings.mockResolvedValue([])
+  await expect(syncGithubIssueSchedule()).resolves.toEqual({ action: "kept", bindingCount: 1 })
+  expect(mockDeleteTask).not.toHaveBeenCalled()
+  mockListProjects.mockResolvedValue([])
+  await expect(syncGithubIssueSchedule()).resolves.toEqual({ action: "deleted", bindingCount: 0 })
 })
 
 it("creates the singleton row once a repo is bound", async () => {

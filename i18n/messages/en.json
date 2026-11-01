@@ -24327,6 +24327,7 @@
       "description": "Description",
       "descriptionHint": "Shared with agents as context for every task in this project.",
       "directoryHint": "Only directories already mounted on this workspace can be referenced.",
+      "editResource": "Edit resource",
       "empty": "No projects yet",
       "emptyHint": "A project groups issues for one deliverable and carries the context every agent run sees.",
       "field": {
@@ -24369,12 +24370,14 @@
       "projectV2Hint": "The number in the project's URL. Its iterations become cycles here.",
       "projectV2Invalid": "Use the whole number from the project's URL.",
       "projectV2Number": "Projects v2 board (optional)",
+      "providerUnavailable": "Provider unavailable",
       "removeResource": "Remove resource",
       "repoHint": "Issues from this repository appear on the board as read-only rows.",
       "repoInvalid": "Use the owner/repository form.",
       "repoPlaceholder": "owner/repository",
       "repoTaken": "That repository is already bound to a project.",
       "resourceBitable": "Lark Bitable table",
+      "resourceConfigInvalid": "Check the resource configuration",
       "resourceDirectory": "Local directory",
       "resourceKind": "Kind",
       "resourceKindLabel": {
@@ -24383,9 +24386,12 @@
         "lark-tasklist": "Lark tasklist",
         "workspace-root": "Directory"
       },
+      "resourceMapping": "Field and status mapping",
+      "resourceNeedsAttention": "Resource needs attention",
       "resourceRepo": "GitHub repository",
       "resourceTasklist": "Lark tasklist",
       "resources": "Resources",
+      "saveResource": "Save resource",
       "startDate": "Start date",
       "status": {
         "backlog": "Backlog",
@@ -34646,6 +34652,7 @@
         "im-rate-source": "IM rate sources",
         "importers": "Importers",
         "integrations": "Integrations",
+        "issue-sync-provider": "Issue sync providers",
         "limits-source": "Usage limit sources",
         "link-matcher": "Link matchers",
         "lsp-server": "Language servers",

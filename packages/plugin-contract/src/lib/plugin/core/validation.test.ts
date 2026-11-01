@@ -19,6 +19,41 @@ import type { ContextResourceKind } from "../../../types/context-workbench"
 
 describe("Plugin Validation", () => {
   describe("validatePluginManifest", () => {
+    it("accepts declared issue-sync providers and refuses duplicates, namespaced IDs and unsupported runtimes", () => {
+      const declaration = { id: "github", label: "Tracker", schemaVersion: 1 }
+      const manifest = {
+        ...createValidManifest(),
+        capabilities: ["issue-sync-provider"],
+        permissions: ["issue:write"],
+        issueSyncProviders: [declaration],
+      }
+      expect(validatePluginManifest(manifest).valid).toBe(true)
+      for (const patch of [
+        { id: "plugin:other/github" },
+        { schemaVersion: 0 },
+        { schemaVersion: 1.5 },
+        { label: "" },
+      ])
+        expect(
+          validatePluginManifest({
+            ...manifest,
+            issueSyncProviders: [{ ...declaration, ...patch }],
+          }).valid
+        ).toBe(false)
+      expect(
+        validatePluginManifest({ ...manifest, issueSyncProviders: [declaration, declaration] })
+          .valid
+      ).toBe(false)
+      expect(validatePluginManifest({ ...manifest, issueSyncProviders: {} }).valid).toBe(false)
+      expect(
+        validatePluginManifest({
+          ...manifest,
+          type: "python",
+          main: undefined,
+          pythonMain: "main.py",
+        }).valid
+      ).toBe(false)
+    })
     describe("optional Node runtime", () => {
       const withRuntime = () => ({
         ...createValidManifest(),

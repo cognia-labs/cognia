@@ -156,6 +156,16 @@ export function createLarkBitableSyncProvider(
   return {
     id: LARK_BITABLE_PROVIDER_ID,
     label: "Lark Bitable",
+    resource: {
+      label: "Lark Bitable",
+      kind: "lark-bitable",
+      schemaVersion: 1,
+      schema: { type: "object", properties: {} },
+      describe: (config) => ({
+        key: `${config.adapterId}:${config.appToken}:${config.tableId}`,
+        label: String(config.name),
+      }),
+    },
     pullFields: ["title", "description", "status", "priority", "assignee", "dueDate", "estimate"],
     pushFields: ["title", "description", "status", "priority", "dueDate", "estimate"],
 

@@ -15,6 +15,37 @@ import type {
   IssueStatus,
   IssueSyncField,
 } from "../../../types/issues/index"
+import type { PluginConfigSchema } from "../../../types/plugin/plugin"
+
+/** Host namespaces this local id; implementations must be declared in the manifest. */
+export interface PluginIssueSyncProviderDef {
+  id: string
+  label: string
+  schemaVersion: number
+}
+
+export interface IssueSyncResourceSchema extends PluginConfigSchema {
+  /** A second generated form, stored in config.mapping. Field/status maps are data, never code. */
+  mapping?: PluginConfigSchema
+}
+
+export interface IssueSyncResourceDescriptor {
+  label: string
+  /** Built-in Host renderers only. Plugins always use kind `plugin`. */
+  kind?: IssueProjectResource["kind"]
+  schemaVersion: number
+  schema: IssueSyncResourceSchema
+  /** Pure and deterministic. The key must survive schema migrations. */
+  describe(config: Record<string, unknown>): { key: string; label: string }
+  validate?(config: Record<string, unknown>): string[]
+  /** Return a new config; the stored resource is not changed until a user saves it. */
+  migrate?(fromVersion: number, config: Record<string, unknown>): Record<string, unknown>
+}
+
+/** The Host resolves plugin resources from the schema; plugins need no private registry imports. */
+export type PluginIssueSyncProvider = Omit<IssueSyncProvider, "resolveBindings" | "resource"> & {
+  resource: IssueSyncResourceDescriptor
+}
 
 /** One remote container bound to one local container. */
 export interface IssueSyncBinding {
@@ -99,6 +130,7 @@ export interface RemoteLink {
 }
 
 export interface PullOptions {
+  signal?: AbortSignal
   /** Epoch ms watermark. Absent means everything. */
   since?: number
   /** Ignore the watermark and read everything again. */
@@ -148,6 +180,7 @@ export type PushOutcome =
 export interface IssueSyncProvider {
   readonly id: string
   readonly label: string
+  readonly resource?: IssueSyncResourceDescriptor
   /** Fields the engine may take FROM the remote. */
   readonly pullFields: readonly IssueSyncField[]
   /** Fields the engine may send TO the remote. Empty means read-only. */
@@ -161,6 +194,7 @@ export interface IssueSyncProvider {
     patch: RemotePatch,
     issue: Issue,
     context: {
+      signal?: AbortSignal
       idempotencyKey: string
       by: IssueActor
       /**

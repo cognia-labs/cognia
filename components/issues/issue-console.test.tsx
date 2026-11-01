@@ -208,6 +208,49 @@ import type { UnifiedIssueItem } from "@/types/issues/unified"
 import { FULL_ISSUE_CAPABILITIES, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
 import { useIssueViewStore } from "@/stores/issues/issue-view-store"
 import { IssueConsole } from "./issue-console"
+import { registerIssueSyncProvider, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
+
+it("reacts to plugin provider availability without requiring project rows to change", async () => {
+  const id = "plugin:console/tracker"
+  projectsForTest = [
+    {
+      id: "p1",
+      projectId: "w1",
+      name: "Plugins",
+      resources: [
+        { kind: "plugin", providerId: id, schemaVersion: 1, config: { project: "remote" } },
+      ],
+    },
+  ]
+  render(<IssueConsole />)
+  await screen.findByTestId("board-stub")
+  const action = () =>
+    (headerProps.secondaryActions as Array<{ id: string; disabled: boolean }>).find(
+      (entry) => entry.id === "sync"
+    )!
+  expect(action().disabled).toBe(true)
+  let dispose!: () => void
+  act(() => {
+    dispose = registerIssueSyncProvider({
+      id,
+      label: "Tracker",
+      pullFields: [],
+      pushFields: [],
+      resolveBindings: () => [],
+      pull: async () => ({ items: [], notModified: true }),
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object", properties: {} },
+        describe: () => ({ key: "remote", label: "Remote" }),
+      },
+    })
+  })
+  expect(action().disabled).toBe(false)
+  act(() => dispose())
+  expect(action().disabled).toBe(true)
+  resetIssueSyncRegistry()
+})
 
 function item(over: Partial<UnifiedIssueItem> = {}): UnifiedIssueItem {
   const kind = over.kind ?? "local"

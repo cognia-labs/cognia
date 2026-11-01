@@ -652,6 +652,7 @@ export type {
 } from "@cognia/plugin-contract/types/plugin/plugin-library"
 
 export { defineDocsProvider } from "./define/define-docs-provider"
+export { defineIssueSyncProvider } from "./define/define-issue-sync-provider"
 export { DocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
 export type {
   RemoteDocKind,

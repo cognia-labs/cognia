@@ -484,6 +484,12 @@ describe("createPluginContext", () => {
     ).toThrow(/docs:provide/)
   })
 
+  it("mounts issue-sync registration with issue:write enforcement", () => {
+    const ctx = createFullPluginContext(createMockPlugin(), mockManager)
+    expect(typeof ctx.issues.registerSyncProvider).toBe("function")
+    expect(() => ctx.issues.registerSyncProvider({ id: "tracker" } as never)).toThrow(/issue:write/)
+  })
+
   it("honors auth revocations and optional runtime grants on an existing context", async () => {
     const guard = getPermissionGuard()
     guard.registerPlugin("test-plugin", ["auth:consume", "auth:provide"])

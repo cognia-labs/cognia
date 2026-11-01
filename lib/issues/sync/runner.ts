@@ -16,6 +16,7 @@ import { runWorkspaceGithubSync, type RunWorkspaceGithubSyncResult } from "@/lib
 import { reconcileBinding } from "./engine"
 import { getIssueSyncRegistry, type IssueSyncRegistry } from "./registry"
 import type { IssueSyncBinding, IssueSyncFailure, ReconcileOutcome } from "./types"
+import { resolvePluginSyncBindings } from "./plugin-resources"
 
 export interface RunWorkspaceIssueSyncInput {
   /** Workspace scope. Omit to sweep every workspace. */
@@ -50,7 +51,13 @@ export async function resolveWorkspaceSyncBindings(
   listContainers: typeof listIssueProjects = listIssueProjects
 ): Promise<IssueSyncBinding[]> {
   const containers = await listContainers(projectId === undefined ? {} : { projectId })
-  return registry.list().flatMap((provider) => provider.resolveBindings(containers))
+  return [
+    ...registry
+      .list()
+      .filter((provider) => !provider.id.startsWith("plugin:"))
+      .flatMap((provider) => provider.resolveBindings(containers)),
+    ...resolvePluginSyncBindings(containers, registry),
+  ]
 }
 
 export async function runWorkspaceIssueSync(
@@ -69,6 +76,14 @@ export async function runWorkspaceIssueSync(
           ...(input.full ? { full: true } : {}),
         })
 
+  const registrations = new Map(
+    registry
+      .list()
+      .map((provider) => [
+        provider.id,
+        { provider, signal: registry.signal(provider.id, provider) },
+      ])
+  )
   const bindings = (
     await resolveWorkspaceSyncBindings(input.projectId, registry, deps.listContainers)
   ).filter((binding) => !input.providerId || binding.providerId === input.providerId)
@@ -78,12 +93,22 @@ export async function runWorkspaceIssueSync(
   // Sequential on purpose: bindings of one provider share a credential and a
   // rate limit, and two bindings can write the same label catalogue.
   for (const binding of bindings) {
-    const provider = registry.get(binding.providerId)
-    if (!provider) continue
+    const registration = registrations.get(binding.providerId)
+    if (
+      !registration ||
+      registration.signal.aborted ||
+      registry.get(binding.providerId) !== registration.provider
+    )
+      continue
+    const { provider, signal } = registration
     try {
-      outcomes.push(await reconcile(binding, provider, input.full ? { full: true } : {}))
+      const outcome = await reconcile(binding, provider, {
+        ...(input.full ? { full: true } : {}),
+        signal,
+      })
+      if (!signal.aborted) outcomes.push(outcome)
     } catch (error) {
-      failures.push({ binding, error })
+      if (!signal.aborted) failures.push({ binding, error })
     }
   }
 

@@ -479,7 +479,7 @@ export function createFullPluginContext(
     goals: createGoalAPI(pluginId),
     hooks: createHooksAPI(pluginId),
     plans: createPlanAPI(pluginId),
-    issues: createIssuesAPI(pluginId),
+    issues: createIssuesAPI(pluginId, plugin.manifest),
     memory: createMemoryAPI(pluginId),
     externalAgents: createExternalAgentsAPI(pluginId),
     team: createTeamAPI(pluginId),

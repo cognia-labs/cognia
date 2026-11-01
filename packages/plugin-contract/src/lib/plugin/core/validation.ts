@@ -1,4 +1,5 @@
 import { validatePluginDocsProviderDef } from "../../../types/plugin/plugin-docs-providers"
+import { validatePluginIssueSyncProviderDef } from "../../issues/sync/resources"
 import { subset, valid, validRange } from "semver"
 import { validateLibrarySchema } from "../library/schema"
 import { validateSubscriptionProvider } from "../../../types/subscription/provider-definition"
@@ -2965,6 +2966,30 @@ export function validatePluginManifest(
     pushWarning,
     m.type
   )
+
+  if (m.issueSyncProviders !== undefined) {
+    if (!Array.isArray(m.issueSyncProviders))
+      pushError(
+        "issueSyncProviders",
+        "manifest.issueSyncProviders.invalid",
+        "issueSyncProviders must be an array"
+      )
+    else {
+      const ids = new Set<string>()
+      m.issueSyncProviders.forEach((def, index) => {
+        for (const error of validatePluginIssueSyncProviderDef(def))
+          pushError(`issueSyncProviders[${index}]`, "manifest.issueSyncProviders.invalid", error)
+        const id = (def as { id?: string } | null)?.id
+        if (id && ids.has(id))
+          pushError(
+            `issueSyncProviders[${index}].id`,
+            "manifest.issueSyncProviders.duplicate",
+            "Duplicate issue-sync provider id"
+          )
+        if (id) ids.add(id)
+      })
+    }
+  }
 
   if (m.docsProviders !== undefined) {
     if (!Array.isArray(m.docsProviders))
