@@ -1,6 +1,6 @@
 # Evidence ledger: Convergence phase 0, track 0b fixes
 
-- Status: building
+- Status: verifying
 - Lane: deep
 - Created: 2026-11-01
 - Updated: 2026-11-01
@@ -204,5 +204,9 @@ X12 list: the dev gate failures conv-0a measured on clean `d8e3ac4fb9` (`conv-0a
 <!-- ID prefix M. Signals that the ORIGINAL problem improved (validation, not verification).
 Status: pending | met | not-met | not-measurable -->
 
-| ID  | Signal | How / when measured | Result | Status |
-| --- | ------ | ------------------- | ------ | ------ |
+| ID  | Signal                                                                          | How / when measured                                                                                                                                        | Result                                                                                                                             | Status  |
+| --- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| M1  | Every B1–B10 defect pinned by a test that went red, then green                  | per commit: ef4ef21c78, 02862200a5, c7cc0175f8, aaa9dd75de, f4cdf4ccb0, dcc1e80136, 4b76342546, e9f70e822d, f90652cc39, eb73db93c0, e6814b654c, ce3b4aaecb | each verified red against HEAD or the prior fix before it went green (V1–V12)                                                      | met     |
+| M2  | The §6 gates and the four named B9 gates pass on this branch                    | `node scripts/gates/check-{colocated-tests,headless-registry,host-parity,rust-architecture,sidecar-architecture,rpc-semantic-parity}.mjs` after ce3b4aaecb | all six OK (colocated 207 known, headless 31/31 pending, host-parity 94 known, rpc 5 baselined)                                    | met     |
+| M3  | `typecheck` passes                                                              | tsgo over every file 0b touched, plus the two test files that carried dev's pre-existing errors                                                            | clean apart from the environment-only png import (X12); a full-repo `pnpm typecheck` was not run (16 GB heap, shared node_modules) | pending |
+| M4  | A real brain restart on a user store keeps binary values and reports old losses | `cognia-agent durability verify` on a live account after upgrade                                                                                           | not run: jest + fake-indexeddb only (V10)                                                                                          | pending |
