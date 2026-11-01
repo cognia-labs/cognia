@@ -4,6 +4,7 @@ import test from "node:test"
 import {
   analyze,
   collectChannelReferences,
+  constNameLists,
   selectArmFiles,
   DELEGATED_ARM_FILES,
   collectEmittedChannels,
@@ -280,12 +281,140 @@ test("selectArmFiles adds the delegated sources and drops test modules", () => {
     "crates/cognia-terminal/src/sftp_service.rs",
     "crates/cognia-file-share/src/rpc.rs",
     "crates/cognia-remote-desktop/src/commands.rs",
+    "crates/cognia-companion-rpc/src/managed_desktops.rs",
+    "crates/cognia-companion-rpc/src/managed_desktop_results.rs",
   ])
   assert.deepEqual(DELEGATED_ARM_FILES, [
     "crates/cognia-terminal/src/sftp_service.rs",
     "crates/cognia-file-share/src/rpc.rs",
     "crates/cognia-remote-desktop/src/commands.rs",
+    "crates/cognia-companion-rpc/src/managed_desktops.rs",
+    "crates/cognia-companion-rpc/src/managed_desktop_results.rs",
   ])
+})
+
+test("extractDispatchArms reads a prelude block over a const list for commands the table lacks", () => {
+  // managed_desktops.rs serves its file and clipboard ops in an
+  // `if OPERATION_COMMANDS.contains(&name) {` block before any table; read
+  // without the list, all four look arm-less and the gate names four 404s.
+  const source = [
+    "pub const OPERATION_COMMANDS: &[&str] = &[",
+    '    "op_read",',
+    '    "op_write",',
+    "];",
+    "pub async fn dispatch(name: &str, args: Value) -> Result<Value> {",
+    "    if OPERATION_COMMANDS.contains(&name) {",
+    '        let path: String = required(&args, "path")?;',
+    "        return run(path).await;",
+    "    }",
+    "    Err(unknown())",
+    "}",
+  ].join("\n")
+  const arms = extractDispatchArms(source, "managed_desktops.rs")
+  assert.deepEqual(
+    arms.map((arm) => arm.names),
+    [["op_read", "op_write"]]
+  )
+  assert.match(arms[0].body, /"path"/)
+})
+
+test("extractDispatchArms reads a guard before the table as a guard, not as the arm", () => {
+  // service_plane.rs fences `send_to_external_agent` in an `if matches!(…)`
+  // before its table; taken as the arm, every field the real arm reads looks
+  // dropped (`message` was reported as never read).
+  const source = [
+    "pub(super) async fn dispatch(name: &str, args: Value) -> Result<Value> {",
+    "    if matches!(",
+    "        name,",
+    '        "send_agent" | "guard_only"',
+    "    ) && person.is_none()",
+    "    {",
+    '        let id: String = required(&args, "agent_id")?;',
+    "    }",
+    "    match name {",
+    '        "send_agent" => {',
+    '            let message: String = required(&args, "message")?;',
+    "            send(message).await",
+    "        }",
+    "        _ => Err(unknown()),",
+    "    }",
+    "}",
+  ].join("\n")
+  const arms = extractDispatchArms(source, "service_plane.rs")
+  // `guard_only` has a guard and nothing else: no arm, so the gate reports it.
+  assert.deepEqual(
+    arms.map((arm) => arm.names),
+    [["send_agent"]]
+  )
+  assert.match(arms[0].body, /"message"/)
+})
+
+test("extractDispatchArms takes a prelude block as an arm only when it answers on the name alone", () => {
+  const source = [
+    "pub(super) async fn dispatch(name: &str, args: Value) -> Result<Value> {",
+    '    if name == "refused_only" && !caller.is_owner() {',
+    "        return Err(forbidden());",
+    "    }",
+    '    if name == "errors_only" {',
+    "        return Err(unsupported());",
+    "    }",
+    '    if name == "either_a" || name == "either_b" {',
+    '        let id: String = required(&args, "id")?;',
+    "        return to_json(read(id));",
+    "    }",
+    "    Err(unknown())",
+    "}",
+  ].join("\n")
+  assert.deepEqual(
+    extractDispatchArms(source, "rpc/x.rs").map((arm) => arm.names),
+    [["either_a", "either_b"]]
+  )
+})
+
+test("extractDispatchArms reads a delegated command from the table that serves it, not the delegating block", () => {
+  // environment.rs: `dispatch` hands the preview commands to
+  // `dispatch_local_preview`; the 4-line handoff must not stand in for the
+  // real arm, or a dropped or deadlocked field there goes unseen.
+  const source = [
+    'const LOCAL_PREVIEW_COMMANDS: &[&str] = &["preview_list"];',
+    "pub(super) async fn dispatch(name: &str, args: Value) -> Result<Value> {",
+    "    if LOCAL_PREVIEW_COMMANDS.contains(&name) {",
+    "        return dispatch_local_preview(name, args).await;",
+    "    }",
+    "    match name {",
+    '        "other" => Ok(Value::Null),',
+    "        _ => Err(unknown()),",
+    "    }",
+    "}",
+    "async fn dispatch_local_preview(name: &str, args: Value) -> Result<Value> {",
+    "    match name {",
+    '        "preview_list" => {',
+    '            let project: String = required(&args, "projectId")?;',
+    "            list(project).await",
+    "        }",
+    "        _ => Err(unknown()),",
+    "    }",
+    "}",
+  ].join("\n")
+  const arms = extractDispatchArms(source, "rpc/environment.rs")
+  assert.deepEqual(
+    arms.map((arm) => arm.names),
+    [["other"], ["preview_list"]]
+  )
+  assert.match(arms[1].body, /"projectId"/)
+})
+
+test("constNameLists reads every string-slice const of a file", () => {
+  const lists = constNameLists(
+    'pub const A: &[&str] = &["a_one", "a_two"];\nconst B_LIST: &[&str] = &[\n    "b",\n];\nconst N: usize = 3;'
+  )
+  assert.deepEqual(
+    [...lists],
+    [
+      ["A", ["a_one", "a_two"]],
+      ["B_LIST", ["b"]],
+    ]
+  )
 })
 
 test("selectArmFiles skips a tracked file that is no longer on disk", () => {
@@ -374,6 +503,73 @@ test("flags a contract deadlock: arm requires what the enforced schema forbids",
   const deadlocks = findings.filter((f) => f.kind === "deadlocked-contract")
   assert.equal(deadlocks.length, 1)
   assert.match(deadlocks[0].detail, /remote_execution_context/)
+})
+
+test("a shared arm's per-command required field deadlocks only when no command of the arm declares it", () => {
+  // `host_provider_credential_set` | `host_git_credential_set` share one arm
+  // that requires `apiKey` for the first and `token` for the second.
+  const body =
+    '"cred_provider_set" | "cred_git_set" => {\n' +
+    '    let v: String = if provider { required_aliased(&args, "api_key", "apiKey")? } ' +
+    'else { required(&args, "token")? };\n    let x: X = required(&args, "nonce")?;\n}'
+  const names = ["cred_provider_set", "cred_git_set"]
+  const schema = (properties) => ({
+    inputSchema: { properties, additionalProperties: false },
+    outputSchema: {},
+  })
+  const findings = analyze(
+    baseInput({
+      arms: new Map(names.map((name) => [name, { body, file: "rpc/service_plane.rs", names }])),
+      catalog: new Map([
+        ["cred_provider_set", schema({ providerId: {}, apiKey: {} })],
+        ["cred_git_set", schema({ host: {}, token: {} })],
+      ]),
+    })
+  )
+  const deadlocks = findings.filter((f) => f.kind === "deadlocked-contract")
+  assert.deepEqual(deadlocks.map((f) => f.command).sort(), [...names].sort())
+  for (const finding of deadlocks) {
+    assert.match(finding.detail, /`nonce`/)
+    assert.doesNotMatch(finding.detail, /`token`|`api_key`/)
+  }
+})
+
+test("an unconditional required read in a shared arm deadlocks the sibling that does not declare it", () => {
+  const names = ["a_set", "b_set"]
+  const findings = analyze(
+    baseInput({
+      arms: new Map(
+        names.map((name) => [
+          name,
+          {
+            body: '"a_set" | "b_set" => {\n    let t: String = required(&args, "token")?;\n    set(t)\n}',
+            file: "rpc/x.rs",
+            names,
+          },
+        ])
+      ),
+      catalog: new Map([
+        [
+          "a_set",
+          {
+            inputSchema: { properties: { token: {} }, additionalProperties: false },
+            outputSchema: {},
+          },
+        ],
+        [
+          "b_set",
+          {
+            inputSchema: { properties: { host: {} }, additionalProperties: false },
+            outputSchema: {},
+          },
+        ],
+      ]),
+    })
+  )
+  assert.deepEqual(
+    findings.filter((f) => f.kind === "deadlocked-contract").map((f) => f.command),
+    ["b_set"]
+  )
 })
 
 test("no deadlock when the schema declares the field, or under either spelling", () => {

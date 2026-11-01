@@ -133,6 +133,7 @@
     "open": "Open a handle, window, panel, socket, or transfer.",
     "parse": "Parse a document into structured content.",
     "paste": "Paste clipboard content.",
+    "pair": "Pair this client with a host it has just reached, enrolling it as a device of that host.",
     "pause": "Suspend a lifecycle that can be resumed.",
     "perform": "Perform a named accessibility action.",
     "persist": "Persist runtime state for recovery.",

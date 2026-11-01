@@ -453,7 +453,9 @@ export function parseTauriCommands(rawSource, file) {
  * wrong body to every git command. Same eight-space rustfmt seam that
  * `gen-companion-api.mjs:extractCommandArgumentSchemas` relies on.
  *
- * The name is matched as `dispatch` or the one named exception, `dispatch_sftp`.
+ * The name is matched as `dispatch` or a named exception (`dispatch_sftp`,
+ * and environment.rs's `dispatch_arm` / `dispatch_local_preview`, which its
+ * `dispatch` hands each command to); every one of them in a file is scanned.
  * It is an explicit alternative and not `dispatch\w*` on purpose: the tree also
  * holds `dispatch_bridge`, `dispatch_dify`, `dispatch_browser_rpc` and
  * `dispatch_canonical`, and since `search` takes the FIRST match, a wildcard
@@ -474,15 +476,130 @@ export function parseTauriCommands(rawSource, file) {
  */
 export function extractDispatchArms(rawSource, file) {
   const source = stripRustComments(rawSource)
-  const dispatchStart = source.search(
-    /(?:pub(?:\s*\([^)]*\))?\s+)?async\s+fn\s+dispatch(?:_sftp)?\s*(?:<[^>]*>)?\s*\(/
-  )
-  if (dispatchStart < 0) return []
-  const matchStart = source.indexOf("match name {", dispatchStart)
-  if (matchStart < 0) return []
+  const fnRe =
+    /(?:pub(?:\s*\([^)]*\))?\s+)?async\s+fn\s+(dispatch(?:_sftp|_arm|_local_preview)?)\s*(?:<[^>]*>)?\s*\(/g
+  const starts = [...source.matchAll(fnRe)].map((m) => m.index ?? 0)
+  if (starts.length === 0) return []
+  const lists = constNameLists(source)
+  const preludes = []
+  const tables = []
+  for (const [k, from] of starts.entries()) {
+    // One function's text: up to the next top-level item.
+    const rest = source.slice(from + 1)
+    const next = rest.search(/\n(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s/)
+    const to = Math.min(next < 0 ? source.length : from + 1 + next, starts[k + 1] ?? source.length)
+    const arms = dispatchFunctionArms(source.slice(from, to), file, lists)
+    preludes.push(...arms.prelude)
+    tables.push(...arms.table)
+  }
+  // A prelude block stands in only for a command NO table of the file serves:
+  // environment.rs's `dispatch` hands `LOCAL_PREVIEW_COMMANDS` to
+  // `dispatch_local_preview`, whose own table holds the real arms.
+  const served = new Set(tables.flatMap((arm) => arm.names))
+  const unserved = preludes
+    .map((arm) => ({ ...arm, names: arm.names.filter((name) => !served.has(name)) }))
+    .filter((arm) => arm.names.length > 0)
+  return [...unserved, ...tables]
+}
 
-  const lines = source.slice(matchStart).split(/\r?\n/)
+/**
+ * The arms of one dispatch function: its statement-level (four-space) `match
+ * name {` table — managed_desktops.rs matches `name` in a nested `let command =
+ * match name {` first, which is not its table — plus the early returns before
+ * it, `if name == "x" {`, `if matches!(name, "a" | "b") {` and `if
+ * LIST.contains(&name) {` over a `const LIST: &[&str]` of the same file
+ * (`environment_delivery_list`, the managed desktop file and clipboard ops).
+ *
+ * A prelude block is an arm only when it answers: its condition tests the name
+ * alone (no `&&` / `||` on anything else) and its body returns something other
+ * than an `Err`. The same shapes also guard commands a table serves
+ * (service_plane.rs fences `send_to_external_agent` before its table), and a
+ * guard read as the arm both hides the real arm's reads and silences the 404 of
+ * a command that only has a guard. {@link extractDispatchArms} then drops the
+ * names any table of the file serves.
+ *
+ * @param {string} text
+ * @param {string} file
+ * @param {Map<string, string[]>} [lists] `const NAME: &[&str]` lists of the file
+ * @returns {{ prelude: Array<{names: string[], body: string, file: string}>, table: Array<{names: string[], body: string, file: string}> }}
+ */
+function dispatchFunctionArms(text, file, lists = new Map()) {
   const arms = []
+  const tableAt = text.search(/^ {4}(?:let\s+[A-Za-z_]\w*\s*=\s*)?match name \{/m)
+  const prelude = (tableAt < 0 ? text : text.slice(0, tableAt)).split(/\r?\n/)
+  for (let i = 0; i < prelude.length; i += 1) {
+    if (!/^ {4}if (?:name ==|matches!\(|[A-Z][A-Z0-9_]*\.contains\(&name\))/.test(prelude[i]))
+      continue
+    // The condition runs to the first line that opens the block.
+    let open = i
+    while (open < prelude.length && !/\{\s*$/.test(prelude[open])) open += 1
+    const condition = prelude.slice(i, open + 1).join(" ")
+    const names = [
+      ...condition.matchAll(/name == "([a-z][a-z0-9_]*)"/g),
+      ...(/matches!\(\s*name\s*,([^)]*)\)/.exec(condition)?.[1] ?? "").matchAll(
+        /"([a-z][a-z0-9_]*)"/g
+      ),
+    ]
+      .map((m) => m[1])
+      .concat(
+        [...condition.matchAll(/\b([A-Z][A-Z0-9_]*)\.contains\(&name\)/g)].flatMap(
+          (m) => lists.get(m[1]) ?? []
+        )
+      )
+    if (names.length === 0) continue
+    const close = prelude.findIndex((line, j) => j > open && line === "    }")
+    const body = prelude.slice(i, close < 0 ? prelude.length : close + 1)
+    if (!testsNameAlone(condition) || !answers(body.slice(open - i + 1).join("\n"))) continue
+    arms.push({ names, body: body.join("\n"), file })
+  }
+  return { prelude: arms, table: tableAt < 0 ? [] : tableArms(text.slice(tableAt), file) }
+}
+
+/** The `if` condition tests the command name and nothing else. */
+function testsNameAlone(condition) {
+  const rest = condition
+    .replace(/matches!\(\s*name\s*,[^)]*\)/g, "")
+    .replace(/\bname\s*==\s*"[a-z][a-z0-9_]*"/g, "")
+    .replace(/\b[A-Z][A-Z0-9_]*\.contains\(&name\)/g, "")
+    .replace(/^\s*if\b/, "")
+    .replace(/\{\s*$/, "")
+  // What is left may only join the name tests together.
+  return /^[\s()|]*$/.test(rest)
+}
+
+/** The block returns a result, not only an error. */
+function answers(body) {
+  return /\breturn\s+(?!Err\s*\()/.test(body)
+}
+
+/**
+ * `const NAME: &[&str] = &[ "a", "b" ];` lists of one Rust file, by name.
+ *
+ * @param {string} source comment-stripped Rust source
+ * @returns {Map<string, string[]>}
+ */
+export function constNameLists(source) {
+  const lists = new Map()
+  for (const m of source.matchAll(
+    /\bconst\s+([A-Z][A-Z0-9_]*)\s*:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]/g
+  )) {
+    lists.set(
+      m[1],
+      [...m[2].matchAll(/"([a-z][a-z0-9_]*)"/g)].map((n) => n[1])
+    )
+  }
+  return lists
+}
+
+/**
+ * The arms of a statement-level `match name {` table, from its opening line.
+ *
+ * @param {string} text
+ * @param {string} file
+ */
+function tableArms(text, file) {
+  const arms = []
+  const lines = text.split(/\r?\n/)
   let current = null
 
   const finish = () => {
@@ -493,7 +610,7 @@ export function extractDispatchArms(rawSource, file) {
   for (const line of lines.slice(1)) {
     const isArmStart = /^ {8}"[a-z][a-z0-9_]*"/.test(line)
     const isContinuation = /^ {8}\| "[a-z][a-z0-9_]*"/.test(line)
-    if (/^ {8}_\s*=>/.test(line)) {
+    if (/^ {8}_\s*=>/.test(line) || /^ {4}\}/.test(line)) {
       finish()
       break
     }
@@ -542,10 +659,31 @@ export function armNamesOnLine(line) {
  * @param {string} body
  * @returns {Array<[string, string | undefined]>}
  */
-export function armRequiredFields(body) {
+export function armRequiredFields(body, options = {}) {
   const re =
     /\brequired(?:_aliased)?\s*(?:::<[^>]*>)?\s*\(\s*&args\s*,\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?/g
-  return [...body.matchAll(re)].map((m) => [m[1], m[2]])
+  return [...body.matchAll(re)].map((m) =>
+    options.withBranch ? [m[1], m[2], insideNestedBlock(body, m.index ?? 0)] : [m[1], m[2]]
+  )
+}
+
+/**
+ * Whether `index` sits inside a block nested in the arm's own block — an `if`,
+ * `else`, `match` arm or closure body, i.e. a read that may run for only some of
+ * the commands the arm serves. String literals are blanked first so braces in
+ * `format!` strings do not count.
+ *
+ * @param {string} body the arm's text, from its pattern line
+ * @param {number} index
+ */
+function insideNestedBlock(body, index) {
+  const before = body.slice(0, index).replace(/"(?:[^"\\]|\\.)*"/g, '""')
+  let depth = 0
+  for (const char of before) {
+    if (char === "{") depth += 1
+    else if (char === "}") depth -= 1
+  }
+  return depth >= 2
 }
 
 /**
@@ -982,17 +1120,33 @@ export function analyze(input) {
   // omit it and the arm rejects it 400. There is no third option, so the
   // command cannot be called at all. This is strictly worse than a dropped
   // argument and is reported separately from `schema-missing-params`.
+  //
+  // One arm can serve several commands and branch on which one it got
+  // (`host_provider_credential_set` requires `apiKey`, its sibling
+  // `host_git_credential_set` requires `token`). A required field read inside a
+  // nested block, that a sibling's schema declares, belongs to that sibling's
+  // branch, so it deadlocks nobody. An unconditional read (the arm's own block)
+  // must be declared by every command the arm serves.
+  const declaredFields = (command) => {
+    const schema = catalog.get(command)?.inputSchema
+    if (!schema || typeof schema !== "object") return new Set()
+    return new Set(Object.keys(schema.properties ?? {}).map(normalizeField))
+  }
   for (const [name, arm] of arms) {
     const entry = catalog.get(name)
     const schema = entry?.inputSchema
     if (!schema || typeof schema !== "object") continue
     if (schema.additionalProperties !== false) continue
     const declared = new Set(Object.keys(schema.properties ?? {}).map(normalizeField))
-    const deadlocking = armRequiredFields(arm.body)
-      .filter(([field, alias]) => {
-        if (declared.has(normalizeField(field))) return false
-        return !(alias && declared.has(normalizeField(alias)))
-      })
+    const siblings = (arm.names ?? []).filter((other) => other !== name).map(declaredFields)
+    const accepts = (field, branched) =>
+      declared.has(normalizeField(field)) ||
+      (branched && siblings.some((fields) => fields.has(normalizeField(field))))
+    const deadlocking = armRequiredFields(arm.body, { withBranch: true })
+      .filter(
+        ([field, alias, branched]) =>
+          !accepts(field, branched) && !(alias && accepts(alias, branched))
+      )
       .map(([field]) => field)
     if (deadlocking.length > 0) {
       add(
@@ -1306,6 +1460,8 @@ export const DELEGATED_ARM_FILES = [
   COMPANION_SOURCES.sftpService,
   COMPANION_SOURCES.fileShareRpc,
   COMPANION_SOURCES.remoteDesktopCommands,
+  COMPANION_SOURCES.managedDesktops,
+  COMPANION_SOURCES.managedDesktopResults,
 ]
 
 /**
@@ -1373,7 +1529,7 @@ export function collectInputs() {
   for (const file of armFiles) {
     for (const arm of extractDispatchArms(read(file), file)) {
       for (const name of arm.names) {
-        if (!arms.has(name)) arms.set(name, { body: arm.body, file: arm.file })
+        if (!arms.has(name)) arms.set(name, { body: arm.body, file: arm.file, names: arm.names })
       }
     }
   }

@@ -1,5 +1,5 @@
 {
-  "$comment": "Layer map for the Claude sidecar (ADR-0197), read by scripts/gates/check-sidecar-architecture.mjs. `layers` maps each sidecar/src/<layer>/ to the layers it may import (its own layer is always allowed). Everything else under sidecar/ that is not a launcher, a self-contained tree, test-support or a test is LEGACY: code the migration has not moved yet. Legacy may import src/, src/ may not import legacy.",
+  "$comment": "Layer map for the Claude sidecar (ADR-0197), read by scripts/gates/check-sidecar-architecture.mjs. `layers` maps each sidecar/src/<layer>/ to the layers it may import (its own layer is always allowed). Everything else under sidecar/ that is not a launcher, a self-contained tree, test-support or a test is LEGACY: code the migration has not moved yet. Legacy may import src/, src/ may not import legacy. `externalData` names the files outside sidecar/ a sidecar file may import: shared JSON data, and `packages/agent-pi/src/subagent-models.ts`, which the Pi extension imports: the CLI builds inline it with esbuild (scripts/build/lib/stage-pi-extension.mjs) and the desktop ships it as a resource beside the raw extension (src-tauri/tauri.conf.json), so the relative import resolves in both.",
   "scope": "sidecar/",
   "nestedPackages": [
     "sidecar/vscode-ext-host/",
@@ -85,7 +85,8 @@
   "externalData": [
     "lib/settings/builtin-tools-data.json",
     "lib/ai/code-mode/limits.json",
-    "lib/ai/providers/models-dev-capabilities.json"
+    "lib/ai/providers/models-dev-capabilities.json",
+    "packages/agent-pi/src/subagent-models.ts"
   ],
   "isomorphic": [
     "sidecar/src/policy/permission/resolver.ts",
@@ -111,7 +112,12 @@
     "sidecar/src/services/code-graph/languages/index.ts",
     "sidecar/src/services/code-graph/parser.ts",
     "sidecar/src/services/lsp/servers.ts",
-    "sidecar/test-support/live-harness.ts"
+    "sidecar/test-support/live-harness.ts",
+    "sidecar/src/tools/adapters/ai-sdk.ts",
+    "sidecar/src/tools/adapters/ai-sdk-tool-search.ts",
+    "sidecar/src/tools/state/read-tracker.ts",
+    "sidecar/src/context/progress-checkpoint.ts",
+    "sidecar/native-agents/pins.json"
   ],
   "externalScanRoots": [
     ".storybook/",

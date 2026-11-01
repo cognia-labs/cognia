@@ -156,9 +156,21 @@ export function expectedTestPaths(file) {
   return [`${stem}.test.ts`, `${stem}.test.tsx`, `${stem}.spec.ts`, `${stem}.spec.tsx`]
 }
 
-/** Rust files satisfy the rule with an in-file test module. Pure. */
+/**
+ * Rust files satisfy the rule with an in-file test module. Pure.
+ *
+ * `#[cfg(test)]`, or an `all(…)` that requires `test` among its predicates:
+ * `#[cfg(all(test, unix))]` gates a real test module on a platform (the Lume
+ * workspace adoption tests need Unix symlinks). `not(test)` and `any(test, …)`
+ * do not count, since neither guarantees the module only builds under test.
+ */
 export function rustHasInlineTests(source) {
-  return source.includes("#[cfg(test)]")
+  if (source.includes("#[cfg(test)]")) return true
+  for (const match of source.matchAll(/#\[cfg\(\s*all\(((?:[^()]|\([^()]*\))*)\)\s*\)\]/g)) {
+    const predicates = match[1].replace(/\([^()]*\)/g, "(…)").split(",")
+    if (predicates.some((predicate) => predicate.trim() === "test")) return true
+  }
+  return false
 }
 
 /**

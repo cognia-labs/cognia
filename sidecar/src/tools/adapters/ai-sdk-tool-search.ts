@@ -16,7 +16,7 @@ import { tool } from "ai"
 import type { ToolSet } from "ai"
 import { z } from "zod"
 import { modelToolName, restoreToolName } from "../../policy/tool-catalog/model-names.ts"
-import type { ConversationMessage } from "../../context/compaction.ts"
+import type { ConversationMessage } from "../../shared/wire/conversation.ts"
 
 export const AI_SDK_TOOL_SEARCH_NAME = "ToolSearch"
 

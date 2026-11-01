@@ -1061,6 +1061,28 @@
         "chat_copilot_resize": "Controls the local chat-copilot Tauri window, geometry, visibility, or clipboard (src-tauri/src/chat_copilot/mod.rs); no remote UI surface exists.",
         "chat_copilot_copy": "Controls the local chat-copilot Tauri window, geometry, visibility, or clipboard (src-tauri/src/chat_copilot/mod.rs); no remote UI surface exists."
       }
+    },
+    {
+      "disposition": "local-only",
+      "reason": "Host bootstrap over SSH (ADR-0235 P5/P6) is driven by this desktop: it opens the SSH session from the user's own keys, installs a Host on the remote machine and pairs this desktop with it. A paired or headless client has no Host to install itself onto, and routing the steps to the selected Host would install from the wrong machine.",
+      "commands": [
+        "host_installer_close",
+        "host_installer_inspect",
+        "host_installer_install",
+        "host_installer_pair",
+        "host_installer_ssh_open",
+        "host_installer_uninstall"
+      ]
+    },
+    {
+      "disposition": "local-only",
+      "reason": "The status bar's network meter reads this machine's own interface counters and measures latency from this machine through its own proxy policy. A remote Host's interfaces and route are not what the readout describes.",
+      "commands": ["network_interface_counters", "network_latency_probe"]
+    },
+    {
+      "disposition": "local-only",
+      "reason": "Magpie discovery returns the port of the gateway on this machine's loopback; the caller then connects to 127.0.0.1 on that port. A Host's port would point the client at its own loopback, where no such gateway listens.",
+      "commands": ["magpie_gateway_port"]
     }
   ]
 }

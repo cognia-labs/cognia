@@ -77,6 +77,13 @@ export const COMPANION_SOURCES = Object.freeze({
    * command, the same one `remote_desktop_local_call` reaches (ADR-0234).
    */
   remoteDesktopCommands: "crates/cognia-remote-desktop/src/commands.rs",
+  /**
+   * Managed desktops (ADR-0233/0234) dispatch from their own modules of
+   * `cognia-companion-rpc`, not from `rpc/`; `gen-companion-api.mjs`
+   * already reads both for argument schemas.
+   */
+  managedDesktops: "crates/cognia-companion-rpc/src/managed_desktops.rs",
+  managedDesktopResults: "crates/cognia-companion-rpc/src/managed_desktop_results.rs",
 })
 
 /** The dispatch file of one RPC family, e.g. `rpcFamilyFile("chat")`. */
