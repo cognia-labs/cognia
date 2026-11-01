@@ -338,6 +338,10 @@ test("media requests preserve the native contract and bound binary transfer chun
     assert.equal(frame({ sourceToken: "source", time: 0, ...(format ? { format } : {}) }), true)
   }
   assert.equal(frame({ sourceToken: "source", time: 0, format: "jpeg" }), false)
+  const sheet = { fps: 24, frameCount: 24, maxEdge: 256, format: "webp" }
+  assert.equal(frame({ sourceToken: "source", time: 0, animationSheet: sheet }), true)
+  assert.equal(frame({ sourceToken: "source", time: 0, animationSheet: { ...sheet, format: "gif" } }), false)
+  assert.equal(frame({ sourceToken: "source", time: 0, animationSheet: { ...sheet, extra: 1 } }), false)
   const analysisFrame = ajv.compile(schemas.get("plugin_media_read_analysis_frame"))
   assert.equal(analysisFrame({ outputDirectory: "/owned/analysis", path: "/owned/analysis/frame.png" }), true)
   assert.equal(analysisFrame({ path: "/owned/analysis/frame.png" }), false)

@@ -618,8 +618,18 @@ pub(super) async fn dispatch(
                 .value
                 .clone()
                 .ok_or_else(|| RpcError::malformed(format!("{name}.input.value is required")))?;
-            tokio::task::spawn_blocking(move || {
-                cognia_secrets::keyring_secrets::set(&input.namespace, &input.key, &value)
+            // The guarded form is the desktop's compare-and-set; dropping it
+            // here would turn a revision check into a blind overwrite.
+            let condition: Option<cognia_secrets::keyring_secrets::SecretStoreSetCondition> =
+                optional(&args, "condition")?;
+            tokio::task::spawn_blocking(move || match condition {
+                Some(condition) => cognia_secrets::keyring_secrets::set_if(
+                    &input.namespace,
+                    &input.key,
+                    &value,
+                    &condition,
+                ),
+                None => cognia_secrets::keyring_secrets::set(&input.namespace, &input.key, &value),
             })
             .await
             .map_err(|error| RpcError::internal(error.to_string()))?

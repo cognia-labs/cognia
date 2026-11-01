@@ -261,11 +261,22 @@ pub(super) async fn dispatch(
             let token = required(&args, "sourceToken")?;
             let time = required(&args, "time")?;
             let format: Option<String> = optional(&args, "format")?;
-            let bytes = match format.as_deref() {
-                None | Some("rgba") => {
+            let animation_sheet: Option<cognia_media::VideoAnimationSheetOptions> =
+                optional(&args, "animationSheet")?;
+            let bytes = match (animation_sheet, format.as_deref()) {
+                // Same precedence as the desktop command: a sheet request wins.
+                (Some(options), None) => {
+                    service::video_animation_sheet(registry, token, options).await
+                }
+                (Some(_), Some(_)) => {
+                    return Err(RpcError::malformed(
+                        "animationSheet and format are mutually exclusive".to_string(),
+                    ));
+                }
+                (None, None | Some("rgba")) => {
                     service::plugin_media_get_video_frame(registry, token, time).await
                 }
-                Some("png") => service::video_frame_png(registry, token, time).await,
+                (None, Some("png")) => service::video_frame_png(registry, token, time).await,
                 _ => {
                     return Err(RpcError::malformed(
                         "frame format must be rgba or png".to_string(),
@@ -567,6 +578,65 @@ mod tests {
                 .is_err()
             );
         }
+        // The pet importer asks for a sprite sheet through this same command;
+        // a remote Host used to drop the option and answer with one raw frame.
+        // Sheets only accept VP8/VP9 sources, so this case needs its own clip.
+        let pet_source = workspace.path().join("pet.webm");
+        let encoded = std::process::Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x48:rate=4",
+                "-t",
+                "1",
+                "-c:v",
+                "libvpx",
+            ])
+            .arg(&pet_source)
+            .output()
+            .expect("ffmpeg fixture dependency");
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        let pet_info = call("video_get_info", json!({"filePath":pet_source}))
+            .await
+            .unwrap();
+        let pet_token = pet_info["sourceToken"].as_str().unwrap();
+        let sheet = call(
+            "plugin_media_get_video_frame",
+            json!({"sourceToken":pet_token,"time":0,"animationSheet":{"fps":2,"frameCount":2,"maxEdge":64,"format":"webp"}}),
+        )
+        .await
+        .unwrap();
+        let id = sheet["transferId"].as_str().unwrap();
+        let bytes: Vec<u8> = serde_json::from_value(
+            call(
+                "plugin_media_read_chunk",
+                json!({"transferId":id,"offset":0}),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&bytes[8..12], b"RIFF");
+        assert_eq!(&bytes[16..20], b"WEBP");
+        call("plugin_media_close_transfer", json!({"transferId":id}))
+            .await
+            .unwrap();
+        assert!(
+            call(
+                "plugin_media_get_video_frame",
+                json!({"sourceToken":token,"time":0,"format":"png","animationSheet":{"fps":2,"frameCount":2,"maxEdge":64}}),
+            )
+            .await
+            .is_err()
+        );
         let trimmed = call(
             "video_trim",
             json!({"options":{"sourceToken":token,"startTime":0,"endTime":0.5,"format":"mp4"}}),

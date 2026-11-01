@@ -146568,6 +146568,31 @@ paths:
                   enum:
                     - rgba
                     - png
+                animationSheet:
+                  type: object
+                  properties:
+                    fps:
+                      type: integer
+                      minimum: 1
+                      maximum: 30
+                    frameCount:
+                      type: integer
+                      minimum: 1
+                      maximum: 360
+                    maxEdge:
+                      type: integer
+                      minimum: 64
+                      maximum: 256
+                    format:
+                      type: string
+                      enum:
+                        - png
+                        - webp
+                  required:
+                    - fps
+                    - frameCount
+                    - maxEdge
+                  additionalProperties: false
               required:
                 - sourceToken
                 - time
@@ -170754,6 +170779,32 @@ paths:
                     value:
                       type: string
                       minLength: 1
+                  additionalProperties: false
+                condition:
+                  type: object
+                  required:
+                    - expected
+                  properties:
+                    expected:
+                      type:
+                        - string
+                        - "null"
+                    changes:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - key
+                          - value
+                        properties:
+                          key:
+                            type: string
+                            minLength: 1
+                          value:
+                            type:
+                              - string
+                              - "null"
+                        additionalProperties: false
                   additionalProperties: false
               additionalProperties: false
       responses:

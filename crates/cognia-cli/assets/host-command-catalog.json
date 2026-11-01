@@ -66658,6 +66658,39 @@
               "rgba",
               "png"
             ]
+          },
+          "animationSheet": {
+            "type": "object",
+            "properties": {
+              "fps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "frameCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 360
+              },
+              "maxEdge": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 256
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "png",
+                  "webp"
+                ]
+              }
+            },
+            "required": [
+              "fps",
+              "frameCount",
+              "maxEdge"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -79450,6 +79483,44 @@
               "value": {
                 "type": "string",
                 "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "condition": {
+            "type": "object",
+            "required": [
+              "expected"
+            ],
+            "properties": {
+              "expected": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
               }
             },
             "additionalProperties": false
@@ -110455,5 +110526,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "40f11ec33e956c517daccf27aec24ce18fbae8c5547b33737540b21e8eca816a"
+  "catalogHash": "912a032d9d2f280a6cee77cf4f3d052d2b7b8438a2cbb4e0bba25e284b87937a"
 }

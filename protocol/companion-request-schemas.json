@@ -19285,6 +19285,44 @@
             }
           },
           "additionalProperties": false
+        },
+        "condition": {
+          "type": "object",
+          "required": [
+            "expected"
+          ],
+          "properties": {
+            "expected": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "key",
+                  "value"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

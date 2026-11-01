@@ -2555,6 +2555,84 @@ async fn secret_store_arms_and_keyring_aliases_share_the_headless_backend() {
     assert_eq!(got, Value::Null);
 }
 
+/// `condition` is the desktop's compare-and-set (`compareAndSetSecret`). The
+/// remote arm used to drop it, so a stale writer silently overwrote the
+/// revision and left its related credentials half-published.
+#[tokio::test]
+async fn secret_store_set_honours_the_compare_and_set_condition() {
+    let state = test_state();
+    let host = headless_host();
+
+    macro_rules! call {
+        ($name:expr, $args:expr $(,)?) => {
+            dispatch(
+                $name,
+                $args,
+                &state,
+                &host,
+                "brain-local",
+                Some(ACCOUNT_ID),
+                Some("service"),
+            )
+            .await
+        };
+    }
+    let get = |key: &'static str| json!({ "input": { "namespace": "backup", "key": key } });
+
+    call!(
+        "secret_store_set",
+        json!({
+            "input": { "namespace": "backup", "key": "cas.revision", "value": "r1" },
+            "condition": { "expected": null, "changes": [{ "key": "cas.token", "value": "t1" }] },
+        }),
+    )
+    .expect("first publication from an empty revision");
+    assert_eq!(
+        call!("secret_store_get", get("cas.revision")).unwrap(),
+        json!("r1")
+    );
+    assert_eq!(
+        call!("secret_store_get", get("cas.token")).unwrap(),
+        json!("t1")
+    );
+
+    call!(
+        "secret_store_set",
+        json!({
+            "input": { "namespace": "backup", "key": "cas.revision", "value": "r2" },
+            "condition": { "expected": "stale", "changes": [{ "key": "cas.token", "value": "t2" }] },
+        }),
+    )
+    .expect_err("a stale expected revision must not publish");
+    assert_eq!(
+        call!("secret_store_get", get("cas.revision")).unwrap(),
+        json!("r1")
+    );
+    assert_eq!(
+        call!("secret_store_get", get("cas.token")).unwrap(),
+        json!("t1")
+    );
+
+    call!(
+        "secret_store_set",
+        json!({
+            "input": { "namespace": "backup", "key": "cas.revision", "value": "r2" },
+            "condition": { "expected": "r1", "changes": [{ "key": "cas.token", "value": null }] },
+        }),
+    )
+    .expect("matching revision publishes and applies the related delete");
+    assert_eq!(
+        call!("secret_store_get", get("cas.revision")).unwrap(),
+        json!("r2")
+    );
+    assert_eq!(
+        call!("secret_store_get", get("cas.token")).unwrap(),
+        Value::Null
+    );
+
+    call!("secret_store_delete", get("cas.revision")).expect("cleanup");
+}
+
 #[tokio::test]
 async fn ocr_service_arms_use_the_headless_registry() {
     let state = test_state();

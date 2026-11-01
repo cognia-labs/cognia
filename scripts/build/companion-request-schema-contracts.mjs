@@ -612,6 +612,17 @@ const schemas = {
     sourceToken: z.string().min(1),
     time: z.number().nonnegative(),
     format: z.enum(["rgba", "png"]).optional(),
+    // Pet media packs: a bounded, alpha-preserving sheet instead of one frame
+    // (`VideoAnimationSheetOptions`; bounds mirror `animation_sheet_filter`).
+    animationSheet: z
+      .object({
+        fps: z.number().int().min(1).max(30),
+        frameCount: z.number().int().min(1).max(360),
+        maxEdge: z.number().int().min(64).max(256),
+        format: z.enum(["png", "webp"]).optional(),
+      })
+      .strict()
+      .optional(),
   }),
   plugin_media_concatenate_videos: z.object({ clips: mediaClips }),
   plugin_media_apply_video_effect: z.object({

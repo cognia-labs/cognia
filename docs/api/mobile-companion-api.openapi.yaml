@@ -112533,6 +112533,31 @@ paths:
                   enum:
                     - rgba
                     - png
+                animationSheet:
+                  type: object
+                  properties:
+                    fps:
+                      type: integer
+                      minimum: 1
+                      maximum: 30
+                    frameCount:
+                      type: integer
+                      minimum: 1
+                      maximum: 360
+                    maxEdge:
+                      type: integer
+                      minimum: 64
+                      maximum: 256
+                    format:
+                      type: string
+                      enum:
+                        - png
+                        - webp
+                  required:
+                    - fps
+                    - frameCount
+                    - maxEdge
+                  additionalProperties: false
               required:
                 - sourceToken
                 - time
