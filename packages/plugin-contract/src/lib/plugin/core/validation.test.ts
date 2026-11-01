@@ -149,6 +149,37 @@ describe("Plugin Validation", () => {
       const validate = (authProviders: unknown) =>
         validatePluginManifest({ ...createValidManifest(), authProviders })
 
+      it("accepts the public Host authorization binding", () => {
+        expect(
+          validate([
+            {
+              ...provider(),
+              authorization: {
+                clientId: "client",
+                issuer: "https://issuer.test",
+                redirectUri: "cognia://auth/callback",
+              },
+            },
+          ]).errors
+        ).toEqual([])
+      })
+
+      it.each([
+        null,
+        {},
+        { clientId: "", issuer: "https://issuer.test" },
+        { clientId: "client", issuer: "http://issuer.test" },
+        { clientId: "client", issuer: "https://issuer.test/path" },
+        { clientId: "client", issuer: "https://issuer.test", redirectUri: "relative" },
+        { clientId: "client", issuer: "https://issuer.test", clientSecret: "secret" },
+      ])("rejects invalid or secret-bearing Host authorization %j", (authorization) => {
+        expect(validate([{ ...provider(), authorization }]).diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ code: "manifest.authProviders.authorization.invalid" }),
+          ])
+        )
+      })
+
       it("accepts legacy declarations and every supported method and principal", () => {
         expect(validate([provider()]).errors).toEqual([])
         expect(validate([]).errors).toEqual([])

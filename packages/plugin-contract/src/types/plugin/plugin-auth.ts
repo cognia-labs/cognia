@@ -141,6 +141,8 @@ export interface PluginAuthProviderDef {
   id: string
   /** Human-readable label shown in the consent UI. */
   label: string
+  /** Public client/issuer binding for a Host-managed provider. Never include a client secret. */
+  authorization?: AuthAuthorizationConfig
   /** Authentication methods supported by this provider. */
   methods?: AuthMethod[]
   /** Remote principal kinds supported by this provider. */

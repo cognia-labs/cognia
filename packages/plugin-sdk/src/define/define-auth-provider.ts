@@ -8,13 +8,11 @@
  * (ADR-0246 §5). The provider never schedules refresh itself.
  *
  * Usage:
+ *   // manifest.authProviders[] declares authorization: { clientId, issuer }.
  *   ctx.auth.registerProvider(defineAuthProvider({
+ *     management: "host",
  *     id: "acme",
  *     label: "Acme",
- *     getSessions: (scopes, options) => sessions.list(scopes, options),
- *     createSession: (scopes, options) => sessions.create(scopes, options),
- *     removeSession: (id) => sessions.remove(id),
- *     authorization: { clientId: "public-client-id", issuer: "https://login.acme.com" },
  *     // Use attempt.attemptId as state and attempt.codeChallenge with S256.
  *     // The Host chooses redirectUri and opens the returned HTTPS URL.
  *     authorize: (attempt) => acme.authorizationUrl(attempt),
@@ -26,6 +24,6 @@
 
 import type { PluginAuthProvider } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 
-export function defineAuthProvider(provider: PluginAuthProvider): PluginAuthProvider {
+export function defineAuthProvider<T extends PluginAuthProvider>(provider: T): T {
   return provider
 }

@@ -1057,6 +1057,27 @@ function validateAuthProviders(raw: unknown, pushError: PushDiagnostic): void {
       }
     }
 
+    if (provider.authorization !== undefined) {
+      const configuration = provider.authorization
+      if (
+        !isPlainObject(configuration) ||
+        typeof configuration.clientId !== "string" ||
+        !configuration.clientId.trim() ||
+        !isAuthProviderUrl(configuration.issuer, true) ||
+        (configuration.redirectUri !== undefined &&
+          (typeof configuration.redirectUri !== "string" ||
+            !URL.canParse(configuration.redirectUri))) ||
+        Object.keys(configuration).some(
+          (key) => !["clientId", "issuer", "redirectUri"].includes(key)
+        )
+      )
+        pushError(
+          `${field}.authorization`,
+          "manifest.authProviders.authorization.invalid",
+          `${field}.authorization requires a clientId, HTTPS issuer origin and optional absolute redirectUri; secrets are not allowed`
+        )
+    }
+
     if (provider.tokenEndpoints !== undefined) {
       if (!Array.isArray(provider.tokenEndpoints)) {
         pushError(

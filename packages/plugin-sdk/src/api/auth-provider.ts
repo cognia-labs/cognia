@@ -37,5 +37,7 @@ export type {
   PluginAuthAPI,
   PluginAuthConnectionsAPI,
   PluginAuthProvider,
+  LegacyPluginAuthProvider,
+  HostManagedPluginAuthProvider,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 export type * from "@cognia/plugin-contract/types/plugin/plugin-auth"

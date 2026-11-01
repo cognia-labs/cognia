@@ -78,6 +78,8 @@ export interface AuthSessionRemovedEvent {
 }
 
 export interface AuthenticationProvider {
+  /** Host-managed public providers receive Host-backed legacy session callbacks. */
+  management?: "legacy" | "host"
   /** Stable provider identifier — e.g. `"github"`, `"microsoft"`. */
   id: string
   /** Human-readable label for the consent UI. */

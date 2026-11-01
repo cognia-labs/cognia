@@ -4,15 +4,44 @@ import {
   createAuthAPI,
   getHostPkceTokenRequestExemptKeys,
   type PluginAuthProvider,
+  type LegacyPluginAuthProvider,
 } from "./auth-api"
 import { sanitizePluginNetworkEgress } from "./plugin-pii-gate"
 import { loggers } from "@cognia/logging"
 import { ConsumerTokenReadDenied } from "@/lib/plugin/auth/consumer-token-read-policy"
+import { getPlugin } from "@/lib/db/plugins"
+import { getAuthConnection } from "@/lib/db/auth-connections"
+import { getDb } from "@/lib/db/schema"
+import { connectProvider } from "@/lib/plugin/auth/connect"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import { setHostAuthBackend } from "@/lib/plugin/auth/connection-credentials"
+import { withNamedLock } from "@/lib/locks/named-lock"
+import { acceptCallback } from "@/lib/plugin/auth/callback-acceptor"
+import { openExternal } from "@/lib/tauri/opener"
+import { createIntegrationAccount } from "@/lib/db/integrations"
+import { listServiceConnections, putCapabilityGrant } from "@/lib/db/external-services"
+import {
+  registerExternalServices,
+  unregisterExternalServicesByPlugin,
+} from "@/lib/external-services/catalog"
+import {
+  registerIntegrationDefinitions,
+  __resetIntegrationRegistryForTesting,
+} from "@/lib/integrations/registry"
+import { createIntegrationsAPI } from "@/lib/plugin/api/integrations-api"
+import { proxyFetch } from "@/lib/network/proxy-fetch"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
 beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
+
+jest.mock("@/lib/db/plugins", () => ({
+  ...jest.requireActual("@/lib/db/plugins"),
+  getPlugin: jest.fn(),
+}))
+jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn() }))
+jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
 
 jest.mock("@/lib/plugin/auth/auth-attempts", () => ({
   ...jest.requireActual("@/lib/plugin/auth/auth-attempts"),
@@ -50,7 +79,7 @@ function pkceConfig(): PluginPkceFlowConfig {
   }
 }
 
-function fakeProvider(over?: Partial<PluginAuthProvider>): PluginAuthProvider {
+function fakeProvider(over?: Partial<LegacyPluginAuthProvider>): LegacyPluginAuthProvider {
   const session: AuthSession = __makeSession({
     accessToken: "tok",
     account: { id: "u1", label: "User" },
@@ -68,6 +97,271 @@ function fakeProvider(over?: Partial<PluginAuthProvider>): PluginAuthProvider {
 
 const allow = { hasPermission: () => true }
 const deny = { hasPermission: () => false }
+
+describe("Host-managed provider session adapter", () => {
+  const providerId = "host-acme"
+  let provider: PluginAuthProvider
+  let activeLocks: Set<string>
+  beforeEach(() => {
+    localStorage.clear()
+    resetPermissionGuard()
+    __resetAuthRegistryForTesting()
+    const stores = new Map<string, Map<string, string>>()
+    activeLocks = new Set()
+    setHostAuthBackend({
+      lock: (name, task) =>
+        withNamedLock(
+          name,
+          async (assertHeld) => {
+            activeLocks.add(name)
+            try {
+              return await task(assertHeld)
+            } finally {
+              activeLocks.delete(name)
+            }
+          },
+          { mode: "in-process" }
+        ),
+      storeFor(namespace) {
+        const values = stores.get(namespace) ?? new Map<string, string>()
+        stores.set(namespace, values)
+        return {
+          load: async (key) => values.get(key) ?? null,
+          save: async (key, value) => {
+            values.set(key, value)
+          },
+          delete: async (key) => {
+            values.delete(key)
+          },
+          isPersistent: () => true,
+        }
+      },
+    })
+    jest.mocked(getPlugin).mockResolvedValue({
+      manifest: {
+        author: "Acme",
+        providesServices: { "auth.host-acme": "1.0.0" },
+        authProviders: [
+          {
+            id: providerId,
+            label: "Acme",
+            methods: ["oauth-pkce"],
+            issuers: ["https://issuer.test"],
+            authorization: { clientId: "client", issuer: "https://issuer.test" },
+          },
+        ],
+      },
+    } as never)
+    provider = {
+      management: "host",
+      id: providerId,
+      label: "Acme",
+      authorize: jest.fn(async (attempt) => ({
+        url: `https://issuer.test/authorize?state=${attempt.attemptId}`,
+      })),
+      exchange: jest.fn(async () => ({
+        accessToken: "host-secret",
+        refreshToken: "refresh-secret",
+        scopes: ["read"],
+      })),
+      refresh: jest.fn(async (lineage) => {
+        expect(activeLocks.has(`cognia-auth-lineage:${lineage.lineageId}`)).toBe(true)
+        return { accessToken: "rotated-secret", scopes: ["read"] }
+      }),
+      describe: jest.fn(async (credentials) => ({
+        issuer: "https://issuer.test",
+        clientId: "client",
+        principal: { id: "user", kind: "user" as const },
+        accountLabel: "Account",
+        scopes: credentials.scopes,
+      })),
+      revoke: jest.fn(async (lineage) => {
+        expect(await getAuthConnection(lineage.ref)).toMatchObject({ status: "tombstoned" })
+        await expect(getConnectionManager().getCredentials(lineage.ref)).rejects.toThrow()
+      }),
+    }
+    jest.mocked(openExternal).mockImplementation(async (raw) => {
+      await acceptCallback(
+        { state: new URL(raw).searchParams.get("state")!, code: "code" },
+        "broadcast"
+      )
+    })
+    createAuthAPI("host-owner", allow).registerProvider(provider)
+  })
+  afterEach(() => {
+    setHostAuthBackend(null)
+    __resetAuthRegistryForTesting()
+    jest.restoreAllMocks()
+    __resetIntegrationRegistryForTesting()
+    unregisterExternalServicesByPlugin("host-business")
+  })
+
+  it("registers without session callbacks and serves connected, scope-matching sessions", async () => {
+    expect(provider.getSessions).toBeUndefined()
+    const owner = createAuthAPI("host-owner", allow)
+    expect(await owner.getSessions(providerId)).toEqual([])
+    const ref = await connectProvider({ providerId, scopes: ["read"] })
+    expect(await owner.getSession(providerId, ["read"])).toEqual({
+      id: ref,
+      accessToken: "host-secret",
+      account: { id: "user", label: "Account" },
+      scopes: ["read"],
+    })
+    expect(await owner.getSessions(providerId, ["write"])).toEqual([])
+    expect(provider.refresh).not.toHaveBeenCalled()
+    expect(getPermissionGuard().getAuditLog({ pluginId: "host-owner", action: "check" })).toEqual(
+      []
+    )
+    const row = (await getAuthConnection(ref))!
+    // A provider upgraded from the legacy form must not recurse through the
+    // manager's legacy-session bridge or surface an old provider's credentials.
+    await getDb().authConnections.put({
+      ...row,
+      id: "legacy-ref" as typeof ref,
+      identityKey: "legacy-ref",
+      legacySessionId: "legacy-session",
+    })
+    expect(await owner.getSessions(providerId)).toHaveLength(1)
+    await getDb().authConnections.put({ ...row, status: "needs-reauth" })
+    expect(await owner.getSessions(providerId)).toEqual([])
+  })
+
+  it("creates sessions through connectProvider and applies the consumer transition policy", async () => {
+    const owner = createAuthAPI("host-owner", allow)
+    const session = await owner.getSession(providerId, ["read"], { createIfNone: true })
+    expect(session?.accessToken).toBe("host-secret")
+    expect(provider.exchange).toHaveBeenCalledTimes(1)
+    const consumer = createAuthAPI("host-transition-consumer", allow)
+    const warn = jest.spyOn(loggers.plugin, "warn").mockImplementation(() => {})
+    await expect(consumer.getSession(providerId, ["read"])).resolves.toEqual(session)
+    await expect(consumer.getSessions(providerId, ["read"])).resolves.toEqual([session])
+    expect(warn).toHaveBeenCalledTimes(1)
+    const audit = getPermissionGuard().getAuditLog({
+      pluginId: "host-transition-consumer",
+      action: "check",
+    })
+    expect(audit).toHaveLength(2)
+    expect(JSON.stringify(audit)).not.toContain("host-secret")
+    await expect(
+      createAuthAPI("host-denied-consumer", allow, "deny").getSession(providerId, [])
+    ).rejects.toBeInstanceOf(ConsumerTokenReadDenied)
+    await expect(
+      createAuthAPI("host-owner", allow, "deny").getSession(providerId, [])
+    ).resolves.toEqual(session)
+  })
+
+  it("tombstones before revoking and removes the legacy session", async () => {
+    const session = await createAuthAPI("host-owner", allow).getSession(providerId, [], {
+      createIfNone: true,
+    })
+    await removeSession(providerId, session!.id)
+    expect(provider.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credentials: expect.objectContaining({ accessToken: "host-secret" }),
+      })
+    )
+    expect(await getAuthConnection(session!.id)).toMatchObject({ status: "revoked", revision: 2 })
+    expect(await createAuthAPI("host-owner", allow).getSessions(providerId)).toEqual([])
+  })
+
+  it("refreshes expired credentials only through the Host lineage lock", async () => {
+    jest.mocked(provider.exchange!).mockResolvedValueOnce({
+      accessToken: "expired",
+      refreshToken: "refresh-secret",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      scopes: ["read"],
+    })
+    await connectProvider({ providerId, scopes: ["read"] })
+    expect(provider.refresh).not.toHaveBeenCalled()
+    const owner = createAuthAPI("host-owner", allow)
+    const sessions = await Promise.all([
+      owner.getSession(providerId, []),
+      owner.getSession(providerId, []),
+    ])
+    expect(sessions.map((session) => session?.accessToken)).toEqual([
+      "rotated-secret",
+      "rotated-secret",
+    ])
+    expect(provider.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it("injects a granted consumer request through ctx.integrations without a session read", async () => {
+    const consumer = "host-business"
+    const ref = await connectProvider({ providerId, scopes: ["read"] })
+    registerExternalServices(consumer, [
+      {
+        id: "items",
+        label: "Items",
+        fallbackPolicy: "never",
+        providers: [
+          {
+            id: "api",
+            kind: "integration",
+            contributionId: "items",
+            priority: 1,
+            surfaces: ["chat"],
+          },
+        ],
+      },
+    ])
+    registerIntegrationDefinitions({
+      pluginId: consumer,
+      definitions: [
+        {
+          id: "items",
+          label: "Items",
+          allowedOrigins: ["https://issuer.test"],
+          authStrategies: [{ id: "oauth", type: "oauth2", label: "OAuth", providerId }],
+          resourceKinds: [],
+          eventTypes: [],
+          actions: [],
+        },
+      ],
+      handlers: {},
+    })
+    const account = await createIntegrationAccount(consumer, {
+      integrationId: "items",
+      providerId,
+      connectionId: ref,
+      authSessionId: "unused-legacy-handle",
+      remoteAccountId: "user",
+      label: "Account",
+    })
+    const api = createIntegrationsAPI(consumer, allow.hasPermission)
+    await expect(
+      api.authenticatedRequest(account.id, "https://issuer.test/items")
+    ).rejects.toMatchObject({ name: "ConsumerGrantRequired" })
+    const [projection] = await listServiceConnections({ pluginId: consumer })
+    await putCapabilityGrant({
+      id: "host-consumer-grant",
+      connectionId: projection.id,
+      providerFingerprint: projection.providerFingerprint,
+      consumerPluginId: consumer,
+      connectionRevision: 1,
+      operationPatterns: ["items.request.GET"],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    jest.mocked(proxyFetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: ["one"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+    const sessionRead = jest.spyOn(
+      listProviders().find((item) => item.id === providerId)!,
+      "getSessions"
+    )
+    expect(await api.authenticatedRequest(account.id, "https://issuer.test/items")).toMatchObject({
+      data: { items: ["one"] },
+    })
+    expect(
+      new Headers(jest.mocked(proxyFetch).mock.calls.at(-1)![1]?.headers).get("authorization")
+    ).toBe("Bearer host-secret")
+    expect(sessionRead).not.toHaveBeenCalled()
+    expect(provider.refresh).not.toHaveBeenCalled()
+  })
+})
 
 it("wires all four connection methods through the auth:consume gate", async () => {
   const connections = createAuthAPI("consumer", deny).connections

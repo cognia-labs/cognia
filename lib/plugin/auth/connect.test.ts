@@ -131,6 +131,27 @@ it("exchanges client credentials without opening a browser", async () => {
   )
 })
 
+it("uses the manifest authorization binding for Host-managed providers", async () => {
+  provider.management = "host"
+  provider.authorization = { clientId: "wrong-client", issuer: "https://wrong.test" }
+  const plugin = (await getPlugin("owner"))!
+  const manifest = plugin.manifest as { authProviders: Array<Record<string, unknown>> }
+  manifest.authProviders[0].authorization = { clientId: "client", issuer: "https://issuer.test" }
+  await connectProvider({ providerId: "acme", scopes: ["read"] })
+  expect(provider.authorize).toHaveBeenCalledWith(
+    expect.objectContaining({ clientId: "client", issuer: "https://issuer.test" })
+  )
+})
+
+it("requires a declared manifest authorization binding for Host-managed providers", async () => {
+  provider.management = "host"
+  await expect(connectProvider({ providerId: "acme", scopes: [] })).rejects.toMatchObject({
+    code: "INVALID_REQUEST",
+    reason: "authorization-configuration-missing",
+  })
+  expect(provider.exchange).not.toHaveBeenCalled()
+})
+
 it.each(["https://foreign.test/authorize", "http://issuer.test/authorize", "javascript:alert(1)"])(
   "rejects unsafe authorization URL %s before opening",
   async (url) => {

@@ -123,7 +123,10 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     const method = requestedMethod ?? declared.find(supported)
     if (!method || !declared.includes(method) || !supported(method))
       throw new AuthConnectError("NOT_SUPPORTED", "auth-method-unavailable")
-    const configuration = provider.authorization
+    const configuration =
+      provider.management === "host" && provider.pluginId !== null
+        ? definition?.authorization
+        : (definition?.authorization ?? provider.authorization)
     if (!configuration?.clientId || !configuration.issuer)
       throw new AuthConnectError("INVALID_REQUEST", "authorization-configuration-missing")
     const issuer = new URL(configuration.issuer)

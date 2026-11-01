@@ -43,16 +43,9 @@ export interface ConfidentialExchangeResponse {
   body: Record<string, unknown>
 }
 
-/** Provider object a plugin registers via `ctx.auth.registerProvider`. */
-export interface PluginAuthProvider {
+interface PluginAuthProviderCallbacks {
   id: string
   label: string
-  getSessions(
-    scopes: readonly string[] | undefined,
-    options: AuthSessionOptions
-  ): Promise<AuthSession[]>
-  createSession(scopes: readonly string[], options?: AuthSessionOptions): Promise<AuthSession>
-  removeSession(sessionId: string): Promise<void>
   /** Public client/issuer binding for Host-created attempts; never contains a client secret. */
   authorization?: AuthAuthorizationConfig
   /** Build an HTTPS authorization URL using attemptId as state, redirectUri and codeChallenge (S256).
@@ -73,6 +66,33 @@ export interface PluginAuthProvider {
   /** Describe the remote identity behind fresh credentials, for the Host's connection record (ADR-0246 §2). */
   describe?(credentials: AuthCredentialSet): Promise<AuthIdentityDescription>
 }
+
+/** Existing providers continue to own their sessions without a management marker. */
+export interface LegacyPluginAuthProvider extends PluginAuthProviderCallbacks {
+  management?: "legacy"
+  getSessions(
+    scopes: readonly string[] | undefined,
+    options: AuthSessionOptions
+  ): Promise<AuthSession[]>
+  createSession(scopes: readonly string[], options?: AuthSessionOptions): Promise<AuthSession>
+  removeSession(sessionId: string): Promise<void>
+}
+
+/**
+ * The Host owns sessions, credential storage and refresh scheduling. Declare
+ * authorization in manifest.authProviders[]; only coordinated callbacks see tokens.
+ */
+export interface HostManagedPluginAuthProvider extends PluginAuthProviderCallbacks {
+  management: "host"
+  describe(credentials: AuthCredentialSet): Promise<AuthIdentityDescription>
+  refresh(lineage: AuthRefreshContext): Promise<AuthCredentialSet>
+  getSessions?: never
+  createSession?: never
+  removeSession?: never
+}
+
+/** Provider object a plugin registers via `ctx.auth.registerProvider`. */
+export type PluginAuthProvider = LegacyPluginAuthProvider | HostManagedPluginAuthProvider
 
 /**
  * Consumer connection API (`auth:consume`). A connection is visible only to its

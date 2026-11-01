@@ -176,6 +176,8 @@ export type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
   PluginAuthProvider,
+  LegacyPluginAuthProvider,
+  HostManagedPluginAuthProvider,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 export type {
   PluginUriAPI,

@@ -1,4 +1,4 @@
-import type { PluginAuthProvider, PluginContext } from "@cognia/plugin-sdk"
+import type { LegacyPluginAuthProvider, PluginContext } from "@cognia/plugin-sdk"
 
 export const FEISHU_PROVIDER_ID = "feishu-user-oauth"
 export const FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
@@ -6,8 +6,8 @@ const AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 const USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 const RECORD_PREFIX = "oauth-session:"
 const STATE_PREFIX = "cognia-plugin:feishu-auth:"
-type Session = Awaited<ReturnType<PluginAuthProvider["createSession"]>>
-type SessionOptions = Parameters<PluginAuthProvider["createSession"]>[1]
+type Session = Awaited<ReturnType<LegacyPluginAuthProvider["createSession"]>>
+type SessionOptions = Parameters<LegacyPluginAuthProvider["createSession"]>[1]
 
 interface Configuration {
   clientId: string
@@ -115,7 +115,7 @@ function grantedScopes(raw: string): string[] {
 export function createFeishuAuthProvider(
   ctx: PluginContext,
   options: { now?: () => number; timeoutMs?: number; nonce?: () => string } = {}
-): { provider: PluginAuthProvider; dispose: () => void } {
+): { provider: LegacyPluginAuthProvider; dispose: () => void } {
   const now = options.now ?? Date.now
   const controller = new AbortController()
   const refreshing = new Map<string, Promise<Session | undefined>>()
@@ -360,7 +360,7 @@ export function createFeishuAuthProvider(
     }
   }
 
-  const provider: PluginAuthProvider = {
+  const provider: LegacyPluginAuthProvider = {
     id: FEISHU_PROVIDER_ID,
     label: "Feishu user OAuth",
     createSession,

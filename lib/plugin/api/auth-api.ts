@@ -4,7 +4,8 @@
  * Promotes the previously VS-Code-only `auth-provider-registry` into a
  * first-class native plugin surface: a plugin can REGISTER an authentication
  * provider (`auth:provide`) and CONSUME sessions from any provider
- * (`auth:consume`), with tokens persisted via `ctx.secrets`. A PKCE helper
+ * (`auth:consume`). Host-managed providers keep credentials in the Host's
+ * connection store. Legacy providers continue to own their sessions. A PKCE helper
  * (`createPkceFlow`) wraps the reusable OAuth flow so a provider's
  * `createSession` doesn't hand-roll crypto. Like VS Code `authentication` +
  * Raycast OAuth / `withAccessToken`.
@@ -15,7 +16,16 @@ import {
   getSession as registryGetSession,
   getProvider,
   onDidChangeSessions as registryOnDidChange,
+  type AuthSession,
+  type AuthenticationProvider,
 } from "@/lib/plugin/auth/auth-provider-registry"
+import { getAuthConnection, listAuthConnections } from "@/lib/db/auth-connections"
+import { connectProvider } from "@/lib/plugin/auth/connect"
+import {
+  ConnectionUnavailableError,
+  getConnectionManager,
+} from "@/lib/plugin/auth/connection-manager"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { createAttempt } from "@/lib/plugin/auth/auth-attempts"
 import { acceptCallback, registerAuthCallbackWaiter } from "@/lib/plugin/auth/callback-acceptor"
 import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
@@ -34,12 +44,76 @@ export { AuthRefreshRejected } from "@cognia/plugin-contract/lib/plugin/auth/aut
 import type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
+  PluginAuthProvider,
   PluginAuthSessionMetadata,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
+
+/** Adapt connection-backed providers for the native and VS Code session surfaces. */
+function hostManagedProvider(
+  provider: Extract<PluginAuthProvider, { management: "host" }>,
+  pluginId: string
+): AuthenticationProvider {
+  if (typeof provider.describe !== "function" || typeof provider.refresh !== "function")
+    throw new Error("Host-managed auth providers require describe and refresh callbacks.")
+  if (provider.getSessions || provider.createSession || provider.removeSession)
+    throw new Error("Host-managed auth providers cannot implement session callbacks.")
+
+  async function sessionFor(ref: AuthConnectionRef): Promise<AuthSession> {
+    const manager = getConnectionManager()
+    const credentials = await manager.getCredentials(ref)
+    // Credential resolution may refresh or await a provider. Fence logout and
+    // ownership changes after it, before returning anything to a session reader.
+    const row = await manager.getConnection(ref)
+    if (row.providerId !== provider.id || row.ownerPluginId !== pluginId)
+      throw new ConnectionUnavailableError("provider-unavailable")
+    return {
+      id: row.id,
+      accessToken: credentials.accessToken,
+      account: { id: row.principalId, label: row.accountLabel },
+      scopes: [...credentials.scopes].sort(),
+    }
+  }
+  return {
+    ...provider,
+    pluginId,
+    async getSessions(scopes) {
+      const rows = await listAuthConnections(provider.id)
+      const sessions: AuthSession[] = []
+      for (const row of rows) {
+        if (
+          row.ownerPluginId !== pluginId ||
+          row.legacySessionId ||
+          row.status !== "connected" ||
+          (scopes && !scopes.every((scope) => row.scopes.includes(scope)))
+        )
+          continue
+        try {
+          const session = await sessionFor(row.id)
+          if (!scopes || scopes.every((scope) => session.scopes.includes(scope)))
+            sessions.push(session)
+        } catch (error) {
+          // A concurrent disconnect or provider outage removes this session.
+          if (!(error instanceof ConnectionUnavailableError)) throw error
+        }
+      }
+      return sessions
+    },
+    async createSession(scopes) {
+      return sessionFor(await connectProvider({ providerId: provider.id, scopes }))
+    },
+    async removeSession(sessionId) {
+      const row = await getAuthConnection(sessionId)
+      if (row?.providerId === provider.id && row.ownerPluginId === pluginId)
+        await getConnectionManager().disconnect(row.id, { revoke: Boolean(provider.revoke) })
+    },
+  }
+}
 export type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
   PluginAuthProvider,
+  LegacyPluginAuthProvider,
+  HostManagedPluginAuthProvider,
   ConfidentialExchangeRequest,
   ConfidentialExchangeResponse,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
@@ -109,7 +183,11 @@ export function createAuthAPI(
       if (existing && existing.pluginId !== pluginId) {
         throw new Error(`Auth provider "${provider.id}" is owned by another plugin.`)
       }
-      return registerAuthenticationProvider({ ...provider, pluginId })
+      return registerAuthenticationProvider(
+        provider.management === "host"
+          ? hostManagedProvider(provider, pluginId)
+          : { ...provider, pluginId }
+      )
     },
     async getSession(providerId, scopes, sessionOptions) {
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
