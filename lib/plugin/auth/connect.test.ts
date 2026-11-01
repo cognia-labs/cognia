@@ -15,6 +15,8 @@ import { AuthConnectionManager, getConnectionManager } from "./connection-manage
 import { setHostAuthBackend } from "./connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
 import { PluginGatewayError } from "@/lib/plugin/core/transport"
+import { subscribeConnectionPrompts, resolveConnectionPrompt } from "./connection-prompts"
+import { registerLegacySessionMigration } from "./legacy-session-migrations"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn() }))
@@ -144,6 +146,29 @@ it("uses the manifest authorization binding for Host-managed providers", async (
   )
 })
 
+it("refuses to exchange until the registered legacy migration succeeds", async () => {
+  provider.management = "host"
+  const plugin = (await getPlugin("owner"))!
+  const manifest = plugin.manifest as { authProviders: Array<Record<string, unknown>> }
+  manifest.authProviders[0].authorization = { clientId: "client", issuer: "https://issuer.test" }
+  const migrate = jest.fn(async () => {
+    throw new Error("migration failed")
+  })
+  const dispose = registerLegacySessionMigration("owner", provider.id, {
+    migrate,
+    aliases: async () => new Map(),
+  })
+  try {
+    await expect(
+      connectProvider({ providerId: provider.id, scopes: ["read"], method: "client-credentials" })
+    ).rejects.toMatchObject({ reason: "provider-or-storage-failed" })
+    expect(migrate).toHaveBeenCalledWith(provider)
+    expect(provider.exchange).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+  }
+})
+
 it("requires a declared manifest authorization binding for Host-managed providers", async () => {
   provider.management = "host"
   await expect(connectProvider({ providerId: "acme", scopes: [] })).rejects.toMatchObject({
@@ -151,6 +176,95 @@ it("requires a declared manifest authorization binding for Host-managed provider
     reason: "authorization-configuration-missing",
   })
   expect(provider.exchange).not.toHaveBeenCalled()
+})
+
+it("resolves the configured App ID without exposing Host configuration to attempt callbacks", async () => {
+  provider.management = "host"
+  const plugin = (await getPlugin("owner"))!
+  const definition = (plugin.manifest.authProviders as Array<Record<string, unknown>>)[0]
+  definition.authorization = {
+    clientIdFrom: { configuration: "appId" },
+    issuer: "https://issuer.test",
+  }
+  definition.configurationSchema = {
+    type: "object",
+    properties: { appId: { type: "string" } },
+    required: ["appId"],
+  }
+  await connectProvider({
+    providerId: "acme",
+    scopes: [],
+    configuration: {
+      appId: "client",
+      clientId: "ignored",
+      redirectUri: "https://callback.test/plugin-auth/callback",
+    },
+  })
+  expect(provider.exchange).toHaveBeenCalledWith(
+    expect.objectContaining({
+      clientId: "client",
+      redirectUri: "https://callback.test/plugin-auth/callback",
+    }),
+    expect.anything()
+  )
+  const attempt = jest.mocked(provider.authorize!).mock.calls[0][0]
+  expect(attempt).not.toHaveProperty("configuration")
+  expect(attempt).not.toHaveProperty("clientIdFrom")
+})
+
+it.each([undefined, "", 42])(
+  "rejects a missing or invalid configured App ID %p before authorization",
+  async (appId) => {
+    provider.management = "host"
+    const plugin = (await getPlugin("owner"))!
+    const definition = (plugin.manifest.authProviders as Array<Record<string, unknown>>)[0]
+    definition.authorization = {
+      clientIdFrom: { configuration: "appId" },
+      issuer: "https://issuer.test",
+    }
+    definition.configurationSchema = {
+      type: "object",
+      properties: { appId: { type: "string" } },
+      required: ["appId"],
+    }
+    await expect(
+      connectProvider({ providerId: "acme", scopes: [], configuration: { appId } })
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" })
+    expect(provider.authorize).not.toHaveBeenCalled()
+  }
+)
+
+it("asks the Host configuration form and uses its selected method", async () => {
+  provider.management = "host"
+  const plugin = (await getPlugin("owner"))!
+  const definition = (plugin.manifest.authProviders as Array<Record<string, unknown>>)[0]
+  definition.authorization = {
+    clientIdFrom: { configuration: "appId" },
+    issuer: "https://issuer.test",
+  }
+  definition.configurationSchema = {
+    type: "object",
+    properties: { appId: { type: "string" } },
+    required: ["appId"],
+  }
+  const dispose = subscribeConnectionPrompts(({ current }) => {
+    if (current?.kind === "configure")
+      resolveConnectionPrompt(current.id, {
+        kind: "configured",
+        method: "client-credentials",
+        configuration: { appId: "client", issuer: "https://issuer.test" },
+      })
+  })
+  try {
+    await connectProvider({ providerId: "acme", scopes: [] })
+    expect(provider.exchange).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: "client", method: "client-credentials" }),
+      expect.anything()
+    )
+    expect(openExternal).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+  }
 })
 
 it("binds Host form client selection to the attempt and connection", async () => {

@@ -12,6 +12,38 @@ jest.mock("@/lib/plugin/auth/callback-acceptor", () => ({
   startHostAuthCallbackListeners: jest.fn(() => jest.fn()),
 }))
 
+it("dismisses an active Host setup form when the runtime unmounts", async () => {
+  const { unmount } = render(
+    <NextIntlClientProvider locale="en" messages={{ plugins: { auth: en } }}>
+      <PluginConnectionPromptHost />
+    </NextIntlClientProvider>
+  )
+  let pending!: ReturnType<typeof requestConnectionPrompt>
+  act(() => {
+    pending = requestConnectionPrompt({
+      kind: "configure",
+      pluginId: "feishu-auth",
+      pluginName: "Feishu",
+      providerLabel: "Feishu",
+      schema: {
+        type: "object",
+        properties: {
+          appId: { type: "string" },
+          clientSecret: { type: "string", format: "secret" },
+        },
+        required: ["appId"],
+      },
+      issuers: ["https://accounts.feishu.cn"],
+      methods: ["oauth-pkce"],
+      defaults: { issuer: "https://accounts.feishu.cn" },
+    })
+  })
+  expect(screen.getByRole("dialog", { name: "Configure Feishu" })).toBeInTheDocument()
+  expect(screen.getByLabelText("App secret")).toHaveAttribute("type", "password")
+  unmount()
+  await expect(pending).resolves.toEqual({ kind: "dismissed" })
+})
+
 it("starts Host callbacks at runtime mount and wires sign-in approval", async () => {
   const { unmount } = render(
     <NextIntlClientProvider locale="en" messages={{ plugins: { auth: en } }}>

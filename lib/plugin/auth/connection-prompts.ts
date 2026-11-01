@@ -1,6 +1,8 @@
 import type {
   AuthConnectionMetadata,
   AuthConnectionRef,
+  AuthMethod,
+  AuthProviderConfigurationSchema,
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 export interface ConnectionGrantOperation {
@@ -11,6 +13,15 @@ export interface ConnectionGrantOperation {
 }
 
 type PromptInput =
+  | {
+      kind: "configure"
+      providerLabel: string
+      schema: AuthProviderConfigurationSchema
+      issuers: string[]
+      methods: AuthMethod[]
+      defaults: Record<string, string>
+    }
+  | { kind: "connect-error"; reason: "tenant-scope-required" | "identity-conflict" }
   | { kind: "picker"; candidates: AuthConnectionMetadata[] }
   | { kind: "sign-in"; providerId: string; providerLabel: string; scopes: string[] }
   | { kind: "add-scopes"; connection: AuthConnectionMetadata; scopes: string[] }
@@ -26,6 +37,7 @@ export type ConnectionPrompt = PromptInput & {
   pluginName: string
 }
 export type ConnectionPromptResult =
+  | { kind: "configured"; configuration: Record<string, string>; method: AuthMethod }
   | { kind: "selected"; ref: AuthConnectionRef }
   | { kind: "sign-in" }
   | { kind: "reconnect" }
@@ -54,12 +66,27 @@ function notify() {
 
 /** No mounted Host surface (including CLI/headless) always settles immediately. */
 export function requestConnectionPrompt(
-  input: PromptInput & { pluginId: string; pluginName: string }
+  input: PromptInput & { pluginId: string; pluginName: string },
+  signal?: AbortSignal
 ): Promise<ConnectionPromptResult> {
-  if (!listeners.size) return Promise.resolve({ kind: "dismissed" })
+  if (!listeners.size || signal?.aborted) return Promise.resolve({ kind: "dismissed" })
   const request = structuredClone({ ...input, id: crypto.randomUUID() })
   return new Promise((resolve) => {
-    pending.set(request.id, { request, resolve })
+    const abort = () => {
+      const entry = pending.get(request.id)
+      if (!entry) return
+      pending.delete(request.id)
+      entry.resolve({ kind: "dismissed" })
+      notify()
+    }
+    pending.set(request.id, {
+      request,
+      resolve: (result) => {
+        signal?.removeEventListener("abort", abort)
+        resolve(result)
+      },
+    })
+    signal?.addEventListener("abort", abort, { once: true })
     notify()
   })
 }
@@ -68,7 +95,9 @@ export function resolveConnectionPrompt(id: string, result: ConnectionPromptResu
   // Only the active prompt can be answered, and only with its own candidates.
   const current = snapshot().current
   if (!current || current.id !== id) return
-  if (result.kind === "selected") {
+  if (result.kind === "configured") {
+    if (current.kind !== "configure" || !current.methods.includes(result.method)) return
+  } else if (result.kind === "selected") {
     if (current.kind !== "picker" || !current.candidates.some((row) => row.ref === result.ref))
       return
   } else if (result.kind === "sign-in") {

@@ -87,11 +87,28 @@ export interface AuthCredentialSet {
 }
 
 /** Public client configuration used by the Host before creating a bound attempt. Never include a secret. */
-export interface AuthAuthorizationConfig {
-  clientId: string
+export type AuthAuthorizationConfig = {
   issuer: string
   /** Defaults to the existing Host callback route for this runtime. */
   redirectUri?: string
+} & (
+  | { clientId: string; clientIdFrom?: never }
+  | { clientId?: never; clientIdFrom: { configuration: string } }
+)
+
+/** Host-owned setup form. Secret values are written to the Host store, never plugin configuration. */
+export interface AuthProviderConfigurationSchema {
+  type: "object"
+  properties: Record<
+    string,
+    {
+      type: "string"
+      format?: "secret" | "uri"
+      minLength?: number
+      enum?: string[]
+    }
+  >
+  required?: string[]
 }
 
 /** Host-bound attempt supplied only to the providing plugin for authorization and exchange. */
@@ -143,6 +160,8 @@ export interface PluginAuthProviderDef {
   label: string
   /** Public client/issuer binding for a Host-managed provider. Never include a client secret. */
   authorization?: AuthAuthorizationConfig
+  /** Setup fields for AuthSessionOptions.configuration; never copied into ctx.config. */
+  configurationSchema?: AuthProviderConfigurationSchema
   /** Authentication methods supported by this provider. */
   methods?: AuthMethod[]
   /** Remote principal kinds supported by this provider. */

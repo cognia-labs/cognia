@@ -4,7 +4,7 @@
   "nameKey": "manifest.name",
   "version": "1.0.0",
   "type": "frontend",
-  "description": "Shared Feishu OAuth provider for service plugins. Credentials and refresh tokens remain in this provider's secure storage.",
+  "description": "Host-managed Feishu and Lark user and bot authentication for service plugins.",
   "descriptionKey": "manifest.description",
   "author": "Cognia Official",
   "license": "MIT",
@@ -14,21 +14,69 @@
   },
   "main": "src/index.ts",
   "capabilities": ["auth-provider"],
-  "permissions": [
-    "auth:provide",
-    "secrets:read",
-    "secrets:write",
-    "network:fetch",
-    "shell:execute"
-  ],
+  "permissions": ["auth:provide", "network:fetch"],
   "authProviders": [
     {
       "id": "feishu-user-oauth",
-      "label": "Feishu user OAuth"
+      "label": "Feishu user OAuth",
+      "authorization": {
+        "clientIdFrom": {
+          "configuration": "appId"
+        },
+        "issuer": "https://accounts.feishu.cn"
+      },
+      "configurationSchema": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clientSecret": {
+            "type": "string",
+            "format": "secret",
+            "minLength": 1
+          },
+          "redirectUri": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": ["appId"]
+      },
+      "methods": ["oauth-pkce", "client-credentials"],
+      "principals": ["user", "bot"],
+      "issuers": ["https://accounts.feishu.cn", "https://accounts.larksuite.com"],
+      "tokenEndpoints": [
+        {
+          "url": "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+          "clientSecret": "json"
+        },
+        {
+          "url": "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+          "clientSecret": "json",
+          "credentialFields": {
+            "clientId": "app_id",
+            "clientSecret": "app_secret"
+          }
+        },
+        {
+          "url": "https://open.larksuite.com/open-apis/authen/v2/oauth/token",
+          "clientSecret": "json"
+        },
+        {
+          "url": "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
+          "clientSecret": "json",
+          "credentialFields": {
+            "clientId": "app_id",
+            "clientSecret": "app_secret"
+          }
+        }
+      ]
     }
   ],
   "networkAccess": {
-    "allowedDomains": ["open.feishu.cn"],
+    "allowedDomains": ["open.feishu.cn", "open.larksuite.com"],
     "rules": [
       {
         "domain": "open.feishu.cn",
@@ -37,8 +85,28 @@
       },
       {
         "domain": "open.feishu.cn",
+        "methods": ["POST"],
+        "paths": ["/open-apis/auth/v3/tenant_access_token/internal"]
+      },
+      {
+        "domain": "open.feishu.cn",
         "methods": ["GET"],
-        "paths": ["/open-apis/authen/v1/user_info"]
+        "paths": ["/open-apis/authen/v1/user_info", "/open-apis/tenant/v2/tenant/query"]
+      },
+      {
+        "domain": "open.larksuite.com",
+        "methods": ["POST"],
+        "paths": ["/open-apis/authen/v2/oauth/token"]
+      },
+      {
+        "domain": "open.larksuite.com",
+        "methods": ["POST"],
+        "paths": ["/open-apis/auth/v3/tenant_access_token/internal"]
+      },
+      {
+        "domain": "open.larksuite.com",
+        "methods": ["GET"],
+        "paths": ["/open-apis/authen/v1/user_info", "/open-apis/tenant/v2/tenant/query"]
       }
     ]
   },
@@ -48,28 +116,34 @@
       "entrypoint": "src/index.ts"
     },
     "headless": {
-      "availability": "blocked",
-      "reason": "Interactive Feishu OAuth currently requires the Cognia desktop host and a hosted HTTPS callback page."
+      "availability": "degraded",
+      "entrypoint": "src/index.ts",
+      "reason": "Bot connections and existing user connections require a trusted Host; initial PKCE sign-in needs an interactive shell."
     },
     "browser": {
-      "availability": "blocked",
-      "reason": "This confidential-client provider keeps the app secret in the desktop keychain and uses the system browser."
+      "availability": "degraded",
+      "entrypoint": "src/index.ts",
+      "reason": "Confidential exchange requires a connected trusted Host and PKCE requires a registered callback."
     },
     "mobile": {
-      "availability": "blocked",
-      "reason": "Interactive Feishu OAuth currently requires the Cognia desktop host."
+      "availability": "degraded",
+      "entrypoint": "src/index.ts",
+      "reason": "Confidential exchange requires a connected trusted Host and PKCE requires a registered callback."
     }
   },
   "i18n": {
     "locales": {
       "en": {
         "manifest.name": "Feishu Authentication",
-        "manifest.description": "Shared Feishu OAuth provider with provider-owned secure token storage and refresh."
+        "manifest.description": "Shared Feishu and Lark authentication; the Host stores credentials and coordinates refresh."
       },
       "zh-CN": {
         "manifest.name": "飞书认证",
-        "manifest.description": "供飞书服务插件依赖的共享 OAuth 认证，统一安全保存和刷新凭证。"
+        "manifest.description": "共享飞书与 Lark 认证，由 Host 保存凭证并统一协调刷新。"
       }
     }
+  },
+  "providesServices": {
+    "auth.feishu": "1.0.0"
   }
 }

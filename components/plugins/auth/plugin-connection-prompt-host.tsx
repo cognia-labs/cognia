@@ -10,6 +10,7 @@ import { ConnectionPickerDialog } from "./connection-picker-dialog"
 import { ConnectionGrantDialog } from "./connection-grant-dialog"
 import { ConnectionSignInDialog } from "./connection-sign-in-dialog"
 import { ConnectionAddScopesDialog } from "./connection-add-scopes-dialog"
+import { ConnectionConfigurationDialog } from "./connection-configuration-dialog"
 import { startHostAuthCallbackListeners } from "@/lib/plugin/auth/callback-acceptor"
 
 export function PluginConnectionPromptHost() {
@@ -21,7 +22,13 @@ export function PluginConnectionPromptHost() {
   const request = state.current
   if (!request) return null
   const onDismiss = () => resolveConnectionPrompt(request.id, { kind: "dismissed" })
-  return request.kind === "add-scopes" ? (
+  return request.kind === "configure" || request.kind === "connect-error" ? (
+    <ConnectionConfigurationDialog
+      key={request.id}
+      request={request}
+      onResolve={(result) => resolveConnectionPrompt(request.id, result)}
+    />
+  ) : request.kind === "add-scopes" ? (
     <ConnectionAddScopesDialog
       key={request.id}
       pluginName={request.pluginName}

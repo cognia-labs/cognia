@@ -18,6 +18,8 @@ import {
   type AuthAttempt,
 } from "./auth-attempts"
 import { registerAuthCallbackWaiter } from "./callback-acceptor"
+import { requestConnectionPrompt } from "./connection-prompts"
+import { runLegacySessionMigrations } from "./legacy-session-migrations"
 import {
   getConnectionManager,
   ReconnectIdentityMismatch,
@@ -78,6 +80,10 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
   try {
     active()
     if (!provider) throw new AuthConnectError("NOT_FOUND", "provider-not-registered")
+    // The connection UI can connect directly, bypassing createSession. It must
+    // also wait for activation's legacy lineage handover before exchanging.
+    if (provider.management === "host") await runLegacySessionMigrations(provider)
+    active()
     if (requestedMethod === "device-code")
       throw new AuthConnectError("NOT_SUPPORTED", "device-code-deferred")
     const scopes = [...new Set(request.scopes)]
@@ -118,29 +124,78 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     ) as PluginAuthProviderDef | undefined
     if (provider.pluginId !== null && !definition)
       throw new AuthConnectError("UNAVAILABLE", "provider-declaration-missing")
+    let submitted = request.configuration
+    let chosenMethod: AuthMethod | undefined = requestedMethod
+    if (definition?.configurationSchema && !submitted) {
+      const result = await requestConnectionPrompt(
+        {
+          kind: "configure",
+          pluginId: provider.pluginId ?? "__host__",
+          pluginName: provider.label,
+          providerLabel: provider.label,
+          schema: definition.configurationSchema,
+          issuers: definition.issuers ?? [
+            definition.authorization?.issuer ?? provider.authorization?.issuer ?? "",
+          ],
+          methods: definition.methods ?? ["oauth-pkce"],
+          defaults: {
+            issuer: original?.issuer ?? definition.authorization?.issuer ?? "",
+            ...(original && definition.authorization?.clientIdFrom
+              ? { [definition.authorization.clientIdFrom.configuration]: original.clientId }
+              : {}),
+          },
+        },
+        controller.signal
+      )
+      active()
+      if (result.kind !== "configured")
+        throw new AuthConnectError("CANCELLED", "configuration-dismissed")
+      submitted = result.configuration
+      chosenMethod ??= result.method
+    }
     const supported = (method: AuthMethod) =>
       Boolean(
         provider.exchange &&
         (method === "client-credentials" || (method === "oauth-pkce" && provider.authorize))
       )
     const declared = definition?.methods ?? (["oauth-pkce", "client-credentials"] as AuthMethod[])
-    const method = requestedMethod ?? declared.find(supported)
+    const method = chosenMethod ?? declared.find(supported)
     if (!method || !declared.includes(method) || !supported(method))
       throw new AuthConnectError("NOT_SUPPORTED", "auth-method-unavailable")
     const defaults =
       provider.management === "host" && provider.pluginId !== null
         ? definition?.authorization
         : (definition?.authorization ?? provider.authorization)
-    const configuration = {
-      ...defaults,
+    const configuration: { clientId?: string; issuer?: string; redirectUri?: string } = {
+      clientId: defaults?.clientId,
+      issuer: defaults?.issuer,
+      redirectUri: defaults?.redirectUri,
       ...(original ? { clientId: original.clientId, issuer: original.issuer } : {}),
     }
-    for (const key of ["clientId", "issuer"] as const) {
-      const value = request.configuration?.[key]
+    const clientSource = defaults?.clientIdFrom?.configuration
+    if (clientSource) {
+      const field = definition?.configurationSchema?.properties[clientSource]
+      if (!field || field.type !== "string" || field.format === "secret")
+        throw new AuthConnectError("INVALID_REQUEST", "invalid-client-id-source")
+      const value = submitted?.[clientSource]
+      if (value !== undefined) {
+        if (typeof value !== "string" || !value.trim())
+          throw new AuthConnectError("INVALID_REQUEST", "invalid-authorization-configuration")
+        configuration.clientId = value.trim()
+      }
+      // Legacy calendar's form still submits clientId until P5c. It is an
+      // alias only when the configured source was absent, never an override.
+      if (value === undefined && submitted?.clientId !== undefined)
+        configuration.clientId =
+          typeof submitted.clientId === "string" ? submitted.clientId.trim() : undefined
+    }
+    for (const key of ["clientId", "issuer", "redirectUri"] as const) {
+      if (key === "clientId" && clientSource) continue
+      const value = submitted?.[key]
       if (value === undefined) continue
       if (typeof value !== "string" || !value.trim())
         throw new AuthConnectError("INVALID_REQUEST", "invalid-authorization-configuration")
-      configuration[key] = value
+      configuration[key] = value.trim()
     }
     if (!configuration.clientId || !configuration.issuer)
       throw new AuthConnectError("INVALID_REQUEST", "authorization-configuration-missing")
@@ -166,9 +221,32 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
         : undefined
     if (method === "oauth-pkce" && !redirectUri)
       throw new AuthConnectError("NOT_SUPPORTED", "browser-unavailable")
+    if (redirectUri) {
+      let redirect: URL
+      try {
+        redirect = new URL(redirectUri)
+      } catch {
+        throw new AuthConnectError("INVALID_REQUEST", "invalid-redirect")
+      }
+      const local = ["localhost", "127.0.0.1", "[::1]"].includes(redirect.hostname)
+      if (
+        redirect.username ||
+        redirect.password ||
+        redirect.search ||
+        redirect.hash ||
+        !(
+          redirect.protocol === "https:" ||
+          (redirect.protocol === "http:" && local) ||
+          (redirect.protocol === "cognia:" &&
+            redirect.hostname === "auth" &&
+            redirect.pathname === "/callback")
+        )
+      )
+        throw new AuthConnectError("INVALID_REQUEST", "invalid-redirect")
+    }
     active()
-    if (provider.management === "host" && request.configuration?.clientSecret !== undefined) {
-      const secret = request.configuration.clientSecret
+    if (provider.management === "host" && submitted?.clientSecret !== undefined) {
+      const secret = submitted.clientSecret
       if (typeof secret !== "string" || !secret || provider.pluginId === null)
         throw new AuthConnectError("INVALID_REQUEST", "invalid-client-secret-configuration")
       await setProviderClientSecret(
@@ -259,6 +337,20 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       })
     )
   } catch (error) {
+    const tenantScopeRequired =
+      (error as { code?: unknown } | null)?.code === "AUTH_TENANT_SCOPE_REQUIRED"
+    if (tenantScopeRequired || error instanceof ConnectionIdentityConflict) {
+      await requestConnectionPrompt(
+        {
+          kind: "connect-error",
+          pluginId: provider?.pluginId ?? "__host__",
+          pluginName: provider?.label ?? providerId,
+          reason: tenantScopeRequired ? "tenant-scope-required" : "identity-conflict",
+        },
+        controller.signal
+      )
+      if (tenantScopeRequired) throw new AuthConnectError("UNAVAILABLE", "tenant-scope-required")
+    }
     if (isClientSecretRequired(error))
       throw new AuthConnectError("CLIENT_SECRET_REQUIRED", "client-secret-reentry-required")
     if (

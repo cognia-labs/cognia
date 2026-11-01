@@ -1,365 +1,258 @@
-import type { PluginContext } from "@cognia/plugin-sdk"
-import { createFeishuAuthProvider, FEISHU_TOKEN_URL, FeishuAuthError } from "./oauth"
+import type {
+  AuthAttemptContext,
+  AuthCredentialSet,
+  AuthLineageContext,
+  PluginContext,
+} from "@cognia/plugin-sdk"
+import { AuthRefreshRejected } from "@cognia/plugin-sdk"
+import { createFeishuAuthProvider, FEISHU_PROVIDER_ID } from "./oauth"
 
-const NONCE = "0123456789abcdef0123456789abcdef"
-const CONFIG = {
-  clientId: "cli_test",
-  clientSecret: "secret-value",
-  redirectUri: "https://cognia.example/plugin-auth/callback",
-}
-const TOKEN = {
+export const TOKEN = {
   code: 0,
-  access_token: "u-initial",
-  refresh_token: "r-initial",
+  access_token: "user-token",
+  refresh_token: "refresh-one",
   expires_in: 7200,
-  refresh_token_expires_in: 86400,
   scope: "offline_access calendar:calendar:readonly",
 }
-
+const attempt: AuthAttemptContext = {
+  attemptId: "host-state",
+  providerId: FEISHU_PROVIDER_ID,
+  method: "oauth-pkce",
+  issuer: "https://accounts.feishu.cn",
+  clientId: "app-one",
+  codeVerifier: "verifier",
+  codeChallenge: "challenge",
+  redirectUri: "https://cognia.test/plugin-auth/callback",
+  scopes: ["calendar:calendar:readonly"],
+}
 function fixture() {
-  const secrets = new Map<string, string>()
-  const lifecycle = new AbortController()
-  let uri: Parameters<PluginContext["uri"]["registerHandler"]>[0] | undefined
-  const unregister = jest.fn()
-  const post = jest.fn(
+  const exchangeConfidential = jest.fn(
+    async (_request: unknown): Promise<{ status: number; body: Record<string, unknown> }> => ({
+      status: 200,
+      body: { ...TOKEN },
+    })
+  )
+  const get = jest.fn(
     async (
       _url: string,
-      _body?: unknown,
       _options?: unknown
-    ): Promise<{
-      ok: boolean
-      status: number
-      statusText: string
-      headers: Record<string, string>
-      data: unknown
-    }> => ({ ok: true, status: 200, statusText: "OK", headers: {}, data: { ...TOKEN } })
+    ): Promise<{ ok: boolean; status: number; data: unknown }> => ({
+      ok: true,
+      status: 200,
+      data: { code: 0, data: { open_id: "ou_one", tenant_key: "tenant-one", name: "Person" } },
+    })
   )
-  const get = jest.fn(async (_url: string, _options?: unknown) => ({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: {},
-    data: { code: 0, data: { open_id: "ou_one", name: "Person" } },
-  }))
-  const open = jest.fn(async () => {
-    await uri?.handle({
-      pluginId: "feishu-auth",
-      path: "oauth-callback",
-      query: { code: "auth-code", state: `cognia-plugin:feishu-auth:${NONCE}` },
-      raw: "",
-    })
-  })
-  const pkce = jest.fn(async (config: Parameters<PluginContext["auth"]["createPkceFlow"]>[0]) => {
-    await config.openUrl("https://accounts.feishu.cn/authorize")
-    const callback = await config.waitForCode({
-      redirectUri: config.redirectUri,
-      state: config.state!,
-      codeVerifier: "verifier",
-    })
-    if (callback.state !== config.state) throw new Error("state mismatch")
-    // Stand-in for the Host: plugins cannot supply a transport, and the token
-    // request goes through the plugin's governed network with the flow's signal.
-    if ("fetchImpl" in config) throw new Error("ctx.auth.createPkceFlow does not allow fetchImpl")
-    expect(config.tokenRequestEncoding).toBe("json")
-    expect(config.signal).toBeInstanceOf(AbortSignal)
-    const response = await post(
-      config.tokenUrl,
-      {
-        grant_type: "authorization_code",
-        code: callback.code,
-        code_verifier: "verifier",
-        client_id: config.clientId,
-        redirect_uri: config.redirectUri,
-        ...config.extraTokenParams,
-      },
-      { headers: { "Content-Type": "application/json" }, signal: config.signal }
-    )
-    if (!response.ok)
-      throw new Error(`OAuth token exchange failed: ${response.status} ${response.statusText}`)
-    const raw = response.data as Record<string, string>
-    return { accessToken: raw.access_token, refreshToken: raw.refresh_token, raw }
-  })
-  const context = {
-    lifecycle: { signal: lifecycle.signal },
-    secrets: {
-      get: jest.fn(async (key: string) => secrets.get(key) ?? null),
-      store: jest.fn(async (key: string, value: string) => {
-        secrets.set(key, value)
-      }),
-      delete: jest.fn(async (key: string) => {
-        secrets.delete(key)
-      }),
-      keys: jest.fn(async () => [...secrets.keys()]),
-    },
-    auth: { createPkceFlow: pkce },
-    shell: { open },
-    network: { get, post },
-    uri: {
-      registerHandler: jest.fn((handler) => {
-        uri = handler
-        return unregister
-      }),
-    },
-  } as unknown as PluginContext
+  const ctx = { auth: { exchangeConfidential }, network: { get } } as unknown as PluginContext
+  const provider = createFeishuAuthProvider(ctx, { now: () => 1_000_000 })
+  return { provider, exchangeConfidential, get }
+}
+function lineage(
+  credentials: AuthCredentialSet,
+  kind: "user" | "bot" = "user"
+): AuthLineageContext {
   return {
-    context,
-    secrets,
-    lifecycle,
-    open,
-    pkce,
-    post,
-    get,
-    unregister,
-    callback: (query: Record<string, string>, path = "oauth-callback") =>
-      uri?.handle({ pluginId: "feishu-auth", path, query, raw: "" }),
+    ref: "ref" as AuthLineageContext["ref"],
+    lineageId: "lineage",
+    credentialRevision: 1,
+    credentials,
+    identity: {
+      provider: {
+        providerId: FEISHU_PROVIDER_ID,
+        ownerPluginId: "feishu-auth",
+        publisher: "Cognia",
+        contractMajor: 1,
+      },
+      issuer: attempt.issuer,
+      clientId: attempt.clientId,
+      principal: { id: kind === "bot" ? attempt.clientId : "ou_one", kind },
+    },
   }
 }
 
-async function login(f: ReturnType<typeof fixture>, now = () => 1_000_000) {
-  const auth = createFeishuAuthProvider(f.context, { now, nonce: () => NONCE, timeoutMs: 100 })
-  const session = await auth.provider.createSession(["calendar:calendar:readonly"], {
-    configuration: CONFIG,
-  })
-  return { ...auth, session }
-}
-
-describe("Feishu shared OAuth provider", () => {
-  it("registers its callback before browser open, exchanges JSON and persists only through secrets", async () => {
+it.each(["feishu.cn", "larksuite.com"])(
+  "builds bound PKCE and describes a user at %s without owning sessions",
+  async (domain) => {
     const f = fixture()
-    const { provider, session, dispose } = await login(f)
-    expect(f.context.uri.registerHandler).toHaveBeenCalled()
-    expect(f.post).toHaveBeenCalledWith(
-      FEISHU_TOKEN_URL,
-      expect.objectContaining({
-        code: "auth-code",
+    const bound = { ...attempt, issuer: `https://accounts.${domain}` }
+    const url = new URL((await f.provider.authorize!(bound)).url)
+    expect(url.origin).toBe(bound.issuer)
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      state: "host-state",
+      client_id: "app-one",
+      code_challenge: "challenge",
+      code_challenge_method: "S256",
+    })
+    expect(url.searchParams.get("scope")).toContain("offline_access")
+    const tokens = await f.provider.exchange!(bound, { state: bound.attemptId, code: "accepted" })
+    expect(f.exchangeConfidential).toHaveBeenCalledWith({
+      providerId: FEISHU_PROVIDER_ID,
+      issuer: bound.issuer,
+      clientId: "app-one",
+      placement: "json",
+      tokenUrl: `https://open.${domain}/open-apis/authen/v2/oauth/token`,
+      params: {
+        grant_type: "authorization_code",
+        code: "accepted",
         code_verifier: "verifier",
-        client_secret: CONFIG.clientSecret,
-      }),
-      expect.objectContaining({ headers: { "Content-Type": "application/json" } })
+        redirect_uri: attempt.redirectUri,
+      },
+    })
+    expect(await f.provider.describe(tokens)).toMatchObject({
+      issuer: bound.issuer,
+      clientId: "app-one",
+      tenantId: "tenant-one",
+      principal: { id: "ou_one", kind: "user" },
+    })
+    expect(f.provider.management).toBe("host")
+    expect(f.provider).not.toHaveProperty("getSessions")
+    expect(f.provider).not.toHaveProperty("createSession")
+    expect(f.provider).not.toHaveProperty("removeSession")
+    expect(JSON.stringify(f.exchangeConfidential.mock.calls)).not.toMatch(
+      /client_secret|app_secret|clientSecret/
     )
-    expect(session.account.id).toBe("cli_test:ou_one")
-    expect(session.scopes).toEqual(["calendar:calendar:readonly", "offline_access"])
-    expect(f.secrets.size).toBe(1)
-    expect(f.unregister).toHaveBeenCalledTimes(1)
-    expect(await provider.getSessions(["calendar:calendar:readonly"], { silent: true })).toEqual([
-      session,
-    ])
-    expect(await provider.getSessions(["ungranted"], { silent: true })).toEqual([])
-    dispose()
-  })
+  }
+)
 
-  it("hydrates sessions after a provider restart", async () => {
-    const f = fixture()
-    const first = await login(f)
-    first.dispose()
-    const second = createFeishuAuthProvider(f.context, { now: () => 1_000_000 })
-    expect(await second.provider.getSessions(undefined, { silent: true })).toEqual([first.session])
-    second.dispose()
+it("rotates user credentials through the gateway and rejects invalid_grant", async () => {
+  const f = fixture()
+  const initial = await f.provider.exchange!(attempt, { state: "host-state", code: "code" })
+  f.exchangeConfidential.mockResolvedValueOnce({
+    status: 200,
+    body: { ...TOKEN, access_token: "user-two", refresh_token: "refresh-two" },
   })
+  const updated = await f.provider.refresh(lineage(initial))
+  expect(updated.refreshToken).toBe("refresh-two")
+  expect(f.exchangeConfidential.mock.calls[1][0]).toMatchObject({
+    params: { grant_type: "refresh_token", refresh_token: "refresh-one" },
+  })
+  f.exchangeConfidential.mockResolvedValueOnce({
+    status: 400,
+    body: { error: "invalid_grant", error_description: "private-value" },
+  })
+  await expect(f.provider.refresh(lineage(updated))).rejects.toBeInstanceOf(AuthRefreshRejected)
+  await expect(
+    f.provider.refresh(lineage({ ...updated, refreshToken: undefined }))
+  ).rejects.toBeInstanceOf(AuthRefreshRejected)
+})
 
-  it("single-flights token refresh and persists rotating refresh tokens", async () => {
+it.each(["feishu.cn", "larksuite.com"])(
+  "connects and re-exchanges a bot and obtains the tenant identity at %s",
+  async (domain) => {
     const f = fixture()
-    let time = 1_000_000
-    const auth = await login(f, () => time)
-    time += 7_190_000
-    f.post.mockResolvedValue({
-      ok: true,
+    f.exchangeConfidential.mockResolvedValue({
       status: 200,
-      statusText: "OK",
-      headers: {},
-      data: { ...TOKEN, access_token: "u-new", refresh_token: "r-new" },
+      body: { code: 0, msg: "ok", tenant_access_token: "tenant-token", expire: 7200 },
     })
-    const [a, b] = await Promise.all([
-      auth.provider.getSessions(undefined, { silent: true }),
-      auth.provider.getSessions(undefined, { silent: true }),
-    ])
-    expect(a[0].accessToken).toBe("u-new")
-    expect(b).toEqual(a)
-    expect(f.post).toHaveBeenCalledTimes(2)
-    expect(f.post.mock.calls[1][1]).toMatchObject({
-      grant_type: "refresh_token",
-      refresh_token: "r-initial",
-    })
-    expect(JSON.parse([...f.secrets.values()][0]).refreshToken).toBe("r-new")
-    auth.dispose()
-  })
-
-  it("does not invent granted scopes", async () => {
-    const f = fixture()
-    f.post.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: {},
-      data: { ...TOKEN, scope: "offline_access" },
-    })
-    await expect(login(f)).rejects.toMatchObject({ reason: "missing-granted-scopes" })
-    expect(f.secrets.size).toBe(0)
-  })
-
-  it("rejects HTTP-200 token errors without leaking provider error descriptions", async () => {
-    const f = fixture()
-    f.post.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: {},
-      data: { code: 20001, error_description: "secret-user-content" },
-    })
-    await expect(login(f)).rejects.toMatchObject({ reason: "token-rejected", code: 20001 })
-    expect(f.secrets.size).toBe(0)
-  })
-
-  it("maps a failed Host token exchange to token-http and stores nothing", async () => {
-    const f = fixture()
-    f.post.mockResolvedValueOnce({
-      ok: false,
-      status: 400,
-      statusText: "Bad Request",
-      headers: {},
-      data: { error: "invalid_grant" },
-    })
-    await expect(login(f)).rejects.toMatchObject({ reason: "token-http", code: 400 })
-    expect(f.secrets.size).toBe(0)
-  })
-
-  it("passes its cancellation signal to the Host token exchange", async () => {
-    const f = fixture()
-    await login(f)
-    const [, , options] = f.post.mock.calls[0] as [string, unknown, { signal?: AbortSignal }]
-    expect(options.signal).toBeInstanceOf(AbortSignal)
-    expect(f.pkce.mock.calls[0][0]).not.toHaveProperty("fetchImpl")
-  })
-
-  it("propagates consent denial and cleans listeners", async () => {
-    const f = fixture()
-    f.open.mockImplementation(async () => {
-      await f.callback({ state: `cognia-plugin:feishu-auth:${NONCE}`, error: "access_denied" })
-    })
-    await expect(login(f)).rejects.toMatchObject({ reason: "authorization-denied" })
-    expect(f.unregister).toHaveBeenCalledTimes(1)
-    expect(f.post).not.toHaveBeenCalled()
-  })
-
-  it("ignores a callback for another state or callback path", async () => {
-    const f = fixture()
-    f.open.mockImplementation(async () => {
-      await f.callback({ state: "wrong-state", code: "bad-code" })
-      await f.callback({ state: `cognia-plugin:feishu-auth:${NONCE}`, code: "bad-code" }, "other")
-    })
-    const auth = createFeishuAuthProvider(f.context, { timeoutMs: 5, nonce: () => NONCE })
-    await expect(auth.provider.createSession([], { configuration: CONFIG })).rejects.toMatchObject({
-      reason: "authorization-timeout",
-    })
-    expect(f.post).not.toHaveBeenCalled()
-    expect(f.unregister).toHaveBeenCalledTimes(1)
-    auth.dispose()
-  })
-
-  it("cancels an outstanding authorization on disable", async () => {
-    const f = fixture()
-    f.open.mockImplementation(async () => {
-      f.lifecycle.abort()
-    })
-    await expect(login(f)).rejects.toMatchObject({ reason: "cancelled" })
-    expect(f.unregister).toHaveBeenCalledTimes(1)
-  })
-
-  it.each([
-    "javascript:alert(1)",
-    "http://remote.example/plugin-auth/callback",
-    "https://user:pass@cognia.example/plugin-auth/callback",
-    "https://cognia.example/plugin-auth/callback?next=bad",
-    "https://cognia.example/other",
-  ])("rejects an unsafe redirect %s", async (redirectUri) => {
-    const f = fixture()
-    const auth = createFeishuAuthProvider(f.context)
-    await expect(
-      auth.provider.createSession([], { configuration: { ...CONFIG, redirectUri } })
-    ).rejects.toBeInstanceOf(FeishuAuthError)
-    expect(f.open).not.toHaveBeenCalled()
-    auth.dispose()
-  })
-
-  it("keeps multiple accounts isolated and logout does not remove sibling sessions", async () => {
-    const f = fixture()
-    const auth = await login(f)
     f.get.mockResolvedValue({
       ok: true,
       status: 200,
-      statusText: "OK",
-      headers: {},
-      data: { code: 0, data: { open_id: "ou_two", name: "Other" } },
+      data: {
+        code: 0,
+        msg: "ok",
+        data: {
+          tenant: {
+            name: "Company",
+            display_id: "display",
+            tenant_tag: 1,
+            tenant_key: "tenant-key",
+            avatar: {},
+            domain: "example",
+          },
+        },
+      },
     })
-    const other = await auth.provider.createSession([], { configuration: CONFIG })
-    await auth.provider.removeSession(auth.session.id)
-    expect(await auth.provider.getSessions(undefined, { silent: true })).toEqual([other])
-    auth.dispose()
-  })
-
-  it("does not return expired sessions when refresh authorization has expired", async () => {
-    const f = fixture()
-    let time = 1_000_000
-    const auth = await login(f, () => time)
-    time += 86_400_000
-    expect(await auth.provider.getSessions(undefined, { silent: true })).toEqual([])
-    expect(f.post).toHaveBeenCalledTimes(1)
-    auth.dispose()
-  })
-
-  it("clears a definitively revoked refresh grant but retains credentials on transient failure", async () => {
-    const f = fixture()
-    let time = 1_000_000
-    const auth = await login(f, () => time)
-    time += 7_190_000
-    f.post.mockResolvedValueOnce({
-      ok: false,
-      status: 503,
-      statusText: "Unavailable",
-      headers: {},
-      data: {},
-    })
-    await expect(auth.provider.getSessions(undefined, { silent: true })).rejects.toMatchObject({
-      reason: "token-http",
-    })
-    expect(f.secrets.size).toBe(1)
-    f.post.mockResolvedValueOnce({
-      ok: false,
-      status: 400,
-      statusText: "Bad Request",
-      headers: {},
-      data: { error: "invalid_grant" },
-    })
-    expect(await auth.provider.getSessions(undefined, { silent: true })).toEqual([])
-    expect(f.secrets.size).toBe(0)
-    auth.dispose()
-  })
-
-  it("logout cannot be undone by an in-flight refresh", async () => {
-    const f = fixture()
-    let time = 1_000_000
-    const auth = await login(f, () => time)
-    time += 7_190_000
-    let finish!: (value: Awaited<ReturnType<typeof f.post>>) => void
-    f.post.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve
-        })
+    const tokens = await f.provider.exchange!(
+      {
+        ...attempt,
+        issuer: `https://accounts.${domain}`,
+        method: "client-credentials",
+        scopes: [],
+      },
+      { state: "host-state" }
     )
-    const pending = auth.provider.getSessions(undefined, { silent: true })
-    while (!finish) await Promise.resolve()
-    const logout = auth.provider.removeSession(auth.session.id)
-    finish({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: {},
-      data: { ...TOKEN, access_token: "u-new", refresh_token: "r-new" },
+    expect(f.exchangeConfidential.mock.calls[0][0]).toMatchObject({
+      tokenUrl: `https://open.${domain}/open-apis/auth/v3/tenant_access_token/internal`,
+      params: {},
     })
-    await logout
-    expect(await pending).toEqual([])
-    expect(f.secrets.size).toBe(0)
-    auth.dispose()
+    expect(await f.provider.describe(tokens)).toEqual({
+      issuer: `https://accounts.${domain}`,
+      clientId: "app-one",
+      tenantId: "tenant-key",
+      tenantLabel: "Company",
+      accountLabel: "Company",
+      principal: { id: "app-one", kind: "bot" },
+      scopes: [],
+    })
+    expect(f.get).toHaveBeenCalledWith(`https://open.${domain}/open-apis/tenant/v2/tenant/query`, {
+      headers: { Authorization: "Bearer tenant-token" },
+    })
+    await f.provider.refresh(lineage(tokens, "bot"))
+    expect(f.exchangeConfidential).toHaveBeenCalledTimes(2)
+  }
+)
+
+it.each([
+  [403, 1184001],
+  [404, 1184000],
+  [200, 1184001],
+  [200, 1184000],
+])("fails bot tenant discovery clearly for HTTP %s / code %s", async (status, code) => {
+  const f = fixture()
+  f.get.mockResolvedValue({
+    ok: status === 200,
+    status,
+    data: { code, msg: "private-provider-message" },
+  })
+  await expect(
+    f.provider.describe({
+      accessToken: "bot",
+      scopes: [],
+      extra: { clientId: "app", issuer: attempt.issuer, principalKind: "bot" },
+    })
+  ).rejects.toMatchObject({
+    code: "AUTH_TENANT_SCOPE_REQUIRED",
+    message: expect.not.stringContaining("private-provider-message"),
+  })
+})
+
+it("keeps a tenant permission failure actionable even without a JSON response", async () => {
+  const f = fixture()
+  f.get.mockResolvedValue({ ok: false, status: 403, data: null })
+  await expect(
+    f.provider.describe({
+      accessToken: "bot",
+      scopes: [],
+      extra: { clientId: "app", issuer: attempt.issuer, principalKind: "bot" },
+    })
+  ).rejects.toMatchObject({ code: "AUTH_TENANT_SCOPE_REQUIRED" })
+})
+
+it("rejects missing tenant identity and missing grants, and sanitizes vendor errors", async () => {
+  const f = fixture()
+  f.get.mockResolvedValue({
+    ok: true,
+    status: 200,
+    data: { code: 0, data: { open_id: "ou", name: "Person" } },
+  })
+  const tokens = await f.provider.exchange!(attempt, { state: "host-state", code: "code" })
+  await expect(f.provider.describe(tokens)).rejects.toMatchObject({
+    reason: "identity-unavailable",
+  })
+  f.exchangeConfidential.mockResolvedValueOnce({
+    status: 200,
+    body: { ...TOKEN, scope: "offline_access" },
+  })
+  await expect(
+    f.provider.exchange!(attempt, { state: "host-state", code: "code" })
+  ).rejects.toMatchObject({ reason: "missing-granted-scopes" })
+  f.exchangeConfidential.mockResolvedValueOnce({
+    status: 200,
+    body: { code: 20001, msg: "secret" },
+  })
+  await expect(
+    f.provider.exchange!(attempt, { state: "host-state", code: "code" })
+  ).rejects.toMatchObject({
+    reason: "token-rejected",
+    message: expect.not.stringContaining("secret"),
   })
 })

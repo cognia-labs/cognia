@@ -1,24 +1,29 @@
-import definition, { manifest } from "./index"
+import plugin, { manifest } from "./index"
 import type { PluginContext } from "@cognia/plugin-sdk"
 
-it("registers a shared provider and tears it down with its activation", async () => {
-  const callbacks: Array<() => void> = []
+it("activates only a Host-managed provider and disposes its registration", async () => {
   const unregister = jest.fn()
   const registerProvider = jest.fn(() => unregister)
-  const ctx = {
-    lifecycle: {
-      signal: new AbortController().signal,
-      onDispose: (dispose: () => void) => {
-        callbacks.push(dispose)
-      },
-    },
+  const onDispose = jest.fn()
+  await plugin.activate!({
     auth: { registerProvider },
-  } as unknown as PluginContext
-  await definition.activate?.(ctx)
-  expect(manifest.authProviders).toEqual([{ id: "feishu-user-oauth", label: "Feishu user OAuth" }])
+    lifecycle: { onDispose },
+    network: {},
+  } as unknown as PluginContext)
   expect(registerProvider).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "feishu-user-oauth", createSession: expect.any(Function) })
+    expect.objectContaining({ management: "host", id: "feishu-user-oauth" })
   )
-  callbacks[0]()
+  expect(onDispose).toHaveBeenCalledWith(unregister, "feishu-auth:provider")
+  expect(manifest.providesServices).toEqual({ "auth.feishu": "1.0.0" })
+  expect(manifest.authProviders).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: "feishu-user-oauth",
+        methods: ["oauth-pkce", "client-credentials"],
+        principals: ["user", "bot"],
+      }),
+    ])
+  )
+  onDispose.mock.calls[0][0]()
   expect(unregister).toHaveBeenCalledTimes(1)
 })

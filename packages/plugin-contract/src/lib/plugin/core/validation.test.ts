@@ -164,6 +164,42 @@ describe("Plugin Validation", () => {
         ).toEqual([])
       })
 
+      it("resolves a client id only from a declared non-secret string configuration field", () => {
+        const authorization = {
+          clientIdFrom: { configuration: "appId" },
+          issuer: "https://issuer.test",
+        }
+        const configurationSchema = {
+          type: "object",
+          properties: { appId: { type: "string", minLength: 1 } },
+          required: ["appId"],
+        }
+        expect(validate([{ ...provider(), authorization, configurationSchema }]).errors).toEqual([])
+        for (const invalid of [
+          { ...authorization, clientId: "fixed" },
+          { ...authorization, clientIdFrom: {} },
+          { ...authorization, clientIdFrom: { configuration: "missing" } },
+          { ...authorization, clientIdFrom: { configuration: "appId", secret: true } },
+        ]) {
+          expect(
+            validate([{ ...provider(), authorization: invalid, configurationSchema }]).valid
+          ).toBe(false)
+        }
+        expect(validate([{ ...provider(), authorization }]).valid).toBe(false)
+        expect(
+          validate([
+            {
+              ...provider(),
+              authorization,
+              configurationSchema: {
+                ...configurationSchema,
+                properties: { appId: { type: "string", format: "secret" } },
+              },
+            },
+          ]).valid
+        ).toBe(false)
+      })
+
       it.each([
         null,
         {},

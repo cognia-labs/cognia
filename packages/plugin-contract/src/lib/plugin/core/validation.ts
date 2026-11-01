@@ -1057,24 +1057,83 @@ function validateAuthProviders(raw: unknown, pushError: PushDiagnostic): void {
       }
     }
 
+    const schema = provider.configurationSchema
+    if (
+      schema !== undefined &&
+      (!isPlainObject(schema) ||
+        schema.type !== "object" ||
+        !isPlainObject(schema.properties) ||
+        Object.keys(schema).some((key) => !["type", "properties", "required"].includes(key)) ||
+        Object.values(schema.properties).some(
+          (property) =>
+            !isPlainObject(property) ||
+            property.type !== "string" ||
+            (property.format !== undefined &&
+              !["secret", "uri"].includes(property.format as string)) ||
+            (property.minLength !== undefined &&
+              (!Number.isSafeInteger(property.minLength) || Number(property.minLength) < 0)) ||
+            (property.enum !== undefined &&
+              (!Array.isArray(property.enum) ||
+                !property.enum.length ||
+                property.enum.some((value) => typeof value !== "string"))) ||
+            Object.keys(property).some(
+              (key) => !["type", "format", "minLength", "enum"].includes(key)
+            )
+        ) ||
+        (schema.required !== undefined &&
+          (!Array.isArray(schema.required) ||
+            schema.required.some(
+              (key) => typeof key !== "string" || !Object.hasOwn(schema.properties as object, key)
+            ))))
+    )
+      pushError(
+        `${field}.configurationSchema`,
+        "manifest.authProviders.configurationSchema.invalid",
+        `${field}.configurationSchema requires string setup fields`
+      )
+
     if (provider.authorization !== undefined) {
       const configuration = provider.authorization
+      const source = isPlainObject(configuration) ? configuration.clientIdFrom : undefined
+      const property =
+        isPlainObject(source) &&
+        typeof source.configuration === "string" &&
+        isPlainObject(schema) &&
+        isPlainObject(schema.properties)
+          ? schema.properties[source.configuration]
+          : undefined
+      const fixedClient =
+        isPlainObject(configuration) &&
+        typeof configuration.clientId === "string" &&
+        Boolean(configuration.clientId.trim()) &&
+        source === undefined
+      const configuredClient =
+        isPlainObject(configuration) &&
+        configuration.clientId === undefined &&
+        isPlainObject(source) &&
+        Object.keys(source).length === 1 &&
+        typeof source.configuration === "string" &&
+        Boolean(source.configuration.trim()) &&
+        isPlainObject(property) &&
+        property.type === "string" &&
+        property.format !== "secret" &&
+        Array.isArray((schema as Record<string, unknown>).required) &&
+        ((schema as Record<string, unknown>).required as unknown[]).includes(source.configuration)
       if (
         !isPlainObject(configuration) ||
-        typeof configuration.clientId !== "string" ||
-        !configuration.clientId.trim() ||
+        (!fixedClient && !configuredClient) ||
         !isAuthProviderUrl(configuration.issuer, true) ||
         (configuration.redirectUri !== undefined &&
           (typeof configuration.redirectUri !== "string" ||
             !URL.canParse(configuration.redirectUri))) ||
         Object.keys(configuration).some(
-          (key) => !["clientId", "issuer", "redirectUri"].includes(key)
+          (key) => !["clientId", "clientIdFrom", "issuer", "redirectUri"].includes(key)
         )
       )
         pushError(
           `${field}.authorization`,
           "manifest.authProviders.authorization.invalid",
-          `${field}.authorization requires a clientId, HTTPS issuer origin and optional absolute redirectUri; secrets are not allowed`
+          `${field}.authorization requires exactly one of clientId or clientIdFrom (a required non-secret string setup field), HTTPS issuer origin and optional absolute redirectUri; secrets are not allowed`
         )
     }
 

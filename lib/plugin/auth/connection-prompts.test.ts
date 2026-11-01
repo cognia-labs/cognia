@@ -12,6 +12,69 @@ it("dismisses immediately with no prompt surface", async () => {
   ).resolves.toEqual({ kind: "dismissed" })
 })
 
+it("removes a cancelled configuration prompt without disturbing the active request", async () => {
+  let state!: ConnectionPromptState
+  const dispose = subscribeConnectionPrompts((value) => {
+    state = value
+  })
+  const controller = new AbortController()
+  try {
+    const first = requestConnectionPrompt({
+      kind: "picker",
+      pluginId: "p",
+      pluginName: "P",
+      candidates: [],
+    })
+    const second = requestConnectionPrompt(
+      {
+        kind: "configure",
+        pluginId: "p",
+        pluginName: "P",
+        providerLabel: "P",
+        schema: { type: "object", properties: {} },
+        issuers: [],
+        methods: ["oauth-pkce"],
+        defaults: {},
+      },
+      controller.signal
+    )
+    const id = state.current!.id
+    controller.abort()
+    await expect(second).resolves.toEqual({ kind: "dismissed" })
+    expect(state.current?.id).toBe(id)
+    expect(state.queue).toEqual([])
+    resolveConnectionPrompt(id, { kind: "dismissed" })
+    await first
+  } finally {
+    dispose()
+  }
+})
+
+it("refuses configuration results for a non-configuration prompt", async () => {
+  let state!: ConnectionPromptState
+  const dispose = subscribeConnectionPrompts((value) => {
+    state = value
+  })
+  try {
+    const pending = requestConnectionPrompt({
+      kind: "connect-error",
+      pluginId: "p",
+      pluginName: "P",
+      reason: "identity-conflict",
+    })
+    resolveConnectionPrompt(state.current!.id, {
+      kind: "configured",
+      method: "client-credentials",
+      configuration: { appId: "forged" },
+    })
+    expect(state.current?.kind).toBe("connect-error")
+    resolveConnectionPrompt(state.current!.id, { kind: "dismissed" })
+    await expect(pending).resolves.toEqual({ kind: "dismissed" })
+  } finally {
+    dispose()
+  }
+})
+
 it("accepts reconnect only on an add-scope prompt and dismisses it without a Host", async () => {
   const request = {
     kind: "add-scopes" as const,

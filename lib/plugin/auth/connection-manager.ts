@@ -114,6 +114,8 @@ interface ConnectOptions {
   binding?: { clientId: string; issuer: string }
   /** Publication is the commit point; cancellation after it starts must observe its result. */
   onCommit?: () => void
+  /** Host-only import: a rejected legacy grant is retained for explicit reauthentication. */
+  migrationStatus?: "connected" | "needs-reauth"
 }
 /** A stale response or credential resolution must never cross a connection revision. */
 export class ConnectionRevisionChanged extends Error {
@@ -509,6 +511,19 @@ export class AuthConnectionManager {
       throw error
     }
   }
+  /** Activation migration already resolved the remote identity, or recovered its stored open id. */
+  async importLegacyCredentials(
+    provider: AuthenticationProvider,
+    description: AuthIdentityDescription,
+    credentials: AuthCredentialSet,
+    needsReauth: boolean
+  ): Promise<AuthConnectionRef> {
+    if (this.provider(provider.id) !== provider)
+      throw new ConnectionUnavailableError("provider-unavailable")
+    return this.connect(provider, description, credentials, undefined, {
+      migrationStatus: needsReauth ? "needs-reauth" : "connected",
+    })
+  }
   /** Best-effort cleanup for an exchange finishing after cancellation, without ever storing it. */
   async discardCredentials(
     provider: AuthenticationProvider,
@@ -557,7 +572,8 @@ export class AuthConnectionManager {
           if (
             !sameProvider(target, owner) ||
             authConnectionIdentityKey(identityOf(target)) !== identityKey ||
-            target.tenantId !== description.tenantId
+            (target.tenantId !== description.tenantId &&
+              !(target.status === "needs-reauth" && target.tenantId === undefined))
           )
             throw new ReconnectIdentityMismatch()
         }
@@ -583,8 +599,33 @@ export class AuthConnectionManager {
           existing = undefined
         }
         if (existing && !sameProvider(existing, owner)) throw new ConnectionIdentityConflict()
-        if (existing && existing.tenantId !== description.tenantId)
+        // An expired legacy grant may have only its stored open id. Preserve a
+        // known tenant on import; a fresh reauthentication can fill an unknown
+        // tenant only after matching the issuer, client and principal above.
+        if (options.migrationStatus && existing && description.tenantId === undefined)
+          description = {
+            ...description,
+            tenantId: existing.tenantId,
+            tenantLabel: existing.tenantLabel,
+          }
+        if (
+          existing &&
+          existing.tenantId !== description.tenantId &&
+          !(
+            options.reconnect === existing.id &&
+            existing.status === "needs-reauth" &&
+            existing.tenantId === undefined
+          )
+        )
           throw new ConnectionIdentityConflict()
+        // Old plugins could issue several sessions for one account. Adoption
+        // must not replace a healthy Host lineage with a stale legacy grant.
+        if (
+          options.migrationStatus &&
+          existing?.status === "connected" &&
+          !existing.legacySessionId
+        )
+          return existing.id
         const ref = existing?.id ?? (crypto.randomUUID() as AuthConnectionRef)
         return this.mutate(ref, async () => {
           if (this.provider(provider.id) !== provider)
@@ -611,7 +652,7 @@ export class AuthConnectionManager {
               : 1,
             credentialRevision: current?.credentialRevision ?? 0,
             lineageId: current?.lineageId ?? crypto.randomUUID(),
-            status: "connected",
+            status: options.migrationStatus ?? "connected",
             identityKey,
             legacySessionId,
             createdAt: current?.createdAt ?? this.now(),
@@ -659,6 +700,7 @@ export class AuthConnectionManager {
     options: { minValidityMs?: number } = {}
   ): Promise<AuthCredentialSet> {
     let row = await this.requireRow(ref)
+    if (row.status === "needs-reauth") throw new ConnectionUnavailableError("needs-reauth")
     let provider = await this.requireProvider(row)
     if (row.hostMetadata) {
       row = await this.getConnection(ref, row.revision)
