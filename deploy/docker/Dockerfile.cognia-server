@@ -7,6 +7,9 @@
 ##                                (invalidated only by manifest/lock changes).
 ##   builder | check              full release build vs. codegen-free
 ##                                `cargo check` (the PR CI target).
+##   plugin-artifacts             placeholder for the `plugin-artifacts` named
+##                                context (the verified first-party plugin set);
+##                                fails the build when none is passed.
 ##   brain-builder                Node stage bundling the brain (cognia-agent
 ##                                CLI layout) + sidecar via
 ##                                scripts/build/build-cli-binary.mjs --layout-only.
@@ -17,7 +20,9 @@
 ##                                the cognia-runner image so versions can't drift).
 ##
 ## Usage:
-##   docker build -f deploy/docker/Dockerfile.cognia-server --target runtime-slim -t cognia-server .
+##   pnpm plugin:builtin:build    # produces the plugin set in .cache/plugin-artifacts
+##   docker build -f deploy/docker/Dockerfile.cognia-server --target runtime-slim \
+##     --build-context plugin-artifacts=.cache/plugin-artifacts -t cognia-server .
 ##   docker run --rm -v $HOME/cognia-data:/data cognia-server init
 ##   docker run --rm -v $HOME/cognia-data:/data -p 27890:27890 cognia-server serve --port 27890 --no-mdns
 ##
@@ -212,6 +217,18 @@ COPY sidecar/native-agents/pins.json ./sidecar/native-agents/pins.json
 RUN cargo check --release --locked -p cognia-server --bin cognia-server --features container-exec,k8s-exec,workspace-runtime-exec,otel-export
 RUN cargo check --release --locked -p cognia-cli --bin cognia
 
+# ── Plugin artifact set (named build context) ───────────────────────────────
+# First-party plugins reach the image only as a verified artifact set, never as
+# source (docs/plans/2026-10-30-plugins-repository-extraction.md §5 and §9):
+# .dockerignore keeps plugins/ out of the build context, and the caller passes
+# the set with `--build-context plugin-artifacts=<set dir>`. CI produces it
+# with .github/actions/plugin-artifact-set; locally, `pnpm plugin:builtin:build`
+# writes it to .cache/plugin-artifacts. A named context replaces this stage, so
+# the stage only runs, and stops the build, when the caller passed none.
+FROM node:26-trixie-slim AS plugin-artifacts
+RUN echo "No plugin artifact set: pass --build-context plugin-artifacts=<set dir> (pnpm plugin:builtin:build writes .cache/plugin-artifacts)." >&2 \
+    && exit 1
+
 # ── Node: brain (cognia-agent) + sidecar bundle ─────────────────────────────
 # Full (non-slim) image: node-gyp needs python3/make/g++ for the sidecar's
 # native optional deps (node-pty, better-sqlite3).
@@ -282,6 +299,10 @@ RUN node scripts/build/build-sidecar-linked-packages.mjs
 RUN npm --prefix sidecar/vscode-ext-host ci --no-audit --no-fund \
     && npm --prefix sidecar/vscode-ext-host run build
 RUN pnpm sidecar:codeserver-agent:build
+# The verified plugin artifact set; stage-plugin-artifacts admits it against
+# this checkout's product profile and authoring identity before staging.
+COPY --from=plugin-artifacts / /plugin-artifacts/
+ENV COGNIA_PLUGIN_ARTIFACTS=/plugin-artifacts
 RUN NODE_OPTIONS=--max-old-space-size=8192 node scripts/build/build-cli-binary.mjs --layout-only
 
 # Pinned managed Pro IDE binary. The release digest is selected per BuildKit

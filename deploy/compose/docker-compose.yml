@@ -173,6 +173,11 @@ services:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.cognia-server
       target: runtime-full
+      # The verified first-party plugin set (never plugin source; see the
+      # `plugin-artifacts` stage). `pnpm plugin:builtin:build` writes the
+      # default; CI points COGNIA_PLUGIN_ARTIFACTS_CONTEXT at the set it made.
+      additional_contexts:
+        plugin-artifacts: ${COGNIA_PLUGIN_ARTIFACTS_CONTEXT:-../../.cache/plugin-artifacts}
     # Multicast has no meaning inside a container network, and advertising the
     # host there would only leak its presence (ADR-0224 A1).
     command: ["serve", "--port", "27890", "--no-mdns"]
@@ -290,6 +295,11 @@ services:
     build:
       context: ../../
       dockerfile: deploy/compose/Dockerfile.web
+      # The verified first-party plugin set (never plugin source; see the
+      # `plugin-artifacts` stage). `pnpm plugin:builtin:build` writes the
+      # default; CI points COGNIA_PLUGIN_ARTIFACTS_CONTEXT at the set it made.
+      additional_contexts:
+        plugin-artifacts: ${COGNIA_PLUGIN_ARTIFACTS_CONTEXT:-../../.cache/plugin-artifacts}
       args:
         NEXT_PUBLIC_E2E: ${NEXT_PUBLIC_E2E:-}
         NEXT_PUBLIC_E2E_CLOUD_GATE: ${NEXT_PUBLIC_E2E_CLOUD_GATE:-}

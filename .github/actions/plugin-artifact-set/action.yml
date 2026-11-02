@@ -1,0 +1,52 @@
+name: Produce the plugin artifact set
+description: >
+  Produce the first-party plugin artifact set on the runner, where the plugin
+  source and its git history are, for image builds that take it as the
+  `plugin-artifacts` named build context (deploy/docker/Dockerfile.cognia-server,
+  deploy/compose/Dockerfile.web). Images never read plugin source; once the
+  plugins repository is split this step fetches the pinned set instead
+  (docs/plans/2026-10-30-plugins-repository-extraction.md §9). Installs the
+  root dependencies on the way, so later steps can reuse them.
+
+inputs:
+  path:
+    description: Where to write the set, relative to the workspace
+    default: .cache/plugin-artifacts
+
+outputs:
+  path:
+    description: Absolute path of the produced set
+    value: ${{ steps.produce.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    # action-setup reads the root `packageManager` pin; Node tracks
+    # `engines.node` (>= 26).
+    - uses: pnpm/action-setup@v6
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 26.x
+        cache: pnpm
+        cache-dependency-path: |
+          pnpm-lock.yaml
+          sidecar/pnpm-lock.yaml
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile --prefer-offline
+    # The producer loads @cognia/plugin-sdk, plugin-ui and github-bot-kit
+    # through their package exports, which point at compiled dist/.
+    - name: Build workspace packages
+      shell: bash
+      run: pnpm build:packages
+    - name: Produce the set
+      id: produce
+      shell: bash
+      env:
+        SET_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        out="$GITHUB_WORKSPACE/$SET_PATH"
+        node scripts/plugin/artifacts/produce.mjs --out "$out"
+        test -f "$out/plugin-artifacts.json"
+        echo "path=$out" >> "$GITHUB_OUTPUT"

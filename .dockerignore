@@ -29,6 +29,16 @@ playwright-report
 test-results
 storybook-static
 
+# First-party plugin source never enters an image. Images consume the verified
+# plugin artifact set through the `plugin-artifacts` named build context
+# (docs/plans/2026-10-30-plugins-repository-extraction.md §5 and §9), so the
+# build keeps working once plugins/ lives in its own repository.
+plugins
+
+# Workspace package builds from the caller's checkout. Each image compiles
+# them itself; a host copy would only skew the layer cache and the build.
+packages/*/dist
+
 # Mobile native shells (never part of the container build)
 mobile/ios
 mobile/android

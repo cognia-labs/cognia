@@ -22,6 +22,9 @@ test("runtime, companion crates, contracts and harness inputs select the lane", 
     "tests/real-e2e/helpers/pairing.ts",
     "deploy/compose/docker-compose.yml",
     "deploy/docker/Dockerfile.cognia-server",
+    "deploy/compose/Dockerfile.web",
+    ".dockerignore",
+    ".github/actions/plugin-artifact-set/action.yml",
     ".github/workflows/dual-host.yml",
     "scripts/ci/dual-host-paths.mjs",
     "playwright.dual-host.config.ts",
@@ -118,6 +121,14 @@ test("workflow always reports its required status and uses the slim minimal stac
   assert.match(runs, /--cache-to type=gha,scope=dual-host,mode=max/)
   assert.match(runs, /--profile server --profile tls up -d --wait cognia-server caddy/)
   assert.match(runs, /test:e2e:dual-host:web-headless/)
+  // Both images take plugins only as the set produced before either builds.
+  const produce = lane.steps.findIndex(
+    (step) => step.uses === "./.github/actions/plugin-artifact-set"
+  )
+  const web = lane.steps.findIndex((step) => step.name === "Build same-origin Web/Caddy image")
+  assert.ok(produce >= 0 && produce < build && produce < web, "plugin set precedes both images")
+  assert.match(runs, /--build-context plugin-artifacts="\$PLUGIN_ARTIFACTS"/)
+  assert.match(lane.steps[web].env.COGNIA_PLUGIN_ARTIFACTS_CONTEXT, /steps\.plugins\.outputs\.path/)
   assert.equal(lane.steps.find((step) => step.name === "Down").if, "always()")
   const required = workflow.jobs["dual-host-required"]
   assert.equal(required.if, "always()")

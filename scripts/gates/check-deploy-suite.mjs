@@ -34,10 +34,20 @@
  *      `COGNIA_INSTANCE`, and the volume name matches the env var the server
  *      reads byte for byte.
  *   6. No GitHub workflow pins a pnpm version other than `packageManager`.
+ *   7. No image reads first-party plugin source, so the build survives the
+ *      plugins repository split (docs/plans/2026-10-30-plugins-repository-
+ *      extraction.md §5): `.dockerignore` excludes `plugins/` with nothing
+ *      re-included, and each image that stages plugins takes the verified set
+ *      through the `plugin-artifacts` named context. Its placeholder stage
+ *      fails the build when no context is passed, the set is copied in and
+ *      named by `COGNIA_PLUGIN_ARTIFACTS`, and every compose build of such an
+ *      image passes the context.
  *
  * What is NOT checked, and why: that the images build, that compose brings
  * the stack up, or that two instances actually coexist. Those are runtime
- * properties of a daemon and belong to `compose-e2e.yml` and the smoke.
+ * properties of a daemon and belong to `compose-e2e.yml` and the smoke. A
+ * workflow that builds a plugin consumer without the named context is not
+ * checked either: the placeholder stage stops that build with a message.
  *
  * Usage: pnpm audit:deploy-suite
  */
@@ -68,6 +78,14 @@ export const ROOT_WORKSPACE_NODE_DOCKERFILES = [
   "deploy/compose/Dockerfile.web",
   "services/workspace-runtime/Dockerfile",
 ]
+
+/** Dockerfiles that stage first-party plugins: they take the verified artifact set, never plugin source. */
+export const PLUGIN_CONSUMER_DOCKERFILES = [
+  "deploy/docker/Dockerfile.cognia-server",
+  "deploy/compose/Dockerfile.web",
+]
+export const DOCKERIGNORE = ".dockerignore"
+export const PLUGIN_CONTEXT = "plugin-artifacts"
 
 export const COMPOSE_BASE = "deploy/compose/docker-compose.yml"
 export const COMPOSE_T2 = "deploy/compose/docker-compose.t2.yml"
@@ -323,6 +341,109 @@ export function checkWorkflowPnpmPins({ workflows, packageManager }) {
   return problems
 }
 
+/** Whether a root `.dockerignore` keeps all of `plugins/` out of the build context. */
+export function dockerignoreExcludesPlugins(text) {
+  let excluded = false
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    if (!line || line.startsWith("#")) continue
+    const negated = line.startsWith("!")
+    const pattern = (negated ? line.slice(1) : line).trim().replace(/^\/+/, "").replace(/\/+$/, "")
+    if (pattern === "plugins") excluded = !negated
+    // Re-including anything under it lets that source back into the image.
+    else if (negated && pattern.startsWith("plugins/")) return false
+  }
+  return excluded
+}
+
+/** `[{ name, image, body }]` for every `FROM` stage, in order. */
+export function dockerStages(dockerfile) {
+  const lines = dockerfile.split("\n")
+  const stages = []
+  for (const line of lines) {
+    const from = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?/i)
+    if (from) stages.push({ image: from[1], name: from[2] ?? null, body: [] })
+    else stages.at(-1)?.body.push(line)
+  }
+  return stages.map((stage) => ({ ...stage, body: stage.body.join("\n") }))
+}
+
+/** Problems with one plugin-consuming Dockerfile. */
+export function checkPluginConsumerDockerfile(rel, dockerfile) {
+  const problems = []
+  const stages = dockerStages(dockerfile)
+  const placeholder = stages.find((stage) => stage.name === PLUGIN_CONTEXT)
+  if (!placeholder)
+    problems.push(
+      `${rel}: no \`${PLUGIN_CONTEXT}\` stage. The named build context replaces it; without it a build that forgot the context has no clear failure.`
+    )
+  else if (!/\bexit\s+1\b/.test(placeholder.body))
+    problems.push(
+      `${rel}: the \`${PLUGIN_CONTEXT}\` placeholder stage does not fail. It only runs when no plugin set was passed, and must stop the build then.`
+    )
+  const consumers = stages.filter((stage) =>
+    new RegExp(`^\\s*COPY\\s+--from=${PLUGIN_CONTEXT}\\s`, "m").test(stage.body)
+  )
+  if (consumers.length === 0)
+    problems.push(`${rel}: never copies the \`${PLUGIN_CONTEXT}\` context into a build stage.`)
+  for (const stage of consumers) {
+    const copy = stage.body.match(
+      new RegExp(`^\\s*COPY\\s+--from=${PLUGIN_CONTEXT}\\s+\\S+\\s+(\\S+)`, "m")
+    )
+    const destination = copy?.[1].replace(/\/+$/, "")
+    const env = stage.body.slice(copy.index).match(/^\s*ENV\s+COGNIA_PLUGIN_ARTIFACTS[=\s]+(\S+)/m)
+    if (!env || env[1].replace(/\/+$/, "") !== destination)
+      problems.push(
+        `${rel}: stage ${stage.name ?? stage.image} copies the plugin set to ${destination} but does not then point COGNIA_PLUGIN_ARTIFACTS at it, so staging would look for plugin source.`
+      )
+  }
+  for (const line of dockerfile.split("\n")) {
+    if (!/^\s*(?:COPY|ADD)\s/i.test(line) || /--from=/.test(line)) continue
+    const inputs = line
+      .trim()
+      .split(/\s+/)
+      .slice(1, -1)
+      .filter((input) => !input.startsWith("--"))
+    if (inputs.some((input) => /^(?:\.\/)?plugins(?:\/|$)/.test(input)))
+      problems.push(
+        `${rel}: copies plugin source (${line.trim()}); take the plugin artifact set instead.`
+      )
+  }
+  return problems
+}
+
+/** Every compose build of a plugin consumer must pass the named context. */
+export function checkComposePluginContexts({ composeText, rel = COMPOSE_BASE }) {
+  const problems = []
+  const compose = parseYaml(composeText) ?? {}
+  for (const [name, service] of Object.entries(compose.services ?? {})) {
+    const build = service?.build
+    if (!build || typeof build !== "object") continue
+    if (!PLUGIN_CONSUMER_DOCKERFILES.includes(build.dockerfile)) continue
+    const contexts = build.additional_contexts ?? {}
+    const named = Array.isArray(contexts)
+      ? contexts.some((entry) => String(entry).startsWith(`${PLUGIN_CONTEXT}=`))
+      : Object.hasOwn(contexts, PLUGIN_CONTEXT)
+    if (!named)
+      problems.push(
+        `${rel}: service "${name}" builds ${build.dockerfile} without additional_contexts.${PLUGIN_CONTEXT}.`
+      )
+  }
+  return problems
+}
+
+export function checkPluginArtifactConsumers({ dockerignore, dockerfiles, composeText }) {
+  const problems = []
+  if (!dockerignoreExcludesPlugins(dockerignore))
+    problems.push(
+      `${DOCKERIGNORE}: plugins/ reaches the build context. Images take first-party plugins only as the verified artifact set, so the build keeps working once plugins/ moves to its own repository.`
+    )
+  for (const [rel, text] of Object.entries(dockerfiles))
+    problems.push(...checkPluginConsumerDockerfile(rel, text))
+  problems.push(...checkComposePluginContexts({ composeText }))
+  return problems
+}
+
 export function runChecks(inputs) {
   return [
     ...checkRustBases({ dockerfiles: inputs.rustDockerfiles, channel: inputs.channel }),
@@ -344,6 +465,11 @@ export function runChecks(inputs) {
       workflows: inputs.workflows,
       packageManager: inputs.packageManager,
     }),
+    ...checkPluginArtifactConsumers({
+      dockerignore: inputs.dockerignore,
+      dockerfiles: inputs.pluginDockerfiles,
+      composeText: inputs.composeFiles[COMPOSE_BASE],
+    }),
   ]
 }
 
@@ -363,6 +489,10 @@ export function loadRepoInputs() {
       ROOT_WORKSPACE_NODE_DOCKERFILES.map((rel) => [rel, read(rel)])
     ),
     composeFiles: Object.fromEntries(COMPOSE_FILES_WITH_IMAGES.map((rel) => [rel, read(rel)])),
+    dockerignore: read(DOCKERIGNORE),
+    pluginDockerfiles: Object.fromEntries(
+      PLUGIN_CONSUMER_DOCKERFILES.map((rel) => [rel, read(rel)])
+    ),
     imagesWorkflow: read(IMAGES_WORKFLOW),
     workflows: Object.fromEntries(
       workflowFiles.map((f) => [`${WORKFLOWS_DIR}/${f}`, read(`${WORKFLOWS_DIR}/${f}`)])
@@ -381,6 +511,6 @@ if (invokedDirectly) {
     process.exit(1)
   }
   console.log(
-    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned.`
+    `deploy-suite: OK — ${ROOT_CONTEXT_RUST_DOCKERFILES.length} Rust images on the toolchain pin, ${ROOT_WORKSPACE_NODE_DOCKERFILES.length} Node images on engines/packageManager, every compose default image published, host ports and instance scoping parametrized, workflow pnpm pins aligned, ${PLUGIN_CONSUMER_DOCKERFILES.length} plugin consumers take the artifact set and never plugin source.`
   )
 }

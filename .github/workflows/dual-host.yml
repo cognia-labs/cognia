@@ -88,10 +88,25 @@ jobs:
         run: |
           docker build -t cognia-signaling:ci .cache/cognia-services/services/signaling-server
           docker build -t cognia-share:ci .cache/cognia-services/services/share-server
+      - name: Cache standalone npm downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-${{ runner.arch }}-node26-npm-${{ hashFiles('sidecar/vscode-ext-host/package-lock.json', 'sidecar/webclone/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node26-npm-
+      # Both images take first-party plugins only as this verified set (the
+      # build context excludes plugins/). Also installs the root dependencies
+      # the Playwright steps below use.
+      - name: Produce the plugin artifact set
+        id: plugins
+        uses: ./.github/actions/plugin-artifact-set
       - name: Build cognia-server (runtime-slim)
+        env:
+          PLUGIN_ARTIFACTS: ${{ steps.plugins.outputs.path }}
         run: |
           docker buildx build --load \
             --file deploy/docker/Dockerfile.cognia-server --target runtime-slim \
+            --build-context plugin-artifacts="$PLUGIN_ARTIFACTS" \
             --tag cognia-server:ci-slim \
             --cache-from "type=registry,ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cognia-server:buildcache" \
             --cache-from type=gha,scope=dual-host \
@@ -110,28 +125,14 @@ jobs:
           free -h
       - name: Build same-origin Web/Caddy image
         working-directory: deploy/compose
+        env:
+          COGNIA_PLUGIN_ARTIFACTS_CONTEXT: ${{ steps.plugins.outputs.path }}
         run: docker compose --profile tls build caddy
       - name: Up + wait
         working-directory: deploy/compose
         # These entry services pull in signaling and the Anthropic fixture.
         # server + tls suffice; the sample needs no secondary Hosts or IdP.
         run: docker compose --profile server --profile tls up -d --wait cognia-server caddy
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26.x
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            sidecar/pnpm-lock.yaml
-      - name: Cache standalone npm downloads
-        uses: actions/cache@v6
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-${{ runner.arch }}-node26-npm-${{ hashFiles('sidecar/vscode-ext-host/package-lock.json', 'sidecar/webclone/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node26-npm-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
       - name: Run dual-host Web Headless project

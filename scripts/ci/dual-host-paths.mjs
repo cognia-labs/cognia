@@ -19,9 +19,12 @@ const prefixes = [
   "tests/real-e2e/",
   "deploy/compose/",
   ".github/actions/checkout-cognia-services/",
+  // The images consume the plugin artifact set this action produces.
+  ".github/actions/plugin-artifact-set/",
 ]
 const exact = new Set([
   "deploy/docker/Dockerfile.cognia-server",
+  ".dockerignore",
   ".github/workflows/dual-host.yml",
   "scripts/ci/dual-host-paths.mjs",
   "scripts/ci/dual-host-paths.test.mjs",

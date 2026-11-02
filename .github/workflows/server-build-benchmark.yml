@@ -95,6 +95,13 @@ jobs:
           free -h > "$RUNNER_TEMP/server-benchmark/memory-before.txt"
           df -h > "$RUNNER_TEMP/server-benchmark/disk-before.txt"
 
+      # The current Dockerfile takes first-party plugins only as this verified
+      # set (the build context excludes plugins/); the baseline arm ignores it.
+      - name: Produce the plugin artifact set
+        if: inputs.smoke_image_run == ''
+        id: plugins
+        uses: ./.github/actions/plugin-artifact-set
+
       - uses: docker/setup-buildx-action@v4
         if: inputs.smoke_image_run == ''
         id: builder
@@ -113,6 +120,7 @@ jobs:
           context: .
           file: ${{ steps.bench.outputs.file }}
           target: runtime-full
+          build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.bench.outputs.image }}-full
@@ -126,6 +134,7 @@ jobs:
           context: .
           file: ${{ steps.bench.outputs.file }}
           target: runtime-slim
+          build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.bench.outputs.image }}-slim

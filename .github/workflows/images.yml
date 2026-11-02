@@ -47,6 +47,8 @@ on:
       - "deploy/docker/Dockerfile.collab-server"
       - "deploy/docker/Dockerfile.docker-proxy"
       - ".dockerignore"
+      # Both app images take first-party plugins only as the set it produces.
+      - ".github/actions/plugin-artifact-set/**"
       - "deploy/runner/**"
       # The agent bundle: its Dockerfile, pins, npm lock and smoke script, the
       # script that stages it, and the runtime catalog its pins are checked
@@ -99,7 +101,7 @@ env:
       {"name":"cognia-deploy-agent","context":".","file":"deploy/docker/Dockerfile.deploy-agent","rootCargo":true},
       {"name":"cognia-ops-controller","context":".","file":"deploy/docker/Dockerfile.ops-controller","rootCargo":true},
       {"name":"cognia-docker-proxy","context":".","file":"deploy/docker/Dockerfile.docker-proxy","rootCargo":true},
-      {"name":"cognia-web","context":".","file":"deploy/compose/Dockerfile.web"}
+      {"name":"cognia-web","context":".","file":"deploy/compose/Dockerfile.web","pluginArtifacts":true}
     ]
 
 permissions:
@@ -179,6 +181,13 @@ jobs:
           sudo swapon /mnt/swapfile
           free -h
 
+      # The web export takes first-party plugins only as this verified set;
+      # the build context excludes plugins/.
+      - name: Produce the plugin artifact set
+        id: plugins
+        if: steps.ctx.outputs.present == 'true' && matrix.pluginArtifacts
+        uses: ./.github/actions/plugin-artifact-set
+
       - uses: docker/setup-buildx-action@v4
         if: steps.ctx.outputs.present == 'true'
 
@@ -205,6 +214,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          build-contexts: ${{ matrix.pluginArtifacts && format('plugin-artifacts={0}', steps.plugins.outputs.path) || '' }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -583,6 +593,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The brain layout takes first-party plugins only as this verified set;
+      # the build context excludes plugins/.
+      - name: Produce the plugin artifact set
+        id: plugins
+        uses: ./.github/actions/plugin-artifact-set
+
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
@@ -623,6 +639,7 @@ jobs:
           context: .
           file: deploy/docker/Dockerfile.cognia-server
           target: runtime-full
+          build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
           tags: ${{ steps.meta-full.outputs.tags }}
           labels: ${{ steps.meta-full.outputs.labels }}
@@ -636,6 +653,7 @@ jobs:
           context: .
           file: deploy/docker/Dockerfile.cognia-server
           target: runtime-slim
+          build-contexts: plugin-artifacts=${{ steps.plugins.outputs.path }}
           push: ${{ needs.vars.outputs.should_push == 'true' }}
           tags: ${{ steps.meta-slim.outputs.tags }}
           labels: ${{ steps.meta-slim.outputs.labels }}

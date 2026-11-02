@@ -62,8 +62,20 @@ context. Run commands from the root, for example:
 `deploy/docker/` 下的五个 Dockerfile 仍以仓库根目录为构建上下文。例如在根目录执行：
 
 ```sh
-docker build -f deploy/docker/Dockerfile.cognia-server --target runtime-slim -t cognia-server .
+pnpm plugin:builtin:build
+docker build -f deploy/docker/Dockerfile.cognia-server --target runtime-slim \
+  --build-context plugin-artifacts=.cache/plugin-artifacts -t cognia-server .
 ```
+
+The server and Web images never read `plugins/` (`.dockerignore` excludes it).
+They take the first-party plugins as a verified artifact set through the
+`plugin-artifacts` named build context; `pnpm plugin:builtin:build` writes one to
+`.cache/plugin-artifacts`, which is also the Compose default.
+
+server 和 Web 镜像从不读取 `plugins/`（`.dockerignore` 已排除）。第一方插件只以
+经过校验的构件集形式，通过 `plugin-artifacts` 命名构建上下文传入；
+`pnpm plugin:builtin:build` 会把它写到 `.cache/plugin-artifacts`，这也是 Compose
+的默认位置。
 
 Compose configurations stay in `deploy/compose/`. Service-local Dockerfiles and
 the runner/bundle images stay beside their own deployment assets.

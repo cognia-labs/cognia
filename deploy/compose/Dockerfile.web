@@ -10,9 +10,23 @@
 ##
 ## Build (repo root is the context; .dockerignore keeps node_modules/out/target
 ## off the daemon):
-##   docker build -f deploy/compose/Dockerfile.web -t cognia-web .
+##   pnpm plugin:builtin:build    # produces the plugin set in .cache/plugin-artifacts
+##   docker build -f deploy/compose/Dockerfile.web \
+##     --build-context plugin-artifacts=.cache/plugin-artifacts -t cognia-web .
 ## CI: published as ghcr.io/<owner>/cognia-web by the `cognia-web` matrix
 ## entry in images.yml.
+
+# ── Plugin artifact set (named build context) ───────────────────────────────
+# First-party plugins reach the image only as a verified artifact set, never as
+# source (docs/plans/2026-10-30-plugins-repository-extraction.md §5 and §9):
+# .dockerignore keeps plugins/ out of the build context, and the caller passes
+# the set with `--build-context plugin-artifacts=<set dir>`. CI produces it
+# with .github/actions/plugin-artifact-set; locally, `pnpm plugin:builtin:build`
+# writes it to .cache/plugin-artifacts. A named context replaces this stage, so
+# the stage only runs, and stops the build, when the caller passed none.
+FROM node:26-bookworm AS plugin-artifacts
+RUN echo "No plugin artifact set: pass --build-context plugin-artifacts=<set dir> (pnpm plugin:builtin:build writes .cache/plugin-artifacts)." >&2 \
+    && exit 1
 
 FROM node:26-bookworm AS web-build
 ARG COREPACK_VERSION=0.35.0
@@ -89,6 +103,10 @@ RUN --mount=type=cache,id=cognia-pnpm-store,target=/root/.local/share/pnpm/store
     && mv pnpm-workspace.root.yaml pnpm-workspace.yaml
 # Sources last. prebuild still runs the complete asset and sidecar pipeline.
 COPY . .
+# The verified plugin artifact set; stage-plugin-artifacts admits it against
+# this checkout's product profile and authoring identity before staging.
+COPY --from=plugin-artifacts / /plugin-artifacts/
+ENV COGNIA_PLUGIN_ARTIFACTS=/plugin-artifacts
 # The `build` script sets its own 16 GB V8 heap (cross-env), so an outer
 # NODE_OPTIONS would be overridden. Peak RSS is ~17 GB: on a 16 GB host the
 # build needs swap (images.yml grows the runner's before this job builds).

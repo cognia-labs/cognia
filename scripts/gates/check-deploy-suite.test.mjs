@@ -6,12 +6,17 @@ import {
   COMPOSE_BASE,
   COMPOSE_T2,
   checkComposeImagesPublished,
+  checkComposePluginContexts,
+  checkPluginArtifactConsumers,
+  checkPluginConsumerDockerfile,
   checkComposePortsParametrized,
   checkInstanceScoping,
   checkNodeBases,
   checkRustBases,
   checkWorkflowPnpmPins,
   composeDefault,
+  dockerignoreExcludesPlugins,
+  dockerStages,
   fromImages,
   ghcrImageName,
   ghcrImageOwner,
@@ -31,6 +36,11 @@ services:
       - "\${COGNIA_BIND_ADDRESS:-0.0.0.0}:\${SIGNALING_PORT:-7892}:7892"
   cognia-server:
     image: \${COGNIA_SERVER_IMAGE:-ghcr.io/owner/cognia-server:latest-full}
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.cognia-server
+      additional_contexts:
+        plugin-artifacts: \${COGNIA_PLUGIN_ARTIFACTS_CONTEXT:-../../.cache/plugin-artifacts}
     environment:
       COGNIA_DEPLOYMENT_ID: \${COGNIA_INSTANCE:-cognia}
     ports:
@@ -82,6 +92,21 @@ const GOOD_NODE = {
     "FROM node:26-bookworm AS web-build\nARG PNPM_VERSION=11.18.0\nRUN npm i -g pnpm@${PNPM_VERSION}\nFROM caddy:2.10\n",
 }
 
+const GOOD_PLUGIN_CONSUMER = `FROM node:26-bookworm AS plugin-artifacts
+RUN echo "pass --build-context plugin-artifacts=<dir>" >&2 \\
+    && exit 1
+
+FROM node:26-bookworm AS web-build
+COPY . .
+COPY --from=plugin-artifacts / /plugin-artifacts/
+ENV COGNIA_PLUGIN_ARTIFACTS=/plugin-artifacts
+RUN pnpm build
+FROM caddy:2.10
+COPY --from=web-build /app/out /srv
+`
+
+const GOOD_DOCKERIGNORE = "node_modules\n# source never enters an image\nplugins\n.git\n"
+
 const GOOD_INPUTS = {
   channel: "1.95",
   enginesNode: ">=26.0.0",
@@ -90,6 +115,8 @@ const GOOD_INPUTS = {
   nodeDockerfiles: GOOD_NODE,
   composeFiles: { [COMPOSE_BASE]: GOOD_BASE, [COMPOSE_T2]: GOOD_T2 },
   imagesWorkflow: GOOD_IMAGES_WORKFLOW,
+  dockerignore: GOOD_DOCKERIGNORE,
+  pluginDockerfiles: { "Dockerfile.web": GOOD_PLUGIN_CONSUMER },
   workflows: {
     "a.yml": "jobs:\n  x:\n    steps:\n      - uses: pnpm/action-setup@v6\n",
     "b.yml":
@@ -361,4 +388,97 @@ jobs:
 `
   assert.deepEqual([...publishedImageNames(workflow)].sort(), ["cognia-signaling", "cognia-web"])
   assert.throws(() => publishedImageNames("env:\n  FAST_IMAGE_MATRIX: invalid-json"))
+})
+
+test("dockerStages splits stages with their names and bodies", () => {
+  const stages = dockerStages(GOOD_PLUGIN_CONSUMER)
+  assert.deepEqual(
+    stages.map((stage) => [stage.image, stage.name]),
+    [
+      ["node:26-bookworm", "plugin-artifacts"],
+      ["node:26-bookworm", "web-build"],
+      ["caddy:2.10", null],
+    ]
+  )
+  assert.match(stages[1].body, /COPY --from=plugin-artifacts/)
+})
+
+test("plugins/ must stay out of the build context, with nothing under it re-included", () => {
+  assert.equal(dockerignoreExcludesPlugins(GOOD_DOCKERIGNORE), true)
+  assert.equal(dockerignoreExcludesPlugins("/plugins/\n"), true)
+  assert.equal(dockerignoreExcludesPlugins("node_modules\n"), false)
+  assert.equal(dockerignoreExcludesPlugins("# plugins\n"), false)
+  assert.equal(dockerignoreExcludesPlugins("plugins\n!plugins\n"), false)
+  assert.equal(dockerignoreExcludesPlugins("plugins\n!plugins/ocr/plugin.json\n"), false)
+  // Other directories that happen to be called plugins are not the source tree.
+  assert.equal(dockerignoreExcludesPlugins("public/plugins\n"), false)
+  assert.deepEqual(
+    checkPluginArtifactConsumers({
+      dockerignore: "node_modules\n",
+      dockerfiles: {},
+      composeText: "services: {}\n",
+    }).length,
+    1
+  )
+})
+
+test("a plugin consumer needs a failing placeholder and must name the copied set", () => {
+  assert.deepEqual(checkPluginConsumerDockerfile("Dockerfile.web", GOOD_PLUGIN_CONSUMER), [])
+  const noPlaceholder = GOOD_PLUGIN_CONSUMER.replace(
+    /^FROM node:26-bookworm AS plugin-artifacts\n[^]*?\n\n/,
+    ""
+  )
+  assert.match(
+    checkPluginConsumerDockerfile("D", noPlaceholder).join("\n"),
+    /no `plugin-artifacts` stage/
+  )
+  const silent = GOOD_PLUGIN_CONSUMER.replace("    && exit 1", "    && true")
+  assert.match(checkPluginConsumerDockerfile("D", silent).join("\n"), /does not fail/)
+  const unnamed = GOOD_PLUGIN_CONSUMER.replace(
+    "ENV COGNIA_PLUGIN_ARTIFACTS=/plugin-artifacts\n",
+    ""
+  )
+  assert.match(checkPluginConsumerDockerfile("D", unnamed).join("\n"), /COGNIA_PLUGIN_ARTIFACTS/)
+  const elsewhere = GOOD_PLUGIN_CONSUMER.replace(
+    "ENV COGNIA_PLUGIN_ARTIFACTS=/plugin-artifacts",
+    "ENV COGNIA_PLUGIN_ARTIFACTS=/other"
+  )
+  assert.match(checkPluginConsumerDockerfile("D", elsewhere).join("\n"), /COGNIA_PLUGIN_ARTIFACTS/)
+  const neverCopied = GOOD_PLUGIN_CONSUMER.replace(
+    "COPY --from=plugin-artifacts / /plugin-artifacts/\n",
+    ""
+  )
+  assert.match(checkPluginConsumerDockerfile("D", neverCopied).join("\n"), /never copies/)
+  const source = GOOD_PLUGIN_CONSUMER.replace("COPY . .", "COPY plugins ./plugins")
+  assert.match(checkPluginConsumerDockerfile("D", source).join("\n"), /copies plugin source/)
+})
+
+test("a compose build of a plugin consumer must pass the named context", () => {
+  assert.deepEqual(checkComposePluginContexts({ composeText: GOOD_BASE }), [])
+  const listForm = GOOD_BASE.replace(
+    "        plugin-artifacts: ${COGNIA_PLUGIN_ARTIFACTS_CONTEXT:-../../.cache/plugin-artifacts}",
+    "        - plugin-artifacts=../../.cache/plugin-artifacts"
+  )
+  assert.deepEqual(checkComposePluginContexts({ composeText: listForm }), [])
+  const missing = GOOD_BASE.replace(/      additional_contexts:\n.*\n/, "")
+  assert.match(
+    checkComposePluginContexts({ composeText: missing }).join("\n"),
+    /cognia-server.*additional_contexts\.plugin-artifacts/
+  )
+})
+
+test("the image files before the artifact-set change fail the plugin-source check", () => {
+  const before = {
+    dockerignore: "node_modules\n.git\n",
+    dockerfiles: {
+      "deploy/compose/Dockerfile.web":
+        "FROM node:26-bookworm AS web-build\nCOPY . .\nRUN pnpm build\n",
+    },
+    composeText: GOOD_BASE.replace(/      additional_contexts:\n.*\n/, ""),
+  }
+  const problems = checkPluginArtifactConsumers(before).join("\n")
+  assert.match(problems, /plugins\/ reaches the build context/)
+  assert.match(problems, /no `plugin-artifacts` stage/)
+  assert.match(problems, /never copies/)
+  assert.match(problems, /additional_contexts\.plugin-artifacts/)
 })
