@@ -1,66 +1,25 @@
-/**
- * GitHub webhook → issue board freshness.
- *
- * The board reads Dexie only, and Dexie was refreshed only by the 15-minute
- * `github-issue-sync` schedule and the "Sync now" button. A user who set up a
- * full webhook still watched an `issues.closed` sit on the board as open for up
- * to a quarter of an hour: webhook events reached workflows, the inbox and bots,
- * and nothing that wrote the mirror.
- *
- * This is that consumer. It does not project the webhook payload into rows
- * itself — the mirror's `since` watermark is the newest `updatedAt` it holds,
- * so writing one fresh row out of band would move the watermark past edits the
- * poll has not fetched yet and lose them for good. Instead an event schedules
- * the same incremental refresh the schedule runs, for the one repository the
- * event names, coalesced over a short window so a burst (a bulk label edit
- * fires one event per issue) costs one read.
- *
- * The exception is an issue that LEFT the repository (`issues.transferred`,
- * `issues.deleted`): no read of this repository will ever mention it again, so
- * its mirror row is removed directly from the payload's issue number.
- *
- * Scope: issue bindings name a bare `owner/name`, which means github.com. An
- * event from an account on a GitHub Enterprise server is ignored here rather
- * than refreshing a github.com repository that happens to share the name.
- */
-
+/** GitHub webhook freshness is scheduled by the shared external-sync runtime. */
 import type { IntegrationEventEnvelope } from "@/types/plugin/plugin-integration"
 import { getIntegrationAccount } from "@/lib/db/integrations"
 import { deleteGithubIssues } from "@/lib/db/github-issue-mirror"
 import { GITHUB_DOT_COM, parseGithubHost } from "@/lib/github/host"
 import { integrationApiBaseUrl } from "@/lib/integrations/action-runner"
+import { pendingExternalSyncKeys, requestExternalSync } from "@/lib/external-services/sync/runtime"
 import { GITHUB_DELIVERY_PLUGIN_ID } from "./github-writeback"
-import {
-  MissingGithubCredentialError,
-  resolveWorkspaceGithubBindings,
-  type WorkspaceGithubBinding,
-} from "./sync-runner"
-import { syncRepoIssues } from "./github-sync"
-import { createResolveOctokit } from "@/lib/ai/agent/team/pr-feedback/resolvers"
-import type { OctokitLike } from "@/lib/github/issues"
-import { getIssueSyncRegistry } from "./sync/registry"
-import { reconcileBinding } from "./sync/engine"
-import { resolveWorkspaceSyncBindings } from "./sync/runner"
-import { GITHUB_SYNC_PROVIDER_ID } from "./sync/providers/github"
-import type { IssueSyncBinding } from "./sync/types"
+import { githubMirrorSyncTarget } from "./github-sync"
+import { issueSyncTarget, tombstoneIssueSyncRefs } from "./sync/engine"
+import { reconcileIssueSyncRegistrations } from "./sync/runtime"
 
-/** Coalescing window for a burst of events on one repository. */
-export const GITHUB_EVENT_REFRESH_DEBOUNCE_MS = 2_000
-
-/** Event families whose delivery can change what the board shows. */
 const REFRESHING_PREFIXES = ["issues.", "issue_comment."] as const
-/** Actions after which the issue no longer belongs to the repository. */
 const DEPARTED = new Set(["issues.transferred", "issues.deleted"])
 
 export interface GithubEventRefreshDeps {
   accountHostId: (pluginId: string, connectorAccountId: string) => Promise<string | undefined>
-  mirrorBindings: () => Promise<WorkspaceGithubBinding[]>
-  importBindings: () => Promise<IssueSyncBinding[]>
-  refreshMirror: (binding: WorkspaceGithubBinding) => Promise<unknown>
-  reconcileImport: (binding: IssueSyncBinding) => Promise<unknown>
+  reconcileRegistrations: typeof reconcileIssueSyncRegistrations
+  requestSync: typeof requestExternalSync
+  pendingKeys: typeof pendingExternalSyncKeys
   removeFromMirror: (repoFullName: string, numbers: number[]) => Promise<unknown>
-  setTimer: (fn: () => void, ms: number) => unknown
-  clearTimer: (handle: unknown) => void
+  departImport: typeof tombstoneIssueSyncRefs
   onError: (repoFullName: string, error: unknown) => void
 }
 
@@ -76,32 +35,13 @@ async function defaultAccountHostId(
 }
 
 function defaultDeps(): GithubEventRefreshDeps {
-  const resolveOctokit = createResolveOctokit() as (
-    repoFullName: string
-  ) => Promise<OctokitLike | null>
   return {
     accountHostId: defaultAccountHostId,
-    mirrorBindings: () => resolveWorkspaceGithubBindings(),
-    importBindings: async () =>
-      (await resolveWorkspaceSyncBindings()).filter(
-        (binding) => binding.providerId === GITHUB_SYNC_PROVIDER_ID
-      ),
-    refreshMirror: (binding) =>
-      syncRepoIssues(binding, {
-        resolveOctokit: async (repoFullName) => {
-          const octokit = await resolveOctokit(repoFullName)
-          if (!octokit) throw new MissingGithubCredentialError(repoFullName)
-          return octokit
-        },
-      }),
-    reconcileImport: async (binding) => {
-      const provider = getIssueSyncRegistry().get(binding.providerId)
-      if (!provider) return undefined
-      return reconcileBinding(binding, provider)
-    },
-    removeFromMirror: (repoFullName, numbers) => deleteGithubIssues(repoFullName, numbers),
-    setTimer: (fn, ms) => setTimeout(fn, ms),
-    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    reconcileRegistrations: reconcileIssueSyncRegistrations,
+    requestSync: requestExternalSync,
+    pendingKeys: pendingExternalSyncKeys,
+    removeFromMirror: deleteGithubIssues,
+    departImport: tombstoneIssueSyncRefs,
     onError: (repoFullName, error) =>
       console.warn("GitHub event issue refresh failed", { repoFullName, error }),
   }
@@ -117,11 +57,22 @@ function issueNumberOf(event: IntegrationEventEnvelope): number | undefined {
   return typeof number === "number" && Number.isInteger(number) && number > 0 ? number : undefined
 }
 
-export class GithubEventIssueRefresher {
-  private readonly timers = new Map<string, unknown>()
-  /** One refresh chain per repository, so two windows never overlap. */
-  private readonly chains = new Map<string, Promise<void>>()
+/**
+ * The remote version a departure is pinned to: the payload issue's own
+ * `updated_at`, never a Host clock. `occurredAt` is the Host's receipt time
+ * (late delivery, local skew), and a barrier above the item's real versions
+ * would keep a genuinely returned item departed until it is edited again.
+ * Without a remote version the departure is recorded unpinned: a stale page
+ * may revive it, and the next full scan verifies and departs it again.
+ */
+function departedRemoteAt(event: IntegrationEventEnvelope): number | undefined {
+  const updated = (event.payload as { issue?: { updated_at?: unknown } } | undefined)?.issue
+    ?.updated_at
+  const time = typeof updated === "string" ? Date.parse(updated) : NaN
+  return Number.isFinite(time) ? time : undefined
+}
 
+export class GithubEventIssueRefresher {
   constructor(private readonly deps: GithubEventRefreshDeps = defaultDeps()) {}
 
   /** True when the event can change the issue board. */
@@ -144,63 +95,59 @@ export class GithubEventIssueRefresher {
     try {
       const hostId = await this.deps.accountHostId(event.pluginId, event.accountId)
       if (hostId !== GITHUB_DOT_COM.id) return
+      // crates/cognia-scheduling/src/workflow/triggers/webhook_router.rs:
+      // handle_integration_ingress verifies the HMAC before queueing a delivery;
+      // lib/integrations/ingress-client.ts normalizes it before publishIntegrationEvent.
+      const { mirror, imported } = await this.deps.reconcileRegistrations()
+      const boundMirrors = mirror.filter((binding) => sameRepo(binding.repoFullName, repoFullName))
+      const boundImports = imported.filter(
+        (binding) => binding.providerId === "github" && sameRepo(binding.key, repoFullName)
+      )
       if (DEPARTED.has(event.eventType)) {
         const number = issueNumberOf(event)
-        const bound = (await this.deps.mirrorBindings()).find((binding) =>
-          sameRepo(binding.repoFullName, repoFullName)
-        )
-        // The bound spelling, not the payload's: the mirror key is the one
-        // the binding was synced under.
-        if (number !== undefined && bound) {
-          await this.deps.removeFromMirror(bound.repoFullName, [number])
+        if (number !== undefined) {
+          for (const binding of boundMirrors)
+            await this.deps.removeFromMirror(binding.repoFullName, [number])
+          for (const binding of boundImports) {
+            const remoteAt = departedRemoteAt(event)
+            await this.deps.departImport(
+              binding,
+              [`${binding.key}#${number}`],
+              remoteAt !== undefined ? { departedRemoteAt: remoteAt } : {}
+            )
+          }
         }
       }
-      this.schedule(repoFullName)
+      for (const binding of boundMirrors)
+        this.deps.requestSync(githubMirrorSyncTarget(binding).key, "push")
+      for (const binding of boundImports)
+        this.deps.requestSync(issueSyncTarget(binding).key, "push")
     } catch (error) {
       this.deps.onError(repoFullName, error)
     }
   }
 
-  /** Repositories with a refresh waiting to fire. */
+  /** Repository names of pending shared targets (the legacy caller-facing API). */
   pending(): string[] {
-    return [...this.timers.keys()]
+    return [
+      ...new Set(
+        this.deps.pendingKeys().flatMap((key) => {
+          const match = /^(?:github-mirror|issues):[^:]+:(.+)$/.exec(key)
+          return match && /^[^/:]+\/[^/:]+$/.test(match[1]) ? [match[1].toLowerCase()] : []
+        })
+      ),
+    ]
   }
 
-  private schedule(repoFullName: string): void {
-    const key = repoFullName.toLowerCase()
-    const existing = this.timers.get(key)
-    if (existing !== undefined) this.deps.clearTimer(existing)
-    this.timers.set(
-      key,
-      this.deps.setTimer(() => {
-        this.timers.delete(key)
-        void this.enqueue(key, repoFullName)
-      }, GITHUB_EVENT_REFRESH_DEBOUNCE_MS)
-    )
-  }
-
-  private enqueue(key: string, repoFullName: string): Promise<void> {
-    const previous = this.chains.get(key) ?? Promise.resolve()
-    const next = previous.then(() => this.refresh(repoFullName))
-    this.chains.set(key, next)
-    return next.finally(() => {
-      if (this.chains.get(key) === next) this.chains.delete(key)
-    })
-  }
-
-  /** Refresh every binding of the repository, mirror and import alike. */
   async refresh(repoFullName: string): Promise<void> {
     try {
-      const [mirror, imported] = await Promise.all([
-        this.deps.mirrorBindings(),
-        this.deps.importBindings(),
-      ])
-      for (const binding of mirror.filter((b) => sameRepo(b.repoFullName, repoFullName))) {
-        await this.deps.refreshMirror(binding)
-      }
-      for (const binding of imported.filter((b) => sameRepo(b.key, repoFullName))) {
-        await this.deps.reconcileImport(binding)
-      }
+      const { mirror, imported } = await this.deps.reconcileRegistrations()
+      for (const binding of mirror.filter((b) => sameRepo(b.repoFullName, repoFullName)))
+        this.deps.requestSync(githubMirrorSyncTarget(binding).key, "push")
+      for (const binding of imported.filter(
+        (b) => b.providerId === "github" && sameRepo(b.key, repoFullName)
+      ))
+        this.deps.requestSync(issueSyncTarget(binding).key, "push")
     } catch (error) {
       this.deps.onError(repoFullName, error)
     }

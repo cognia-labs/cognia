@@ -18,12 +18,12 @@
 import {
   fetchRepoIssues,
   toMirrorRow,
-  ISSUES_PER_PAGE,
+  fetchGithubIssuePage,
+  rateAwareOctokit,
   type OctokitLike,
 } from "@/lib/github/issues"
 import {
   ExternalSyncRateLimited,
-  ExternalSyncCursorInvalid,
   type ExternalSyncTarget,
 } from "@/lib/external-services/sync/types"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
@@ -178,78 +178,6 @@ export async function resolveGithubSyncReadClient(
       mode: "pat",
       pat: { token },
     })) as unknown as OctokitLike,
-  }
-}
-
-function githubRateLimit(error: {
-  status?: number
-  headers?: Record<string, string | undefined>
-  data?: unknown
-  message?: string
-}): ExternalSyncRateLimited | undefined {
-  const headers = Object.fromEntries(
-    Object.entries(error.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
-  )
-  const message =
-    error.data && typeof error.data === "object" && "message" in error.data
-      ? String(error.data.message)
-      : (error.message ?? "")
-  if (
-    error.status !== 429 &&
-    !(
-      error.status === 403 &&
-      (headers["x-ratelimit-remaining"] === "0" || /secondary rate limit/i.test(message))
-    )
-  )
-    return undefined
-  const retry = headers["retry-after"]
-  const delay = retry
-    ? /^\d+(?:\.\d+)?$/.test(retry.trim())
-      ? Number(retry) * 1000
-      : Date.parse(retry) - Date.now()
-    : NaN
-  const reset = Number(headers["x-ratelimit-reset"]) * 1000 - Date.now()
-  return new ExternalSyncRateLimited(
-    Number.isFinite(delay) && delay >= 0
-      ? delay
-      : Number.isFinite(reset) && reset >= 0
-        ? reset
-        : 60_000
-  )
-}
-
-class GithubSyncHttpError extends Error {
-  constructor(readonly status: number) {
-    super("GitHub sync request failed")
-  }
-}
-
-function rateAwareOctokit(octokit: OctokitLike): OctokitLike {
-  return {
-    request: async (route, params) => {
-      try {
-        const response = await octokit.request(route, params)
-        const limited = githubRateLimit(response)
-        if (limited) throw limited
-        if (response.status >= 400) throw new GithubSyncHttpError(response.status)
-        return response
-      } catch (error) {
-        if (error && typeof error === "object") {
-          const value = error as {
-            status?: number
-            response?: { headers?: Record<string, string | undefined>; data?: unknown }
-            message?: string
-          }
-          const limited = githubRateLimit({
-            status: value.status,
-            ...value.response,
-            message: value.message,
-          })
-          if (limited) throw limited
-        }
-        throw error
-      }
-    },
   }
 }
 
@@ -694,45 +622,12 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const resource = binding.resource
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const [owner, repo] = resource.repoFullName.split("/")
-      const previous = Number(options.cursor ?? 0)
-      // `max`: newest updated_at read on earlier pages of this scan, pull
-      // requests included. Every row up to it has been read in keyset order.
-      let token: { since: number; page: number; floor?: number; max?: number }
-      try {
-        token = options.page
-          ? JSON.parse(options.page)
-          : { since: options.mode === "full" ? 0 : previous, page: 1 }
-      } catch {
-        throw new ExternalSyncCursorInvalid()
-      }
-      if (
-        !Number.isFinite(previous) ||
-        previous < 0 ||
-        !token ||
-        !Number.isFinite(token.since) ||
-        token.since < 0 ||
-        !Number.isSafeInteger(token.page) ||
-        token.page < 1 ||
-        (token.floor !== undefined &&
-          (!Number.isFinite(token.floor) || token.floor < 0 || token.floor > token.since)) ||
-        (token.max !== undefined && (!Number.isFinite(token.max) || token.max < 0))
-      )
-        // Old offset tokens cannot safely resume a keyset generation.
-        throw new ExternalSyncCursorInvalid()
       const octokit = await octokitFor(resource.repoFullName)
-      const response = await octokit.request("GET /repos/{owner}/{repo}/issues", {
-        owner,
-        repo,
-        state: "all",
-        sort: "updated",
-        direction: "asc",
-        per_page: ISSUES_PER_PAGE,
-        page: token.page,
-        since: new Date(Math.max(0, token.since - 1000)).toISOString(),
-        request: { signal: options.signal },
+      const page = await fetchGithubIssuePage(octokit, {
+        ...options,
+        repoFullName: resource.repoFullName,
       })
-      if (!Array.isArray(response.data)) throw new Error("Invalid GitHub issue page")
-      const raw = response.data as Array<Parameters<typeof toMirrorRow>[0]>
+      const raw = page.raw
       const milestones = await fetchMilestones(octokit, owner, repo)
       const project = resource.sync?.projectV2Number
         ? await fetchProjectV2(octokit, owner, repo, resource.sync.projectV2Number)
@@ -748,42 +643,15 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
             project.iterationByIssue
           )
         })
-      const hasMore = /<[^>]+>;\s*rel="next"/.test(response.headers.link ?? "")
-      // Pull requests are filtered out of `items` but still advance the keyset:
-      // a terminal page of only pull requests must not drop the scan's progress.
-      const pageMax = raw.reduce((max, row) => {
-        const updated = Date.parse(row.updated_at)
-        return Number.isFinite(updated) ? Math.max(max, updated) : max
-      }, token.max ?? 0)
-      let floor = token.page > 1 ? Math.min(token.floor ?? token.since, token.since) : token.floor
-      let nextPage: string | undefined
-      if (hasMore) {
-        const boundary = Date.parse(raw.at(-1)?.updated_at ?? "")
-        if (!Number.isFinite(boundary)) throw new Error("GitHub issue page boundary missing")
-        // The overlap may re-read a boundary (including PR-only pages). Only
-        // advance by offset while its timestamp cannot move the keyset forward.
-        if (boundary <= token.since) floor = Math.min(floor ?? token.since, token.since)
-        nextPage = JSON.stringify({
-          ...(boundary > token.since
-            ? { since: boundary, page: 1 }
-            : { since: token.since, page: token.page + 1 }),
-          ...(floor !== undefined ? { floor } : {}),
-          ...(pageMax > 0 ? { max: pageMax } : {}),
-        })
-      }
       options.signal?.throwIfAborted()
-      const links = nextPage
+      const links = page.nextPage
         ? []
         : await fetchPullLinks(octokit, owner, repo, binding, pullPageSize, pullCiLimit)
-      // Offset fallback within a same-second bucket may shift on deletion.
-      // Pin the cursor to its earliest bucket so the next pass re-reads it.
-      // Replaying from this bucket (including later pages) avoids permanent gaps.
-      const terminalCursor = String(Math.min(Math.max(previous, pageMax), floor ?? Infinity))
       return {
         items,
         cycles: [...milestones, ...project.cycles],
         links,
-        ...(nextPage ? { nextPage } : { cursor: terminalCursor }),
+        ...(page.nextPage ? { nextPage: page.nextPage } : { cursor: page.cursor }),
       }
     },
 

@@ -30,6 +30,7 @@ import type { ScheduledTask, TaskExecutionConfig, TaskNotificationConfig } from 
 import { resolveWorkspaceGithubBindings } from "./sync-runner"
 import { resolveWorkspaceSyncBindings } from "@/lib/issues/sync/runner"
 import { listIssueProjects } from "@/lib/db/issue-projects"
+import { reconcileIssueSyncRegistrations } from "./sync/runtime"
 
 export const GITHUB_ISSUE_SYNC_TASK_ID = "github-issue-sync::singleton"
 
@@ -103,6 +104,7 @@ export interface SyncGithubIssueScheduleResult {
  * to call on boot, after adding a resource, and after removing one.
  */
 export async function syncGithubIssueSchedule(): Promise<SyncGithubIssueScheduleResult> {
+  await reconcileIssueSyncRegistrations()
   // Mirror bindings plus every provider binding (spec 2026-09-06 D1): the one
   // task exists as long as anything at all is bound.
   const bindings = [

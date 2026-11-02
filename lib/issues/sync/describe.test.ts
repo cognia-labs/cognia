@@ -70,7 +70,14 @@ describe("summarizeSync", () => {
         mirror: {
           repoCount: 1,
           results: [
-            { repoFullName: "o/m", written: 4, removed: 0, notModified: false, truncated: false },
+            {
+              repoFullName: "o/m",
+              status: "completed",
+              written: 4,
+              removed: 0,
+              notModified: false,
+              truncated: false,
+            },
           ],
           failures: [],
         },

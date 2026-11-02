@@ -13,6 +13,8 @@ export interface ExternalSyncPage<Item> {
 }
 
 export interface ExternalSyncDriver<Item> {
+  /** Yield after this many new pages, retaining the generation for the next run. */
+  pageBudget?: number
   /** Enumerate full pages every pass without bypassing persisted retry delays. */
   fullScanOnly?: boolean
   itemId(item: Item): string
@@ -55,6 +57,7 @@ export interface ExternalSyncOutcome {
   applied: number
   tombstoned: number
   errorCode?: string
+  truncated?: boolean
 }
 
 export interface ExternalSyncOptions {

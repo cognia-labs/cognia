@@ -51,7 +51,13 @@ import { createLarkTaskSyncProvider } from "./providers/lark-task"
 import { createGithubSyncProvider, type GithubSyncProviderDeps } from "./providers/github"
 import type { IssueActor, IssueProject } from "@/types/issues"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
-import { issueSyncTarget, pushIdempotencyKey, reconcileBinding, triageOnImport } from "./engine"
+import {
+  issueSyncTarget,
+  pushIdempotencyKey,
+  reconcileBinding,
+  tombstoneIssueSyncRefs,
+  triageOnImport,
+} from "./engine"
 import type {
   IssueSyncBinding,
   IssueSyncProvider,
@@ -160,6 +166,63 @@ function fake(options: FakeOptions = {}) {
   }
   return { provider, pushes, pulls }
 }
+
+it("authoritative departures affect only the exact binding and emit one transition", async () => {
+  const { provider } = fake({ pull: { items: [remote()], notModified: false } })
+  await reconcileBinding(binding(), provider)
+  const issue = (await getIssueByExternalKey("fake", "o/r#1"))!
+  expect(await tombstoneIssueSyncRefs(binding({ key: "other/repo" }), ["o/r#1"])).toBe(0)
+  expect(await tombstoneIssueSyncRefs(binding({ issueProjectId: "other" }), ["o/r#1"])).toBe(0)
+  expect(await tombstoneIssueSyncRefs(binding(), ["o/r#1"], { now: () => 1234 })).toBe(1)
+  expect(await tombstoneIssueSyncRefs(binding(), ["o/r#1"], { now: () => 5678 })).toBe(0)
+  expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toBe(1234)
+  expect(
+    (await listIssueEvents({ issueId: issue.id })).filter(
+      (event) => event.kind === "external_departed"
+    )
+  ).toHaveLength(1)
+})
+
+it("a push finishing after an authoritative departure cannot erase its remote version", async () => {
+  const { provider } = fake({ pull: { items: [remote()], notModified: false } })
+  await reconcileBinding(binding(), provider, { now: () => 2000 })
+  const issue = (await getIssueByExternalKey("fake", "o/r#1"))!
+  await updateIssue(issue.id, { title: "Local edit" }, HUMAN)
+  provider.pullPage = async () => ({ items: [], cursor: "1000" })
+  let entered!: () => void
+  let release!: () => void
+  const pushing = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  provider.push = async () => {
+    entered()
+    await gate
+    return { status: "applied", remoteUpdatedAt: 5000 }
+  }
+  const run = reconcileBinding(binding(), provider)
+  await pushing
+  try {
+    await tombstoneIssueSyncRefs(binding(), ["o/r#1"], { departedRemoteAt: 3000, now: () => 4000 })
+  } finally {
+    release()
+  }
+  expect((await run).status).toBe("completed")
+  expect((await getIssue(issue.id))?.externalRefs?.[0]).toMatchObject({
+    departedAt: 4000,
+    meta: { departedRemoteAt: 3000 },
+  })
+  provider.pullPage = async () => ({ items: [remote({ remoteUpdatedAt: 3000 })], cursor: "3000" })
+  await reconcileBinding(binding(), provider)
+  expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toBe(4000)
+  expect(
+    (await listIssueEvents({ issueId: issue.id })).filter(
+      (event) => event.kind === "external_returned"
+    )
+  ).toHaveLength(0)
+})
 
 describe("reconcileBinding: import", () => {
   it("creates a local issue per unknown remote item, with labels, assignee and the ref", async () => {

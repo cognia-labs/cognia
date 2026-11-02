@@ -3,6 +3,7 @@
  */
 
 import { createDbTestFixture } from "./test-fixture"
+import { getDb } from "./schema"
 import type { GithubIssueMirrorRow } from "./github-issue-mirror-types"
 import {
   bindRepoToIssueProject,
@@ -44,6 +45,14 @@ function row(over: Partial<GithubIssueMirrorRow> = {}): GithubIssueMirrorRow {
     ...over,
   }
 }
+
+it("cache timestamps do not advance the durable mirror cursor", async () => {
+  const key = "github-mirror:p1:o/r"
+  await getDb().externalSyncCursors.put({ key, owner: "host", failures: 0, cursor: "10" })
+  await upsertGithubIssues([row({ updatedAt: 99_999 })])
+  expect(await latestMirroredUpdate("o/r")).toBe(99_999)
+  expect((await getDb().externalSyncCursors.get(key))?.cursor).toBe("10")
+})
 
 describe("githubMirrorId", () => {
   it("is stable and human-legible", () => {

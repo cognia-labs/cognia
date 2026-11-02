@@ -14,6 +14,17 @@ interface Registration {
 const registrations = new Map<string, Registration>()
 const DEBOUNCE_MS = 2000
 
+export function hasExternalSyncRegistration(key: string): boolean {
+  return registrations.has(key)
+}
+
+/** Pending target keys, so consumers need no private debounce state. */
+export function pendingExternalSyncKeys(): string[] {
+  return [...registrations]
+    .filter(([, entry]) => entry.timer !== undefined || entry.running !== undefined)
+    .map(([key]) => key)
+}
+
 export function registerExternalSync<Item>(
   target: ExternalSyncTarget,
   driverFactory: () => ExternalSyncDriver<Item> | Promise<ExternalSyncDriver<Item>>
@@ -67,7 +78,9 @@ function start(entry: Registration): void {
           signal: controller.signal,
         })
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError"))
+        return
       // Factories and storage can fail before a run can return an outcome.
       // Never log provider errors, which may contain remote content.
       console.warn("External sync runtime failed")

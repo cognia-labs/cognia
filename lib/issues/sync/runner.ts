@@ -13,11 +13,12 @@
 
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import { runWorkspaceGithubSync, type RunWorkspaceGithubSyncResult } from "@/lib/issues/sync-runner"
-import { reconcileBinding } from "./engine"
+import { issueSyncTarget, type reconcileBinding } from "./engine"
 import { getIssueSyncRegistry, type IssueSyncRegistry } from "./registry"
 import type { IssueSyncBinding, IssueSyncFailure, ReconcileOutcome } from "./types"
 import { IssueSyncOutcomeError } from "./types"
 import { resolvePluginSyncBindings } from "./plugin-resources"
+import { reconcileIssueSyncRegistrations, runRegisteredIssueSync } from "./runtime"
 
 export interface RunWorkspaceIssueSyncInput {
   /** Workspace scope. Omit to sweep every workspace. */
@@ -67,7 +68,10 @@ export async function runWorkspaceIssueSync(
 ): Promise<RunWorkspaceIssueSyncResult> {
   const registry = deps.registry ?? getIssueSyncRegistry()
   const runMirror = deps.runMirror ?? runWorkspaceGithubSync
-  const reconcile = deps.reconcile ?? reconcileBinding
+  await reconcileIssueSyncRegistrations({
+    registry,
+    importBindings: () => resolveWorkspaceSyncBindings(undefined, registry, deps.listContainers),
+  })
 
   const mirror =
     input.mirror === false
@@ -85,9 +89,17 @@ export async function runWorkspaceIssueSync(
         { provider, signal: registry.signal(provider.id, provider) },
       ])
   )
-  const bindings = (
-    await resolveWorkspaceSyncBindings(input.projectId, registry, deps.listContainers)
-  ).filter((binding) => !input.providerId || binding.providerId === input.providerId)
+  // Reconcile again after the mirror wait and run exactly that snapshot: a
+  // binding added meanwhile has a registration, one removed meanwhile does not.
+  const { imported } = await reconcileIssueSyncRegistrations({
+    registry,
+    importBindings: () => resolveWorkspaceSyncBindings(undefined, registry, deps.listContainers),
+  })
+  const bindings = imported.filter(
+    (binding) =>
+      (input.projectId === undefined || binding.projectId === input.projectId) &&
+      (!input.providerId || binding.providerId === input.providerId)
+  )
 
   const outcomes: ReconcileOutcome[] = []
   const failures: IssueSyncFailure[] = []
@@ -101,13 +113,14 @@ export async function runWorkspaceIssueSync(
       registry.get(binding.providerId) !== registration.provider
     )
       continue
-    const { provider, signal } = registration
+    const { signal } = registration
     try {
-      const outcome = await reconcile(binding, provider, {
+      const outcome = await runRegisteredIssueSync(issueSyncTarget(binding).key, {
         ...(input.full ? { full: true } : {}),
         signal,
+        ...(deps.reconcile ? { reconcile: deps.reconcile } : {}),
       })
-      if (!signal.aborted) {
+      if (outcome && "binding" in outcome && !signal.aborted) {
         outcomes.push(outcome)
         if (outcome.status === "failed" || outcome.status === "backoff")
           failures.push({

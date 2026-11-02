@@ -609,6 +609,14 @@ describe("Integration event publication", () => {
       expect(refreshIssues).toHaveBeenCalledWith(event)
     })
 
+    it("does not schedule another refresh for an already projected delivery", async () => {
+      const account = await setupGithub()
+      const event = closed(account.id)
+      await publishIntegrationEvent("github-delivery", event)
+      await publishIntegrationEvent("github-delivery", event)
+      expect(refreshIssues).toHaveBeenCalledTimes(1)
+    })
+
     it("still delivers the event when the board refresh throws", async () => {
       const account = await setupGithub()
       refreshIssues.mockRejectedValue(new Error("dexie closed"))

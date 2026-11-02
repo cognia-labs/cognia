@@ -1,5 +1,6 @@
 import type { IssueExternalRef, IssueProject } from "@/types/issues"
 import type { OctokitLike } from "@/lib/github/issues"
+import { fetchGithubIssuePage } from "@/lib/github/issues"
 import type { IssueSyncBinding } from "../types"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
@@ -78,6 +79,42 @@ function binding(): IssueSyncBinding {
     key: "acme/one",
   }
 }
+
+it("shares the mirror's tie-bucket continuation with the import provider", async () => {
+  const client: OctokitLike = {
+    request: async (route) => ({
+      status: 200,
+      headers: route.endsWith("/issues") ? { link: '<x>; rel="next"' } : {},
+      data: route.endsWith("/issues")
+        ? [
+            {
+              number: 7,
+              title: "Issue",
+              state: "open",
+              html_url: "url",
+              created_at: "2026-01-01",
+              updated_at: "2026-01-02",
+            },
+          ]
+        : [],
+    }),
+  }
+  const b = { ...binding(), resource: { ...importRepo, sync: { mode: "import" as const } } }
+  const options = {
+    mode: "full" as const,
+    cursor: "0",
+    page: JSON.stringify({ since: Date.parse("2026-01-02"), page: 2, floor: 10_000, max: 20_000 }),
+  }
+  const mirrorPage = await fetchGithubIssuePage(client, { ...options, repoFullName: b.key })
+  const importedPage = await createGithubSyncProvider({ resolveOctokitOrNull: async () => client })
+    .pullPage!(b, options)
+  expect(importedPage.nextPage).toBe(mirrorPage.nextPage)
+  expect(JSON.parse(importedPage.nextPage!)).toMatchObject({
+    floor: 10_000,
+    max: Date.parse("2026-01-02"),
+  })
+  expect(importedPage.items[0].externalId).toBe("acme/one#7")
+})
 
 describe("pure transforms", () => {
   it("scopes milestone identity by repository and GitHub host", () => {

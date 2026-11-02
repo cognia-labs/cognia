@@ -41,7 +41,7 @@ import { appendIssueEvent } from "@/lib/db/issue-events"
 import type { Issue, IssueExternalRef, IssueStatus, IssueSyncField } from "@/types/issues"
 import { externalKeyOf, ISSUE_SYNC_FIELDS, statusCategoryOf, syncActorFor } from "@/types/issues"
 import { runExternalSync } from "@/lib/external-services/sync/core"
-import type { ExternalSyncTarget } from "@/lib/external-services/sync/types"
+import type { ExternalSyncTarget, ExternalSyncDriver } from "@/lib/external-services/sync/types"
 import type { LabelRow } from "@/types/labels"
 import {
   applyRemoteField,
@@ -437,7 +437,7 @@ async function pushPatch(
     return
   }
   tally.pushed += 1
-  await touchIssueExternalRef(issue.id, ref, {
+  await touchSyncRef(binding, issue.id, ref.externalId, {
     syncedAt,
     ...(outcome.remoteUpdatedAt !== undefined
       ? { remoteUpdatedAt: outcome.remoteUpdatedAt }
@@ -518,11 +518,131 @@ export function issueSyncTarget(binding: IssueSyncBinding): ExternalSyncTarget {
   }
 }
 
-export async function reconcileBinding(
+/** Serialize the ref version check with its lifecycle event, independently of sync exclusion. */
+async function observeIssueSyncRef(
+  binding: IssueSyncBinding,
+  issueId: string,
+  externalId: string,
+  observation: { departedAt: number; departedRemoteAt?: number } | { remoteUpdatedAt: number },
+  options: { signal?: AbortSignal; label?: string } = {}
+): Promise<boolean> {
+  const db = getDb()
+  return db.transaction("rw", db.issues, db.issueEvents, async () => {
+    options.signal?.throwIfAborted()
+    const issue = await db.issues.get(issueId)
+    if (
+      !issue ||
+      issue.projectId !== binding.projectId ||
+      issue.issueProjectId !== binding.issueProjectId
+    )
+      return false
+    const ref = refOf(issue, binding, externalId)
+    if (!ref) return false
+    const identity = { ...ref, binding: binding.key }
+    const by = syncActorFor(binding.providerId, options.label)
+    if ("departedAt" in observation) {
+      if (observation.departedRemoteAt !== undefined) {
+        const previous = ref.meta?.departedRemoteAt
+        await touchIssueExternalRef(issueId, ref, {
+          meta: {
+            ...(ref.meta ?? {}),
+            departedRemoteAt: Math.max(
+              typeof previous === "number" ? previous : -Infinity,
+              observation.departedRemoteAt
+            ),
+          },
+        })
+      }
+      const changed = await setIssueExternalRefDeparted(
+        issueId,
+        identity,
+        observation.departedAt,
+        by
+      )
+      options.signal?.throwIfAborted()
+      return changed
+    }
+    if (ref.departedAt === undefined) return true
+    const barrier = ref.meta?.departedRemoteAt
+    if (typeof barrier === "number" && !(observation.remoteUpdatedAt > barrier)) return false
+    // Scan-originated tombstones have no remote version and retain the existing return rule.
+    await setIssueExternalRefDeparted(issueId, identity, undefined, by)
+    const meta = { ...(ref.meta ?? {}) }
+    delete meta.departedRemoteAt
+    await touchIssueExternalRef(issueId, ref, { meta })
+    options.signal?.throwIfAborted()
+    return true
+  })
+}
+
+/** A webhook may update metadata while an outbound request is in flight. */
+async function touchSyncRef(
+  binding: IssueSyncBinding,
+  issueId: string,
+  externalId: string,
+  patch: Pick<IssueExternalRef, "syncedAt" | "remoteUpdatedAt" | "meta">
+): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.issues, async () => {
+    const issue = await db.issues.get(issueId)
+    const current = issue && refOf(issue, binding, externalId)
+    if (!current || current.departedAt !== undefined) return
+    await touchIssueExternalRef(issueId, current, {
+      ...patch,
+      meta: { ...(current.meta ?? {}), ...(patch.meta ?? {}), binding: binding.key },
+    })
+  })
+}
+
+/** Authoritative webhook departures bypass remote confirmation, sharing the engine's transition writer. */
+export async function tombstoneIssueSyncRefs(
+  binding: IssueSyncBinding,
+  ids: readonly string[],
+  options: {
+    signal?: AbortSignal
+    now?: () => number
+    label?: string
+    departedRemoteAt?: number
+  } = {}
+): Promise<number> {
+  const requested = new Set(ids)
+  let count = 0
+  const issues = await getDb().issues.where("projectId").equals(binding.projectId).toArray()
+  for (const issue of issues) {
+    if (issue.issueProjectId !== binding.issueProjectId) continue
+    for (const ref of issue.externalRefs ?? []) {
+      if (
+        ref.provider !== binding.providerId ||
+        ref.meta?.binding !== binding.key ||
+        !requested.has(ref.externalId)
+      )
+        continue
+      options.signal?.throwIfAborted()
+      if (
+        await observeIssueSyncRef(
+          binding,
+          issue.id,
+          ref.externalId,
+          {
+            departedAt: (options.now ?? Date.now)(),
+            ...(options.departedRemoteAt !== undefined
+              ? { departedRemoteAt: options.departedRemoteAt }
+              : {}),
+          },
+          options
+        )
+      )
+        count += 1
+    }
+  }
+  return count
+}
+
+export async function prepareIssueSync(
   binding: IssueSyncBinding,
   provider: IssueSyncProvider,
   options: ReconcileOptions = {}
-): Promise<ReconcileOutcome> {
+) {
   const now = options.now ?? Date.now
   const tally: ReconcileOutcome = {
     binding,
@@ -572,10 +692,10 @@ export async function reconcileBinding(
   let departureChecksRemaining = 50
   const tombstone = async (ids: string[], signal: AbortSignal) => {
     if (ids.length === 0) return
-    const issues = await ownedIssues()
     const requested = new Set(ids)
     let removed = requested
     if (provider.confirmDeparted) {
+      const issues = await ownedIssues()
       const candidates = new Set<string>()
       for (const issue of issues)
         for (const ref of issue.externalRefs ?? [])
@@ -598,211 +718,206 @@ export async function reconcileBinding(
       signal.throwIfAborted()
       removed = new Set(confirmed.filter((id) => allowed.has(id)))
     }
-    for (const issue of issues) {
-      for (const ref of issue.externalRefs ?? []) {
-        if (
-          ref.provider !== binding.providerId ||
-          ref.meta?.binding !== binding.key ||
-          !removed.has(ref.externalId)
-        )
-          continue
-        signal.throwIfAborted()
-        if (
-          await setIssueExternalRefDeparted(
-            issue.id,
-            { ...ref, binding: binding.key },
-            now(),
-            syncActorFor(binding.providerId, provider.label)
-          )
-        )
-          tally.tombstoned += 1
-      }
-    }
+    tally.tombstoned += await tombstoneIssueSyncRefs(binding, [...removed], {
+      signal,
+      now,
+      label: provider.label,
+    })
   }
   let fetched: PullPage = { items: [] }
-  const outcome = await runExternalSync(
-    target,
-    {
-      fullScanOnly: provider.fullScanOnly,
-      itemId: (item: RemoteIssue) => item.externalId,
-      fetchPage: async (input) => {
-        if (provider.pullPage) {
-          // A full scan starts from the beginning, but the provider still needs
-          // its previously committed cursor as a floor for the terminal cursor.
-          const previous =
-            input.cursor ?? (await getDb().externalSyncCursors.get(target.key))?.cursor
-          fetched = await provider.pullPage(binding, {
-            ...input,
-            ...(previous !== undefined ? { cursor: previous } : {}),
-          })
-          tally.notModified &&= fetched.items.length === 0
-        } else {
-          // The legacy adapter uses only the committed cursor, never ref timestamps.
-          const previous = (await getDb().externalSyncCursors.get(target.key))?.cursor
-          const pulled = await provider.pull(binding, {
-            ...(input.mode === "incremental" && input.cursor !== undefined
-              ? { since: Number(input.cursor) }
-              : {}),
-            ...(input.mode === "full" ? { full: true } : {}),
-            signal: input.signal,
-          })
-          tally.notModified &&= pulled.notModified
-          tally.truncated ||= pulled.truncated ?? false
-          const previousTime = Number(previous ?? 0)
-          const newest = pulled.items.reduce(
-            (max, item) => Math.max(max, item.remoteUpdatedAt),
-            Number.isFinite(previousTime) ? previousTime : 0
-          )
-          fetched = { ...pulled, cursor: pulled.truncated ? (previous ?? "0") : String(newest) }
-        }
-        return fetched
-      },
-      applyPage: async ({ items, deleted }, { signal }) => {
-        if (fetched.cycles?.length) {
-          await upsertCycles(binding, fetched.cycles, signal)
-          tally.cycles += fetched.cycles.length
-        }
-        const context = await buildFieldContext(binding)
+  const driver: ExternalSyncDriver<RemoteIssue> = {
+    fullScanOnly: provider.fullScanOnly,
+    itemId: (item: RemoteIssue) => item.externalId,
+    fetchPage: async (input) => {
+      if (provider.pullPage) {
+        // A full scan starts from the beginning, but the provider still needs
+        // its previously committed cursor as a floor for the terminal cursor.
+        const previous = input.cursor ?? (await getDb().externalSyncCursors.get(target.key))?.cursor
+        fetched = await provider.pullPage(binding, {
+          ...input,
+          ...(previous !== undefined ? { cursor: previous } : {}),
+        })
+        tally.notModified &&= fetched.items.length === 0
+      } else {
+        // The legacy adapter uses only the committed cursor, never ref timestamps.
+        const previous = (await getDb().externalSyncCursors.get(target.key))?.cursor
+        const pulled = await provider.pull(binding, {
+          ...(input.mode === "incremental" && input.cursor !== undefined
+            ? { since: Number(input.cursor) }
+            : {}),
+          ...(input.mode === "full" ? { full: true } : {}),
+          signal: input.signal,
+        })
+        tally.notModified &&= pulled.notModified
+        tally.truncated ||= pulled.truncated ?? false
+        const previousTime = Number(previous ?? 0)
+        const newest = pulled.items.reduce(
+          (max, item) => Math.max(max, item.remoteUpdatedAt),
+          Number.isFinite(previousTime) ? previousTime : 0
+        )
+        fetched = { ...pulled, cursor: pulled.truncated ? (previous ?? "0") : String(newest) }
+      }
+      return fetched
+    },
+    applyPage: async ({ items, deleted }, { signal }) => {
+      if (fetched.cycles?.length) {
+        await upsertCycles(binding, fetched.cycles, signal)
+        tally.cycles += fetched.cycles.length
+      }
+      const context = await buildFieldContext(binding)
+      signal.throwIfAborted()
+      const pending: Array<{
+        issue: Issue
+        ref: IssueExternalRef
+        patch: RemotePatch
+        syncedAt: number
+      }> = []
+      const stamp = now()
+      for (const remote of items) {
+        mentioned.add(remote.externalId)
+        let local = await getIssueByExternalKey(binding.providerId, remote.externalId)
         signal.throwIfAborted()
-        const pending: Array<{
-          issue: Issue
-          ref: IssueExternalRef
-          patch: RemotePatch
-          syncedAt: number
-        }> = []
-        const stamp = now()
-        for (const remote of items) {
-          mentioned.add(remote.externalId)
-          let local = await getIssueByExternalKey(binding.providerId, remote.externalId)
+        if (!local) {
+          const imported = await importRemote(binding, remote, context.cycleIdOf, stamp, signal)
           signal.throwIfAborted()
-          if (!local) {
-            const imported = await importRemote(binding, remote, context.cycleIdOf, stamp, signal)
-            signal.throwIfAborted()
-            if (imported.created) {
-              tally.created += 1
-              continue
-            }
-            // A concurrent link/import may have won the unique external key.
-            // Reconcile that returned row before allowing this page to commit.
-            local = imported.issue
+          if (imported.created) {
+            tally.created += 1
+            continue
           }
+          // A concurrent link/import may have won the unique external key.
+          // Reconcile that returned row before allowing this page to commit.
+          local = imported.issue
+        }
+        if (
+          local.projectId !== binding.projectId ||
+          local.issueProjectId !== binding.issueProjectId
+        )
+          continue
+        let oldRef = refOf(local, binding, remote.externalId)
+        if (!oldRef) {
+          const candidate = local.externalRefs?.find(
+            (ref) => ref.provider === binding.providerId && ref.externalId === remote.externalId
+          )
+          if (!candidate || candidate.meta?.binding !== undefined) continue
+          signal.throwIfAborted()
           if (
-            local.projectId !== binding.projectId ||
-            local.issueProjectId !== binding.issueProjectId
+            !(await adoptIssueExternalRefBinding(local.id, candidate, {
+              projectId: binding.projectId,
+              issueProjectId: binding.issueProjectId,
+              binding: binding.key,
+            }))
           )
             continue
-          let oldRef = refOf(local, binding, remote.externalId)
-          if (!oldRef) {
-            const candidate = local.externalRefs?.find(
-              (ref) => ref.provider === binding.providerId && ref.externalId === remote.externalId
-            )
-            if (!candidate || candidate.meta?.binding !== undefined) continue
-            signal.throwIfAborted()
-            if (
-              !(await adoptIssueExternalRefBinding(local.id, candidate, {
-                projectId: binding.projectId,
-                issueProjectId: binding.issueProjectId,
-                binding: binding.key,
-              }))
-            )
-              continue
-            local = (await fresh(local.id)) ?? local
-            oldRef = refOf(local, binding, remote.externalId)
-          }
-          if (!oldRef) continue
-          if (oldRef.departedAt !== undefined) {
-            await setIssueExternalRefDeparted(
-              local.id,
-              { ...oldRef, binding: binding.key },
-              undefined,
-              syncActorFor(binding.providerId, provider.label)
-            )
-            local = (await fresh(local.id)) ?? local
-          }
-          const { patch, watermark } = await reconcileItem(
+          local = (await fresh(local.id)) ?? local
+          oldRef = refOf(local, binding, remote.externalId)
+        }
+        if (!oldRef) continue
+        if (
+          !(await observeIssueSyncRef(
             binding,
-            provider,
-            local,
-            remote,
-            context,
-            stamp,
-            tally,
-            signal
-          )
-          const current = (await fresh(local.id)) ?? local
-          signal.throwIfAborted()
-          const ref = refOf(current, binding, remote.externalId)
-          if (!ref) continue
-          if (Object.keys(patch).length > 0)
-            pending.push({ issue: current, ref, patch, syncedAt: watermark })
-          else
-            await touchIssueExternalRef(current.id, ref, {
-              syncedAt: watermark,
-              remoteUpdatedAt: remote.remoteUpdatedAt,
-              meta: { ...(ref.meta ?? {}), ...(remote.meta ?? {}), binding: binding.key },
-            })
-        }
-        await tombstone(deleted, signal)
-        for (const { issue, ref, patch, syncedAt } of pending) {
-          if (deleted.includes(ref.externalId)) continue
-          signal.throwIfAborted()
-          await pushPatch(binding, provider, issue, ref, patch, syncedAt, tally, signal)
-        }
-        if (fetched.links?.length) await linkRemote(binding, fetched.links, tally, signal)
+            local.id,
+            remote.externalId,
+            { remoteUpdatedAt: remote.remoteUpdatedAt },
+            { signal, label: provider.label }
+          ))
+        )
+          continue
+        local = (await fresh(local.id)) ?? local
+        const { patch, watermark } = await reconcileItem(
+          binding,
+          provider,
+          local,
+          remote,
+          context,
+          stamp,
+          tally,
+          signal
+        )
+        const current = (await fresh(local.id)) ?? local
         signal.throwIfAborted()
-      },
-      ...(provider.pullPage && provider.completeFullScan
-        ? {
-            listKnownIds: async (signal: AbortSignal) => {
-              const ids: string[] = []
-              for (const issue of await ownedIssues()) {
-                signal.throwIfAborted()
-                for (const ref of issue.externalRefs ?? [])
-                  if (
-                    ref.provider === binding.providerId &&
-                    ref.meta?.binding === binding.key &&
-                    ref.departedAt === undefined
-                  )
-                    ids.push(ref.externalId)
-              }
-              return ids
-            },
-            tombstone: (ids: string[], { signal }: { signal: AbortSignal }) =>
-              tombstone(ids, signal),
-          }
-        : {}),
-      // Only after a successful scan, under its exclusion and after tombstones.
-      // Busy/offline/backoff/failed/cancelled runs must never issue these writes.
-      // A push failure retains the terminal checkpoint and receives core backoff.
-      complete: async ({ signal }) => {
-        if (!provider.push || provider.pushFields.length === 0) return
-        const context = await buildFieldContext(binding)
-        for (const issue of await ownedIssues()) {
-          for (const ref of issue.externalRefs ?? []) {
-            if (
-              ref.provider !== binding.providerId ||
-              ref.meta?.binding !== binding.key ||
-              ref.departedAt !== undefined ||
-              ref.syncedAt === undefined ||
-              mentioned.has(ref.externalId)
-            )
-              continue
-            signal.throwIfAborted()
-            const events = await listIssueEvents({ issueId: issue.id })
-            const clock = lastLocalChangeAt(events, ref.syncedAt)
-            const patch: RemotePatch = {}
-            for (const field of clock.keys()) {
-              if (provider.pushFields.includes(field))
-                addToPatch(patch, field, localFieldValue(issue, field, context))
-            }
-            const watermark = events.reduce((max, event) => Math.max(max, event.ts), now())
-            await pushPatch(binding, provider, issue, ref, patch, watermark, tally, signal)
-          }
-        }
-      },
+        const ref = refOf(current, binding, remote.externalId)
+        if (!ref || ref.departedAt !== undefined) continue
+        if (Object.keys(patch).length > 0)
+          pending.push({ issue: current, ref, patch, syncedAt: watermark })
+        else
+          await touchSyncRef(binding, current.id, ref.externalId, {
+            syncedAt: watermark,
+            remoteUpdatedAt: remote.remoteUpdatedAt,
+            meta: { ...(ref.meta ?? {}), ...(remote.meta ?? {}), binding: binding.key },
+          })
+      }
+      await tombstone(deleted, signal)
+      for (const { issue, ref, patch, syncedAt } of pending) {
+        if (deleted.includes(ref.externalId)) continue
+        signal.throwIfAborted()
+        await pushPatch(binding, provider, issue, ref, patch, syncedAt, tally, signal)
+      }
+      if (fetched.links?.length) await linkRemote(binding, fetched.links, tally, signal)
+      signal.throwIfAborted()
     },
-    { mode: options.full ? "full" : "auto", now, signal: options.signal }
-  )
+    ...(provider.pullPage && provider.completeFullScan
+      ? {
+          listKnownIds: async (signal: AbortSignal) => {
+            const ids: string[] = []
+            for (const issue of await ownedIssues()) {
+              signal.throwIfAborted()
+              for (const ref of issue.externalRefs ?? [])
+                if (
+                  ref.provider === binding.providerId &&
+                  ref.meta?.binding === binding.key &&
+                  ref.departedAt === undefined
+                )
+                  ids.push(ref.externalId)
+            }
+            return ids
+          },
+          tombstone: (ids: string[], { signal }: { signal: AbortSignal }) => tombstone(ids, signal),
+        }
+      : {}),
+    // Only after a successful scan, under its exclusion and after tombstones.
+    // Busy/offline/backoff/failed/cancelled runs must never issue these writes.
+    // A push failure retains the terminal checkpoint and receives core backoff.
+    complete: async ({ signal }) => {
+      if (!provider.push || provider.pushFields.length === 0) return
+      const context = await buildFieldContext(binding)
+      for (const issue of await ownedIssues()) {
+        for (const ref of issue.externalRefs ?? []) {
+          if (
+            ref.provider !== binding.providerId ||
+            ref.meta?.binding !== binding.key ||
+            ref.departedAt !== undefined ||
+            ref.syncedAt === undefined ||
+            mentioned.has(ref.externalId)
+          )
+            continue
+          signal.throwIfAborted()
+          const events = await listIssueEvents({ issueId: issue.id })
+          const clock = lastLocalChangeAt(events, ref.syncedAt)
+          const patch: RemotePatch = {}
+          for (const field of clock.keys()) {
+            if (provider.pushFields.includes(field))
+              addToPatch(patch, field, localFieldValue(issue, field, context))
+          }
+          const watermark = events.reduce((max, event) => Math.max(max, event.ts), now())
+          await pushPatch(binding, provider, issue, ref, patch, watermark, tally, signal)
+        }
+      }
+    },
+  }
+  return { target, driver, tally }
+}
+
+export async function reconcileBinding(
+  binding: IssueSyncBinding,
+  provider: IssueSyncProvider,
+  options: ReconcileOptions = {}
+): Promise<ReconcileOutcome> {
+  const { target, driver, tally } = await prepareIssueSync(binding, provider, options)
+  const outcome = await runExternalSync(target, driver, {
+    mode: options.full ? "full" : "auto",
+    now: options.now,
+    signal: options.signal,
+  })
   return {
     ...tally,
     status: outcome.status,

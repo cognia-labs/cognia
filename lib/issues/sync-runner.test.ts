@@ -6,6 +6,23 @@ import {
   type WorkspaceGithubBinding,
 } from "./sync-runner"
 import type { IssueProject, IssueProjectResource } from "@/types/issues"
+import { reconcileIssueSyncRegistrations } from "./sync/runtime"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import {
+  hasExternalSyncRegistration,
+  installExternalSyncRuntime,
+} from "@/lib/external-services/sync/runtime"
+import type { OctokitLike } from "@/lib/github/issues"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
+let dispose: () => void
+beforeEach(() => {
+  dispose = installExternalSyncRuntime()
+})
+afterEach(() => dispose())
 
 const mockListIssueProjects = jest.fn()
 jest.mock("@/lib/db/issue-projects", () => ({
@@ -181,13 +198,78 @@ describe("runWorkspaceGithubSync", () => {
     expect(isMissingGithubCredential("not an error")).toBe(false)
   })
 
-  it("builds the credential resolver from the shared gh-CLI seam by default", async () => {
+  it("registers a fresh credential-aware mirror factory by default", async () => {
     const sync = jest.fn().mockResolvedValue({ results: [], failures: [] })
     await runWorkspaceGithubSync(
       { projectId: "ws-1" },
       { resolveBindings: async () => bindings, sync }
     )
 
-    expect(mockCreateResolveOctokit).toHaveBeenCalledTimes(1)
+    expect(hasExternalSyncRegistration("github-mirror:a:acme/one")).toBe(true)
   })
+
+  it.each(["earlier target", "credential preparation"])(
+    "does not restart B unbound during %s",
+    async (window) => {
+      const a = { repoFullName: "acme/a", issueProjectId: "a" }
+      const b = { repoFullName: "acme/b", issueProjectId: "b" }
+      let live = [a, b]
+      let entered!: () => void
+      let release!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const request = jest.fn(async (_route: string, params?: Record<string, unknown>) => {
+        if (window === "earlier target" && params?.repo === "a") {
+          entered()
+          await gate
+        }
+        return {
+          status: 200,
+          headers: {},
+          data: [
+            {
+              number: 7,
+              title: "Issue",
+              state: "open",
+              html_url: "url",
+              created_at: "2026-01-01",
+              updated_at: "2026-01-02",
+            },
+          ],
+        }
+      })
+      const resolve = jest.fn(async (repo: string): Promise<OctokitLike> => {
+        if (window === "credential preparation" && repo === "acme/b") {
+          entered()
+          await gate
+        }
+        return { request }
+      })
+      const running = runWorkspaceGithubSync(
+        {},
+        { resolveBindings: async () => live, resolveOctokitOrNull: resolve }
+      )
+      await blocked
+      try {
+        live = [a]
+        await reconcileIssueSyncRegistrations({
+          mirrorBindings: async () => live,
+          importBindings: async () => [],
+        })
+        expect(hasExternalSyncRegistration("github-mirror:b:acme/b")).toBe(false)
+      } finally {
+        release()
+      }
+      const result = await running
+      expect(result.failures).toEqual([])
+      expect(result.results.map((row) => row.repoFullName)).toEqual(["acme/a"])
+      expect(request.mock.calls.some(([, params]) => params?.repo === "b")).toBe(false)
+      expect(await getDb().externalSyncCursors.get("github-mirror:b:acme/b")).toBeUndefined()
+      expect(await getDb().githubIssueMirror.where("repoFullName").equals("acme/b").count()).toBe(0)
+    }
+  )
 })

@@ -1,4 +1,6 @@
 const mockGetTask = jest.fn()
+jest.mock("./sync/runtime", () => ({ reconcileIssueSyncRegistrations: jest.fn(async () => {}) }))
+import { reconcileIssueSyncRegistrations } from "./sync/runtime"
 const mockCreateTask = jest.fn()
 const mockDeleteTask = jest.fn()
 const mockUpdateTask = jest.fn()
@@ -63,6 +65,7 @@ it("keeps plugin cadence before activation and does not double-count after regis
     },
   ])
   await expect(syncGithubIssueSchedule()).resolves.toEqual({ action: "created", bindingCount: 1 })
+  expect(reconcileIssueSyncRegistrations).toHaveBeenCalledTimes(1)
   mockGetTask.mockResolvedValue({
     id: GITHUB_ISSUE_SYNC_TASK_ID,
     notification: { channels: ["none"], dueReminder: false },

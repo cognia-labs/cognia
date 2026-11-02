@@ -1,113 +1,180 @@
-/**
- * GitHub → mirror sync.
- *
- * Ties `lib/github/issues.ts` (fetch) to `lib/db/github-issue-mirror.ts`
- * (store). Nothing else calls the network on the issue board's behalf: opening
- * `/issues` reads Dexie only, so a slow or expired token degrades to
- * stale-but-visible rather than a blank board.
- *
- * The incremental contract is an overlapping `since` watermark:
- *   - `since` is the newest `updatedAt` already mirrored, so a routine sync
- *     asks only for what changed.
- *   - row ETags lack query/completeness provenance and cannot revalidate a
- *     different `since` window. They are deliberately not sent on this path.
- *
- * Deps are injected so the whole flow is testable without a network, a
- * keyring, or Dexie mocking games.
- */
-
-import { fetchRepoIssues, type OctokitLike } from "@/lib/github/issues"
+/** GitHub mirror pages share the durable incremental-sync checkpoint and exclusion. */
 import {
-  latestMirroredUpdate,
-  pruneRepoMirror,
-  repoMirrorEtag,
+  fetchGithubIssuePage,
+  githubIssuePageUsedOffset,
+  MAX_ISSUE_PAGES,
+  toMirrorRow,
+  type OctokitLike,
+} from "@/lib/github/issues"
+import {
+  deleteGithubIssues,
+  listGithubIssues,
   upsertGithubIssues,
 } from "@/lib/db/github-issue-mirror"
+import { getDb } from "@/lib/db/schema"
+import type { GithubIssueMirrorRow } from "@/lib/db/github-issue-mirror-types"
+import { runExternalSync } from "@/lib/external-services/sync/core"
+import type {
+  ExternalSyncDriver,
+  ExternalSyncOutcome,
+  ExternalSyncTarget,
+} from "@/lib/external-services/sync/types"
 
 export interface SyncRepoIssuesDeps {
-  resolveOctokit: (repoFullName: string) => Promise<OctokitLike>
-  latestMirroredUpdate?: typeof latestMirroredUpdate
-  /** Legacy injection point; row ETags are no longer safe to reuse. */
-  repoMirrorEtag?: typeof repoMirrorEtag
+  /** Workspace sweeps execute only a still-registered, freshly resolved target. */
+  runRegistered?: (input: SyncRepoIssuesInput) => Promise<SyncRepoIssuesResult | undefined>
+  resolveOctokit?: (repoFullName: string) => Promise<OctokitLike>
+  resolveReadClient?: (
+    repoFullName: string
+  ) => Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }>
   upsertGithubIssues?: typeof upsertGithubIssues
-  pruneRepoMirror?: typeof pruneRepoMirror
   now?: () => number
+  /** At most MAX_ISSUE_PAGES; smaller budgets let a Host share API spend. */
+  pageBudget?: number
 }
 
 export interface SyncRepoIssuesInput {
   repoFullName: string
-  /** Delivery container to bind the mirrored rows to. */
   issueProjectId: string
-  /**
-   * Ignore the stored watermark and re-read everything. The manual "Sync now"
-   * affordance uses this so a user who suspects drift has a way out that does
-   * not involve clearing the cache by hand.
-   */
   full?: boolean
 }
 
 export interface SyncRepoIssuesResult {
   repoFullName: string
-  /** Rows written. Zero on a 304, and on a genuinely quiet window. */
   written: number
-  /**
-   * Rows removed because a full read no longer lists them (transferred or
-   * deleted issues). Always zero on an incremental or truncated read.
-   */
   removed: number
   notModified: boolean
   truncated: boolean
+  status: ExternalSyncOutcome["status"]
+  errorCode?: string
   rateLimitRemaining?: number
 }
 
-/**
- * Pass the stored watermark to the shared reader, which overlaps it by one
- * second so updates at the boundary are included.
- */
-function sinceFor(watermark: number | undefined): string | undefined {
-  return watermark === undefined ? undefined : new Date(watermark).toISOString()
+export class GithubMirrorSyncOutcomeError extends Error {
+  constructor(readonly code: string) {
+    super(`GitHub mirror sync failed: ${code}`)
+    this.name = "GithubMirrorSyncOutcomeError"
+  }
+}
+
+export function githubMirrorSyncTarget(input: SyncRepoIssuesInput): ExternalSyncTarget {
+  return {
+    key: `github-mirror:${input.issueProjectId}:${input.repoFullName.toLowerCase()}`,
+    owner: "host",
+  }
+}
+
+/** Also used by push registration: credentials and binding are resolved anew per run. */
+export async function prepareGithubMirrorSync(
+  input: SyncRepoIssuesInput,
+  deps: SyncRepoIssuesDeps = {}
+) {
+  const target = githubMirrorSyncTarget(input)
+  const table = getDb().externalSyncCursors
+  const stored = await table.get(target.key)
+  let octokit: OctokitLike | undefined
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    target.connectionRef = stored?.connectionRef
+  } else {
+    const client = deps.resolveOctokit
+      ? { octokit: await deps.resolveOctokit(input.repoFullName) }
+      : await (
+          deps.resolveReadClient ??
+          (await import("./sync/providers/github")).resolveGithubSyncReadClient
+        )(input.repoFullName)
+    octokit = client.octokit
+    target.connectionRef = client.connectionRef
+    // Match the import engine: an empty offline deferral has no credential identity yet.
+    await getDb().transaction("rw", table, async () => {
+      const current = await table.get(target.key)
+      if (
+        current?.owner === target.owner &&
+        current.deferredOffline &&
+        !current.cursor &&
+        !current.generation &&
+        current.connectionRef !== target.connectionRef
+      )
+        await table.delete(target.key)
+    })
+  }
+  const result: SyncRepoIssuesResult = {
+    repoFullName: input.repoFullName,
+    written: 0,
+    removed: 0,
+    notModified: false,
+    truncated: false,
+    status: "completed",
+  }
+  const driver: ExternalSyncDriver<GithubIssueMirrorRow> = {
+    pageBudget: Math.max(
+      1,
+      Math.min(MAX_ISSUE_PAGES, Math.floor(deps.pageBudget ?? MAX_ISSUE_PAGES))
+    ),
+    itemId: (row) => String(row.number),
+    fetchPage: async (options) => {
+      const previous = options.cursor ?? (await table.get(target.key))?.cursor
+      const page = await fetchGithubIssuePage(octokit!, {
+        ...options,
+        cursor: previous,
+        repoFullName: input.repoFullName,
+      })
+      if (page.rateLimitRemaining !== undefined) result.rateLimitRemaining = page.rateLimitRemaining
+      return {
+        items: page.raw
+          .filter((row) => !row.pull_request)
+          .map((row) =>
+            toMirrorRow(row, {
+              repoFullName: input.repoFullName,
+              issueProjectId: input.issueProjectId,
+              syncedAt: (deps.now ?? Date.now)(),
+            })
+          ),
+        ...(page.nextPage
+          ? { nextPage: page.nextPage }
+          : { cursor: String(Math.max(Number(previous ?? 0), Number(page.cursor))) }),
+      }
+    },
+    applyPage: async ({ items }, { signal }) => {
+      signal.throwIfAborted()
+      if (items.length) await (deps.upsertGithubIssues ?? upsertGithubIssues)(items)
+      signal.throwIfAborted()
+      result.written += items.length
+    },
+    listKnownIds: async (signal) => {
+      const generation = (await table.get(target.key))?.generation
+      signal.throwIfAborted()
+      // Durable tokens include earlier runs, including a retry of terminal finalization.
+      if (generation?.pageTokens?.some(githubIssuePageUsedOffset)) return []
+      return (
+        await listGithubIssues({
+          repoFullName: input.repoFullName,
+          issueProjectId: input.issueProjectId,
+        })
+      ).map((row) => String(row.number))
+    },
+    tombstone: async (ids, { signal }) => {
+      signal.throwIfAborted()
+      result.removed += await deleteGithubIssues(input.repoFullName, ids.map(Number))
+      signal.throwIfAborted()
+    },
+  }
+  return { target, driver, result }
 }
 
 export async function syncRepoIssues(
   input: SyncRepoIssuesInput,
-  deps: SyncRepoIssuesDeps
+  deps: SyncRepoIssuesDeps = {}
 ): Promise<SyncRepoIssuesResult> {
-  const readWatermark = deps.latestMirroredUpdate ?? latestMirroredUpdate
-  const write = deps.upsertGithubIssues ?? upsertGithubIssues
-  const prune = deps.pruneRepoMirror ?? pruneRepoMirror
-  const now = deps.now ?? Date.now
-
-  const watermark = input.full ? undefined : await readWatermark(input.repoFullName)
-
-  const octokit = await deps.resolveOctokit(input.repoFullName)
-  const result = await fetchRepoIssues(octokit, {
-    repoFullName: input.repoFullName,
-    issueProjectId: input.issueProjectId,
-    now: now(),
-    ...(sinceFor(watermark) ? { since: sinceFor(watermark) } : {}),
+  const { target, driver, result } = await prepareGithubMirrorSync(input, deps)
+  const outcome = await runExternalSync(target, driver, {
+    mode: input.full ? "full" : "auto",
+    now: deps.now,
   })
-
-  if (!result.notModified && result.rows.length > 0) {
-    await write(result.rows)
-  }
-
-  // A full, complete read is the only moment "not listed" means "gone": an
-  // incremental walk omits everything unchanged, and a truncated one omits
-  // whatever did not fit.
-  const removed =
-    input.full && !result.notModified && !result.truncated
-      ? await prune(input.repoFullName, new Set(result.rows.map((row) => row.number)))
-      : 0
-
   return {
-    repoFullName: input.repoFullName,
-    written: result.notModified ? 0 : result.rows.length,
-    removed,
-    notModified: result.notModified,
-    truncated: result.truncated,
-    ...(result.rateLimitRemaining !== undefined
-      ? { rateLimitRemaining: result.rateLimitRemaining }
-      : {}),
+    ...result,
+    status: outcome.status,
+    truncated: outcome.truncated ?? false,
+    ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
   }
 }
 
@@ -136,16 +203,19 @@ export async function syncWorkspaceRepos(
 
   for (const binding of input.bindings) {
     try {
-      results.push(
-        await syncRepoIssues(
-          {
-            repoFullName: binding.repoFullName,
-            issueProjectId: binding.issueProjectId,
-            ...(input.full ? { full: true } : {}),
-          },
-          deps
-        )
-      )
+      const target = { ...binding, ...(input.full ? { full: true } : {}) }
+      const result = deps.runRegistered
+        ? await deps.runRegistered(target)
+        : await syncRepoIssues(target, deps)
+      if (!result) continue
+      results.push(result)
+      // Busy is a successful exclusion, just like the import runner.
+      if (result.status === "failed" || result.status === "backoff") {
+        failures.push({
+          repoFullName: binding.repoFullName,
+          error: new GithubMirrorSyncOutcomeError(result.errorCode ?? result.status),
+        })
+      }
     } catch (error) {
       failures.push({ repoFullName: binding.repoFullName, error })
     }

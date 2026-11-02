@@ -2,6 +2,20 @@ import type { IssueProject } from "@/types/issues"
 import { IssueSyncRegistry } from "./registry"
 import { resolveWorkspaceSyncBindings, runWorkspaceIssueSync } from "./runner"
 import type { IssueSyncBinding, IssueSyncProvider, ReconcileOutcome } from "./types"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { reconcileIssueSyncRegistrations } from "./runtime"
+import { installExternalSyncRuntime } from "@/lib/external-services/sync/runtime"
+import { issueSyncTarget } from "./engine"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
+let dispose: () => void
+beforeEach(() => {
+  dispose = installExternalSyncRuntime()
+})
+afterEach(() => dispose())
 
 function container(id: string, projectId = "w1"): IssueProject {
   return {
@@ -72,6 +86,110 @@ describe("resolveWorkspaceSyncBindings", () => {
 })
 
 describe("runWorkspaceIssueSync", () => {
+  it.each(["earlier target", "credential preparation"])(
+    "skips an import unbound during %s",
+    async (window) => {
+      const registry = new IssueSyncRegistry()
+      const a = binding("github", "p1")
+      const b = binding("github", "p2")
+      let live = [a, b]
+      await getDb().issueProjects.bulkPut([container("p1"), container("p2")])
+      let entered!: () => void
+      let release!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const pull = jest.fn(async (current: IssueSyncBinding) => {
+        if (window === "earlier target" && current.issueProjectId === "p1") {
+          entered()
+          await gate
+        }
+        return {
+          items: [
+            {
+              externalId: `${current.key}#7`,
+              title: "Imported",
+              status: "todo" as const,
+              remoteUpdatedAt: 1000,
+            },
+          ],
+          cursor: "1000",
+        }
+      })
+      const currentProvider: IssueSyncProvider = {
+        ...provider("github", []),
+        resolveBindings: () => live,
+        pullPage: pull,
+        prepare: async (current) => {
+          if (window === "credential preparation" && current.issueProjectId === "p2") {
+            entered()
+            await gate
+          }
+          return { provider: currentProvider }
+        },
+      }
+      registry.register(currentProvider)
+      const running = runWorkspaceIssueSync(
+        { mirror: false },
+        { registry, listContainers: async () => [] }
+      )
+      await blocked
+      try {
+        live = [a]
+        await reconcileIssueSyncRegistrations({
+          registry,
+          mirrorBindings: async () => [],
+          importBindings: async () => live,
+        })
+      } finally {
+        release()
+      }
+      const result = await running
+      expect(result.failures).toEqual([])
+      expect(result.outcomes.map((row) => row.binding.issueProjectId)).toEqual(["p1"])
+      expect(pull.mock.calls.some(([current]) => current.issueProjectId === "p2")).toBe(false)
+      expect(await getDb().externalSyncCursors.get(issueSyncTarget(b).key)).toBeUndefined()
+      expect(await getDb().issues.where("issueProjectId").equals("p2").count()).toBe(0)
+    }
+  )
+  it("runs an import bound while the mirror sync was running", async () => {
+    const registry = new IssueSyncRegistry()
+    const a = binding("a", "p1")
+    const b = binding("a", "p2")
+    let live = [a]
+    registry.register({ ...provider("a", []), resolveBindings: () => live })
+    let release!: () => void
+    const mirrorDone = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started!: () => void
+    const mirrorStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const reconcile = jest.fn(async (current: IssueSyncBinding) => outcome(current))
+    const running = runWorkspaceIssueSync(
+      {},
+      {
+        registry,
+        reconcile,
+        listContainers: async () => [],
+        runMirror: async () => {
+          started()
+          await mirrorDone
+          return { repoCount: 0, results: [], failures: [] }
+        },
+      }
+    )
+    await mirrorStarted
+    live = [a, b]
+    release()
+    const result = await running
+    expect(result.outcomes.map((row) => row.binding.issueProjectId)).toEqual(["p1", "p2"])
+    expect(result.bindingCount).toBe(2)
+  })
   it("reports failed/backoff outcomes as typed failures and keeps sequential binding order", async () => {
     const registry = new IssueSyncRegistry()
     const bindings = [binding("a", "p1"), binding("a", "p2"), binding("a", "p3")]

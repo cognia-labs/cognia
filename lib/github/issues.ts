@@ -20,6 +20,12 @@
  * the PR surface already exists in `lib/github/pr-observe/`.
  */
 
+import {
+  ExternalSyncRateLimited,
+  ExternalSyncCursorInvalid,
+  type ExternalSyncMode,
+} from "@/lib/external-services/sync/types"
+
 import type {
   GithubIssueMirrorRow,
   GithubIssueState,
@@ -85,7 +91,7 @@ async function safeRequest(
   params: Record<string, unknown>
 ): Promise<{ status: number; headers: Record<string, string | undefined>; data: unknown }> {
   try {
-    return await octokit.request(route, params)
+    return await rateAwareOctokit(octokit).request(route, params)
   } catch (error) {
     const status =
       error !== null && typeof error === "object" && "status" in error
@@ -279,4 +285,192 @@ export async function fetchRepoIssues(
   }
 
   throw new Error(`GitHub issue listing incomplete: page limit (${MAX_ISSUE_PAGES}) reached`)
+}
+
+function githubRateLimit(error: {
+  status?: number
+  headers?: Record<string, string | undefined>
+  data?: unknown
+  message?: string
+}): ExternalSyncRateLimited | undefined {
+  const headers = Object.fromEntries(
+    Object.entries(error.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+  )
+  const message =
+    error.data && typeof error.data === "object" && "message" in error.data
+      ? String(error.data.message)
+      : (error.message ?? "")
+  if (
+    error.status !== 429 &&
+    !(
+      error.status === 403 &&
+      (headers["x-ratelimit-remaining"] === "0" || /secondary rate limit/i.test(message))
+    )
+  )
+    return undefined
+  const retry = headers["retry-after"]
+  const delay = retry
+    ? /^\d+(?:\.\d+)?$/.test(retry.trim())
+      ? Number(retry) * 1000
+      : Date.parse(retry) - Date.now()
+    : NaN
+  const reset = Number(headers["x-ratelimit-reset"]) * 1000 - Date.now()
+  return new ExternalSyncRateLimited(
+    Number.isFinite(delay) && delay >= 0
+      ? delay
+      : Number.isFinite(reset) && reset >= 0
+        ? reset
+        : 60_000
+  )
+}
+
+class GithubSyncHttpError extends Error {
+  constructor(readonly status: number) {
+    super("GitHub sync request failed")
+  }
+}
+
+export function rateAwareOctokit(octokit: OctokitLike): OctokitLike {
+  return {
+    request: async (route, params) => {
+      try {
+        const response = await octokit.request(route, params)
+        const limited = githubRateLimit(response)
+        if (limited) throw limited
+        if (response.status >= 400) throw new GithubSyncHttpError(response.status)
+        return response
+      } catch (error) {
+        if (error && typeof error === "object") {
+          const value = error as {
+            status?: number
+            response?: { headers?: Record<string, string | undefined>; data?: unknown }
+            message?: string
+          }
+          const limited = githubRateLimit({
+            status: value.status,
+            ...value.response,
+            message: value.message,
+          })
+          if (limited) throw limited
+        }
+        throw error
+      }
+    },
+  }
+}
+
+/** P8b keyset checkpoint shared by imports and the disposable mirror. */
+export interface GithubIssuePageToken {
+  since: number
+  page: number
+  floor?: number
+  max?: number
+}
+
+function githubIssuePageToken(input: {
+  mode: ExternalSyncMode
+  cursor?: string
+  page?: string
+}): GithubIssuePageToken {
+  const previous = Number(input.cursor ?? 0)
+  let token: GithubIssuePageToken
+  try {
+    token = input.page
+      ? JSON.parse(input.page)
+      : { since: input.mode === "full" ? 0 : previous, page: 1 }
+  } catch {
+    throw new ExternalSyncCursorInvalid()
+  }
+  if (
+    !Number.isFinite(previous) ||
+    previous < 0 ||
+    !token ||
+    !Number.isFinite(token.since) ||
+    token.since < 0 ||
+    !Number.isSafeInteger(token.page) ||
+    token.page < 1 ||
+    (token.floor !== undefined &&
+      (!Number.isFinite(token.floor) || token.floor < 0 || token.floor > token.since)) ||
+    (token.max !== undefined && (!Number.isFinite(token.max) || token.max < 0))
+  )
+    throw new ExternalSyncCursorInvalid()
+  return token
+}
+
+/** A tie-bucket offset can shift when rows leave: never infer mirror deletions from it. */
+export function githubIssuePageUsedOffset(page: string): boolean {
+  try {
+    const token = JSON.parse(page) as GithubIssuePageToken
+    return token.page > 1 || token.floor !== undefined
+  } catch {
+    return true
+  }
+}
+
+export async function fetchGithubIssuePage(
+  octokit: OctokitLike,
+  input: {
+    repoFullName: string
+    mode: ExternalSyncMode
+    cursor?: string
+    page?: string
+    signal?: AbortSignal
+  }
+): Promise<{
+  raw: RawGithubIssue[]
+  nextPage?: string
+  cursor?: string
+  rateLimitRemaining?: number
+}> {
+  const [owner, repo] = input.repoFullName.split("/")
+  if (!owner || !repo) throw new Error(`Invalid repository: ${input.repoFullName}`)
+  const token = githubIssuePageToken(input)
+  const previous = Number(input.cursor ?? 0)
+  const response = await rateAwareOctokit(octokit).request("GET /repos/{owner}/{repo}/issues", {
+    owner,
+    repo,
+    state: "all",
+    sort: "updated",
+    direction: "asc",
+    per_page: ISSUES_PER_PAGE,
+    page: token.page,
+    since: new Date(Math.max(0, token.since - 1000)).toISOString(),
+    request: { signal: input.signal },
+  })
+  if (response.status !== 200)
+    throw new Error(`GitHub issues request failed (HTTP ${response.status})`)
+  if (!Array.isArray(response.data)) throw new Error("Invalid GitHub issue page")
+  const raw = response.data as RawGithubIssue[]
+  for (const row of raw) {
+    if (!row.pull_request && !Number.isFinite(Date.parse(row.updated_at)))
+      throw new Error("GitHub issue update time missing")
+  }
+  // PR-only pages still carry the newest timestamp forward.
+  const pageMax = raw.reduce((max, row) => {
+    const updated = Date.parse(row.updated_at)
+    return Number.isFinite(updated) ? Math.max(max, updated) : max
+  }, token.max ?? 0)
+  let floor = token.page > 1 ? Math.min(token.floor ?? token.since, token.since) : token.floor
+  let nextPage: string | undefined
+  if (hasNextPage(response.headers.link)) {
+    const boundary = Date.parse(raw.at(-1)?.updated_at ?? "")
+    if (!Number.isFinite(boundary)) throw new Error("GitHub issue page boundary missing")
+    if (boundary <= token.since) floor = Math.min(floor ?? token.since, token.since)
+    nextPage = JSON.stringify({
+      ...(boundary > token.since
+        ? { since: boundary, page: 1 }
+        : { since: token.since, page: token.page + 1 }),
+      ...(floor !== undefined ? { floor } : {}),
+      ...(pageMax > 0 ? { max: pageMax } : {}),
+    })
+  }
+  input.signal?.throwIfAborted()
+  // Preserve P8b-1's earliest tie floor so a later pass replays that bucket.
+  const cursor = String(Math.min(Math.max(previous, pageMax), floor ?? Infinity))
+  const remaining = response.headers["x-ratelimit-remaining"]
+  return {
+    raw,
+    ...(nextPage ? { nextPage } : { cursor }),
+    ...(remaining !== undefined ? { rateLimitRemaining: Number(remaining) } : {}),
+  }
 }

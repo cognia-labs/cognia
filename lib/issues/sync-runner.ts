@@ -8,19 +8,19 @@
  * "the button works but the schedule doesn't", which is the kind of bug that
  * survives for months.
  *
- * Credentials come from `createResolveOctokit` (the `gh auth token` seam that
- * Agent Team PR feedback already uses). Reusing it means one credential story
- * for every GitHub read in the app rather than a second one that drifts.
+ * Credentials use the import provider's resolver, which returns the client and
+ * its Host connection together (or a gh CLI fallback with a named lock).
  */
 
-import { createResolveOctokit } from "@/lib/ai/agent/team/pr-feedback/resolvers"
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import type { OctokitLike } from "@/lib/github/issues"
 import {
   syncWorkspaceRepos,
+  githubMirrorSyncTarget,
   type SyncRepoIssuesDeps,
   type SyncWorkspaceReposResult,
 } from "./github-sync"
+import { reconcileIssueSyncRegistrations, runRegisteredIssueSync } from "./sync/runtime"
 
 export interface WorkspaceGithubBinding {
   repoFullName: string
@@ -54,8 +54,8 @@ export async function resolveWorkspaceGithubBindings(
       // Import-mode bindings belong to `lib/issues/sync/` (spec 2026-09-06
       // D1): their rows are local issues, not mirror rows.
       if (resource.sync?.mode === "import") continue
-      if (seen.has(resource.repoFullName)) continue
-      seen.add(resource.repoFullName)
+      if (seen.has(resource.repoFullName.toLowerCase())) continue
+      seen.add(resource.repoFullName.toLowerCase())
       bindings.push({ repoFullName: resource.repoFullName, issueProjectId: container.id })
     }
   }
@@ -72,7 +72,7 @@ export interface RunWorkspaceGithubSyncInput {
 
 export interface RunWorkspaceGithubSyncDeps {
   resolveBindings?: typeof resolveWorkspaceGithubBindings
-  /** Returns null when no credential is available — see `createResolveOctokit`. */
+  /** Test/legacy override; production resolves the exact credential source too. */
   resolveOctokitOrNull?: (repoFullName: string) => Promise<OctokitLike | null>
   sync?: typeof syncWorkspaceRepos
 }
@@ -117,21 +117,26 @@ export async function runWorkspaceGithubSync(
 ): Promise<RunWorkspaceGithubSyncResult> {
   const resolveBindings = deps.resolveBindings ?? resolveWorkspaceGithubBindings
   const bindings = await resolveBindings(input.projectId)
-  if (bindings.length === 0) {
-    return { repoCount: 0, results: [], failures: [] }
+  const syncDeps: SyncRepoIssuesDeps = deps.resolveOctokitOrNull
+    ? {
+        resolveOctokit: async (repoFullName) => {
+          const octokit = await deps.resolveOctokitOrNull!(repoFullName)
+          if (!octokit) throw new MissingGithubCredentialError(repoFullName)
+          return octokit
+        },
+      }
+    : {}
+  await reconcileIssueSyncRegistrations({
+    mirrorBindings: () => resolveBindings(),
+    mirrorDeps: syncDeps,
+  })
+  syncDeps.runRegistered = async (binding) => {
+    const result = await runRegisteredIssueSync(githubMirrorSyncTarget(binding).key, {
+      full: binding.full,
+    })
+    return result && "repoFullName" in result ? result : undefined
   }
-
-  const resolveOctokitOrNull =
-    deps.resolveOctokitOrNull ??
-    (createResolveOctokit() as (repoFullName: string) => Promise<OctokitLike | null>)
-
-  const syncDeps: SyncRepoIssuesDeps = {
-    resolveOctokit: async (repoFullName) => {
-      const octokit = await resolveOctokitOrNull(repoFullName)
-      if (!octokit) throw new MissingGithubCredentialError(repoFullName)
-      return octokit
-    },
-  }
+  if (bindings.length === 0) return { repoCount: 0, results: [], failures: [] }
 
   const sync = deps.sync ?? syncWorkspaceRepos
   const result = await sync({ bindings, ...(input.full ? { full: true } : {}) }, syncDeps)

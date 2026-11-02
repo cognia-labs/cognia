@@ -150,7 +150,7 @@ export async function pruneRepoMirror(
   return deleteGithubIssues(repoFullName, stale)
 }
 
-/** Most recent `updatedAt` seen for a repo, for the next `since` watermark. */
+/** Cache observation only; sync checkpoints belong to externalSyncCursors. */
 export async function latestMirroredUpdate(repoFullName: string): Promise<number | undefined> {
   const rows = await getDb().githubIssueMirror.where("repoFullName").equals(repoFullName).toArray()
   if (rows.length === 0) return undefined

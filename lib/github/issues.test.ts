@@ -6,6 +6,7 @@ import {
   toMirrorRow,
   type OctokitLike,
 } from "./issues"
+import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 
 const NOW = 1_700_000_000_000
 
@@ -229,10 +230,38 @@ describe("fetchRepoIssues", () => {
     expect(calls).toHaveLength(MAX_ISSUE_PAGES)
   })
 
-  it.each([401, 403, 404, 429, 500])("rejects a resolved HTTP %s response", async (status) => {
+  it.each([401, 403, 404, 500])("rejects a resolved HTTP %s response", async (status) => {
     const { client } = octokit([{ status, data: { message: "Unavailable" } }])
     await expect(fetchRepoIssues(client, { repoFullName: "o/r" })).rejects.toMatchObject({ status })
   })
+
+  it.each([
+    { status: 429, headers: { "retry-after": "12" }, data: {}, delay: 12_000 },
+    { status: 403, headers: {}, data: { message: "secondary rate limit" }, delay: 60_000 },
+  ])(
+    "maps resolved and thrown rate limits during pagination ($status)",
+    async ({ delay, ...response }) => {
+      for (const thrown of [false, true]) {
+        let page = 0
+        const client: OctokitLike = {
+          request: async () => {
+            if (page++ === 0)
+              return { status: 200, headers: { link: '<x>; rel="next"' }, data: [rawIssue()] }
+            if (thrown)
+              throw Object.assign(new Error("limited"), { status: response.status, response })
+            return response
+          },
+        }
+        await expect(fetchRepoIssues(client, { repoFullName: "o/r" })).rejects.toBeInstanceOf(
+          ExternalSyncRateLimited
+        )
+        page = 0
+        await expect(fetchRepoIssues(client, { repoFullName: "o/r" })).rejects.toMatchObject({
+          retryAfterMs: delay,
+        })
+      }
+    }
+  )
 
   it("rejects a malformed success body instead of treating it as an empty listing", async () => {
     const { client } = octokit([{ data: { message: "unexpected" } }])

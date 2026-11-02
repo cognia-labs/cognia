@@ -23,6 +23,30 @@ const driver = (): ExternalSyncDriver<string> => ({
 })
 const row = () => getDb().externalSyncCursors.get(target.key)
 
+it("yields at a page budget and resumes a pending full generation in auto mode", async () => {
+  await getDb().externalSyncCursors.put({ ...target, failures: 0, cursor: "old" })
+  const d = driver()
+  d.pageBudget = 1
+  d.fetchPage = jest.fn(async ({ page }) =>
+    page ? { items: ["b"], cursor: "new" } : { items: ["a"], nextPage: "second" }
+  )
+  d.listKnownIds = jest.fn(async () => ["a", "b", "gone"])
+  d.tombstone = jest.fn(async () => {})
+  expect(await runExternalSync(target, d, { ...options, mode: "full" })).toMatchObject({
+    status: "completed",
+    truncated: true,
+  })
+  expect(await row()).toMatchObject({ cursor: "old", generation: { mode: "full", page: "second" } })
+  expect(d.tombstone).not.toHaveBeenCalled()
+  expect(await runExternalSync(target, d, options)).toMatchObject({
+    status: "completed",
+    mode: "full",
+    pages: 2,
+  })
+  expect(d.tombstone).toHaveBeenCalledWith(["gone"], expect.anything())
+  expect(await row()).toMatchObject({ cursor: "new", failures: 0 })
+})
+
 it("persists before fetching and re-applies a page after an apply/checkpoint crash", async () => {
   const d = driver()
   const checkpoint = jest.spyOn(getDb().externalSyncSeen, "bulkPut")

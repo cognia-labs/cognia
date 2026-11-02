@@ -69,9 +69,9 @@ export async function runExternalSync<Item>(
       throw new ExternalSyncTargetRemoved()
   }
   const selectMode = (row?: ExternalSyncCursorRow): ExternalSyncMode =>
-    options.mode === "full" || driver.fullScanOnly || !row?.cursor || row.invalidated
+    options.mode === "full" || driver.fullScanOnly
       ? "full"
-      : "incremental"
+      : (row?.generation?.mode ?? (!row?.cursor || row.invalidated ? "full" : "incremental"))
   mode = selectMode(initial)
   if (options.signal?.aborted) return outcome("cancelled")
   if (
@@ -167,6 +167,7 @@ export async function runExternalSync<Item>(
       if (options.mode !== "full" && row.backoffUntil !== undefined && now() < row.backoffUntil)
         return outcome("backoff", row.lastErrorCode)
       let invalidations = 0
+      let fetchedPages = 0
       while (true) {
         if (!generation || generation.mode !== mode) {
           const previous = generation
@@ -242,6 +243,9 @@ export async function runExternalSync<Item>(
           })
           Object.assign(pending, checkpoint)
           if (page.nextPage !== undefined) pageTokens.add(page.nextPage)
+          fetchedPages += 1
+          if (page.nextPage !== undefined && fetchedPages >= (driver.pageBudget ?? Infinity))
+            return { ...outcome("completed"), truncated: true }
         }
         if (!generation) continue
         await assertTarget()

@@ -12,6 +12,8 @@ import {
   requestExternalSync,
   installExternalSyncRuntime,
   unregisterExternalSyncTargets,
+  hasExternalSyncRegistration,
+  pendingExternalSyncKeys,
 } from "./runtime"
 import type { ExternalSyncDriver } from "./types"
 const driver: ExternalSyncDriver<string> = {
@@ -35,12 +37,15 @@ afterEach(() => {
 
 it("coalesces three requests and immediately runs manual full", async () => {
   registerExternalSync({ key: "test", owner: "host" }, () => driver)
+  expect(hasExternalSyncRegistration("test")).toBe(true)
   requestExternalSync("test", "poll")
+  expect(pendingExternalSyncKeys()).toEqual(["test"])
   requestExternalSync("test", "push")
   requestExternalSync("test", "poll")
   await jest.advanceTimersByTimeAsync(1999)
   expect(runExternalSync).not.toHaveBeenCalled()
   await jest.advanceTimersByTimeAsync(1)
+  expect(pendingExternalSyncKeys()).toEqual([])
   expect(runExternalSync).toHaveBeenCalledTimes(1)
   requestExternalSync("test", "poll")
   requestExternalSync("test", "manual", { full: true })
@@ -53,6 +58,30 @@ it("coalesces three requests and immediately runs manual full", async () => {
   )
   await jest.advanceTimersByTimeAsync(2000)
   expect(runExternalSync).toHaveBeenCalledTimes(2)
+})
+
+it("does not report a cancelled factory when its credential preparation finishes after unregister", async () => {
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const unregister = registerExternalSync({ key: "test", owner: "host" }, async () => {
+    await gate
+    throw new Error("credential provider completed after removal")
+  })
+  try {
+    requestExternalSync("test", "manual")
+    await settle()
+    unregister()
+    release()
+    await settle()
+    expect(runExternalSync).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  } finally {
+    release()
+    warn.mockRestore()
+  }
 })
 
 it("unregisters matching targets before their debounce fires and retains other owners", async () => {
