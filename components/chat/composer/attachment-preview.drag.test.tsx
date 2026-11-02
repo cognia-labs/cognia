@@ -10,6 +10,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { SPRING_DRAG } from "@/lib/ui/motion"
 import { AttachmentPreview } from "./attachment-preview"
 import type { StagedAttachmentState, StagedAttachmentsValue } from "./staged-attachment-store"
 
@@ -45,6 +46,34 @@ jest.mock("@dnd-kit/core", () => ({
     return <>{children}</>
   },
 }))
+
+/** Props each chip's `motion.div` received, so the settle transition is observable. */
+const mockMotionDivProps: Array<{ layout?: unknown; transition?: Record<string, unknown> }> = []
+
+jest.mock("motion/react", () => {
+  const actual = jest.requireActual("motion/react")
+  const React = jest.requireActual("react")
+  const Div = React.forwardRef(function MotionDivStub(
+    {
+      layout,
+      transition,
+      initial: _initial,
+      animate: _animate,
+      exit: _exit,
+      ...rest
+    }: Record<string, unknown>,
+    ref: unknown
+  ) {
+    mockMotionDivProps.push({ layout, transition: transition as Record<string, unknown> })
+    return React.createElement("div", { ref, ...rest })
+  })
+  return {
+    ...actual,
+    motion: new Proxy(actual.motion, {
+      get: (target, key) => (key === "div" ? Div : target[key as keyof typeof target]),
+    }),
+  }
+})
 
 const mockState: {
   files: Array<{ id: string; type?: "file"; filename?: string }>
@@ -109,6 +138,15 @@ beforeEach(() => {
     { id: "a", filename: "one.txt" },
     { id: "b", filename: "two.txt" },
   ])
+})
+
+describe("AttachmentPreview — drag settle", () => {
+  it("settles a reordered chip on the over-damped drag spring", () => {
+    mockMotionDivProps.length = 0
+    mount()
+    const chip = mockMotionDivProps.find((p) => p.layout !== undefined)
+    expect(chip?.transition?.layout).toEqual(SPRING_DRAG)
+  })
 })
 
 describe("AttachmentPreview — drag handlers", () => {

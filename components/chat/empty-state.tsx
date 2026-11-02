@@ -464,7 +464,7 @@ export function EmptyChatState({
               <div className="flex flex-col gap-2">
                 <h2
                   className={cn(
-                    "font-semibold leading-[1.1] tracking-tight text-balance",
+                    "font-medium leading-[1.08] tracking-[-0.03em] text-balance",
                     rich ? "text-3xl @lg:text-4xl @3xl:text-5xl" : "text-2xl @lg:text-3xl"
                   )}
                 >
@@ -680,7 +680,7 @@ export function EmptyChatState({
               aria-hidden
               data-testid="welcome-bloom"
               data-ambient-glow
-              className="pointer-events-none absolute left-1/2 top-[48%] size-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/[0.06] blur-3xl"
+              className="pointer-events-none absolute left-1/2 top-[48%] size-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/[0.03] blur-3xl"
             />
           ) : null}
           <div aria-hidden className={cn("min-h-6", dashboard ? null : "flex-1")} />
@@ -714,7 +714,9 @@ export function EmptyChatState({
                 renders. */}
               <h2
                 className={cn(
-                  "text-balance text-center font-semibold leading-[1.08] tracking-tight",
+                  // Medium, not semibold: at display size the greeting carries by scale
+                  // and tight tracking alone; a heavy weight made it shout.
+                  "text-balance text-center font-medium leading-[1.06] tracking-[-0.03em]",
                   rich ? "text-4xl @lg:text-5xl" : "text-2xl @lg:text-3xl"
                 )}
               >

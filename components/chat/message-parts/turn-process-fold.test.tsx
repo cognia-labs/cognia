@@ -40,6 +40,17 @@ describe("TurnProcessFold", () => {
     expect(screen.queryByText("process body")).toBeNull()
   })
 
+  it("draws the toggle as a quiet hover pill, not a ruled-off header", () => {
+    render(
+      <TurnProcessFold fold={fold} durationMs={5_000}>
+        <p>process body</p>
+      </TurnProcessFold>
+    )
+    const toggle = screen.getByTestId("turn-process-fold-toggle")
+    expect(toggle.className).not.toMatch(/(^|\s)border-b(\s|$)/)
+    expect(toggle).toHaveClass("w-fit", "hover:bg-accent/60")
+  })
+
   it("opens and closes the body on click", () => {
     render(
       <TurnProcessFold fold={fold} durationMs={5_000}>

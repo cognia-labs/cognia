@@ -116,9 +116,10 @@ function tileValue(
 }
 
 /**
- * Quiet stat tile. Bordered rather than card-elevated: the welcome page is
- * card-less by design, but a dense grid of numbers still needs an edge to read
- * as a grid instead of loose text.
+ * Quiet stat tile. The welcome page is card-less by design, but a dense grid of
+ * numbers still needs an edge to read as a grid instead of loose text: here the
+ * edge is a recessed tonal fill one step off the page, not a border, deepening
+ * a step on hover.
  */
 function StatTile({
   label,
@@ -137,7 +138,7 @@ function StatTile({
   return (
     <div
       data-testid={testid}
-      className="flex min-w-0 flex-col gap-1 rounded-xl border border-border/60 bg-muted/25 px-3 py-2.5 transition-colors hover:border-border hover:bg-muted/40"
+      className="flex min-w-0 flex-col gap-1 rounded-xl bg-muted/60 px-3 py-2.5 transition-colors hover:bg-muted"
     >
       <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
         <Icon className="size-3 shrink-0" aria-hidden />

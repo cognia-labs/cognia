@@ -49,6 +49,25 @@ export const MOBILE_SPRING: Transition = {
   mass: 0.7,
 }
 
+/**
+ * Motion has a personality per gesture. Something the user drags is held by
+ * the hand, so it must land exactly where it was let go: an over-damped spring
+ * (damping ratio ≈ 1.15) that arrives fast and never overshoots. A
+ * confirmation the user earned — a like, a check, a copied tick — is a reward,
+ * so it gets an under-damped spring (ratio ≈ 0.46) with one small rebound.
+ */
+export const SPRING_DRAG: Transition = {
+  type: "spring",
+  stiffness: 1200,
+  damping: 80,
+}
+
+export const SPRING_POP: Transition = {
+  type: "spring",
+  stiffness: 380,
+  damping: 18,
+}
+
 /** Stagger spacing (seconds) for list enter animations. */
 export const STAGGER_INTERVAL = 0.04
 

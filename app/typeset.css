@@ -614,3 +614,46 @@
     --rich-code-max-h: none;
   }
 }
+
+/*
+ * Reading polish. Body copy breaks with `text-wrap: pretty` so a paragraph
+ * never ends on a single stranded word; headings balance instead. An icon set
+ * inline in text sits on the x-height centre (-0.125em) rather than the
+ * baseline, which is where a 1em glyph box otherwise rides high.
+ *
+ * Dark mode thins every typeset weight by one 40-unit step (600 → 560,
+ * 500 → 460): light text on a dark ground blooms and reads heavier than the
+ * same weight in light mode. Geist is a variable font, so the in-between
+ * weights render exactly. The Tailwind weight tokens get the same treatment in
+ * `app/globals.css`.
+ */
+@layer components {
+  .typeset *:not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *)) {
+    &:where(p, li, blockquote, dd, figcaption, [data-markdown-paragraph]) {
+      text-wrap: pretty;
+    }
+    &:where(h1, h2, h3, h4, h5, h6) {
+      text-wrap: balance;
+    }
+    &:where(p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dd) > :where(svg) {
+      vertical-align: -0.125em;
+    }
+  }
+
+  .dark
+    .typeset
+    *:not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *)) {
+    &:where(h1, h2, h3, h4, strong, b) {
+      font-weight: 560;
+    }
+    &:where(h5, h6, a, sup a, summary, kbd, dt, thead th, tbody th, tfoot th) {
+      font-weight: 460;
+    }
+    &:where(:is(h1, h2, h3, h4, h5, h6) :is(a)) {
+      font-weight: inherit;
+    }
+  }
+  .dark .chat-link {
+    font-weight: 460;
+  }
+}

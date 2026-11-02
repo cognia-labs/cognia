@@ -761,18 +761,23 @@ export function ContextBar({ execution, onExecutionChange, project }: ContextBar
           3. the chip row under the seam hides when it holds nothing but
              display:none a11y live-regions — the stock `:empty` check misses
              them and leaves a stray ~8px row;
-          4. when the card lights its border on focus-within the strip joins
-             in, or the fused unit looks half-lit. */}
+          4. the card draws no border, only the composer's ring (a box-shadow),
+             so the strip draws the same ring on its top and sides as inset
+             shadows and shares the card's fill — one surface, no seam line. On
+             focus-within the strip's ring deepens with the card's and grows
+             the same soft halo outward (offset shadows, never down into the
+             card), or the fused unit looks half-lit. */}
       <style>{`
 [data-ctxbar-scope]:has([data-ctxbar-fused]) [data-composer-skin]{border-top-left-radius:0;border-top-right-radius:0;padding-top:0}
 [data-ctxbar-scope]:has([data-ctxbar-fused]) [data-composer-skin]>[class*="self-start"]:not(:has([data-chip-flow]>:not([id^="Dnd"]))){display:none}
-[data-ctxbar-scope]:focus-within [data-ctxbar-fused]{border-color:color-mix(in oklab,var(--primary) 40%,transparent)}
+[data-ctxbar-fused]{--ctxbar-edge:color-mix(in oklab,var(--foreground) 7%,transparent);box-shadow:inset 0 1px 0 var(--ctxbar-edge),inset 1px 0 0 var(--ctxbar-edge),inset -1px 0 0 var(--ctxbar-edge)}
+[data-ctxbar-scope]:focus-within [data-ctxbar-fused]{--ctxbar-edge:color-mix(in oklab,var(--foreground) 16%,transparent);--ctxbar-halo:color-mix(in oklab,var(--foreground) 5%,transparent);box-shadow:inset 0 1px 0 var(--ctxbar-edge),inset 1px 0 0 var(--ctxbar-edge),inset -1px 0 0 var(--ctxbar-edge),0 -4px 0 0 var(--ctxbar-halo),-4px 0 0 0 var(--ctxbar-halo),4px 0 0 0 var(--ctxbar-halo)}
 `}</style>
       <Surface
         data-testid="context-bar"
         data-ctxbar-fused
         data-tonality="translucent"
-        className="relative z-10 -mb-px flex h-9 items-center gap-0.5 rounded-t-2xl border border-b-0 border-input/60 bg-background/70 px-1.5 transition-[border-color] duration-200"
+        className="relative z-10 -mb-px flex h-9 items-center gap-0.5 rounded-t-2xl bg-card/80 px-1.5 transition-[box-shadow] duration-200 ease-[cubic-bezier(.215,.61,.355,1)]"
       >
         {/* A rootless workspace has no checkout for the pickers to act on —
             offer the door to open one rather than dead controls. */}

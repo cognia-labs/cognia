@@ -816,6 +816,11 @@ describe("row chrome", () => {
     expect(container.querySelector("li")?.className).toContain("bg-accent")
   })
 
+  it("separates the open conversation by tone, not an outline", () => {
+    const { container } = setup({ active: true })
+    expect(container.querySelector("li")?.className).not.toMatch(/shadow-\[inset|(^|\s)ring-/)
+  })
+
   it("renders no accent bar on an inactive row", () => {
     setup({ active: false })
     expect(screen.queryByTestId("session-row-active-bar")).toBeNull()

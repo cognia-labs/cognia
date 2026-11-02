@@ -374,6 +374,7 @@ jest.mock("@/hooks/ui/use-pointer", () => ({
 
 const mockMessageCopy = jest.fn(async (_text: string) => true)
 jest.mock("@/hooks/ui/use-copy", () => ({
+  COPY_FEEDBACK_MS: 2500,
   useCopy: () => ({ copied: false, copy: mockMessageCopy }),
 }))
 

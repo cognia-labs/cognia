@@ -126,6 +126,16 @@ beforeEach(() => {
 })
 
 describe("ContextBar", () => {
+  it("fuses onto the borderless card by fill and an inset ring, not a border", async () => {
+    const { container } = await renderBar()
+    const bar = screen.getByTestId("context-bar")
+    expect(bar).toHaveClass("bg-card/80")
+    expect(bar.className).not.toMatch(/(^|\s)border(\s|-)/)
+    const css = container.querySelector("style")?.textContent ?? ""
+    expect(css).toContain("[data-ctxbar-fused]{--ctxbar-edge:")
+    expect(css).toMatch(/:focus-within \[data-ctxbar-fused\]\{[^}]*0 -4px 0 0 var\(--ctxbar-halo\)/)
+  })
+
   it("renders repository · worktree tokens fused on the composer's top edge", async () => {
     await renderBar()
     const bar = screen.getByTestId("context-bar")

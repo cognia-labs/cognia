@@ -94,6 +94,13 @@ describe("<EmptyChatState />", () => {
     expect(screen.getByRole("heading", { level: 2 }).className).toContain("@lg:text-5xl")
   })
 
+  it("sets the greeting in a medium display weight with tight tracking", () => {
+    render(<EmptyChatState {...baseProps()} />)
+    const heading = screen.getByRole("heading", { level: 2 })
+    expect(heading).toHaveClass("font-medium", "tracking-[-0.03em]")
+    expect(heading).not.toHaveClass("font-semibold")
+  })
+
   it("centers the hero — no two-column split", () => {
     render(<EmptyChatState {...baseProps()} />)
     const hero = screen.getByTestId("welcome-hero")

@@ -5,8 +5,15 @@ import { useCallback, useRef, useState } from "react"
 import { loggers } from "@cognia/logging"
 import { writeText as capWriteText } from "@/lib/capacitor/clipboard"
 
+/**
+ * How long a "copied" confirmation stays up before it puts itself out. Long
+ * enough to read the tick after the pointer has left the button, short enough
+ * that the control is back to its resting glyph before the next glance.
+ */
+export const COPY_FEEDBACK_MS = 2500
+
 export interface UseCopyOptions {
-  /** Milliseconds to keep `copied` true after a successful write. Defaults to 1500. */
+  /** Milliseconds to keep `copied` true after a successful write. Defaults to `COPY_FEEDBACK_MS`. */
   resetMs?: number
   /**
    * Logger scope for write failures. Defaults to `loggers.ui`.
@@ -30,7 +37,7 @@ export interface UseCopyResult {
  */
 export function useCopy(options: UseCopyOptions | number = {}): UseCopyResult {
   const opts = typeof options === "number" ? { resetMs: options } : options
-  const resetMs = opts.resetMs ?? 1500
+  const resetMs = opts.resetMs ?? COPY_FEEDBACK_MS
   const logger = opts.logger ?? loggers.ui
   const scope = opts.scope ?? "ui"
 

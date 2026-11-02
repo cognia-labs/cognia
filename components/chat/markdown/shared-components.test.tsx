@@ -386,7 +386,12 @@ describe("createSharedMarkdownComponents — lists and inline", () => {
     const { blockquote: Blockquote } = createSharedMarkdownComponents({ enableAlerts: false })
     const { container } = renderNode(<Blockquote>quoted</Blockquote>)
     const quote = container.querySelector("blockquote")
-    expect(quote).toHaveClass("border-l-4", "border-primary/30", "italic", "text-muted-foreground")
+    expect(quote).toHaveClass(
+      "border-l-2",
+      "border-foreground/15",
+      "italic",
+      "text-muted-foreground"
+    )
     // Indent and vertical rhythm belong to typeset.
     expect(quote?.className).not.toMatch(/\bpl-\d|\bmy-\d/)
   })

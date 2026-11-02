@@ -53,7 +53,8 @@ describe("RichBlockFrame", () => {
 
     const css = readFileSync(join(process.cwd(), "app/globals.css"), "utf8")
     for (const selector of [
-      '[data-block-border="off"] :is([data-rich-block], [data-streamdown="code-block"])',
+      // Border off clears the frame AND its header rule, on both branches.
+      '[data-block-border="off"]\n  :is(\n    [data-rich-block],\n    [data-rich-block-header],\n    [data-streamdown="code-block"],\n    [data-streamdown="code-block-header"]\n  )',
       '[data-block-header="off"] [data-rich-block-header] {',
       '[data-block-header="off"] [data-rich-block-title]',
       '[data-block-header="off"] [data-streamdown="code-block-header"]',

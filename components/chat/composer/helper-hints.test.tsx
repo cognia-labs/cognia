@@ -43,6 +43,13 @@ describe("HelperHints", () => {
     expect(screen.getByText(/Try/i)).toBeInTheDocument()
   })
 
+  it("draws the chips as borderless tonal pills", () => {
+    render(<HelperHints />, { wrapper: Wrapper })
+    const chip =
+      screen.getByText(/Drop/i).closest('[data-slot="badge"]') ?? screen.getByText(/Drop/i)
+    expect(chip).toHaveClass("border-transparent", "bg-muted/70")
+  })
+
   it("still shows for a selected session that has no messages yet", () => {
     seedSession(0)
     render(<HelperHints />, { wrapper: Wrapper })

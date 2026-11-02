@@ -9,7 +9,8 @@
  * toolbar button sizes drifted apart, and two toolbars ignored the
  * rich-controls setting. The frame owns all of that:
  *
- *   - `rounded-lg border bg-card`, with the vertical gap read from
+ *   - `rounded-lg`, filled one tonal step above the prose (card mixed toward
+ *     muted) so it separates without a hairline, with the vertical gap read from
  *     `--rich-block-gap` (the `blockDensity` setting, `app/typeset.css`);
  *   - a 32px header (`header="bar"`) with an icon, a label, muted meta and the
  *     actions, or no header with the actions floating over the body
@@ -89,7 +90,7 @@ export const RichBlockFrame = forwardRef<HTMLDivElement, RichBlockFrameProps>(
           ref={ref}
           data-rich-block={kind}
           className={cn(
-            "group/rich not-typeset relative min-w-0 overflow-hidden border bg-card text-card-foreground",
+            "group/rich not-typeset relative min-w-0 overflow-hidden border bg-[color-mix(in_oklab,var(--muted)_60%,var(--card))] text-card-foreground",
             compact ? "my-1 rounded-md" : "my-(--rich-block-gap) rounded-lg",
             className
           )}

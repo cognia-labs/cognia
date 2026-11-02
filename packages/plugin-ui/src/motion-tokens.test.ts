@@ -10,6 +10,8 @@ import {
   MOBILE_EASE,
   MOBILE_SPRING,
   MOTION_RESPECT_ATTRIBUTE,
+  SPRING_DRAG,
+  SPRING_POP,
   REDUCE_MOTION_ATTRIBUTE,
   REDUCE_MOTION_CLASS,
   REDUCED_MOTION_QUERY,
@@ -98,6 +100,28 @@ describe("tokens", () => {
     // visible bounce. A bouncy selection indicator reads as a toy, and the
     // overshoot would push the pill past the tab it is meant to land on.
     expect(damping).toBeGreaterThanOrEqual(2 * Math.sqrt(stiffness * mass))
+  })
+
+  it("SPRING_DRAG is over-damped so a dropped item lands without rebound", () => {
+    const { type, stiffness, damping } = SPRING_DRAG as {
+      type: string
+      stiffness: number
+      damping: number
+    }
+    expect(type).toBe("spring")
+    expect({ stiffness, damping }).toEqual({ stiffness: 1200, damping: 80 })
+    expect(damping).toBeGreaterThan(2 * Math.sqrt(stiffness))
+  })
+
+  it("SPRING_POP is under-damped so a confirmation rebounds once", () => {
+    const { type, stiffness, damping } = SPRING_POP as {
+      type: string
+      stiffness: number
+      damping: number
+    }
+    expect(type).toBe("spring")
+    expect({ stiffness, damping }).toEqual({ stiffness: 380, damping: 18 })
+    expect(damping).toBeLessThan(2 * Math.sqrt(stiffness))
   })
 
   it("STAGGER_CHILD fades and rises, and returns the way it came", () => {

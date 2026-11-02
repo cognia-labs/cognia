@@ -1,4 +1,6 @@
 /** @jest-environment jsdom */
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { render as rtlRender, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
@@ -468,17 +470,40 @@ describe("ComposerBox — slots", () => {
 // `cn(...)` arguments, NOT by re-deriving them from the skin table. If a future
 // edit routes `classic` through the variable path, or nudges one of these
 // utilities, this fails loudly rather than shipping a silently different box.
-// Elevation now follows the shared style ramp; classic geometry stays pinned.
+// Elevation follows the shared style ramp and the edge is the borderless
+// double ring (`--composer-shadow*`); classic geometry stays pinned.
 const CLASSIC_CLASS_STRING =
-  "relative flex flex-wrap items-end border shadow-(--elevation-1) " +
-  "transition-[border-color,box-shadow,background-color] duration-200 motion-reduce:transition-none " +
-  "focus-within:border-primary/40 focus-within:shadow-(--elevation-2) focus-within:ring-2 focus-within:ring-ring/15 " +
-  "gap-2 rounded-2xl border-input/60 bg-background/70 px-2 py-2"
+  "relative flex flex-wrap items-end border border-transparent shadow-(--composer-shadow) " +
+  "transition-[box-shadow,background-color] duration-200 ease-[cubic-bezier(.215,.61,.355,1)] motion-reduce:transition-none " +
+  "focus-within:shadow-(--composer-shadow-focus) " +
+  "gap-2 rounded-2xl bg-card/80 px-2 py-2"
 
 function classSet(source: HTMLElement | string) {
   const raw = typeof source === "string" ? source : source.className
   return new Set(raw.split(/\s+/).filter(Boolean))
 }
+
+describe("borderless edge", () => {
+  it("draws no outline or ring utility on focus, only the deeper double ring", () => {
+    render(<ComposerBox {...props()} />)
+    const cls = classSet(box())
+    expect([...cls].filter((c) => /^focus-within:(ring|outline|border)/.test(c))).toEqual([])
+    expect(cls.has("focus-within:shadow-(--composer-shadow-focus)")).toBe(true)
+  })
+
+  it("retints the ring amber in plan mode instead of drawing a border", () => {
+    render(<ComposerBox {...props({ permissionMode: "plan" })} />)
+    const cls = classSet(box())
+    expect(cls.has("[--composer-edge:var(--color-amber-500)]")).toBe(true)
+    expect([...cls].some((c) => c.startsWith("border-amber"))).toBe(false)
+  })
+
+  it("backs both rings with globals.css custom properties", () => {
+    const css = readFileSync(join(process.cwd(), "app/globals.css"), "utf8")
+    expect(css).toMatch(/--composer-shadow:\s*0 0 0 1px/)
+    expect(css).toMatch(/--composer-shadow-focus:\s*\n?\s*0 0 0 1px[^;]+0 0 0 4px/)
+  })
+})
 
 describe("classic parity — today's composer is unchanged", () => {
   it("preserves classic geometry with shared elevation tokens", () => {

@@ -87,7 +87,7 @@ import { formatBytesCompact } from "@/lib/observability/format-utils"
 import { FileTypeBadge } from "@/components/shared/file-type-icon"
 import { pinnedExtension } from "@/lib/files/file-type-icon"
 import { cn } from "@/lib/utils"
-import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
+import { SPRING_DRAG, mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { useStagedAttachments, type StagedAttachmentState } from "./staged-attachment-store"
 import { AttachmentPreviewDialog, type PreviewTarget } from "./attachment-preview-dialog"
 import type { ComposerImageInput } from "./hooks/use-composer-image-input"
@@ -149,7 +149,14 @@ export function AttachmentPreview(props: AttachmentPreviewProps) {
   const t = useTranslations("chat.composer.attachments")
   const attachments = usePromptInputAttachments()
   const staged = useStagedAttachments()
-  const transition = useReducedMotionTransition(mobileTransition("fast"))
+  const fadeTransition = useReducedMotionTransition(mobileTransition("fast"))
+  // A dragged tile is held by the hand, so the reorder settles on the
+  // over-damped drag spring: fast, exact, no rebound past its new slot.
+  const layoutTransition = useReducedMotionTransition(SPRING_DRAG)
+  const transition = useMemo(
+    () => ({ ...fadeTransition, layout: layoutTransition }),
+    [fadeTransition, layoutTransition]
+  )
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [previewTab, setPreviewTab] = useState<"file" | "model">("file")
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)

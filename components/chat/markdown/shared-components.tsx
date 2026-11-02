@@ -516,7 +516,7 @@ export function createSharedMarkdownComponents(options: SharedMarkdownComponentO
       // utilities (which outrank typeset's `:where()` rules); the indent and
       // the vertical rhythm are generic, so typeset owns them.
       return (
-        <blockquote className="border-l-4 border-primary/30 italic text-muted-foreground">
+        <blockquote className="border-l-2 border-foreground/15 italic text-muted-foreground">
           {children}
         </blockquote>
       )

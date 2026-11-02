@@ -46,6 +46,7 @@ jest.mock("./markdown/rendering-policy", () => ({
 
 import {
   FinalizedLongTextPart,
+  STREAMING_INK_ANIMATION,
   StreamingTextPart,
   blockRendersCode,
   mathScaleClass,
@@ -252,6 +253,35 @@ describe("StreamingTextPart", () => {
     }
     expect(props.caret).toBe("block")
     expect(props.className).not.toContain("animate-pulse")
+  })
+
+  it("streams text in with the per-character ink reveal", () => {
+    render(<StreamingTextPart text="hello" isStreaming={true} />)
+    const props = mockMessageResponse.mock.calls.at(-1)?.[0] as { animated?: unknown }
+    expect(props.animated).toBe(STREAMING_INK_ANIMATION)
+    expect(STREAMING_INK_ANIMATION).toEqual({
+      animation: "ink",
+      duration: 90,
+      easing: "cubic-bezier(.215,.61,.355,1)",
+      sep: "char",
+      stagger: 30,
+    })
+  })
+
+  it("drops the ink reveal under reduced motion", () => {
+    flowMotion.reduce = true
+    render(<StreamingTextPart text="hello" isStreaming={true} />)
+    const props = mockMessageResponse.mock.calls.at(-1)?.[0] as { animated?: unknown }
+    expect(props.animated).toBe(false)
+  })
+
+  it("backs the ink reveal with a globals.css keyframe Streamdown's span names", () => {
+    // Streamdown stamps `--sd-animation: sd-<animation>` on each span and does
+    // not ship its stylesheet here, so the keyframe and the span rule are ours.
+    const css = readFileSync(path.join(process.cwd(), "app/globals.css"), "utf8")
+    expect(css).toContain(`@keyframes sd-${STREAMING_INK_ANIMATION.animation} {`)
+    expect(css).toMatch(/\[data-sd-animate\] \{\s*animation: var\(--sd-animation/)
+    expect(css).toContain("filter: blur(6px)")
   })
 
   it("supplies incremental parsing and a typeset-aware block wrapper to Streamdown", () => {

@@ -20,7 +20,7 @@
  */
 
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { Block, parseMarkdownIntoBlocks, type BlockProps } from "streamdown"
+import { Block, parseMarkdownIntoBlocks, type AnimateOptions, type BlockProps } from "streamdown"
 import { MessageResponse, type MessageResponseProps } from "@/components/ai-elements/message"
 import {
   createSharedMarkdownComponents,
@@ -63,6 +63,25 @@ interface FinalizedProps {
 export const FINALIZED_MARKDOWN_LAZY_THRESHOLD = 64 * 1024
 const FINALIZED_BLOCKS_PER_SECTION = 8
 const FINALIZED_EAGER_SECTIONS = 3
+
+/**
+ * Ink-bleed reveal for the reply being streamed. Each new character fades in
+ * from a 6px blur over 90ms on an ease-out cubic, and neighbours start 30ms
+ * apart, so text spreads along the line instead of popping in a glyph at a
+ * time. Per character rather than per word because CJK has no spaces: a word
+ * split would reveal a whole Chinese sentence as one block. The keyframe
+ * (`sd-ink`) and the `[data-sd-animate]` rule live in `app/globals.css`.
+ * Streamdown only runs the plugin while `isAnimating`, caps how far the
+ * cascade may run ahead of a fast stream, and never touches code blocks.
+ * Module-level so the memoised `MessageResponse` sees a stable reference.
+ */
+export const STREAMING_INK_ANIMATION = {
+  animation: "ink",
+  duration: 90,
+  easing: "cubic-bezier(.215,.61,.355,1)",
+  sep: "char",
+  stagger: 30,
+} as const satisfies AnimateOptions
 
 /** A fence opening at the start of any line, allowing CommonMark's ≤3 spaces of
  *  indentation and the extra indentation a list item or blockquote adds. */
@@ -329,10 +348,12 @@ function StreamingTextPartInner({
   //
   // Reduced motion keeps the caret and drops only the blink, so "more is coming"
   // still reads without an animation. `animate-pulse` is a guaranteed Tailwind
-  // utility (no dependency on `animate-caret-blink`).
+  // utility (no dependency on `animate-caret-blink`). It drops the ink reveal
+  // too: text then lands sharp the moment it arrives.
   const { reduce } = useFlowMotion()
   return (
     <MessageResponse
+      animated={reduce ? false : STREAMING_INK_ANIMATION}
       BlockComponent={StreamingBlock}
       caret="block"
       className={cn(

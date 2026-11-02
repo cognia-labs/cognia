@@ -99,15 +99,43 @@ describe("AnimatedActionIcon", () => {
 })
 
 describe("CopyFeedbackIcon", () => {
-  it("switches from the copy glyph to the check glyph after a successful copy", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ settings: { motion: { reduce: false, speed: 1 } } as never })
+  })
+
+  const layer = (container: HTMLElement, name: "copy" | "check") =>
+    container.querySelector(`[data-slot="copy-feedback-icon"] [data-layer="${name}"]`)
+
+  it("shows the copy glyph and keeps the check mounted but hidden while idle", () => {
+    const { container } = render(<CopyFeedbackIcon copied={false} />)
+    const root = container.querySelector('[data-slot="copy-feedback-icon"]')
+    expect(root).toHaveAttribute("data-state", "idle")
+    expect(root).toHaveAttribute("aria-hidden", "true")
+    expect(layer(container, "copy")).toHaveAttribute("data-visible", "true")
+    expect(layer(container, "copy")?.querySelector("rect")).toBeTruthy()
+    expect(layer(container, "check")).toHaveAttribute("data-visible", "false")
+  })
+
+  it("swaps to the check after a copy and back when the flag resets", () => {
     const { container, rerender } = render(<CopyFeedbackIcon copied={false} />)
-    expect(container.querySelector('[data-slot="copy-feedback-icon"] rect')).toBeTruthy()
 
     rerender(<CopyFeedbackIcon copied />)
     expect(container.querySelector('[data-slot="copy-feedback-icon"]')).toHaveAttribute(
       "data-state",
       "copied"
     )
-    expect(container.querySelector('[data-slot="copy-feedback-icon"] rect')).toBeNull()
+    expect(layer(container, "check")).toHaveAttribute("data-visible", "true")
+    expect(layer(container, "copy")).toHaveAttribute("data-visible", "false")
+
+    rerender(<CopyFeedbackIcon copied={false} />)
+    expect(layer(container, "check")).toHaveAttribute("data-visible", "false")
+    expect(layer(container, "copy")).toHaveAttribute("data-visible", "true")
+  })
+
+  it("sizes the stacked glyph box from the size prop", () => {
+    const { container } = render(<CopyFeedbackIcon copied={false} size={12} />)
+    const root = container.querySelector<HTMLElement>('[data-slot="copy-feedback-icon"]')
+    expect(root?.style.width).toBe("12px")
+    expect(root?.style.height).toBe("12px")
   })
 })

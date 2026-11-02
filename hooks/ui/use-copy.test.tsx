@@ -8,7 +8,7 @@ jest.mock("@/lib/capacitor/clipboard", () => ({
   writeText: (value: string) => capWriteText(value),
 }))
 
-import { useCopy } from "./use-copy"
+import { COPY_FEEDBACK_MS, useCopy } from "./use-copy"
 
 describe("useCopy", () => {
   let originalClipboard: typeof navigator.clipboard | undefined
@@ -63,6 +63,22 @@ describe("useCopy", () => {
     expect(capWriteText).toHaveBeenCalledWith("native")
     expect(writeText).not.toHaveBeenCalled()
     expect(result.current.copied).toBe(true)
+  })
+
+  it("puts the copied confirmation out after COPY_FEEDBACK_MS by default", async () => {
+    expect(COPY_FEEDBACK_MS).toBe(2500)
+    const { result } = renderHook(() => useCopy())
+    await act(async () => {
+      await result.current.copy("x")
+    })
+    act(() => {
+      jest.advanceTimersByTime(COPY_FEEDBACK_MS - 1)
+    })
+    expect(result.current.copied).toBe(true)
+    act(() => {
+      jest.advanceTimersByTime(1)
+    })
+    expect(result.current.copied).toBe(false)
   })
 
   it("accepts a numeric arg as the legacy resetMs shortcut", async () => {

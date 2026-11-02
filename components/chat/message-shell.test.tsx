@@ -44,7 +44,7 @@ describe("MessageShell", () => {
     expect(shell).toHaveAttribute("data-link-underline", "subtle")
     expect(shell).toHaveAttribute("data-block-density", "compact")
     expect(shell).toHaveAttribute("data-code-max-height", "tall")
-    expect(shell).toHaveAttribute("data-block-border", "on")
+    expect(shell).toHaveAttribute("data-block-border", "off")
     expect(shell).toHaveAttribute("data-block-header", "on")
     // One agent, nothing to tell apart: no header row at all, not even the
     // quiet "complete" dot on its own.
@@ -156,6 +156,8 @@ describe("MessageShell", () => {
     const header = screen.getByTestId("message-shell-header")
     expect(header).toHaveTextContent("↑10 ↓20")
     expect(header).toHaveTextContent("$0.0123")
+    // Figures lock to tabular widths so a growing count never jitters the row.
+    expect(screen.getByText("$0.0123")).toHaveClass("tabular-nums")
   })
 
   it("keeps the metadata catalogue in step with the settings type", () => {

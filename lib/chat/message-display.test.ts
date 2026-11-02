@@ -164,7 +164,7 @@ describe("resolveMessageDisplayOptions", () => {
         mathCopy: true,
         charts: true,
         blockDensity: "compact",
-        blockBorder: true,
+        blockBorder: false,
         blockHeader: true,
         codeMaxHeight: "tall",
         codeTheme: "one",

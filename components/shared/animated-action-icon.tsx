@@ -9,9 +9,12 @@ import {
   useRef,
 } from "react"
 
+import { motion } from "motion/react"
+
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
 import { CheckIcon } from "@/components/ui/check"
 import { CopyIcon } from "@/components/ui/copy"
+import { SPRING_POP } from "@/lib/ui/motion"
 import { cn } from "@/lib/utils"
 
 const ICON_ANIMATION_DURATION_MS = 700
@@ -123,14 +126,56 @@ export interface CopyFeedbackIconProps extends Omit<
   copied: boolean
 }
 
-export function CopyFeedbackIcon({ copied, ...props }: CopyFeedbackIconProps) {
+/** The check fades back to the copy glyph on the same ease-out as streamed text. */
+const COPY_FEEDBACK_FADE = { duration: 0.32, ease: [0.215, 0.61, 0.355, 1] } as const
+const COPY_GLYPH_SWAP = { duration: 0.18, ease: [0.215, 0.61, 0.355, 1] } as const
+const INSTANT = { duration: 0 } as const
+
+/**
+ * Copy glyph that confirms a copy and then puts itself out. Both glyphs stay
+ * mounted, stacked: on `copied` the check pops in on an under-damped spring
+ * (one small rebound — a reward, not a toy) and draws itself, and when the
+ * caller's `copied` flag resets (`COPY_FEEDBACK_MS`, 2.5s) the check fades out
+ * while the copy glyph fades back. Swapping a single glyph made the tick vanish
+ * in one frame. Reduced motion keeps the swap and drops the movement.
+ */
+export function CopyFeedbackIcon({
+  copied,
+  size = 16,
+  className,
+  style,
+  ...props
+}: CopyFeedbackIconProps) {
+  const { reduce } = useFlowMotion()
   return (
-    <AnimatedActionIcon
-      icon={copied ? CheckIcon : CopyIcon}
-      animateOnChange={copied}
+    <span
+      aria-hidden="true"
       data-slot="copy-feedback-icon"
       data-state={copied ? "copied" : "idle"}
+      className={cn("relative inline-flex shrink-0", className)}
+      style={{ width: size, height: size, ...style }}
       {...props}
-    />
+    >
+      <motion.span
+        data-layer="copy"
+        data-visible={!copied}
+        className="absolute inset-0 inline-flex"
+        initial={false}
+        animate={copied ? { opacity: 0, scale: 0.8 } : { opacity: 1, scale: 1 }}
+        transition={reduce ? INSTANT : COPY_GLYPH_SWAP}
+      >
+        <AnimatedActionIcon icon={CopyIcon} size={size} />
+      </motion.span>
+      <motion.span
+        data-layer="check"
+        data-visible={copied}
+        className="absolute inset-0 inline-flex"
+        initial={false}
+        animate={copied ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.6 }}
+        transition={reduce ? INSTANT : copied ? SPRING_POP : COPY_FEEDBACK_FADE}
+      >
+        <AnimatedActionIcon icon={CheckIcon} size={size} animateOnChange={copied} />
+      </motion.span>
+    </span>
   )
 }

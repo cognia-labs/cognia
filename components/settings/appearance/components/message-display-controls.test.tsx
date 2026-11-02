@@ -189,8 +189,9 @@ describe("MessageDisplayControls", () => {
       const switches = group.querySelectorAll("[role=switch]")
       expect(switches).toHaveLength(9)
       const byId = (id: string) => document.getElementById(`message-display-markdown-${id}`)!
-      // ADR-0218 frame chrome: both on by default.
-      expect(byId("blockBorder")).toHaveAttribute("data-state", "checked")
+      // ADR-0218 frame chrome: the header is on by default; the border is off,
+      // since blocks separate from prose by a tonal step.
+      expect(byId("blockBorder")).toHaveAttribute("data-state", "unchecked")
       expect(byId("blockHeader")).toHaveAttribute("data-state", "checked")
       // Own override wins over the preset default …
       expect(byId("mermaid")).toHaveAttribute("data-state", "unchecked")

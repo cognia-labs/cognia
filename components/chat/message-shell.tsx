@@ -418,7 +418,7 @@ export function MessageShell({
                 <Badge
                   key={item}
                   variant="secondary"
-                  className="h-5 px-1.5 text-[10px] font-normal"
+                  className="h-5 px-1.5 text-[10px] font-normal tabular-nums"
                 >
                   {item}
                 </Badge>

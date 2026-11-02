@@ -128,7 +128,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--background",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(1 0 0)", "oklch(0.145 0 0)"),
+    default: lit("oklch(0.991 0.0013 106.4)", "oklch(0.149 0.0021 106.7)"),
     vscode: ["editor.background", "tab.activeBackground"],
   },
   {
@@ -144,7 +144,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--card",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(1 0 0)", "oklch(0.205 0 0)"),
+    default: lit("oklch(1 0 0)", "oklch(0.196 0 0)"),
     // `editorGroup.dropBackground` is omitted on purpose — it's a transient
     // drag-overlay color themes usually define with embedded alpha, which
     // produces saturated tints once the alpha is stripped.
@@ -163,7 +163,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--popover",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(1 0 0)", "oklch(0.205 0 0)"),
+    default: lit("oklch(1 0 0)", "oklch(0.217 0.0019 106.6)"),
     vscode: ["editorWidget.background", "dropdown.background", "quickInput.background"],
   },
   {
@@ -179,7 +179,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--muted",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(0.97 0 0)", "oklch(0.269 0 0)"),
+    default: lit("oklch(0.97 0.0026 106.4)", "oklch(0.243 0.0037 106.7)"),
     vscode: ["editor.lineHighlightBackground", "input.background", "editorWidget.background"],
   },
   {
@@ -195,7 +195,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--border",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(0.922 0 0)", "oklch(1 0 0 / 10%)"),
+    default: lit("oklch(0.93 0.004 106.5)", "oklch(1 0 0 / 8%)"),
     vscode: [
       "panel.border",
       "editorWidget.border",
@@ -209,7 +209,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--input",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(0.922 0 0)", "oklch(1 0 0 / 15%)"),
+    default: lit("oklch(0.93 0.004 106.5)", "oklch(1 0 0 / 15%)"),
     vscode: ["input.background", "editorWidget.background"],
   },
   {
@@ -248,7 +248,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--secondary",
     group: "brand",
     base: true,
-    default: lit("oklch(0.97 0 0)", "oklch(0.269 0 0)"),
+    default: lit("oklch(0.97 0.0026 106.4)", "oklch(0.243 0.0037 106.7)"),
     vscode: [
       "panel.background",
       "sideBarSectionHeader.background",
@@ -268,7 +268,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--accent",
     group: "brand",
     base: true,
-    default: lit("oklch(0.97 0 0)", "oklch(0.269 0 0)"),
+    default: lit("oklch(0.97 0.0026 106.4)", "oklch(0.243 0.0037 106.7)"),
     vscode: [
       "list.activeSelectionBackground",
       "list.focusBackground",
@@ -407,7 +407,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--sidebar",
     group: "sidebar",
     base: true,
-    default: lit("oklch(0.985 0 0)", "oklch(0.205 0 0)"),
+    default: lit("oklch(0.97 0.0026 106.4)", "oklch(0.196 0 0)"),
     vscode: ["sideBar.background", "activityBar.background"],
   },
   {
@@ -439,7 +439,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--sidebar-accent",
     group: "sidebar",
     base: true,
-    default: lit("oklch(0.97 0 0)", "oklch(0.269 0 0)"),
+    default: lit("oklch(0.951 0.004 106.5)", "oklch(0.243 0.0037 106.7)"),
     vscode: ["list.hoverBackground", "list.inactiveSelectionBackground"],
   },
   {
@@ -455,7 +455,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--sidebar-border",
     group: "sidebar",
     base: true,
-    default: lit("oklch(0.922 0 0)", "oklch(1 0 0 / 10%)"),
+    default: lit("oklch(0.93 0.004 106.5)", "oklch(1 0 0 / 8%)"),
     vscode: ["sideBar.border", "activityBar.border"],
   },
   {

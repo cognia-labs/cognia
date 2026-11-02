@@ -196,7 +196,7 @@ import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
 import { ReadAloudButton } from "./read-aloud-button"
 import { TaskUpdateRow } from "@/components/tasks/task-update-row"
-import { useCopy } from "@/hooks/ui/use-copy"
+import { COPY_FEEDBACK_MS, useCopy } from "@/hooks/ui/use-copy"
 import { useShowKeyboardHints } from "@/hooks/ui/use-pointer"
 import { buildMessageShareContent, writeMessageToClipboard } from "@/lib/chat/message-share"
 import { resolveMessageActionCommands } from "@/lib/chat/message-action-commands"
@@ -742,7 +742,7 @@ function MessageRendererInner({
       : await copy(messageShareContent.plainText)
     if (ok && needsRichClipboard) {
       setRichCopied(true)
-      window.setTimeout(() => setRichCopied(false), 1500)
+      window.setTimeout(() => setRichCopied(false), COPY_FEEDBACK_MS)
     }
     if (ok) onCopy?.()
   }, [messageShareContent, messageText, copy, onCopy])
@@ -757,7 +757,7 @@ function MessageRendererInner({
     )
     if (!ok) return
     setLinkCopied(true)
-    window.setTimeout(() => setLinkCopied(false), 1500)
+    window.setTimeout(() => setLinkCopied(false), COPY_FEEDBACK_MS)
   }, [branchSessionId, message.id, copy])
 
   const handleShare = useCallback(async () => {
@@ -772,7 +772,7 @@ function MessageRendererInner({
     if (out.kind === "cancelled") return
     if (out.kind === "shared") {
       setShared(true)
-      window.setTimeout(() => setShared(false), 1500)
+      window.setTimeout(() => setShared(false), COPY_FEEDBACK_MS)
       return
     }
     if (out.kind === "error") {
@@ -785,7 +785,7 @@ function MessageRendererInner({
     // never happened.
     if (await writeMessageToClipboard(messageShareContent)) {
       setShared(true)
-      window.setTimeout(() => setShared(false), 1500)
+      window.setTimeout(() => setShared(false), COPY_FEEDBACK_MS)
       toast.success(t("shareCopiedFallback"))
     } else {
       toast.error(t("shareFailed"))

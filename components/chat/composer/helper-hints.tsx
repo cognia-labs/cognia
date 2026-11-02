@@ -71,7 +71,12 @@ export function HelperHints({ onOpenCheatsheet }: HelperHintsProps) {
 
 function Hint({ children }: { children: React.ReactNode }) {
   return (
-    <Badge variant="outline" className="rounded-pill bg-background/60 px-2 py-0.5 text-[10px]">
+    // Borderless: a recessed tonal chip, so the hints sit under the composer
+    // as quiet print instead of a row of outlined buttons.
+    <Badge
+      variant="outline"
+      className="rounded-pill border-transparent bg-muted/70 px-2 py-0.5 text-[10px] font-normal text-muted-foreground"
+    >
       {children}
     </Badge>
   )

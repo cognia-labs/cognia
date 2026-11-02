@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, renderHook } from "@testing-library/react"
+import { act, render, renderHook } from "@testing-library/react"
 
 import {
   MotionCollapse,
@@ -117,6 +117,76 @@ describe("MotionCollapse", () => {
       </MotionCollapse>
     )
     expect(getByTestId("body")).toBeTruthy()
+  })
+
+  const endRowTransition = (el: Element, propertyName = "grid-template-rows") => {
+    const event = new Event("transitionend", { bubbles: true })
+    Object.defineProperty(event, "propertyName", { value: propertyName })
+    act(() => {
+      el.dispatchEvent(event)
+    })
+  }
+
+  it("folds on a CSS grid row rather than a measured height", () => {
+    useSettingsStore.setState({ settings: { motion: { reduce: false, speed: 1 } } as never })
+    const { container } = render(
+      <MotionCollapse open className="p-2">
+        <span data-testid="body">x</span>
+      </MotionCollapse>
+    )
+    const root = container.querySelector('[data-slot="motion-collapse"]')!
+    expect(root).toHaveAttribute("data-state", "open")
+    expect(root.className).toContain("grid-rows-[0fr]")
+    expect(root.className).toContain("data-[state=open]:grid-rows-[1fr]")
+    expect((root as HTMLElement).style.transitionDuration).toBe("280ms")
+    // The caller's padding sits inside the clipped row, where it cannot hold
+    // the folded track open.
+    expect(root.firstElementChild).toHaveClass("min-h-0", "overflow-hidden")
+    expect(root.firstElementChild?.firstElementChild).toHaveClass("p-2")
+  })
+
+  it("lands a body that was open at mount without a starting style", () => {
+    useSettingsStore.setState({ settings: { motion: { reduce: false, speed: 1 } } as never })
+    const { container } = render(
+      <MotionCollapse open>
+        <span>x</span>
+      </MotionCollapse>
+    )
+    const root = container.querySelector('[data-slot="motion-collapse"]')!
+    expect(root.className).not.toContain("starting:")
+  })
+
+  it("unfurls from 0fr when opened after mount, then unmounts once folded shut", () => {
+    useSettingsStore.setState({ settings: { motion: { reduce: false, speed: 1 } } as never })
+    const { container, rerender, queryByTestId } = render(
+      <MotionCollapse open={false}>
+        <span data-testid="body">x</span>
+      </MotionCollapse>
+    )
+    expect(queryByTestId("body")).toBeNull()
+
+    rerender(
+      <MotionCollapse open>
+        <span data-testid="body">x</span>
+      </MotionCollapse>
+    )
+    const root = container.querySelector('[data-slot="motion-collapse"]')!
+    expect(root.className).toContain("starting:data-[state=open]:grid-rows-[0fr]")
+
+    rerender(
+      <MotionCollapse open={false}>
+        <span data-testid="body">x</span>
+      </MotionCollapse>
+    )
+    // Still mounted (and inert) while the row folds.
+    expect(queryByTestId("body")).toBeTruthy()
+    expect(root).toHaveAttribute("data-state", "closed")
+    expect(root).toHaveAttribute("inert")
+
+    endRowTransition(root, "opacity")
+    expect(queryByTestId("body")).toBeTruthy()
+    endRowTransition(root)
+    expect(queryByTestId("body")).toBeNull()
   })
 })
 

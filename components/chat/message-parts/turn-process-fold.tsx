@@ -64,14 +64,17 @@ export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnP
         onClick={() => setRemembered(!open)}
         aria-expanded={open}
         aria-label={open ? t("collapse", { label }) : t("expand", { label })}
-        className="group flex w-full items-center gap-1.5 border-b border-border/60 pb-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="group -mx-1.5 flex w-fit max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         data-testid="turn-process-fold-toggle"
       >
         <span className="min-w-0 truncate" data-testid="turn-process-fold-label">
           {label}
         </span>
         <ChevronRightIcon
-          className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          className={cn(
+            "size-3.5 shrink-0 transition-transform duration-200 ease-[cubic-bezier(.215,.61,.355,1)]",
+            open && "rotate-90"
+          )}
           aria-hidden
         />
         {/* The closed row's only hint that something went wrong. Once open,
@@ -79,7 +82,7 @@ export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnP
             above them just doubled it. */}
         {fold.failedCount > 0 && !open ? (
           <span
-            className="ml-auto shrink-0 text-[11px] font-medium text-red-600 dark:text-red-500"
+            className="shrink-0 text-[11px] font-medium text-red-600 tabular-nums dark:text-red-500"
             data-testid="turn-process-fold-failed"
           >
             {t("failed", { count: fold.failedCount })}

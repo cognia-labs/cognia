@@ -65,7 +65,9 @@ export const DEFAULT_MESSAGE_MARKDOWN_OPTIONS: MessageMarkdownOptions = {
   mathCopy: true,
   charts: true,
   blockDensity: "compact",
-  blockBorder: true,
+  // Rich blocks separate from the prose by a tonal step, not a hairline (the
+  // surface ladder in `app/globals.css`); turning this on restores the frame.
+  blockBorder: false,
   blockHeader: true,
   codeMaxHeight: "tall",
   codeTheme: "one",

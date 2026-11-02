@@ -23,6 +23,7 @@ import { createContext, useContext, useState, type CSSProperties, type ReactNode
 import { useSettingsStore } from "@/stores/settings"
 import { speedToDurationScale } from "@/lib/appearance/motion-applier"
 import { MOBILE_DURATION, MOBILE_EASE, MOBILE_SPRING } from "@/lib/ui/motion"
+import { cn } from "@/lib/utils"
 import type { MessageMotion } from "@/types/appearance"
 
 const MessageMotionContext = createContext<MessageMotion | undefined>(undefined)
@@ -160,43 +161,56 @@ export interface MotionCollapseProps {
 }
 
 /**
- * Unified expand/collapse for the agent-flow surfaces — the tool rows, the
- * activity group, and the sub-agent rows all reveal their bodies the same way.
- * Collapses to a plain show/hide when motion is reduced (OS hint or user opt-in).
+ * Expand/collapse for surfaces outside the transcript (settings panels), where
+ * nothing measures the box and the unfurl is worth having.
  *
- * Height animates on a *monotonic* eased tween rather than a spring: a spring
- * overshoots `auto`, and under `overflow: hidden` that overshoot clips the last
- * rows of content for a frame. A 0→auto tween never exceeds the final height, so
- * the body is never clipped. `MOBILE_EASE` is monotonic, so it satisfies that
- * constraint while putting this on the same clock as every other surface —
- * before, this was a fourth hand-tuned curve. Opacity keeps its quick ease-out.
+ * The height runs on CSS grid: the body sits in a single `1fr` row that
+ * transitions to `0fr`, so the browser interpolates between "no height" and
+ * "the content's height" itself. No JS measures `auto` and no spring can
+ * overshoot it and clip the last row under `overflow: hidden`. The curve is
+ * `MOBILE_EASE`, monotonic, on the same clock as every other surface.
+ *
+ * Opening after mount plays from `0fr` through `@starting-style` (the
+ * `starting:` variant); a body already open when it mounts is being redrawn and
+ * lands without motion. Closing keeps the body mounted, `inert`, until the row
+ * finishes folding, then unmounts it. Reduced motion is a plain show/hide.
  */
 export function MotionCollapse({ open, children, className }: MotionCollapseProps) {
   const { reduce, durationScale } = useFlowMotion()
+  const [openAtMount, setOpenAtMount] = useState(open)
+  const [mounted, setMounted] = useState(open)
+  if (open && !mounted) setMounted(true)
+  if (!open && openAtMount) setOpenAtMount(false)
 
   if (reduce) {
     return open ? <div className={className}>{children}</div> : null
   }
+  if (!mounted) return null
 
   return (
-    <AnimatePresence initial={false}>
-      {open ? (
-        <motion.div
-          key="collapse-body"
-          className={className}
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: "auto", opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{
-            height: { duration: MOBILE_DURATION.normal * durationScale, ease: MOBILE_EASE },
-            opacity: { duration: MOBILE_DURATION.fast * durationScale, ease: "easeOut" },
-          }}
-          style={{ overflow: "hidden" }}
-        >
-          {children}
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+    <div
+      data-slot="motion-collapse"
+      data-state={open ? "open" : "closed"}
+      inert={!open}
+      className={cn(
+        "grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity]",
+        "data-[state=open]:grid-rows-[1fr] data-[state=open]:opacity-100",
+        !openAtMount &&
+          "starting:data-[state=open]:grid-rows-[0fr] starting:data-[state=open]:opacity-0"
+      )}
+      style={{
+        transitionDuration: `${Math.round(MOBILE_DURATION.normal * durationScale * 1000)}ms`,
+        transitionTimingFunction: `cubic-bezier(${MOBILE_EASE.join(",")})`,
+      }}
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.propertyName === "grid-template-rows" && !open) setMounted(false)
+      }}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div className={className}>{children}</div>
+      </div>
+    </div>
   )
 }
 

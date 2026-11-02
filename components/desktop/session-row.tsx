@@ -579,10 +579,10 @@ function SessionRowImpl({
             "group relative flex items-stretch rounded-lg pl-3.5 text-sm transition-colors duration-150",
             // Hover and active were both `bg-accent`, which made every hovered row
             // look like the open conversation. Active now owns a stronger surface
-            // plus the left accent bar below; hover stays a lighter wash.
+            // plus the left accent bar below; hover stays a lighter wash. No
+            // outline: the tonal step and the bar carry the state on their own.
             !active && "hover:bg-accent/60",
-            active &&
-              "bg-accent shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
+            active && "bg-accent",
             // Inset rings: the sections' collapsible bodies clip their overflow
             // (for the open / close animation), and an outset ring on the first or
             // last row of a section was cut off there.

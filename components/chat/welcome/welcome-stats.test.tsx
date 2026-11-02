@@ -116,6 +116,14 @@ describe("<WelcomeStats />", () => {
     expect(screen.getByTestId("welcome-stat-peakHour")).toHaveTextContent("7")
   })
 
+  it("draws tiles as borderless tonal fills with tabular figures", () => {
+    render(<WelcomeStats />)
+    const tile = screen.getByTestId("welcome-stat-tokens")
+    expect(tile).toHaveClass("bg-muted/60")
+    expect(tile.className).not.toMatch(/(^|\s)border(\s|-)/)
+    expect(tile.querySelector(".tabular-nums")).toHaveTextContent("1.5M")
+  })
+
   it("renders the opt-in longest-streak tile when it is turned on", () => {
     storeState.settings = { welcomeStats: { tiles: ["longestStreak"] } }
     render(<WelcomeStats />)

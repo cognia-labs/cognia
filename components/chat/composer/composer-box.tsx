@@ -73,21 +73,28 @@ import { composerSkinVars, type ResolvedComposerSkin } from "@/lib/chat/composer
  * prevents any further wrapping. Mobile (Capacitor) keeps the stack at every
  * width.
  */
+/*
+ * No drawn border and no focus outline: the box separates from the page by its
+ * fill (one tonal step up, `bg-card/80`) and a whisper ring, and focus deepens
+ * that into a double ring — a tighter edge plus a soft 4px halo — so the field
+ * reads as biting into the page rather than lighting up. The rings are
+ * `--composer-shadow` / `--composer-shadow-focus` (`app/globals.css`), tinted
+ * by `--composer-edge`. The 1px transparent border keeps the box geometry.
+ */
 const BOX_BASE =
-  "relative flex flex-wrap items-end border shadow-(--elevation-1) transition-[border-color,box-shadow,background-color] duration-200 motion-reduce:transition-none focus-within:border-primary/40 focus-within:shadow-(--elevation-2) focus-within:ring-2 focus-within:ring-ring/15"
+  "relative flex flex-wrap items-end border border-transparent shadow-(--composer-shadow) transition-[box-shadow,background-color] duration-200 ease-[cubic-bezier(.215,.61,.355,1)] motion-reduce:transition-none focus-within:shadow-(--composer-shadow-focus)"
 
 /** The phone layout shows the character count only from this length on. */
 const MOBILE_CHAR_COUNTER_FROM = 1_000
 
-/** Verbatim from the pre-skin composer. Pinned by the parity test. */
-const CLASSIC_BOX = "gap-2 rounded-2xl border-input/60 bg-background/70 px-2 py-2"
+/** Pre-skin composer geometry, fill on the surface ladder. Pinned by the parity test. */
+const CLASSIC_BOX = "gap-2 rounded-2xl bg-card/80 px-2 py-2"
 
 /**
  * The classic skin's stacked (phone / compact-setting) card. Its corner is
  * {@link COMPACT_CLASSIC_RADIUS_PX}; keep the two in step.
  */
-const COMPACT_CLASSIC_BOX =
-  "gap-1.5 rounded-[1.75rem] border-border/70 bg-background/85 px-3 py-2.5 shadow-md"
+const COMPACT_CLASSIC_BOX = "gap-1.5 rounded-[1.75rem] bg-card/90 px-3 py-2.5"
 const COMPACT_CLASSIC_RADIUS_PX = 28
 
 /**
@@ -124,7 +131,7 @@ export function composerNoticeVars(
 
 /** Every other skin drives its geometry from the inline custom properties. */
 const SKIN_BOX =
-  "gap-[var(--composer-gap)] rounded-[var(--composer-radius)] border-input/60 bg-background/70 px-[var(--composer-pad-x)] py-[var(--composer-pad-y)]"
+  "gap-[var(--composer-gap)] rounded-[var(--composer-radius)] bg-card/80 px-[var(--composer-pad-x)] py-[var(--composer-pad-y)]"
 
 export interface ComposerBoxProps {
   /** Resolved skin — geometry + which toolbar arrangement to use. */
@@ -480,7 +487,7 @@ export function ComposerBox({
         // Plan mode: amber tint on the input surface (with the banner above)
         // so the read-only state is unmistakable (Claude Code parity).
         permissionMode === "plan" &&
-          "border-amber-500/50 focus-within:border-amber-500/70 focus-within:ring-amber-500/15"
+          "[--composer-edge:var(--color-amber-500)] [--composer-edge-focus:70%] [--composer-edge-rest:50%]"
       )}
       style={composerSkinVars(skin)}
       data-composer-skin={skin.id}
