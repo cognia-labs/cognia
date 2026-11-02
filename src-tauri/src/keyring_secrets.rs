@@ -22,6 +22,7 @@ async fn on_blocking_pool<T: Send + 'static>(
 
 #[tauri::command]
 pub async fn secret_store_get(input: SecretStoreInput) -> Result<Option<String>, String> {
+    require_generic_access(&input, None)?;
     on_blocking_pool(move || read_with_legacy_webhook_secret(&input)).await
 }
 
@@ -47,6 +48,7 @@ pub async fn secret_store_set(
     input: SecretStoreInput,
     condition: Option<SecretStoreSetCondition>,
 ) -> Result<(), String> {
+    require_generic_access(&input, condition.as_ref())?;
     let value = input
         .value
         .ok_or_else(|| "secret-store set: value is required".to_string())?;
@@ -59,6 +61,7 @@ pub async fn secret_store_set(
 
 #[tauri::command]
 pub async fn secret_store_delete(input: SecretStoreInput) -> Result<(), String> {
+    require_generic_access(&input, None)?;
     on_blocking_pool(move || clear(&input.namespace, &input.key)).await
 }
 
@@ -174,6 +177,39 @@ mod tests {
             get(&revision.namespace, "revision").unwrap().as_deref(),
             Some("r1")
         );
+    }
+
+    #[tokio::test]
+    async fn generic_commands_and_aliases_refuse_host_owned_records() {
+        let host_record = SecretStoreInput {
+            namespace: "docs-providers".into(),
+            key: "google-auth-lineages-v2".into(),
+            value: Some("forged".into()),
+        };
+        set(&host_record.namespace, &host_record.key, "host-only").unwrap();
+        assert!(secret_store_get(host_record.clone()).await.is_err());
+        assert!(keyring_secret_get(host_record.clone()).await.is_err());
+        assert!(secret_store_set(host_record.clone(), None).await.is_err());
+        assert!(keyring_secret_set(host_record.clone()).await.is_err());
+        assert!(secret_store_delete(host_record.clone()).await.is_err());
+        assert!(keyring_secret_clear(host_record.clone()).await.is_err());
+        let mut revision = host_record.clone();
+        revision.key = "unrelated-revision".into();
+        let smuggled = SecretStoreSetCondition {
+            expected: None,
+            changes: vec![SecretStoreChange {
+                key: host_record.key.clone(),
+                value: None,
+            }],
+        };
+        assert!(secret_store_set(revision, Some(smuggled)).await.is_err());
+        assert_eq!(
+            get(&host_record.namespace, &host_record.key)
+                .unwrap()
+                .as_deref(),
+            Some("host-only")
+        );
+        clear(&host_record.namespace, &host_record.key).unwrap();
     }
 
     #[tokio::test]

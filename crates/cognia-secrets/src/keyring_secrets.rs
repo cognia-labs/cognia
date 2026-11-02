@@ -187,6 +187,46 @@ pub fn clear(namespace: &str, key: &str) -> Result<(), String> {
     secret_store::delete(&service, key)
 }
 
+/// Records that only a Rust Host controller reads or writes (ADR-0246): the
+/// Google lineage record with its refresh tokens and client secrets, and the
+/// legacy keys it migrates from. The generic secret-store surfaces (desktop
+/// IPC and the headless companion RPC) refuse them, so no renderer can read a
+/// credential the Host holds or forge the record its CAS protects.
+const HOST_OWNED_RECORDS: &[(&str, &str)] = &[
+    ("docs-providers", "google-auth-lineages-v2"),
+    ("docs-providers", "google-connection-v1"),
+    ("docs-providers", "google-client-secret"),
+    ("docs-providers", "google-tokens"),
+    ("docs-providers", "google-oauth-pending"),
+    ("backup-destinations", "google-drive-tokens"),
+    ("backup-destinations", "google-drive-client-secret"),
+];
+
+/// True for a record only a Rust Host controller may touch.
+pub fn is_host_owned(namespace: &str, key: &str) -> bool {
+    HOST_OWNED_RECORDS
+        .iter()
+        .any(|(owned_namespace, owned_key)| *owned_namespace == namespace && *owned_key == key)
+}
+
+/// Gate for generic secret-store requests: the target key and every related
+/// key a conditional set would change must not be Host-owned.
+pub fn require_generic_access(
+    input: &SecretStoreInput,
+    condition: Option<&SecretStoreSetCondition>,
+) -> Result<(), String> {
+    let related = condition
+        .into_iter()
+        .flat_map(|condition| condition.changes.iter().map(|change| change.key.as_str()));
+    if std::iter::once(input.key.as_str())
+        .chain(related)
+        .any(|key| is_host_owned(&input.namespace, key))
+    {
+        return Err("secret-store: this record is owned by the Host and is not readable or writable through the generic secret store".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +389,43 @@ mod tests {
         clear("keyring-slash/v1", "tok").unwrap();
         clear("keyring-slash", "tok").unwrap();
         assert_eq!(get("keyring-slash/v1", "tok").unwrap(), None);
+    }
+
+    #[test]
+    fn generic_access_refuses_host_owned_records_including_related_changes() {
+        let input = |namespace: &str, key: &str| SecretStoreInput {
+            namespace: namespace.into(),
+            key: key.into(),
+            value: Some("forged".into()),
+        };
+        for (namespace, key) in HOST_OWNED_RECORDS {
+            assert!(is_host_owned(namespace, key));
+            assert!(require_generic_access(&input(namespace, key), None).is_err());
+        }
+        // Same key in another namespace, and other keys in an owned namespace, stay generic.
+        assert!(require_generic_access(&input("other", "google-auth-lineages-v2"), None).is_ok());
+        assert!(require_generic_access(&input("docs-providers", "lark-settings"), None).is_ok());
+        // A conditional set cannot reach a Host record through its related changes.
+        let smuggled = SecretStoreSetCondition {
+            expected: None,
+            changes: vec![SecretStoreChange {
+                key: "google-auth-lineages-v2".into(),
+                value: None,
+            }],
+        };
+        assert!(
+            require_generic_access(&input("docs-providers", "revision"), Some(&smuggled)).is_err()
+        );
+        let harmless = SecretStoreSetCondition {
+            expected: None,
+            changes: vec![SecretStoreChange {
+                key: "other".into(),
+                value: None,
+            }],
+        };
+        assert!(
+            require_generic_access(&input("docs-providers", "revision"), Some(&harmless)).is_ok()
+        );
     }
 
     #[test]

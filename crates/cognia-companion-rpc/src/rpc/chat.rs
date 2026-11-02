@@ -599,6 +599,7 @@ pub(super) async fn dispatch(
             let input: cognia_secrets::keyring_secrets::SecretStoreInput =
                 required(&args, "input")?;
             require_non_org_namespace(&input.namespace)?;
+            require_generic_secret_access(&input, None)?;
             let value = tokio::task::spawn_blocking(move || {
                 cognia_secrets::keyring_secrets::get(&input.namespace, &input.key)
             })
@@ -622,6 +623,7 @@ pub(super) async fn dispatch(
             // here would turn a revision check into a blind overwrite.
             let condition: Option<cognia_secrets::keyring_secrets::SecretStoreSetCondition> =
                 optional(&args, "condition")?;
+            require_generic_secret_access(&input, condition.as_ref())?;
             tokio::task::spawn_blocking(move || match condition {
                 Some(condition) => cognia_secrets::keyring_secrets::set_if(
                     &input.namespace,
@@ -643,6 +645,7 @@ pub(super) async fn dispatch(
             let input: cognia_secrets::keyring_secrets::SecretStoreInput =
                 required(&args, "input")?;
             require_non_org_namespace(&input.namespace)?;
+            require_generic_secret_access(&input, None)?;
             tokio::task::spawn_blocking(move || {
                 cognia_secrets::keyring_secrets::clear(&input.namespace, &input.key)
             })
@@ -654,6 +657,19 @@ pub(super) async fn dispatch(
         unknown => Err(RpcError::unknown_command(unknown)),
     };
     result
+}
+
+/// Host-owned credential records (ADR-0246) never cross the generic secret store.
+fn require_generic_secret_access(
+    input: &cognia_secrets::keyring_secrets::SecretStoreInput,
+    condition: Option<&cognia_secrets::keyring_secrets::SecretStoreSetCondition>,
+) -> Result<(), (StatusCode, Json<RpcError>)> {
+    cognia_secrets::keyring_secrets::require_generic_access(input, condition).map_err(|message| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(RpcError::new("host_surface_forbidden", message)),
+        )
+    })
 }
 
 fn require_non_org_namespace(namespace: &str) -> Result<(), (StatusCode, Json<RpcError>)> {

@@ -2645,6 +2645,59 @@ async fn secret_store_set_honours_the_compare_and_set_condition() {
     call!("secret_store_delete", get("cas.revision")).expect("cleanup");
 }
 
+/// The Google lineage record holds refresh tokens and client secrets that only
+/// the Rust controller may touch (ADR-0246); the generic arms refuse it.
+#[tokio::test]
+async fn generic_secret_arms_refuse_host_owned_records() {
+    let state = test_state();
+    let host = headless_host();
+
+    macro_rules! call {
+        ($name:expr, $args:expr $(,)?) => {
+            dispatch(
+                $name,
+                $args,
+                &state,
+                &host,
+                "brain-local",
+                Some(ACCOUNT_ID),
+                Some("service"),
+            )
+            .await
+        };
+    }
+    cognia_secrets::keyring_secrets::set("docs-providers", "google-auth-lineages-v2", "host-only")
+        .unwrap();
+    let record = json!({ "input": { "namespace": "docs-providers", "key": "google-auth-lineages-v2", "value": "forged" } });
+    for name in [
+        "secret_store_get",
+        "keyring_secret_get",
+        "secret_store_set",
+        "keyring_secret_set",
+        "secret_store_delete",
+        "keyring_secret_clear",
+    ] {
+        let (status, Json(error)) = call!(name, record.clone()).expect_err(name);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}");
+        assert_eq!(error.code, "host_surface_forbidden", "{name}");
+    }
+    call!(
+        "secret_store_set",
+        json!({
+            "input": { "namespace": "docs-providers", "key": "unrelated-revision", "value": "r1" },
+            "condition": { "expected": null, "changes": [{ "key": "google-auth-lineages-v2", "value": null }] },
+        }),
+    )
+    .expect_err("a related change cannot reach a Host record");
+    assert_eq!(
+        cognia_secrets::keyring_secrets::get("docs-providers", "google-auth-lineages-v2")
+            .unwrap()
+            .as_deref(),
+        Some("host-only")
+    );
+    cognia_secrets::keyring_secrets::clear("docs-providers", "google-auth-lineages-v2").unwrap();
+}
+
 #[tokio::test]
 async fn ocr_service_arms_use_the_headless_registry() {
     let state = test_state();
