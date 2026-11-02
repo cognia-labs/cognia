@@ -341,7 +341,7 @@ export function McpToolRulesCard({ server }: Props) {
           </>
         )}
 
-        <div className="space-y-1.5 rounded-md border bg-muted/30 p-2.5">
+        <div className="space-y-1.5 rounded-md border border-transparent bg-muted/60 p-2.5">
           <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             {t("patternsTitle")}
           </p>

@@ -239,7 +239,7 @@ export function AnthropicAddAccountDialog({
 
         {step === "choose-mode" && (
           <div className="space-y-4 py-2">
-            <Surface className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <Surface className="rounded-md border border-transparent bg-muted/60 p-3 text-xs text-muted-foreground">
               <p>{t("login.apiKeySetupHint")}</p>
               <Link
                 href="/settings?section=providers"

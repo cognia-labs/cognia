@@ -355,7 +355,7 @@ function InspectorPanelInner({
                   rows={2}
                 />
               </Field>
-              <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 rounded-md border border-transparent bg-muted/60 px-3 py-2">
                 <div>
                   <p className="text-sm font-medium">{t("disabled")}</p>
                   <p className="text-[11px] text-muted-foreground">{t("disabledHint")}</p>

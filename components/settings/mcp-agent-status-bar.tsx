@@ -90,7 +90,10 @@ export function McpAgentStatusBar() {
   }
 
   return (
-    <div data-testid="mcp-agent-status-bar" className="space-y-2 rounded-md border bg-muted/20 p-3">
+    <div
+      data-testid="mcp-agent-status-bar"
+      className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3"
+    >
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
           <p className="text-xs font-medium">{t("title")}</p>

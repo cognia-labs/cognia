@@ -38,7 +38,7 @@ export function WhatsNewCard() {
           <AccordionItem key={release.version} value={release.version}>
             <AccordionTrigger data-testid={`whatsnew-trigger-${release.version}`}>
               <span className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="rounded-md border bg-muted/50 px-1.5 py-0.5 font-mono text-xs">
+                <span className="rounded-md border border-transparent bg-muted/70 px-1.5 py-0.5 font-mono text-xs">
                   {release.version}
                 </span>
                 <span className="text-xs font-normal text-muted-foreground">

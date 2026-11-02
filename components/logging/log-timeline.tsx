@@ -422,7 +422,7 @@ export function LogTimeline({
   return (
     <div
       data-testid="log-timeline-container"
-      className={cn("px-3 py-2 sm:px-3 border-b bg-muted/10", className)}
+      className={cn("px-3 py-2 sm:px-3 bg-muted/10", className)}
     >
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs sm:text-[10px] text-muted-foreground font-medium">

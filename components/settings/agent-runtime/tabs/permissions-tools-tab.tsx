@@ -124,7 +124,7 @@ export function PermissionsToolsTab() {
         contentClassName="space-y-0"
       >
         {/* One divided list, not one card per toggle. */}
-        <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border">
+        <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-transparent bg-muted/50">
           {BUILTIN_TOOL_CATEGORIES.map((cat) => {
             const checked = builtin[cat.id as BuiltinToolCategoryId] ?? false
             const riskColor =

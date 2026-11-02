@@ -793,7 +793,7 @@ export function ProviderImportExport({ onClose, compact = false }: ProviderImpor
             {/* Include API Keys */}
             <div
               className={cn(
-                "flex items-start gap-3 p-3 rounded-lg border transition-colors",
+                "flex items-start gap-3 p-3 rounded-lg border border-transparent bg-muted/50 transition-colors",
                 includeApiKeys ? "border-amber-500/50 bg-amber-500/10" : "border-border"
               )}
             >

@@ -59,7 +59,7 @@ export function TransportRow({
     <Collapsible asChild open={open} onOpenChange={onOpenChange}>
       <div
         className={cn(
-          "rounded-lg border transition-colors",
+          "rounded-lg border border-transparent bg-muted/50 transition-colors",
           enabled ? "bg-background" : "bg-muted/30"
         )}
         data-testid={`logs-transport-${id}`}

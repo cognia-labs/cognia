@@ -409,7 +409,11 @@ function FormSection({
   children: React.ReactNode
 }) {
   return (
-    <Collapsible defaultOpen={defaultOpen} className="rounded-lg border" data-testid={dataTestId}>
+    <Collapsible
+      defaultOpen={defaultOpen}
+      className="rounded-lg border border-transparent bg-muted/50"
+      data-testid={dataTestId}
+    >
       <CollapsibleTrigger className="group flex min-h-11 w-full items-center justify-between gap-2 px-3 py-2 text-left">
         <span className="text-sm font-medium">{title}</span>
         <span className="flex min-w-0 items-center gap-2">
@@ -1445,7 +1449,7 @@ export function AgentEditorDialog({
             defaultOpen
             dataTestId="opencode-options-section"
           >
-            <Surface className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 p-3">
+            <Surface className="flex items-center justify-between gap-3 rounded-md border border-transparent bg-muted/50 p-3">
               <div className="min-w-0 space-y-0.5">
                 <Label htmlFor={fid("opencode-auto-spawn")} className="cursor-pointer text-sm">
                   {tManager("autoSpawnServer")}

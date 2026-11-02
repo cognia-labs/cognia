@@ -104,7 +104,7 @@ function ChoiceRow({
       type="button"
       onClick={onSelect}
       data-testid={testId}
-      className="group flex w-full items-center gap-3 rounded-lg border text-left bg-background px-3.5 py-3 transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group flex w-full items-center gap-3 rounded-lg bg-muted/50 px-3.5 py-3 text-left transition-colors duration-200 ease-ink hover:bg-muted focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-(--control-halo)"
     >
       <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
         <Icon className="size-4" aria-hidden />

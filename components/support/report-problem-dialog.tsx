@@ -336,7 +336,7 @@ function ReportProblemForm({
             </p>
           ) : preview ? (
             <pre
-              className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
+              className="max-h-56 overflow-auto rounded-md border border-transparent bg-muted/70 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
               data-testid="report-problem-preview"
             >
               {preview}

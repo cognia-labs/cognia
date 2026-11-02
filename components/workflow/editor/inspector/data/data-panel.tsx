@@ -120,7 +120,7 @@ export function DataPanel({
       </div>
 
       {items.length > 1 ? (
-        <div className="flex items-center justify-between rounded-md border bg-muted/20 px-2 py-1 text-[11px]">
+        <div className="flex items-center justify-between rounded-md border border-transparent bg-muted/50 px-2 py-1 text-[11px]">
           <Button
             size="icon"
             variant="ghost"

@@ -268,7 +268,7 @@ export function LocalProviderSetupWizard({
             <h3 className="font-semibold">{t("setupWizard.configurationTitle")}</h3>
 
             <div className="space-y-3">
-              <div className="rounded-lg border p-3 space-y-2">
+              <div className="rounded-lg border border-transparent bg-muted/50 p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{t("serverUrl")}</span>
                   <Badge variant="secondary" className="font-mono text-xs">

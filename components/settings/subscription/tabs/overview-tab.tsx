@@ -173,7 +173,7 @@ export function SubscriptionOverviewTab({
 
   return (
     <div className="@container space-y-3" data-testid="overview-windows">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <StatusIcon className={cn("size-5 shrink-0", statusClass)} aria-hidden />
           <div className="min-w-0">
@@ -216,7 +216,10 @@ export function SubscriptionOverviewTab({
       </div>
 
       {resolved.extras.length > 0 && (
-        <div className="space-y-3 rounded-lg border p-4" data-testid="overview-extras">
+        <div
+          className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-4"
+          data-testid="overview-extras"
+        >
           {resolved.extras.map((meter) => (
             <MeterRow
               key={meter.id}

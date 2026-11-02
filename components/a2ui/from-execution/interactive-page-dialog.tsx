@@ -211,7 +211,7 @@ export function InteractivePageDialog({ source, trigger }: Props) {
             />
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-muted/30 p-2">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-transparent bg-muted/60 p-2">
             {app ? (
               <A2UISurface surfaceId={previewId} readOnly showLoading={false} />
             ) : (

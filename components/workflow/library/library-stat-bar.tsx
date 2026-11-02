@@ -61,7 +61,7 @@ export function LibraryStatBar() {
 
 function Card({ label, value, emphasize }: { label: string; value: string; emphasize?: boolean }) {
   return (
-    <div className="rounded-md border bg-card/50 px-3 py-2">
+    <div className="rounded-md border border-transparent bg-card/50 shadow-(--card-shadow) px-3 py-2">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p
         className={

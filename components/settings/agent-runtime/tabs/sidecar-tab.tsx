@@ -389,7 +389,10 @@ export function SidecarTab() {
         {visibleExtensions.length > 0 && (
           <div className="space-y-2">
             <p className="text-sm font-medium">{t("savedExtensions")}</p>
-            <ul aria-label={t("savedExtensions")} className="divide-y rounded-lg border">
+            <ul
+              aria-label={t("savedExtensions")}
+              className="divide-y rounded-lg border border-transparent bg-muted/50"
+            >
               {visibleExtensions.map((ref) => (
                 <li key={ref.path} className="flex items-center justify-between gap-2 p-3">
                   <span className="min-w-0 break-all font-mono text-xs">{ref.path}</span>

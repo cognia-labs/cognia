@@ -90,7 +90,7 @@ export function EvalDashboard({ initialDatasetId }: EvalDashboardProps = {}) {
           detail on a phone. It names the row it returns from, so the back
           arrow is not the sole thing on an otherwise blank bar. */}
       {isMobile && mobileDetailOpen && (
-        <div className="flex min-h-9 shrink-0 items-center gap-1 border-b px-1.5">
+        <div className="flex min-h-9 shrink-0 items-center gap-1 px-1.5">
           <Button
             size="icon-sm"
             variant="ghost"
@@ -106,16 +106,23 @@ export function EvalDashboard({ initialDatasetId }: EvalDashboardProps = {}) {
       )}
 
       <div
-        className={cn("grid min-h-0 flex-1", !isMobile && "divide-x")}
+        className="grid min-h-0 flex-1"
         // Driven by the SAME source as showList/showDetail. A Tailwind `md:`
         // rule disagrees with `useIsMobile()` on a native tablet shell, which
-        // left half the screen blank — and that applies to the divider too,
-        // hence the conditional class rather than `md:divide-x`.
+        // left half the screen blank — and that applies to the list column's
+        // tone too, hence the conditional class on it rather than `md:`.
         style={{ gridTemplateColumns: isMobile ? "1fr" : "320px minmax(0,1fr)" }}
       >
         {showList && (
-          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-col overflow-hidden",
+              // The list column sits a tone below the detail instead of a
+              // divider; the same `isMobile` source decides it (see above).
+              !isMobile && "bg-muted/35"
+            )}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
               <Input
                 aria-label={t("datasets.searchPlaceholder")}
                 placeholder={t("datasets.searchPlaceholder")}
@@ -134,7 +141,7 @@ export function EvalDashboard({ initialDatasetId }: EvalDashboardProps = {}) {
                 and swallow a click on Create while either field was empty. */}
             {creating && (
               <form
-                className="flex shrink-0 flex-col gap-2 border-b bg-muted/30 px-3 py-3"
+                className="mx-2 mb-2 flex shrink-0 flex-col gap-2 rounded-lg bg-muted/70 px-3 py-3"
                 data-testid="new-dataset-form"
                 onSubmit={(event) => {
                   event.preventDefault()

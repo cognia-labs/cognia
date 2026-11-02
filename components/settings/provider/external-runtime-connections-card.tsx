@@ -41,7 +41,10 @@ export function ExternalRuntimeConnectionsCard({
 
   return (
     <section
-      className={cn("@container/provider-runtimes rounded-lg border px-4 py-3", className)}
+      className={cn(
+        "@container/provider-runtimes rounded-lg border border-transparent bg-muted/50 px-4 py-3",
+        className
+      )}
       aria-labelledby="external-runtime-connections-title"
       data-testid="external-runtime-connections"
     >

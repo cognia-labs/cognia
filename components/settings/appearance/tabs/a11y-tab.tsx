@@ -181,7 +181,10 @@ function A11yGroup({
 }) {
   const t = useTranslations("settings.appearance.a11y.groups")
   return (
-    <section className="space-y-3 rounded-lg border p-3" data-testid={testId}>
+    <section
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+      data-testid={testId}
+    >
       <div className="space-y-0.5">
         <Label className="text-xs">{t(`${groupKey}.label`)}</Label>
         <p className="text-[11px] text-muted-foreground">{t(`${groupKey}.hint`)}</p>

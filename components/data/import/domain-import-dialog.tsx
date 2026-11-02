@@ -148,7 +148,7 @@ export function DomainImportDialog({ domain, labelKey, trigger }: Props) {
 
           {pending && (
             <div
-              className="space-y-2 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground"
+              className="space-y-2 rounded-md border border-transparent bg-muted/60 p-2 text-xs text-muted-foreground"
               data-testid="domain-import-preview"
             >
               <p>

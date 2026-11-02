@@ -240,17 +240,17 @@ function EvidenceContent({
       </div>
       <Separator />
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-lg border bg-muted/25 p-3">
+        <div className="rounded-lg border border-transparent bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">{t("lab.evidence.issues")}</p>
           <p className="mt-1 text-lg font-semibold tabular-nums">{issueCount}</p>
         </div>
-        <div className="col-span-2 rounded-lg border bg-muted/25 p-3">
+        <div className="col-span-2 rounded-lg border border-transparent bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">{t("lab.evidence.clearance")}</p>
           <p className="mt-1 font-semibold">
             {t(`lab.evidence.clearanceValues.${mediaClearance}`)}
           </p>
         </div>
-        <div className="rounded-lg border bg-muted/25 p-3">
+        <div className="rounded-lg border border-transparent bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">{t("lab.evidence.retention")}</p>
           <p className="mt-1 text-lg font-semibold tabular-nums">{retentionDays}</p>
         </div>
@@ -1311,7 +1311,7 @@ function EvalLabWorkspaceContent({
                       ) : null}
                     </>
                   ) : null}
-                  <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
                     <div>
                       <p className="text-sm font-medium">{t("lab.variants.local")}</p>
                       <p className="text-xs text-muted-foreground">{t("lab.variants.localHint")}</p>
@@ -1323,7 +1323,7 @@ function EvalLabWorkspaceContent({
                     </Badge>
                   </div>
                   {!variant.isLocal ? (
-                    <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-2">
+                    <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3 sm:grid-cols-2">
                       <div className="grid gap-2">
                         <Label htmlFor={`${variant.id}-input-price`}>
                           {t("lab.variants.inputPrice")}
@@ -1369,7 +1369,7 @@ function EvalLabWorkspaceContent({
                     </div>
                   ) : null}
                   {mode === "model" ? (
-                    <div className="grid gap-3 rounded-lg border p-3">
+                    <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
                       <div>
                         <p className="text-sm font-medium">{t("lab.variants.inference")}</p>
                         <p className="text-xs text-muted-foreground">
@@ -1469,7 +1469,7 @@ function EvalLabWorkspaceContent({
                       </div>
                     </div>
                   ) : null}
-                  <div className="space-y-3 rounded-lg border p-3">
+                  <div className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3">
                     <div>
                       <p className="text-sm font-medium">{t("lab.variants.capabilities")}</p>
                       <p className="text-xs text-muted-foreground">
@@ -1533,7 +1533,7 @@ function EvalLabWorkspaceContent({
               <CardDescription>{t("lab.scoring.policyHint")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center justify-between rounded-lg border border-transparent bg-muted/50 p-3">
                 <div>
                   <p className="text-sm font-medium">{t("lab.scoring.formal")}</p>
                   <p className="text-xs text-muted-foreground">{t("lab.scoring.formalHint")}</p>
@@ -1555,7 +1555,7 @@ function EvalLabWorkspaceContent({
                 />
               </div>
               {formal ? (
-                <div className="grid gap-4 rounded-lg border p-4">
+                <div className="grid gap-4 rounded-lg border border-transparent bg-muted/50 p-4">
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="grid gap-2">
                       <Label htmlFor="eval-judge-provider">{t("lab.scoring.judgeProvider")}</Label>
@@ -1591,7 +1591,7 @@ function EvalLabWorkspaceContent({
                       </datalist>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="flex items-center justify-between rounded-lg border border-transparent bg-muted/50 p-3">
                     <span className="text-sm font-medium">{t("lab.scoring.judgeLocal")}</span>
                     <Badge variant={judgeIsLocal ? "default" : "secondary"}>
                       {judgeIsLocal
@@ -1671,7 +1671,7 @@ function EvalLabWorkspaceContent({
                       </datalist>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="flex items-center justify-between rounded-lg border border-transparent bg-muted/50 p-3">
                     <span className="text-sm font-medium">{t("lab.scoring.secondJudgeLocal")}</span>
                     <Badge variant={secondJudgeIsLocal ? "default" : "secondary"}>
                       {secondJudgeIsLocal
@@ -1760,7 +1760,7 @@ function EvalLabWorkspaceContent({
               {decisionPolicy.dimensions.map((dimension, index) => (
                 <div
                   key={`dimension-${index}`}
-                  className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_10rem_8rem_auto] sm:items-end"
+                  className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3 sm:grid-cols-[1fr_10rem_8rem_auto] sm:items-end"
                 >
                   <div className="grid gap-2">
                     <Label htmlFor={`eval-dimension-${index}-metric`}>
@@ -1881,7 +1881,7 @@ function EvalLabWorkspaceContent({
               {decisionPolicy.constraints.map((constraint, index) => (
                 <div
                   key={`constraint-${index}`}
-                  className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_10rem_8rem_auto] sm:items-end"
+                  className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3 sm:grid-cols-[1fr_10rem_8rem_auto] sm:items-end"
                 >
                   <div className="grid gap-2">
                     <Label htmlFor={`eval-constraint-${index}-metric`}>
@@ -2034,7 +2034,7 @@ function EvalLabWorkspaceContent({
               <div
                 key={`${issue.code}-${issue.variantId ?? index}`}
                 data-testid="preflight-issue"
-                className="flex items-start gap-3 rounded-lg border p-3"
+                className="flex items-start gap-3 rounded-lg border border-transparent bg-muted/50 p-3"
               >
                 <Badge variant={issue.severity === "error" ? "destructive" : "secondary"}>
                   {issue.code}
@@ -2334,7 +2334,7 @@ function EvalLabWorkspaceContent({
                 </Alert>
               ) : null}
               {applicationDiff.length ? (
-                <div className="overflow-hidden rounded-lg border">
+                <div className="overflow-hidden rounded-lg border border-transparent bg-muted/50">
                   <Table className="text-sm">
                     <TableHeader>
                       <TableRow className="text-muted-foreground hover:bg-transparent">
@@ -2491,7 +2491,10 @@ function EvalLabWorkspaceContent({
               )
             })}
           </div>
-          <Surface layer="raised" className="mt-auto rounded-lg border p-3">
+          <Surface
+            layer="raised"
+            className="mt-auto rounded-lg border border-transparent bg-muted/50 p-3"
+          >
             <p className="text-xs font-medium">{t("lab.rail.evidence")}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {t("lab.rail.evidenceHint", { count: preflight.issues.length })}

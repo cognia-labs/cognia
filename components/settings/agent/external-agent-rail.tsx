@@ -433,7 +433,7 @@ export function ExternalAgentRail({
   return (
     <aside
       className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-lg border",
+        "flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50",
         // At the stacked tier the frame reserves a bar row above the detail
         // row; the list owns both while it is the one on screen.
         stacked && "row-span-2"

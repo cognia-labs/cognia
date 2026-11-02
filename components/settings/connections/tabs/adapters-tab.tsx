@@ -272,7 +272,7 @@ export function AdaptersTab() {
         <SettingsListDetail listWidth={300} data-testid="adapters-shell">
           {/* Sidebar, once the pane is wide enough to hold one */}
           <div
-            className="hidden min-h-0 overflow-hidden rounded-lg border @[560px]/settings-pane:flex @[560px]/settings-pane:flex-col"
+            className="hidden min-h-0 overflow-hidden rounded-lg border border-transparent bg-muted/50 @[560px]/settings-pane:flex @[560px]/settings-pane:flex-col"
             data-testid="adapters-sidebar"
           >
             {sidebar}
@@ -316,7 +316,7 @@ export function AdaptersTab() {
 
           {/* Detail */}
           <div
-            className="flex min-h-0 flex-col overflow-hidden rounded-lg border"
+            className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50"
             data-testid="adapters-detail"
           >
             {selectedAdapterId ? (

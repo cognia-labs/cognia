@@ -122,7 +122,7 @@ export function SettingsSidebar({ activeSection, onSelect, searchQuery, onSearch
 
   return (
     <Sidebar collapsible="icon" className="border-r h-full">
-      <SidebarHeader className="h-[var(--chrome-h-tall)] border-b border-sidebar-border/50 p-3 flex items-center group-data-[collapsible=icon]:h-[var(--chrome-h)] group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:border-none">
+      <SidebarHeader className="h-[var(--chrome-h-tall)] p-3 flex items-center group-data-[collapsible=icon]:h-[var(--chrome-h)] group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:border-none">
         {!isCollapsed && (
           <InputGroup className="h-9">
             <InputGroupAddon align="inline-start">

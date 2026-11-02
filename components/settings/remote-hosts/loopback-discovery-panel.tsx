@@ -106,7 +106,7 @@ export function LoopbackDiscoveryPanel({
             {t("found", { version: outcome.health.version, url: outcome.baseUrl })}
           </p>
           <p className="text-xs text-muted-foreground">{t("foundHint")}</p>
-          <div className="flex items-start gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+          <div className="flex items-start gap-2 rounded-md border border-transparent bg-muted/70 px-2 py-1.5">
             {/* Wraps rather than scrolls: a command cut mid-flag reads as
                 complete and does not parse (see `HeadlessInvitationHelp`). */}
             <code

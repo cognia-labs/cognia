@@ -34,7 +34,7 @@ export function RouterFusionProgressCard({ sessionId }: { sessionId: string | nu
       role="status"
       aria-live="polite"
       data-testid="router-fusion-progress"
-      className="mb-2 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs"
+      className="mb-2 flex items-center gap-2 rounded-md border border-transparent bg-muted/70 px-3 py-1.5 text-xs"
     >
       <Spinner className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">

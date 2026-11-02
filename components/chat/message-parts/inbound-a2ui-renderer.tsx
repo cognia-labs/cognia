@@ -116,7 +116,7 @@ function InboundA2UIBlockView({ block, className }: InboundA2UIRendererProps) {
       data-testid="inbound-a2ui"
       data-source={block.source}
       className={cn(
-        "min-w-0 max-w-full rounded-md border bg-muted/20 px-3 py-2 text-sm space-y-2 [overflow-wrap:anywhere]",
+        "min-w-0 max-w-full rounded-md border border-transparent bg-muted/50 px-3 py-2 text-sm space-y-2 [overflow-wrap:anywhere]",
         className
       )}
     >

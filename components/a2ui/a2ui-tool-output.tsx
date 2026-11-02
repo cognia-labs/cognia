@@ -59,7 +59,7 @@ export function A2UIToolOutput({
       </div>
       <A2UISurface
         surfaceId={surfaceId}
-        className="rounded-lg border bg-card"
+        className="rounded-lg border border-transparent bg-card shadow-(--card-shadow)"
         onAction={onAction}
         onDataChange={onDataChange}
       />

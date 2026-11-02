@@ -141,7 +141,7 @@ export function LogsLevelsPanel({ draft }: LogsLevelsPanelProps) {
         {overrides.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t("settings.moduleLevels.empty")}</p>
         ) : (
-          <ul className="divide-y divide-border/60 rounded-lg border">
+          <ul className="divide-y divide-border/60 rounded-lg border border-transparent bg-muted/50">
             {overrides.map(([prefix, level]) => (
               <li key={prefix} className="flex items-center gap-2 px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-xs">{prefix}</span>

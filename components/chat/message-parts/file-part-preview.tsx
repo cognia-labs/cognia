@@ -191,7 +191,7 @@ function DownloadLink({ url, displayName }: { url: string; displayName: string }
     <a
       href={url}
       download={displayName}
-      className="my-1 block w-full max-w-md rounded-xl border bg-card shadow-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="my-1 block w-full max-w-md rounded-xl border border-transparent bg-card shadow-(--card-shadow) shadow-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       target="_blank"
       rel="noopener noreferrer"
       data-testid="file-download-link"
@@ -435,7 +435,7 @@ export const FilePartCard = memo(function FilePartCard({
   return (
     <div
       className={cn(
-        "my-1 w-full overflow-hidden rounded-xl border bg-card shadow-xs",
+        "my-1 w-full overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow) shadow-xs",
         // A closed card is as wide as every other file card; an open preview
         // gets room for a page or a code listing.
         open ? "max-w-2xl" : "max-w-md"

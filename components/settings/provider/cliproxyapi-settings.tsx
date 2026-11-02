@@ -377,7 +377,7 @@ export function CLIProxyAPISettings({ className }: CLIProxyAPISettingsProps) {
                   {availableModels.map((model) => (
                     <div
                       key={model.id}
-                      className="flex items-center justify-between p-2 rounded-lg border bg-muted/30 text-sm"
+                      className="flex items-center justify-between p-2 rounded-lg border border-transparent bg-muted/60 text-sm"
                     >
                       <div className="flex items-center gap-2">
                         <Zap className="h-3 w-3 text-muted-foreground" />
@@ -430,7 +430,9 @@ export function CLIProxyAPISettings({ className }: CLIProxyAPISettingsProps) {
                   </Label>
                   <Input
                     id="cliproxy-host"
-                    placeholder="localhost"
+                    placeholder={
+                      /* i18n-exempt: the loopback hostname, identical in every language */ "localhost"
+                    }
                     value={cliProxyAPISettings.host || ""}
                     onChange={(e) =>
                       updateCLIProxyAPISettings({ host: e.target.value || "localhost" })

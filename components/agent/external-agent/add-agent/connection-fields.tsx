@@ -150,7 +150,7 @@ export function ConnectionFields({ form, planeWarning }: ConnectionFieldsProps) 
 
       {isOpenCode ? (
         <>
-          <div className="rounded-md border bg-muted/20 p-3">
+          <div className="rounded-md border border-transparent bg-muted/50 p-3">
             <ToggleRow
               id="auto-spawn"
               label={tManager("autoSpawnServer")}
@@ -337,7 +337,7 @@ export function ConnectionFields({ form, planeWarning }: ConnectionFieldsProps) 
               />
             </>
           ) : (
-            <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+            <div className="space-y-3 rounded-md border border-transparent bg-muted/50 p-3">
               <ToggleRow
                 id="bare-flag"
                 label={tSettings("passBareFlag")}

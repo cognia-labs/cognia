@@ -553,7 +553,7 @@ export function PairOnboardingClient() {
   const recoveryNotice =
     pairParams.mode === "recover" ? (
       <div
-        className="rounded-lg border bg-muted/60 p-3 text-sm"
+        className="rounded-lg border border-transparent bg-muted/80 p-3 text-sm"
         data-testid="pair-recovery-context"
       >
         <p className="font-medium">{t(`recovery.${pairParams.state ?? "offline"}.title`)}</p>

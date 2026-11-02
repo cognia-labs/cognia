@@ -226,7 +226,7 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
           showToggle={false}
         />
 
-        <div className="space-y-4 rounded-lg border p-4">
+        <div className="space-y-4 rounded-lg border border-transparent bg-muted/50 p-4">
           <div className="space-y-2">
             <Label className="flex items-center gap-1.5 text-sm font-medium">
               <Key className="h-3.5 w-3.5" />

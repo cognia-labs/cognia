@@ -74,7 +74,7 @@ export function ImportPreview({ pkg }: { pkg: BackupPackageV3 }) {
   const t = useTranslations("settings.data")
   const integrityShort = pkg.manifest.integrity.checksum.slice(0, 12)
   return (
-    <div className="rounded-md border bg-muted/30 p-3 text-xs [overflow-wrap:anywhere]">
+    <div className="rounded-md border border-transparent bg-muted/60 p-3 text-xs [overflow-wrap:anywhere]">
       <p className="mb-2 font-medium">{t("preview")}</p>
       <p className="text-[11px] text-muted-foreground">
         {t("backup.previewBackend", {

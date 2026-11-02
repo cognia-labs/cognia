@@ -90,6 +90,14 @@ describe("StatStrip", () => {
     expect(strip.children).toHaveLength(2)
   })
 
+  it("separates tonal cells by space rather than a hairline ground", () => {
+    render(<StatStrip stats={[stat("a"), stat("b")]} />)
+    const strip = screen.getByTestId("stat-strip")
+    expect(strip).toHaveClass("gap-0.5", "bg-background")
+    expect(strip.className).not.toContain("bg-border")
+    expect(screen.getByTestId("stat-a")).toHaveClass("bg-muted/50")
+  })
+
   it("renders nothing when there is nothing to report", () => {
     const { container } = render(<StatStrip stats={[]} />)
     expect(container).toBeEmptyDOMElement()

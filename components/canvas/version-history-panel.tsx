@@ -413,7 +413,7 @@ function VersionItem({
     <div
       data-testid={`canvas-version-item-${version.id}`}
       className={cn(
-        "rounded-lg border p-3 transition-colors",
+        "rounded-lg border border-transparent bg-muted/50 p-3 transition-colors",
         isCurrent && "border-primary bg-primary/5",
         compareMode && "cursor-pointer",
         compareMode && !isSelected && "hover:bg-muted/50",

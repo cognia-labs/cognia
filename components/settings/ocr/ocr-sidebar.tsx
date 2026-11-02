@@ -85,7 +85,7 @@ export function OcrSidebar({
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
       {/* 1. Search */}
-      <div className="flex min-w-0 gap-2 border-b p-3">
+      <div className="flex min-w-0 gap-2 p-3 pb-1.5">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -173,7 +173,7 @@ export function OcrSidebar({
       </div>
 
       {/* 6. Stats row */}
-      <div className="min-w-0 border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="min-w-0 px-3 py-2 text-xs tabular-nums text-muted-foreground">
         {t("ocr.sidebar.stats", stats)}
       </div>
     </div>
@@ -208,9 +208,7 @@ function PinnedRow({ isSelected, onClick, icon, label, subtitle, badge, testId }
       data-testid={testId}
       className={cn(
         "h-auto w-full justify-start gap-3 whitespace-normal rounded-lg px-3 py-2.5 text-left font-normal transition-all duration-200",
-        isSelected
-          ? "border-l-2 border-l-primary bg-primary text-primary-foreground"
-          : "hover:bg-muted/50"
+        isSelected ? "bg-primary text-primary-foreground" : "hover:bg-muted/50"
       )}
     >
       <div

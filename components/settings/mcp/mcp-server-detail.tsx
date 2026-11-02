@@ -148,7 +148,7 @@ export function McpServerDetail({
     <div className="flex h-full min-h-0 flex-col" data-testid="mcp-server-detail">
       <div className="flex shrink-0 flex-wrap items-start gap-2 border-b px-4 py-3">
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
-          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/50">
+          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg border border-transparent bg-muted/70">
             <ServerIcon className="size-4 text-muted-foreground" aria-hidden />
           </span>
           <div className="min-w-0 space-y-1">

@@ -160,7 +160,7 @@ export function McpToolSelector({ value, onChange, recommendationContext }: McpT
           {selectedCount} {t("selected")}
         </Badge>
       </div>
-      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-2">
+      <div className="rounded-md border border-transparent bg-muted/60 p-3 text-xs text-muted-foreground space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="font-medium text-foreground">{t("mcpBudgetTitle")}</p>

@@ -259,7 +259,7 @@ function KeyRotationSection({
         {apiKeys.map((key, index) => (
           <div
             key={index}
-            className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-xs"
+            className="flex items-center gap-2 rounded-md border border-transparent bg-muted/60 px-2 py-1.5 text-xs"
           >
             <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="flex-1 truncate font-mono">

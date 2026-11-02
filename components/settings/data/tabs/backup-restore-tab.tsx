@@ -356,7 +356,7 @@ function CronScheduleBlock() {
       <p className="text-xs text-muted-foreground">{t("schedule.desc")}</p>
 
       {backupTasks.length > 0 && (
-        <div className="space-y-1.5 rounded-md border bg-muted/30 p-2 text-xs">
+        <div className="space-y-1.5 rounded-md border border-transparent bg-muted/60 p-2 text-xs">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             {t("schedule.currentCount", { count: backupTasks.length })}
           </p>

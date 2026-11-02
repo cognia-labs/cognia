@@ -72,7 +72,7 @@ export function ShellJobCard({ run }: { run: ShellJobRun }) {
     <div
       data-testid="shell-job-card"
       data-phase={phase}
-      className="my-1 space-y-2 rounded-md border bg-muted/20 p-3 text-xs"
+      className="my-1 space-y-2 rounded-md border border-transparent bg-muted/50 p-3 text-xs"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 font-mono font-medium">

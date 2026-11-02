@@ -122,7 +122,7 @@ export function FilesRow({ entry, actions, previewed, selected, onSelect, now }:
         </TableCell>
         <TableCell className="min-w-0">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+            <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-transparent bg-muted/70">
               {isThumbnailEntry(entry) ? (
                 <FilesImageThumb
                   hash={thumbnailHash(entry)}

@@ -322,7 +322,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                   {availableModels.slice(0, 50).map((model) => (
                     <div
                       key={model.id}
-                      className="flex items-center justify-between rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm"
+                      className="flex items-center justify-between rounded-md border border-transparent bg-muted/60 px-2.5 py-1.5 text-sm"
                     >
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <Zap className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -332,7 +332,9 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                           </span>
                           {model.contextLength && (
                             <span className="text-[10px] text-muted-foreground">
-                              {Math.round(model.contextLength / 1000)}K context
+                              {t("openrouterSettings.contextLength", {
+                                count: Math.round(model.contextLength / 1000),
+                              })}
                             </span>
                           )}
                         </div>
@@ -346,7 +348,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                   ))}
                   {availableModels.length > 50 && (
                     <p className="text-xs text-muted-foreground text-center py-2">
-                      +{availableModels.length - 50} more models
+                      {t("openrouterSettings.moreModels", { count: availableModels.length - 50 })}
                     </p>
                   )}
                 </div>
@@ -395,7 +397,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                   return (
                     <div
                       key={key.id}
-                      className="flex items-center gap-2.5 rounded-md border bg-muted/30 px-2.5 py-2"
+                      className="flex items-center gap-2.5 rounded-md border border-transparent bg-muted/60 px-2.5 py-2"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -457,7 +459,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                     onValueChange={(value) => setNewByokProvider(value as BYOKProvider)}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select provider" />
+                      <SelectValue placeholder={t("openrouterSettings.selectProvider")} />
                     </SelectTrigger>
                     <SelectContent>
                       {BYOK_PROVIDERS.map((provider) => (
@@ -476,7 +478,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                   {newByokProvider && (
                     <>
                       <Input
-                        placeholder="Key name (optional)"
+                        placeholder={t("openrouterSettings.keyName")}
                         value={newByokName}
                         onChange={(e) => setNewByokName(e.target.value)}
                       />
@@ -484,7 +486,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                       {selectedProviderConfig?.configType === "simple" ? (
                         <Input
                           type="password"
-                          placeholder="API Key"
+                          placeholder={t("apiKey")}
                           value={newByokConfig}
                           onChange={(e) => setNewByokConfig(e.target.value)}
                           autoComplete="new-password"
@@ -609,7 +611,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
                     <div className="space-y-2">
                       <Label className="text-sm">{t("openrouterSettings.providerOrder")}</Label>
                       <Textarea
-                        placeholder="e.g., Amazon Bedrock, Google Vertex AI, Anthropic"
+                        placeholder={t("openrouterSettings.providerOrderPlaceholder")}
                         value={openRouterSettings.providerOrdering?.order?.join(", ") || ""}
                         onChange={(e) => {
                           const order = e.target.value
@@ -667,7 +669,7 @@ export function OpenRouterSettings({ className }: OpenRouterSettingsProps) {
               </Label>
               <Input
                 id="site-name"
-                placeholder="Your App Name"
+                placeholder={t("openrouterSettings.siteNamePlaceholder")}
                 value={openRouterSettings.siteName || ""}
                 onChange={(e) => updateOpenRouterSettings({ siteName: e.target.value })}
               />

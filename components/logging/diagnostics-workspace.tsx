@@ -574,7 +574,7 @@ export function DiagnosticsWorkspace() {
         overflowActions={overflowActions}
       />
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {activeView === "logs" ? (
           <LogPanel
             key={logPanelKey}

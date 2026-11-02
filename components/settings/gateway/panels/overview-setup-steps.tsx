@@ -146,7 +146,7 @@ export function GatewaySetupSteps({
       description={t("description")}
       badge={t("progress", { done: doneCount, total: STEP_ORDER.length })}
       badgeVariant="outline"
-      className="rounded-lg border bg-muted/30 p-3 @lg/gateway-pane:p-4"
+      className="rounded-lg border border-transparent bg-muted/60 p-3 @lg/gateway-pane:p-4"
     >
       <ol className="flex flex-col gap-2" data-testid="gateway-setup-steps">
         {STEP_ORDER.map((id, index) => {

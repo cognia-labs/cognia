@@ -176,7 +176,10 @@ export function LiveVoiceCard() {
               const deployment = deploymentFor(provider)
               const descriptor = LIVE_VOICE_PROVIDER_DESCRIPTORS[provider]
               return (
-                <div className="space-y-3 rounded-lg border p-3" key={provider}>
+                <div
+                  className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+                  key={provider}
+                >
                   <div className="flex items-center justify-between gap-4">
                     <Label htmlFor={`live-voice-${provider}`}>{t(`providers.${provider}`)}</Label>
                     <Switch

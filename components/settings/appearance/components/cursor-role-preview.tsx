@@ -70,7 +70,7 @@ export function CursorRolePreview({ pack, palette, sizePx, className }: CursorRo
       <div className="flex flex-wrap gap-3" data-testid="cursor-role-preview">
         {painted.map((role) => (
           <div key={role} className="flex w-16 flex-col items-center gap-1">
-            <span className="flex h-10 items-center justify-center rounded-md border bg-card px-2">
+            <span className="flex h-10 items-center justify-center rounded-md border border-transparent bg-card shadow-(--card-shadow) px-2">
               {/* eslint-disable-next-line @next/next/no-img-element -- generated SVG data: URL, nothing for next/image to optimize */}
               <img
                 src={svgToDataUrl(buildCursorSvg({ role, shape, palette, sizePx }))}

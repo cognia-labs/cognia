@@ -413,7 +413,10 @@ function ImportPreview({ body }: ImportPreviewProps) {
   return (
     <div className="max-h-[40vh] space-y-3 overflow-y-auto" data-testid="import-preview">
       {rows.map((row) => (
-        <div key={row.provider} className="space-y-1.5 rounded-md border bg-muted/30 p-3">
+        <div
+          key={row.provider}
+          className="space-y-1.5 rounded-md border border-transparent bg-muted/60 p-3"
+        >
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">{safeProviderName(row.provider)}</span>
             {row.hasPreset && (

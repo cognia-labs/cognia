@@ -216,7 +216,7 @@ export function DeviceListPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="device-list-pane">
-      <div className="flex shrink-0 flex-col gap-2 border-b p-2.5">
+      <div className="flex shrink-0 flex-col gap-2 p-2.5 pb-1.5">
         <Input
           type="search"
           value={search}

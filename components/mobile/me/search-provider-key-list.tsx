@@ -66,7 +66,7 @@ export function SearchProviderKeyList() {
             return (
               <li
                 key={id}
-                className="flex flex-col gap-2 rounded-xl border bg-muted/30 p-3 text-muted-foreground"
+                className="flex flex-col gap-2 rounded-xl border border-transparent bg-muted/60 p-3 text-muted-foreground"
                 data-testid={`search-key-row-${id}`}
               >
                 <span className="text-sm font-medium">{config.name}</span>
@@ -88,7 +88,7 @@ export function SearchProviderKeyList() {
           return (
             <li
               key={id}
-              className="flex flex-col gap-2 rounded-xl border bg-card p-3"
+              className="flex flex-col gap-2 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-3"
               data-testid={`search-key-row-${id}`}
             >
               <div className="flex items-center justify-between gap-2">

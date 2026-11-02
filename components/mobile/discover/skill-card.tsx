@@ -44,7 +44,7 @@ export function SkillCard({ skill, onToggle, className }: SkillCardProps) {
         onClick={() => setOpen(true)}
         aria-label={tSkills("openSheet", { name: skill.name })}
         className={cn(
-          "h-auto w-full items-start justify-start gap-3 rounded-md border border-border bg-card p-3 text-left font-normal",
+          "h-auto w-full items-start justify-start gap-3 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3 text-left font-normal",
           "active:bg-muted/50 transition-colors",
           className
         )}

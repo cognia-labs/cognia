@@ -231,7 +231,7 @@ export function SessionReportView({
           <TestResultsContent>
             {report.testSnapshots.map((snapshot) => (
               <div
-                className="flex items-center gap-3 rounded-lg border px-4 py-3"
+                className="flex items-center gap-3 rounded-lg border border-transparent bg-muted/50 px-4 py-3"
                 data-testid={`session-test-snapshot-${snapshot.messageIndex}`}
                 key={snapshot.messageIndex}
               >

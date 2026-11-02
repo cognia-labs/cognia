@@ -171,7 +171,7 @@ export function RunStepDetail({
         </div>
 
         {summary ? (
-          <div className="grid grid-cols-1 gap-2 rounded-md border bg-muted/30 p-3 text-xs @xs/run-step:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 rounded-md border border-transparent bg-muted/60 p-3 text-xs @xs/run-step:grid-cols-2">
             <Stat label={t("duration")} value={formatDurationMs(summary.durationMs)} />
             <Stat label={t("statusLabel")} value={summary.terminalType.replace("step_", "")} />
             {startedEv ? (
@@ -223,7 +223,7 @@ export function RunStepDetail({
         {retryEvents.length > 0 ? (
           <Section title={t("attempts")}>
             <div
-              className="space-y-1.5 rounded-md border bg-muted/30 p-2"
+              className="space-y-1.5 rounded-md border border-transparent bg-muted/60 p-2"
               data-testid="step-attempts"
             >
               {retryEvents.map((e) => {
@@ -264,7 +264,7 @@ export function RunStepDetail({
                   {stackOpen ? tLogs("stackToggleHide") : tLogs("stackToggleShow")}
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <pre className="mt-1 whitespace-pre overflow-x-auto rounded-md border bg-muted/30 p-2 text-[11px] font-mono leading-relaxed">
+                  <pre className="mt-1 whitespace-pre overflow-x-auto rounded-md border border-transparent bg-muted/60 p-2 text-[11px] font-mono leading-relaxed">
                     {failedError.stack}
                   </pre>
                 </CollapsibleContent>
@@ -328,7 +328,7 @@ export function RunStepDetail({
                 {tLogs("noResults")}
               </p>
             ) : (
-              <div className="space-y-1.5 rounded-md border bg-muted/30 p-2">
+              <div className="space-y-1.5 rounded-md border border-transparent bg-muted/60 p-2">
                 {filteredLogs.map((e) => {
                   const payload = e.payload as { message?: string; data?: unknown } | undefined
                   return (
@@ -391,7 +391,7 @@ function JsonView({ value, emptyText }: { value: unknown; emptyText: string }) {
     return <p className="text-xs text-muted-foreground italic">{emptyText}</p>
   }
   return (
-    <pre className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs font-mono leading-relaxed">
+    <pre className="whitespace-pre-wrap rounded-md border border-transparent bg-muted/60 p-3 text-xs font-mono leading-relaxed">
       {safeStringify(value)}
     </pre>
   )

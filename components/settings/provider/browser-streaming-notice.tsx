@@ -50,8 +50,8 @@ export function BrowserStreamingNotice({ providerId, baseURL }: BrowserStreaming
       data-tone={tone}
       className={
         tone === "info"
-          ? "flex items-start gap-3 rounded-md border border-border bg-muted/40 px-3 py-2.5"
-          : "flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-900 dark:bg-amber-950/30"
+          ? "flex items-start gap-3 rounded-md border border-transparent bg-muted/70 px-3 py-2.5"
+          : "flex items-start gap-3 rounded-md border border-transparent bg-amber-500/10 px-3 py-2.5"
       }
     >
       {tone === "info" ? (

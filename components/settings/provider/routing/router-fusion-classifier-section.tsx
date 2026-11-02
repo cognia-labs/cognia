@@ -108,7 +108,7 @@ export function RouterFusionClassifierSection({
 
   return (
     <section
-      className="space-y-3 rounded-lg border px-3 py-3"
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 px-3 py-3"
       aria-labelledby="router-fusion-classifier-title"
       data-testid="router-fusion-classifier"
     >

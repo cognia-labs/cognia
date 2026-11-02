@@ -330,7 +330,10 @@ function AccountQuickUnlockSettings({
           })}
         </div>
       ) : (
-        <div className="space-y-3 rounded-lg border p-3" data-testid="quick-unlock-draft">
+        <div
+          className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+          data-testid="quick-unlock-draft"
+        >
           <p className="text-xs text-muted-foreground" data-testid="quick-unlock-draft-step">
             {draft.kind === "pin"
               ? t(draft.first === null ? "pinEnter" : "pinConfirm")

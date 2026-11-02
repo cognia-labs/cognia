@@ -92,7 +92,7 @@ export function SkillListPane({
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
-      <div className="shrink-0 border-b p-3">
+      <div className="shrink-0 px-3 pt-3 pb-1.5">
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -105,7 +105,7 @@ export function SkillListPane({
         </div>
       </div>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-b px-3 py-2">
+      <div className="grid shrink-0 grid-cols-2 gap-2 px-3 py-1.5">
         <Select
           value={filters.source}
           onValueChange={(v) => setFilters({ source: v as SkillSource | "all", category: "all" })}
@@ -157,7 +157,7 @@ export function SkillListPane({
       </div>
 
       {/* Sort + view-mode controls */}
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 px-3 pt-1.5 pb-2">
         <Select
           value={filters.sort}
           onValueChange={(v) => setFilters({ sort: v as SkillSortMode })}
@@ -209,7 +209,7 @@ export function SkillListPane({
 
       {overBudget && (
         <div
-          className="flex shrink-0 items-center gap-2 border-b bg-muted px-3 py-1.5 text-[11px] text-muted-foreground"
+          className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-md bg-muted px-3 py-1.5 text-[11px] text-muted-foreground"
           role="status"
           data-testid="skill-budget-warning"
         >
@@ -227,8 +227,8 @@ export function SkillListPane({
         className={cn(
           "flex-1 overflow-y-auto",
           prefs.viewMode === "grid"
-            ? "grid auto-rows-max grid-cols-1 border-l sm:grid-cols-2"
-            : "divide-y"
+            ? "grid auto-rows-max grid-cols-1 gap-1.5 px-2 pb-2 sm:grid-cols-2"
+            : "flex flex-col gap-px pe-1.5 pb-1.5"
         )}
         aria-label={t("panel.listAriaLabel")}
         data-testid="skill-list"
@@ -268,7 +268,7 @@ export function SkillListPane({
         )}
       </div>
 
-      <div className="shrink-0 border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="shrink-0 px-3.5 py-2 text-xs tabular-nums text-muted-foreground">
         {t("panel.statsBar", { enabled: enabledCount, total })}
       </div>
     </div>

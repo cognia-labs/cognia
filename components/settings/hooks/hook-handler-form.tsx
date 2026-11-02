@@ -77,7 +77,7 @@ export function HookHandlerForm({
 
   return (
     <div
-      className="space-y-2 rounded-md border bg-muted/30 p-3"
+      className="space-y-2 rounded-md border border-transparent bg-muted/60 p-3"
       data-testid="hook-handler-form"
       data-handler-type={value.type}
     >
@@ -132,7 +132,7 @@ export function HookHandlerForm({
               inline field. Gutter/search/diagnostics are off to keep it minimal. */}
           <div
             className={cn(
-              "max-h-40 min-h-[3.5rem] overflow-hidden rounded-md border bg-muted/30",
+              "max-h-40 min-h-[3.5rem] overflow-hidden rounded-md border border-transparent bg-muted/60",
               error === "commandRequired" && "border-destructive"
             )}
           >

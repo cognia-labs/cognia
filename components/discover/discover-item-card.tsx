@@ -371,7 +371,7 @@ export function DiscoverItemCard({
         data-testid={`discover-item-${item.kind}-${item.id}`}
         aria-pressed={selected}
         className={cn(
-          "h-auto w-full rounded-md border border-border bg-card text-left font-normal",
+          "h-auto w-full rounded-md border border-transparent bg-card shadow-(--card-shadow) text-left font-normal",
           "transition-colors hover:bg-muted/50 active:bg-muted/60",
           selected && "border-primary ring-1 ring-primary/40 hover:bg-muted/30",
           onToggleFavorite && !isGrid && "pr-9",

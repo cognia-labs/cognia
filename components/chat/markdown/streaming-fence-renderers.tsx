@@ -59,7 +59,7 @@ function PendingA2UI() {
       aria-busy
       aria-label={t("generating")}
       data-fence-pending
-      className="my-2 space-y-2 rounded-lg border bg-card p-3"
+      className="my-2 space-y-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3"
     >
       <span className="text-muted-foreground text-xs">{t("generating")}</span>
       <Skeleton className="h-16 w-full" />

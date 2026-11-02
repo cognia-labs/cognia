@@ -130,7 +130,7 @@ export function IssueFilterBar({
 
   return (
     <div
-      className="flex shrink-0 flex-col gap-2 border-b bg-background/60 px-3 py-2"
+      className="flex shrink-0 flex-col gap-2 bg-muted/30 px-3 py-2"
       data-testid="issue-filter-bar"
     >
       <div className="flex min-w-0 items-center gap-2">

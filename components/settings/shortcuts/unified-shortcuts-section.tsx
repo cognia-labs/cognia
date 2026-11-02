@@ -93,7 +93,7 @@ export function UnifiedShortcutsSection() {
               <h4 className="text-xs font-medium text-muted-foreground">
                 {t(`categories.${group.category.replace(/^app\./, "")}`)}
               </h4>
-              <ul className="divide-y rounded-md border bg-card">
+              <ul className="divide-y rounded-md border border-transparent bg-card shadow-(--card-shadow)">
                 {group.rows.map((row) => (
                   <AppShortcutRecorderRow
                     key={row.descriptor.id}

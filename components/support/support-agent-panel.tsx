@@ -53,7 +53,7 @@ export function SupportAgentPanel({ sessionId }: { sessionId: string | null }) {
 
   return (
     <div
-      className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-1.5 text-xs"
+      className="flex items-center gap-2 rounded-lg border border-transparent bg-muted/60 px-2.5 py-1.5 text-xs"
       data-testid="support-agent-panel"
     >
       <LifeBuoyIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

@@ -57,7 +57,7 @@ export function AdapterSidebar({
   return (
     <div className="flex h-full w-full min-w-0 flex-col" data-testid="adapter-sidebar">
       {/* Search + add */}
-      <div className="flex min-w-0 gap-2 border-b p-3">
+      <div className="flex min-w-0 gap-2 p-3 pb-1.5">
         <div className="relative flex-1">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -106,7 +106,7 @@ export function AdapterSidebar({
       </ul>
 
       {/* Stats */}
-      <div className="min-w-0 border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="min-w-0 px-3 py-2 text-xs tabular-nums text-muted-foreground">
         {t("sidebar.stats", { total, enabled })}
       </div>
     </div>

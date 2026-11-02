@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
  * that whole population participate in wallpaper translucency without touching
  * a single caller (ADR-0148).
  *
- * The look is unchanged: `raised` resolves `--surface-bg` to `var(--card)`, and
+ * `raised` resolves `--surface-bg` to `var(--card)`, and
  * `rounded-stage` compiles to the same `calc(var(--radius) + 4px)` that
  * `rounded-xl` did. The settings-panel fork now clears the tier by setting the
  * variable rather than by painting `bg-transparent` over it — a variable never
@@ -28,7 +28,12 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
       radius="stage"
       data-slot="card"
       className={cn(
-        "flex flex-col gap-6 border py-6 text-card-foreground shadow-sm",
+        // No drawn edge: the raised fill (`--card`, one step off the page) and
+        // a soft `--card-shadow` (none in dark mode, where the tonal step reads
+        // on its own) carry the card. The transparent border keeps the box and
+        // lets a caller's border colour draw; a dashed placeholder keeps its
+        // dashes.
+        "flex flex-col gap-6 border border-transparent py-6 text-card-foreground shadow-(--card-shadow) [&.border-dashed]:border-border",
         "[[data-settings-panel]_&]:min-w-0 [[data-settings-panel]_&]:gap-4",
         "[[data-settings-panel]_&]:rounded-none [[data-settings-panel]_&]:border-x-0 [[data-settings-panel]_&]:border-t-0",
         "[[data-settings-panel]_&]:border-b [[data-settings-panel]_&]:border-border/60 [[data-settings-panel]_&]:[--surface-bg:transparent]",

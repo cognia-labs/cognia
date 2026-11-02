@@ -424,7 +424,7 @@ export function GatewayKeysCard({
           <form
             id="gw-key-create"
             aria-labelledby="gw-key-create-title"
-            className="flex flex-col gap-3 rounded-lg border p-3 @lg/gateway-pane:p-4"
+            className="flex flex-col gap-3 rounded-lg border border-transparent bg-muted/50 p-3 @lg/gateway-pane:p-4"
             data-testid="gateway-key-create-form"
             noValidate
             onSubmit={(e) => {

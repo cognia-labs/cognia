@@ -71,7 +71,7 @@ export function ProviderConstraintsEditor() {
           {constraints.map((c, i) => (
             <div
               key={`${c.providerId}-${i}`}
-              className="flex flex-wrap items-end gap-2 rounded-lg border px-3 py-2.5"
+              className="flex flex-wrap items-end gap-2 rounded-lg border border-transparent bg-muted/50 px-3 py-2.5"
               data-testid={`constraint-row-${i}`}
             >
               <div className="min-w-32 space-y-1">

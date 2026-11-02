@@ -59,6 +59,65 @@
    * user's Typography picks reach chat body text and code. */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* Spring easings for CSS-only motion, sampled from the same springs as
+   * `SPRING_POP` / `SPRING_DRAG` (`packages/plugin-ui/src/motion-tokens.ts`)
+   * so a checkbox or switch moves with the personality a motion component
+   * would. `ease-spring-pop` (380/18, ~0.46 damping) overshoots once and
+   * settles: pair it with `duration-(--duration-spring-pop)`, for confirmations.
+   * `ease-spring-drag` (1200/80, over-damped) lands without rebound: pair it
+   * with `duration-(--duration-spring-drag)`, for things held or placed. */
+  --ease-spring-pop: linear(
+    0,
+    0.0668,
+    0.231,
+    0.4426,
+    0.6604,
+    0.8552,
+    1.0093,
+    1.1157,
+    1.1753,
+    1.1948,
+    1.1839,
+    1.1531,
+    1.1123,
+    1.0697,
+    1.0312,
+    1.0004,
+    0.9788,
+    0.9665,
+    0.9621,
+    0.9638,
+    0.9696,
+    0.9774,
+    0.9857,
+    0.9933,
+    0.9995,
+    1.0038,
+    1.0064,
+    1.0074,
+    1.0071,
+    1.006,
+    1
+  );
+  --ease-spring-drag: linear(
+    0,
+    0.1451,
+    0.3714,
+    0.5619,
+    0.7013,
+    0.7982,
+    0.8643,
+    0.9089,
+    0.9389,
+    0.959,
+    0.9725,
+    0.9816,
+    0.9877,
+    0.9917,
+    0.9945,
+    1
+  );
+  --ease-ink: cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
 @theme inline {
@@ -239,7 +298,7 @@
   --wf-status-failed: var(--destructive);
   --wf-status-skipped: oklch(0.6 0.02 270);
   --wf-status-waiting: var(--wf-action);
-  --border: oklch(0.93 0.004 106.5);
+  --border: oklch(0.952 0.003 106.5);
   --input: oklch(0.93 0.004 106.5);
   --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.646 0.222 41.116);
@@ -253,7 +312,7 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.951 0.004 106.5);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.93 0.004 106.5);
+  --sidebar-border: oklch(0.952 0.003 106.5);
   --sidebar-ring: oklch(0.708 0 0);
 
   /* Ultracode accent — the ONE chromatic token in an otherwise achromatic
@@ -334,7 +393,7 @@
   --wf-status-failed: var(--destructive);
   --wf-status-skipped: oklch(0.55 0.02 270);
   --wf-status-waiting: var(--wf-action);
-  --border: oklch(1 0 0 / 8%);
+  --border: oklch(1 0 0 / 6%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
@@ -348,7 +407,7 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.243 0.0037 106.7);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-border: oklch(1 0 0 / 6%);
   --sidebar-ring: oklch(0.556 0 0);
 
   /* Lifted well above the light-mode value: the same violet at L=0.53 sits too
@@ -675,6 +734,19 @@ html[data-pro-ide-active] [data-slot="resizable-handle"] {
   }
   .dark :where(b, strong) {
     font-weight: 660;
+  }
+
+  /* Body copy never strands a single word on its last line; headings balance.
+     Tables and keyboard hints lock to tabular figures so a changing count
+     never shifts its column. */
+  :where(p, li, dd, figcaption, blockquote) {
+    text-wrap: pretty;
+  }
+  :where(h1, h2, h3, h4) {
+    text-wrap: balance;
+  }
+  :where(table, [data-slot="table"], [data-slot="badge"], [data-slot="kbd"], time) {
+    font-variant-numeric: tabular-nums;
   }
 
   /* No global scrollbar inside the desktop shell. DesktopAppShell sets
@@ -1437,6 +1509,17 @@ html[data-bg-preview="all"] [data-bg-target] {
    other Tailwind default behaves. The scope retune further down still works:
    it sets `--surface-bg-*`, a different property, on an ancestor. */
 @layer base {
+  /* A raised surface separates by its fill (`--card`) and the soft
+     `--card-shadow`, never a hairline: a plain `border` on one keeps its box
+     but loses the default colour. In the base layer on purpose, so a caller's
+     explicit border colour (a status tint, a selection) still wins, and a
+     dashed placeholder keeps its dashes. */
+  [data-surface-layer="raised"]:where(.border, [class*="border-"]):not(.border-dashed) {
+    border-color: transparent;
+  }
+  [data-surface-layer="raised"]:where(.border) {
+    box-shadow: var(--card-shadow);
+  }
   [data-surface-layer="base"] {
     --surface-bg: var(--surface-bg-base);
   }
@@ -2483,6 +2566,39 @@ body[data-bg-enabled="true"] [data-tonality="frosted"] {
   --elevation-2: 0 4px 12px -2px oklch(0 0 0 / 0.12), 0 2px 4px -2px oklch(0 0 0 / 0.08);
   --elevation-3: 0 12px 32px -4px oklch(0 0 0 / 0.18), 0 4px 12px -4px oklch(0 0 0 / 0.1);
 }
+/* Controls without borders. Buttons (`outline`), toggles, inputs, selects and
+   outline badges fill with a few percent of the foreground instead of drawing
+   a 1px edge, so they sit one tonal step off whatever surface they are on —
+   page, card or muted panel alike — the way the composer does. Focus deepens
+   into a double ring: the transparent border takes `--control-edge-focus` and a
+   4px `--control-halo` ring grows around it. Dark mode carries a slightly
+   larger step, since equal alpha reads flatter on a dark ground. Inside a
+   wallpaper scope `--control-bg` (translucent background) still wins, so
+   controls stay legible over an image. */
+:root {
+  /* Durations the spring easings were sampled over (`--ease-spring-*`). */
+  --duration-spring-pop: calc(600ms * var(--motion-duration-scale, 1));
+  --duration-spring-drag: calc(300ms * var(--motion-duration-scale, 1));
+  --control-fill: color-mix(in oklab, var(--foreground) 4.5%, transparent);
+  --control-fill-hover: color-mix(in oklab, var(--foreground) 7.5%, transparent);
+  --control-edge-focus: color-mix(in oklab, var(--foreground) 24%, transparent);
+  --control-halo: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --overlay-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent),
+    0 12px 32px -6px oklch(0 0 0 / 0.14), 0 4px 10px -4px oklch(0 0 0 / 0.08);
+  --card-shadow: 0 1px 2px 0 oklch(0 0 0 / 0.04), 0 2px 8px -2px oklch(0 0 0 / 0.04);
+}
+.dark {
+  --control-fill: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --control-fill-hover: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --control-edge-focus: color-mix(in oklab, var(--foreground) 28%, transparent);
+  --control-halo: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --overlay-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent),
+    0 16px 40px -8px oklch(0 0 0 / 0.6), 0 4px 12px -4px oklch(0 0 0 / 0.4);
+  --card-shadow: none;
+}
+
 /* Composer edge (`components/chat/composer/composer-box.tsx`). At rest a
    whisper ring over the first elevation step; on focus the ring tightens and a
    soft 4px halo joins it, so the field bites into the page instead of growing
@@ -4950,6 +5066,14 @@ html[data-reduce-motion="true"] .pending-progress-bar {
  * own stylesheet (`streamdown/styles.css`) is not imported, so the rule lives
  * here and the duration follows the app's motion-speed knob. Opacity and
  * filter only: compositor work, no layout. */
+/* Checkbox tick (`components/ui/checkbox.tsx`), run on `--ease-spring-pop`. */
+@keyframes check-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
 @keyframes sd-ink {
   from {
     opacity: 0;

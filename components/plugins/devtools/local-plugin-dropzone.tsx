@@ -93,7 +93,7 @@ export function LocalPluginDropzone({ className, onInstalled }: LocalPluginDropz
         data-testid="local-plugin-dropzone"
       >
         <div className="flex flex-col items-center gap-1.5">
-          <div className="mb-1 flex size-10 items-center justify-center rounded-lg border bg-muted/50">
+          <div className="mb-1 flex size-10 items-center justify-center rounded-lg border border-transparent bg-muted/70">
             <FolderUpIcon className="size-5 text-muted-foreground" aria-hidden="true" />
           </div>
           <p className="text-sm font-medium">{t("title")}</p>

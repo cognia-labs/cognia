@@ -84,7 +84,8 @@ export function PetStatCard({
       data-variant={variant}
       className={cn(
         "flex flex-col gap-4 text-card-foreground",
-        variant === "outlined" && "rounded-xl border bg-card p-4",
+        variant === "outlined" &&
+          "rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-4",
         className
       )}
     >

@@ -129,7 +129,7 @@ export function FilesFolderTile({ folder, itemCount, actions }: FilesFolderItemP
           }
         }}
         className={cn(
-          "group relative flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left text-sm transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+          "group relative flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-card shadow-(--card-shadow) px-4 py-3 text-left text-sm transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
           drop.isOver && "ring-2 ring-primary/60",
           drag.isDragging && "opacity-50"
         )}

@@ -880,7 +880,7 @@ export function WorkflowPortal() {
                 >
                   {block.submitLabel ?? content.inputSubmitLabel ?? t("run")}
                 </Button>
-                <div className="space-y-2 rounded-lg border p-3">
+                <div className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
                       className="max-w-sm"
@@ -1037,7 +1037,10 @@ export function WorkflowPortal() {
           return null
         })}
         {feedbackTarget ? (
-          <section className="space-y-3 rounded-lg border p-4" aria-live="polite">
+          <section
+            className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-4"
+            aria-live="polite"
+          >
             <h2 className="font-medium">{t("feedbackTitle")}</h2>
             {feedbackSubmitted ? (
               <p className="text-sm text-muted-foreground">{t("feedbackThanks")}</p>
@@ -1101,7 +1104,10 @@ export function WorkflowPortal() {
           </section>
         ) : null}
         {bootstrap.app.resultSharing?.enabled && feedbackTarget?.runId ? (
-          <section className="space-y-3 rounded-lg border p-4" aria-live="polite">
+          <section
+            className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-4"
+            aria-live="polite"
+          >
             <h2 className="font-medium">{t("resultShareTitle")}</h2>
             {resultShare && resultShareUrl ? (
               <div className="space-y-2">
@@ -1148,7 +1154,7 @@ export function WorkflowPortal() {
               return (
                 <form
                   key={request.id}
-                  className="space-y-4 rounded-lg border p-4"
+                  className="space-y-4 rounded-lg border border-transparent bg-muted/50 p-4"
                   onSubmit={(event) => event.preventDefault()}
                 >
                   <div className="space-y-1">

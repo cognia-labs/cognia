@@ -513,7 +513,7 @@ function LogPanelToolbarImpl({
   const errorFatalCount = (stats.byLevel["error"] || 0) + (stats.byLevel["fatal" as LogLevel] || 0)
 
   return (
-    <div data-testid="log-panel-toolbar" className="border-b bg-muted/30">
+    <div data-testid="log-panel-toolbar" className="bg-muted/30">
       {/* ── Layer 1: Primary bar ──
           Wraps. Six controls and a search field do not fit across 375px: the
           search was the only flexible item, so it absorbed the whole shortfall
@@ -547,7 +547,7 @@ function LogPanelToolbarImpl({
             `aria-pressed` carries the selection and `aria-label` carries the
             name the tooltip used to be the only source of. */}
         <div
-          className="flex shrink-0 items-center rounded-md border"
+          className="flex shrink-0 items-center rounded-md bg-(--control-fill)"
           role="group"
           aria-label={t("panel.viewModeGroup")}
         >
@@ -896,7 +896,7 @@ function LogPanelToolbarImpl({
       {showAdvancedFilters && (
         <div
           data-testid="log-panel-filter-group"
-          className="flex flex-wrap items-center gap-2 px-2 pb-2 pt-1 border-t border-border/50 motion-safe:animate-in motion-safe:slide-in-from-top-1 motion-safe:duration-150"
+          className="flex flex-wrap items-center gap-2 px-2 pb-2 pt-1 motion-safe:animate-in motion-safe:slide-in-from-top-1 motion-safe:duration-150"
         >
           {/* Module selector */}
           <Select value={moduleFilter} onValueChange={setModuleFilter}>
@@ -1126,7 +1126,7 @@ function LogPanelToolbarImpl({
       {activeFacetCount > 0 && (
         <div
           data-testid="log-panel-facet-chip-row"
-          className="flex flex-wrap items-center gap-1.5 border-t border-border/40 px-2 py-2"
+          className="flex flex-wrap items-center gap-1.5 px-2 py-2"
         >
           {sourceFilter !== "all" && (
             <FacetChip

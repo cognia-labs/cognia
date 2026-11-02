@@ -172,7 +172,7 @@ function MemoryPolicyEditor({
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+    <div className="space-y-3 rounded-md border border-transparent bg-muted/50 p-3">
       <div className="space-y-1">
         <Label className="text-xs font-medium">{t("title")}</Label>
         <p className="text-[10px] text-muted-foreground">{t("description")}</p>
@@ -529,7 +529,7 @@ export function CharacterEditor({
       </div>
 
       {/* ADR-0030 v2 — persona (tone / personality / opening / exemplars) */}
-      <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3">
         <Label className="text-xs font-medium">{tEditor("persona.title")}</Label>
         <p className="text-[10px] text-muted-foreground">{tEditor("persona.description")}</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -575,7 +575,7 @@ export function CharacterEditor({
         </div>
       </div>
 
-      <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3">
         <div>
           <Label className="text-xs font-medium">{tEditor("routing.title")}</Label>
           <p className="text-[10px] text-muted-foreground">{tEditor("routing.description")}</p>
@@ -696,7 +696,7 @@ export function CharacterEditor({
         </div>
       </div>
 
-      <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-3 rounded-md border border-transparent bg-muted/50 p-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <Label className="text-xs font-medium">{tEditor("execution.envTitle")}</Label>
@@ -878,7 +878,7 @@ export function CharacterEditor({
         />
       </div>
 
-      <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3">
         <div className="flex items-center justify-between gap-3">
           <Label className="cursor-pointer text-xs">{tGeneral("bareMode")}</Label>
           <Switch
@@ -1111,7 +1111,7 @@ export function CharacterEditor({
       />
 
       {/* ADR-0030 v2 — voice profile (rides the existing TTS subsystem) */}
-      <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3">
         <Label className="text-xs font-medium">{tEditor("voice.title")}</Label>
         <p className="text-[10px] text-muted-foreground">{tEditor("voice.description")}</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1205,7 +1205,7 @@ export function CharacterEditor({
       </div>
 
       {/* ADR-0030 v2 — platform availability (empty = all) */}
-      <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-3">
         <Label className="text-xs font-medium">{tEditor("platforms.title")}</Label>
         <p className="text-[10px] text-muted-foreground">{tEditor("platforms.description")}</p>
         <div className="flex flex-wrap gap-1.5">
@@ -1336,7 +1336,7 @@ function ComputerUseSubSettings({ value, onChange }: ComputerUseSubSettingsProps
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/10 p-3 pl-4">
+    <div className="space-y-3 rounded-md border border-transparent bg-muted/40 p-3 pl-4">
       <div className="flex items-center justify-between gap-3">
         <div className="space-y-0.5">
           <Label className="cursor-pointer text-xs">{t("requireConsent.label")}</Label>

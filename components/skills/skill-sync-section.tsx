@@ -22,7 +22,7 @@ export function SkillSyncSection({ skill }: Props) {
 
   if (!tauriEnv) {
     return (
-      <Alert data-testid="skill-sync-section" className="rounded-none border-x-0">
+      <Alert data-testid="skill-sync-section" className="py-2">
         <AlertDescription className="text-xs">{t("desktopOnly")}</AlertDescription>
       </Alert>
     )

@@ -139,7 +139,7 @@ export function CogniaCliInstallDialog({
 
           <TabsContent value="source" className="space-y-3 pt-2">
             <p className="text-sm text-muted-foreground">{t("sourceHint")}</p>
-            <div className="flex items-center gap-2 rounded-md border bg-muted/40 p-2">
+            <div className="flex items-center gap-2 rounded-md border border-transparent bg-muted/70 p-2">
               <code className="flex-1 text-xs break-all font-mono">{CARGO_INSTALL_CMD}</code>
               <Button
                 size="icon"
@@ -168,7 +168,7 @@ export function CogniaCliInstallDialog({
           </TabsContent>
         </Tabs>
 
-        <div className="space-y-1 rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+        <div className="space-y-1 rounded-md border border-transparent bg-muted/60 p-2 text-[11px] text-muted-foreground">
           <p className="flex items-center gap-1">
             <CheckIcon className="size-3" aria-hidden="true" />
             {t("verifyNote")}

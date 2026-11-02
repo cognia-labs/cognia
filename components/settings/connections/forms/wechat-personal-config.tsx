@@ -355,7 +355,7 @@ export function WeChatPersonalConfigDialog({
           />
         </div>
 
-        <div className="rounded-md border bg-muted px-3 py-2 text-xs text-muted-foreground">
+        <div className="rounded-md border border-transparent bg-muted/80 px-3 py-2 text-xs text-muted-foreground">
           {t("banRiskNote")}
         </div>
 

@@ -65,7 +65,7 @@ export function ChatTemplateBodyPreview({
   return (
     <Surface
       className={cn(
-        "whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6",
+        "whitespace-pre-wrap rounded-md border border-transparent bg-muted/60 p-3 font-mono text-xs leading-6",
         className
       )}
       data-testid="chat-template-body-preview"

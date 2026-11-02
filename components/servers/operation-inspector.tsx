@@ -74,7 +74,7 @@ function PayloadBlock({ label, value }: { label: string; value: unknown }) {
           {t("operations.copy")}
         </Button>
       </div>
-      <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
+      <pre className="max-h-64 overflow-auto rounded-md border border-transparent bg-muted/70 p-3 font-mono text-xs leading-relaxed">
         {text}
       </pre>
     </section>

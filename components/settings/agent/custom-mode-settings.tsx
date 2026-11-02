@@ -656,7 +656,7 @@ export function CustomModeSettings() {
           <p className="text-xs font-medium">{tCustomMode("detail.systemPrompt")}</p>
           {activeMode.systemPrompt ? (
             <pre
-              className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap"
+              className="max-h-64 overflow-auto rounded-md border border-transparent bg-muted/70 p-3 font-mono text-xs whitespace-pre-wrap"
               data-testid="custom-mode-system-prompt"
             >
               {activeMode.systemPrompt}

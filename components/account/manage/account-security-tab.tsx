@@ -171,7 +171,7 @@ export function AccountSecurityTab({ account }: AccountSecurityTabProps) {
             ) : (
               <>
                 <AutoLockControl />
-                <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2.5">
                   <div className="min-w-0">
                     <p className="text-xs font-medium">{t("lockNowLabel")}</p>
                     <p className="text-[11px] text-muted-foreground">{t("lockNowHelp")}</p>

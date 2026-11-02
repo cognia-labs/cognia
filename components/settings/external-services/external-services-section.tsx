@@ -178,7 +178,7 @@ export function ExternalServicesSection() {
                   placeholder={t("website.loginUrlPlaceholder")}
                 />
               </div>
-              <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
                 <div>
                   <Label htmlFor="external-service-uploads">{t("website.uploads")}</Label>
                   <p className="text-xs text-muted-foreground">{t("website.uploadsHint")}</p>
@@ -207,7 +207,7 @@ export function ExternalServicesSection() {
 
       <ol className="grid gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label={t("flow.ariaLabel")}>
         {INSTALL_STEPS.map((step, index) => (
-          <li key={step} className="rounded-lg border bg-muted/20 p-3 text-xs">
+          <li key={step} className="rounded-lg border border-transparent bg-muted/50 p-3 text-xs">
             <span className="text-muted-foreground">{index + 1}</span>
             <p className="mt-1 font-medium">{t(`flow.${step}`)}</p>
           </li>

@@ -132,7 +132,7 @@ export function LogsFiltersPanel({ draft }: LogsFiltersPanelProps) {
             {t("settings.sampling.empty")}
           </p>
         ) : (
-          <div className="divide-y divide-border/60 rounded-lg border">
+          <div className="divide-y divide-border/60 rounded-lg border border-transparent bg-muted/50">
             {rules.map((rule) => (
               <div
                 key={rule.modulePrefix}

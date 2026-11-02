@@ -48,12 +48,12 @@ const STATUS_COLOR: Record<IssueStatus, string> = {
 
 /** Soft column tint mirroring the board's grouped background. */
 export const STATUS_COLUMN_TINT: Record<IssueStatus, string> = {
-  backlog: "bg-muted/30",
-  todo: "bg-muted/20",
-  in_progress: "bg-amber-500/5",
-  in_review: "bg-emerald-500/5",
-  done: "bg-blue-500/5",
-  canceled: "bg-muted/20",
+  backlog: "bg-muted/50",
+  todo: "bg-muted/40",
+  in_progress: "bg-amber-500/[0.07]",
+  in_review: "bg-emerald-500/[0.07]",
+  done: "bg-blue-500/[0.07]",
+  canceled: "bg-muted/40",
 }
 
 export interface IssueStatusIconProps {

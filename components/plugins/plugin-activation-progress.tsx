@@ -76,9 +76,10 @@ export function PluginActivationProgress({
           // The shared region draws a 4px solid-primary bar, which at the edge
           // of a dense list row reads as a heavy black rule rather than as
           // progress, and is easily mistaken for the row divider it sits on.
-          // Halve it and tint it in `row` only.
+          // Halve it, drop the track and tint it in `row` only: on a
+          // borderless row the filled part alone reads as progress.
           variant === "row" &&
-            "[&_[data-slot=progress]]:h-0.5 [&_[data-slot=progress]]:bg-primary/15 [&_[data-slot=progress-indicator]]:bg-primary/60"
+            "[&_[data-slot=progress]]:h-0.5 [&_[data-slot=progress]]:rounded-full [&_[data-slot=progress]]:bg-transparent [&_[data-slot=progress-indicator]]:bg-primary/35"
         )}
       />
       {showText ? (

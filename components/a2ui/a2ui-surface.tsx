@@ -205,7 +205,10 @@ export function A2UIInlineSurface({
   return (
     <A2UISurface
       surfaceId={surfaceId}
-      className={cn("rounded-lg border bg-card p-3", className)}
+      className={cn(
+        "rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3",
+        className
+      )}
       onAction={onAction}
       onDataChange={onDataChange}
       showLoading={false}

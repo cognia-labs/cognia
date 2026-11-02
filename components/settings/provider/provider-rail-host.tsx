@@ -80,7 +80,7 @@ export function ProviderRailHost({
     return (
       <>
         <div
-          className="relative flex min-h-0 flex-col overflow-hidden rounded-lg border"
+          className="relative flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50"
           data-testid="provider-rail"
         >
           {rail}
@@ -122,7 +122,7 @@ export function ProviderRailHost({
     // bar row above the detail row; with no bar, the rail takes both.
     return (
       <div
-        className="row-span-2 flex min-h-0 flex-col overflow-hidden rounded-lg border"
+        className="row-span-2 flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50"
         data-testid="provider-rail"
         data-stacked-view="list"
       >

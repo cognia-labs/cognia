@@ -89,7 +89,7 @@ export function IncidentDetailDialog({ state }: { state: IncidentDetailState }) 
 
         {detail ? (
           <div className="space-y-6">
-            <div className="space-y-1.5 rounded-xl border bg-muted/30 px-4 py-3">
+            <div className="space-y-1.5 rounded-xl border border-transparent bg-muted/60 px-4 py-3">
               {detail.componentIds.length > 0 ? (
                 <p className="text-sm">
                   {t("incidents.components", { components: components(detail.componentIds) })}

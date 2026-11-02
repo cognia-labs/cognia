@@ -188,6 +188,20 @@ describe("SchedulerListRow", () => {
   it("keeps every checkbox resident during a bulk session", () => {
     render(<SchedulerListRow {...baseProps} item={item()} signal={null} checkMode />)
     expect(screen.getByTestId("scheduler-list-row-check-slot")).not.toHaveClass("opacity-0")
+    // The tile it covers steps aside for the whole session.
+    expect(screen.getByTestId("scheduler-list-row-kind-tile")).toHaveClass("opacity-0")
+  })
+
+  it("lays the checkbox over the kind tile instead of reserving a gutter", () => {
+    render(<SchedulerListRow {...baseProps} item={item()} signal={null} />)
+    const slot = screen.getByTestId("scheduler-list-row-check-slot")
+    expect(slot).toHaveClass("absolute", "start-2.5", "top-2.5", "size-6")
+    expect(slot).not.toHaveClass("w-7")
+    // Same inset as a row with no checkbox, so rows align with the rail above.
+    expect(screen.getByRole("button")).toHaveClass("ps-2.5")
+    const tile = screen.getByTestId("scheduler-list-row-kind-tile")
+    expect(tile).toHaveClass("group-hover:opacity-0", "pointer-coarse:opacity-0")
+    expect(tile).not.toHaveClass("opacity-0")
   })
 })
 

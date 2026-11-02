@@ -80,7 +80,7 @@ export function DailyWallpaperCard({ daily, onChange, onFetchNow }: DailyWallpap
 
   return (
     <section
-      className="space-y-3 rounded-lg border p-3"
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
       data-testid="wallpaper-daily"
       data-enabled={merged.enabled}
     >

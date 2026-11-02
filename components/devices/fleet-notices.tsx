@@ -94,7 +94,7 @@ export function StandaloneFleetCard({
   const t = useTranslations("devices")
   return (
     <div
-      className="rounded-lg border border-dashed p-3"
+      className="rounded-lg bg-muted/50 p-3"
       data-testid="devices-requires-host"
       data-reason={standaloneDevicesRequiresHost.reason}
     >

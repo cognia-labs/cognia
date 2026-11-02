@@ -24,7 +24,7 @@ function RuntimeChip({ label, value, testid }: { label: string; value: string; t
   return (
     <span
       data-testid={testid}
-      className="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[11px] leading-none"
+      className="inline-flex items-center gap-1.5 rounded-md border border-transparent bg-muted/70 px-2 py-1 text-[11px] leading-none"
     >
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono text-foreground">{value}</span>

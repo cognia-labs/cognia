@@ -40,7 +40,7 @@ export function HotReloadDiagnostics({ className }: { className?: string }) {
       <div className="flex h-full flex-col gap-3 p-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/50">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent bg-muted/70">
               <RotateCwIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             </div>
             <h3 className="truncate text-sm font-semibold tracking-tight">{t("title")}</h3>
@@ -86,7 +86,7 @@ function HotReloadRow({ entry }: { entry: HotReloadEntry }) {
         : t("kindHotReload")
   return (
     <li
-      className="flex flex-col gap-1 rounded-md border bg-card px-2.5 py-1.5 text-xs"
+      className="flex flex-col gap-1 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-2.5 py-1.5 text-xs"
       data-testid={`hot-reload-row-${entry.pluginId}`}
       data-status={entry.status}
       data-source={entry.source}

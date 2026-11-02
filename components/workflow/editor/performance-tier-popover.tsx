@@ -64,7 +64,7 @@ export function PerformanceTierFields({
       </RadioGroup>
       {value === "auto" ? (
         <div
-          className="rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
+          className="rounded-md border border-transparent bg-muted/70 px-2 py-1 text-xs text-muted-foreground"
           data-testid="perf-tier-effective-footer"
         >
           {t("effectiveLabel", { tier: t(effective) })}

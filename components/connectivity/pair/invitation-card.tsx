@@ -96,7 +96,11 @@ export function InvitationCard({
 
   return (
     <div
-      className={cn("rounded-xl border p-4", TONE_CLASS[tone], className)}
+      className={cn(
+        "rounded-xl border border-transparent bg-muted/50 p-4",
+        TONE_CLASS[tone],
+        className
+      )}
       data-testid="pair-invitation-card"
       data-tone={tone}
     >

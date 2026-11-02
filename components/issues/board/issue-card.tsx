@@ -88,7 +88,7 @@ export function IssueCardVisual({
   return (
     <div
       className={cn(
-        "group flex w-full flex-col gap-2 rounded-lg border bg-card p-3 text-left shadow-xs",
+        "group flex w-full flex-col gap-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 text-left shadow-xs",
         "motion-safe:transition-[box-shadow,opacity] motion-safe:duration-150",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         !overlay && "hover:shadow-sm",

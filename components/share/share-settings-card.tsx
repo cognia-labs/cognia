@@ -53,7 +53,7 @@ export function ShareSettingsCard() {
   }
 
   return (
-    <div className="space-y-4 rounded-lg border p-4">
+    <div className="space-y-4 rounded-lg border border-transparent bg-muted/50 p-4">
       <div>
         <h3 className="text-sm font-medium">{t("title")}</h3>
         <p className="text-xs text-muted-foreground">{t("description")}</p>

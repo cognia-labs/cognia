@@ -275,7 +275,7 @@ function RunDetailInner({
           {busy ? t("rerunning") : t("retry.currentDeployment")}
         </Button>
         <div
-          className="basis-full rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+          className="basis-full rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
           data-testid="run-provenance"
         >
           <span>{t("provenance.trigger", { value: run.triggerKind })}</span>

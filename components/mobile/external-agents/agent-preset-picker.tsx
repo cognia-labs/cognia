@@ -30,7 +30,7 @@ import { groupPresetEntries, runnablePresetEntries, type PresetEntry } from "@/c
 import { configureExternalAgentHref } from "./routes"
 
 const CARD_CLASS =
-  "flex flex-col gap-2 rounded-xl border bg-card p-3 text-left transition-colors active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  "flex flex-col gap-2 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-3 text-left transition-colors active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
 function PresetCard({
   entry,

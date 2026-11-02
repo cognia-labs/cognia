@@ -41,7 +41,7 @@ export function ListSkeleton({
       {Array.from({ length: rows }, (_, i) => (
         <div
           key={i}
-          className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
+          className="flex items-center gap-3 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3"
         >
           <Skeleton className="size-12 shrink-0 rounded-md" />
           <div className="flex min-w-0 flex-1 flex-col gap-2">

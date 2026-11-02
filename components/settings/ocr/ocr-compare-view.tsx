@@ -360,7 +360,7 @@ export function OcrCompareView({
               return (
                 <article
                   key={id}
-                  className="flex flex-col gap-2 rounded-lg border p-3"
+                  className="flex flex-col gap-2 rounded-lg border border-transparent bg-muted/50 p-3"
                   data-testid={`ocr-compare-column-${id}`}
                 >
                   <header className="flex items-center justify-between gap-2 border-b pb-2">

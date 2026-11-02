@@ -542,7 +542,7 @@ function DiagnosticPanel({
     <div className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {has ? (
-        <ScrollArea className="h-32 rounded-md border bg-muted/40">
+        <ScrollArea className="h-32 rounded-md border border-transparent bg-muted/70">
           <pre className="p-3 text-xs font-mono leading-relaxed" data-testid={testid}>
             {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
           </pre>

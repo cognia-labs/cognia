@@ -97,7 +97,7 @@ export function ProviderFilterPopover({
   const statusKey = STATUS_FILTERS.find((s) => s.value === statusFilter)?.key ?? "statusAll"
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1 border-b px-3 py-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 py-1.5">
       <Popover>
         <PopoverTrigger asChild>
           <Button

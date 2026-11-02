@@ -1279,10 +1279,10 @@ export function LogPanel({
   return (
     <div
       ref={rootRef}
-      // `border-b` only: every host frames the panel's top edge already (the
-      // workspace header rule, the settings card), and `border-y` drew a
-      // second line right under it.
-      className={cn("flex h-full flex-col border-b bg-background", className)}
+      // No frame of its own: every host already sets the panel apart (the
+      // workspace pane, the settings card), and a rule here drew a second
+      // edge against theirs.
+      className={cn("flex h-full flex-col bg-background", className)}
       style={maxHeight ? { maxHeight } : undefined}
       data-testid="log-panel"
     >

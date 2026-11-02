@@ -521,7 +521,7 @@ function StartRunForm({
           </section>
 
           <section
-            className="rounded-md border bg-muted/30 p-3 text-sm"
+            className="rounded-md border border-transparent bg-muted/60 p-3 text-sm"
             data-testid="harness-estimate"
           >
             <h4 className="mb-1 font-medium">{t("estimate")}</h4>

@@ -137,7 +137,7 @@ export function ProviderDetailPanel({
       {/* Header */}
       {/* `flex-wrap`: on a narrow pane (mobile, or a wide rail) the action
           cluster drops under the title instead of squeezing it to nothing. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         {onBack && (
           <Button
             variant="ghost"
@@ -338,7 +338,7 @@ export function ProviderDetailPanel({
             `truncate` let a label give up width on a narrow pane instead of
             pushing the strip past the right edge, where it was clipped with no
             scroll affordance. `title` keeps the full label reachable. */}
-        <TabsList className="flex w-full min-w-0 shrink-0 justify-start overflow-x-auto rounded-none border-b bg-transparent px-4">
+        <TabsList className="mx-4 flex max-w-[calc(100%-2rem)] min-w-0 shrink-0 justify-start self-start overflow-x-auto">
           {visibleTabs.map((key) => (
             <TabsTrigger
               key={key}

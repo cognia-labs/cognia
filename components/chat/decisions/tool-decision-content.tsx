@@ -107,7 +107,7 @@ export function ToolInputPreview({ approval }: { approval: PendingApproval }) {
     const label = approval.title || approval.displayName || approval.toolName
     return (
       <div data-testid="approval-input-fallback" className="space-y-1">
-        <p className="break-all rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs">
+        <p className="break-all rounded-md border border-transparent bg-muted/70 px-3 py-2 font-mono text-xs">
           {label}
         </p>
         <p className="text-xs text-muted-foreground">{t("noInputDetails")}</p>
@@ -126,7 +126,7 @@ export function ToolInputPreview({ approval }: { approval: PendingApproval }) {
       <div data-testid="approval-bash-preview" className="space-y-1">
         <pre
           data-testid="approval-bash-command"
-          className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed"
+          className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border border-transparent bg-muted/70 px-3 py-2 font-mono text-xs leading-relaxed"
         >
           <code>{command}</code>
         </pre>

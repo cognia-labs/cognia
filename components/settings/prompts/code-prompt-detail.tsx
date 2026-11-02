@@ -197,7 +197,7 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
         ) : null}
       </header>
 
-      <dl className="grid gap-x-4 gap-y-2 rounded-md border bg-muted/30 p-3 text-xs @[620px]/settings-pane:grid-cols-2">
+      <dl className="grid gap-x-4 gap-y-2 rounded-md border border-transparent bg-muted/60 p-3 text-xs @[620px]/settings-pane:grid-cols-2">
         <Fact label={t("facts.activation")}>{t(`activation.${def.activation}`)}</Fact>
         <Fact label={t("facts.hosts")}>
           {def.hosts.map((host) => t(`host.${host}`)).join(" · ")}
@@ -477,7 +477,7 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
                 : t("resetDialog.bodyScoped")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-2 font-mono text-[11px]">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-transparent bg-muted/70 p-2 font-mono text-[11px]">
             {inheritedText}
           </pre>
           <AlertDialogFooter>

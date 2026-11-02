@@ -196,7 +196,7 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
             <h1 className="text-lg font-semibold">{t("recoveryTitle")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{t("recoveryDescription")}</p>
           </div>
-          <code className="select-all break-all rounded-md border bg-muted p-4 font-mono text-sm">
+          <code className="select-all break-all rounded-md border border-transparent bg-muted/80 p-4 font-mono text-sm">
             {pendingRecoveryKey}
           </code>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

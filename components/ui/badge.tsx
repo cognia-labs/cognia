@@ -5,7 +5,7 @@ import { Slot } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 const badgeVariants = cva(
-  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-pill border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3",
+  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-pill border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-(--control-edge-focus) focus-visible:ring-4 focus-visible:ring-(--control-halo) aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3",
   {
     variants: {
       // Each variant explicitly re-asserts its foreground with a `dark:`
@@ -25,8 +25,10 @@ const badgeVariants = cva(
           "bg-success text-success-foreground dark:text-success-foreground [a&]:hover:bg-success/90",
         warning:
           "bg-warning text-warning-foreground dark:text-warning-foreground [a&]:hover:bg-warning/90",
+        // Borderless: a recessed tonal pill. A caller's border colour (a status
+        // tint) still draws, since the base keeps a 1px transparent border.
         outline:
-          "border-border text-foreground dark:text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+          "bg-(--control-fill) text-foreground/80 dark:text-foreground/80 [a&]:hover:bg-(--control-fill-hover) [a&]:hover:text-accent-foreground",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary dark:text-primary underline-offset-4 [a&]:hover:underline",
       },

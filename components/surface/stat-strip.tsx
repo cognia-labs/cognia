@@ -135,13 +135,13 @@ export function StatStrip({
   return (
     // `Surface` owns the radius so the strip follows the same corner scale as
     // the cards around it. Its `--surface-bg` is deliberately overridden with
-    // `bg-border` here: the strip's ground IS the hairline, showing through the
-    // 1px grid gaps, which is what makes the cells read as one instrument
-    // rather than four boxes. The cells paint `bg-card` back over it.
+    // the page ground here, showing through 2px grid gaps between tonal cells
+    // (`bg-muted/50`): the cells read as one instrument by the shared rounded
+    // outline, separated by space rather than drawn hairlines.
     <Surface asChild radius="panel">
       <div
         className={cn(
-          "grid gap-px overflow-hidden border bg-border",
+          "grid gap-0.5 overflow-hidden bg-background",
           columns[stats.length] ?? columns[4],
           className
         )}
@@ -183,7 +183,7 @@ export function StatStrip({
                 onClick={stat.action.onSelect}
                 aria-expanded={stat.action.expanded}
                 aria-controls={stat.action.controls}
-                className="min-w-0 cursor-pointer bg-card px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="min-w-0 cursor-pointer bg-muted/50 px-3 py-2 text-left transition-colors duration-200 ease-ink hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--control-edge-focus)"
                 data-testid={`${cellTestIdPrefix}-${stat.id}`}
               >
                 {body}
@@ -194,7 +194,7 @@ export function StatStrip({
           return (
             <div
               key={stat.id}
-              className="min-w-0 bg-card px-3 py-2"
+              className="min-w-0 bg-muted/50 px-3 py-2"
               data-testid={`${cellTestIdPrefix}-${stat.id}`}
             >
               {body}

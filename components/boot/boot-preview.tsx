@@ -61,10 +61,7 @@ export function BootPreview({ settled, className }: BootPreviewProps) {
     <div
       aria-hidden="true"
       data-slot="boot-preview"
-      className={cn(
-        "hidden border-l border-border/60 bg-muted/35 p-5 sm:flex sm:flex-col",
-        className
-      )}
+      className={cn("hidden bg-muted/35 p-5 sm:flex sm:flex-col", className)}
     >
       {/* Window controls — real once preferences (theme, chrome) are applied. */}
       <div className="flex items-center gap-1.5">
@@ -73,7 +70,7 @@ export function BootPreview({ settled, className }: BootPreviewProps) {
         <Block settled={settled.preferences} order={2} className={DOT} />
       </div>
 
-      <div className="boot-preview__frame mt-5 flex min-h-52 flex-1 gap-3 rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm">
+      <div className="boot-preview__frame mt-5 flex min-h-52 flex-1 gap-3 rounded-xl bg-background/80 p-3 shadow-(--card-shadow)">
         {/* Rail: the avatar lands with the account read, the icons with the interface. */}
         <div className="w-12 shrink-0 space-y-2 rounded-lg bg-muted/70 p-2">
           <Block
@@ -107,7 +104,7 @@ export function BootPreview({ settled, className }: BootPreviewProps) {
           <Block
             settled={settled.interface}
             order={4}
-            className="h-8 w-full rounded-lg border border-foreground/10 bg-foreground/[0.04]"
+            className="h-8 w-full rounded-lg bg-foreground/[0.05]"
           />
         </div>
       </div>

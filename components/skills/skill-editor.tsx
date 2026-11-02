@@ -348,7 +348,7 @@ export function SkillEditor({ mode, initial, onCancel, onSave, hideContent, onAi
               />
             </TabsContent>
             <TabsContent value="preview" className="mt-1.5">
-              <div className="min-h-[300px] rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <div className="min-h-[300px] rounded-md border border-transparent bg-muted/60 px-3 py-2 text-sm">
                 {form.content.trim() ? (
                   <MarkdownRenderer
                     content={`## ${form.name || t("unnamedPreview")}\n\n${form.content}`}

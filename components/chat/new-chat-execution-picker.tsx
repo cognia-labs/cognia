@@ -106,7 +106,7 @@ export function NewChatExecutionPicker({
       <div
         role="group"
         aria-label={t("locationLabel")}
-        className="inline-flex rounded-lg border bg-muted/35 p-0.5"
+        className="inline-flex rounded-lg border border-transparent bg-muted/60 p-0.5"
       >
         <Button
           type="button"

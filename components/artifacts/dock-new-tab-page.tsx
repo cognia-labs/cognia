@@ -265,7 +265,7 @@ export function DockNewTabPage({
 
         {showInstall ? (
           <section
-            className="rounded-lg border bg-muted/30 p-3"
+            className="rounded-lg border border-transparent bg-muted/60 p-3"
             aria-label={t("installTitle")}
             data-testid="dock-new-tab-install"
           >
@@ -443,7 +443,7 @@ export function DockNewTabPage({
 }
 
 const TILE_CLASS =
-  "flex h-11 min-w-0 items-center gap-2.5 rounded-lg border bg-card px-3 text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none aria-pressed:border-primary/40 aria-pressed:bg-primary/5"
+  "flex h-11 min-w-0 items-center gap-2.5 rounded-lg border border-transparent bg-card shadow-(--card-shadow) px-3 text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none aria-pressed:border-primary/40 aria-pressed:bg-primary/5"
 
 const ROW_CLASS =
   "flex h-8 w-full min-w-0 items-center gap-2.5 rounded-md px-2 text-left text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"

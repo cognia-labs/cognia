@@ -136,9 +136,7 @@ export const OcrSidebarItem = React.memo(function OcrSidebarItem({
       aria-disabled={ariaDisabled}
       className={cn(
         "h-auto w-full justify-start gap-3 whitespace-normal rounded-lg px-3 py-2.5 text-left font-normal transition-all duration-200",
-        isSelected
-          ? "border-l-2 border-l-primary bg-primary text-primary-foreground"
-          : "hover:bg-muted/50",
+        isSelected ? "bg-primary text-primary-foreground" : "hover:bg-muted/50",
         disabled && !isSelected && "opacity-60"
       )}
     >

@@ -508,7 +508,7 @@ export function BrowserCookieImportDialog({
           <p
             role="status"
             data-testid="cookie-import-inert"
-            className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground"
+            className="rounded-md border border-transparent bg-muted/70 p-3 text-sm text-muted-foreground"
           >
             {t("sink.unsupported")}
           </p>
@@ -516,7 +516,7 @@ export function BrowserCookieImportDialog({
           <div
             role="status"
             data-testid="cookie-import-disabled"
-            className="flex flex-col items-start gap-2 rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground"
+            className="flex flex-col items-start gap-2 rounded-md border border-transparent bg-muted/70 p-3 text-sm text-muted-foreground"
           >
             <p>{t("featureDisabled")}</p>
             <Button asChild size="sm" variant="outline">

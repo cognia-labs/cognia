@@ -108,7 +108,7 @@ export function SubscriptionPreferenceFields({
             <Label
               key={id}
               htmlFor={`${baseId}-${id}`}
-              className="flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 font-normal transition-colors hover:bg-muted/40 has-[[data-state=checked]]:border-foreground/30 has-[[data-state=checked]]:bg-muted/50"
+              className="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent bg-muted/50 px-3.5 py-3 font-normal transition-colors hover:bg-muted/40 has-[[data-state=checked]]:border-foreground/30 has-[[data-state=checked]]:bg-muted/50"
             >
               <Checkbox
                 id={`${baseId}-${id}`}
@@ -187,7 +187,7 @@ export function SubscriptionDialog({
         )}
 
         {mirror ? (
-          <div className="space-y-4 rounded-xl border bg-muted/30 p-4 text-sm">
+          <div className="space-y-4 rounded-xl border border-transparent bg-muted/60 p-4 text-sm">
             <p>{t("subscribe.mirrorDescription")}</p>
             <StatusExternalLink
               href={runtime.primaryPageUrl}
@@ -199,7 +199,7 @@ export function SubscriptionDialog({
           </div>
         ) : !emailAvailable ? (
           <p
-            className="rounded-xl border bg-muted/30 p-4 text-sm leading-6"
+            className="rounded-xl border border-transparent bg-muted/60 p-4 text-sm leading-6"
             role="status"
             data-testid="subscription-disabled"
           >

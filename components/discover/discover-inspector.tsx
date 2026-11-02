@@ -125,7 +125,7 @@ export function DiscoverInspector({
         className={className}
         data-testid="discover-inspector-empty"
       >
-        <header className="flex flex-col gap-1 border-b border-border px-4 py-3">
+        <header className="flex flex-col gap-1 px-4 pt-4 pb-2">
           <h2 className="text-sm font-semibold">{t(`categories.${category}`)}</h2>
           <p className="text-xs text-muted-foreground">
             {t("inspector.itemCount", { count: items.length })}
@@ -434,7 +434,7 @@ function SkillInspector({ skill }: { skill: Skill }) {
       {skill.description ? (
         <p className="text-sm text-muted-foreground">{skill.description}</p>
       ) : null}
-      <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2">
+      <label className="flex items-center justify-between gap-2 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-3 py-2">
         <span className="text-sm">{t(enabled ? "inspector.enable" : "inspector.disable")}</span>
         <Switch
           checked={enabled}
@@ -483,7 +483,7 @@ function PluginInspector({ plugin }: { plugin: PluginRow }) {
         {plugin.version ? <Badge variant="outline">v{plugin.version}</Badge> : null}
         {plugin.source ? <Badge variant="secondary">{plugin.source}</Badge> : null}
       </div>
-      <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2">
+      <label className="flex items-center justify-between gap-2 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-3 py-2">
         <span className="text-sm">
           {t(plugin.enabled ? "inspector.enable" : "inspector.disable")}
         </span>
@@ -731,7 +731,7 @@ function McpServerInspector({ server }: { server: McpServer }) {
         <Badge variant="outline">{server.transport}</Badge>
         {server.pluginId ? <Badge variant="secondary">{t("badgePlugin")}</Badge> : null}
       </div>
-      <label className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2">
+      <label className="flex items-center justify-between gap-2 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-3 py-2">
         <span className="text-sm">
           {t(server.enabled ? "inspector.enable" : "inspector.disable")}
         </span>
@@ -891,7 +891,7 @@ function ExternalServiceInspector({ service }: { service: ServiceView }) {
         {service.providers.map((provider) => (
           <li
             key={provider.providerId}
-            className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-2"
+            className="flex flex-wrap items-center gap-1.5 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-2.5 py-2"
             data-state={provider.state}
           >
             <span className="text-xs font-medium">{provider.providerId}</span>

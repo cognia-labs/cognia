@@ -50,7 +50,7 @@ export function AboutCard({
       >
         <span
           aria-hidden
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-card text-muted-foreground shadow-sm"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-transparent bg-card shadow-(--card-shadow) text-muted-foreground shadow-sm"
         >
           <Icon className="size-4" />
         </span>

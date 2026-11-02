@@ -54,7 +54,7 @@ export const SuggestionItem = memo(function SuggestionItem({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-3 space-y-2 transition-all",
+        "rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 space-y-2 transition-all",
         suggestion.status === "accepted" && "opacity-50",
         suggestion.status === "rejected" && "opacity-30 line-through",
         className
@@ -101,7 +101,7 @@ export const SuggestionItem = memo(function SuggestionItem({
               <ChevronDown className="h-3 w-3 transition-transform data-[state=open]:rotate-180" />
             </Button>
           </CollapsibleTrigger>
-          <CollapsibleContent className="rounded-md border bg-muted/30 p-2 space-y-2 text-xs sm:text-sm font-mono">
+          <CollapsibleContent className="rounded-md border border-transparent bg-muted/60 p-2 space-y-2 text-xs sm:text-sm font-mono">
             <div className="space-y-1">
               <div className="text-[10px] text-muted-foreground font-sans">{t("original")}:</div>
               <pre className="p-2 rounded bg-destructive/10 text-destructive whitespace-pre-wrap overflow-x-auto">

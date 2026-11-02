@@ -345,7 +345,10 @@ function SessionExecutionWorkspaceContent({
     })
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/20 p-3" data-testid="execution-workspace">
+    <div
+      className="space-y-3 rounded-md border border-transparent bg-muted/50 p-3"
+      data-testid="execution-workspace"
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium">{t("title")}</p>

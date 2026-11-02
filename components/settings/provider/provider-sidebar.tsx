@@ -126,7 +126,7 @@ export function ProviderSidebar({
   return (
     <div className="@container/provider-rail flex h-full w-full min-w-0 flex-col overflow-hidden">
       {/* Top: search + add button */}
-      <div className="flex min-w-0 gap-2 border-b p-3">
+      <div className="flex min-w-0 gap-2 p-3 pb-1.5">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -257,7 +257,7 @@ export function ProviderSidebar({
       </ScrollArea>
 
       {/* Cross-provider workspaces */}
-      <div className="min-w-0 space-y-1 border-t px-3 py-2">
+      <div className="min-w-0 space-y-1 px-3 py-2">
         {onRoutingClick && (
           <Button
             variant={routingSelected ? "secondary" : "ghost"}
@@ -293,7 +293,7 @@ export function ProviderSidebar({
       </div>
 
       {/* Stats bar */}
-      <div className="min-w-0 border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="min-w-0 px-3 py-2 text-xs tabular-nums text-muted-foreground">
         {t("sidebar.stats", { filtered: filteredTotal, total: globalTotal, active })}
       </div>
     </div>

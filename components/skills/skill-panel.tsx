@@ -128,10 +128,10 @@ export function SkillPanel({ className, embedded }: Props) {
             >
               {activeTab === "my-skills" && (
                 <div
-                  className="grid min-h-0 w-full flex-1 grid-cols-1 border-y md:grid-cols-[320px_minmax(0,1fr)] md:divide-x"
+                  className="grid min-h-0 w-full flex-1 grid-cols-1 md:grid-cols-[320px_minmax(0,1fr)]"
                   data-layout="master-detail"
                 >
-                  <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+                  <div className="flex min-h-0 min-w-0 flex-col overflow-hidden md:bg-muted/35">
                     <SkillListPane
                       skills={view.filtered}
                       total={view.all.length}

@@ -462,7 +462,7 @@ export function ChannelListBulkToolbar({
           </AlertDialogHeader>
           {selectedTitles.length > 0 ? (
             <ul
-              className="max-h-40 space-y-1 overflow-y-auto rounded-md border bg-muted/40 px-3 py-2 text-sm"
+              className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-transparent bg-muted/70 px-3 py-2 text-sm"
               data-testid="channel-list-bulk-delete-titles"
             >
               {selectedTitles.slice(0, DELETE_CONFIRM_TITLE_LIMIT).map((title, index) => (

@@ -50,7 +50,10 @@ export function OcrTextOverlay({
 
   return (
     <div
-      className={cn("relative w-full overflow-hidden rounded-md border bg-muted/30", className)}
+      className={cn(
+        "relative w-full overflow-hidden rounded-md border border-transparent bg-muted/60",
+        className
+      )}
       style={positioned ? { aspectRatio: `${width} / ${height}` } : undefined}
       aria-label={t("ariaLabel")}
       data-testid="ocr-text-overlay"

@@ -295,7 +295,7 @@ function WideFact({
       </div>
       <div
         className={cn(
-          "mt-1 rounded-md border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed break-words whitespace-pre-wrap",
+          "mt-1 rounded-md border border-transparent bg-muted/70 px-2.5 py-2 text-xs leading-relaxed break-words whitespace-pre-wrap",
           code && "font-mono text-[11px]",
           clampable && !expanded && "line-clamp-6"
         )}
@@ -347,7 +347,7 @@ function RawPayload({ raw }: { raw: Record<string, unknown> }) {
       </div>
       <CollapsibleContent>
         <pre
-          className="mt-1 max-h-72 overflow-auto rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed"
+          className="mt-1 max-h-72 overflow-auto rounded-md border border-transparent bg-muted/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed"
           data-testid="payload-raw"
         >
           {json}

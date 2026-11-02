@@ -7,8 +7,9 @@
  * controls, so the list stays usable with a keyboard and on touch. Actions
  * live in the detail, the keyboard and the bulk toolbar. The one thing that
  * stays interactive beside the button is the multi-select checkbox, which
- * sits outside it and reveals on hover, keyboard focus or touch, or once
- * anything is checked.
+ * sits outside it, over the kind tile, and takes the tile's place on hover,
+ * keyboard focus or touch, or once anything is checked. It reserves no gutter
+ * of its own, so rows line up with the search field and filters above.
  *
  * The second line is the row's reason to exist: the item's attention signal
  * when it has one (failed last night, running now, cannot run here), else
@@ -123,7 +124,9 @@ function SchedulerListRowImpl({
         <span
           data-testid="scheduler-list-row-check-slot"
           className={cn(
-            "flex w-7 shrink-0 items-center justify-center",
+            // Laid over the kind tile (the button's `ps-2.5` + `py-2` and the
+            // tile's `mt-0.5`), so a checkable row is no wider than a plain one.
+            "absolute start-2.5 top-2.5 z-10 flex size-6 items-center justify-center",
             // Revealed on row hover, keyboard focus and touch (no hover there);
             // only the opacity fades, so the checkbox is always reachable.
             HOVER_REVEAL_GROUP_CLASS,
@@ -144,8 +147,7 @@ function SchedulerListRowImpl({
         onClick={() => onSelect(item)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "flex min-w-0 flex-1 items-start gap-2.5 rounded-md py-2 pe-2.5 text-left transition-colors",
-          checkable ? "ps-1" : "ps-2.5",
+          "flex min-w-0 flex-1 items-start gap-2.5 rounded-md py-2 ps-2.5 pe-2.5 text-left transition-colors",
           "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           selected && "bg-muted",
           checked && !selected && "bg-muted/40"
@@ -154,8 +156,13 @@ function SchedulerListRowImpl({
         <span
           className={cn(
             "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md",
-            KIND_PLATE[item.kind]
+            KIND_PLATE[item.kind],
+            // Steps aside whenever the checkbox laid over it shows.
+            checkable &&
+              "transition-opacity group-hover:opacity-0 group-has-[[data-slot=checkbox]:focus-visible]:opacity-0 pointer-coarse:opacity-0",
+            checkable && (checkMode || checked) && "opacity-0"
           )}
+          data-testid="scheduler-list-row-kind-tile"
         >
           <KindIcon kind={item.kind} className="size-3 text-current" />
         </span>

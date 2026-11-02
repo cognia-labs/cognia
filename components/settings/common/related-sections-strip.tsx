@@ -73,7 +73,7 @@ export function RelatedSectionsStrip({ current, targets }: Props) {
       // a 375px screen, which spent about 110px of the first view on links to
       // OTHER sections before the reader saw a single control belonging to
       // this one. Secondary navigation does not get to outrank the page.
-      className="flex items-center gap-1.5 overflow-x-auto rounded-md border bg-muted/30 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="flex items-center gap-1.5 overflow-x-auto rounded-md border border-transparent bg-muted/60 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       role="navigation"
       aria-label={t("ariaLabel")}
       data-testid="related-sections-strip"

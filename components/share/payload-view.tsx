@@ -101,7 +101,7 @@ export function PayloadView({
 function TwinDisclosure() {
   const t = useTranslations("share.view")
   return (
-    <div className="mx-auto mb-3 w-full max-w-3xl rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+    <div className="mx-auto mb-3 w-full max-w-3xl rounded-md border border-transparent bg-muted/70 px-3 py-2 text-sm text-muted-foreground">
       {t("provenance.digitalTwin")}
     </div>
   )
@@ -617,7 +617,7 @@ function MarkdownText({
         content={text}
         enableEnhancedImages={false}
         markdown={display.markdown}
-        className="rounded-lg border border-border bg-muted/20 p-4"
+        className="rounded-lg border border-transparent bg-muted/50 p-4"
       />
     </article>
   )
@@ -682,7 +682,7 @@ function DiscoverItemView({ payload, className }: { payload: SharePayload; class
           <p className="text-xs font-medium text-muted-foreground">{t("discoverItem.members")}</p>
           <ul className="space-y-2">
             {def.members.map((m, i) => (
-              <li key={i} className="rounded-md border border-border bg-muted/30 p-2 text-sm">
+              <li key={i} className="rounded-md border border-transparent bg-muted/60 p-2 text-sm">
                 <span className="font-medium text-foreground">
                   {m.role || t("discoverItem.memberRole", { index: i + 1 })}
                 </span>
@@ -708,7 +708,7 @@ function DiscoverItemView({ payload, className }: { payload: SharePayload; class
             {def.slots.map((slot) => (
               <li
                 key={slot.key}
-                className="rounded-md border border-border bg-muted/30 p-2 text-sm"
+                className="rounded-md border border-transparent bg-muted/60 p-2 text-sm"
               >
                 <span className="font-medium text-foreground">{slot.label}</span>
                 <span className="ml-2 text-xs text-muted-foreground">{slot.type}</span>
@@ -734,7 +734,7 @@ function DiscoverField({ label, body }: { label: string; body: string }) {
   return (
     <div className="space-y-1">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <pre className="overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-3 text-sm text-foreground">
+      <pre className="overflow-auto whitespace-pre-wrap rounded-lg border border-transparent bg-muted/70 p-3 text-sm text-foreground">
         {body}
       </pre>
     </div>
@@ -777,7 +777,7 @@ function PreText({ text, title, className }: { text: string; title?: string; cla
   return (
     <div className={cn("mx-auto w-full max-w-3xl", className)}>
       {title ? <h1 className="mb-4 text-xl font-semibold text-foreground">{title}</h1> : null}
-      <pre className="overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-4 text-sm text-foreground">
+      <pre className="overflow-auto whitespace-pre-wrap rounded-lg border border-transparent bg-muted/70 p-4 text-sm text-foreground">
         {text}
       </pre>
     </div>

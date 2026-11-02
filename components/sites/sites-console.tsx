@@ -318,7 +318,7 @@ export function SitesConsole() {
           <div
             role="status"
             data-testid="sites-host-banner"
-            className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs"
+            className="flex shrink-0 flex-wrap items-center gap-2 bg-warning/10 px-4 py-2 text-xs"
           >
             <CloudIcon aria-hidden className="size-3.5 shrink-0 text-warning" />
             <span className="font-medium">{t("desktopOnly.title")}</span>

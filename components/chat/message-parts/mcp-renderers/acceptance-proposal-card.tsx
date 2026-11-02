@@ -34,7 +34,10 @@ export function AcceptanceProposalCard({ part }: { part: ToolUIPart; sessionId?:
     Number.isSafeInteger(estimate.hourlyRateMicros) &&
     estimate.hourlyRateMicros >= 0
   return (
-    <section aria-label={t("title")} className="space-y-2 rounded-lg border p-3 text-sm">
+    <section
+      aria-label={t("title")}
+      className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3 text-sm"
+    >
       <h4 className="font-medium">{t("title")}</h4>
       <p className="break-words">
         {t("delivery", {

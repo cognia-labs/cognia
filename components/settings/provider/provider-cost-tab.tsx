@@ -144,7 +144,7 @@ interface OverviewCardProps {
 
 function OverviewCard({ label, value }: OverviewCardProps) {
   return (
-    <div className="rounded-lg border p-4 text-center">
+    <div className="rounded-lg border border-transparent bg-muted/50 p-4 text-center">
       <p className="text-2xl font-bold tracking-tight">{value}</p>
       <p className="mt-1 text-xs text-muted-foreground">{label}</p>
     </div>

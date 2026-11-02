@@ -199,7 +199,7 @@ export function WebReaderSettings() {
           const name = t(`readers.${id}`)
           const result = results[id]
           return (
-            <li key={id} className="space-y-2 rounded-lg border p-3">
+            <li key={id} className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
               <Field orientation="horizontal">
                 <FieldLabel htmlFor={`reader-${id}`}>{name}</FieldLabel>
                 <Switch

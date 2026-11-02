@@ -71,7 +71,7 @@ export function ApiKeyPoolInput({
     onChange(keys.map((k, i) => (i === index ? value : k)))
 
   return (
-    <div className="space-y-2 rounded-md border bg-muted/20 p-2.5">
+    <div className="space-y-2 rounded-md border border-transparent bg-muted/50 p-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <Label className="flex items-center gap-1.5 text-xs font-medium">

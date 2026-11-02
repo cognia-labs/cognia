@@ -153,7 +153,7 @@ export function TaskDependencyGraph({
                 data-testid={`dependency-node-${p.id}`}
                 style={{ left: p.x + PAD, top: p.y + PAD, width: NODE_W, height: NODE_H }}
                 className={cn(
-                  "absolute flex items-center gap-2 rounded-lg border bg-card px-2.5 text-left transition-colors hover:bg-accent",
+                  "absolute flex items-center gap-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) px-2.5 text-left transition-colors hover:bg-accent",
                   p.inCycle
                     ? "border-red-500/60"
                     : isFocus

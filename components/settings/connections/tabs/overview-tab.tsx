@@ -294,7 +294,7 @@ export function OverviewTab() {
               {recentAudit.map((entry) => (
                 <li
                   key={entry.id}
-                  className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-xs"
+                  className="flex items-center gap-2 rounded-md border border-transparent bg-muted/60 px-3 py-1.5 text-xs"
                 >
                   {entry.kind.includes("error") || entry.kind.includes("deadlettered") ? (
                     <XCircleIcon className="h-3 w-3 shrink-0 text-destructive" />

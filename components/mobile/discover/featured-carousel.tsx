@@ -48,7 +48,7 @@ export function FeaturedCarousel({ characters, onSelect, className }: FeaturedCa
               variant="ghost"
               onClick={() => onSelect(c)}
               data-testid={`featured-tile-${c.id}`}
-              className="h-auto w-24 flex-col items-center gap-1.5 rounded-md border border-border bg-card p-3 text-left font-normal"
+              className="h-auto w-24 flex-col items-center gap-1.5 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3 text-left font-normal"
             >
               <Avatar className="size-12">
                 <AvatarFallback

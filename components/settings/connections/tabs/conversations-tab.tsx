@@ -117,7 +117,7 @@ export function ConversationsTab() {
       <CardContent>
         {overrides && overrides.length > 0 && (
           <div
-            className="mb-3 flex flex-wrap gap-2 rounded-md border bg-muted/20 px-3 py-2 text-xs"
+            className="mb-3 flex flex-wrap gap-2 rounded-md border border-transparent bg-muted/50 px-3 py-2 text-xs"
             data-testid="conversations-safety-summary"
           >
             <span className="inline-flex items-center gap-1" data-testid="conversations-summary-cu">

@@ -311,7 +311,7 @@ export function IssueListConfig({ params, onChange }: ConfigProps) {
           {ISSUE_STATUSES.map((status) => (
             <label
               key={status}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={selected.includes(status)}
@@ -589,7 +589,7 @@ export function IssueEventTriggerConfig({ params, onChange }: ConfigProps) {
           {ISSUE_TRIGGER_KINDS.map((kind) => (
             <label
               key={kind}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={selected.includes(kind)}

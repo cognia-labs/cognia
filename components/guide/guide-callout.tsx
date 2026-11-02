@@ -39,8 +39,10 @@ export interface GuideCalloutProps {
 }
 
 const SURFACE: Record<NonNullable<GuideCalloutProps["tone"]>, string> = {
-  brand: "border-brand-action/25 bg-brand-wash",
-  attention: "border-brand-approval/35 bg-brand-approval/8",
+  // Washes, not frames: the tint carries the callout (the border stays
+  // transparent so the box size is unchanged).
+  brand: "border-transparent bg-brand-wash",
+  attention: "border-transparent bg-brand-approval/10",
 }
 
 const ICON_TILE: Record<NonNullable<GuideCalloutProps["tone"]>, string> = {
@@ -129,7 +131,7 @@ export function GuideCallout({
       data-variant="card"
       data-tone={tone}
       className={cn(
-        "flex items-start gap-3 rounded-xl border px-4 py-3",
+        "flex items-start gap-3 rounded-xl border border-transparent bg-muted/50 px-4 py-3",
         SURFACE[tone],
         GUIDE_CALLOUT_ENTER,
         className

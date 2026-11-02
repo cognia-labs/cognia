@@ -149,7 +149,7 @@ function TrayDisplayCard() {
     spendMetric || (display.taskbarUsageMode === "title" && titleNeedsUsage(display.titleFields))
 
   return (
-    <div className="space-y-4 rounded-md border bg-card p-4">
+    <div className="space-y-4 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-4">
       <div>
         <h3 className="text-sm font-semibold">{t("title")}</h3>
         <p className="text-sm text-muted-foreground">{t("description")}</p>
@@ -493,7 +493,7 @@ export function TraySection() {
 
       <TrayDisplayCard />
 
-      <ul className="divide-y rounded-md border bg-card">
+      <ul className="divide-y rounded-md border border-transparent bg-card shadow-(--card-shadow)">
         {items.map((item, idx) => {
           const isSep = item.kind === "separator"
           const id = "id" in item ? item.id : `sep-${idx}`

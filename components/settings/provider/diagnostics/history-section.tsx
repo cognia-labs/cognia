@@ -70,7 +70,7 @@ export function HistorySection({
       ) : (
         <>
           <div
-            className="mb-4 flex h-28 items-end gap-1 rounded-lg border bg-muted/20 p-3"
+            className="mb-4 flex h-28 items-end gap-1 rounded-lg border border-transparent bg-muted/50 p-3"
             role="img"
             aria-label={t("history.chartAria")}
           >

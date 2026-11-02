@@ -69,7 +69,7 @@ export function AutoComposeTaskEditor({
         {tasks.map((task, i) => (
           <li
             key={i}
-            className="space-y-2 rounded-md border bg-muted/20 p-2.5"
+            className="space-y-2 rounded-md border border-transparent bg-muted/50 p-2.5"
             data-testid={`auto-compose-task-${i}`}
           >
             <div className="flex items-center gap-2">

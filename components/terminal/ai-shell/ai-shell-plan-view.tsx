@@ -74,7 +74,10 @@ export function AiShellPlanView({
   }
 
   return (
-    <div className="mt-2 rounded-md border bg-muted/30 p-2" data-testid="ai-shell-plan">
+    <div
+      className="mt-2 rounded-md border border-transparent bg-muted/60 p-2"
+      data-testid="ai-shell-plan"
+    >
       {/* Plan header */}
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

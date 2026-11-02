@@ -550,7 +550,7 @@ function ErrorPageShell({
       */}
       <div
         className={cn(
-          "flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-sm",
+          "flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-transparent bg-card shadow-(--card-shadow) text-card-foreground shadow-sm",
           hasBody && "max-w-2xl"
         )}
       >

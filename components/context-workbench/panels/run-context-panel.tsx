@@ -157,7 +157,7 @@ export function RunContextPanel({ sessionId }: RunContextPanelProps) {
               <h3 className="text-sm font-medium">{t("workingSet.title")}</h3>
               <p className="text-xs text-muted-foreground">{t("workingSet.description")}</p>
             </div>
-            <div className="space-y-2 rounded-lg border p-3">
+            <div className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
               <Textarea
                 value={summary}
                 maxLength={512}
@@ -202,7 +202,10 @@ export function RunContextPanel({ sessionId }: RunContextPanelProps) {
               </Empty>
             ) : (
               workingSet.entries.map((entry) => (
-                <article key={entry.id} className="space-y-2 rounded-lg border p-3">
+                <article
+                  key={entry.id}
+                  className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3"
+                >
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm">{entry.summary}</p>
                     <Badge variant="outline">{t(`workingSet.${entry.status}`)}</Badge>
@@ -234,7 +237,7 @@ export function RunContextPanel({ sessionId }: RunContextPanelProps) {
               ))
             )}
 
-            <section className="space-y-2 rounded-lg border p-3">
+            <section className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
               <h4 className="text-sm font-medium">{t("workingSet.projectionTitle")}</h4>
               <p className="text-xs text-muted-foreground">
                 {t("workingSet.projectionDescription")}

@@ -168,7 +168,7 @@ export function AiShellPanel({ state, actions, className }: AiShellPanelProps) {
               onKeyDown={handleKeyDown}
               placeholder={t("inputPlaceholder")}
               aria-label={t("inputPlaceholder")}
-              className="field-sizing-fixed min-h-0 min-w-0 flex-1 resize-none rounded-md border bg-muted/50 px-2 py-1.5 text-[11px] shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus-visible:ring-1 focus-visible:ring-primary md:text-[11px] dark:bg-muted/50"
+              className="field-sizing-fixed min-h-0 min-w-0 flex-1 resize-none rounded-md border border-transparent bg-muted/70 px-2 py-1.5 text-[11px] shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus-visible:ring-1 focus-visible:ring-primary md:text-[11px] dark:bg-muted/50"
               rows={2}
               disabled={state.generating || state.executing || state.advisoryLoading}
               data-testid="ai-shell-input"

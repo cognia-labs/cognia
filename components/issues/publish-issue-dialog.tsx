@@ -108,7 +108,7 @@ export function PublishIssueDialog({
             </Select>
           </div>
 
-          <div className="flex flex-col gap-1.5 rounded-md border bg-muted/40 p-3 text-sm">
+          <div className="flex flex-col gap-1.5 rounded-md border border-transparent bg-muted/70 p-3 text-sm">
             <span className="text-xs font-medium text-muted-foreground">
               {t("publish.preview")}
             </span>

@@ -514,7 +514,7 @@ export function InspectorTab({ onOpenPermissions }: InspectorTabProps = {}) {
 
                 {view === "raw" && (
                   <>
-                    <pre className="max-h-[480px] overflow-auto rounded-md border bg-muted/30 p-3 text-[11px]">
+                    <pre className="max-h-[480px] overflow-auto rounded-md border border-transparent bg-muted/60 p-3 text-[11px]">
                       {JSON.stringify(visibleNodes, null, 2)}
                     </pre>
                     <Pagination
@@ -533,7 +533,7 @@ export function InspectorTab({ onOpenPermissions }: InspectorTabProps = {}) {
                 {view === "events" && <EventList events={events} empty={t("noEvents")} />}
 
                 {view === "evidence" && (
-                  <pre className="max-h-[480px] overflow-auto rounded-md border bg-muted/30 p-3 text-[11px]">
+                  <pre className="max-h-[480px] overflow-auto rounded-md border border-transparent bg-muted/60 p-3 text-[11px]">
                     {actionResult ? JSON.stringify(actionResult, null, 2) : t("noEvidence")}
                   </pre>
                 )}
@@ -745,7 +745,7 @@ function RevisionDiff({ history, empty }: { history: RevisionHistory; empty: str
     return <p className="text-xs text-muted-foreground">{empty}</p>
   }
   return (
-    <pre className="max-h-[480px] overflow-auto rounded-md border bg-muted/30 p-3 text-[11px]">
+    <pre className="max-h-[480px] overflow-auto rounded-md border border-transparent bg-muted/60 p-3 text-[11px]">
       {JSON.stringify(
         {
           initialRevision: history.initial?.revision ?? null,

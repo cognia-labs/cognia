@@ -15,7 +15,7 @@ import type { HarnessExecutionEvidence } from "@/types/harness/evolution"
 function Pre({ children, testId }: { children: string; testId?: string }) {
   return (
     <pre
-      className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 text-xs"
+      className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-transparent bg-muted/60 p-2 text-xs"
       data-testid={testId}
     >
       {children}

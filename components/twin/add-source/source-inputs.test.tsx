@@ -82,7 +82,10 @@ describe("FileSourceInput", () => {
     render(<FileSourceInput {...props} />)
 
     const input = screen.getByLabelText(/pick text files/i)
-    expect(input).toHaveClass("border-input", "focus-visible:border-ring")
+    expect(input).toHaveClass(
+      "bg-[var(--control-bg,var(--control-fill))]",
+      "focus-visible:border-(--control-edge-focus)"
+    )
     await userEvent.upload(
       input,
       [

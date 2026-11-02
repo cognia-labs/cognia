@@ -191,7 +191,7 @@ function AgentDetail(props: ComponentProps<typeof AgentInspector>) {
   }
   return (
     <div
-      className="@container/agent-detail flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card"
+      className="@container/agent-detail flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow)"
       data-testid="agent-inspector-frame"
     >
       <div className="min-h-0 flex-1 overflow-y-auto p-3 @md/agent-detail:p-4">
@@ -580,7 +580,7 @@ export function ExternalAgentSettings() {
 
       {onNativeMobile ? (
         <div
-          className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs"
+          className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs"
           data-testid="external-agent-mobile-notice"
         >
           <Smartphone aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -675,7 +675,9 @@ export function ExternalAgentSettings() {
                 data-detail-density={density}
                 className={cn(
                   "@container/agent-detail min-h-0 flex-1 overflow-y-auto",
-                  density === "split" ? "rounded-lg border p-4" : "pr-0.5"
+                  density === "split"
+                    ? "rounded-lg border border-transparent bg-muted/50 p-4"
+                    : "pr-0.5"
                 )}
               >
                 {view.kind === "overview" && (

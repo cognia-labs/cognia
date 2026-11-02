@@ -202,7 +202,7 @@ describe("localized phase labels", () => {
     // The shared 4px solid-primary bar at a dense row's edge reads as a heavy
     // black rule sitting on the row divider rather than as progress.
     expect(region?.className).toContain("[&_[data-slot=progress]]:h-0.5")
-    expect(region?.className).toContain("[&_[data-slot=progress-indicator]]:bg-primary/60")
+    expect(region?.className).toContain("[&_[data-slot=progress-indicator]]:bg-primary/35")
   })
 
   it("keeps the full-size bar and the phase text in the detail variant", () => {

@@ -224,7 +224,7 @@ function MarketplaceRow({
   const t = useTranslations("discover")
   return (
     <div
-      className="flex items-start gap-3 rounded-md border border-border bg-card p-3"
+      className="flex items-start gap-3 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3"
       data-testid={`discover-marketplace-row-${entry.id}`}
     >
       <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">

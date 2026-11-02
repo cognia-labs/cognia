@@ -119,7 +119,7 @@ export function DesktopLocalAgents() {
 
   if (error) {
     return (
-      <Empty className="rounded-xl border" data-testid="desktop-local-agents-error">
+      <Empty className="rounded-xl border border-transparent bg-muted/50" data-testid="desktop-local-agents-error">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <CloudOffIcon />

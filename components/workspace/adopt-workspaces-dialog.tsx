@@ -67,7 +67,7 @@ export function AdoptWorkspacesDialog({
               {candidates.map((candidate) => (
                 <li
                   key={candidate.path}
-                  className="flex items-center gap-2 rounded-lg border px-3 py-2"
+                  className="flex items-center gap-2 rounded-lg border border-transparent bg-muted/50 px-3 py-2"
                   data-testid={`adopt-candidate-${candidate.path}`}
                 >
                   <div className="flex min-w-0 flex-1 flex-col">

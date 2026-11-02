@@ -303,7 +303,7 @@ export function FilesSidebar({
           touch={touch}
         />
       </div>
-      <div className="shrink-0 border-t px-2 py-2">
+      <div className="shrink-0 px-2 py-2">
         <TrashPlace count={trashCount} touch={touch} />
       </div>
     </nav>

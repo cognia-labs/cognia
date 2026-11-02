@@ -95,7 +95,7 @@ export function PluginCapabilitiesSection() {
             return (
               <div
                 key={id}
-                className="rounded-md border bg-muted/20 px-2 py-1.5"
+                className="rounded-md border border-transparent bg-muted/50 px-2 py-1.5"
                 data-testid={`plugin-template-${id}`}
               >
                 <div className="flex items-start gap-2">
@@ -159,7 +159,7 @@ function CapabilityGroup({
       {entries.map((entry) => (
         <div
           key={entry.kind}
-          className="flex items-start gap-2 rounded-md border bg-muted/20 px-2 py-1.5"
+          className="flex items-start gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5"
           data-testid={`plugin-capability-${entry.kind}`}
         >
           <Boxes className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

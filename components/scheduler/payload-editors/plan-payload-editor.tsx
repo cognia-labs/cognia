@@ -109,7 +109,7 @@ export function PlanPayloadEditor({
         )}
       </div>
 
-      <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+      <div className="flex items-center justify-between rounded-lg border border-transparent bg-muted/50 px-3 py-2.5">
         <div>
           <Label className="text-sm font-medium">{t("payload.plan.replanOnFailure")}</Label>
           <p className="text-[11px] text-muted-foreground">

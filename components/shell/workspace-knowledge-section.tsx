@@ -270,7 +270,7 @@ export function WorkspaceKnowledgeSection({ project }: Props) {
             return (
               <li
                 key={file.id}
-                className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5"
+                className="flex flex-wrap items-center gap-2 rounded-md border border-transparent bg-muted/60 px-2 py-1.5"
               >
                 <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-xs" title={file.name}>

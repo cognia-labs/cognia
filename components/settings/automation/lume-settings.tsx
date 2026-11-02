@@ -318,7 +318,10 @@ function LumeResourcePanel({
     bootEpoch: resource.bootEpoch,
   }
   return (
-    <section className="flex flex-col gap-3 rounded-lg border p-4" aria-label={resource.vmName}>
+    <section
+      className="flex flex-col gap-3 rounded-lg border border-transparent bg-muted/50 p-4"
+      aria-label={resource.vmName}
+    >
       <p className="font-medium">{resource.vmName}</p>
       <p>
         {t("state", {

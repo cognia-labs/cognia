@@ -210,11 +210,11 @@ function BlindReviewSession({
         {assignment ? (
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="min-h-32 rounded-lg border p-4">
+              <div className="min-h-32 rounded-lg border border-transparent bg-muted/50 p-4">
                 <Badge>{t("lab.review.blind.left")}</Badge>
                 <p className="mt-3 whitespace-pre-wrap text-sm">{assignment.left.output}</p>
               </div>
-              <div className="min-h-32 rounded-lg border p-4">
+              <div className="min-h-32 rounded-lg border border-transparent bg-muted/50 p-4">
                 <Badge>{t("lab.review.blind.right")}</Badge>
                 <p className="mt-3 whitespace-pre-wrap text-sm">{assignment.right.output}</p>
               </div>
@@ -265,7 +265,7 @@ function BlindReviewSession({
                 })}
               </AlertDescription>
             </Alert>
-            <div className="grid gap-3 rounded-lg border p-4">
+            <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-4">
               <div className="grid gap-2 sm:max-w-sm">
                 <Label htmlFor="eval-review-password">{t("lab.review.blind.password")}</Label>
                 <Input
@@ -299,7 +299,7 @@ function BlindReviewSession({
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 rounded-lg border p-4">
+            <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label htmlFor="eval-adjudicator-id">{t("lab.review.blind.adjudicator")}</Label>

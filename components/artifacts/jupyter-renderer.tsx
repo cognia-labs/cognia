@@ -82,7 +82,7 @@ function JupyterCellOutput({ output }: { output: JupyterOutput }) {
     return (
       <pre
         className={cn(
-          "mt-2 rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap",
+          "mt-2 rounded-md border border-transparent bg-muted/70 p-3 text-xs whitespace-pre-wrap",
           isErr && "border-destructive/40 bg-destructive/5 text-destructive"
         )}
       >
@@ -131,7 +131,7 @@ function JupyterCellOutput({ output }: { output: JupyterOutput }) {
 
   if (text) {
     return (
-      <pre className="mt-2 rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
+      <pre className="mt-2 rounded-md border border-transparent bg-muted/70 p-3 text-xs whitespace-pre-wrap">
         {text}
       </pre>
     )
@@ -144,7 +144,7 @@ function JupyterCellView({ cell, language }: { cell: JupyterCell; language: stri
   const source = flattenSource(cell.source)
   if (cell.cell_type === "markdown") {
     return (
-      <div className="rounded-md border bg-card p-3">
+      <div className="rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3">
         <MarkdownRenderer content={source} rhythm="document" />
       </div>
     )
@@ -152,7 +152,7 @@ function JupyterCellView({ cell, language }: { cell: JupyterCell; language: stri
 
   if (cell.cell_type === "code") {
     return (
-      <div className="rounded-md border bg-card p-3">
+      <div className="rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3">
         <CodeBlock code={source} language={language} showLineNumbers />
         {cell.outputs?.map((out, i) => (
           <JupyterCellOutput key={i} output={out} />
@@ -162,7 +162,9 @@ function JupyterCellView({ cell, language }: { cell: JupyterCell; language: stri
   }
 
   return (
-    <pre className="rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap">{source}</pre>
+    <pre className="rounded-md border border-transparent bg-muted/70 p-3 text-xs whitespace-pre-wrap">
+      {source}
+    </pre>
   )
 }
 

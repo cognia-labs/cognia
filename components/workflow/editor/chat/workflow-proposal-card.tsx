@@ -217,7 +217,7 @@ export function WorkflowProposalCard({ part }: { part: ToolUIPart }) {
         data-proposal-id={proposalId}
         data-status={effectiveStatus}
         className={cn(
-          "my-2 rounded-md border bg-card text-card-foreground transition-opacity",
+          "my-2 rounded-md border border-transparent bg-card shadow-(--card-shadow) text-card-foreground transition-opacity",
           effectiveStatus === "discarded" && "opacity-60"
         )}
         // Hovering the card highlights the nodes this proposal touches on the

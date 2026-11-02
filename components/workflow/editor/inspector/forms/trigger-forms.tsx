@@ -185,7 +185,7 @@ export function ConnectorInboundConfig({ params, onChange }: ConfigProps) {
           {CONNECTOR_CHANNEL_KINDS.map((kind) => (
             <label
               key={kind}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={channelKinds.includes(kind)}
@@ -256,7 +256,7 @@ export function ConnectorSystemTriggerConfig({ params, onChange }: ConfigProps) 
           {CONNECTOR_SYSTEM_EVENT_KINDS.map((kind) => (
             <label
               key={kind}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={kinds.includes(kind)}
@@ -633,7 +633,7 @@ export function DesktopEventTriggerConfig({ params, onChange }: ConfigProps) {
           {DESKTOP_EVENT_KINDS.map((kind) => (
             <label
               key={kind}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={selected.includes(kind)}
@@ -691,7 +691,7 @@ export function PetEventTriggerConfig({ params, onChange }: ConfigProps) {
           {PET_EVENT_KINDS.map((kind) => (
             <label
               key={kind}
-              className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+              className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
             >
               <Checkbox
                 checked={selected.includes(kind)}

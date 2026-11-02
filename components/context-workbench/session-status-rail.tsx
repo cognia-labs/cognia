@@ -77,7 +77,7 @@ export function SessionStatusRail({ displayStatus, error, className }: SessionSt
     <div
       role={displayStatus === "error" ? "alert" : "status"}
       className={cn(
-        "flex items-start gap-2 rounded-lg border px-2 py-1.5",
+        "flex items-start gap-2 rounded-lg border border-transparent bg-muted/50 px-2 py-1.5",
         tone.surface,
         className
       )}

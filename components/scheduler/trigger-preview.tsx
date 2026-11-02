@@ -93,7 +93,10 @@ export function TriggerPreview({
 
   return (
     <Surface
-      className={cn("rounded-md border bg-muted/30 px-3 py-2 text-xs", className)}
+      className={cn(
+        "rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs",
+        className
+      )}
       data-testid="trigger-preview"
       data-state={state.kind}
     >

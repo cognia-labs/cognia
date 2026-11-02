@@ -69,7 +69,10 @@ export function SharedToolDetailSetting({
   }
 
   return (
-    <div className="flex items-start gap-3 rounded-lg border p-3" data-testid="shared-tool-detail">
+    <div
+      className="flex items-start gap-3 rounded-lg border border-transparent bg-muted/50 p-3"
+      data-testid="shared-tool-detail"
+    >
       <div className="min-w-0 flex-1 space-y-1">
         <Label htmlFor="shared-tool-detail-switch">{t("toolDetailLabel")}</Label>
         <p className="text-muted-foreground text-xs">{t("toolDetailDescription")}</p>

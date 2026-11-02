@@ -117,7 +117,7 @@ function ActionTile({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-4">
       <div className="flex items-start gap-3">
         <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted">
           <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -375,7 +375,10 @@ export function ServerDetailView({
               bridge can honestly do is carry the address across and say so.
             */}
             {server.publicUrl ? (
-              <section className="rounded-lg border p-4" data-testid="server-add-as-host">
+              <section
+                className="rounded-lg border border-transparent bg-muted/50 p-4"
+                data-testid="server-add-as-host"
+              >
                 <h3 className="text-sm font-medium">{t("addAsHost.title")}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">{t("addAsHost.description")}</p>
                 <Button asChild variant="outline" size="sm" className="mt-3">
@@ -388,7 +391,7 @@ export function ServerDetailView({
             ) : null}
 
             {latestBackup && (
-              <section className="rounded-lg border bg-card p-4">
+              <section className="rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-4">
                 <h3 className="text-sm font-medium">{t("overview.latestRecoveryPoint")}</h3>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -461,14 +464,19 @@ export function ServerDetailView({
               </Button>
             </div>
             {backups.length === 0 ? (
-              <Empty className={cn("rounded-lg border", loadingDetail && "opacity-60")}>
+              <Empty
+                className={cn(
+                  "rounded-lg border border-transparent bg-muted/50",
+                  loadingDetail && "opacity-60"
+                )}
+              >
                 <EmptyHeader>
                   <EmptyTitle>{t("backups.emptyTitle")}</EmptyTitle>
                   <EmptyDescription>{t("backups.empty")}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
-              <ul className="divide-y overflow-hidden rounded-lg border bg-card">
+              <ul className="divide-y overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow)">
                 {backups.map((backup) => (
                   <li
                     key={backup.id}
@@ -513,14 +521,19 @@ export function ServerDetailView({
               </Button>
             </div>
             {logs.length === 0 ? (
-              <Empty className={cn("rounded-lg border", loadingDetail && "opacity-60")}>
+              <Empty
+                className={cn(
+                  "rounded-lg border border-transparent bg-muted/50",
+                  loadingDetail && "opacity-60"
+                )}
+              >
                 <EmptyHeader>
                   <EmptyTitle>{t("logs.emptyTitle")}</EmptyTitle>
                   <EmptyDescription>{t("logs.empty")}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
-              <ul className="divide-y overflow-hidden rounded-lg border bg-card font-mono text-xs">
+              <ul className="divide-y overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow) font-mono text-xs">
                 {logs.map((entry) => (
                   <li key={entry.id} className="flex gap-3 p-2.5">
                     <span className="w-36 shrink-0 text-muted-foreground">

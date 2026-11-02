@@ -62,7 +62,7 @@ export function DiscoverHelp({ emphasised = false, flush = false, className }: D
       open={open}
       onOpenChange={setOpen}
       className={cn(
-        !flush && "rounded-lg border bg-card/40",
+        !flush && "rounded-lg border border-transparent bg-card/40 shadow-(--card-shadow)",
         !flush && (emphasised ? "border-border" : "border-dashed"),
         className
       )}

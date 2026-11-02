@@ -562,7 +562,7 @@ export function RouterFusionActionCatalog({
           return (
             <li
               key={action.id}
-              className="rounded-lg border"
+              className="rounded-lg border border-transparent bg-muted/50"
               data-testid={`router-fusion-action-${action.id}`}
               data-dormant={dormant ? "true" : undefined}
             >

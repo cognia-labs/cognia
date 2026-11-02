@@ -38,7 +38,7 @@ export function ReferenceChips({ bare = false }: ReferenceChipsProps = {}) {
         <div
           key={r.absolute}
           className={cn(
-            "group relative flex h-14 w-[13.5rem] max-w-full items-center gap-1.5 rounded-xl border bg-card py-1.5 pr-7 pl-1.5 text-xs shadow-xs hover:border-foreground/20"
+            "group relative flex h-14 w-[13.5rem] max-w-full items-center gap-1.5 rounded-xl border border-transparent bg-card shadow-(--card-shadow) py-1.5 pr-7 pl-1.5 text-xs shadow-xs hover:border-foreground/20"
           )}
           title={r.absolute}
         >

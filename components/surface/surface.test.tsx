@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react"
 import { Card } from "@/components/ui/card"
 import { Alert } from "@/components/ui/alert"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { Surface } from "./surface"
 
 describe("Surface", () => {
@@ -84,7 +86,8 @@ describe("primitives re-based on Surface keep their default look", () => {
     expect(el).toHaveAttribute("data-surface-layer", "raised")
     expect(el.className).toContain("rounded-stage")
     expect(el.className).toContain("text-card-foreground")
-    expect(el.className).toContain("shadow-sm")
+    expect(el.className).toContain("shadow-(--card-shadow)")
+    expect(el.className).toContain("border-transparent")
     expect(el.className).not.toContain("bg-card")
     expect(el.className).not.toContain("rounded-xl")
     // The data-slot the wallpaper stack and the component-style registry key
@@ -112,5 +115,17 @@ describe("primitives re-based on Surface keep their default look", () => {
     el = screen.getByTestId("a")
     expect(el.className).toContain("text-destructive")
     expect(el.className).not.toContain("bg-card")
+  })
+})
+
+describe("raised surfaces separate by tone", () => {
+  it("clears a plain border's colour on raised surfaces in the base layer", () => {
+    const css = readFileSync(join(process.cwd(), "app/globals.css"), "utf8")
+    expect(css).toMatch(
+      /\[data-surface-layer="raised"\]:where\(\.border, \[class\*="border-"\]\):not\(\.border-dashed\) \{\s*border-color: transparent;/
+    )
+    expect(css).toMatch(
+      /\[data-surface-layer="raised"\]:where\(\.border\) \{\s*box-shadow: var\(--card-shadow\);/
+    )
   })
 })

@@ -157,7 +157,7 @@ export function FirstRunStep({
               disabled={running !== null || blocked}
               onClick={() => void pick(card)}
               data-testid={`onboarding-card-${card.id}`}
-              className="flex h-full w-full flex-col items-stretch gap-2 rounded-xl border bg-card p-4 text-left transition-all hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:-translate-y-0.5"
+              className="flex h-full w-full flex-col items-stretch gap-2 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-4 text-left transition-all hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:-translate-y-0.5"
             >
               <span className="flex items-center gap-2">
                 {running === card.id ? (

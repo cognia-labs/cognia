@@ -258,7 +258,7 @@ export function ProviderStep({ onConnected, onViewChange, heading = true }: Prov
         )}
 
         <div
-          className="flex flex-col gap-3 rounded-xl border bg-card p-5"
+          className="flex flex-col gap-3 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-5"
           data-testid="onboarding-provider-connected"
         >
           <span className="flex items-center gap-2">
@@ -308,7 +308,7 @@ export function ProviderStep({ onConnected, onViewChange, heading = true }: Prov
           />
         )}
 
-        <div className="flex flex-col gap-4 rounded-xl border bg-muted/30 p-5">
+        <div className="flex flex-col gap-4 rounded-xl border border-transparent bg-muted/60 p-5">
           <div className="flex flex-col gap-2">
             <Label htmlFor="onboarding-provider-id" className="text-xs font-medium">
               {t("provider.pickerLabel")}
@@ -437,7 +437,7 @@ export function ProviderStep({ onConnected, onViewChange, heading = true }: Prov
             type="button"
             onClick={() => (providerKey === "apiKey" ? show("apiKey") : setDialog(providerKey))}
             data-testid={`onboarding-provider-${providerKey}`}
-            className="group flex h-full flex-col items-stretch gap-2 rounded-xl border bg-card p-4 text-left transition-all hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-safe:hover:-translate-y-0.5"
+            className="group flex h-full flex-col items-stretch gap-2 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-4 text-left transition-all hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-safe:hover:-translate-y-0.5"
           >
             <span className="flex items-center gap-2">
               {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />}

@@ -213,7 +213,7 @@ function AvatarCropEditor({ file, saving, onCancel, onConfirm }: AvatarCropEdito
           role="application"
           aria-label={t("avatarEditReposition")}
           className={cn(
-            "relative overflow-hidden rounded-md border bg-muted",
+            "relative overflow-hidden rounded-md border border-transparent bg-muted/80",
             natural ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-default"
           )}
           style={{ width: VIEWPORT_PX, height: VIEWPORT_PX }}

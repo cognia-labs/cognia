@@ -253,7 +253,7 @@ export function TunnelTab({ defaultLocalUrl = DEFAULT_LOCAL_URL }: TunnelTabProp
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <code
-                  className="flex-1 rounded-md border bg-muted/40 px-2 py-1.5 text-xs"
+                  className="flex-1 rounded-md border border-transparent bg-muted/70 px-2 py-1.5 text-xs"
                   data-testid="tunnel-public-url"
                 >
                   {info.publicUrl}
@@ -424,7 +424,7 @@ export function TunnelTab({ defaultLocalUrl = DEFAULT_LOCAL_URL }: TunnelTabProp
                 return (
                   <li
                     key={adapter.id}
-                    className="rounded-md border bg-muted/20 px-3 py-2"
+                    className="rounded-md border border-transparent bg-muted/50 px-3 py-2"
                     data-testid={`tunnel-adapter-row-${adapter.id}`}
                   >
                     <div className="flex items-center gap-2">

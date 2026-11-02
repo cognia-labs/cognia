@@ -167,7 +167,7 @@ export const SkillListItem = memo(function SkillListItem({
 
   if (grid) {
     return (
-      <div className="relative min-w-0 border-b border-r">
+      <div className="relative min-w-0">
         <span className="absolute right-2 top-2 z-10">{selectCheckbox}</span>
         <Button
           type="button"
@@ -175,11 +175,11 @@ export const SkillListItem = memo(function SkillListItem({
           onClick={() => onOpen(skill.id)}
           aria-current={active ? "true" : undefined}
           className={cn(
-            "h-full w-full items-stretch justify-start whitespace-normal rounded-none border-l-2 border-l-transparent text-left",
+            "h-full w-full items-stretch justify-start whitespace-normal rounded-lg text-left",
             compact ? "p-2" : "p-3",
             active
-              ? "border-l-primary bg-accent font-medium text-accent-foreground"
-              : "hover:bg-muted/50",
+              ? "bg-accent font-medium text-accent-foreground"
+              : "bg-muted/40 hover:bg-muted/70",
             status === "disabled" && "opacity-60"
           )}
         >
@@ -204,7 +204,7 @@ export const SkillListItem = memo(function SkillListItem({
   }
 
   return (
-    <div className="flex items-center gap-2 pl-2">
+    <div className="flex items-center gap-1.5 ps-2">
       {selectCheckbox}
       <Button
         type="button"
@@ -212,11 +212,9 @@ export const SkillListItem = memo(function SkillListItem({
         onClick={() => onOpen(skill.id)}
         aria-current={active ? "true" : undefined}
         className={cn(
-          "h-auto min-w-0 flex-1 justify-start gap-2.5 whitespace-normal rounded-none border-l-2 border-l-transparent px-2.5 text-left",
+          "h-auto min-w-0 flex-1 justify-start gap-2.5 whitespace-normal rounded-md px-2.5 text-left",
           compact ? "py-1.5" : "py-2",
-          active
-            ? "border-l-primary bg-accent font-medium text-accent-foreground"
-            : "hover:bg-muted/50",
+          active ? "bg-accent font-medium text-accent-foreground" : "hover:bg-muted/60",
           status === "disabled" && "opacity-60"
         )}
       >

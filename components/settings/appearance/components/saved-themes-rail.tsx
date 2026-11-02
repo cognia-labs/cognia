@@ -103,7 +103,7 @@ function ThemeItem({
   return (
     <div
       className={cn(
-        "group flex items-center gap-2 rounded-md border bg-card/40 px-2 py-1.5 text-xs transition",
+        "group flex items-center gap-2 rounded-md border border-transparent bg-card/40 shadow-(--card-shadow) px-2 py-1.5 text-xs transition",
         editing ? "border-primary ring-1 ring-primary/30" : "border-border hover:bg-card/70",
         active && !editing && "bg-primary/10"
       )}
@@ -205,7 +205,7 @@ export function SavedThemesRail({
   return (
     <aside
       className={cn(
-        "flex w-full flex-col gap-2 rounded-md border bg-muted/20 p-2",
+        "flex w-full flex-col gap-2 rounded-md border border-transparent bg-muted/50 p-2",
         "@4xl/appearance-pane:max-h-[60vh] @4xl/appearance-pane:min-h-0",
         className
       )}

@@ -220,7 +220,7 @@ export function RouterFusionSection() {
             return (
               <li
                 key={surface}
-                className="space-y-2 rounded-lg border px-3 py-2"
+                className="space-y-2 rounded-lg border border-transparent bg-muted/50 px-3 py-2"
                 data-testid={`router-fusion-surface-${surface}`}
                 data-dormant={wired ? undefined : "true"}
               >
@@ -452,7 +452,7 @@ export function RouterFusionSection() {
             return (
               <li
                 key={row}
-                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+                className="flex items-center justify-between gap-3 rounded-lg border border-transparent bg-muted/50 px-3 py-2"
                 data-testid={`router-fusion-rule-${row}`}
                 data-dormant={wired ? undefined : "true"}
               >

@@ -113,7 +113,7 @@ export function ToolPicker({ value, onChange, disabled, testId }: ToolPickerProp
             {customNames.map((name) => (
               <span
                 key={name}
-                className="inline-flex items-center gap-1 rounded-md border bg-muted/40 px-2 py-0.5 text-xs"
+                className="inline-flex items-center gap-1 rounded-md border border-transparent bg-muted/70 px-2 py-0.5 text-xs"
                 data-testid={`${testId}-custom-${name}`}
               >
                 <span className="font-mono">{name}</span>

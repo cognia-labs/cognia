@@ -287,7 +287,7 @@ export function DelegateAcceptanceProfiles({
                   return (
                     <li
                       key={profile.profileId}
-                      className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+                      className="flex items-center justify-between gap-3 rounded-lg border border-transparent bg-muted/50 px-3 py-2"
                       data-testid={`router-fusion-acceptance-profile-${profile.profileId}`}
                     >
                       <div className="min-w-0 space-y-0.5">

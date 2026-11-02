@@ -1772,10 +1772,9 @@ describe("LogPanel — Logs channel fixes", () => {
     ])
   })
 
-  it("draws one bottom border only and gives the URL sync the rows to resolve sel against", () => {
+  it("draws no frame of its own and gives the URL sync the rows to resolve sel against", () => {
     render(<LogPanel />)
-    expect(screen.getByTestId("log-panel")).toHaveClass("border-b")
-    expect(screen.getByTestId("log-panel")).not.toHaveClass("border-y")
+    expect(screen.getByTestId("log-panel").className).not.toMatch(/(^|\s)border-(b|y)(\s|$)/)
     const options = mockUseLogPanelUrlSync.mock.calls.at(-1)?.[1] as {
       logs: unknown[]
       logsReady: boolean

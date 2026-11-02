@@ -36,7 +36,7 @@ export function AgentRuntimeField({ value, onChange, disabled }: AgentRuntimeFie
 
   return (
     <div
-      className="space-y-1.5 rounded-md border bg-muted/20 p-3"
+      className="space-y-1.5 rounded-md border border-transparent bg-muted/50 p-3"
       data-testid="agent-runtime-field"
     >
       <Label className="text-xs font-medium">{t("label")}</Label>

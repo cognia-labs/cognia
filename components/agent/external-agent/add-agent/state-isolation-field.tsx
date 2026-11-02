@@ -127,7 +127,7 @@ export function StateIsolationField({
               key={option.value}
               htmlFor={id}
               className={cn(
-                "flex min-h-11 min-w-0 cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
+                "flex min-h-11 min-w-0 cursor-pointer items-start gap-3 rounded-lg border border-transparent bg-muted/50 p-3 font-normal",
                 value === option.value && "border-primary bg-primary/5",
                 option.disabled && "cursor-not-allowed opacity-60"
               )}

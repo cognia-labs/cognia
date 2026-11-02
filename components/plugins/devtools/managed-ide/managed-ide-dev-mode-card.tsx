@@ -98,7 +98,7 @@ export function ManagedIdeDevModeCard({ className }: { className?: string }) {
           <div className="flex min-w-0 items-start gap-3">
             <Surface
               layer="raised"
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg border"
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent bg-muted/50"
             >
               <BugIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             </Surface>

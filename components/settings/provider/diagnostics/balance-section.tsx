@@ -102,7 +102,7 @@ export function BalanceSection({
         const thresholdUnit =
           threshold?.unit ?? snapshot?.amounts[0]?.unit ?? source.unit ?? "credits"
         return (
-          <div key={source.id} className="rounded-lg border p-3">
+          <div key={source.id} className="rounded-lg border border-transparent bg-muted/50 p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{source.label}</p>

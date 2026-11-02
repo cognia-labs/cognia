@@ -247,7 +247,7 @@ function HostAgentRows({
                 {t("groupCount", { count: group.records.length })}
               </span>
             </p>
-            <div className="divide-y overflow-hidden rounded-xl border bg-card">
+            <div className="divide-y overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow)">
               {group.records.map((record) => (
                 <HostAgentRow
                   key={record.configId}
@@ -310,7 +310,7 @@ export function HostAgentList() {
 
   if (host.unavailable) {
     return (
-      <Empty className="rounded-xl border" data-testid="host-agents-unavailable">
+      <Empty className="rounded-xl border border-transparent bg-muted/50" data-testid="host-agents-unavailable">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <ServerCogIcon />
@@ -337,7 +337,7 @@ export function HostAgentList() {
         </Alert>
       ) : null}
       {loadFailed ? (
-        <Empty className="rounded-xl border" data-testid="host-agents-load-failed">
+        <Empty className="rounded-xl border border-transparent bg-muted/50" data-testid="host-agents-load-failed">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <CloudOffIcon />
@@ -360,7 +360,7 @@ export function HostAgentList() {
       ) : !host.loaded || (host.loading && host.configs.length === 0) ? (
         <LoadingRows />
       ) : host.configs.length === 0 ? (
-        <Empty className="rounded-xl border" data-testid="host-agents-empty">
+        <Empty className="rounded-xl border border-transparent bg-muted/50" data-testid="host-agents-empty">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <BotIcon />

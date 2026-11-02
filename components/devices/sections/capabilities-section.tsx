@@ -107,7 +107,7 @@ function CapabilityGroup({
         {sorted.map((cell) => (
           <li
             key={cell.id}
-            className="flex items-baseline gap-2 border-b border-border/50 py-1"
+            className="flex items-baseline gap-2 py-1"
             data-testid={`capability-${cell.id}`}
             /* Where the answer came from, at every width. The visible token
                below needs room the narrowest pane does not have, and a fact

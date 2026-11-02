@@ -369,7 +369,7 @@ export function SharedSessionFiles({
             {state.grants.map((grant) => (
               <li
                 key={grant.id}
-                className="space-y-1 rounded-lg border p-2"
+                className="space-y-1 rounded-lg border border-transparent bg-muted/50 p-2"
                 data-testid={`shared-files-grant-${grant.id}`}
               >
                 <div className="flex items-center gap-2">
@@ -405,7 +405,10 @@ export function SharedSessionFiles({
       )}
 
       {browsing ? (
-        <div className="space-y-2 rounded-lg border p-2" data-testid="shared-files-browser">
+        <div
+          className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-2"
+          data-testid="shared-files-browser"
+        >
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"

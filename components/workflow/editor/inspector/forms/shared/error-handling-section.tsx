@@ -88,7 +88,7 @@ export function ErrorHandlingSection({ errorHandling, onChange }: ErrorHandlingS
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="@container/inspector-form rounded-md border bg-muted/30"
+      className="@container/inspector-form rounded-md border border-transparent bg-muted/60"
       data-testid="error-handling-section"
     >
       <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left">

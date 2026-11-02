@@ -11,14 +11,15 @@ function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxP
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer size-4 shrink-0 rounded-[4px] border border-input shadow-xs transition-shadow outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:bg-input/30 dark:aria-invalid:ring-destructive/40 dark:data-[state=checked]:bg-primary",
+        "peer size-4 shrink-0 rounded-[4px] border border-foreground/25 bg-(--control-fill) transition-[background-color,border-color,box-shadow] duration-200 ease-ink outline-none focus-visible:border-(--control-edge-focus) focus-visible:ring-4 focus-visible:ring-(--control-halo) disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:border-foreground/30 dark:aria-invalid:ring-destructive/40 dark:data-[state=checked]:bg-primary",
         className
       )}
       {...props}
     >
       <CheckboxPrimitive.Indicator
         data-slot="checkbox-indicator"
-        className="grid place-content-center text-current transition-none"
+        // The tick is a small reward: it pops in on the under-damped spring.
+        className="grid place-content-center text-current transition-none motion-safe:animate-[check-pop_var(--duration-spring-pop)_var(--ease-spring-pop)]"
       >
         <CheckIcon className="size-3.5" />
       </CheckboxPrimitive.Indicator>

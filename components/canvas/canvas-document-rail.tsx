@@ -374,7 +374,7 @@ export function CanvasDocumentRail() {
           />
         </div>
         <div
-          className="flex items-center rounded-md border bg-muted/40 p-0.5 text-[11px]"
+          className="flex items-center rounded-md border border-transparent bg-muted/70 p-0.5 text-[11px]"
           role="group"
           aria-label={t("viewMode")}
         >

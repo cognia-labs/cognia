@@ -73,7 +73,7 @@ function CopyableCommand({ step, index }: { step: AgentEnrollmentStep; index: nu
         </span>
       </div>
       <div className="relative">
-        <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 pr-10 font-mono text-xs leading-relaxed">
+        <pre className="overflow-x-auto rounded-md border border-transparent bg-muted/70 p-3 pr-10 font-mono text-xs leading-relaxed">
           {step.command}
         </pre>
         <Button

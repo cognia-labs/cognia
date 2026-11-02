@@ -391,7 +391,7 @@ export function PromptsSection() {
           chooseLabel={t("rail.choose")}
         />
         <Surface asChild>
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow)">
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <div className="mx-auto max-w-3xl">
                 {selectedKey === PREVIEW_KEY ? (
@@ -491,7 +491,7 @@ function RailWrapper({
   const density = useSettingsListDensity()
   if (density === "stacked") {
     return (
-      <div className="space-y-2 rounded-lg border">
+      <div className="space-y-2 rounded-lg border border-transparent bg-muted/50">
         {header}
         <div className="border-t p-2" data-testid="prompts-stacked-picker">
           <Select value={selectedKey} onValueChange={onSelect}>
@@ -511,7 +511,7 @@ function RailWrapper({
     )
   }
   return (
-    <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+    <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50">
       {header}
       {list}
     </aside>

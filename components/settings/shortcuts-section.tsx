@@ -255,7 +255,7 @@ export function ShortcutsSection() {
         })}
       </p>
 
-      <ul className="divide-y rounded-md border bg-card">
+      <ul className="divide-y rounded-md border border-transparent bg-card shadow-(--card-shadow)">
         {rows.map((row) => {
           const isRecording = recorder?.id === row.id
           return (

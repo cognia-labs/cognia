@@ -169,7 +169,7 @@ export function TaskBoard({ team, tasks, teammates }: TaskBoardProps) {
     return (
       <div
         data-testid="task-drag-overlay"
-        className="w-60 cursor-grabbing rounded-lg border bg-card p-2 shadow-lg ring-1 ring-border/60"
+        className="w-60 cursor-grabbing rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-2 shadow-lg ring-1 ring-border/60"
       >
         <p className="line-clamp-2 text-xs font-medium leading-snug">{task.title}</p>
         {assigneeName ? (

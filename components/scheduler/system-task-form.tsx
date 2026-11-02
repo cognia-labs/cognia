@@ -490,7 +490,7 @@ export function SystemTaskForm({
           <Input
             value={f.logonUser}
             onChange={(e) => updateForm({ logonUser: e.target.value })}
-            placeholder="username"
+            placeholder={t("onLogonUserPlaceholder")}
             disabled={isSubmitting}
           />
         </div>
@@ -565,7 +565,9 @@ export function SystemTaskForm({
             <Input
               value={f.command}
               onChange={(e) => updateForm({ command: e.target.value })}
-              placeholder="/usr/bin/echo"
+              placeholder={
+                /* i18n-exempt: a literal command-line example, identical in every language */ "/usr/bin/echo"
+              }
               disabled={isSubmitting}
             />
           </div>
@@ -574,7 +576,9 @@ export function SystemTaskForm({
             <Input
               value={f.commandArgs}
               onChange={(e) => updateForm({ commandArgs: e.target.value })}
-              placeholder="arg1 arg2"
+              placeholder={
+                /* i18n-exempt: a literal command-line example, identical in every language */ "arg1 arg2"
+              }
               disabled={isSubmitting}
             />
           </div>
@@ -583,7 +587,9 @@ export function SystemTaskForm({
             <Input
               value={f.commandWorkingDir}
               onChange={(e) => updateForm({ commandWorkingDir: e.target.value })}
-              placeholder="/path/to/dir"
+              placeholder={
+                /* i18n-exempt: a literal command-line example, identical in every language */ "/path/to/dir"
+              }
               disabled={isSubmitting}
             />
           </div>
@@ -597,7 +603,9 @@ export function SystemTaskForm({
             <Input
               value={f.appPath}
               onChange={(e) => updateForm({ appPath: e.target.value })}
-              placeholder="/Applications/MyApp.app"
+              placeholder={
+                /* i18n-exempt: a literal command-line example, identical in every language */ "/Applications/MyApp.app"
+              }
               disabled={isSubmitting}
             />
           </div>
@@ -606,7 +614,9 @@ export function SystemTaskForm({
             <Input
               value={f.appArgs}
               onChange={(e) => updateForm({ appArgs: e.target.value })}
-              placeholder="--flag value"
+              placeholder={
+                /* i18n-exempt: a literal command-line example, identical in every language */ "--flag value"
+              }
               disabled={isSubmitting}
             />
           </div>
@@ -626,7 +636,7 @@ export function SystemTaskForm({
             </p>
           ))}
           {validationResult.translation.native_representation && (
-            <div className="rounded-md border bg-muted/30 px-2.5 py-1.5 text-xs font-mono text-muted-foreground">
+            <div className="rounded-md border border-transparent bg-muted/60 px-2.5 py-1.5 text-xs font-mono text-muted-foreground">
               {validationResult.translation.native_representation}
             </div>
           )}

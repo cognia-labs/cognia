@@ -894,7 +894,7 @@ export function ProviderSettings({ headerActionsTarget }: ProviderSettingsProps 
           // rather than `SETTINGS_DETAIL_PANE_CLASS`, which drops it below
           // 440px while our split threshold is 560px.
           detail={
-            <div className="@container/provider-pane flex min-h-0 flex-col overflow-hidden rounded-lg border">
+            <div className="@container/provider-pane flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50">
               {/* Selecting a provider swapped this whole subtree instantly, which is
               exactly what `PanelTransition` exists for — Appearance and
               Subscription already crossfade their master/detail bodies with it.

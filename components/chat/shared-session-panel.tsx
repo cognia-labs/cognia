@@ -696,7 +696,10 @@ export function SharedSessionPanel({
                 </label>
               </RadioGroup>
               {shareMode === "history" ? (
-                <Surface layer="raised" className="rounded-lg border p-3 text-sm">
+                <Surface
+                  layer="raised"
+                  className="rounded-lg border border-transparent bg-muted/50 p-3 text-sm"
+                >
                   <p className="font-medium">{t("historyWarningTitle")}</p>
                   <p className="mt-1 text-muted-foreground">
                     {t("historyWarning", {
@@ -706,7 +709,7 @@ export function SharedSessionPanel({
                   </p>
                 </Surface>
               ) : (
-                <div className="space-y-1 rounded-lg border p-3">
+                <div className="space-y-1 rounded-lg border border-transparent bg-muted/50 p-3">
                   <ConversationSummaryEditor
                     label={t("backgroundLabel")}
                     text={background.text}
@@ -722,7 +725,7 @@ export function SharedSessionPanel({
                   <p className="text-xs text-muted-foreground">{t("backgroundHint")}</p>
                 </div>
               )}
-              <div className="space-y-2 rounded-lg border p-3">
+              <div className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
                 <Label htmlFor="shared-invite-token">{t("inviteToken")}</Label>
                 <Input
                   id="shared-invite-token"
@@ -784,7 +787,7 @@ export function SharedSessionPanel({
                   {t("runCoordination")}
                 </h3>
                 {activeLease ? (
-                  <div className="rounded-lg border p-3 text-sm">
+                  <div className="rounded-lg border border-transparent bg-muted/50 p-3 text-sm">
                     <div className="flex items-center gap-2">
                       <Badge>{t("running")}</Badge>
                       <span className="truncate">
@@ -800,7 +803,7 @@ export function SharedSessionPanel({
                     {queue.map((item) => (
                       <div
                         key={item.id}
-                        className="flex items-center gap-2 rounded-lg border p-2 text-sm"
+                        className="flex items-center gap-2 rounded-lg border border-transparent bg-muted/50 p-2 text-sm"
                       >
                         <span className="min-w-0 flex-1 truncate">
                           {t("queuedBy", {
@@ -843,7 +846,7 @@ export function SharedSessionPanel({
                 {members.map((member) => (
                   <div
                     key={member.userId}
-                    className="flex items-center gap-2 rounded-lg border p-2"
+                    className="flex items-center gap-2 rounded-lg border border-transparent bg-muted/50 p-2"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 text-sm font-medium">
@@ -933,7 +936,7 @@ export function SharedSessionPanel({
                   <h3 id="shared-invite-heading" className="text-sm font-semibold">
                     {t("invite")}
                   </h3>
-                  <div className="space-y-2 rounded-lg border p-3">
+                  <div className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3">
                     <Label htmlFor="shared-invite-user">{t("userId")}</Label>
                     <Input
                       id="shared-invite-user"
@@ -1039,7 +1042,10 @@ export function SharedSessionPanel({
                         remote?.policyRevision ?? 0
                       ).allowed
                       return (
-                        <div key={approval.id} className="rounded-lg border p-3 text-sm">
+                        <div
+                          key={approval.id}
+                          className="rounded-lg border border-transparent bg-muted/50 p-3 text-sm"
+                        >
                           <div className="flex items-center gap-2">
                             <span className="min-w-0 flex-1 truncate font-medium">
                               {approval.action}
@@ -1079,7 +1085,10 @@ export function SharedSessionPanel({
                   </h3>
                   <div className="space-y-2">
                     {audit.slice(0, 20).map((event) => (
-                      <div key={event.id} className="rounded-lg border p-2 text-xs">
+                      <div
+                        key={event.id}
+                        className="rounded-lg border border-transparent bg-muted/50 p-2 text-xs"
+                      >
                         <div className="flex items-center gap-2">
                           <Badge variant={event.allowed ? "secondary" : "destructive"}>
                             {event.allowed ? t("allowed") : t("denied")}

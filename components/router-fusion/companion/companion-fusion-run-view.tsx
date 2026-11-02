@@ -166,7 +166,7 @@ export function CompanionFusionRunView({
   return (
     <Surface asChild>
       <section
-        className="rounded-lg border bg-card p-3 text-xs"
+        className="rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 text-xs"
         data-testid="companion-fusion-run"
         data-stage={stage}
         data-run-id={runId ?? undefined}

@@ -142,7 +142,7 @@ export function CollaborationCard() {
     >
       <p className="text-xs text-muted-foreground">{t("help")}</p>
 
-      <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-transparent bg-muted/50 p-3">
         <div className="min-w-0 space-y-1">
           <Label className="text-xs" htmlFor="collab-shared-chat">
             {tShared("switchLabel")}

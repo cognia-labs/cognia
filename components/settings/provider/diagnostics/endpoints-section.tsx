@@ -117,7 +117,7 @@ export function EndpointsSection({
           return (
             <div
               key={candidate.id}
-              className="flex items-center justify-between gap-2 rounded-lg border p-2"
+              className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2"
             >
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{candidate.url}</p>

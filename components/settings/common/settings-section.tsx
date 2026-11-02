@@ -152,7 +152,7 @@ export function SettingsRow({
   return (
     <div
       className={cn(
-        "flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 rounded-lg border p-2.5 sm:p-3 transition-colors",
+        "flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 rounded-lg border border-transparent bg-muted/50 p-2.5 sm:p-3 transition-colors",
         disabled && "opacity-50",
         className
       )}

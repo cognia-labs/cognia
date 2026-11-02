@@ -845,7 +845,7 @@ function Toggle({
   return (
     <div
       className={cn(
-        "flex items-start justify-between gap-4 rounded-md border bg-muted/10 p-3",
+        "flex items-start justify-between gap-4 rounded-md border border-transparent bg-muted/40 p-3",
         inert && "opacity-60"
       )}
       data-testid={testid}

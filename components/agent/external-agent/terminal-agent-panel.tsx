@@ -98,7 +98,7 @@ export function TerminalAgentPanel({ onOpenedInTerminal }: { onOpenedInTerminal?
   }
 
   return (
-    <Collapsible className="shrink-0 rounded-lg border">
+    <Collapsible className="shrink-0 rounded-lg border border-transparent bg-muted/50">
       <CollapsibleTrigger asChild>
         <Button variant="ghost" className="h-auto w-full justify-between px-3 py-2.5">
           <span className="flex items-center gap-2">

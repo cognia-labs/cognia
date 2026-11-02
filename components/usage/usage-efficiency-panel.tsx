@@ -71,7 +71,10 @@ export function UsageEfficiencyPanel({
 
   return (
     <div className="space-y-4" data-testid={testid}>
-      <div className="flex items-start gap-3 rounded-lg border p-3" data-testid={`${testid}-cache`}>
+      <div
+        className="flex items-start gap-3 rounded-lg border border-transparent bg-muted/50 p-3"
+        data-testid={`${testid}-cache`}
+      >
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
           <PiggyBankIcon className="size-4" aria-hidden />
         </span>

@@ -245,7 +245,7 @@ export function RoleModelFields({
   )
   return (
     <section
-      className="space-y-3 rounded-lg border p-3"
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
       aria-labelledby={headingId}
       data-testid="role-model-fields"
     >

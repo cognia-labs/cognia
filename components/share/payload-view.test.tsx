@@ -285,7 +285,7 @@ describe("PayloadView", () => {
     )
     const download = screen.getByRole("button", { name: "Download image" })
     expect(download).toHaveAttribute("data-variant", "outline")
-    expect(download).toHaveClass("focus-visible:ring-[3px]")
+    expect(download).toHaveClass("focus-visible:ring-4", "focus-visible:ring-(--control-halo)")
     fireEvent.click(download)
     expect(URL.createObjectURL).toHaveBeenCalled()
     expect(screen.getByRole("button", { name: "Copy image" })).toHaveAttribute(

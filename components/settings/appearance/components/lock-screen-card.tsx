@@ -68,7 +68,10 @@ export function LockScreenCard({ settings, gallery, onChange }: LockScreenCardPr
   const dimIsLow = usesImage && clampLockDim(merged.dim) < LOW_DIM_THRESHOLD
 
   return (
-    <section className="space-y-3 rounded-lg border p-3" data-testid="lock-screen-card">
+    <section
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+      data-testid="lock-screen-card"
+    >
       <div className="flex items-start gap-2">
         <LockKeyholeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         <div className="space-y-0.5">

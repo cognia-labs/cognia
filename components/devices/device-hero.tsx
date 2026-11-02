@@ -170,7 +170,7 @@ export function DeviceHero({ row, actions, onRepairHost, children }: DeviceHeroP
     ) : null
 
   return (
-    <div className="shrink-0 border-b px-4 pt-3.5 pb-2.5" data-testid="device-hero">
+    <div className="shrink-0 px-4 pt-3.5 pb-2.5" data-testid="device-hero">
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2.5">
         <span
           className={cn(

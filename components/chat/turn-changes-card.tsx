@@ -238,7 +238,7 @@ function TurnChangesCardBody({ sessionId, row }: { sessionId: string; row: CodeA
 
   return (
     <div
-      className="not-prose mt-2 w-full overflow-hidden rounded-xl border bg-muted/20"
+      className="not-prose mt-2 w-full overflow-hidden rounded-xl border border-transparent bg-muted/50"
       data-testid="turn-changes-card"
       data-reverted={reverted}
     >

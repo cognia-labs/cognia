@@ -57,7 +57,9 @@ export function TwinProfileCard({ twinId }: TwinProfileCardProps) {
         {profile.styleSummary ? (
           <div className="space-y-1">
             <span className="text-xs font-medium text-muted-foreground">{t("style")}</span>
-            <p className="rounded-md border bg-muted/40 p-2 text-xs">{profile.styleSummary}</p>
+            <p className="rounded-md border border-transparent bg-muted/70 p-2 text-xs">
+              {profile.styleSummary}
+            </p>
           </div>
         ) : null}
       </CardContent>

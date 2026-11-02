@@ -57,7 +57,7 @@ function PreferencesSummary({ preferences }: { preferences: SubscriptionPreferen
   const locale = useLocale()
   return (
     <dl
-      className="grid grid-cols-[auto_1fr] divide-y rounded-xl border text-sm [&>*]:py-2.5"
+      className="grid grid-cols-[auto_1fr] divide-y rounded-xl border border-transparent bg-muted/50 text-sm [&>*]:py-2.5"
       data-testid="token-preferences"
     >
       <dt className="pl-4 text-muted-foreground">{t("token.preferences.address")}</dt>

@@ -421,7 +421,7 @@ export function OutboundTab({ initialFilter = "all", adapterId }: OutboundTabPro
             return (
               <div
                 key={job.id}
-                className="flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 text-sm"
+                className="flex flex-col gap-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) px-4 py-3 text-sm"
                 data-testid={`outbound-row-${job.id}`}
               >
                 <div className="flex items-start gap-3">
@@ -502,7 +502,7 @@ export function OutboundTab({ initialFilter = "all", adapterId }: OutboundTabPro
                 </div>
                 {expanded && (
                   <div
-                    className="space-y-2 rounded-md border bg-muted/30 px-3 py-2 text-xs"
+                    className="space-y-2 rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs"
                     data-testid={`outbound-detail-${job.id}`}
                   >
                     <div className="flex flex-wrap gap-2">

@@ -228,7 +228,10 @@ export function MatrixSection({
 
           <div className="grid gap-3 @3xl/diagnostics:hidden">
             {rows.map(({ targetId, sample, summary }) => (
-              <article key={targetId} className="rounded-lg border p-3">
+              <article
+                key={targetId}
+                className="rounded-lg border border-transparent bg-muted/50 p-3"
+              >
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h4 className="truncate text-sm font-medium">

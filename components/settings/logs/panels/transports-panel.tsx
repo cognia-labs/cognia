@@ -427,7 +427,7 @@ export function LogsTransportsPanel({
                   </p>
                 )}
             </div>
-            <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="min-w-0 flex-1 space-y-0.5">
                 <Label htmlFor="logs-langfuse-model-content" className="text-sm font-medium">
                   {t("settings.transports.langfuseCaptureModelContent")}
@@ -444,7 +444,7 @@ export function LogsTransportsPanel({
                 }
               />
             </div>
-            <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="min-w-0 flex-1 space-y-0.5">
                 <Label htmlFor="logs-langfuse-tool-content" className="text-sm font-medium">
                   {t("settings.transports.langfuseCaptureToolContent")}
@@ -467,7 +467,7 @@ export function LogsTransportsPanel({
       case "agentTrace":
         return (
           <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="min-w-0 flex-1 space-y-0.5">
                 <Label htmlFor="agent-trace-capture-content-switch" className="text-sm font-medium">
                   {t("panel.agentTrace.settings.captureContent")}

@@ -215,7 +215,7 @@ export function McpServerEditor({ initial, onCancel, onSave }: EditorProps) {
           aria-label={t("config")}
         />
       ) : transport === "stdio" ? (
-        <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+        <div className="space-y-3 rounded-md border border-transparent bg-muted/60 p-3">
           <div className="space-y-1">
             <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {t("command")}
@@ -250,7 +250,7 @@ export function McpServerEditor({ initial, onCancel, onSave }: EditorProps) {
           />
         </div>
       ) : (
-        <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+        <div className="space-y-3 rounded-md border border-transparent bg-muted/60 p-3">
           <div className="space-y-1">
             <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {t("url")}

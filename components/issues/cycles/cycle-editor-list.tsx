@@ -187,7 +187,7 @@ export function CycleEditorList({
   return (
     <div className="flex flex-col gap-4" data-testid="cycle-editor-list">
       <form
-        className="flex flex-col gap-3 rounded-md border bg-card p-3"
+        className="flex flex-col gap-3 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3"
         onSubmit={(event) => {
           event.preventDefault()
           void create()

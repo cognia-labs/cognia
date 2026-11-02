@@ -220,7 +220,7 @@ export function RunIssueDialog({
                     onClick={() => setAdapterId(adapter.id)}
                     data-testid={`run-issue-adapter-${adapter.id}`}
                     className={cn(
-                      "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      "flex flex-col items-start gap-0.5 rounded-lg border border-transparent bg-muted/50 px-3 py-2 text-left text-sm transition-colors",
                       active ? "border-primary bg-primary/5" : "hover:bg-muted/50",
                       !verdict.ok && "cursor-not-allowed opacity-60"
                     )}

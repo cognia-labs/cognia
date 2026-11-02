@@ -1058,7 +1058,10 @@ function WindowSlot({
   const t = useTranslations("subscription.usage.window")
   if (!meter) {
     return (
-      <div className="rounded-lg border p-4 text-xs text-muted-foreground" data-testid={testid}>
+      <div
+        className="rounded-lg border border-transparent bg-muted/50 p-4 text-xs text-muted-foreground"
+        data-testid={testid}
+      >
         <span className="font-medium text-foreground">{label}</span> — {t("noData")}
       </div>
     )

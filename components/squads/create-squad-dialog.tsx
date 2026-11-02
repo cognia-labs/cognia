@@ -280,7 +280,7 @@ function StartOption({
       disabled={disabled}
       data-testid={`squad-create-${id}`}
       className={cn(
-        "group flex w-full items-start gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors",
+        "group flex w-full items-start gap-3 rounded-lg border border-transparent bg-muted/50 px-3.5 py-3 text-left transition-colors",
         "hover:border-foreground/20 hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         "disabled:pointer-events-none disabled:opacity-60"
       )}

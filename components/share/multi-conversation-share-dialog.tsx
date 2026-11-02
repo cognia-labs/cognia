@@ -69,7 +69,7 @@ export function MultiConversationShareDialog({ sessions, open, onOpenChange }: P
   const summary = (
     <motion.section
       aria-label={t("summary", { count: sessions.length })}
-      className="overflow-hidden rounded-lg border bg-muted/30"
+      className="overflow-hidden rounded-lg border border-transparent bg-muted/60"
       variants={summaryVariants}
       initial="initial"
       animate="animate"

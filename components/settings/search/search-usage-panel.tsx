@@ -93,7 +93,7 @@ export function SearchUsagePanel() {
         ) : (
           <>
             <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg border p-2 text-center">
+              <div className="rounded-lg border border-transparent bg-muted/50 p-2 text-center">
                 <div className="text-[10px] text-muted-foreground uppercase">
                   {tu("totalSearches")}
                 </div>
@@ -104,13 +104,13 @@ export function SearchUsagePanel() {
                   </Badge>
                 )}
               </div>
-              <div className="rounded-lg border p-2 text-center">
+              <div className="rounded-lg border border-transparent bg-muted/50 p-2 text-center">
                 <div className="text-[10px] text-muted-foreground uppercase">
                   {tu("avgResponse")}
                 </div>
                 <div className="text-base font-bold">{avgResponseTime}ms</div>
               </div>
-              <div className="min-w-0 rounded-lg border p-2 text-center">
+              <div className="min-w-0 rounded-lg border border-transparent bg-muted/50 p-2 text-center">
                 <div className="text-[10px] text-muted-foreground uppercase">{tu("mostUsed")}</div>
                 {/* The only stat that is a name rather than a number. A third of
                     a phone-width pane is ~80px, so "Google Custom Search" has to

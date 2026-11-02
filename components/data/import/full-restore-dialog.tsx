@@ -82,7 +82,7 @@ export function FullRestoreDialog() {
       </div>
 
       {flow.state.status === "needsPassphrase" && (
-        <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
+        <div className="space-y-2 rounded-md border border-transparent bg-muted/60 p-3 text-xs">
           <div className="flex items-center gap-2">
             <LockIcon className="size-4" />
             <span className="font-medium">{t("backup.encryptedFileDetected")}</span>

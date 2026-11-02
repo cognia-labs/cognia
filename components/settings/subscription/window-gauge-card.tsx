@@ -79,7 +79,10 @@ export function WindowGaugeCard({ meter, now, representative, testid }: WindowGa
   const countdown = resetLabel ?? t("resetUnknown")
 
   return (
-    <div className="space-y-2 rounded-lg border p-4" data-testid={testid}>
+    <div
+      className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-4"
+      data-testid={testid}
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate text-sm font-medium">{label}</span>
         {representative && (

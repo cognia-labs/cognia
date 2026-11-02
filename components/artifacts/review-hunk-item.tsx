@@ -63,7 +63,7 @@ export const ReviewHunkItem = memo(function ReviewHunkItem({
     <div
       data-testid="review-hunk-item"
       className={cn(
-        "rounded-lg border bg-card p-3 space-y-2 transition-all",
+        "rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 space-y-2 transition-all",
         item.status === "accepted" && "border-green-500/40",
         item.status === "rejected" && "opacity-40",
         className
@@ -105,7 +105,7 @@ export const ReviewHunkItem = memo(function ReviewHunkItem({
             <ChevronDown className="h-3 w-3 transition-transform data-[state=open]:rotate-180" />
           </Button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="rounded-md border bg-muted/30 p-2 text-xs font-mono">
+        <CollapsibleContent className="rounded-md border border-transparent bg-muted/60 p-2 text-xs font-mono">
           <pre className="overflow-x-auto whitespace-pre-wrap">
             {item.diffLines.map((line, i) => (
               <div

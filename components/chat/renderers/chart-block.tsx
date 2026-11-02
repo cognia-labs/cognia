@@ -367,7 +367,7 @@ export function ChartBlock({ content, isIncomplete = false, className }: ChartBl
                   scatterSeriesName={tPreview("chartSeriesFallbackName")}
                 />
               </div>
-              <div className="rounded-lg border">
+              <div className="rounded-lg border border-transparent bg-muted/50">
                 <ChartDataTable contract={contract} />
               </div>
             </div>

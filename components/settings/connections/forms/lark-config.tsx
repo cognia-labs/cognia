@@ -789,7 +789,7 @@ function SendAsUserFields(p: SendAsUserFieldsProps) {
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-4 rounded-md border bg-muted/30 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-4 rounded-md border border-transparent bg-muted/60 px-3 py-2.5">
         <div className="min-w-0 space-y-0.5">
           <Label className="text-xs font-medium">{t("connectedAccountLabel")}</Label>
           <p className="text-xs text-muted-foreground break-all">
@@ -1020,7 +1020,7 @@ function IdentityFields(p: IdentityFieldsProps) {
       </div>
 
       {/* selfBotOpenId — read-only display + Refresh, spans full width */}
-      <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2.5">
+      <div className="space-y-1.5 rounded-md border border-transparent bg-muted/60 px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <Label className="text-xs font-medium">{t("selfBotOpenIdLabel")}</Label>
           <Button

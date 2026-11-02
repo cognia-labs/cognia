@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils"
 import { useFilesLibraryStore } from "@/stores/files-library"
 
 const CARD_CLASS =
-  "flex h-full w-full min-w-0 flex-col items-start gap-2 rounded-xl border bg-card p-3 text-left transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
+  "flex h-full w-full min-w-0 flex-col items-start gap-2 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-3 text-left transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
 
 function TemplateCard({
   name,

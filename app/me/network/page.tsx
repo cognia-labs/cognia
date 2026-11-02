@@ -88,7 +88,7 @@ function NetworkBody() {
       </MeSection>
 
       <div
-        className="flex items-start gap-3 rounded-xl border bg-card px-3 py-3 text-xs text-muted-foreground"
+        className="flex items-start gap-3 rounded-xl border border-transparent bg-card shadow-(--card-shadow) px-3 py-3 text-xs text-muted-foreground"
         data-testid="network-manage-note"
       >
         <MonitorSmartphoneIcon className="mt-0.5 size-4 shrink-0" aria-hidden />

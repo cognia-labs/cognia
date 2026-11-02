@@ -125,7 +125,7 @@ export function ComponentsTab() {
                   <div
                     key={entry.key}
                     data-component-key={entry.key}
-                    className="flex flex-col gap-3 rounded-lg border p-3 @2xl/appearance-pane:flex-row @2xl/appearance-pane:items-center"
+                    className="flex flex-col gap-3 rounded-lg border border-transparent bg-muted/50 p-3 @2xl/appearance-pane:flex-row @2xl/appearance-pane:items-center"
                   >
                     {/* Live preview swatch — reflects elevation + radius directly. */}
                     <div className="flex items-center gap-3 @2xl/appearance-pane:w-40">

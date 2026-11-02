@@ -129,7 +129,11 @@ export function CloudSyncCard() {
   }
 
   return (
-    <Collapsible open={expanded} onOpenChange={setExpanded} className="rounded-lg border">
+    <Collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
+      className="rounded-lg border border-transparent bg-muted/50"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 p-3">
         <Label className="flex items-center gap-2 text-sm">
           <CloudIcon className="size-4" />

@@ -239,7 +239,7 @@ export function UsageDockView() {
         data-edge={edge}
         data-expanded={expanded ? "true" : "false"}
         className={cn(
-          "flex items-stretch gap-1 rounded-xl border p-1.5 text-popover-foreground backdrop-blur",
+          "flex items-stretch gap-1 rounded-xl border border-transparent bg-muted/50 p-1.5 text-popover-foreground backdrop-blur",
           vertical ? "flex-col" : "flex-row"
         )}
         aria-label={t("title")}

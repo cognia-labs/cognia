@@ -54,7 +54,10 @@ export function PetWalletStrip({
     </>
   )
 
-  const layout = cn("flex items-center gap-2", variant === "outlined" && "rounded-lg border p-2.5")
+  const layout = cn(
+    "flex items-center gap-2",
+    variant === "outlined" && "rounded-lg border border-transparent bg-muted/50 p-2.5"
+  )
   if (onOpenShop) {
     return (
       <Button

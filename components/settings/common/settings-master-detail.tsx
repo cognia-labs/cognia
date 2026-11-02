@@ -234,7 +234,7 @@ export function SettingsMasterDetail({
       >
         <div
           className={cn(
-            "hidden min-h-0 rounded-lg border",
+            "hidden min-h-0 rounded-lg border border-transparent bg-muted/50",
             "@[440px]/settings-pane:flex @[440px]/settings-pane:flex-col @[440px]/settings-pane:overflow-hidden",
             RAIL_DENSITY_CLASSES
           )}

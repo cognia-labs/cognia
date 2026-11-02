@@ -485,7 +485,7 @@ function SortableChip({
           data={file}
           onRemove={onRemove}
           className={cn(
-            "rounded-xl border transition-colors",
+            "rounded-xl border border-transparent bg-muted/50 transition-colors",
             isDocument ? "bg-card shadow-xs hover:border-foreground/20" : "bg-muted/40",
             state?.status === "rejected" && "border-destructive/60 bg-destructive/5"
           )}

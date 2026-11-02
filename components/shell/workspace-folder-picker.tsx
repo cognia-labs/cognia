@@ -409,7 +409,7 @@ export function WorkspaceFolderPicker({ open, onOpenChange, initialPath, onSelec
             </div>
           ) : null}
 
-          <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
+          <div className="flex items-center gap-2 rounded-md border border-transparent bg-muted/60 px-2 py-1.5">
             <Button
               type="button"
               variant="ghost"

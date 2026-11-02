@@ -61,7 +61,7 @@ function InlineDiff({
   const stats = useMemo(() => computeDiffStats(diff), [diff])
 
   return (
-    <div className="overflow-hidden rounded-md border bg-card text-xs">
+    <div className="overflow-hidden rounded-md border border-transparent bg-card shadow-(--card-shadow) text-xs">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5 text-[11px] text-muted-foreground">
         <span className="shrink-0">{base.label}</span>
         <span aria-hidden>↔</span>

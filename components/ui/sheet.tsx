@@ -58,20 +58,20 @@ function SheetContent({
         className={cn(
           // enter 500ms / exit 300ms, each scaled by the user's motion-speed
           // preference (`--motion-duration-scale`, from motion-applier).
-          "fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:[animation-duration:calc(300ms*var(--motion-duration-scale,1))] data-[state=open]:animate-in data-[state=open]:[animation-duration:calc(500ms*var(--motion-duration-scale,1))]",
+          "fixed z-50 flex flex-col gap-4 bg-background shadow-(--overlay-shadow) transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:[animation-duration:calc(300ms*var(--motion-duration-scale,1))] data-[state=open]:animate-in data-[state=open]:[animation-duration:calc(500ms*var(--motion-duration-scale,1))]",
           side === "right" &&
-            "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
+            "inset-y-0 right-0 h-full w-3/4 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
           side === "left" &&
-            "inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
+            "inset-y-0 left-0 h-full w-3/4 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
           side === "top" &&
-            "inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+            "inset-x-0 top-0 h-auto data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
           side === "bottom" &&
             // pb: bottom sheets sit flush against the screen edge — reserve the
             // home-indicator inset so footers/action rows stay tappable on
             // notched devices (0px on desktop). Arbitrary pb-* (not the
             // `safe-area-pb` utility) so a caller's own pb-* still wins via
             // tailwind-merge.
-            "inset-x-0 bottom-0 h-auto border-t pb-[env(safe-area-inset-bottom)] data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+            "inset-x-0 bottom-0 h-auto pb-[env(safe-area-inset-bottom)] data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
           className
         )}
         {...props}

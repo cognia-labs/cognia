@@ -77,7 +77,12 @@ const ACTIONS: Array<{ action: FormatAction; icon: React.ReactNode; label: strin
 
 export function DocumentFormatToolbar({ onAction, className }: DocumentFormatToolbarProps) {
   return (
-    <div className={cn("flex items-center gap-0.5 rounded-md border bg-muted/20 p-1", className)}>
+    <div
+      className={cn(
+        "flex items-center gap-0.5 rounded-md border border-transparent bg-muted/50 p-1",
+        className
+      )}
+    >
       {ACTIONS.map(({ action, icon, label }) => (
         <Tooltip key={action} delayDuration={300}>
           <TooltipTrigger asChild>

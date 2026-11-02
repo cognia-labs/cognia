@@ -486,7 +486,7 @@ export function GitHubRunnerPanel() {
           ) : (
             <form
               noValidate
-              className="space-y-4 rounded-lg border p-4"
+              className="space-y-4 rounded-lg border border-transparent bg-muted/50 p-4"
               onSubmit={(event) => {
                 event.preventDefault()
                 submitStep()

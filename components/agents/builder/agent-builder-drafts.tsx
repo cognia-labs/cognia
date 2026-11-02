@@ -56,7 +56,7 @@ export function AgentBuilderDrafts({
         <MessageSquareDashedIcon className="size-3.5" aria-hidden />
         {t("title", { count: drafts.length })}
       </h3>
-      <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border">
+      <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-transparent bg-muted/50">
         {drafts.map((session) => {
           const draft = session.agentBuilder?.draft ?? {}
           const name = draft.name?.trim() || t("untitled")

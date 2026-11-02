@@ -59,7 +59,7 @@ export function StatusFooter({
         </div>
       </div>
 
-      <div className="mt-6 grid gap-8 rounded-2xl border bg-card p-5 shadow-xs sm:p-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="mt-6 grid gap-8 rounded-2xl border border-transparent bg-card shadow-(--card-shadow) p-5 shadow-xs sm:p-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="max-w-3xl space-y-3 text-sm leading-6 text-muted-foreground">
           <h2 className="font-medium text-foreground">{t("footer.boundariesTitle")}</h2>
           <p data-testid="status-boundaries">{t("footer.boundaries")}</p>

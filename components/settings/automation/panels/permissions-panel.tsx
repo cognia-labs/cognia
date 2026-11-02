@@ -271,7 +271,7 @@ function PerPluginOverrides({
         ) : undefined
       }
       testid="automation-per-plugin"
-      className="rounded-md border bg-muted/20 p-3"
+      className="rounded-md border border-transparent bg-muted/50 p-3"
     >
       {loading ? (
         <Skeleton className="h-12 w-full" />

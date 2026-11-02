@@ -354,7 +354,7 @@ export function BackupScheduleDialog({
           </div>
 
           {backupType === "full" && (
-            <div className="space-y-3 rounded-lg border p-3">
+            <div className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <Label className="text-sm font-medium">{t("backup.includeOptions")}</Label>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex items-center gap-2 text-sm">
@@ -404,7 +404,7 @@ export function BackupScheduleDialog({
                 )}
               </Button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="mt-2 space-y-3 rounded-lg border bg-muted/20 p-3">
+            <CollapsibleContent className="mt-2 space-y-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Label className="text-xs">{t("maxRetries")}</Label>

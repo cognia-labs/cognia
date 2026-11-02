@@ -127,7 +127,7 @@ export function MessageVideoAttachmentCard({
 
   return (
     <figure
-      className="w-full max-w-md space-y-2 rounded-lg border bg-card p-2.5"
+      className="w-full max-w-md space-y-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-2.5"
       data-testid="message-video-attachment"
     >
       <figcaption className="space-y-0.5">

@@ -116,7 +116,7 @@ export function LocalProviderCard({
   // Compact view
   if (compact) {
     return (
-      <div className="flex items-center justify-between gap-2 rounded-lg border p-2">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2">
         <div className="flex items-center gap-2">
           <Server className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">{config.name}</span>

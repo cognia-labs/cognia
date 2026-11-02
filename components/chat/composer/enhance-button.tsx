@@ -181,7 +181,7 @@ export function EnhanceButton({
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {t("preview.original")}
                   </p>
-                  <p className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-2 text-muted-foreground">
+                  <p className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-transparent bg-muted/60 p-2 text-muted-foreground">
                     {preview.original}
                   </p>
                 </div>

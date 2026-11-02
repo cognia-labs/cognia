@@ -383,7 +383,7 @@ export function HooksSection({ cwd, runtimeCapabilities = DEFAULT_RUNTIME_CAPABI
           <div
             aria-label={t("eventListLabel")}
             className={cn(
-              "max-h-64 min-h-0 space-y-3 overflow-y-auto rounded-lg border bg-muted/20 p-2",
+              "max-h-64 min-h-0 space-y-3 overflow-y-auto rounded-lg border border-transparent bg-muted/50 p-2",
               "@3xl/hooks-pane:h-full @3xl/hooks-pane:max-h-none @3xl/hooks-pane:w-60 @3xl/hooks-pane:shrink-0"
             )}
           >

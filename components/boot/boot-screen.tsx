@@ -172,7 +172,7 @@ export function BootScreen({
         className={cn(
           // Opaque on purpose: a translucent card would force a backdrop
           // re-composite every frame the ambient field behind it drifts.
-          "grid w-full max-w-3xl overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_40px_-16px_rgb(0_0_0/0.18)] sm:grid-cols-[minmax(0,1.15fr)_minmax(15rem,0.85fr)]",
+          "grid w-full max-w-3xl overflow-hidden rounded-2xl bg-card shadow-(--overlay-shadow) sm:grid-cols-[minmax(0,1.15fr)_minmax(15rem,0.85fr)]",
           view.playIntro && "boot-screen__card--intro"
         )}
       >

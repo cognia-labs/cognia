@@ -197,7 +197,7 @@ export function ScheduledTaskApprovalPreview({
   return (
     <div
       className={cn(
-        "space-y-3 rounded-lg border p-3",
+        "space-y-3 rounded-lg border border-transparent bg-muted/50 p-3",
         destructive ? "border-destructive/40 bg-destructive/5" : "bg-muted/20"
       )}
       data-testid="schedule-approval-preview"

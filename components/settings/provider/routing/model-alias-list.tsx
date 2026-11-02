@@ -45,7 +45,7 @@ export function ModelAliasList() {
           {mappings.map((m) => (
             <div
               key={m.id}
-              className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5"
+              className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 px-3 py-2.5"
               data-testid={`alias-row-${m.alias}`}
             >
               <div className="min-w-0 flex-1 space-y-1.5">

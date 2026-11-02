@@ -180,7 +180,7 @@ export function RoutingTestPanel() {
           </p>
         ) : (
           <div
-            className="space-y-2 rounded-lg border bg-muted/30 px-3 py-2.5"
+            className="space-y-2 rounded-lg border border-transparent bg-muted/60 px-3 py-2.5"
             data-testid="preview-result"
           >
             <div className="flex flex-wrap items-center gap-2">

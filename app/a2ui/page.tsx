@@ -760,7 +760,7 @@ function A2UIPageContent() {
 
               <div
                 className={cn(
-                  "mt-6 overflow-hidden rounded-xl border bg-card shadow-sm",
+                  "mt-6 overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow) shadow-sm",
                   "transition-[border-color,box-shadow] duration-200 motion-reduce:transition-none",
                   "focus-within:border-ring/70 focus-within:shadow-md"
                 )}
@@ -1065,7 +1065,7 @@ function A2UIPageContent() {
                   /* List mode is one surface with divided rows, not a stack of
                      floating cards — rows read as a list and the eye follows a
                      single left edge down the page. */
-                  <div className="overflow-hidden rounded-xl border bg-card">
+                  <div className="overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow)">
                     {filteredApps.map((app, index) => (
                       <div
                         key={app.id}

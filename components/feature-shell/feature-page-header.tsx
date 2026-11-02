@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils"
  *
  *  - `management` — the full-bleed band every feature route uses
  *  - `compact`    — the same band at column-header height
- *  - `card`       — a bordered, rounded block with a gap beneath it, for
+ *  - `card`       — a rounded, raised block with a gap beneath it, for
  *                   scrolling document pages that have no band to sit in
  *
  * `card` exists because three call sites were already producing it by passing
@@ -210,9 +210,12 @@ export function FeaturePageHeader({
       data-has-secondary={String(hasSecondary)}
       data-navigation-placement={navigationPlacement}
       className={cn(
-        "@container/feature-header relative z-10 shrink-0 overflow-hidden border-border/70 bg-background/88 text-foreground backdrop-blur-xl supports-[backdrop-filter]:bg-background/76",
-        isCard ? "mb-5 rounded-stage border" : "border-b",
-        "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/35 before:to-transparent",
+        // No rule under the band and no hairline over it: the band is the
+        // page's own ground (translucent, blurred over what scrolls beneath),
+        // and the toolbar or panes that follow separate by tone. The card
+        // variant lifts onto the raised fill instead of drawing a frame.
+        "@container/feature-header relative z-10 shrink-0 overflow-hidden bg-background/88 text-foreground backdrop-blur-xl supports-[backdrop-filter]:bg-background/76",
+        isCard && "mb-5 rounded-stage bg-card supports-[backdrop-filter]:bg-card",
         className
       )}
     >
@@ -242,7 +245,7 @@ export function FeaturePageHeader({
           <span
             data-slot="feature-header-avatar"
             className={cn(
-              "grid shrink-0 place-items-center overflow-hidden border border-primary/15 bg-gradient-to-br from-primary/14 via-primary/8 to-background",
+              "grid shrink-0 place-items-center overflow-hidden bg-gradient-to-br from-primary/14 via-primary/8 to-primary/[0.03]",
               isCompact ? "size-7 rounded-lg" : "size-9 rounded-xl"
             )}
             aria-hidden="true"
@@ -252,7 +255,7 @@ export function FeaturePageHeader({
         ) : icon ? (
           <span
             className={cn(
-              "grid shrink-0 place-items-center border border-primary/15 bg-gradient-to-br from-primary/14 via-primary/8 to-background text-primary shadow-xs",
+              "grid shrink-0 place-items-center bg-gradient-to-br from-primary/14 via-primary/8 to-primary/[0.03] text-primary",
               isCompact ? "size-7 rounded-lg [&_svg]:size-3.5" : "size-9 rounded-xl [&_svg]:size-4"
             )}
             aria-hidden="true"
@@ -348,7 +351,7 @@ export function FeaturePageHeader({
       </div>
 
       {hasSecondary ? (
-        <div className="relative flex min-h-[var(--chrome-h)] min-w-0 items-center gap-2 border-t border-border/55 bg-muted/16 px-3 py-1.5 @md/feature-header:px-4">
+        <div className="relative flex min-h-[var(--chrome-h)] min-w-0 items-center gap-2 bg-muted/30 px-3 py-1.5 @md/feature-header:px-4">
           {secondaryNavigation ? (
             <div
               // Same contract as the inline slot and as `controls` below. This

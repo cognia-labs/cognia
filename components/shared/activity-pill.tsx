@@ -93,7 +93,7 @@ export function ActivityPill({
       role="status"
       aria-label={ariaLabel}
       className={cn(
-        "flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs",
+        "flex items-center gap-2 rounded-md border border-transparent bg-muted/70 px-3 py-1.5 text-xs",
         className
       )}
     >

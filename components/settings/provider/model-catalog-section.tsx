@@ -380,7 +380,7 @@ function CatalogList({
     <div
       ref={scrollRef}
       className={cn(
-        "min-h-0 overflow-auto rounded-lg border",
+        "min-h-0 overflow-auto rounded-lg border border-transparent bg-muted/50",
         density === "stacked" && "row-span-2"
       )}
       data-testid="model-catalog-list"
@@ -419,7 +419,7 @@ function CatalogList({
                   aria-current={isSelected ? "true" : undefined}
                   className={cn(
                     "size-full justify-start gap-3 whitespace-normal rounded-none px-3 text-left font-normal hover:bg-muted/40",
-                    isSelected && "bg-accent shadow-[inset_2px_0_0_0_var(--primary)]"
+                    isSelected && "bg-accent"
                   )}
                 >
                   <ProviderIcon

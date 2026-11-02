@@ -42,7 +42,7 @@ export function EndpointDiffDialog({
           <AlertDialogTitle>{t("endpoints.diffTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("endpoints.diffDescription")}</AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="grid gap-2 rounded-lg border p-3 text-sm">
+        <div className="grid gap-2 rounded-lg border border-transparent bg-muted/50 p-3 text-sm">
           <div>
             <span className="text-muted-foreground">{t("endpoints.before")}: </span>
             <code className="break-all">{currentEndpoint}</code>

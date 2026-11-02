@@ -195,7 +195,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--border",
     group: "surfaceText",
     base: true,
-    default: lit("oklch(0.93 0.004 106.5)", "oklch(1 0 0 / 8%)"),
+    default: lit("oklch(0.952 0.003 106.5)", "oklch(1 0 0 / 6%)"),
     vscode: [
       "panel.border",
       "editorWidget.border",
@@ -455,7 +455,7 @@ export const THEME_TOKEN_CATALOG: readonly ThemeTokenDef[] = [
     cssVar: "--sidebar-border",
     group: "sidebar",
     base: true,
-    default: lit("oklch(0.93 0.004 106.5)", "oklch(1 0 0 / 8%)"),
+    default: lit("oklch(0.952 0.003 106.5)", "oklch(1 0 0 / 6%)"),
     vscode: ["sideBar.border", "activityBar.border"],
   },
   {

@@ -136,7 +136,7 @@ export function DiagnosticCard({
       data-code={diagnostic.code}
       data-severity={diagnostic.severity}
       className={cn(
-        "rounded-lg border px-3 py-2",
+        "rounded-lg border border-transparent bg-muted/50 px-3 py-2",
         destructive
           ? "border-destructive/30 bg-destructive/[0.06]"
           : "border-warning/30 bg-warning/[0.06]",

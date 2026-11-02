@@ -86,7 +86,7 @@ export function FilesCard({
           }
         }}
         className={cn(
-          "group relative flex aspect-square min-w-0 cursor-pointer flex-col overflow-hidden rounded-xl border bg-card text-left transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+          "group relative flex aspect-square min-w-0 cursor-pointer flex-col overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow) text-left transition-colors outline-none hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
           (selected || previewed) && "border-primary ring-1 ring-primary",
           isDragging && "opacity-50"
         )}

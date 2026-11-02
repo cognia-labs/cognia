@@ -81,7 +81,7 @@ export function TaskConfirmationDialog({
           <AlertDialogDescription asChild>
             <div className="space-y-4">
               {/* Task name */}
-              <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center justify-between rounded-lg border border-transparent bg-muted/50 p-3">
                 <div className="space-y-1">
                   <span className="text-sm font-medium">{confirmation.details.task_name}</span>
                   {(confirmation.target_task_id || confirmation.task_id) && (

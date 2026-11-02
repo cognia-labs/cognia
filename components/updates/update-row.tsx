@@ -77,7 +77,7 @@ export function UpdateRow({
       data-testid={`update-row-${item.key}`}
       data-state={item.state}
       className={cn(
-        "flex flex-col gap-2 rounded-lg border p-3",
+        "flex flex-col gap-2 rounded-lg border border-transparent bg-muted/50 p-3",
         highlighted && "ring-2 ring-primary",
         critical && item.state === "available" && "border-destructive/50"
       )}

@@ -124,7 +124,7 @@ export const FilesMobileRow = memo(function FilesMobileRow({
           data-testid={`files-mobile-open-${entry.key}`}
         />
         <span className="pointer-events-none relative z-10 flex min-h-14 w-full min-w-0 items-center gap-3 py-2 pl-3">
-          <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+          <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-transparent bg-muted/70">
             {isThumbnailEntry(entry) ? (
               <FilesImageThumb
                 hash={thumbnailHash(entry)}

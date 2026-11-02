@@ -515,6 +515,7 @@
   "onEventId": "事件 ID",
   "onEventSource": "事件来源",
   "onLogonUser": "登录用户（可选）",
+  "onLogonUserPlaceholder": "用户名",
   "openInPluginSettings": "在插件设置中打开",
   "openInSourceEditor": "在源编辑器中打开",
   "openInWorkflowEditor": "在工作流编辑器中打开",

@@ -120,7 +120,7 @@ export function ChangelogTab({
           <li
             key={row.id}
             className={cn(
-              "rounded-md border bg-card p-2 text-xs",
+              "rounded-md border border-transparent bg-card shadow-(--card-shadow) p-2 text-xs",
               row.status === "discarded" && "opacity-70"
             )}
             data-testid={`workflow-changelog-row-${row.id}`}

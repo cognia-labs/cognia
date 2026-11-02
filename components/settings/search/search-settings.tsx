@@ -103,12 +103,12 @@ export function SearchSettings() {
                the rail a share of it. */
             <SettingsListDetail listWidth={260}>
               {/* ── Master rail ─────────────────────────────────────────── */}
-              <aside className="min-h-0 overflow-y-auto rounded-lg border p-2">
+              <aside className="min-h-0 overflow-y-auto rounded-lg border border-transparent bg-muted/50 p-2">
                 <SearchSettingsNav active={active} onSelect={navigate} />
               </aside>
 
               {/* ── Detail panel ────────────────────────────────────────── */}
-              <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+              <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50">
                 <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                     {activeSection.icon}

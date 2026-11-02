@@ -150,7 +150,7 @@ export function AskUserDialog() {
             <MessageCircleQuestion className="size-5 shrink-0 text-primary" aria-hidden />
             {t("title")}
           </DialogTitle>
-          <DialogDescription className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-sm leading-relaxed text-foreground">
+          <DialogDescription className="mt-1 whitespace-pre-wrap rounded-md border border-transparent bg-muted/70 p-3 text-sm leading-relaxed text-foreground">
             {request.question}
           </DialogDescription>
         </DialogHeader>

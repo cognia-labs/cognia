@@ -108,6 +108,12 @@ describe("KanbanBoard", () => {
       expect(screen.getByTestId("k-column-done")).toContainElement(screen.getByTestId("card-c"))
     })
 
+    it("draws lanes without a frame, keeping a transparent border for the drop ring", () => {
+      renderBoard([A])
+      const lane = screen.getByTestId("k-column-todo")
+      expect(lane).toHaveClass("border", "border-transparent")
+    })
+
     it("registers one droppable per column, enabled at rest", () => {
       renderBoard([A])
       expect(droppableCalls).toEqual(

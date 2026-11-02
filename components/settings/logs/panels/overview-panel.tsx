@@ -120,7 +120,10 @@ export function LogsOverviewPanel({
           </Badge>
         }
       >
-        <div className={cn("rounded-lg border p-3", TONE_CLASSES[tone])} role="status">
+        <div
+          className={cn("rounded-lg border border-transparent bg-muted/50 p-3", TONE_CLASSES[tone])}
+          role="status"
+        >
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 @lg/settings-stack:grid-cols-3">
             <Fact label={t("settings.native.mode")} value={nativeLogging.startupMode} />
             <Fact label={t("settings.native.bridge")} value={nativeLogging.bridgeState} />
@@ -170,7 +173,7 @@ export function LogsOverviewPanel({
         {transports.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t("settings.overview.noTransports")}</p>
         ) : (
-          <ul className="divide-y divide-border/60 rounded-lg border">
+          <ul className="divide-y divide-border/60 rounded-lg border border-transparent bg-muted/50">
             {transports.map((health) => {
               const transportTone = toneForTransportStatus(health.status)
               return (

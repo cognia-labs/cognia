@@ -53,7 +53,10 @@ export function RunRetrospectiveView({
         </Empty>
       ) : (
         bundles.map(({ retrospective, proposals }) => (
-          <section key={retrospective.id} className="space-y-3 rounded-lg border p-3">
+          <section
+            key={retrospective.id}
+            className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+          >
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-muted-foreground">
                 {retrospective.runId}

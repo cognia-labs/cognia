@@ -294,7 +294,7 @@ export function SiteDomainsTab({
                 <Label
                   key={mode}
                   className={cn(
-                    "flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-2 text-xs font-normal transition-colors hover:bg-accent/50 motion-reduce:transition-none",
+                    "flex cursor-pointer items-center gap-2 rounded-lg border border-transparent bg-muted/50 px-2 py-2 text-xs font-normal transition-colors hover:bg-accent/50 motion-reduce:transition-none",
                     accessMode === mode && "border-primary bg-primary/5 ring-1 ring-primary/40"
                   )}
                 >

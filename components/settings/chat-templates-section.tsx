@@ -574,7 +574,7 @@ export function ChatTemplatesSection({ mobile = false }: ChatTemplatesSectionPro
         />
 
         <Surface asChild>
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow)">
             {creating ? (
               <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 <div className="mx-auto max-w-2xl">
@@ -835,7 +835,7 @@ function RailWrapper({
   const density = useSettingsListDensity()
   if (density === "stacked") {
     return (
-      <div className="space-y-2 rounded-lg border">
+      <div className="space-y-2 rounded-lg border border-transparent bg-muted/50">
         {/* The rail's pinned header only — the scroll list is replaced by the
             picker so the auto-height row stays small. */}
         {railHeader}
@@ -867,7 +867,7 @@ function RailWrapper({
     )
   }
   return (
-    <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+    <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50">
       {railHeader}
       {railList}
     </aside>

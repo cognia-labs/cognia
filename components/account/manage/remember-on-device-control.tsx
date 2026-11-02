@@ -71,7 +71,7 @@ export function RememberOnDeviceControl({ account }: RememberOnDeviceControlProp
 
   return (
     <div className="flex flex-col gap-2" data-testid="account-remember-on-device">
-      <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2.5">
         <div className="min-w-0">
           <Label htmlFor={switchId} className="text-xs font-medium">
             {t("rememberOnDeviceLabel")}

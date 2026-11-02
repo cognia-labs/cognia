@@ -147,8 +147,8 @@ export function ConsoleSection({
 }: ConsoleSectionProps) {
   if (variant === "sheet") {
     // No `Surface`: a chapter has no tier of its own, it is part of the pane.
-    // The rule under the heading is what separates it, so the heading and the
-    // body share the pane's ground and alignment edge.
+    // No rule under the heading either: the gap between chapters separates
+    // them, and the heading and the body share the pane's ground and edge.
     return (
       <section
         id={`${idPrefix}-${id}`}
@@ -162,9 +162,9 @@ export function ConsoleSection({
           meta={meta}
           action={action}
           description={description}
-          className="border-b pb-2"
+          className="pb-0.5"
         />
-        <div className={cn("min-w-0 flex-1 pt-3", CARD_CONTAINER[pane])}>{children}</div>
+        <div className={cn("min-w-0 flex-1 pt-2.5", CARD_CONTAINER[pane])}>{children}</div>
       </section>
     )
   }
@@ -183,9 +183,11 @@ export function ConsoleSection({
           meta={meta}
           action={action}
           description={description}
-          className="border-b px-3.5 py-2.5"
+          className="px-3.5 pt-3 pb-1"
         />
-        <div className={cn("min-w-0 flex-1 px-3.5 py-3", CARD_CONTAINER[pane])}>{children}</div>
+        <div className={cn("min-w-0 flex-1 px-3.5 pt-2 pb-3.5", CARD_CONTAINER[pane])}>
+          {children}
+        </div>
       </section>
     </Surface>
   )

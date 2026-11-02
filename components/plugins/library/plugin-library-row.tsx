@@ -143,17 +143,15 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
         // capability chips widened every row, and the list's scroll container
         // answered with a horizontal scrollbar that shifted the WHOLE list
         // sideways, names and all.
-        "group relative flex min-w-0 items-center gap-2 overflow-hidden border-b px-2 py-1.5 text-sm",
-        "transition-colors hover:bg-accent/40",
-        // Active = selected detail target, so render a 3px primary accent bar
-        // via a pseudo-element. It composes with the errored left border
-        // without one overwriting the other.
-        active &&
-          "bg-accent/60 before:absolute before:inset-y-0 before:left-0 before:z-10 before:w-[3px] before:bg-primary",
+        "group relative flex min-w-0 items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-sm",
+        "transition-colors hover:bg-muted/60",
+        // Active = the detail target. A tone step marks it, the same one the
+        // scheduler and bots lists use, rather than a drawn accent bar.
+        active && "bg-muted",
         !plugin.enabled && "opacity-70",
-        // Errored gets a destructive tint + thicker left border so the row
-        // is unmistakably distinct from disabled/loading.
-        errored && "border-l-2 border-l-destructive bg-destructive/5"
+        // Errored keeps its own tint (and the warning glyph in the row) so it
+        // stays distinct from disabled/loading without drawing an edge.
+        errored && (active ? "bg-destructive/12" : "bg-destructive/[0.07]")
       )}
       data-plugin-id={plugin.id}
       data-active={active}
@@ -338,7 +336,7 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
         pluginId={plugin.id}
         pluginName={displayName}
         variant="row"
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-10 mt-0"
+        className="pointer-events-none absolute inset-x-2 bottom-0.5 z-10 mt-0"
       />
       <PluginRowActionsMenu
         plugin={plugin}

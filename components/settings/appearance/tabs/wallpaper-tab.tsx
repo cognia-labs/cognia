@@ -561,7 +561,10 @@ export function WallpaperTab() {
 
         {/* 3a. Placement — the three "where" controls, which used to be spread
                 across a chip row and an unrelated 3-up grid. */}
-        <section className="space-y-3 rounded-lg border p-3" data-testid="wallpaper-placement">
+        <section
+          className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+          data-testid="wallpaper-placement"
+        >
           <div className="space-y-0.5">
             <Label className="text-xs">{t("placementTitle")}</Label>
             <p className="text-[11px] text-muted-foreground">{t("placementHint")}</p>
@@ -689,7 +692,10 @@ export function WallpaperTab() {
 
         {/* 3b. Readability — the two sliders and the verdict they produce,
                 together, because neither number means anything alone. */}
-        <section className="space-y-3 rounded-lg border p-3" data-testid="wallpaper-readability">
+        <section
+          className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+          data-testid="wallpaper-readability"
+        >
           <div className="space-y-0.5">
             <Label className="text-xs">{t("readabilityTitle")}</Label>
             <p className="text-[11px] text-muted-foreground">{t("readabilityHint")}</p>

@@ -515,6 +515,7 @@
   "onEventId": "Event ID",
   "onEventSource": "Event Source",
   "onLogonUser": "Logon User (optional)",
+  "onLogonUserPlaceholder": "username",
   "openInPluginSettings": "Open in plugin settings",
   "openInSourceEditor": "Open in source editor",
   "openInWorkflowEditor": "Open in workflow editor",

@@ -206,7 +206,7 @@ export function SessionCommunicationSheet({ session, open, onOpenChange }: Props
           </TabsList>
 
           <TabsContent value="attached" className="min-h-0 space-y-4 pt-2">
-            <div className="grid gap-3 rounded-lg border p-3">
+            <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="attached-title">{t("attachedTitleLabel")}</Label>
                 <Input
@@ -286,7 +286,10 @@ export function SessionCommunicationSheet({ session, open, onOpenChange }: Props
                   <p className="text-sm text-muted-foreground">{t("noAttached")}</p>
                 ) : (
                   attached.map((child) => (
-                    <div key={child.id} className="space-y-2 rounded-lg border p-3">
+                    <div
+                      key={child.id}
+                      className="space-y-2 rounded-lg border border-transparent bg-muted/50 p-3"
+                    >
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-medium">{child.title}</span>
                         {child.attachedChild ? (
@@ -338,7 +341,7 @@ export function SessionCommunicationSheet({ session, open, onOpenChange }: Props
           </TabsContent>
 
           <TabsContent value="peer" className="min-h-0 space-y-4 pt-2">
-            <div className="grid gap-3 rounded-lg border p-3">
+            <div className="grid gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="peer-policy">{t("policyLabel")}</Label>
                 <NativeSelect

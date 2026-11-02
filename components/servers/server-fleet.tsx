@@ -53,7 +53,7 @@ function Kpi({
   icon: typeof ServerIcon
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-lg border border-transparent bg-card shadow-(--card-shadow) px-3 py-2.5">
       <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted">
         <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
       </span>
@@ -177,7 +177,7 @@ export function ServerFleet({
             <Skeleton key={index} className="h-14 rounded-lg" />
           ))}
         </div>
-        <div className="overflow-hidden rounded-lg border">
+        <div className="overflow-hidden rounded-lg border border-transparent bg-muted/50">
           {Array.from({ length: 4 }).map((_, index) => (
             <div key={index} className="flex items-center gap-3 border-b p-4 last:border-b-0">
               <Skeleton className="size-10 rounded-lg" />
@@ -203,7 +203,7 @@ export function ServerFleet({
         </div>
 
         {servers.length === 0 ? (
-          <Empty className="rounded-lg border">
+          <Empty className="rounded-lg border border-transparent bg-muted/50">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <ServerIcon />
@@ -242,7 +242,7 @@ export function ServerFleet({
             </ToggleGroup>
 
             {filtered.length === 0 ? (
-              <Empty className="rounded-lg border">
+              <Empty className="rounded-lg border border-transparent bg-muted/50">
                 <EmptyHeader>
                   <EmptyTitle>{t("fleet.noMatchTitle")}</EmptyTitle>
                   <EmptyDescription>{t("fleet.noMatchDescription")}</EmptyDescription>
@@ -253,7 +253,10 @@ export function ServerFleet({
               </Empty>
             ) : (
               <div
-                className={cn("overflow-hidden rounded-lg border bg-card", loading && "opacity-70")}
+                className={cn(
+                  "overflow-hidden rounded-lg border border-transparent bg-card shadow-(--card-shadow)",
+                  loading && "opacity-70"
+                )}
               >
                 <div className="divide-y">
                   {filtered.map((server) => (

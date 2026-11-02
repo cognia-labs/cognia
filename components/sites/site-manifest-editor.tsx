@@ -161,7 +161,7 @@ export function SiteManifestEditor({ manifest, gate, isBusy, onSave }: SiteManif
 
   return (
     <div className="space-y-2" data-testid="site-manifest-editor">
-      <div className="overflow-hidden rounded-lg border">
+      <div className="overflow-hidden rounded-lg border border-transparent bg-muted/50">
         <div className="flex flex-wrap items-center gap-1.5 border-b bg-muted/40 px-3 py-1.5">
           <FileJsonIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-xs" title={state.path}>

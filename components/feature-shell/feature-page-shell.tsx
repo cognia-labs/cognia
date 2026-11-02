@@ -207,7 +207,7 @@ export function FeaturePageShell({
         data-testid={`feature-shell-${storageId}-header`}
       >
         {leftPane && collapsibleLeftPane ? (
-          <div className="flex shrink-0 items-center border-b border-border/70 pl-3">
+          <div className="flex shrink-0 items-center pl-3">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -275,7 +275,7 @@ export function FeaturePageShell({
                       ? { minWidth: paneSize(leftPane.minSize, DEFAULT_LEFT_MIN) }
                       : undefined
                   }
-                  className="flex h-full min-w-0 flex-col overflow-hidden border-r bg-muted/20"
+                  className="flex h-full min-w-0 flex-col overflow-hidden bg-muted/40"
                 >
                   {leftPane.content}
                 </aside>
@@ -335,7 +335,7 @@ export function FeaturePageShell({
               >
                 <aside
                   aria-label={rightPane.label}
-                  className="flex h-full min-w-0 flex-col overflow-hidden border-l bg-muted/10"
+                  className="flex h-full min-w-0 flex-col overflow-hidden bg-muted/25"
                 >
                   {rightPane.content}
                 </aside>
@@ -374,7 +374,7 @@ function FeaturePageShellOverlay({
 
       {showStrip ? (
         <div
-          className="flex min-h-9 shrink-0 items-center justify-between border-b border-border/60 bg-muted/20 px-2"
+          className="flex min-h-9 shrink-0 items-center justify-between bg-muted/40 px-2"
           data-testid={`feature-shell-${storageId}-pane-controls`}
         >
           {leftPane && leftTrigger ? <OverlayPane pane={leftPane} side="left" trigger /> : <span />}

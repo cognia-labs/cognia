@@ -54,7 +54,7 @@ export function PetVitalsCard({
       data-variant={variant}
       className={cn(
         "flex flex-col gap-2",
-        variant === "outlined" && "rounded-lg border p-3",
+        variant === "outlined" && "rounded-lg border border-transparent bg-muted/50 p-3",
         className
       )}
     >

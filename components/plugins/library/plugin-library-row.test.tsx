@@ -203,18 +203,19 @@ describe("PluginLibraryRow", () => {
     )
     const row = container.querySelector('[data-errored="true"]') as HTMLElement
     expect(row).toBeTruthy()
-    expect(row.className).toContain("bg-destructive/5")
+    expect(row.className).toContain("bg-destructive/[0.07]")
+    expect(row.className).not.toMatch(/border-l/)
     expect(screen.getByLabelText("erroredAria")).toBeInTheDocument()
   })
 
-  it("renders a left accent bar via before: pseudo-element when active", () => {
+  it("marks the active row with a tone step instead of a drawn bar", () => {
     const h = handlers()
     const { container } = render(
       <PluginLibraryRow plugin={baseRow} selected={false} active={true} {...h} />
     )
     const row = container.querySelector('[data-active="true"]') as HTMLElement
-    expect(row.className).toContain("before:bg-primary")
-    expect(row.className).toContain("before:w-[3px]")
+    expect(row.className).toContain("bg-muted")
+    expect(row.className).not.toMatch(/before:|border-b/)
   })
 
   it("renders capability chips with inline contribution counts when manifest provides them", () => {

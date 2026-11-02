@@ -136,10 +136,10 @@ describe("ShareViewPage", () => {
     await waitFor(() => expect(screen.getByText("Passphrase required")).toBeInTheDocument())
 
     expect(screen.getByLabelText("Passphrase")).toHaveClass(
-      "border-input",
-      "focus-visible:border-ring"
+      "bg-[var(--control-bg,var(--control-fill))]",
+      "focus-visible:border-(--control-edge-focus)"
     )
-    expect(screen.getByRole("button", { name: "Unlock" })).toHaveClass("focus-visible:ring-[3px]")
+    expect(screen.getByRole("button", { name: "Unlock" })).toHaveClass("focus-visible:ring-4")
 
     fireEvent.change(screen.getByLabelText("Passphrase"), { target: { value: "hunter2" } })
     fireEvent.click(screen.getByText("Unlock"))

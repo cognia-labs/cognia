@@ -106,13 +106,13 @@ export function StageGenerate({
               ) : null}
               <div className="space-y-1">
                 <Label className="text-xs">{t("generate.previewSystem")}</Label>
-                <pre className="max-h-40 overflow-auto rounded-md border bg-muted/40 p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
+                <pre className="max-h-40 overflow-auto rounded-md border border-transparent bg-muted/70 p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
                   {envelope.systemPrompt}
                 </pre>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">{t("generate.previewUser")}</Label>
-                <pre className="max-h-60 overflow-auto rounded-md border bg-muted/40 p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
+                <pre className="max-h-60 overflow-auto rounded-md border border-transparent bg-muted/70 p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
                   {envelope.userPrompt}
                 </pre>
               </div>

@@ -97,7 +97,7 @@ export function RecoveryKeySetup({
         <p className="text-xs text-muted-foreground">{t("description")}</p>
       </div>
       <code
-        className="rounded-md border bg-muted/40 px-3 py-2 text-center font-mono text-sm tracking-wider break-all select-all"
+        className="rounded-md border border-transparent bg-muted/70 px-3 py-2 text-center font-mono text-sm tracking-wider break-all select-all"
         data-testid="recovery-key-text"
       >
         {recoveryKeyText}

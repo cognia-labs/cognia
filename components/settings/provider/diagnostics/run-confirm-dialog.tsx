@@ -58,7 +58,7 @@ export function RunConfirmDialog({
             })}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="rounded-lg border p-3 text-sm">
+        <div className="rounded-lg border border-transparent bg-muted/50 p-3 text-sm">
           <p>
             {t("confirm.limits", {
               tokens: limits.maxOutputTokens,

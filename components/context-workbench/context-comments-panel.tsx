@@ -247,7 +247,11 @@ export function ContextCommentsPanel({
     return (
       <article
         key={comment.id}
-        className={reply ? "ml-5 rounded-md border bg-muted/20 p-2" : "rounded-md border p-3"}
+        className={
+          reply
+            ? "ml-5 rounded-md border border-transparent bg-muted/50 p-2"
+            : "rounded-md border p-3"
+        }
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">{comment.authorName}</span>

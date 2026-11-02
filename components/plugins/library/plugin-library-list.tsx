@@ -169,7 +169,7 @@ export function PluginLibraryList() {
   const someSelected = !allSelected && filtered.some((row) => selection.has(row.id))
   const headBar = (
     <div
-      className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b bg-background/95 px-3 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+      className="sticky top-0 z-20 flex min-h-9 items-center gap-2 bg-background/95 px-3.5 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
       data-testid="plugin-library-head"
     >
       {selectable && filtered.length > 0 ? (
@@ -268,7 +268,7 @@ export function PluginLibraryList() {
         ref={listRef}
         role="list"
         aria-label={t("listAria")}
-        className="min-w-0 divide-y overflow-x-hidden"
+        className="flex min-w-0 flex-col gap-px overflow-x-hidden px-1.5 py-1"
         data-testid="plugin-library-list"
         onKeyDown={handleListKeyDown}
       >

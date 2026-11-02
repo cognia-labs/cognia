@@ -122,7 +122,7 @@ function ProviderRow({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-2 rounded-lg border p-2.5"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-transparent bg-muted/50 p-2.5"
       data-testid={testId}
       data-state={provider.state}
       data-action={provider.action.kind}

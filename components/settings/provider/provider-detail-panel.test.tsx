@@ -97,7 +97,10 @@ describe("ProviderDetailPanel", () => {
         />
       )
       const list = container.querySelector('[data-slot="tabs-list"]')
-      expect(list).toHaveClass("w-full", "min-w-0", "overflow-x-auto")
+      // A free-standing pill group, capped to the pane so it scrolls instead
+      // of overflowing; no full-width underline strip.
+      expect(list).toHaveClass("max-w-[calc(100%-2rem)]", "min-w-0", "overflow-x-auto")
+      expect(list).not.toHaveClass("border-b")
       container
         .querySelectorAll('[data-slot="tabs-trigger"]')
         .forEach((trigger) => expect(trigger).toHaveClass("flex-none", "whitespace-nowrap"))

@@ -227,7 +227,7 @@ export function NativeLogLevels() {
       {!loaded ? null : sortedRules.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("settings.nativeLevels.empty")}</p>
       ) : (
-        <ul className="divide-y divide-border/60 rounded-lg border">
+        <ul className="divide-y divide-border/60 rounded-lg border border-transparent bg-muted/50">
           {sortedRules.map((rule) => (
             <li key={rule.target} className="flex items-center gap-2 px-3 py-2">
               <span className="min-w-0 flex-1 truncate font-mono text-xs">{rule.target}</span>

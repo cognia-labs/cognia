@@ -285,7 +285,7 @@ function AiBindingDefaultsDraft({
           </>
         ) : (
           <p
-            className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground"
+            className="rounded-md border border-transparent bg-muted/70 p-3 text-xs text-muted-foreground"
             data-testid="ai-binding-target-managed"
           >
             {t("modelManagedByTarget")}

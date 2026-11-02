@@ -330,7 +330,10 @@ it("keeps shell cancellation available while execution awaits approval or output
     target: { value: "pwd" },
   })
   const excludeContext = screen.getByRole("checkbox", { name: t.excludeContext })
-  expect(excludeContext).toHaveClass("border-input", "focus-visible:border-ring")
+  expect(excludeContext).toHaveClass(
+    "border-foreground/25",
+    "focus-visible:border-(--control-edge-focus)"
+  )
   fireEvent.click(screen.getByText(t.excludeContext))
   expect(excludeContext).toBeChecked()
   fireEvent.click(screen.getByText(t.excludeContext))

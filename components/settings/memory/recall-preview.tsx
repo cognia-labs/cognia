@@ -125,7 +125,7 @@ export function RecallPreview({ config, averageTokens, activeCount }: RecallPrev
 
   return (
     <div
-      className="space-y-3 rounded-lg border bg-muted/30 p-3"
+      className="space-y-3 rounded-lg border border-transparent bg-muted/60 p-3"
       data-testid="memory-recall-preview"
     >
       <div className="space-y-1.5">

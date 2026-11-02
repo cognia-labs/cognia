@@ -1171,7 +1171,7 @@ export function TaskForm({
                     data-testid={`task-type-${type.value}`}
                     data-host-supported={support.supported ? "true" : "false"}
                     className={cn(
-                      "rounded-lg border px-2 py-2 text-xs font-medium transition-all",
+                      "rounded-lg border border-transparent bg-muted/50 px-2 py-2 text-xs font-medium transition-all",
                       "hover:border-primary/50 hover:bg-primary/5",
                       f.taskType === type.value
                         ? "border-primary bg-primary/10 text-primary shadow-sm"
@@ -1227,7 +1227,7 @@ export function TaskForm({
                 aria-pressed={f.triggerType === type.value}
                 onClick={() => updateForm({ triggerType: type.value })}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-lg border p-3 text-left transition-all",
+                  "flex items-center gap-2.5 rounded-lg border border-transparent bg-muted/50 p-3 text-left transition-all",
                   "hover:border-blue-500/50 hover:bg-blue-500/5",
                   f.triggerType === type.value
                     ? "border-blue-500 bg-blue-500/10 shadow-sm"
@@ -1719,7 +1719,7 @@ export function TaskForm({
               <div
                 key={item.key}
                 className={cn(
-                  "flex items-center justify-between rounded-lg border px-3 py-2.5 transition-all",
+                  "flex items-center justify-between rounded-lg border border-transparent bg-muted/50 px-3 py-2.5 transition-all",
                   item.checked
                     ? "border-amber-500/30 bg-amber-500/5"
                     : "border-border bg-background/50"
@@ -1783,7 +1783,7 @@ export function TaskForm({
                     aria-pressed={f.notificationChannels.includes(channel)}
                     onClick={() => toggleChannel(channel)}
                     className={cn(
-                      "w-full rounded-lg border px-3 py-2 text-sm font-medium transition-all",
+                      "w-full rounded-lg border border-transparent bg-muted/50 px-3 py-2 text-sm font-medium transition-all",
                       "hover:border-amber-500/50 hover:bg-amber-500/5",
                       f.notificationChannels.includes(channel)
                         ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400"
@@ -1885,7 +1885,7 @@ export function TaskForm({
             )}
           </Button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="mt-2 rounded-xl border bg-muted/20 p-3 sm:p-4">
+        <CollapsibleContent className="mt-2 rounded-xl border border-transparent bg-muted/50 p-3 sm:p-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-2">
               <Label className="text-xs font-medium text-muted-foreground">

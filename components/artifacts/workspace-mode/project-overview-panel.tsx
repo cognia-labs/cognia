@@ -191,7 +191,7 @@ export function ProjectOverviewPanel({ projectId, onOpenWorkspace }: ProjectOver
           >
             {t("analysis.title")}
           </h3>
-          <div className="divide-y rounded-lg border">
+          <div className="divide-y rounded-lg border border-transparent bg-muted/50">
             <AnalysisRow
               label={t("analysis.contextLabel")}
               value={t("analysis.contextConfigured", {
@@ -229,7 +229,7 @@ export function ProjectOverviewPanel({ projectId, onOpenWorkspace }: ProjectOver
               <div
                 key={root.id}
                 className={cn(
-                  "flex items-center gap-2 rounded-lg border px-3 py-2",
+                  "flex items-center gap-2 rounded-lg border border-transparent bg-muted/50 px-3 py-2",
                   root.path === rootDir && "border-primary/40 bg-primary/5"
                 )}
               >
@@ -291,7 +291,7 @@ export function ProjectOverviewPanel({ projectId, onOpenWorkspace }: ProjectOver
 
           {available ? (
             <>
-              <div className="flex min-w-0 items-center justify-between gap-1 rounded-lg border px-1.5 py-1">
+              <div className="flex min-w-0 items-center justify-between gap-1 rounded-lg border border-transparent bg-muted/50 px-1.5 py-1">
                 <RootSwitcher roots={roots} />
                 <BranchHeader
                   branch={projectStatus?.branch ?? null}
@@ -305,7 +305,7 @@ export function ProjectOverviewPanel({ projectId, onOpenWorkspace }: ProjectOver
               {projectRepoState && !projectRepoState.isRepo ? (
                 <ScmNotice>{t("sourceControl.notRepository")}</ScmNotice>
               ) : projectStatus && changedCount > 0 ? (
-                <div className="h-72 overflow-hidden rounded-lg border">
+                <div className="h-72 overflow-hidden rounded-lg border border-transparent bg-muted/50">
                   <ChangesView
                     variant="review"
                     rootDir={rootDir ?? primaryRoot?.path ?? roots[0]!.path}
@@ -357,7 +357,10 @@ function Metric({
   testId?: string
 }) {
   return (
-    <div className="rounded-lg border bg-card p-3" data-testid={testId}>
+    <div
+      className="rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3"
+      data-testid={testId}
+    >
       <div className="mb-2 flex items-center gap-1.5 text-muted-foreground">
         {icon}
         <span className="text-xs">{label}</span>

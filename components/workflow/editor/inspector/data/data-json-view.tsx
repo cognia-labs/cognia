@@ -5,7 +5,7 @@ export function DataJsonView({ item }: { item: unknown }) {
   return (
     <pre
       data-testid="data-json-view"
-      className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs font-mono leading-relaxed break-all"
+      className="whitespace-pre-wrap rounded-md border border-transparent bg-muted/60 p-3 text-xs font-mono leading-relaxed break-all"
     >
       {safeStringify(item)}
     </pre>

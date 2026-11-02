@@ -60,7 +60,7 @@ export function ProviderEmptyState({
             {guidanceItems.map((item) => (
               <div
                 key={item.id}
-                className="flex flex-col gap-2 rounded-md border bg-muted/20 px-3 py-2 text-left sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-2 rounded-md border border-transparent bg-muted/50 px-3 py-2 text-left sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{item.label}</p>

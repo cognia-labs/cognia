@@ -136,9 +136,7 @@ export const ProviderSidebarItem = React.memo(function ProviderSidebarItem({
         // at. The left bar carries the selection; the tint just keeps it
         // together.
         "relative h-auto w-full justify-start gap-2.5 whitespace-normal rounded-md px-2.5 py-2 text-left font-normal transition-colors",
-        isSelected
-          ? "bg-accent text-accent-foreground shadow-[inset_2px_0_0_0_var(--primary)]"
-          : "hover:bg-muted/50"
+        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-muted/50"
       )}
     >
       {branded || icon == null ? (

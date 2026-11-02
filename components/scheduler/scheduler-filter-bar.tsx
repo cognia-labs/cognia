@@ -109,7 +109,7 @@ export function SchedulerFilterBar({
             // `flex-auto`, not `flex-1`: equal thirds cut "Paused 1" to
             // "Paus…" while "All 3" had room to spare. Sized by label, all
             // three fit the rail.
-            className="h-7 min-w-0 flex-auto gap-1 px-1.5 text-[11px] data-[state=on]:border-primary/30 data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+            className="h-7 min-w-0 flex-auto gap-1 px-1.5 text-[11px] data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
           >
             <span className="truncate">{statusLabel[key]}</span>
             <span className="shrink-0 tabular-nums text-[10px] opacity-70">

@@ -47,7 +47,7 @@ export function TwinDraftCard({ draft, onSelect, className }: TwinDraftCardProps
       variant="ghost"
       onClick={() => onSelect?.(draft)}
       className={cn(
-        "h-auto w-full items-start justify-start gap-3 rounded-md border border-border bg-card p-3 text-left font-normal",
+        "h-auto w-full items-start justify-start gap-3 rounded-md border border-transparent bg-card shadow-(--card-shadow) p-3 text-left font-normal",
         "active:bg-muted/50 transition-colors",
         accepted && "opacity-70",
         className

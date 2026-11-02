@@ -121,7 +121,7 @@ export function McpBridgeTab() {
             </div>
           </div>
           {health.isTauri ? (
-            <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+            <div className="space-y-1.5 rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs">
               <div>
                 <div className="text-muted-foreground">{t("status.sidecarDir")}</div>
                 <div className="break-all font-mono">{health.sidecarDir ?? "—"}</div>
@@ -132,7 +132,7 @@ export function McpBridgeTab() {
               </div>
             </div>
           ) : (
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <div className="rounded-md border border-transparent bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
               {t("status.webModeNotice")}
             </div>
           )}

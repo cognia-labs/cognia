@@ -85,7 +85,7 @@ export function ServerCard({
       aria-pressed={selected}
       aria-busy={status === "checking"}
       className={cn(
-        "group h-auto min-h-16 w-full items-center justify-start gap-3 rounded-lg border bg-card p-3 text-left font-normal",
+        "group h-auto min-h-16 w-full items-center justify-start gap-3 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 text-left font-normal",
         "active:bg-muted/60",
         selected ? "border-primary/60 bg-primary/5" : "border-border hover:bg-muted/30",
         mismatch && "border-destructive/50",

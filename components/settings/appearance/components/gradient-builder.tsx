@@ -58,7 +58,7 @@ export function GradientBuilder({ initial, onCreate }: GradientBuilderProps) {
   }
 
   return (
-    <div className="space-y-3 rounded-lg border p-3">
+    <div className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3">
       <div
         className="aspect-video w-full rounded-md border"
         style={{ backgroundImage: css, backgroundSize: "cover" }}

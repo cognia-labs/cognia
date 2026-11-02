@@ -134,7 +134,7 @@ export function ProfileSection({ showEmail = true }: ProfileSectionProps = {}) {
         <div className="@container/profile-form flex flex-col gap-5">
           <div className="flex flex-col gap-2" data-testid="profile-preview">
             <span className="text-xs font-medium text-muted-foreground">{t("previewTitle")}</span>
-            <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-3">
+            <div className="flex items-center gap-3 rounded-lg border border-transparent bg-muted/70 p-3">
               <Avatar className="size-12">
                 {resolvedAvatarUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element -- avatar is a small data: URL, not an optimizable remote asset

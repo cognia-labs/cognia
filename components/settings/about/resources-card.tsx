@@ -59,7 +59,7 @@ export function ResourcesCard() {
         >
           <span
             aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors group-hover:text-foreground"
+            className="flex size-8 shrink-0 items-center justify-center rounded-md border border-transparent bg-card shadow-(--card-shadow) text-muted-foreground transition-colors group-hover:text-foreground"
           >
             <Icon className="size-4" />
           </span>

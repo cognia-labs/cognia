@@ -98,10 +98,7 @@ export function AttentionBlock({
   if (signals.length === 0) {
     return (
       <div
-        className={cn(
-          "flex items-start gap-2.5 rounded-lg border border-dashed px-3.5 py-3",
-          className
-        )}
+        className={cn("flex items-start gap-2.5 rounded-lg bg-muted/50 px-3.5 py-3", className)}
         data-testid="attention-empty"
       >
         <CheckCircle2Icon

@@ -1607,7 +1607,7 @@ export function CreateIssuePage(props: CreateIssuePageProps) {
             <PageFieldRow label={t("create.cardPreview")} testId="create-card-preview">
               {/* Framed as a mini board column — the card reads as "how this
                   will look on the board", not a floating orphan. */}
-              <Surface className="rounded-lg border bg-muted/40 p-2">
+              <Surface className="rounded-lg border border-transparent bg-muted/70 p-2">
                 <div className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[11px] font-medium text-muted-foreground">
                   <IssueStatusIcon status={form.form.status} />
                   {t(`status.${form.form.status}`)}

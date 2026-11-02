@@ -85,7 +85,7 @@ export const HunkReviewItem = memo(function HunkReviewItem({
       data-current={current ? "true" : undefined}
       aria-current={current ? "true" : undefined}
       className={cn(
-        "space-y-2 rounded-lg border bg-card p-3 transition-all",
+        "space-y-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 transition-all",
         decision === "accepted" && "border-success/40",
         decision === "rejected" && "border-destructive/40 opacity-80",
         current && "ring-1 ring-primary/60"

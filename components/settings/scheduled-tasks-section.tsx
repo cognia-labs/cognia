@@ -601,7 +601,7 @@ function DefaultsCard({ defaults, onChange, tDefaults }: DefaultsCardProps) {
                 return (
                   <div
                     key={channel}
-                    className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-2 py-1.5"
+                    className="flex items-center justify-between gap-2 rounded-md border border-transparent bg-muted/60 px-2 py-1.5"
                   >
                     <label
                       htmlFor={`channel-${channel}`}

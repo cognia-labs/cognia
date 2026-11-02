@@ -112,7 +112,7 @@ function GalleryThumbnail({
           : { ...mobileTransition("normal"), delay: Math.min(index * 0.035, 0.14) }
       }
       className={cn(
-        "group/image relative overflow-hidden rounded-lg border bg-muted/30 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+        "group/image relative overflow-hidden rounded-lg border border-transparent bg-muted/60 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
         multiple ? "aspect-square" : "max-h-72"
       )}
     >

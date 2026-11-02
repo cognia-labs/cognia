@@ -351,7 +351,10 @@ export function AgentTaskCreateForm({
 
   return (
     <div
-      className={cn("grid gap-2 rounded-lg border p-3 sm:grid-cols-2", className)}
+      className={cn(
+        "grid gap-2 rounded-lg border border-transparent bg-muted/50 p-3 sm:grid-cols-2",
+        className
+      )}
       data-testid="agent-task-create-form"
     >
       <div className="space-y-1">

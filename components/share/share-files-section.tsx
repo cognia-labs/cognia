@@ -343,7 +343,7 @@ export function ShareFilesSection({
       >
         <ul
           aria-label={t("listLabel")}
-          className="h-fit divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+          className="h-fit divide-y divide-border overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow)"
         >
           {files.map((file) => (
             <ShareFileRow
@@ -483,7 +483,7 @@ function PreviewPane({
   }, [autoLoad, file, onLoad])
 
   const frame = cn(
-    "flex min-h-64 flex-col overflow-hidden rounded-xl border border-border bg-card lg:sticky lg:top-4",
+    "flex min-h-64 flex-col overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow) lg:sticky lg:top-4",
     tall && "lg:min-h-[28rem]"
   )
 

@@ -109,7 +109,7 @@ export function PluginNavSidebar() {
       </ul>
       {visibleSection === "library" ? (
         <section
-          className="mt-3 border-t pt-3"
+          className="mt-5"
           aria-labelledby="plugin-nav-facets-heading"
           data-testid="plugin-nav-capability-facets"
         >

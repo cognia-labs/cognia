@@ -238,7 +238,10 @@ export function EvalReportPanel({
           </div>
           <div className="space-y-3">
             {filteredReportCases.map((item) => (
-              <Collapsible key={item.sampleId} className="group/collapsible rounded-lg border p-3">
+              <Collapsible
+                key={item.sampleId}
+                className="group/collapsible rounded-lg border border-transparent bg-muted/50 p-3"
+              >
                 <CollapsibleTrigger asChild>
                   <Button
                     variant="ghost"

@@ -57,7 +57,7 @@ export function FileSharingPolicyCard() {
   const t = useTranslations("share.policy")
   return (
     <div
-      className="space-y-4 rounded-lg border p-4"
+      className="space-y-4 rounded-lg border border-transparent bg-muted/50 p-4"
       data-setting-id={FILE_SHARING_POLICY_SETTING_ID}
     >
       <div>

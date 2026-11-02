@@ -764,7 +764,10 @@ describe("TaskResourcesPanel", () => {
     expect(screen.getByRole("button", { name: "undo" })).toBeDisabled()
     await user.click(screen.getByRole("tab", { name: "diff" }))
     const firstHunk = screen.getByRole("checkbox", { name: "@@ first" })
-    expect(firstHunk).toHaveClass("border-input", "focus-visible:border-ring")
+    expect(firstHunk).toHaveClass(
+      "border-foreground/25",
+      "focus-visible:border-(--control-edge-focus)"
+    )
     await user.click(screen.getByText("@@ first"))
     expect(firstHunk).toBeChecked()
     await user.click(screen.getByRole("checkbox", { name: "@@ second" }))

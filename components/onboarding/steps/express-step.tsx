@@ -148,7 +148,7 @@ export function ExpressStep({
             <li key={item.id}>
               <div
                 className={cn(
-                  "flex items-start gap-3 rounded-xl border bg-card px-4 py-3 transition-colors",
+                  "flex items-start gap-3 rounded-xl border border-transparent bg-card shadow-(--card-shadow) px-4 py-3 transition-colors",
                   isDropped && "opacity-55",
                   state === "done" && "border-brand-action/45",
                   state === "running" && "border-brand-approval/50"

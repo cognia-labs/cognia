@@ -91,7 +91,7 @@ export function WorkspaceTrustSection() {
               {trusted.map((w) => (
                 <li
                   key={w.path}
-                  className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5"
+                  className="flex items-center gap-2 rounded-md border border-transparent bg-muted/60 px-2 py-1.5"
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-mono text-xs">{w.path}</span>

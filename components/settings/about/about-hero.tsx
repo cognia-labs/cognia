@@ -40,7 +40,7 @@ export function AboutHero() {
 
   return (
     <div
-      className="relative isolate overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-sm"
+      className="relative isolate overflow-hidden rounded-2xl border border-transparent bg-card shadow-(--card-shadow) text-card-foreground shadow-sm"
       data-testid="about-hero"
     >
       {/* Ambient wash — two blurred primary orbs behind the identity block. */}

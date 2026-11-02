@@ -78,7 +78,7 @@ function PostHogScopeControls({
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>
       <div className="grid gap-3 @md/settings-stack:grid-cols-2">
-        <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
           <div className="min-w-0 space-y-0.5">
             <Label htmlFor={productTestId} className="text-sm font-medium">
               {t("productAnalytics")}
@@ -93,7 +93,7 @@ function PostHogScopeControls({
             onCheckedChange={onProductChange}
           />
         </div>
-        <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-3">
           <div className="min-w-0 space-y-0.5">
             <Label htmlFor={aiTestId} className="text-sm font-medium">
               {t("aiObservability")}
@@ -225,7 +225,7 @@ export function LogsTelemetryPanel({ draft }: LogsTelemetryPanelProps) {
             {BEHAVIOR_TELEMETRY_CATEGORIES.map((category) => (
               <div
                 key={category}
-                className="flex items-center justify-between gap-3 rounded-lg border p-2.5"
+                className="flex items-center justify-between gap-3 rounded-lg border border-transparent bg-muted/50 p-2.5"
               >
                 <Label
                   htmlFor={`behavior-telemetry-category-${category}`}

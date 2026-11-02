@@ -171,7 +171,7 @@ export function OcrSetupWizard({
         {stepIdx === 1 && (
           <div className="space-y-3" data-testid="ocr-wizard-step-preset">
             <p className="text-sm">{t("ocr.wizard.presetIntro")}</p>
-            <div className="rounded-lg border p-3 text-sm">
+            <div className="rounded-lg border border-transparent bg-muted/50 p-3 text-sm">
               <div className="mb-2 font-medium">{t("ocr.wizard.preset.providers")}</div>
               <div className="flex flex-wrap gap-1">
                 {preset.providers.map((id, idx) => (

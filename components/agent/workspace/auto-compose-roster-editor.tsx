@@ -101,7 +101,7 @@ export function AutoComposeRosterEditor({
           return (
             <div
               key={i}
-              className="space-y-2 rounded-md border bg-muted/20 p-2.5"
+              className="space-y-2 rounded-md border border-transparent bg-muted/50 p-2.5"
               data-testid={`auto-compose-member-${i}`}
             >
               <div className="flex items-center gap-2">

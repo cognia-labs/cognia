@@ -68,7 +68,7 @@ export function RedactReviewSheet({ open, onOpenChange, text, onConfirm }: Redac
           </SheetDescription>
         </SheetHeader>
 
-        <ScrollArea className="mx-4 my-3 max-h-60 rounded-md border bg-muted/30">
+        <ScrollArea className="mx-4 my-3 max-h-60 rounded-md border border-transparent bg-muted/60">
           <pre
             className="whitespace-pre-wrap break-words p-3 text-xs"
             data-testid="twin-redact-preview"

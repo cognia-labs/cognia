@@ -216,7 +216,7 @@ function RunDetailRail({
               selectedStepId={selectedStepId}
               onSelectStep={setSelectedStepId}
             />
-            <div className="rounded-md border bg-card/40">
+            <div className="rounded-md border border-transparent bg-card/40 shadow-(--card-shadow)">
               <RunStepDetail
                 workflow={run.workflowSnapshot}
                 events={events as WorkflowRunEventRow[]}

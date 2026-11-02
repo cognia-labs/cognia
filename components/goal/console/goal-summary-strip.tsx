@@ -42,16 +42,16 @@ export function GoalSummaryStrip({
 
   if (loading) {
     return (
-      // Same frame as the strip it stands in for: the hairline is the
-      // ground showing through the 1px gaps (see `StatStrip`).
+      // Same frame as the strip it stands in for: tonal cells over the page
+      // ground showing through 2px gaps (see `StatStrip`).
       <Surface asChild radius="panel">
         <div
-          className="grid grid-cols-2 gap-px overflow-hidden border bg-border @xl/console-pane:grid-cols-4"
+          className="grid grid-cols-2 gap-0.5 overflow-hidden bg-background @xl/console-pane:grid-cols-4"
           aria-busy
           data-testid="goal-summary-strip-loading"
         >
           {Array.from({ length: 4 }, (_, index) => (
-            <div key={index} className="space-y-1.5 bg-card px-3 py-2">
+            <div key={index} className="space-y-1.5 bg-muted/50 px-3 py-2">
               <Skeleton className="h-4 w-10" />
               <Skeleton className="h-3 w-16" />
             </div>

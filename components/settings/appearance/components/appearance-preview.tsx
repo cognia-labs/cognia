@@ -74,7 +74,7 @@ export function AppearancePreview({ className, colors, isDark }: AppearancePrevi
       data-testid="appearance-preview"
       style={overrideStyle}
       className={cn(
-        "space-y-3 rounded-xl border bg-card p-3 text-card-foreground shadow-sm",
+        "space-y-3 rounded-xl border border-transparent bg-card shadow-(--card-shadow) p-3 text-card-foreground shadow-sm",
         colors && isDark && "dark",
         className
       )}

@@ -29,6 +29,15 @@ beforeEach(() => {
   draftsProps = undefined
 })
 
+describe("options", () => {
+  it("draws each way to start as a tonal row, not a framed card", () => {
+    render(<AgentCreateChooser {...props()} />)
+    const blank = screen.getByTestId("agent-create-blank")
+    expect(blank).toHaveClass("bg-muted/50", "hover:bg-muted")
+    expect(blank.className).not.toMatch(/(^|\s)border(\s|$)/)
+  })
+})
+
 describe("copy", () => {
   it("defaults to the create mode", () => {
     render(<AgentCreateChooser {...props({ agentCount: 4 })} />)

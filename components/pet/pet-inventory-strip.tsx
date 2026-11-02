@@ -47,7 +47,7 @@ export function PetInventoryStrip({
       data-variant={variant}
       className={cn(
         "flex flex-col gap-1.5",
-        variant === "outlined" && "rounded-lg border p-2.5",
+        variant === "outlined" && "rounded-lg border border-transparent bg-muted/50 p-2.5",
         className
       )}
     >

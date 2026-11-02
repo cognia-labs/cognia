@@ -50,7 +50,10 @@ export function TemplateConflictList({
       </h3>
       <ul className="max-h-52 space-y-1.5 overflow-y-auto">
         {conflicts.map((conflict) => (
-          <li key={conflict.path} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+          <li
+            key={conflict.path}
+            className="flex items-center gap-3 rounded-lg border border-transparent bg-muted/50 px-3 py-2"
+          >
             <span className="min-w-0 flex-1 truncate font-mono text-xs">{conflict.path}</span>
             <ToggleGroup
               type="single"

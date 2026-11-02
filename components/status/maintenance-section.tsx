@@ -113,7 +113,7 @@ export function MaintenanceSection({ maintenance }: { maintenance: readonly Main
                       ) : null}
                     </div>
                   </div>
-                  <div className="mt-4 grid gap-1 rounded-xl border bg-muted/30 px-3.5 py-3 text-xs text-muted-foreground tabular-nums">
+                  <div className="mt-4 grid gap-1 rounded-xl border border-transparent bg-muted/60 px-3.5 py-3 text-xs text-muted-foreground tabular-nums">
                     <span className="font-medium text-foreground" data-testid="maintenance-utc">
                       {t("maintenance.utcWindow", {
                         start: formatUtcDateTimeBare(entry.startsAt, locale),

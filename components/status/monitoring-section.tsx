@@ -152,7 +152,7 @@ export function MonitoringSection({
                       </Badge>
                     ) : null}
                   </div>
-                  <ul className="mx-5 mt-4 divide-y rounded-xl border text-sm">
+                  <ul className="mx-5 mt-4 divide-y rounded-xl border border-transparent bg-muted/50 text-sm">
                     {probe.profiles.map((profile) => (
                       <li key={profile.id} className="px-3.5 py-2.5">
                         <span className="font-medium">

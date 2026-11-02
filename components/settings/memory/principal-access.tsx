@@ -64,7 +64,10 @@ export function MemoryPrincipalAccess({
     void persist({ ...grants, [id]: grant })
   }
   return (
-    <section className="space-y-3 rounded-lg border p-3" aria-labelledby="memory-access-title">
+    <section
+      className="space-y-3 rounded-lg border border-transparent bg-muted/50 p-3"
+      aria-labelledby="memory-access-title"
+    >
       <h4 id="memory-access-title" className="text-sm font-medium">
         {t("title")}
       </h4>

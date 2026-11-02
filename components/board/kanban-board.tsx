@@ -498,7 +498,9 @@ function KanbanColumn<TId extends string, TItem>({
   const { setNodeRef, isOver } = useDroppable({ id: dropId, disabled: dragDisabled || dimmed })
 
   const shellClass = cn(
-    "flex shrink-0 flex-col rounded-xl border",
+    // A lane reads by its own tint (the caller's `columnClassName`), not a
+    // frame; the drop ring still shows where a card will land.
+    "flex shrink-0 flex-col rounded-xl border border-transparent",
     "motion-safe:transition-[opacity,width] motion-safe:duration-200",
     dimmed && "pointer-events-none opacity-40",
     isOver && !dimmed && "ring-ring/50 ring-2",

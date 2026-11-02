@@ -48,7 +48,7 @@ export function LoopActivityTab({ loop }: Props) {
         <li
           key={ev.id}
           className={cn(
-            "flex items-start gap-2 rounded-md border bg-card px-3 py-2",
+            "flex items-start gap-2 rounded-md border border-transparent bg-card shadow-(--card-shadow) px-3 py-2",
             ev.kind === "exit_triggered" && "border-destructive/50"
           )}
         >

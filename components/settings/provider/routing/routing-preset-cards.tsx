@@ -39,7 +39,7 @@ export function RoutingPresetCards() {
           return (
             <div
               key={preset.id}
-              className="flex flex-col gap-2 rounded-lg border px-3 py-2.5"
+              className="flex flex-col gap-2 rounded-lg border border-transparent bg-muted/50 px-3 py-2.5"
               data-testid={`preset-card-${preset.builtInId}`}
             >
               <div className="flex items-center gap-2">

@@ -268,7 +268,7 @@ export function StatusPanel({ className, children, ...props }: ComponentProps<"d
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-2xl border bg-card text-card-foreground shadow-xs",
+        "overflow-hidden rounded-2xl border border-transparent bg-card shadow-(--card-shadow) text-card-foreground shadow-xs",
         className
       )}
       {...props}

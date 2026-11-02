@@ -73,7 +73,7 @@ export function RuntimeStatusBand({
       data-testid="runtime-status-band"
       data-tone={tone}
       className={cn(
-        "flex min-h-9 w-full items-center gap-2 border-b border-border/60 bg-muted/80 py-1 ps-3 pe-1.5 text-xs backdrop-blur-sm supports-[backdrop-filter]:bg-muted/60",
+        "flex min-h-9 w-full items-center gap-2 bg-muted/80 py-1 ps-3 pe-1.5 text-xs backdrop-blur-sm supports-[backdrop-filter]:bg-muted/60",
         className
       )}
     >

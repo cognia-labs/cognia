@@ -82,7 +82,7 @@ function MobileBarSkeleton() {
 /** Detail pane: header row, tab strip, then a form body. */
 function DetailPaneSkeleton() {
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+    <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-transparent bg-muted/50">
       <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-3">
           <Skeleton className="size-10 shrink-0 rounded-lg" />

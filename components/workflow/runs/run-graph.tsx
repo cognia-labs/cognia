@@ -84,7 +84,10 @@ export function RunGraph({
   }, [workflow, events, startedAt, completedAt, selectedStepId, t])
   return (
     <Surface asChild>
-      <section aria-label={t("title")} className="mb-6 overflow-hidden rounded-xl border bg-card">
+      <section
+        aria-label={t("title")}
+        className="mb-6 overflow-hidden rounded-xl border border-transparent bg-card shadow-(--card-shadow)"
+      >
         <div className="border-b px-4 py-3">
           <h2 className="text-sm font-semibold">{t("title")}</h2>
           <p className="text-xs text-muted-foreground">{t("hint")}</p>

@@ -77,7 +77,7 @@ export function SupportDiagnosticsConsent({ surface, className }: SupportDiagnos
       </Button>
       {showPreview && (
         <pre
-          className="max-h-48 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
+          className="max-h-48 overflow-auto rounded-md border border-transparent bg-muted/70 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
           aria-live="polite"
         >
           {preview}

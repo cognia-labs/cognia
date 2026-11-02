@@ -146,7 +146,7 @@ export function SkillDetail({ skill }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 flex-wrap items-start gap-3 border-b px-4 py-3 sm:px-5 sm:py-4">
+      <div className="flex shrink-0 flex-wrap items-start gap-3 px-4 py-3 sm:px-5 sm:py-4">
         <div
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${category.color}`}
         >
@@ -422,7 +422,7 @@ export function SkillUpdateBanner({ skill }: { skill: Skill }) {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[8rem_1fr] gap-2 border-b border-dashed py-1">
+    <div className="grid grid-cols-[8rem_1fr] items-baseline gap-2 py-1.5">
       <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
       <span>{children}</span>
     </div>

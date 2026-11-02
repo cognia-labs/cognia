@@ -68,14 +68,14 @@ export function SummarySection({
               : t("summary.connectionTestFailed")}
         </p>
       ) : null}
-      <div className="rounded-lg border p-2 text-center">
+      <div className="rounded-lg border border-transparent bg-muted/50 p-2 text-center">
         <Server className="mx-auto mb-1 h-4 w-4" />
         <p className="text-[10px] text-muted-foreground">{t("summary.transport")}</p>
         <Badge variant={latestSample?.probe?.reachable ? "default" : "secondary"}>
           {latestSample?.probe?.reachable ? t("status.reachable") : t("status.unknown")}
         </Badge>
       </div>
-      <div className="rounded-lg border p-2 text-center">
+      <div className="rounded-lg border border-transparent bg-muted/50 p-2 text-center">
         <CheckCircle2 className="mx-auto mb-1 h-4 w-4" />
         <p className="text-[10px] text-muted-foreground">{t("summary.auth")}</p>
         <Badge variant={authenticated ? "default" : "secondary"}>
@@ -86,7 +86,7 @@ export function SummarySection({
               : t("status.unverified")}
         </Badge>
       </div>
-      <div className="rounded-lg border p-2 text-center">
+      <div className="rounded-lg border border-transparent bg-muted/50 p-2 text-center">
         <Gauge className="mx-auto mb-1 h-4 w-4" />
         <p className="text-[10px] text-muted-foreground">{t("summary.execution")}</p>
         <Badge variant={latestSample?.status === "completed" ? "default" : "secondary"}>

@@ -115,7 +115,7 @@ export function McpPicker({
               {servers.map((srv) => (
                 <div
                   key={srv.id}
-                  className="flex items-center gap-2 rounded-md border bg-muted/20 px-2 py-1.5 text-sm hover:bg-muted/40"
+                  className="flex items-center gap-2 rounded-md border border-transparent bg-muted/50 px-2 py-1.5 text-sm hover:bg-muted/40"
                 >
                   <Checkbox
                     id={`${testId}-server-${srv.id}`}

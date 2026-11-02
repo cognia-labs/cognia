@@ -134,7 +134,7 @@ export function VideoJobCard({
     <div
       data-testid="video-job-card"
       data-status={row.status}
-      className="my-1 space-y-2 rounded-md border bg-muted/20 p-3 text-xs"
+      className="my-1 space-y-2 rounded-md border border-transparent bg-muted/50 p-3 text-xs"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 font-medium">

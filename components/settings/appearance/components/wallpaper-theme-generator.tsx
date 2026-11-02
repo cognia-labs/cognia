@@ -202,7 +202,7 @@ export function WallpaperThemeGenerator({
 
   return (
     <div
-      className="space-y-3 rounded-lg border bg-card/60 p-3"
+      className="space-y-3 rounded-lg border border-transparent bg-card/60 shadow-(--card-shadow) p-3"
       data-testid="wallpaper-theme-generator"
     >
       <div className="flex flex-col gap-3 @md/appearance-pane:flex-row @md/appearance-pane:items-center">

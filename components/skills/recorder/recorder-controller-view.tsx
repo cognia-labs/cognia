@@ -153,7 +153,7 @@ export function RecorderControllerView() {
         if ((event.target as HTMLElement).closest("button")) return
         void recorderControllerBeginDrag().catch(() => {})
       }}
-      className="flex h-14 w-[420px] items-center gap-3 rounded-xl border px-3 backdrop-blur"
+      className="flex h-14 w-[420px] items-center gap-3 rounded-xl border border-transparent bg-muted/50 px-3 backdrop-blur"
       aria-label={t("moveController")}
     >
       <CircleIcon
