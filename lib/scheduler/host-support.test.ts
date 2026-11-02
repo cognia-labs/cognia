@@ -177,6 +177,7 @@ describe("CARD_AUTHORED_TASK_TYPES covers every subsystem-authored type", () => 
   // other surface reads, and it silently answered "no" for these two.
   it.each([
     "github-issue-sync",
+    "external-sync-renewal",
     "issue-wakeup",
     "connection:housekeeping:attachment-cache",
     "conversation-auto-archive",

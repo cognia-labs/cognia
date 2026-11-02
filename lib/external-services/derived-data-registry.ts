@@ -1,5 +1,7 @@
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getDb } from "@/lib/db/schema"
+import { withNamedLock } from "@/lib/locks/named-lock"
+import type { ExternalSyncTarget } from "./sync/types"
 
 /**
  * Host-derived data only; never user-kept attachments, messages or artifacts.
@@ -102,5 +104,93 @@ registerDerivedDataPurger({
     // Keep action/authorization/security records and migration backup/completion
     // records: they prove writes, denied access and rollback, not cached content.
     // access.cleanup.* is also retained until its durable retry completes.
+  },
+})
+
+registerDerivedDataPurger({
+  id: "external-sync",
+  async purge(target) {
+    const db = getDb()
+    const matches = (row: ExternalSyncTarget) =>
+      target.kind === "plugin-data"
+        ? row.owner === `plugin:${target.pluginId}`
+        : row.connectionRef === target.ref &&
+          (target.kind === "connection" || row.owner === `plugin:${target.consumerPluginId}`)
+    const { unregisterExternalSync, unregisterExternalSyncTargets } = await import("./sync/runtime")
+    // Cancel timers and unresolved factories even before they have a cursor row.
+    unregisterExternalSyncTargets(matches)
+    const barrierId = `external-sync-purge:${JSON.stringify(target)}`
+    let rows: ExternalSyncTarget[] = []
+    const { deleteExternalSyncRenewalTask, syncExternalSyncRenewalSchedule } =
+      await import("./sync/renewal")
+    const generation = crypto.randomUUID()
+    await db.transaction(
+      "rw",
+      db.externalSyncCursors,
+      db.externalSyncSeen,
+      db.integrationAudit,
+      async () => {
+        const previous = await db.integrationAudit.get(barrierId)
+        const current = await db.externalSyncCursors.filter(matches).toArray()
+        rows = [
+          ...((previous?.detail?.targets as ExternalSyncTarget[] | undefined) ?? []),
+          ...current.map(({ key, owner, connectionRef }) => ({ key, owner, connectionRef })),
+        ]
+        const keys = new Set(current.map((row) => row.key))
+        if (!rows.length) return
+        // Retain the exclusion keys across a timeout/restart even though the
+        // cursors are gone. Access teardown retries must still wait for them.
+        await db.integrationAudit.put({
+          id: barrierId,
+          pluginId: target.kind === "plugin-data" ? target.pluginId : "__host__",
+          integrationId: "__host__",
+          kind: "external-sync.purge.pending",
+          outcome: "succeeded",
+          detail: { targets: rows, generation },
+          createdAt: new Date().toISOString(),
+        })
+        await db.externalSyncSeen.filter((row) => keys.has(row.key)).delete()
+        await db.externalSyncCursors.bulkDelete([...keys])
+      }
+    )
+    for (const row of rows) {
+      unregisterExternalSync(row.key)
+      await deleteExternalSyncRenewalTask(row.key)
+      if (row.connectionRef) {
+        // Core leases last 30 s; allow a margin, but never wait indefinitely
+        // for a runtime that keeps renewing without reaching its next commit.
+        const deadline = Date.now() + 35_000
+        while (true) {
+          const lease = await db.syncLeases.get(`${row.connectionRef}:sync:${row.key}`)
+          if (!lease || lease.expiresAt <= Date.now()) break
+          if (Date.now() >= deadline) throw new Error("External sync purge timed out")
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      } else {
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        try {
+          // Web Locks do not apply withNamedLock's fallback waitMs. Bound the
+          // caller too; a late lock callback only acquires and releases it.
+          await Promise.race([
+            withNamedLock(`cognia-external-sync:${row.key}`, async () => undefined, {
+              waitMs: 5000,
+              ...(typeof window === "undefined" ? { mode: "in-process" as const } : {}),
+            }),
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(() => reject(new Error("External sync purge timed out")), 5000)
+            }),
+          ])
+        } finally {
+          clearTimeout(timeout)
+        }
+      }
+    }
+    if (rows.length) await syncExternalSyncRenewalSchedule()
+    await db.transaction("rw", db.integrationAudit, async () => {
+      const barrier = await db.integrationAudit.get(barrierId)
+      if (barrier?.detail?.generation === generation) await db.integrationAudit.delete(barrierId)
+    })
+    // A runtime whose plugin is still active may start a fresh full sync after
+    // a plugin-data purge. That is expected; this barrier drains stale runs.
   },
 })

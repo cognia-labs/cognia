@@ -55,6 +55,7 @@ export const BUILT_IN_EXECUTOR_TASK_TYPES = Object.freeze([
   "wiki-rebuild",
   "wiki-lint",
   "github-issue-sync",
+  "external-sync-renewal",
   "radar-report",
   "agent-team",
   "goal",

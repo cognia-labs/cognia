@@ -36,6 +36,47 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v255 adds empty external sync stores without backfilling or changing v254 data", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBe(255)
+  const name = "cognia-external-sync-v255-upgrade"
+  const previous = new Dexie(name)
+  previous
+    .version(254)
+    .stores({ ...CURRENT_SCHEMA, externalSyncCursors: null, externalSyncSeen: null })
+  await previous.open()
+  await previous.table("syncLeases").put({
+    key: "keep",
+    connectionRef: "ref",
+    token: "token",
+    ownerId: "owner",
+    expiresAt: 1000,
+    heartbeatAt: 0,
+  })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(255)
+    expect(await current.externalSyncCursors.count()).toBe(0)
+    expect(await current.externalSyncSeen.count()).toBe(0)
+    expect(current.externalSyncCursors.schema.primKey.keyPath).toBe("key")
+    expect(Object.keys(current.externalSyncCursors.schema.idxByName).sort()).toEqual([
+      "backoffUntil",
+      "connectionRef",
+      "owner",
+    ])
+    expect(current.externalSyncSeen.schema.primKey.keyPath).toEqual(["key", "generation", "itemId"])
+    expect(current.externalSyncSeen.schema.idxByName["[key+generation]"].keyPath).toEqual([
+      "key",
+      "generation",
+    ])
+    expect(await current.syncLeases.get("keep")).toMatchObject({ token: "token" })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v248 adds media packs while preserving the v247 store shape and existing data", async () => {
   const name = "cognia-media-v248-upgrade"
   const old = new Dexie(name)
@@ -5542,7 +5583,7 @@ it("v254 adds a device-local capture table without changing v253 data", async ()
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(254)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(current.remoteDocumentConnections.schema.primKey.keyPath).toBe("captureId")
     expect(Object.keys(current.remoteDocumentConnections.schema.idxByName).sort()).toEqual([
       "capturedAt",

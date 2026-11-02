@@ -121567,6 +121567,7 @@ paths:
                         - wiki-rebuild
                         - wiki-lint
                         - github-issue-sync
+                        - external-sync-renewal
                         - issue-wakeup
                         - radar-report
                         - provider-diagnostics-refresh
@@ -122772,6 +122773,7 @@ paths:
                               - wiki-rebuild
                               - wiki-lint
                               - github-issue-sync
+                              - external-sync-renewal
                               - issue-wakeup
                               - radar-report
                               - provider-diagnostics-refresh
@@ -123327,6 +123329,7 @@ paths:
                           - wiki-rebuild
                           - wiki-lint
                           - github-issue-sync
+                          - external-sync-renewal
                           - issue-wakeup
                           - radar-report
                           - provider-diagnostics-refresh

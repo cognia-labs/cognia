@@ -98,6 +98,7 @@ const MACHINE_MAINTENANCE_TASK_TYPES: ReadonlySet<ScheduledTaskType> = new Set([
   "radar-report",
   "provider-diagnostics-refresh",
   "github-issue-sync",
+  "external-sync-renewal",
   "issue-wakeup",
   "connection:housekeeping:clock",
   "connection:housekeeping:outbound-retention",

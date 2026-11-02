@@ -1016,6 +1016,7 @@
     "external-agent": "External Agent (ACP)",
     "files-trash-purge": "Files Trash Purge",
     "github-issue-sync": "GitHub Issue Sync",
+    "external-sync-renewal": "External sync renewal (inert — no shipped provider)",
     "goal": "Goal",
     "harness-evolution-sweep": "Harness Evolution Sweep",
     "im-push": "IM Push",

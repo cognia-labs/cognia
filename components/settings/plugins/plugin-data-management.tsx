@@ -3,9 +3,8 @@
 /**
  * PluginDataManagement — the Dexie tables a plugin owns, and "Delete data".
  *
- * Renders the plugins that have declared Dexie tables (i.e. have a row in
- * `pluginDexieMeta`). For each one it lists the tables and offers "Delete
- * data", which erases every row in them and keeps the plugin installed.
+ * Renders plugins with declared Dexie tables or Host-managed sync data.
+ * "Delete data" purges both while keeping the plugin installed.
  *
  * "Delete data" used to call `uninstallPlugin(id, { purgeData: true })`
  * directly. That uninstalled the plugin (runtime, files, permissions,
@@ -23,7 +22,7 @@
  *
  * Two modes:
  *   - List mode (no `pluginId` prop): renders every plugin with a
- *     `pluginDexieMeta` row. A global maintenance surface.
+ *     `pluginDexieMeta` row or sync state. A global maintenance surface.
  *   - Single mode (`pluginId` prop): renders only the matching plugin's
  *     row, used inside the plugin detail pane's Data tab.
  *
@@ -59,7 +58,7 @@ import { isMirroredPluginClient } from "@/lib/plugin/core/mirrored-client"
 interface Props {
   /** When provided, only render the row for this plugin (used inside the
    * plugin detail pane). When omitted, render every plugin with a
-   * `pluginDexieMeta` row (global maintenance surface). */
+   * `pluginDexieMeta` row or sync state (global maintenance surface). */
   pluginId?: string
 }
 
@@ -74,9 +73,30 @@ export function PluginDataManagement({ pluginId }: Props = {}) {
   const [pending, setPending] = useState<string | null>(null)
   const mirrored = isMirroredPluginClient()
 
-  const registrations = useLiveQuery(() => {
-    const table = getDb().pluginDexieMeta
-    return pluginId ? table.where("pluginId").equals(pluginId).toArray() : table.toArray()
+  const registrations = useLiveQuery(async () => {
+    const db = getDb()
+    const table = db.pluginDexieMeta
+    const [metas, syncs] = await Promise.all([
+      pluginId ? table.where("pluginId").equals(pluginId).toArray() : table.toArray(),
+      db.externalSyncCursors
+        .filter((row) =>
+          pluginId ? row.owner === `plugin:${pluginId}` : row.owner.startsWith("plugin:")
+        )
+        .toArray(),
+    ])
+    const rows = new Map<string, { pluginId: string; tableNames: string[]; syncCount: number }>(
+      metas.map((meta) => [
+        meta.pluginId,
+        { pluginId: meta.pluginId, tableNames: meta.tableNames, syncCount: 0 },
+      ])
+    )
+    for (const sync of syncs) {
+      const id = sync.owner.slice("plugin:".length)
+      const row = rows.get(id) ?? { pluginId: id, tableNames: [], syncCount: 0 }
+      row.syncCount++
+      rows.set(id, row)
+    }
+    return [...rows.values()]
   }, [pluginId])
 
   if (registrations === undefined) {
@@ -100,8 +120,8 @@ export function PluginDataManagement({ pluginId }: Props = {}) {
   const handlePurge = async (id: string) => {
     setPending(id)
     try {
-      const cleared = await clearPluginTables(() => getDb() as unknown as Dexie, id)
-      toast.success(td("purged", { pluginId: id, count: cleared.length }))
+      await clearPluginTables(() => getDb() as unknown as Dexie, id)
+      toast.success(t("purged", { pluginId: id }))
     } catch (error) {
       toast.error(td("purgeFailed", { pluginId: id }), {
         description: error instanceof Error ? error.message : String(error),
@@ -140,6 +160,11 @@ export function PluginDataManagement({ pluginId }: Props = {}) {
                   <span className="text-muted-foreground">
                     {td("tableCount", { count: meta.tableNames.length })}
                   </span>
+                  {meta.syncCount > 0 && (
+                    <span className="text-muted-foreground">
+                      {t("syncCount", { count: meta.syncCount })}
+                    </span>
+                  )}
                 </p>
                 <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
                   {meta.tableNames.map((name) => (

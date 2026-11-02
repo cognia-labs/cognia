@@ -25,6 +25,14 @@ function task(overrides: Partial<ScheduledTask> = {}) {
 }
 
 describe("classifyScheduledTask", () => {
+  it("keeps external sync renewal with its device-local cursors and renewers", () => {
+    expect(
+      classifyScheduledTask(task({ type: "external-sync-renewal", payload: {} }), headless)
+    ).toEqual({
+      movable: false,
+      reasons: [{ kind: "machine-maintenance", taskType: "external-sync-renewal" }],
+    })
+  })
   it("lets a plain chat schedule move to a headless host", () => {
     expect(classifyScheduledTask(task(), headless)).toEqual({ movable: true, reasons: [] })
   })

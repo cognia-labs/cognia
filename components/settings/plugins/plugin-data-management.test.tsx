@@ -48,6 +48,7 @@ import { toast } from "sonner"
 import { clearPluginTables } from "@/lib/plugin/dexie/bridge"
 import { isMirroredPluginClient } from "@/lib/plugin/core/mirrored-client"
 import { getPluginManager } from "@/lib/plugin/core/manager"
+import { getDb } from "@/lib/db/schema"
 
 const useLiveQueryMock = useLiveQuery as jest.Mock
 const clearPluginTablesMock = clearPluginTables as jest.Mock
@@ -73,6 +74,41 @@ async function confirmDelete(pluginId: string) {
 }
 
 describe("PluginDataManagement", () => {
+  it.each([undefined, "sync-only"])(
+    "offers data deletion for sync-only plugins in %s mode",
+    async (pluginId) => {
+      const cursors = [
+        { key: "one", owner: "plugin:sync-only" },
+        { key: "two", owner: "plugin:sync-only" },
+        { key: "host", owner: "host" },
+      ]
+      const table = { toArray: async () => [] }
+      jest.mocked(getDb).mockReturnValueOnce({
+        pluginDexieMeta: { ...table, where: () => ({ equals: () => table }) },
+        externalSyncCursors: {
+          filter: (predicate: (row: (typeof cursors)[number]) => boolean) => ({
+            toArray: async () => cursors.filter(predicate),
+          }),
+        },
+      } as never)
+      useLiveQueryMock.mockReturnValue([])
+      const { unmount } = render(<PluginDataManagement pluginId={pluginId} />)
+      const query = useLiveQueryMock.mock.calls[0][0]
+      const rows = await query()
+      expect(rows).toEqual([{ pluginId: "sync-only", tableNames: [], syncCount: 2 }])
+      unmount()
+      useLiveQueryMock.mockReturnValue(rows)
+      clearPluginTablesMock.mockResolvedValue([])
+      render(<PluginDataManagement pluginId={pluginId} />)
+      expect(screen.getByText('syncCount:{"count":2}')).toBeInTheDocument()
+      await confirmDelete("sync-only")
+      await waitFor(() =>
+        expect(clearPluginTablesMock).toHaveBeenCalledWith(expect.any(Function), "sync-only")
+      )
+      expect(getPluginManager).not.toHaveBeenCalled()
+      expect(toast.success).toHaveBeenCalledWith('purged:{"pluginId":"sync-only"}')
+    }
+  )
   it("shows the all-plugins empty state when no plugins have registered tables", () => {
     useLiveQueryMock.mockReturnValue([])
     render(<PluginDataManagement />)
@@ -140,7 +176,7 @@ describe("PluginDataManagement", () => {
     await waitFor(() => expect(clearPluginTablesMock).toHaveBeenCalledTimes(1))
     expect(clearPluginTablesMock.mock.calls[0][1]).toBe("github-delivery")
     expect(getPluginManager).not.toHaveBeenCalled()
-    expect(toast.success).toHaveBeenCalledWith('purged:{"pluginId":"github-delivery","count":2}')
+    expect(toast.success).toHaveBeenCalledWith('purged:{"pluginId":"github-delivery"}')
   })
 
   it("does nothing when the confirmation is cancelled", async () => {

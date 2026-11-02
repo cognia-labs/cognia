@@ -81,6 +81,7 @@ const TIER_BY_TYPE: Partial<Record<ScheduledTaskType, CatchupTier>> = {
   // the next run covers every window that was missed — replaying them would
   // spend rate-limit budget re-asking for the same answer.
   "github-issue-sync": "never",
+  "external-sync-renewal": "never",
   // A periodic wakeup is a check-in on one issue. One missed tick that is
   // still fresh is worth delivering after a restart; a backlog of them would
   // wake the same agent N times to look at the same issue.

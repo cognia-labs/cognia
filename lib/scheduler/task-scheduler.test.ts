@@ -366,6 +366,31 @@ describe("TaskScheduler", () => {
       await scheduler.initialize()
     })
 
+    it("does not expire a once task re-armed by its executor", async () => {
+      const original = await scheduler.createTask({
+        name: "Renewal",
+        type: "external-sync-renewal",
+        trigger: { type: "once", runAt: new Date(Date.now() + 60_000) },
+      })
+      const rearmed = {
+        ...original,
+        trigger: { type: "once" as const, runAt: new Date(Date.now() + 120_000) },
+      }
+      mockSchedulerDb.getTask.mockResolvedValue(rearmed)
+      mockSchedulerDb.updateTask.mockClear()
+      await (
+        scheduler as unknown as { finalizeClaimedScheduledRun(task: ScheduledTask): Promise<void> }
+      ).finalizeClaimedScheduledRun(original)
+      expect(mockSchedulerDb.updateTask).not.toHaveBeenCalled()
+      mockSchedulerDb.getTask.mockResolvedValue(original)
+      await (
+        scheduler as unknown as { finalizeClaimedScheduledRun(task: ScheduledTask): Promise<void> }
+      ).finalizeClaimedScheduledRun(original)
+      expect(mockSchedulerDb.updateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "expired" })
+      )
+    })
+
     describe("plugin scheduler hooks", () => {
       it("emits committed CRUD transitions without fabricating a plugin owner", async () => {
         const task = await scheduler.createTask({

@@ -225,6 +225,9 @@ export async function removePluginConnectionAccess(
 /** Terminal lifecycle cleanup including provider-owned credentials and profiles. */
 export async function purgePluginExternalServices(pluginId: string): Promise<void> {
   if (!hasExternalServicePersistence()) return
+  const target = { kind: "plugin-data" as const, pluginId }
+  await queueAccessTeardown(target)
+  await runAccessTeardown(target)
   const removed = await removePluginExternalServiceState(pluginId)
   for (const serverId of removed.mcpServerIds) {
     const server = await getMcpServer(serverId)

@@ -24,6 +24,11 @@ import { ensureActiveDatabaseReady, assertPluginSchemaReady } from "@/lib/db/boo
 import { ensureSessionListReady } from "@/lib/db/session-list"
 import { assertStorageLayoutSupported, writeStorageLayoutMarker } from "@/lib/db/storage-layout"
 import { runPluginMigrations } from "./migration-runner"
+import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
+
+jest.mock("@/lib/external-services/derived-data-registry", () => ({
+  purgeDerivedData: jest.fn(async () => ({ purged: [], failed: [] })),
+}))
 
 // We bypass CogniaDB entirely and spin up a lightweight test Dexie instance
 // that includes the pluginDexieMeta table but nothing else.
@@ -434,6 +439,7 @@ describe("clearPluginTables", () => {
   let db: Dexie
 
   beforeEach(() => {
+    jest.mocked(purgeDerivedData).mockClear()
     db = makeTestDb()
     __setTestDb(db)
   })
@@ -490,6 +496,17 @@ describe("clearPluginTables", () => {
 
   it("returns an empty list for a plugin with no registered tables", async () => {
     await expect(clearPluginTables(db, "unknown-plugin")).resolves.toEqual([])
+    expect(purgeDerivedData).toHaveBeenCalledWith({
+      kind: "plugin-data",
+      pluginId: "unknown-plugin",
+    })
+  })
+
+  it("does not report success if a derived-data purger fails", async () => {
+    jest.mocked(purgeDerivedData).mockResolvedValueOnce({ purged: [], failed: ["external-sync"] })
+    await expect(clearPluginTables(db, "sync-only")).rejects.toThrow(
+      "Plugin derived data purge failed"
+    )
   })
 
   it("clears a store that exists physically but is not declared in the live schema", async () => {

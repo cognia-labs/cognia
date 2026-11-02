@@ -86,6 +86,8 @@ export type ScheduledTaskType =
   // GitHub issue mirror refresh for the `/issues` board — registered in
   // `lib/scheduler/executors/github-issue-sync-executor.ts`.
   | "github-issue-sync"
+  // Dormant Host subscription renewal: no shipped provider registers a renewer (ADR-0246 P8).
+  | "external-sync-renewal"
   // An issue wakeup: an event / condition / timer subscription scoped to one
   // issue that delivers an ordinary issue run when it fires. Authored by the
   // issue detail panel and the `issue.wakeup_*` skills, executed by

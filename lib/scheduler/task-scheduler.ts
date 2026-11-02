@@ -3574,6 +3574,9 @@ class TaskSchedulerImpl {
     if (!latest) return
     if (latest.status !== "active") return
     if (latest.trigger.type === "once") {
+      // An executor may have re-armed its one-shot subscription while running.
+      // Completing the claimed old slot must not expire that new slot.
+      if (latest.trigger.runAt?.getTime() !== task.trigger.runAt?.getTime()) return
       await schedulerDb.updateTask({
         ...latest,
         status: "expired",

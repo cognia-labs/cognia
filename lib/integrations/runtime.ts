@@ -1,3 +1,5 @@
+import { installExternalSyncRuntime } from "@/lib/external-services/sync/runtime"
+import { syncExternalSyncRenewalSchedule } from "@/lib/external-services/sync/renewal"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { pruneIntegrationRetention } from "@/lib/db/integrations"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
@@ -20,6 +22,7 @@ function reportRecurringFailure(
     | "retention-prune"
     | "github-delivery-reconciliation"
     | "ingress-install"
+    | "sync-renewal-install"
     | "projection-recovery",
   error: unknown
 ): void {
@@ -48,6 +51,10 @@ export async function startIntegrationRuntime(): Promise<() => void> {
     reportRecurringFailure("ingress-install", error)
     return () => undefined
   })
+  const disposeSync = installExternalSyncRuntime()
+  await syncExternalSyncRenewalSchedule().catch((error) =>
+    reportRecurringFailure("sync-renewal-install", error)
+  )
   // After ingress is installed, so the plugins that own the events have had
   // their chance to register; an event whose projections a crash or a throwing
   // consumer left unfinished is picked up here rather than lost.
@@ -81,6 +88,7 @@ export async function startIntegrationRuntime(): Promise<() => void> {
     globalThis.clearInterval(drainTimer)
     globalThis.clearInterval(retentionTimer)
     globalThis.clearInterval(githubReconciliationTimer)
+    disposeSync()
     disposeIngress()
     disposeGithubAuth()
     disposeLarkAuth()

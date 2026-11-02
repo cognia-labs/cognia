@@ -13,6 +13,13 @@ import {
 import { DEFAULT_EXECUTION_CONFIG } from "@/types/scheduler"
 
 describe("resolveCatchupTier", () => {
+  it("never replays missed external subscription renewals", () => {
+    expect(resolveCatchupTier("external-sync-renewal")).toBe("never")
+    expect(resolveCatchupDefaults("external-sync-renewal")).toEqual({
+      runMissedOnStartup: false,
+      maxMissedRuns: 1,
+    })
+  })
   it("keeps liveness refreshes out of catch-up", () => {
     expect(resolveCatchupTier("connection:presence:refresh")).toBe("never")
   })

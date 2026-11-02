@@ -25,8 +25,10 @@
       "description": "This will permanently delete all IndexedDB data for {pluginId}. The plugin itself will not be uninstalled, but all stored records will be erased and cannot be recovered.",
       "title": "Delete plugin data?"
     },
-    "emptyForAll": "No plugins have declared custom data tables.",
-    "emptyForPlugin": "This plugin has not declared any custom data tables."
+    "emptyForAll": "No plugins have custom data tables or synced sources.",
+    "emptyForPlugin": "This plugin has no custom data tables or synced sources.",
+    "purged": "Deleted stored plugin data for {pluginId}.",
+    "syncCount": "Synced sources: {count}"
   },
   "description": "Plugins are managed in the /plugins workspace. This launcher shows status at a glance and links into the workspace.",
   "developerMode": {

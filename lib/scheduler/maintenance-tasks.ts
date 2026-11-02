@@ -33,6 +33,7 @@ export const MAINTENANCE_TASK_TYPES: readonly string[] = Object.freeze([
   "harness-evolution-sweep",
   "connection:presence:refresh",
   "github-issue-sync",
+  "external-sync-renewal",
 ])
 
 export const MAINTENANCE_TASK_TYPE_PREFIX = "connection:housekeeping:"

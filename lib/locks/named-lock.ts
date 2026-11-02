@@ -8,7 +8,16 @@ export class NamedLockError extends Error {
   }
 }
 
+export class NamedLockUnavailable extends NamedLockError {
+  constructor() {
+    super("The named lock is already held.")
+    this.name = "NamedLockUnavailable"
+  }
+}
+
 export interface NamedLockOptions {
+  /** Try once without waiting behind an existing holder. */
+  ifAvailable?: true
   /** Explicit process-local mode for the headless Host; never auto-selected for browsers. */
   mode?: "in-process" | "indexeddb"
   databaseName?: string
@@ -34,6 +43,11 @@ export async function withNamedLock<T>(
   if (options.mode === "in-process") return inProcessLock(name, task, options)
   const locks = options.locks === undefined ? globalThis.navigator?.locks : options.locks
   if (locks && options.mode !== "indexeddb") {
+    if (options.ifAvailable)
+      return locks.request(name, { ifAvailable: true }, (lock) => {
+        if (!lock) throw new NamedLockUnavailable()
+        return guardedTask(task, options)
+      }) as Promise<T>
     return locks.request(name, () => guardedTask(task, options)) as Promise<T>
   }
   if (typeof indexedDB === "undefined") {
@@ -43,7 +57,105 @@ export async function withNamedLock<T>(
         : inProcessLock(name, task, options)
     throw lockError(options, "A cross-context authentication lock is unavailable.")
   }
-  return indexedDbLock(name, task, options)
+  return indexedDbStateLock(name, task, options)
+}
+
+function lockDatabaseName(name: string, options: NamedLockOptions): string {
+  const base = options.databaseName ?? "cognia-named-locks"
+  return options.isolateByName === false ? base : `${base}:${encodeURIComponent(name)}`
+}
+
+/** Short transactions expose contention without timing a queued work request. */
+function updateIndexedDbReservation(
+  name: string,
+  options: NamedLockOptions,
+  update: (owner: string | undefined) => string | undefined
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(`${lockDatabaseName(name, options)}:availability`, 1)
+    request.onupgradeneeded = () => request.result.createObjectStore("holders")
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const db = request.result
+      const tx = db.transaction("holders", "readwrite")
+      const store = tx.objectStore("holders")
+      // Legacy callers serialize a whole store, regardless of the key's name.
+      const key = options.storeName ?? "locks"
+      let previous: string | undefined
+      const read = store.get(key)
+      read.onsuccess = () => {
+        previous = read.result
+        const next = update(previous)
+        if (next !== previous) {
+          if (next === undefined) store.delete(key)
+          else store.put(next, key)
+        }
+      }
+      tx.oncomplete = () => {
+        db.close()
+        resolve(previous)
+      }
+      tx.onabort = tx.onerror = () => {
+        db.close()
+        reject(tx.error)
+      }
+    }
+  })
+}
+
+async function indexedDbStateLock<T>(
+  name: string,
+  task: (assertHeld: () => void) => Promise<T>,
+  options: NamedLockOptions
+): Promise<T> {
+  const deadline = Date.now() + Math.max(0, options.waitMs ?? DEFAULT_WAIT_MS)
+  const remaining = () => ({ ...options, waitMs: Math.max(0, deadline - Date.now()) })
+  while (true) {
+    const token = crypto.randomUUID()
+    const previous = await updateIndexedDbReservation(name, options, (owner) => owner ?? token)
+    if (previous !== undefined) {
+      // A crash rolls back the work transaction but can leave its reservation.
+      // Probe through that SAME transaction domain: it can remove an observed
+      // reservation only after the live holder has finished. No lease expires
+      // under a slow holder, and a stale reservation cannot block forever.
+      const probe = indexedDbLock(
+        name,
+        async () => {
+          await updateIndexedDbReservation(name, options, (owner) =>
+            owner === previous ? undefined : owner
+          )
+        },
+        remaining()
+      )
+      if (options.ifAvailable) {
+        void probe.catch(() => undefined)
+        throw new NamedLockUnavailable()
+      }
+      await probe
+      continue
+    }
+    try {
+      let acquired = false
+      const result = await indexedDbLock(
+        name,
+        async (held) => {
+          // A probe may have overtaken a paused reservation before its work
+          // transaction started. Such a caller must retry instead of entering.
+          const owner = await updateIndexedDbReservation(name, options, (current) => current)
+          if (owner !== token) return undefined
+          acquired = true
+          return task(held)
+        },
+        remaining()
+      )
+      if (acquired) return result as T
+      if (options.ifAvailable) throw new NamedLockUnavailable()
+    } finally {
+      await updateIndexedDbReservation(name, options, (owner) =>
+        owner === token ? undefined : owner
+      )
+    }
+  }
 }
 
 async function guardedTask<T>(
@@ -107,11 +219,7 @@ function indexedDbLock<T>(
     )
     let request: IDBOpenDBRequest
     try {
-      const base = options.databaseName ?? "cognia-named-locks"
-      request = indexedDB.open(
-        options.isolateByName === false ? base : `${base}:${encodeURIComponent(name)}`,
-        1
-      )
+      request = indexedDB.open(lockDatabaseName(name, options), 1)
     } catch (error) {
       finish(error)
       return
@@ -158,6 +266,7 @@ function indexedDbLock<T>(
           return
         }
         keepAlive.onsuccess = () => {
+          if (settled) return
           if (!started) {
             started = true
             held = true
@@ -201,6 +310,7 @@ async function inProcessLock<T>(
   task: (assertHeld: () => void) => Promise<T>,
   options: NamedLockOptions
 ): Promise<T> {
+  if (options.ifAvailable && queues.has(name)) throw new NamedLockUnavailable()
   const previous = queues.get(name) ?? Promise.resolve()
   let release!: () => void
   const gate = new Promise<void>((resolve) => {

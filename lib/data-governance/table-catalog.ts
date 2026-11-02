@@ -95,6 +95,8 @@ export const CORE_TABLE_NAMES = [
   "connectionBindings",
   "remoteDocumentConnections",
   "syncLeases",
+  "externalSyncCursors",
+  "externalSyncSeen",
   "authAttempts",
   "automationAuditLog",
   "backgroundTasks",
@@ -2046,7 +2048,9 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
       name === "authConnections" ||
       name === "authAttempts" ||
       name === "connectionBindings" ||
-      name === "syncLeases"
+      name === "syncLeases" ||
+      name === "externalSyncCursors" ||
+      name === "externalSyncSeen"
         ? "plugin-auth"
         : name === "remoteDocumentConnections"
           ? "docs-providers"

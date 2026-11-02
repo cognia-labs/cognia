@@ -15,6 +15,7 @@ describe("isMaintenanceTask", () => {
     "provider-diagnostics-refresh",
     "conversation-auto-archive",
     "github-issue-sync",
+    "external-sync-renewal",
     "files-trash-purge",
     "harness-evolution-sweep",
     "connection:presence:refresh",

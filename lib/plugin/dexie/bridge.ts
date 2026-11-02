@@ -435,6 +435,10 @@ export async function clearPluginTables(
   dbSource: DexieSource,
   pluginId: string
 ): Promise<string[]> {
+  // Sync and other Host-derived data can exist without any plugin-owned tables.
+  const { purgeDerivedData } = await import("@/lib/external-services/derived-data-registry")
+  const report = await purgeDerivedData({ kind: "plugin-data", pluginId })
+  if (report.failed.length) throw new Error("Plugin derived data purge failed")
   const dbName = resolveDb(dbSource).name
   return runSchemaMutationExclusive(dbName, async () => {
     const db = resolveDb(dbSource)

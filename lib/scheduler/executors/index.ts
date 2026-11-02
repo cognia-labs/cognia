@@ -78,6 +78,7 @@ import { executeBackupTask } from "./backup-executor"
 import { executeTwinTask } from "./twin-executor"
 import { executeWikiRebuildTask } from "./wiki-rebuild-executor"
 import { executeWikiLintTask } from "./wiki-lint-executor"
+import { executeExternalSyncRenewalTask } from "@/lib/external-services/sync/renewal"
 import { executeGithubIssueSyncTask } from "./github-issue-sync-executor"
 import { executeRadarReportTask } from "./radar-report-executor"
 import { executeAgentTeamTask } from "./team-executor"
@@ -1450,6 +1451,7 @@ const BUILT_IN_EXECUTORS = {
   "wiki-rebuild": executeWikiRebuildTask,
   "wiki-lint": executeWikiLintTask,
   "github-issue-sync": executeGithubIssueSyncTask,
+  "external-sync-renewal": executeExternalSyncRenewalTask,
   "radar-report": executeRadarReportTask,
   "agent-team": executeAgentTeamTask,
   goal: executeGoalTask,
