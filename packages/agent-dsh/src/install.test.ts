@@ -100,7 +100,7 @@ describe("doctorDshRuntime", () => {
       { conformanceSuiteVersion: "3" },
       { conformanceSuiteVersion: "4" },
       { conformanceSuiteVersion: "5" },
-      { conformanceSuiteVersion: "6" },
+      { conformanceSuiteVersion: "7" },
       { conformanceSuiteVersion: "legacy" },
     ]) {
       const report = doctorDshRuntime(channel(overrides), facts(), "cognia-sdk-readonly")

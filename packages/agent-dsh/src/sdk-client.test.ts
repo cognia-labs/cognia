@@ -672,6 +672,40 @@ async function connected() {
 }
 
 describe("DeepSeek Harness current protocol adapter", () => {
+  it("retains owned Todo metadata for UI rehydration and clears it on the next turn", async () => {
+    const { adapter, transport, session } = await connected()
+    try {
+      const result = adapter.execute(session.id, MESSAGE)
+      transport.event(session.id, "turn/start")
+      transport.event("unowned", "todo/write", {
+        todos: [{ content: "Foreign", status: "pending" }],
+      })
+      expect(session.metadata?.plan).toBeUndefined()
+      transport.event(session.id, "user/message", { id: "msg-1", content: [] })
+      transport.event(session.id, "todo/write", {
+        todos: [{ content: "Verify", status: "completed" }],
+      })
+      transport.event(session.id, "turn/end", { reason: { kind: "completed" } })
+      transport.status(session.id, "idle")
+      await result
+      expect(adapter.getSession(session.id)?.metadata?.plan).toEqual([
+        { content: "Verify", status: "completed", priority: "medium" },
+      ])
+      const next = collect(adapter.prompt(session.id, MESSAGE))
+      transport.event(session.id, "turn/start")
+      expect(session.metadata?.plan).toEqual([])
+      transport.event(session.id, "user/message", { id: "msg-1", content: [] })
+      transport.event(session.id, "turn/end", { reason: { kind: "completed" } })
+      transport.status(session.id, "idle")
+      const reset = await next
+      expect(reset.slice(0, 2)).toMatchObject([
+        { type: "plan_update", entries: [], progress: 0, step: -1, totalSteps: 0 },
+        { type: "session_start" },
+      ])
+    } finally {
+      await adapter.disconnect()
+    }
+  })
   it("retains the root model capacity across turns and replaces it when the model changes", async () => {
     const { adapter, transport, session } = await connected()
     try {

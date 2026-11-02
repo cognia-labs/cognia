@@ -25,9 +25,18 @@ import {
   resolveProductLauncher,
   waitForHostProcessLease,
   prepareManagedModulePolicy,
+  transformManagedAcp,
 } from "./launcher.mjs"
 
 const HOST_NONCE = randomUUID()
+test("managed ACP adaptation refuses unverified or changed source", () => {
+  for (const source of [
+    "",
+    '} else if (event.type === "tool/result") {',
+    "export const apply = () => {}",
+  ])
+    assert.throws(() => transformManagedAcp(source), /certified release/)
+})
 const HOST_NONCE_DIGEST = createHash("sha256").update(HOST_NONCE).digest("hex")
 const HOST_RECORD = {
   schemaVersion: 2,

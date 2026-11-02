@@ -367,7 +367,7 @@ export function dshRuntimeCapabilities(snapshot: DshCapabilitySnapshot): string[
 /** Pinned upstream release this channel certifies. */
 export const DSH_UPSTREAM_VERSION = "0.2.1-rc.2"
 export const DSH_NODE_MAJOR_REQUIRED = 26 as const
-export const DSH_CONFORMANCE_SUITE_VERSION = "7"
+export const DSH_CONFORMANCE_SUITE_VERSION = "8"
 
 /**
  * Build the channel manifest from the digests a host just computed.

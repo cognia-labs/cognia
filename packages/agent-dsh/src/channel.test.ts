@@ -55,6 +55,20 @@ function validChannel(): DshRuntimeChannel {
 }
 
 describe("DSH capability facts", () => {
+  it.each(DSH_PROFILE_IDS)(
+    "composes native pruning and Todo in %s without adding execution authority",
+    (profile) => {
+      const rows = dshPluginsForProfile(profile)
+      for (const id of ["tool-result-pruner", "tool-todo"])
+        expect(rows.filter((row) => row.id === id)).toEqual([
+          expect.objectContaining({ status: "enabled" }),
+        ])
+      expect(dshNativeCapabilitiesForProfile(profile).subagents).toBe(false)
+      expect(dshNativeCapabilitiesForProfile(profile).persistentShell).toBe(
+        profile === "cognia-sdk-workspace"
+      )
+    }
+  )
   // These constants are the anti-drift mechanism for upstream's documented
   // limitations. If a future RC changes one, the change must be deliberate.
 

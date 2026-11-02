@@ -792,7 +792,7 @@ jobs:
           npm install --prefix "$DSH_TEST_ROOT" --ignore-scripts --no-audit --no-fund --prefer-offline
       - name: Run launcher and service smoke suites
         working-directory: ${{ env.DSH_TEST_ROOT }}
-        run: node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs managed-plugins.test.mjs
+        run: node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs managed-plugins.test.mjs planning.smoke.test.mjs
 
   sidecar:
     needs: jest-plan

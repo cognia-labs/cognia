@@ -939,6 +939,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
   private terminalAuthPending = false
   /** Forks whose MCP servers are bound by reload when they first execute. */
   private pendingForkMcpRebind = new Set<string>()
+  // Standard replay updates replace session objects; admission ownership must survive them.
+  private readonly pendingSessionResumes = new Map<string, symbol>()
   private dynamicMcpConnections = new Map<string, AcpDynamicMcpConnectionState>()
   private dynamicMcpServerSessions = new Map<string, string>()
 
@@ -1216,6 +1218,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         await this.cleanupNativeSessionTerminals(sessionId)
       }
       this._sessions.clear()
+      this.pendingSessionResumes.clear()
       this.hostPermissionModes.clear()
       this.presentationListeners.clear()
       this.pendingForkMcpRebind.clear()
@@ -2187,6 +2190,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    * session's resources; regardless of support we always clean up local state.
    */
   async closeSession(sessionId: string): Promise<void> {
+    this.pendingSessionResumes.delete(sessionId)
     const session = this._sessions.get(sessionId)
     if (!session) {
       return
@@ -2243,6 +2247,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
 
   /** Local teardown shared by close/delete. */
   private async sessionCtxCleanup(sessionId: string): Promise<void> {
+    this.pendingSessionResumes.delete(sessionId)
     for (const [requestId, pending] of this.pendingPermissions) {
       const belongsToSession = pending.request.sessionId
         ? pending.request.sessionId === sessionId
@@ -2938,6 +2943,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this.intentionalDisconnect = true
     this._connectionStatus = "error"
     this._sessions.clear()
+    this.pendingSessionResumes.clear()
     this.hostPermissionModes.clear()
     this.peer?.rejectAll(error.message)
     void this.teardownTransport().catch((cleanupError) => {
@@ -3647,11 +3653,41 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       throw createExternalAgentUnsupportedSessionExtensionError(method)
     }
 
+    if (this.pendingSessionResumes.has(sessionId))
+      throw new Error("Session admission is already in progress")
+    const admission = Symbol("session-resume")
+    const previousSession = this._sessions.get(sessionId)
+    const previousHostMode = this.hostPermissionModes.get(sessionId)
+    let provisional: ExternalAgentSession | undefined
     try {
       const additionalDirectories = this.resolveAdditionalDirectories(options)
       const cwd = this.resolveSessionCwd(options)
       const mcpServers = normalizeMcpServers(options?.mcpServers)
       this.assertDynamicMcpServersSupported(mcpServers)
+      // Resume may replay updates before its response, just like session/load.
+      // Register the admitted workspace first so replay reaches durable UI metadata.
+      provisional = {
+        id: sessionId,
+        agentId: this._config!.id,
+        status: "active",
+        permissionMode: options?.permissionMode ?? "default",
+        allowedTools: options?.allowedTools,
+        capabilities: this._capabilities,
+        tools: this._tools ?? [],
+        messages: [],
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+        metadata: {
+          ...this.buildSessionMetadata(options),
+          ...this.sessionWorkspaceMetadata(cwd, additionalDirectories),
+        },
+      }
+      this.pendingSessionResumes.set(sessionId, admission)
+      this._sessions.set(sessionId, provisional)
+      this.hostPermissionModes.set(
+        sessionId,
+        options?.permissionMode ?? previousHostMode ?? "default"
+      )
       const result = await this.sendRequest<AcpNewSessionResult>(method, {
         sessionId,
         cwd,
@@ -3663,6 +3699,9 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         _meta: this.buildSessionRequestMeta(options),
       } as Record<string, unknown>)
 
+      const replayed = this._sessions.get(sessionId)
+      if (!replayed || this.pendingSessionResumes.get(sessionId) !== admission)
+        throw new DOMException("Session admission was cancelled", "AbortError")
       const resumedSession: ExternalAgentSession = {
         id: result.sessionId || sessionId,
         agentId: this._config!.id,
@@ -3684,13 +3723,25 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         createdAt: new Date(),
         lastActivityAt: new Date(),
         metadata: {
-          ...this.buildSessionMetadata(options, {
-            models: result.models,
-            modes: result.modes,
-            configOptions: result.configOptions,
-          }),
+          ...this.buildSessionMetadata(
+            { ...options, metadata: replayed.metadata },
+            {
+              models: result.models,
+              modes: result.modes,
+              configOptions: result.configOptions,
+            }
+          ),
           ...this.sessionWorkspaceMetadata(cwd, additionalDirectories),
         },
+      }
+      if (
+        resumedSession.id !== sessionId &&
+        this.pendingSessionResumes.get(sessionId) === admission
+      ) {
+        if (previousSession) this._sessions.set(sessionId, previousSession)
+        else this._sessions.delete(sessionId)
+        if (previousHostMode) this.hostPermissionModes.set(sessionId, previousHostMode)
+        else this.hostPermissionModes.delete(sessionId)
       }
       this._sessions.set(resumedSession.id, resumedSession)
       this.hostPermissionModes.set(resumedSession.id, options?.permissionMode ?? "default")
@@ -3700,6 +3751,14 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       this.setExtensionSupport(method, "supported", "ok")
       return await this.restoreSessionPermissionMode(resumedSession, options)
     } catch (error) {
+      if (provisional && this.pendingSessionResumes.get(sessionId) === admission) {
+        if (previousSession && !this.vendor?.reapplySessionMode)
+          this._sessions.set(sessionId, previousSession)
+        else this._sessions.delete(sessionId)
+        if (previousHostMode && !this.vendor?.reapplySessionMode)
+          this.hostPermissionModes.set(sessionId, previousHostMode)
+        else this.hostPermissionModes.delete(sessionId)
+      }
       if (
         isExternalAgentMethodNotFoundError(error) ||
         isExternalAgentSessionExtensionUnsupportedForMethod(error, method)
@@ -3729,6 +3788,9 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         error instanceof Error ? error.message : String(error)
       )
       throw error
+    } finally {
+      if (this.pendingSessionResumes.get(sessionId) === admission)
+        this.pendingSessionResumes.delete(sessionId)
     }
   }
 

@@ -59,6 +59,6 @@
       "requiresNativeSubprocess": false
     }
   ],
-  "conformanceSuiteVersion": "7",
+  "conformanceSuiteVersion": "8",
   "experimental": true
 }

@@ -350,6 +350,9 @@ export function translateDshNotification(notification: unknown): DshCodecResult 
         throw new TypeError(
           "DeepSeek Harness tool/result requires matching tool call identity and content"
         )
+      // Surface replacements change future model input, not the completed
+      // operation shown to the user. Keep its original full result intact.
+      if (record(event.surfaceOp) && event.surfaceOp.op === "replace") break
       const textOnly = message.content.every(
         (part: unknown) => record(part) && part.type === "text" && typeof part.text === "string"
       )
@@ -367,6 +370,34 @@ export function translateDshNotification(notification: unknown): DshCodecResult 
           ...(data.meta === undefined ? {} : { meta: data.meta }),
           ...(data.error === undefined ? {} : { error: data.error }),
         },
+      })
+      break
+    }
+    case "todo/write": {
+      if (!Array.isArray(data.todos)) throw new TypeError("DeepSeek Harness Todo requires a list")
+      const entries = data.todos.map((todo: unknown) => {
+        if (
+          !record(todo) ||
+          typeof todo.content !== "string" ||
+          !todo.content.trim() ||
+          typeof todo.status !== "string" ||
+          !["pending", "in_progress", "completed"].includes(todo.status)
+        )
+          throw new TypeError("Invalid DeepSeek Harness Todo item")
+        return {
+          content: todo.content,
+          priority: "medium" as const,
+          status: todo.status as "pending" | "in_progress" | "completed",
+        }
+      })
+      const completed = entries.filter((entry) => entry.status === "completed").length
+      events.push({
+        type: "plan_update",
+        ...base,
+        entries,
+        progress: entries.length ? (completed / entries.length) * 100 : 0,
+        step: entries.findIndex((entry) => entry.status === "in_progress"),
+        totalSteps: entries.length,
       })
       break
     }

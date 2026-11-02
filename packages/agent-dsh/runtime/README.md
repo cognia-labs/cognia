@@ -15,11 +15,12 @@ product/runtime dependency closure, including optional and peer dependencies,
 and must be refreshed together on the next supported release upgrade. The installer
 retains a lockfile and validates its digest.
 
-The current Cognia certification is **conformance suite 7**. Earlier channels
+The current Cognia certification is **conformance suite 8**. Earlier channels
 require an updated host and reinstall for boot-scoped ownership and protected
 configuration/module loading. Stop older hosts and restart the system when
 their descendant retirement cannot be established before adopting this channel.
-This keeps the upstream DSH release pinned and adds two bounded backend adapters.
+This keeps the upstream DSH release pinned and includes the bounded backends,
+native tool-result pruning and Todo projection described below.
 
 Installers retain `sessions/` and `dsh-home/` when replacing runtime code. Each
 stage has its own `installId`, directory and readiness marker; finalize requires
@@ -102,6 +103,31 @@ service forwards `session/request_permission` to Cognia. Neither SDK composition
 advertises an interactive approval capability.
 
 ## Cognia tools and model gateway
+
+### Native pruning and Todo
+
+All three profiles mount the exact `0.2.1-rc.2` tool-result pruner and Todo
+plugins before admitting prompts. Pruning runs only under the existing
+compaction pressure/overflow policy, retains full original results in the
+append-only session log and makes no additional model call. It is syntactic
+head/tail trimming and may omit important middle content from the model view.
+Compaction headroom and summary output budgets are capped at one quarter of
+the frozen launch context window (maximum 65,536 tokens), allowing automatic
+pruning on smaller Cognia model windows as well as the default DeepSeek window.
+
+`todo_write` replaces the calling session's complete task list. Native parallel
+subagents are not composed, so at most one item may be `in_progress`. Snapshots
+remain durable, but upstream's current Todo projection resets at every new
+turn. SDK plan metadata and managed standard ACP `plan` updates follow that
+reset; ACP resume projects the current native snapshot, not the last historical
+list. SDK resume remains unsupported. Existing Cognia plan UI renders both paths.
+
+The protected loader adapts only the canonical ACP entry whose exact source
+SHA-256 matches the pinned release. It adds those owned Todo projections and
+filters model-context `tool/result` replacements from tool completion output.
+Unexpected source fails closed. Both SDK and ACP retain the user's original
+full tool output without replaying a completion when model context is pruned.
+No approval, filesystem, subprocess, model-route or maintenance grants change.
 
 ### Managed dsh-ops and ModLens backends
 

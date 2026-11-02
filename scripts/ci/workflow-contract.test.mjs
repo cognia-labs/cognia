@@ -329,6 +329,7 @@ test("DeepSeek node:test suites run in their isolated native Node job, never und
     /node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs/
   )
   assert.ok(test.run.includes("managed-plugins.test.mjs"))
+  assert.ok(test.run.includes("planning.smoke.test.mjs"))
   const rustJob = jobs["cargo-test-workspace"]
   const rustReader = rustJob.steps.find(
     (step) => step.name === "Prepare generated DSH source payload"

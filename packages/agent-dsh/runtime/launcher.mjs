@@ -292,6 +292,8 @@ export function resolveProductLauncher(require = createRequire(import.meta.url))
     "dsh-working-directory",
     "dsh-tool-working-directory",
     "dsh-compaction-basic",
+    "dsh-compaction-tool-result-pruner",
+    "dsh-tool-todo",
     "dsh-compaction-image-offload",
   ]) {
     const pkg = JSON.parse(
@@ -420,9 +422,44 @@ export function installManagedModulePolicy(policy) {
       return { ...resolved, url: admittedUrl(resolved.url) }
     },
     load(url, context, nextLoad) {
-      return nextLoad(admittedUrl(url), context)
+      const canonical = admittedUrl(url)
+      const loaded = nextLoad(canonical, context)
+      if (canonical !== policy.acpUrl) return loaded
+      return { ...loaded, source: transformManagedAcp(Buffer.from(loaded.source).toString("utf8")) }
     },
   })
+}
+
+/** Adapt only the exact pinned ACP projection seam, never arbitrary modules. */
+export function transformManagedAcp(source) {
+  if (
+    createHash("sha256").update(source).digest("hex") !==
+    "9df25827fbf2ac7c0b168f22e5bea151153c1492ef118511be96688dc3039989"
+  )
+    throw new Error("Managed DSH ACP source differs from the certified release")
+  const resultBranch = '} else if (event.type === "tool/result") {'
+  const resumeBranch = "return { configOptions: await record.configOptions(signal) };"
+  if (source.split(resultBranch).length !== 2 || source.split(resumeBranch).length !== 2)
+    throw new Error("Managed DSH ACP projection seam changed")
+  return source
+    .replace(
+      resultBranch,
+      `} else if (event.type === "todo/write" || event.type === "turn/start") {
+    const entries = (event.type === "todo/write" ? event.data.todos : []).map(todo => ({ content: todo.content, status: todo.status, priority: "medium" }));
+    this.outputTail = this.outputTail.then(() => this.notify({ sessionId: this.agent.session.id,
+      update: { sessionUpdate: "plan", entries } })).catch(error => {
+        this.ctx.logger.warn("acp: managed Todo delivery failed: " + errorChain(error));
+      });
+  } else if (event.type === "tool/result" && event.surfaceOp?.op !== "replace") {`
+    )
+    .replace(
+      resumeBranch,
+      `const configOptions = await record.configOptions(signal);
+      const todos = ctx.get("sessionProjections").snapshot(record.agent.session, ["todos"]).values.todos;
+      await notify({ sessionId, update: { sessionUpdate: "plan",
+        entries: (todos ?? []).map(todo => ({ content: todo.content, status: todo.status, priority: "medium" })) } });
+      return { configOptions };`
+    )
 }
 
 /** The pinned ModLens CLI may POST only to its admitted gateway, without redirects. */
@@ -446,6 +483,11 @@ export function prepareManagedModulePolicy(
     composition: launch.composition,
     rootConfig: realpathSync(join(runtimeHome, "host.root.yml")),
     appBootUrl: pathToFileURL(realpathSync(require.resolve("@deepseek-ai/dsh-app-boot"))).href,
+    ...(launch.profile === "cognia-acp"
+      ? {
+          acpUrl: pathToFileURL(realpathSync(require.resolve("@deepseek-ai/dsh-acp"))).href,
+        }
+      : {}),
     launchEnvironmentUrl: pathToFileURL(
       realpathSync(require.resolve("@deepseek-ai/dsh-launch-environment"))
     ).href,
