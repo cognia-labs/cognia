@@ -1,5 +1,20 @@
-import { DocsProviderError, type RemoteDocRef } from "./types"
+import { DocsProviderError, type DocsProvider, type RemoteDocRef } from "./types"
 import { DocsProviderError as PublicDocsProviderError } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
+
+it("keeps runtime legacy-account resolution as an optional Host provider hook", async () => {
+  const resolveLegacyAccount: NonNullable<DocsProvider["resolveLegacyAccount"]> = async (
+    binding
+  ) =>
+    binding.accountId === "legacy"
+      ? { id: "connection-ref", label: "Person", authorizationEpoch: "1" }
+      : null
+  expect(await resolveLegacyAccount({ accountId: "legacy" })).toEqual({
+    id: "connection-ref",
+    label: "Person",
+    authorizationEpoch: "1",
+  })
+  expect(await resolveLegacyAccount({ accountId: "another" })).toBeNull()
+})
 
 it("retains a provider's source type when several document types share a picker kind", () => {
   const ref: RemoteDocRef = {

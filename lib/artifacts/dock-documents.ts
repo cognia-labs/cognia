@@ -8,7 +8,7 @@ import {
 import { getDocsProvider } from "@/lib/docs-providers"
 import { subscribeDocsProviders } from "@/lib/docs-providers/registry"
 import { isPluginDocsProviderId, type DocsProvider } from "@/lib/docs-providers/types"
-import { accountMatchesBinding } from "@/lib/docs-providers/account-binding"
+import { resolveDocsAccountBinding } from "@/lib/docs-providers/account-binding"
 import type { DocsProviderAccountBinding } from "@/lib/docs-providers/types"
 import {
   useDockDocumentsStore,
@@ -162,8 +162,12 @@ export async function reverifyDockDocumentBindings(providerId: string): Promise<
   if (getDocsProvider(providerId) !== provider) return
   for (const tab of bound) {
     const binding = useDockDocumentCache.getState().byId[tab.id]?.binding
-    if (!binding || accounts.some((account) => accountMatchesBinding(account, binding))) continue
-    dropDocumentIdentity(tab.id)
+    if (!binding) continue
+    const resolved = await resolveDocsAccountBinding(provider, binding, accounts)
+    if (getDocsProvider(providerId) !== provider) return
+    if (useDockDocumentCache.getState().byId[tab.id]?.binding !== binding) continue
+    if (resolved) updateDocumentMemory(tab.id, { binding: resolved })
+    else dropDocumentIdentity(tab.id)
   }
 }
 

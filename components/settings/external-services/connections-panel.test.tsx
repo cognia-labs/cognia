@@ -191,29 +191,32 @@ it("maps duplicate-lineage refusal to the localized existing-connection reason",
   expect(await screen.findByRole("alert")).toHaveTextContent(en.connections.identityConflict)
 })
 
-it("reauthorizes a Lark Host connection through its adapter flow", async () => {
-  const reauthorize = jest.fn(async () => {})
-  const dispose = registerHostConnectionDriver("lark", {
-    publisher: "cognia",
-    getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
-    disconnect: async () => {},
-    reauthorize,
-  })
-  jest
-    .mocked(listProviders)
-    .mockReturnValue([{ id: "lark", label: "Feishu / Lark", pluginId: null }] as never)
-  jest
-    .mocked(listAuthConnections)
-    .mockResolvedValue([{ ...row, providerId: "lark", ownerPluginId: null }])
-  try {
-    mount()
-    await screen.findByText("Person")
-    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }))
-    await waitFor(() =>
-      expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
-    )
-    expect(connectProvider).not.toHaveBeenCalled()
-  } finally {
-    dispose()
+it.each(["lark", "google"])(
+  "reauthorizes a %s Host connection through its provider flow",
+  async (providerId) => {
+    const reauthorize = jest.fn(async () => {})
+    const dispose = registerHostConnectionDriver(providerId, {
+      publisher: "cognia",
+      getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
+      disconnect: async () => {},
+      reauthorize,
+    })
+    jest
+      .mocked(listProviders)
+      .mockReturnValue([{ id: providerId, label: providerId, pluginId: null }] as never)
+    jest
+      .mocked(listAuthConnections)
+      .mockResolvedValue([{ ...row, providerId, ownerPluginId: null }])
+    try {
+      mount()
+      await screen.findByText("Person")
+      await userEvent.click(screen.getByRole("button", { name: "Reconnect" }))
+      await waitFor(() =>
+        expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
+      )
+      expect(connectProvider).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+    }
   }
-})
+)

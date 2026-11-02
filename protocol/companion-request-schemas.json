@@ -5471,10 +5471,49 @@
               "properties": {
                 "action": {
                   "const": "snapshot"
+                },
+                "legacyClientId": {
+                  "type": "string"
                 }
               },
               "required": [
                 "action"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "setClientSecret"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "secret": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "clientId",
+                "secret"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "clearClientSecret"
+                },
+                "clientId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "clientId"
               ],
               "additionalProperties": false
             },
@@ -5483,52 +5522,27 @@
               "properties": {
                 "action": {
                   "const": "begin"
-                }
-              },
-              "required": [
-                "action"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "action": {
-                  "const": "setPending"
                 },
-                "authorization": {
+                "clientId": {
                   "type": "string"
                 },
-                "pending": {
-                  "type": "object",
-                  "properties": {
-                    "state": {
-                      "type": "string"
-                    },
-                    "codeVerifier": {
-                      "type": "string"
-                    },
-                    "redirectUri": {
-                      "type": "string"
-                    },
-                    "ts": {
-                      "type": "integer",
-                      "minimum": 0
-                    }
-                  },
-                  "required": [
-                    "state",
-                    "codeVerifier",
-                    "redirectUri",
-                    "ts"
-                  ],
-                  "additionalProperties": false
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reauthorizeLineage": {
+                  "type": "string"
+                },
+                "redirectUri": {
+                  "type": "string"
                 }
               },
               "required": [
                 "action",
-                "authorization",
-                "pending"
+                "clientId",
+                "scopes"
               ],
               "additionalProperties": false
             },
@@ -5536,132 +5550,100 @@
               "type": "object",
               "properties": {
                 "action": {
-                  "const": "claim"
+                  "const": "beginDevice"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reauthorizeLineage": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "clientId",
+                "scopes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "complete"
                 },
                 "state": {
                   "type": "string"
                 },
-                "now": {
+                "code": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "state",
+                "code"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "pollDevice"
+                },
+                "attemptId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "attemptId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "cancel"
+                },
+                "attemptId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "attemptId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "accessToken"
+                },
+                "lineageId": {
+                  "type": "string"
+                },
+                "minValidityMs": {
                   "type": "integer",
                   "minimum": 0
                 }
               },
               "required": [
                 "action",
-                "state",
-                "now"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "action": {
-                  "const": "commit"
-                },
-                "authorization": {
-                  "type": "string"
-                },
-                "tokens": {
-                  "type": "object",
-                  "properties": {
-                    "accessToken": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
-                    },
-                    "expiresAt": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "scope": {
-                      "type": "string"
-                    },
-                    "tokenType": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "accessToken",
-                    "expiresAt"
-                  ],
-                  "additionalProperties": false
-                },
-                "accountEmail": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "action",
-                "authorization",
-                "tokens"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "action": {
-                  "const": "refresh"
-                },
-                "connection": {
-                  "type": "string"
-                },
-                "tokens": {
-                  "type": "object",
-                  "properties": {
-                    "accessToken": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
-                    },
-                    "expiresAt": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "scope": {
-                      "type": "string"
-                    },
-                    "tokenType": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "accessToken",
-                    "expiresAt"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "action",
-                "connection",
-                "tokens"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "action": {
-                  "const": "invalidate"
-                },
-                "connection": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "action",
-                "connection"
+                "lineageId"
               ],
               "additionalProperties": false
             },
@@ -5670,10 +5652,14 @@
               "properties": {
                 "action": {
                   "const": "disconnect"
+                },
+                "lineageId": {
+                  "type": "string"
                 }
               },
               "required": [
-                "action"
+                "action",
+                "lineageId"
               ],
               "additionalProperties": false
             }

@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db/schema"
 import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
 import { getRemoteDocumentConnection } from "@/lib/db/remote-document-connections"
 import { getDocsProvider } from "./registry"
-import { DocsProviderError, type RemoteDocContent } from "./types"
+import { DocsProviderError, type DocsProvider, type RemoteDocContent } from "./types"
 import {
   captureKeptCopyProvenance,
   recordKeptCopySourceFailure,
@@ -12,12 +12,15 @@ import {
 } from "./kept-copy-source"
 import type { RemoteDocumentProvenanceV1 } from "./document-provenance"
 
-jest.mock("./registry", () => ({ getDocsProvider: jest.fn() }))
+jest.mock("./registry", () => ({
+  getDocsProvider: jest.fn(),
+  listDocsProviders: jest.fn(() => []),
+}))
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 beforeEach(async () => {
   await fixture.restore()
-  jest.mocked(getDocsProvider).mockReturnValue({ kinds: ["resource"], urlOrigins: [] } as never)
+  jest.mocked(getDocsProvider).mockReturnValue(provider)
 })
 afterAll(fixture.dispose)
 
@@ -46,6 +49,16 @@ const content: RemoteDocContent = {
   title: "Report",
   text: "Kept body",
   format: "text",
+}
+const provider: DocsProvider = {
+  id: "plugin:vendor/docs",
+  kinds: ["resource"],
+  hosts: ["tauri"],
+  urlOrigins: [],
+  mentionPrefix: "vendor:",
+  matchRef: () => null,
+  listAccounts: async () => [],
+  fetch: async () => content,
 }
 const binding = { accountId: connection.id, authorizationEpoch: "2" }
 async function capture() {
@@ -91,6 +104,38 @@ it("also captures built-ins when their account id is a Host connection ref", asy
     connectionRef: connection.id,
     identityKey: connection.identityKey,
   })
+})
+
+it("captures a provider-resolved legacy binding as connectionScoped without vendor branches", async () => {
+  await getDb().authConnections.put(connection)
+  const account = { id: connection.id, label: connection.accountLabel, authorizationEpoch: "2" }
+  jest.mocked(getDocsProvider).mockReturnValue({
+    ...provider,
+    listAccounts: async () => [account],
+    resolveLegacyAccount: async (binding: { accountId: string }) =>
+      binding.accountId === "legacy-default" ? account : null,
+  } as never)
+  const provenance = await captureKeptCopyProvenance(
+    { ...content, ref: { ...content.ref, providerId: "google", kind: "doc" } },
+    { accountId: "legacy-default", authorizationEpoch: "old-native-nonce" }
+  )
+  expect(provenance?.connectionScoped).toBe(true)
+  expect(await getRemoteDocumentConnection(provenance!.captureId!)).toMatchObject({
+    connectionRef: connection.id,
+  })
+  expect(JSON.stringify(provenance)).not.toContain(connection.id)
+})
+
+it("does not publish a capture when a legacy binding becomes ambiguous", async () => {
+  jest.mocked(getDocsProvider).mockReturnValue({
+    ...provider,
+    listAccounts: async () => [],
+    resolveLegacyAccount: async () => null,
+  } as never)
+  await expect(captureKeptCopyProvenance(content, { accountId: "legacy" })).rejects.toMatchObject({
+    code: "notAuthorized",
+  })
+  expect(await getDb().remoteDocumentConnections.count()).toBe(0)
 })
 
 it.each(["missing", "revision", "revoked"])("refuses a %s capture binding", async (reason) => {

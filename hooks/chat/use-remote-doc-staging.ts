@@ -33,7 +33,11 @@ import { loggers } from "@cognia/logging"
 import { remoteDocCitation } from "@/lib/chat/mentions/attachment-citations"
 import type { ContextRef } from "@/lib/chat/mentions/types"
 import { wrapUntrustedContent } from "@/lib/web/untrusted-content"
-import { accountMatchesBinding, assertRemoteDocBinding } from "@/lib/docs-providers/account-binding"
+import {
+  accountMatchesBinding,
+  assertRemoteDocBinding,
+  resolveDocsAccountBinding,
+} from "@/lib/docs-providers/account-binding"
 import { normalizeRemoteDocContent } from "@/lib/docs-providers/limits"
 import { subscribeDocsProviders } from "@/lib/docs-providers/registry"
 import {
@@ -154,18 +158,21 @@ export function useRemoteDocStaging({
         !controller.signal.aborted &&
         destinationCurrent() &&
         getDocsProvider(item.providerId) === provider
-      const binding = item.doc.accountBinding
+      let binding = item.doc.accountBinding
+      let accountId = item.accountId
+      let doc = item.doc
       let verified = !binding
       let validationVersion = 0
       let validation: Promise<boolean> = Promise.resolve(verified)
       const verify = () => {
-        if (!binding) return Promise.resolve(live())
+        const expected = binding
+        if (!expected) return Promise.resolve(live())
         const attempt = ++validationVersion
         verified = false
         validation = provider.listAccounts().then(
           (accounts) => {
             if (attempt === validationVersion) {
-              verified = accounts.some((account) => accountMatchesBinding(account, binding))
+              verified = accounts.some((account) => accountMatchesBinding(account, expected))
               if (!verified) controller.abort()
             }
             return verified && live()
@@ -183,9 +190,7 @@ export function useRemoteDocStaging({
         await validation
         return current()
       }
-      const unsubscribe = provider.subscribeAccounts?.(() => {
-        void verify()
-      })
+      let unsubscribe: (() => void) | undefined
       const pending = toast.loading(t("picker.fetching", { title: item.doc.title }))
       try {
         let content: RemoteDocContent
@@ -193,12 +198,22 @@ export function useRemoteDocStaging({
         try {
           if (item.doc.providerId !== item.providerId) throw new DocsProviderError("invalidRef")
           assertRemoteDocBinding(item.doc, item.accountId, binding?.authorizationEpoch)
+          if (binding && provider.resolveLegacyAccount) {
+            const resolved = await resolveDocsAccountBinding(provider, binding)
+            if (!resolved) throw new DocsProviderError("notAuthorized")
+            binding = resolved
+            accountId = resolved.accountId
+            doc = { ...doc, accountBinding: resolved }
+          }
+          unsubscribe = provider.subscribeAccounts?.(() => {
+            void verify()
+          })
           if (!live() || (binding && !(await beforeCommit()))) {
             toast.dismiss(pending)
             return null
           }
-          content = await provider.fetch(item.doc, {
-            accountId: item.accountId,
+          content = await provider.fetch(doc, {
+            accountId,
             ...(binding?.authorizationEpoch
               ? { expectedAuthorizationEpoch: binding.authorizationEpoch }
               : {}),
@@ -232,7 +247,7 @@ export function useRemoteDocStaging({
         let staged: readonly File[]
         try {
           provenance = await captureKeptCopyProvenance(content, {
-            accountId: item.accountId,
+            accountId,
             authorizationEpoch: binding?.authorizationEpoch,
           })
           staged = await acceptFiles([file], {

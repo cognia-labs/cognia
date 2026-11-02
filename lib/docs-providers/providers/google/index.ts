@@ -1,10 +1,8 @@
 /**
  * Google Workspace remote document provider (ADR-0134).
  *
- * Owns its own OAuth connection, separate from the Drive *backup* destination:
- * that one holds the minimal `drive.file` scope and can only see files this app
- * created, which is precisely the wrong shape for reading a document the user
- * already has. See `./config` for why the two are not merged.
+ * Consumes a Google Host connection whose scopes permit document reads. The
+ * Host, shared with other Google consumers, owns identity and credentials.
  *
  * Desktop-only for a concrete reason, not a policy one: Google's installed-app
  * flow permits only a loopback redirect, and the loopback listener is the Rust
@@ -12,7 +10,15 @@
  */
 
 import { clampDocText } from "@/lib/docs-providers/limits"
-import { assertRemoteDocBinding } from "@/lib/docs-providers/account-binding"
+import {
+  assertRemoteDocBinding,
+  resolveDocsAccountBinding,
+} from "@/lib/docs-providers/account-binding"
+import {
+  listGoogleConnections,
+  resolveGoogleConnection,
+} from "@/lib/auth-providers/google/host-auth"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import {
   DocsProviderError,
   type DocsProvider,
@@ -23,9 +29,9 @@ import {
   type RemoteDocRef,
 } from "@/lib/docs-providers/types"
 import { registerDocsOAuthCompletion } from "@/lib/docs-providers/oauth-deep-link"
-import { completeGoogleDocsAuth, getGoogleAccessToken } from "./auth"
-import { getGoogleDocsSettings } from "./config"
-import { googleState, subscribeGoogleStateChanged } from "./state"
+import { completeGoogleDocsAuth } from "./auth"
+import { GOOGLE_DOCS_SCOPES } from "./config"
+import { subscribeGoogleStateChanged } from "./state"
 import {
   googleHttp,
   throwIfGoogleRequestAborted,
@@ -43,7 +49,7 @@ import {
 
 export const GOOGLE_PROVIDER_ID = "google"
 
-/** Single account: the connection is one OAuth client, so the id is fixed. */
+/** Stored pre-connection bindings remain readable only when selection is unambiguous. */
 export const GOOGLE_ACCOUNT_ID = "default"
 
 export interface GoogleProviderDeps {
@@ -58,23 +64,69 @@ export function __setGoogleProviderDepsForTests(next: GoogleProviderDeps): void 
   deps = next
 }
 
-async function assertGoogleEpoch(opts: DocsProviderCallOptions): Promise<void> {
-  if (opts.accountId !== GOOGLE_ACCOUNT_ID) throw new DocsProviderError("notAuthorized")
-  if (opts.expectedAuthorizationEpoch !== undefined) {
-    const { state } = await googleState({ action: "snapshot" })
-    if (!state.tokens?.refreshToken || state.authorization !== opts.expectedAuthorizationEpoch)
+async function assertGoogleEpoch(accountId: string, revision?: number) {
+  try {
+    const connection = await resolveGoogleConnection(accountId, revision)
+    if (
+      connection.status !== "connected" ||
+      !GOOGLE_DOCS_SCOPES.every((scope) => connection.scopes.includes(scope))
+    )
       throw new DocsProviderError("notAuthorized")
+    return connection
+  } catch (error) {
+    if (error instanceof DocsProviderError) throw error
+    throw new DocsProviderError("notAuthorized")
   }
 }
 
-async function context(opts: DocsProviderCallOptions): Promise<GoogleApiContext> {
+type BoundGoogleContext = GoogleApiContext & { accountId: string; revision: number }
+async function context(opts: DocsProviderCallOptions): Promise<BoundGoogleContext> {
   const signal = opts.signal
   throwIfGoogleRequestAborted(signal)
-  await assertGoogleEpoch(opts)
-  const accessToken = await withGoogleRequestAbort(signal, deps.accessToken ?? getGoogleAccessToken)
-  await assertGoogleEpoch(opts)
+  if (opts.accountId === GOOGLE_ACCOUNT_ID) {
+    const resolved = await resolveDocsAccountBinding(googleDocsProvider, {
+      accountId: opts.accountId,
+      authorizationEpoch: opts.expectedAuthorizationEpoch,
+    })
+    if (!resolved) throw new DocsProviderError("notAuthorized")
+    opts = {
+      ...opts,
+      accountId: resolved.accountId,
+      expectedAuthorizationEpoch: resolved.authorizationEpoch,
+    }
+  }
+  const expected =
+    opts.expectedAuthorizationEpoch === undefined
+      ? undefined
+      : Number(opts.expectedAuthorizationEpoch)
+  if (expected !== undefined && !Number.isSafeInteger(expected))
+    throw new DocsProviderError("notAuthorized")
+  const connection = await assertGoogleEpoch(opts.accountId, expected)
+  let accessToken: string
+  try {
+    accessToken = await withGoogleRequestAbort(
+      signal,
+      deps.accessToken ??
+        (async () =>
+          (await getConnectionManager().getCredentials(connection.id, { minValidityMs: 60_000 }))
+            .accessToken)
+    )
+  } catch (error) {
+    throwIfGoogleRequestAborted(signal)
+    // Rust publishes invalid_grant as needs-reauth; preserve that outcome
+    // instead of presenting an authorization failure as a network outage.
+    await assertGoogleEpoch(connection.id, connection.revision)
+    throw error
+  }
+  await assertGoogleEpoch(connection.id, connection.revision)
   throwIfGoogleRequestAborted(signal)
-  return { http: deps.http ?? googleHttp, accessToken, signal }
+  return {
+    http: deps.http ?? googleHttp,
+    accessToken,
+    signal,
+    accountId: connection.id,
+    revision: connection.revision,
+  }
 }
 
 export const googleDocsProvider: DocsProvider = {
@@ -88,20 +140,35 @@ export const googleDocsProvider: DocsProvider = {
   hosts: ["tauri"],
 
   async listAccounts(): Promise<DocsProviderAccount[]> {
-    const settings = await getGoogleDocsSettings()
-    if (!settings.connected) return []
-    const { state } = await googleState({ action: "snapshot" })
-    if (!state.tokens?.refreshToken) return []
-    return [
-      {
-        id: GOOGLE_ACCOUNT_ID,
-        label: (state.legacyMetadata ? settings.accountEmail : state.accountEmail) ?? "Google",
-        authorizationEpoch: state.authorization,
-      },
-    ]
+    return (await listGoogleConnections())
+      .filter(
+        (connection) =>
+          connection.status === "connected" &&
+          GOOGLE_DOCS_SCOPES.every((scope) => connection.scopes.includes(scope))
+      )
+      .map((connection) => ({
+        id: connection.id,
+        label: connection.accountLabel,
+        authorizationEpoch: String(connection.revision),
+      }))
   },
 
-  subscribeAccounts: subscribeGoogleStateChanged,
+  async resolveLegacyAccount(binding) {
+    if (binding.accountId !== GOOGLE_ACCOUNT_ID) return null
+    const accounts = await googleDocsProvider.listAccounts()
+    return accounts.length === 1 ? accounts[0] : null
+  },
+
+  subscribeAccounts(listener) {
+    const stopNative = subscribeGoogleStateChanged(listener)
+    const stopConnections = getConnectionManager().onDidChange((event) => {
+      if (event.providerId === GOOGLE_PROVIDER_ID) listener()
+    })
+    return () => {
+      stopNative()
+      stopConnections()
+    }
+  },
 
   matchRef(input) {
     const ref = parseGoogleDocUrl(input)
@@ -110,8 +177,9 @@ export const googleDocsProvider: DocsProvider = {
   },
 
   async search(query: string, opts: DocsProviderSearchOptions): Promise<RemoteDocRef[]> {
-    const refs = await searchGoogleDocs(await context(opts), query, opts.limit)
-    await assertGoogleEpoch(opts)
+    const ctx = await context(opts)
+    const refs = await searchGoogleDocs(ctx, query, opts.limit)
+    await assertGoogleEpoch(ctx.accountId, ctx.revision)
     return refs
   },
 
@@ -123,6 +191,11 @@ export const googleDocsProvider: DocsProvider = {
     }
     assertRemoteDocBinding(ref, opts.accountId, opts.expectedAuthorizationEpoch)
     const ctx = await context(opts)
+    if (ref.accountBinding)
+      ref = {
+        ...ref,
+        accountBinding: { accountId: ctx.accountId, authorizationEpoch: String(ctx.revision) },
+      }
     if (ref.kind === "doc") {
       const [read, name] = await Promise.all([
         exportGoogleDoc(ctx, ref.id),
@@ -132,7 +205,7 @@ export const googleDocsProvider: DocsProvider = {
       ])
       if (!read.text.trim()) throw new DocsProviderError("empty", { title: name })
       const clamped = clampDocText(read.text)
-      await assertGoogleEpoch(opts)
+      await assertGoogleEpoch(ctx.accountId, ctx.revision)
       return {
         ref: { ...ref, title: name },
         title: name,
@@ -148,7 +221,7 @@ export const googleDocsProvider: DocsProvider = {
     const read = await readGoogleSpreadsheet(ctx, ref.id)
     if (!read.text.trim()) throw new DocsProviderError("empty", { title: read.title })
     const clamped = clampDocText(read.text)
-    await assertGoogleEpoch(opts)
+    await assertGoogleEpoch(ctx.accountId, ctx.revision)
     return {
       ref: { ...ref, title: read.title },
       title: read.title,

@@ -22598,153 +22598,177 @@
     "connectors_google_docs_auth": {
       "type": "object",
       "properties": {
-        "state": {
-          "type": "object",
-          "properties": {
-            "version": {
-              "const": 1
-            },
-            "connection": {
-              "type": "string"
-            },
-            "authorization": {
-              "type": "string"
-            },
-            "tokens": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "accessToken": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
-                    },
-                    "expiresAt": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "scope": {
-                      "type": "string"
-                    },
-                    "tokenType": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["accessToken", "expiresAt"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "pending": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "state": {
-                      "type": "string"
-                    },
-                    "codeVerifier": {
-                      "type": "string"
-                    },
-                    "redirectUri": {
-                      "type": "string"
-                    },
-                    "ts": {
-                      "type": "integer",
-                      "minimum": 0
-                    }
-                  },
-                  "required": ["state", "codeVerifier", "redirectUri", "ts"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "claimed": {
-              "type": "boolean"
-            },
-            "accountEmail": {
-              "anyOf": [
-                {
+        "lineages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "method": {
+                "enum": ["loopback-pkce", "device-code"]
+              },
+              "scopes": {
+                "type": "array",
+                "items": {
                   "type": "string"
-                },
-                {
-                  "type": "null"
                 }
-              ]
+              },
+              "sub": {
+                "type": "string"
+              },
+              "email": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["connected", "needs-reauth", "disconnected"]
+              },
+              "revision": {
+                "type": "string"
+              },
+              "credentialRevision": {
+                "type": "string"
+              },
+              "needsIdentity": {
+                "type": "boolean"
+              }
             },
-            "legacyMetadata": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "version",
-            "connection",
-            "authorization",
-            "tokens",
-            "pending",
-            "claimed",
-            "accountEmail",
-            "legacyMetadata"
-          ],
-          "additionalProperties": false
+            "required": [
+              "id",
+              "clientId",
+              "method",
+              "scopes",
+              "sub",
+              "email",
+              "status",
+              "revision",
+              "credentialRevision",
+              "needsIdentity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "clientId": {
+                "type": "string"
+              },
+              "hasClientSecret": {
+                "type": "boolean"
+              }
+            },
+            "required": ["clientId", "hasClientSecret"],
+            "additionalProperties": false
+          }
         },
         "pending": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "state": {
-                  "type": "string"
-                },
-                "codeVerifier": {
-                  "type": "string"
-                },
-                "redirectUri": {
-                  "type": "string"
-                },
-                "ts": {
-                  "type": "integer",
-                  "minimum": 0
-                }
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attemptId": {
+                "type": "string"
               },
-              "required": ["state", "codeVerifier", "redirectUri", "ts"],
-              "additionalProperties": false
+              "clientId": {
+                "type": "string"
+              },
+              "method": {
+                "enum": ["loopback-pkce", "device-code"]
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reauthorizeLineage": {
+                "type": "string"
+              }
             },
-            {
-              "type": "null"
+            "required": ["attemptId", "clientId", "method", "expiresAt"],
+            "additionalProperties": false
+          }
+        },
+        "migrationNeedsClientId": {
+          "type": "boolean"
+        },
+        "attempt": {
+          "type": "object",
+          "properties": {
+            "attemptId": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "authorizeUrl": {
+              "type": "string"
+            },
+            "userCode": {
+              "type": "string"
+            },
+            "verificationUrl": {
+              "type": "string"
+            },
+            "interval": {
+              "type": "integer",
+              "minimum": 0
             }
-          ]
+          },
+          "required": ["attemptId", "expiresAt"],
+          "additionalProperties": false
+        },
+        "pollStatus": {
+          "enum": ["pending", "slow_down", "denied", "expired", "connected"]
+        },
+        "credential": {
+          "type": "object",
+          "properties": {
+            "accessToken": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "revision": {
+              "type": "string"
+            },
+            "credentialRevision": {
+              "type": "string"
+            }
+          },
+          "required": ["accessToken", "expiresAt", "revision", "credentialRevision"],
+          "additionalProperties": false
         },
         "outcome": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "revoked": {
-                  "type": "boolean"
-                },
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": ["revoked"],
-              "additionalProperties": false
+          "type": "object",
+          "properties": {
+            "revoked": {
+              "type": "boolean"
             },
-            {
-              "type": "null"
+            "reason": {
+              "type": "string"
             }
-          ]
+          },
+          "required": ["revoked"],
+          "additionalProperties": false
         }
       },
-      "required": ["state", "pending", "outcome"],
+      "required": ["lineages", "clients", "pending", "migrationNeedsClientId"],
       "additionalProperties": false
     },
     "browser_recording_control": {

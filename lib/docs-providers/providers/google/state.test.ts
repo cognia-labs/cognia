@@ -11,18 +11,10 @@ import {
 const call = transport.call as jest.Mock
 const subscribe = transport.subscribe as jest.Mock
 const reply: GoogleStateReply = {
-  state: {
-    version: 1,
-    connection: "c",
-    authorization: "a",
-    tokens: null,
-    pending: null,
-    claimed: false,
-    accountEmail: null,
-    legacyMetadata: false,
-  },
-  pending: null,
-  outcome: null,
+  lineages: [],
+  clients: [],
+  pending: [],
+  migrationNeedsClientId: false,
 }
 beforeEach(() => {
   jest.clearAllMocks()
@@ -32,11 +24,11 @@ beforeEach(() => {
 })
 afterEach(() => __setGoogleStatePortForTests(null))
 it("sends guarded transitions to the selected host without a renderer storage fallback", async () => {
-  await expect(googleState({ action: "invalidate", connection: "old-generation" })).resolves.toBe(
-    reply
-  )
+  await expect(
+    googleState({ action: "accessToken", lineageId: "lineage", minValidityMs: 60_000 })
+  ).resolves.toBe(reply)
   expect(call).toHaveBeenCalledWith("connectors_google_docs_auth", {
-    input: { action: "invalidate", connection: "old-generation" },
+    input: { action: "accessToken", lineageId: "lineage", minValidityMs: 60_000 },
   })
 })
 it.each([
@@ -44,15 +36,17 @@ it.each([
   [new Error("google_docs_state_mismatch"), "oauth state mismatch"],
 ])("maps host fences to typed authorization errors: %s", async (error, reason) => {
   call.mockRejectedValue(error)
-  await expect(googleState({ action: "claim", state: "s", now: 0 })).rejects.toMatchObject({
-    code: "notAuthorized",
-    params: { reason },
-  })
+  await expect(googleState({ action: "complete", state: "s", code: "code" })).rejects.toMatchObject(
+    {
+      code: "notAuthorized",
+      params: { reason },
+    }
+  )
 })
 it("preserves actual storage/transport failures", async () => {
   const error = new Error("disk unavailable")
   call.mockRejectedValue(error)
-  await expect(googleState({ action: "disconnect" })).rejects.toBe(error)
+  await expect(googleState({ action: "disconnect", lineageId: "lineage" })).rejects.toBe(error)
 })
 it("shares the native signal subscription and releases it after the last observer", () => {
   const first = jest.fn(),
@@ -85,10 +79,12 @@ it("notifies local observers after mutations, including failed cleanup, but neve
   try {
     await googleState({ action: "snapshot" })
     expect(listener).not.toHaveBeenCalled()
-    await googleState({ action: "begin" })
+    await googleState({ action: "begin", clientId: "client", scopes: ["docs:read"] })
     expect(listener).toHaveBeenCalledTimes(1)
     call.mockRejectedValueOnce(new Error("write failed"))
-    await expect(googleState({ action: "disconnect" })).rejects.toThrow("write failed")
+    await expect(googleState({ action: "disconnect", lineageId: "lineage" })).rejects.toThrow(
+      "write failed"
+    )
     expect(listener).toHaveBeenCalledTimes(2)
   } finally {
     off()

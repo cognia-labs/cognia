@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   DocsProviderNotice,
   useDocsProviderReach,
@@ -48,12 +48,23 @@ import {
   getGoogleDocsSettings,
   subscribeGoogleDocsSettings,
   saveGoogleClientSecret,
+  clearGoogleClientSecret,
   updateGoogleDocsSettings,
 } from "@/lib/docs-providers/providers/google/config"
 import {
   beginGoogleDocsAuth,
   disconnectGoogleDocs,
 } from "@/lib/docs-providers/providers/google/auth"
+import {
+  googleState,
+  subscribeGoogleStateChanged,
+  type GoogleStateReply,
+} from "@/lib/docs-providers/providers/google/state"
+import {
+  listGoogleConnections,
+  authorizeGoogleConnection,
+} from "@/lib/auth-providers/google/host-auth"
+import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 
 export function DocsProvidersCard() {
   useDocsProvidersRevision()
@@ -193,82 +204,89 @@ function LarkDocsRow() {
   )
 }
 
+type GoogleOperation = {
+  action: "connect" | "disconnect" | "reauthorize" | "saveSecret" | "clearSecret"
+  connectionId?: string
+}
+
 function GoogleDocsRow() {
   const t = useTranslations("docsProviders")
   const reach = useDocsProviderReach(googleDocsProvider)
   const [clientId, setClientId] = useState("")
   const [clientSecret, setClientSecret] = useState("")
-  const [connected, setConnected] = useState(false)
-  const [email, setEmail] = useState<string | undefined>(undefined)
-  const [operation, setOperation] = useState<"connect" | "disconnect" | null>(null)
+  const [connections, setConnections] = useState<AuthConnectionRow[]>([])
+  const [snapshot, setSnapshot] = useState<GoogleStateReply | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadVersion, setReloadVersion] = useState(0)
+  const [operation, setOperation] = useState<GoogleOperation | null>(null)
   const busy = operation !== null
-  // Every control below talks to the Rust loopback listener or to Google with
-  // a credential only the desktop shell can complete a round trip for. Inert
-  // rather than absent, with the reason above it.
   const inert = !reach.available
+  const refresh = useCallback(() => setReloadVersion((version) => version + 1), [])
+  const hasClientSecret = Boolean(
+    snapshot?.clients.find((client) => client.clientId === clientId.trim())?.hasClientSecret
+  )
 
   useEffect(() => {
     let cancelled = false
     let revision = 0
     const apply = (settings: Awaited<ReturnType<typeof getGoogleDocsSettings>>) => {
-      if (cancelled) return
-      setClientId(settings.clientId ?? "")
-      setConnected(Boolean(settings.connected))
-      setEmail(settings.accountEmail)
+      if (!cancelled) setClientId(settings.clientId ?? "")
     }
     const unsubscribe = subscribeGoogleDocsSettings((settings) => {
       ++revision
       apply(settings)
     })
     const initialRevision = revision
-    void getGoogleDocsSettings().then((settings) => {
-      // A slow initial read must not overwrite a newer OAuth notification.
-      if (revision === initialRevision) apply(settings)
-    })
+    void getGoogleDocsSettings()
+      .then((settings) => {
+        if (revision === initialRevision) apply(settings)
+      })
+      .catch(() => undefined)
     return () => {
       cancelled = true
       unsubscribe()
     }
   }, [])
 
-  const connect = useCallback(async () => {
-    setOperation("connect")
-    try {
-      await updateGoogleDocsSettings({ clientId: clientId.trim() })
-      if (clientSecret.trim()) await saveGoogleClientSecret(clientSecret.trim())
-      const { authorizeUrl } = await beginGoogleDocsAuth()
-      // The consent page must open in the user's real browser: Google blocks
-      // sign-in from embedded webviews.
-      await openUrl(authorizeUrl)
-      // The exchange completes in `ConnectorDeepLinkRouter` when the loopback
-      // route bounces back, so this row only reports that the hand-off started.
-      setClientSecret("")
-    } catch (err) {
-      const reason =
-        err instanceof DocsProviderError
-          ? t(`errors.${err.code}`, err.params ?? {})
-          : err instanceof Error
-            ? err.message
-            : String(err)
-      toast.error(t("settings.connectFailed", { reason }))
-    } finally {
-      setOperation(null)
-    }
-  }, [clientId, clientSecret, t])
+  useEffect(() => subscribeGoogleStateChanged(refresh), [refresh])
 
-  const disconnect = useCallback(async () => {
-    setOperation("disconnect")
+  useEffect(() => {
+    if (inert) return
+    let current = true
+    // Reconciliation finishes legacy migration before reading secret metadata.
+    void listGoogleConnections()
+      .then(async (rows) => [await googleState({ action: "snapshot" }), rows] as const)
+      .then(
+        ([next, rows]) => {
+          if (!current) return
+          setSnapshot(next)
+          setConnections(
+            rows.filter((row) => row.status !== "tombstoned" && row.status !== "revoked")
+          )
+          setLoadFailed(false)
+        },
+        () => {
+          if (!current) return
+          setSnapshot(null)
+          setConnections([])
+          setLoadFailed(true)
+        }
+      )
+    // A newer Host event invalidates this read before starting another one.
+    return () => {
+      current = false
+    }
+  }, [inert, reloadVersion])
+
+  const run = async (
+    nextOperation: GoogleOperation,
+    action: () => Promise<void>,
+    errorKey: "connectFailed" | "disconnectFailed" | "googleSecretSaveFailed"
+  ) => {
+    setOperation(nextOperation)
     try {
-      // Local invalidation happens before revocation. Report any storage failure
-      // rather than claiming the connection was cleared successfully.
-      const outcome = await disconnectGoogleDocs()
-      setConnected(false)
-      setEmail(undefined)
-      if (outcome.revoked) {
-        toast.success(t("settings.disconnectRevoked"))
-      } else if (outcome.reason !== "not-connected") {
-        toast.warning(t("settings.disconnectNotRevoked", { reason: outcome.reason }))
-      }
+      await action()
+      refresh()
     } catch (err) {
       const reason =
         err instanceof DocsProviderError
@@ -276,11 +294,51 @@ function GoogleDocsRow() {
           : err instanceof Error
             ? err.message
             : String(err)
-      toast.error(t("settings.disconnectFailed", { reason }))
+      toast.error(t(`settings.${errorKey}`, { reason }))
     } finally {
       setOperation(null)
     }
-  }, [t])
+  }
+
+  const saveSecret = async () => {
+    const id = clientId.trim()
+    await updateGoogleDocsSettings({ clientId: id })
+    await saveGoogleClientSecret(clientSecret.trim(), id)
+    setClientSecret("")
+  }
+
+  const connect = () =>
+    run(
+      { action: "connect" },
+      async () => {
+        const id = clientId.trim()
+        await updateGoogleDocsSettings({ clientId: id })
+        if (clientSecret.trim()) {
+          await saveGoogleClientSecret(clientSecret.trim(), id)
+          setClientSecret("")
+        }
+        const { authorizeUrl } = await beginGoogleDocsAuth({ clientId: id })
+        // Google sign-in requires the system browser. Rust completes the exchange.
+        await openUrl(authorizeUrl)
+      },
+      "connectFailed"
+    )
+
+  const disconnect = (connection: AuthConnectionRow) =>
+    run(
+      { action: "disconnect", connectionId: connection.id },
+      async () => {
+        const outcome = await disconnectGoogleDocs(connection.hostMetadata!.adapterId)
+        if (outcome.revoked) toast.success(t("settings.disconnectRevoked"))
+        else if (outcome.reason !== "not-connected")
+          toast.warning(
+            t("settings.disconnectNotRevoked", {
+              reason: outcome.reason ?? t("settings.googleRevokeUnavailable"),
+            })
+          )
+      },
+      "disconnectFailed"
+    )
 
   return (
     <section className="space-y-2" data-testid="docs-provider-google">
@@ -288,11 +346,13 @@ function GoogleDocsRow() {
         name={t("labelGoogle")}
         mentionPrefix={googleDocsProvider.mentionPrefix}
         status={
-          connected
-            ? t("settings.connectedAs", { email: email ?? "Google" })
+          connections.length
+            ? t("settings.googleConnectionCount", { count: connections.length })
             : t("settings.notConnected")
         }
-        statusTone={connected ? "connected" : "idle"}
+        statusTone={
+          connections.some((connection) => connection.status === "connected") ? "connected" : "idle"
+        }
         testId="docs-provider-google-status"
       />
       <p className="text-muted-foreground text-xs">{t("settings.googleScopes")}</p>
@@ -302,62 +362,158 @@ function GoogleDocsRow() {
         ))}
       </ul>
       <DocsProviderNotice reach={reach} data-testid="docs-provider-google-notice" />
-      {connected ? (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy || inert}
-          onClick={() => void disconnect()}
-          data-testid="docs-provider-google-disconnect"
-        >
-          {busy ? t("settings.disconnecting") : t("settings.disconnect")}
-        </Button>
-      ) : (
-        <div className="space-y-2">
-          <div className="space-y-1">
-            <Label htmlFor="docs-google-client-id" className="text-xs">
-              {t("settings.googleClientId")}
-            </Label>
+      {loadFailed && (
+        <p role="alert" className="text-destructive text-xs">
+          {t("settings.googleConnectionsFailed")}
+        </p>
+      )}
+      {connections.length > 0 && (
+        <ul aria-label={t("settings.googleConnections")} className="space-y-2">
+          {connections.map((connection) => {
+            const lineage = snapshot?.lineages.find(
+              (value) => value.id === connection.hostMetadata?.adapterId
+            )
+            const disconnecting =
+              operation?.action === "disconnect" && operation.connectionId === connection.id
+            const reauthorizing =
+              operation?.action === "reauthorize" && operation.connectionId === connection.id
+            return (
+              <li key={connection.id} className="space-y-2 rounded-md border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="break-all text-xs font-medium">{connection.accountLabel}</span>
+                  <Badge variant={connection.status === "connected" ? "default" : "outline"}>
+                    {t(`settings.googleConnectionStatus.${connection.status}`)}
+                  </Badge>
+                </div>
+                <p className="text-muted-foreground break-all text-[11px]">
+                  {t("settings.googleConnectionClient", { clientId: connection.clientId })}
+                </p>
+                {lineage?.needsIdentity && (
+                  <p className="text-muted-foreground text-xs">
+                    {t("settings.googleNeedsIdentity")}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || inert || !connection.hostMetadata}
+                    onClick={() =>
+                      void run(
+                        { action: "reauthorize", connectionId: connection.id },
+                        () => authorizeGoogleConnection(connection.id),
+                        "connectFailed"
+                      )
+                    }
+                  >
+                    {reauthorizing ? t("settings.connecting") : t("settings.googleReauthorize")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || inert || !connection.hostMetadata}
+                    onClick={() => void disconnect(connection)}
+                  >
+                    {disconnecting ? t("settings.disconnecting") : t("settings.disconnect")}
+                  </Button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {operation?.action === "disconnect" && (
+        <p role="status" className="text-muted-foreground text-xs">
+          {t("settings.disconnecting")}
+        </p>
+      )}
+      <FieldGroup className="gap-2">
+        <Field orientation="horizontal" data-disabled={inert || busy}>
+          <FieldLabel htmlFor="docs-google-client-id" className="text-xs">
+            {t("settings.googleClientId")}
+          </FieldLabel>
+          <FieldContent>
             <Input
               id="docs-google-client-id"
               value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
+              onChange={(event) => {
+                setClientId(event.target.value)
+                setClientSecret("")
+              }}
               autoComplete="off"
               spellCheck={false}
-              disabled={inert}
+              disabled={inert || busy}
             />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="docs-google-client-secret" className="text-xs">
-              {t("settings.googleClientSecret")}
-            </Label>
+          </FieldContent>
+        </Field>
+        <Field orientation="horizontal" data-disabled={inert || busy}>
+          <FieldLabel htmlFor="docs-google-client-secret" className="text-xs">
+            {t("settings.googleClientSecret")}
+          </FieldLabel>
+          <FieldContent>
             <Input
               id="docs-google-client-secret"
               type="password"
               value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              autoComplete="off"
-              disabled={inert}
+              onChange={(event) => setClientSecret(event.target.value)}
+              autoComplete="new-password"
+              disabled={inert || busy}
+              aria-describedby="docs-google-secret-status"
             />
-          </div>
-          <p className="text-muted-foreground flex items-center gap-1 text-[11px]">
-            <ExternalLinkIcon className="size-3" />
-            {t("settings.googleClientHint")}
-          </p>
-          <Button
-            size="sm"
-            disabled={busy || inert || !clientId.trim()}
-            onClick={() => void connect()}
-            data-testid="docs-provider-google-connect"
-          >
-            {operation === "disconnect"
-              ? t("settings.disconnecting")
-              : busy
-                ? t("settings.connecting")
-                : t("settings.connect")}
-          </Button>
-        </div>
+            <p id="docs-google-secret-status" className="text-muted-foreground text-[11px]">
+              {hasClientSecret
+                ? t("settings.googleSecretSaved")
+                : t("settings.googleSecretWriteOnly")}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || inert || !clientId.trim() || !clientSecret.trim()}
+                onClick={() =>
+                  void run({ action: "saveSecret" }, saveSecret, "googleSecretSaveFailed")
+                }
+              >
+                {t("settings.googleSecretSave")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || inert || !hasClientSecret}
+                onClick={() =>
+                  void run(
+                    { action: "clearSecret" },
+                    async () => {
+                      await clearGoogleClientSecret(clientId.trim())
+                      setClientSecret("")
+                    },
+                    "googleSecretSaveFailed"
+                  )
+                }
+              >
+                {t("settings.googleSecretClear")}
+              </Button>
+            </div>
+          </FieldContent>
+        </Field>
+      </FieldGroup>
+      {snapshot?.migrationNeedsClientId && (
+        <p className="text-muted-foreground text-xs">
+          {t("settings.googleMigrationNeedsClientId")}
+        </p>
       )}
+      <p className="text-muted-foreground flex items-center gap-1 text-[11px]">
+        <ExternalLinkIcon className="size-3" />
+        {t("settings.googleClientHint")}
+      </p>
+      <Button
+        size="sm"
+        disabled={busy || inert || !clientId.trim()}
+        onClick={() => void connect()}
+        data-testid="docs-provider-google-connect"
+      >
+        {operation?.action === "connect" ? t("settings.connecting") : t("settings.connect")}
+      </Button>
     </section>
   )
 }

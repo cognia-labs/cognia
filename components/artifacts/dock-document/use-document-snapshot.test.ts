@@ -404,6 +404,37 @@ it("auto-fetches an explicitly bound picker preview once, after epoch verificati
   await act(async () => {})
   expect(provider.fetch).toHaveBeenCalledTimes(1)
 })
+it("resolves a provider-owned legacy binding before the preview and then pins the revision", async () => {
+  provider.resolveLegacyAccount = jest.fn(async (stored) =>
+    stored.accountId === "legacy" ? account : null
+  )
+  bindDockDocument(tab.id, { accountId: "legacy", authorizationEpoch: "old-native-nonce" })
+  const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.content?.text).toBe("fresh"))
+  expect(provider.fetch).toHaveBeenCalledWith(
+    expect.objectContaining({ accountBinding: binding }),
+    expect.objectContaining({
+      accountId: account.id,
+      expectedAuthorizationEpoch: account.authorizationEpoch,
+    })
+  )
+  expect(documentMemory(tab.id).binding).toEqual(binding)
+})
+it("turns a failed binding resolution into a retryable preview error, not an unhandled rejection", async () => {
+  provider.resolveLegacyAccount = jest.fn(async () => {
+    throw new Error("host keyring unavailable")
+  })
+  bindDockDocument(tab.id, { accountId: "legacy", authorizationEpoch: "old-native-nonce" })
+  const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.error).toBe("network"))
+  expect(result.current.state).toBe("error")
+  expect(provider.fetch).not.toHaveBeenCalled()
+  jest.mocked(provider.resolveLegacyAccount).mockResolvedValue(account)
+  await act(async () => {
+    await expect(result.current.refresh()).resolves.toBeUndefined()
+  })
+  expect(result.current.content?.text).toBe("fresh")
+})
 it("refuses a bound picker preview after the account epoch changed", async () => {
   bindDockDocument(tab.id, binding)
   jest.mocked(provider.listAccounts).mockResolvedValue([{ ...account, authorizationEpoch: "v2" }])

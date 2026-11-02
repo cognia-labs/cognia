@@ -3,6 +3,8 @@ import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en.json"
+import type { AuthConnectionRow } from "@/lib/db/auth-connections"
+import type { GoogleLineage } from "@/lib/docs-providers/providers/google/state"
 
 jest.mock("sonner", () => ({
   toast: { error: jest.fn(), success: jest.fn(), warning: jest.fn() },
@@ -35,9 +37,18 @@ jest.mock("@/lib/docs-providers/providers/google/config", () => ({
   GOOGLE_DOCS_SCOPES: ["https://www.googleapis.com/auth/drive.readonly"],
   getGoogleDocsSettings: jest.fn(async () => ({})),
   saveGoogleClientSecret: jest.fn(async () => undefined),
+  clearGoogleClientSecret: jest.fn(async () => undefined),
   updateGoogleDocsSettings: jest.fn(async () => ({})),
   clearGoogleConnection: jest.fn(async () => undefined),
   subscribeGoogleDocsSettings: jest.fn(() => () => undefined),
+}))
+jest.mock("@/lib/docs-providers/providers/google/state", () => ({
+  googleState: jest.fn(),
+  subscribeGoogleStateChanged: jest.fn(() => () => undefined),
+}))
+jest.mock("@/lib/auth-providers/google/host-auth", () => ({
+  listGoogleConnections: jest.fn(async () => []),
+  authorizeGoogleConnection: jest.fn(async () => undefined),
 }))
 jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
   beginGoogleDocsAuth: jest.fn(async () => ({
@@ -56,12 +67,21 @@ import {
   getGoogleDocsSettings,
   subscribeGoogleDocsSettings,
   saveGoogleClientSecret,
+  clearGoogleClientSecret,
   updateGoogleDocsSettings,
 } from "@/lib/docs-providers/providers/google/config"
 import {
   beginGoogleDocsAuth,
   disconnectGoogleDocs,
 } from "@/lib/docs-providers/providers/google/auth"
+import {
+  googleState,
+  subscribeGoogleStateChanged,
+} from "@/lib/docs-providers/providers/google/state"
+import {
+  listGoogleConnections,
+  authorizeGoogleConnection,
+} from "@/lib/auth-providers/google/host-auth"
 import { DocsProvidersCard } from "./docs-providers-card"
 
 const hostProfileMock = useHostProfile as jest.Mock
@@ -83,6 +103,18 @@ beforeEach(() => {
   hostProfileMock.mockReturnValue("desktop")
   listAdaptersMock.mockResolvedValue([])
   getSettingsMock.mockResolvedValue({})
+  beginAuthMock.mockResolvedValue({
+    authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+  })
+  disconnectMock.mockResolvedValue({ revoked: true })
+  ;(listGoogleConnections as jest.Mock).mockResolvedValue([])
+  ;(googleState as jest.Mock).mockResolvedValue({
+    lineages: [],
+    clients: [],
+    pending: [],
+    migrationNeedsClientId: false,
+  })
+  ;(subscribeGoogleStateChanged as jest.Mock).mockImplementation(() => () => undefined)
   ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation(() => () => undefined)
 })
 
@@ -183,7 +215,41 @@ describe("DocsProvidersCard — Feishu row", () => {
   })
 })
 
-describe("DocsProvidersCard — Google row", () => {
+function connection(overrides: Partial<AuthConnectionRow> = {}): AuthConnectionRow {
+  return {
+    id: "connection-ada" as AuthConnectionRow["id"],
+    providerId: "google",
+    ownerPluginId: null,
+    publisher: "cognia",
+    contractMajor: 1,
+    issuer: "https://accounts.google.com",
+    clientId: "cid",
+    principalId: "ada",
+    principalKind: "user",
+    accountLabel: "ada@example.com",
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    revision: 1,
+    credentialRevision: 1,
+    lineageId: "host-lineage",
+    identityKey: "identity-ada",
+    status: "connected",
+    createdAt: 0,
+    updatedAt: 0,
+    hostMetadata: { adapterId: "native-ada", authorizationEpoch: "nonce-1", bot: false },
+    ...overrides,
+  }
+}
+function showConnections(rows: AuthConnectionRow[], lineages: Partial<GoogleLineage>[] = []) {
+  ;(listGoogleConnections as jest.Mock).mockResolvedValue(rows)
+  ;(googleState as jest.Mock).mockResolvedValue({
+    lineages: lineages.map((lineage) => ({ id: "native-ada", needsIdentity: false, ...lineage })),
+    clients: [],
+    pending: [],
+    migrationNeedsClientId: false,
+  })
+}
+
+describe("DocsProvidersCard — Google connections", () => {
   it("shows the disconnected state and the requested read scopes", async () => {
     renderCard()
     await waitFor(() =>
@@ -192,155 +258,216 @@ describe("DocsProvidersCard — Google row", () => {
     expect(screen.getByText("drive.readonly")).toBeInTheDocument()
   })
 
-  it("shows the connected account instead of the form once connected", async () => {
-    getSettingsMock.mockResolvedValue({
-      clientId: "cid",
-      connected: true,
-      accountEmail: "ada@example.com",
-    })
+  it("lists accounts, clients and reauthorization status while allowing another connection", async () => {
+    showConnections([
+      connection(),
+      connection({
+        id: "connection-grace" as AuthConnectionRow["id"],
+        clientId: "other-client",
+        accountLabel: "grace@example.com",
+        status: "needs-reauth",
+      }),
+      connection({
+        id: "retired" as AuthConnectionRow["id"],
+        accountLabel: "retired@example.com",
+        status: "tombstoned",
+      }),
+    ])
     renderCard()
-    await waitFor(() =>
-      expect(screen.getByTestId("docs-provider-google-status")).toHaveTextContent("ada@example.com")
-    )
-    expect(screen.queryByTestId("docs-provider-google-connect")).not.toBeInTheDocument()
+    await screen.findByText("ada@example.com")
+    expect(screen.getByText("grace@example.com")).toBeVisible()
+    expect(screen.getByText("Client: other-client")).toBeVisible()
+    expect(screen.getByText("Needs reauthorization")).toBeVisible()
+    expect(screen.queryByText("retired@example.com")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument()
+    expect(screen.getByTestId("docs-provider-google-status")).toHaveTextContent("2 connections")
   })
 
   it("keeps Connect disabled until a client id is supplied", async () => {
     renderCard()
-    await waitFor(() => expect(screen.getByTestId("docs-provider-google-connect")).toBeDisabled())
+    await waitFor(() => expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled())
   })
 
-  it("persists the credential, then opens the consent page in the real browser", async () => {
+  it("writes the secret for the selected client, clears the draft and opens the system browser", async () => {
     const user = userEvent.setup()
     renderCard()
-    await waitFor(() => expect(screen.getByTestId("docs-provider-google-connect")).toBeDisabled())
-
+    await waitFor(() => expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled())
     await user.type(screen.getByLabelText("OAuth client ID"), "cid.apps.googleusercontent.com")
     await user.type(screen.getByLabelText("OAuth client secret"), "shh")
-    await user.click(screen.getByTestId("docs-provider-google-connect"))
-
-    await waitFor(() => expect(beginAuthMock).toHaveBeenCalled())
+    await user.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(beginAuthMock).toHaveBeenCalledWith({ clientId: "cid.apps.googleusercontent.com" })
+    )
     expect(updateGoogleDocsSettings).toHaveBeenCalledWith({
       clientId: "cid.apps.googleusercontent.com",
     })
-    expect(saveGoogleClientSecret).toHaveBeenCalledWith("shh")
-    // Google blocks sign-in from embedded webviews, so this must be the system browser.
+    expect(saveGoogleClientSecret).toHaveBeenCalledWith("shh", "cid.apps.googleusercontent.com")
+    expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
     expect(openUrl).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?x=1")
   })
 
-  it("reports a localized reason when the hand-off cannot start", async () => {
+  it("shows saved secret metadata without reading its value and clears only that client's secret", async () => {
+    getSettingsMock.mockResolvedValue({ clientId: "cid" })
+    ;(googleState as jest.Mock).mockResolvedValue({
+      lineages: [],
+      clients: [{ clientId: "cid", hasClientSecret: true }],
+      pending: [],
+      migrationNeedsClientId: false,
+    })
+    const user = userEvent.setup()
+    renderCard()
+    await screen.findByText("Secret saved in the Host")
+    expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
+    ;(googleState as jest.Mock).mockResolvedValue({
+      lineages: [],
+      clients: [],
+      pending: [],
+      migrationNeedsClientId: false,
+    })
+    await user.click(screen.getByRole("button", { name: "Clear saved secret" }))
+    await waitFor(() => expect(clearGoogleClientSecret).toHaveBeenCalledWith("cid"))
+    await waitFor(() =>
+      expect(screen.queryByText("Secret saved in the Host")).not.toBeInTheDocument()
+    )
+    expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
+  })
+
+  it("can save a replacement secret without beginning authorization", async () => {
+    getSettingsMock.mockResolvedValue({ clientId: "cid" })
+    const user = userEvent.setup()
+    renderCard()
+    await waitFor(() => expect(screen.getByLabelText("OAuth client ID")).toHaveValue("cid"))
+    await user.type(screen.getByLabelText("OAuth client secret"), "replacement")
+    await user.click(screen.getByRole("button", { name: "Save secret" }))
+    await waitFor(() => expect(saveGoogleClientSecret).toHaveBeenCalledWith("replacement", "cid"))
+    expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
+    expect(beginAuthMock).not.toHaveBeenCalled()
+  })
+
+  it("prompts legacy identities to reauthorize the exact Host connection", async () => {
+    showConnections([connection()], [{ needsIdentity: true }])
+    const user = userEvent.setup()
+    renderCard()
+    await screen.findByText("Reauthorize to confirm this Google account's identity.")
+    await user.click(screen.getByRole("button", { name: "Reauthorize" }))
+    await waitFor(() => expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada"))
+    expect(beginAuthMock).not.toHaveBeenCalled()
+  })
+
+  it("explains when a legacy saved secret still needs its client id", async () => {
+    ;(googleState as jest.Mock).mockResolvedValue({
+      lineages: [],
+      clients: [],
+      pending: [],
+      migrationNeedsClientId: true,
+    })
+    renderCard()
+    expect(
+      await screen.findByText(
+        "Enter the OAuth client ID associated with your saved secret to finish setup."
+      )
+    ).toBeVisible()
+  })
+
+  it("reports a localized reason when authorization cannot start", async () => {
     const user = userEvent.setup()
     beginAuthMock.mockRejectedValue(new DocsProviderError("hostUnsupported"))
     renderCard()
-    await waitFor(() => expect(screen.getByTestId("docs-provider-google-connect")).toBeDisabled())
     await user.type(screen.getByLabelText("OAuth client ID"), "cid")
-    await user.click(screen.getByTestId("docs-provider-google-connect"))
+    await user.click(screen.getByRole("button", { name: "Connect" }))
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("desktop app only"))
     )
   })
 
-  it("revokes at Google and clears the connection on disconnect", async () => {
+  it("disconnects the selected native lineage and reports successful revocation", async () => {
+    showConnections([connection()])
     const user = userEvent.setup()
-    disconnectMock.mockResolvedValue({ revoked: true })
-    getSettingsMock.mockResolvedValue({ connected: true, accountEmail: "ada@example.com" })
     renderCard()
-    await user.click(await screen.findByRole("button", { name: "Disconnect" }))
-    // Clearing the keyring alone would leave a live grant on Google's side.
-    await waitFor(() => expect(disconnectMock).toHaveBeenCalled())
-    expect(screen.getByTestId("docs-provider-google-status")).toHaveTextContent("Not connected")
+    await screen.findByRole("button", { name: "Disconnect" })
+    showConnections([])
+    await user.click(screen.getByRole("button", { name: "Disconnect" }))
+    await waitFor(() => expect(disconnectMock).toHaveBeenCalledWith("native-ada"))
+    await waitFor(() => expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument())
     expect(toast.success).toHaveBeenCalledWith(
       "Disconnected. The Google authorization has been revoked."
     )
   })
 
-  it("tells the user to finish at Google when revocation failed", async () => {
-    const user = userEvent.setup()
+  it("keeps the local disconnect and warns when Google revocation fails", async () => {
+    showConnections([connection()])
     disconnectMock.mockResolvedValue({ revoked: false, reason: "backend error" })
-    getSettingsMock.mockResolvedValue({ connected: true, accountEmail: "ada@example.com" })
+    const user = userEvent.setup()
     renderCard()
-    await user.click(await screen.findByRole("button", { name: "Disconnect" }))
-
-    // Local state still clears — the warning is the only thing that differs,
-    // because the grant may still stand and only the user can finish it.
-    await waitFor(() =>
-      expect(screen.getByTestId("docs-provider-google-status")).toHaveTextContent("Not connected")
-    )
+    await screen.findByRole("button", { name: "Disconnect" })
+    showConnections([])
+    await user.click(screen.getByRole("button", { name: "Disconnect" }))
+    await waitFor(() => expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument())
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("backend error"))
   })
-})
 
-it("updates connection state after OAuth completes and after credentials are invalidated", async () => {
-  let notify: ((settings: { connected?: boolean; accountEmail?: string }) => void) | undefined
-  const unsubscribe = jest.fn()
-  ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation((listener) => {
-    notify = listener
-    return unsubscribe
+  it("reports disconnect storage failures and keeps the connection available", async () => {
+    showConnections([connection()])
+    disconnectMock.mockRejectedValueOnce(new Error("keyring unavailable"))
+    const user = userEvent.setup()
+    renderCard()
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("keyring unavailable"))
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled()
   })
-  const view = renderCard()
-  await waitFor(() => expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument())
-  act(() => notify?.({ connected: true, accountEmail: "user@example.test" }))
-  expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument()
-  expect(screen.getByText(/user@example.test/)).toBeInTheDocument()
-  act(() => notify?.({ connected: false }))
-  expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument()
-  expect(screen.queryByText(/user@example.test/)).not.toBeInTheDocument()
-  view.unmount()
-  expect(unsubscribe).toHaveBeenCalledTimes(1)
-})
 
-it("keeps a newer connection notification when the initial read resolves late", async () => {
-  let resolve!: (settings: { connected: boolean }) => void
-  getSettingsMock.mockReturnValueOnce(
-    new Promise((done) => {
-      resolve = done
+  it("keeps the disconnecting status while revocation continues after a Host change", async () => {
+    getSettingsMock.mockResolvedValue({ clientId: "cid" })
+    showConnections([connection()])
+    let notify!: () => void
+    ;(subscribeGoogleStateChanged as jest.Mock).mockImplementation((listener) => {
+      notify = listener
+      return () => undefined
     })
-  )
-  let notify: ((settings: { connected: boolean; accountEmail?: string }) => void) | undefined
-  ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation((listener) => {
-    notify = listener
-    return () => undefined
+    let finish!: (outcome: { revoked: true }) => void
+    disconnectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    const user = userEvent.setup()
+    renderCard()
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }))
+    showConnections([])
+    act(() => notify())
+    await waitFor(() => expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument())
+    expect(screen.getByRole("status")).toHaveTextContent("Disconnecting…")
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled()
+    await act(async () => finish({ revoked: true }))
+    expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled()
   })
-  renderCard()
-  act(() => notify?.({ connected: true, accountEmail: "fresh@example.test" }))
-  await act(async () => resolve({ connected: false }))
-  expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument()
-  expect(screen.getByText(/fresh@example.test/)).toBeInTheDocument()
-})
 
-it("reports disconnect storage failures without an unhandled rejection or success toast", async () => {
-  getSettingsMock.mockResolvedValue({ clientId: "cid", connected: true })
-  disconnectMock.mockRejectedValueOnce(new Error("keyring unavailable"))
-  const user = userEvent.setup()
-  renderCard()
-  await user.click(await screen.findByRole("button", { name: "Disconnect" }))
-  await waitFor(() =>
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("keyring unavailable"))
-  )
-  expect(toast.success).not.toHaveBeenCalled()
-  expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled()
-})
-
-it("keeps the disconnecting label while remote revocation is pending after local clear", async () => {
-  getSettingsMock.mockResolvedValue({ clientId: "cid", connected: true })
-  let notify: ((settings: { clientId?: string; connected: boolean }) => void) | undefined
-  ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation((listener) => {
-    notify = listener
-    return () => undefined
-  })
-  let finish!: (outcome: { revoked: true }) => void
-  disconnectMock.mockImplementationOnce(() => {
-    notify?.({ clientId: "cid", connected: false })
-    return new Promise((resolve) => {
-      finish = resolve
+  it("keeps a newer Host snapshot when an initial read resolves late and unsubscribes", async () => {
+    let finish!: (rows: AuthConnectionRow[]) => void
+    ;(listGoogleConnections as jest.Mock).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    let notify!: () => void
+    const unsubscribe = jest.fn()
+    ;(subscribeGoogleStateChanged as jest.Mock).mockImplementation((listener) => {
+      notify = listener
+      return unsubscribe
     })
+    const view = renderCard()
+    showConnections([connection()])
+    act(() => notify())
+    await screen.findByText("ada@example.com")
+    await act(async () => finish([]))
+    expect(screen.getByText("ada@example.com")).toBeVisible()
+    view.unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
-  const user = userEvent.setup()
-  renderCard()
-  await user.click(await screen.findByRole("button", { name: "Disconnect" }))
-  expect(screen.getByRole("button", { name: "Disconnecting…" })).toBeDisabled()
-  await act(async () => finish({ revoked: true }))
-  expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled()
 })
 
 it("lists a newly registered plugin by its manifest label and removes it on disable", async () => {

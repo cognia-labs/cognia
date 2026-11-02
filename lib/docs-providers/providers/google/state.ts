@@ -1,31 +1,70 @@
 /** Atomic credential transitions executed by the selected host, shared by WebViews. */
 import { transport } from "@/lib/tauri/transport-instance"
 import { DocsProviderError } from "@/lib/docs-providers/types"
-import type { GoogleOAuthTokens } from "./config"
-import type { GoogleOAuthPending } from "./oauth-pending"
-
-export interface GoogleConnectionState {
-  version: 1
-  connection: string
-  authorization: string
-  tokens: GoogleOAuthTokens | null
-  pending: GoogleOAuthPending | null
-  claimed: boolean
-  accountEmail: string | null
-  legacyMetadata: boolean
+export interface GoogleLineage {
+  id: string
+  clientId: string
+  method: "loopback-pkce" | "device-code"
+  scopes: string[]
+  sub: string
+  email: string | null
+  status: "connected" | "needs-reauth" | "disconnected"
+  revision: string
+  credentialRevision: string
+  needsIdentity: boolean
+}
+export interface GooglePendingAttempt {
+  attemptId: string
+  clientId: string
+  method: GoogleLineage["method"]
+  expiresAt: number
+  reauthorizeLineage?: string
+}
+export interface GoogleAuthAttempt {
+  attemptId: string
+  authorizeUrl?: string
+  userCode?: string
+  verificationUrl?: string
+  interval?: number
+  expiresAt: number
 }
 export type GoogleStateInput =
-  | { action: "snapshot" | "begin" | "disconnect" }
-  | { action: "setPending"; authorization: string; pending: GoogleOAuthPending }
-  | { action: "claim"; state: string; now: number }
-  | { action: "commit"; authorization: string; tokens: GoogleOAuthTokens; accountEmail?: string }
-  | { action: "refresh"; connection: string; tokens: GoogleOAuthTokens }
-  | { action: "invalidate"; connection: string }
-export type GoogleDisconnectOutcome = { revoked: true } | { revoked: false; reason: string }
+  | { action: "snapshot"; legacyClientId?: string }
+  | {
+      action: "begin"
+      clientId: string
+      scopes: readonly string[]
+      reauthorizeLineage?: string
+      redirectUri?: string
+    }
+  | {
+      action: "beginDevice"
+      clientId: string
+      scopes: readonly string[]
+      reauthorizeLineage?: string
+    }
+  | { action: "complete"; state: string; code: string; clientId?: string }
+  | { action: "pollDevice"; attemptId: string }
+  | { action: "accessToken"; lineageId: string; minValidityMs?: number }
+  | { action: "disconnect"; lineageId: string }
+  | { action: "setClientSecret"; clientId: string; secret: string }
+  | { action: "clearClientSecret"; clientId: string }
+  | { action: "cancel"; attemptId: string }
+export type GoogleDisconnectOutcome = { revoked: boolean; reason?: string }
 export interface GoogleStateReply {
-  state: GoogleConnectionState
-  pending: GoogleOAuthPending | null
-  outcome: GoogleDisconnectOutcome | null
+  lineages: GoogleLineage[]
+  clients: { clientId: string; hasClientSecret: boolean }[]
+  pending: GooglePendingAttempt[]
+  attempt?: GoogleAuthAttempt
+  pollStatus?: "pending" | "slow_down" | "denied" | "expired" | "connected"
+  credential?: {
+    accessToken: string
+    expiresAt: number
+    revision: string
+    credentialRevision: string
+  }
+  outcome?: GoogleDisconnectOutcome
+  migrationNeedsClientId: boolean
 }
 export type GoogleStatePort = (input: GoogleStateInput) => Promise<GoogleStateReply>
 let override: GoogleStatePort | null = null

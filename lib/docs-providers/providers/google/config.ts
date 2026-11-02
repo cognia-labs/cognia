@@ -1,24 +1,13 @@
 /**
  * Google Workspace document connection — settings + secret storage.
  *
- * Namespaced separately from the Drive BACKUP connection
- * (`lib/data/destinations/config.ts`, namespace `backup-destinations`) because
- * the two hold different scopes and may be different Google accounts. Sharing
- * a keyring key would silently couple them: reconnecting one would break the
- * other's identity.
- *
- * AppSettings stores preferences. The host keyring owns connection readiness,
- * account metadata, tokens and OAuth generations across all renderers.
+ * AppSettings stores client preferences. Rust owns client-keyed secrets and
+ * Google lineages; this module consumes metadata without reading credentials.
  */
 
 import type { GoogleDocsProviderSettings } from "@cognia/agent-config-types"
 import { getSettings, saveSettings } from "@/lib/db/settings"
-import { createKeyringStore, type KeyringStore } from "@/lib/credentials/keyring-store"
 import { googleState, subscribeGoogleStateChanged } from "./state"
-
-export const DOCS_PROVIDER_KEYRING_NAMESPACE = "docs-providers"
-export const GOOGLE_CLIENT_SECRET_KEY = "google-client-secret"
-export const GOOGLE_TOKENS_KEY = "google-tokens"
 
 /**
  * Read scopes. `drive.readonly` alone cannot read a Doc's body (Drive only
@@ -40,26 +29,6 @@ export const GOOGLE_DOCS_SCOPES = [
 
 export const GOOGLE_DOCS_SCOPE_STRING = GOOGLE_DOCS_SCOPES.join(" ")
 
-export interface GoogleOAuthTokens {
-  accessToken: string
-  refreshToken?: string
-  /** Epoch ms. */
-  expiresAt: number
-  scope?: string
-  tokenType?: string
-}
-
-let storeOverride: KeyringStore | null = null
-
-/** Test seam: replace the keyring store. */
-export function __setDocsProviderSecretsForTests(store: KeyringStore | null): void {
-  storeOverride = store
-}
-
-export function docsProviderSecrets(): KeyringStore {
-  return storeOverride ?? createKeyringStore(DOCS_PROVIDER_KEYRING_NAMESPACE)
-}
-
 export async function getGoogleDocsSettings(): Promise<GoogleDocsProviderSettings> {
   let preferences: GoogleDocsProviderSettings = {}
   try {
@@ -74,15 +43,20 @@ async function connectionSettings(
   preferences: GoogleDocsProviderSettings
 ): Promise<GoogleDocsProviderSettings> {
   try {
-    const { state } = await googleState({ action: "snapshot" })
+    const { lineages } = await googleState({
+      action: "snapshot",
+      legacyClientId: preferences.clientId,
+    })
+    const connection = lineages.find(
+      (lineage) =>
+        lineage.status === "connected" &&
+        GOOGLE_DOCS_SCOPES.every((scope) => lineage.scopes.includes(scope))
+    )
     return {
       ...preferences,
-      connected: Boolean(state.tokens?.refreshToken),
-      accountEmail: state.legacyMetadata
-        ? preferences.accountEmail
-        : (state.accountEmail ?? undefined),
-      grantedScopes:
-        state.tokens?.scope ?? (state.legacyMetadata ? preferences.grantedScopes : undefined),
+      connected: Boolean(connection),
+      accountEmail: connection?.email ?? undefined,
+      grantedScopes: connection?.scopes.join(" "),
     }
   } catch {
     // Never trust a singleton's stale connected flag if the credential owner
@@ -145,26 +119,16 @@ export async function updateGoogleDocsSettings(
   return next
 }
 
-export async function getGoogleClientSecret(): Promise<string | null> {
-  return docsProviderSecrets().load(GOOGLE_CLIENT_SECRET_KEY)
+/** Write-only: renderer code can observe presence, never retrieve the secret. */
+export async function saveGoogleClientSecret(
+  secret: string,
+  configuredClientId?: string
+): Promise<void> {
+  const clientId = (configuredClientId ?? (await getGoogleDocsSettings()).clientId)?.trim()
+  if (!clientId) throw new Error("Google OAuth client id is required")
+  await googleState({ action: "setClientSecret", clientId, secret })
 }
 
-export async function saveGoogleClientSecret(secret: string): Promise<void> {
-  await docsProviderSecrets().save(GOOGLE_CLIENT_SECRET_KEY, secret)
-}
-
-export async function loadGoogleTokens(): Promise<GoogleOAuthTokens | null> {
-  return (await googleState({ action: "snapshot" })).state.tokens
-}
-
-/** Legacy migration fixture/writer. Once the host record exists it is never reimported. */
-export async function saveGoogleTokens(tokens: GoogleOAuthTokens): Promise<void> {
-  await docsProviderSecrets().save(GOOGLE_TOKENS_KEY, JSON.stringify(tokens))
-}
-
-/** Forget the connection entirely: tokens out of the keyring, flags out of settings. */
-export async function clearGoogleConnection(): Promise<void> {
-  const { state } = await googleState({ action: "snapshot" })
-  if (state.tokens) await googleState({ action: "invalidate", connection: state.connection })
-  await updateGoogleDocsSettings((current) => ({ clientId: current.clientId, connected: false }))
+export async function clearGoogleClientSecret(clientId: string): Promise<void> {
+  await googleState({ action: "clearClientSecret", clientId })
 }

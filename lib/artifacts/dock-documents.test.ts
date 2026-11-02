@@ -365,6 +365,22 @@ describe("account changes", () => {
       listAccounts: jest.fn().mockResolvedValue(accounts.map((a) => ({ ...a, label: a.id }))),
     } as never)
 
+  it("replaces a provider-resolved legacy binding with the actual connection revision", async () => {
+    const account = { id: "connection-ref", label: "Person", authorizationEpoch: "3" }
+    jest.mocked(getDocsProvider).mockReturnValue({
+      listAccounts: async () => [account],
+      resolveLegacyAccount: async () => account,
+    } as never)
+    const id = openDockDocument({
+      sessionId: "s1",
+      target,
+      entry: "picker",
+      binding: { accountId: "legacy", authorizationEpoch: "old-native-nonce" },
+    })!
+    await reverifyDockDocumentBindings("lark")
+    expect(documentMemory(id).binding).toEqual({ accountId: account.id, authorizationEpoch: "3" })
+  })
+
   it("keeps a binding that still verifies, e.g. after a token refresh", async () => {
     providerWith([{ id: "acct", authorizationEpoch: "e1" }])
     const id = openDockDocument({

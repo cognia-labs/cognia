@@ -7,6 +7,7 @@ import { registerGithubIntegrationAuthProviders } from "./github-auth"
 import { reconcileGithubAppDeliveries } from "./github-delivery-recovery"
 import { recoverIntegrationEventProjections } from "./events"
 import { startLarkHostAuth } from "@/lib/connectors/adapters/lark/host-auth"
+import { startGoogleHostAuth } from "@/lib/auth-providers/google/host-auth"
 
 const ACTION_DRAIN_INTERVAL_MS = 30_000
 const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -35,6 +36,7 @@ function reportRecurringFailure(
 export async function startIntegrationRuntime(): Promise<() => void> {
   const disposeGithubAuth = registerGithubIntegrationAuthProviders()
   const disposeLarkAuth = startLarkHostAuth()
+  const disposeGoogleAuth = startGoogleHostAuth()
   await Promise.all([
     drainIntegrationActionJobs().catch((error) => reportRecurringFailure("action-drain", error)),
     pruneIntegrationRetention().catch((error) => reportRecurringFailure("retention-prune", error)),
@@ -82,5 +84,6 @@ export async function startIntegrationRuntime(): Promise<() => void> {
     disposeIngress()
     disposeGithubAuth()
     disposeLarkAuth()
+    disposeGoogleAuth()
   }
 }

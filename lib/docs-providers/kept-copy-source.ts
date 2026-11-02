@@ -12,6 +12,7 @@ import {
   type RemoteDocumentProvenanceV1,
 } from "./document-provenance"
 import { getDocsProvider } from "./registry"
+import { resolveDocsAccountBinding } from "./account-binding"
 import {
   DocsProviderError,
   isPluginDocsProviderId,
@@ -29,6 +30,12 @@ export async function captureKeptCopyProvenance(
 ): Promise<RemoteDocumentProvenanceV1 | null> {
   const provenance = remoteDocumentProvenance(content)
   if (!provenance) return null
+  const provider = getDocsProvider(content.ref.providerId)
+  if (provider?.resolveLegacyAccount) {
+    const resolved = await resolveDocsAccountBinding(provider, binding)
+    if (!resolved) throw new DocsProviderError("notAuthorized")
+    binding = resolved
+  }
   const db = getDb()
   return db.transaction("rw", db.authConnections, db.remoteDocumentConnections, async () => {
     const connection = await getAuthConnection(binding.accountId)

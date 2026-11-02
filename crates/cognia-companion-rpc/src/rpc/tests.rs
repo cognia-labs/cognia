@@ -5863,6 +5863,18 @@ fn google_docs_auth_is_registered_as_internal_service_state() {
 async fn google_docs_auth_service_dispatch_emits_a_signal_without_secret_payload() {
     let state = test_state();
     let host = headless_host();
+    let signals = |host: &crate::headless::HeadlessServices| {
+        let cognia_companion::event_bus::SubscribeResult::Ok { replay, .. } =
+            host.event_bus.subscribe(Some(0), 0)
+        else {
+            panic!("signal retained")
+        };
+        replay
+            .into_iter()
+            .filter(|event| event.event_type == "google-docs-connection-changed")
+            .map(|event| event.payload)
+            .collect::<Vec<_>>()
+    };
     let before = dispatch(
         "connectors_google_docs_auth",
         json!({"input":{"action":"snapshot"}}),
@@ -5874,11 +5886,12 @@ async fn google_docs_auth_service_dispatch_emits_a_signal_without_secret_payload
     )
     .await
     .expect("actual host snapshot");
-    assert!(before.is_object());
-    assert_eq!(before["state"]["version"], 1);
+    assert!(before["lineages"].is_array());
+    assert!(before.get("state").is_none());
+    let baseline = signals(&host).len();
     let refused = dispatch(
         "connectors_google_docs_auth",
-        json!({"input":{"action":"claim","state":"google:deliberate-mismatch","now":0}}),
+        json!({"input":{"action":"complete","state":"google:deliberate-mismatch","code":"unused"}}),
         &state,
         &host,
         "brain-local",
@@ -5887,15 +5900,24 @@ async fn google_docs_auth_service_dispatch_emits_a_signal_without_secret_payload
     )
     .await;
     assert!(refused.is_err());
-    let cognia_companion::event_bus::SubscribeResult::Ok { replay, .. } =
-        host.event_bus.subscribe(Some(0), 0)
-    else {
-        panic!("signal retained")
-    };
-    let signals: Vec<_> = replay
-        .iter()
-        .filter(|event| event.event_type == "google-docs-connection-changed")
-        .collect();
-    assert_eq!(signals.len(), 1);
-    assert_eq!(signals[0].payload, Value::Null);
+    assert_eq!(
+        signals(&host).len(),
+        baseline,
+        "a refused callback is not a change"
+    );
+    let written = dispatch(
+        "connectors_google_docs_auth",
+        json!({"input":{"action":"setClientSecret","clientId":"client.apps.googleusercontent.com","secret":"deliberate-secret-value"}}),
+        &state,
+        &host,
+        "brain-local",
+        Some(ACCOUNT_ID),
+        Some("service"),
+    )
+    .await
+    .expect("write-only client secret");
+    assert!(!written.to_string().contains("deliberate-secret-value"));
+    let after = signals(&host);
+    assert_eq!(after.len(), baseline + 1, "the secret write signals once");
+    assert!(after.iter().all(Value::is_null), "signals carry no payload");
 }

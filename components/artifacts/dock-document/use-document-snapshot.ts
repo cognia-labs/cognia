@@ -5,7 +5,10 @@ import { requestComposerDocument } from "@/lib/chat/composer-document-request"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import { getDocsProvider } from "@/lib/docs-providers"
-import { accountMatchesBinding } from "@/lib/docs-providers/account-binding"
+import {
+  accountMatchesBinding,
+  resolveDocsAccountBinding,
+} from "@/lib/docs-providers/account-binding"
 import { docsProviderReach } from "@/lib/docs-providers/reach"
 import {
   DocsProviderError,
@@ -194,11 +197,29 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
   const refresh = useCallback(
     async (choice?: DocsProviderAccountBinding) => {
       if (!provider || !reach.available || !source.canReopen || !currentTab()) return
-      if (tab.remoteDocument?.connectionScoped) {
-        const connection = await resolveKeptCopyConnection(tab.remoteDocument)
-        if (!connection || !currentTab()) return
-        // Restore only the captured identity, never another account chosen by coincidence.
-        choice = { accountId: connection.id, authorizationEpoch: String(connection.revision) }
+      try {
+        if (tab.remoteDocument?.connectionScoped) {
+          const connection = await resolveKeptCopyConnection(tab.remoteDocument)
+          if (!connection || !currentTab()) return
+          // Restore only the captured identity, never another account chosen by coincidence.
+          choice = { accountId: connection.id, authorizationEpoch: String(connection.revision) }
+        }
+        const storedBinding = choice ?? documentMemory(tab.id).binding
+        if (storedBinding && provider.resolveLegacyAccount) {
+          const resolved = await resolveDocsAccountBinding(provider, storedBinding)
+          if (!currentTab()) return
+          if (resolved) choice = resolved
+        }
+      } catch (error) {
+        // Resolving the binding reads the Host (IPC, keyring); a failure there is
+        // a retryable preview error, never an unhandled rejection from void refresh().
+        if (mounted.current && currentTab())
+          setOperation({
+            phase: "error",
+            generation: documentMemory(tab.id).generation,
+            error: error instanceof DocsProviderError ? error.code : "network",
+          })
+        return
       }
       if (choice) bindDockDocument(tab.id, choice)
       else invalidateDocument(tab.id)

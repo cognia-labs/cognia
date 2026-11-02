@@ -19083,10 +19083,49 @@
                 "properties": {
                   "action": {
                     "const": "snapshot"
+                  },
+                  "legacyClientId": {
+                    "type": "string"
                   }
                 },
                 "required": [
                   "action"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "setClientSecret"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "secret": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "clientId",
+                  "secret"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "clearClientSecret"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "clientId"
                 ],
                 "additionalProperties": false
               },
@@ -19095,52 +19134,27 @@
                 "properties": {
                   "action": {
                     "const": "begin"
-                  }
-                },
-                "required": [
-                  "action"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "const": "setPending"
                   },
-                  "authorization": {
+                  "clientId": {
                     "type": "string"
                   },
-                  "pending": {
-                    "type": "object",
-                    "properties": {
-                      "state": {
-                        "type": "string"
-                      },
-                      "codeVerifier": {
-                        "type": "string"
-                      },
-                      "redirectUri": {
-                        "type": "string"
-                      },
-                      "ts": {
-                        "type": "integer",
-                        "minimum": 0
-                      }
-                    },
-                    "required": [
-                      "state",
-                      "codeVerifier",
-                      "redirectUri",
-                      "ts"
-                    ],
-                    "additionalProperties": false
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "reauthorizeLineage": {
+                    "type": "string"
+                  },
+                  "redirectUri": {
+                    "type": "string"
                   }
                 },
                 "required": [
                   "action",
-                  "authorization",
-                  "pending"
+                  "clientId",
+                  "scopes"
                 ],
                 "additionalProperties": false
               },
@@ -19148,132 +19162,100 @@
                 "type": "object",
                 "properties": {
                   "action": {
-                    "const": "claim"
+                    "const": "beginDevice"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "reauthorizeLineage": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "clientId",
+                  "scopes"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "complete"
                   },
                   "state": {
                     "type": "string"
                   },
-                  "now": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "state",
+                  "code"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "pollDevice"
+                  },
+                  "attemptId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "attemptId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "cancel"
+                  },
+                  "attemptId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "attemptId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "const": "accessToken"
+                  },
+                  "lineageId": {
+                    "type": "string"
+                  },
+                  "minValidityMs": {
                     "type": "integer",
                     "minimum": 0
                   }
                 },
                 "required": [
                   "action",
-                  "state",
-                  "now"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "const": "commit"
-                  },
-                  "authorization": {
-                    "type": "string"
-                  },
-                  "tokens": {
-                    "type": "object",
-                    "properties": {
-                      "accessToken": {
-                        "type": "string"
-                      },
-                      "refreshToken": {
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      "scope": {
-                        "type": "string"
-                      },
-                      "tokenType": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "accessToken",
-                      "expiresAt"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "accountEmail": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "action",
-                  "authorization",
-                  "tokens"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "const": "refresh"
-                  },
-                  "connection": {
-                    "type": "string"
-                  },
-                  "tokens": {
-                    "type": "object",
-                    "properties": {
-                      "accessToken": {
-                        "type": "string"
-                      },
-                      "refreshToken": {
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      "scope": {
-                        "type": "string"
-                      },
-                      "tokenType": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "accessToken",
-                      "expiresAt"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "action",
-                  "connection",
-                  "tokens"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "const": "invalidate"
-                  },
-                  "connection": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "action",
-                  "connection"
+                  "lineageId"
                 ],
                 "additionalProperties": false
               },
@@ -19282,10 +19264,14 @@
                 "properties": {
                   "action": {
                     "const": "disconnect"
+                  },
+                  "lineageId": {
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "action"
+                  "action",
+                  "lineageId"
                 ],
                 "additionalProperties": false
               }
@@ -19301,171 +19287,215 @@
       "outputSchema": {
         "type": "object",
         "properties": {
-          "state": {
+          "lineages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "method": {
+                  "enum": [
+                    "loopback-pkce",
+                    "device-code"
+                  ]
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sub": {
+                  "type": "string"
+                },
+                "email": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "connected",
+                    "needs-reauth",
+                    "disconnected"
+                  ]
+                },
+                "revision": {
+                  "type": "string"
+                },
+                "credentialRevision": {
+                  "type": "string"
+                },
+                "needsIdentity": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "clientId",
+                "method",
+                "scopes",
+                "sub",
+                "email",
+                "status",
+                "revision",
+                "credentialRevision",
+                "needsIdentity"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "clients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "clientId": {
+                  "type": "string"
+                },
+                "hasClientSecret": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "clientId",
+                "hasClientSecret"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attemptId": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "method": {
+                  "enum": [
+                    "loopback-pkce",
+                    "device-code"
+                  ]
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reauthorizeLineage": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attemptId",
+                "clientId",
+                "method",
+                "expiresAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "migrationNeedsClientId": {
+            "type": "boolean"
+          },
+          "attempt": {
             "type": "object",
             "properties": {
-              "version": {
-                "const": 1
-              },
-              "connection": {
+              "attemptId": {
                 "type": "string"
               },
-              "authorization": {
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "authorizeUrl": {
                 "type": "string"
               },
-              "tokens": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "accessToken": {
-                        "type": "string"
-                      },
-                      "refreshToken": {
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      "scope": {
-                        "type": "string"
-                      },
-                      "tokenType": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "accessToken",
-                      "expiresAt"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "userCode": {
+                "type": "string"
               },
-              "pending": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "state": {
-                        "type": "string"
-                      },
-                      "codeVerifier": {
-                        "type": "string"
-                      },
-                      "redirectUri": {
-                        "type": "string"
-                      },
-                      "ts": {
-                        "type": "integer",
-                        "minimum": 0
-                      }
-                    },
-                    "required": [
-                      "state",
-                      "codeVerifier",
-                      "redirectUri",
-                      "ts"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "verificationUrl": {
+                "type": "string"
               },
-              "claimed": {
-                "type": "boolean"
-              },
-              "accountEmail": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "legacyMetadata": {
-                "type": "boolean"
+              "interval": {
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
-              "version",
-              "connection",
-              "authorization",
-              "tokens",
-              "pending",
-              "claimed",
-              "accountEmail",
-              "legacyMetadata"
+              "attemptId",
+              "expiresAt"
             ],
             "additionalProperties": false
           },
-          "pending": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "state": {
-                    "type": "string"
-                  },
-                  "codeVerifier": {
-                    "type": "string"
-                  },
-                  "redirectUri": {
-                    "type": "string"
-                  },
-                  "ts": {
-                    "type": "integer",
-                    "minimum": 0
-                  }
-                },
-                "required": [
-                  "state",
-                  "codeVerifier",
-                  "redirectUri",
-                  "ts"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "null"
-              }
+          "pollStatus": {
+            "enum": [
+              "pending",
+              "slow_down",
+              "denied",
+              "expired",
+              "connected"
             ]
           },
-          "outcome": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "revoked": {
-                    "type": "boolean"
-                  },
-                  "reason": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "revoked"
-                ],
-                "additionalProperties": false
+          "credential": {
+            "type": "object",
+            "properties": {
+              "accessToken": {
+                "type": "string"
               },
-              {
-                "type": "null"
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "revision": {
+                "type": "string"
+              },
+              "credentialRevision": {
+                "type": "string"
               }
-            ]
+            },
+            "required": [
+              "accessToken",
+              "expiresAt",
+              "revision",
+              "credentialRevision"
+            ],
+            "additionalProperties": false
+          },
+          "outcome": {
+            "type": "object",
+            "properties": {
+              "revoked": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "revoked"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
-          "state",
+          "lineages",
+          "clients",
           "pending",
-          "outcome"
+          "migrationNeedsClientId"
         ],
         "additionalProperties": false
       },
@@ -110546,5 +110576,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "cb52f8fedc1f0805b222b91af2361254d538ee714a7e43dc1e7a50fed5440e60"
+  "catalogHash": "ade39a67209a7c7b81d724e0eb7ef3a9cf3042da8f11aac976b1da4fbbd4ee34"
 }
