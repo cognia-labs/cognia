@@ -18,6 +18,7 @@ import {
   getProvider,
 } from "@/lib/plugin/auth/auth-provider-registry"
 import { registerHostAuthProviderService } from "@/lib/plugin/auth/connection-access"
+import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
 import {
   ConnectionUnavailableError,
   ConnectionIdentityConflict,
@@ -116,13 +117,31 @@ export function ensureLarkHostProvider(): void {
   }
 }
 
-/** Identity is fetched only for legacy metadata; all token lineage checks remain Rust-owned. */
+type LarkReconcileOptions = { expiresAt?: string; onlyExisting?: boolean }
+
+/**
+ * Identity is fetched only for legacy metadata; all token lineage checks remain Rust-owned.
+ * The snapshot read and its publication run under one per-adapter auth lock shared by
+ * every window, so a stale "not configured" snapshot read in one window cannot tombstone
+ * a reauthorization another window has already published.
+ */
 export async function reconcileLarkConnection(
   adapterId: string,
-  options: { expiresAt?: string; onlyExisting?: boolean } = {}
+  options: LarkReconcileOptions = {}
 ): Promise<AuthConnectionRow | undefined> {
   if (options.onlyExisting && !getHostConnectionDriver("lark")) return undefined
   ensureLarkHostProvider()
+  return withAuthLock(
+    `cognia-auth-provider:lark:reconcile:${adapterId}`,
+    () => publishLarkSnapshot(adapterId, options),
+    "provider-reconcile"
+  )
+}
+
+async function publishLarkSnapshot(
+  adapterId: string,
+  options: LarkReconcileOptions
+): Promise<AuthConnectionRow | undefined> {
   const manager = getConnectionManager()
   const previous = (await listAuthConnections("lark")).filter(
     (row) => row.hostMetadata?.adapterId === adapterId

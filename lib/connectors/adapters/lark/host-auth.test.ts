@@ -32,7 +32,8 @@ import { waitFor } from "@testing-library/react"
 jest.mock("./oauth-begin", () => ({ beginLarkOAuth: jest.fn() }))
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
 jest.mock("@/lib/connectors/events", () => ({ connectorListen: jest.fn(async () => jest.fn()) }))
-import { refreshUserToken } from "./auth"
+import { larkDeployment, refreshUserToken } from "./auth"
+import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
 import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
 import {
   captureKeptCopyProvenance,
@@ -365,6 +366,80 @@ it("tombstones token clearing and disconnect, keeps captured copies, and drops a
   expect(await getDb().remoteDocumentConnections.count()).toBe(1)
 })
 
+it("orders snapshot reads with other windows so a stale token clearing cannot tombstone a newer reauthorization", async () => {
+  const row = (await reconcileLarkConnection("adapter"))!
+  state = { ...state, accessToken: null, refreshToken: null }
+  // A snapshot reply reflects native state when it is READ, and may arrive late.
+  let openGate!: () => void
+  const gate = new Promise<void>((resolve) => (openGate = resolve))
+  const answer = jest.mocked(connectorsLarkUserAuth).getMockImplementation()!
+  jest.mocked(connectorsLarkUserAuth).mockImplementation(async (input) => {
+    if (input.action !== "snapshot") return answer(input)
+    const seen = await answer(input)
+    await gate
+    return seen
+  })
+  const snapshotReads = () =>
+    jest.mocked(connectorsLarkUserAuth).mock.calls.filter(([input]) => input.action === "snapshot")
+      .length
+  const readsBefore = snapshotReads()
+  // Another window holds this adapter's reconcile lock while it reauthorizes.
+  let entered!: () => void
+  const otherWindowEntered = new Promise<void>((resolve) => (entered = resolve))
+  let release!: () => void
+  const otherWindow = withAuthLock(
+    "cognia-auth-provider:lark:reconcile:adapter",
+    async () => {
+      entered()
+      await new Promise<void>((resolve) => (release = resolve))
+    },
+    "provider-reconcile"
+  )
+  await otherWindowEntered
+  const stale = reconcileLarkConnection("adapter")
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(snapshotReads()).toBe(readsBefore)
+    state = {
+      ...state,
+      authorizationEpoch: "epoch-2",
+      accessToken: "private-user-token-2",
+      refreshToken: "private-refresh-2",
+    }
+    await getDb().adapterInstances.update("adapter", {
+      settings: {
+        connectedUser: { openId: "ou_ada", tenantKey: "tenant", authorizationEpoch: "epoch-2" },
+      },
+    } as never)
+    await getConnectionManager().reconcileHostConnection(
+      "lark",
+      {
+        issuer: larkDeployment("feishu").issuer,
+        clientId: "cli_app",
+        tenantId: "tenant",
+        principal: { id: "ou_ada", kind: "user" },
+        accountLabel: "Ada",
+        scopes: ["search:docs:read"],
+      },
+      {
+        adapterId: "adapter",
+        authorizationEpoch: "epoch-2",
+        credentialVersion: "native-r1",
+        bot: true,
+      }
+    )
+  } finally {
+    // A failed assertion must not leave the shared lock held for later tests.
+    openGate()
+    release()
+  }
+  await otherWindow
+  await stale
+  expect((await listAuthConnections("lark")).find((item) => item.id === row.id)).toMatchObject({
+    status: "connected",
+    hostMetadata: { authorizationEpoch: "epoch-2" },
+  })
+})
 it("marks invalid_grant needs-reauth and does not silently restore it on reconciliation", async () => {
   const row = (await reconcileLarkConnection("adapter"))!
   jest.mocked(connectorsHttpRequest).mockResolvedValue({
