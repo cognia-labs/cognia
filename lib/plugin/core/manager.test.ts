@@ -5996,6 +5996,25 @@ describe("PluginManager", () => {
   })
 
   describe("disposable lifecycle ledger", () => {
+    it("disposes public sync registrations when their plugin is disabled", async () => {
+      const { createSyncAPI } = await import("@/lib/plugin/api/sync-api")
+      const { hasExternalSyncRegistration } = await import("@/lib/external-services/sync/runtime")
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const sync = createSyncAPI("sync-owner", { hasPermission: () => true })
+      sync.register("calendar", {
+        itemId: String,
+        fetchPage: async () => ({ items: [], cursor: "next" }),
+        applyPage: async () => {},
+      })
+      expect(hasExternalSyncRegistration("plugin:sync-owner/calendar")).toBe(true)
+      mockGetState.mockReturnValue({ plugins: {} })
+      await (
+        manager as unknown as { unregisterPluginContributions: (id: string) => Promise<void> }
+      ).unregisterPluginContributions("sync-owner")
+      expect(hasExternalSyncRegistration("plugin:sync-owner/calendar")).toBe(false)
+      manager.dispose()
+    })
+
     it("disposes a partial activation even when the store row is already gone", async () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins" })
       const dispose = jest.fn()

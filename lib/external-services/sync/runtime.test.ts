@@ -60,6 +60,105 @@ it("coalesces three requests and immediately runs manual full", async () => {
   expect(runExternalSync).toHaveBeenCalledTimes(2)
 })
 
+it("retains a poll's full request while coalescing subsequent requests", async () => {
+  registerExternalSync({ key: "test", owner: "host" }, () => driver)
+  requestExternalSync("test", "poll", { full: true })
+  requestExternalSync("test", "poll")
+  await jest.advanceTimersByTimeAsync(2000)
+  expect(runExternalSync).toHaveBeenCalledTimes(1)
+  expect(runExternalSync).toHaveBeenCalledWith(
+    expect.anything(),
+    driver,
+    expect.objectContaining({ mode: "full" })
+  )
+})
+
+it("freezes each resolved target after asynchronous credential preparation", async () => {
+  const target = { key: "test", owner: "host" as const }
+  let ref = "first"
+  const resolved = { ...target, connectionRef: ref as never }
+  registerExternalSync(target, async () => {
+    await Promise.resolve()
+    resolved.connectionRef = ref as never
+    return { driver, target: resolved }
+  })
+  requestExternalSync("test", "manual")
+  await settle()
+  const first = jest.mocked(runExternalSync).mock.calls[0][0]
+  expect(first).toEqual({ ...target, connectionRef: "first" })
+  expect(Object.isFrozen(first)).toBe(true)
+  ref = "second"
+  requestExternalSync("test", "manual")
+  await settle()
+  expect(runExternalSync).toHaveBeenLastCalledWith(
+    { ...target, connectionRef: "second" },
+    driver,
+    expect.anything()
+  )
+  expect(first.connectionRef).toBe("first")
+})
+
+it("keeps the registered binding when a wrapped driver supplies no target", async () => {
+  const target = { key: "test", owner: "host" as const, connectionRef: "bound" as never }
+  registerExternalSync(target, async () => ({ driver }))
+  target.connectionRef = "mutated" as never
+  requestExternalSync("test", "manual")
+  await settle()
+  expect(runExternalSync).toHaveBeenCalledWith(
+    { key: "test", owner: "host", connectionRef: "bound" },
+    driver,
+    expect.anything()
+  )
+})
+
+it("unregisters a resolved connection before its first cursor is persisted", async () => {
+  jest.mocked(runExternalSync).mockImplementationOnce(async (_target, _driver, options) => {
+    unregisterExternalSyncTargets((target) => target.connectionRef === "resolved")
+    expect(options?.signal?.aborted).toBe(true)
+    return { status: "cancelled", mode: "full", pages: 0, applied: 0, tombstoned: 0 }
+  })
+  registerExternalSync({ key: "test", owner: "host" }, async () => ({
+    driver,
+    target: { key: "test", owner: "host", connectionRef: "resolved" as never },
+  }))
+  requestExternalSync("test", "manual")
+  await settle()
+  expect(runExternalSync).toHaveBeenCalledTimes(1)
+  expect(hasExternalSyncRegistration("test")).toBe(false)
+})
+
+it.each([
+  { key: "other", owner: "host" as const },
+  { key: "test", owner: "plugin:other" as const },
+])("refuses a factory's replacement of the registered identity: %s", async (target) => {
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    registerExternalSync({ key: "test", owner: "host" }, async () => ({ driver, target }))
+    requestExternalSync("test", "manual")
+    await settle()
+    expect(runExternalSync).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith("External sync runtime failed")
+  } finally {
+    warn.mockRestore()
+  }
+})
+
+it("notifies a registration lifetime exactly once on purge and keeps its replacement live", () => {
+  const removed = jest.fn()
+  const unregister = registerExternalSync({ key: "test", owner: "host" }, () => driver, {
+    onUnregister: removed,
+  })
+  unregisterExternalSyncTargets(() => true)
+  expect(removed).toHaveBeenCalledTimes(1)
+  const replacementRemoved = jest.fn()
+  registerExternalSync({ key: "test", owner: "host" }, () => driver, {
+    onUnregister: replacementRemoved,
+  })
+  unregister()
+  expect(hasExternalSyncRegistration("test")).toBe(true)
+  expect(replacementRemoved).not.toHaveBeenCalled()
+})
+
 it("does not report a cancelled factory when its credential preparation finishes after unregister", async () => {
   const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
   let release!: () => void

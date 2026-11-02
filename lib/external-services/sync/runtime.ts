@@ -2,14 +2,20 @@ import { listDeferredExternalSyncs } from "@/lib/db/external-sync"
 import { abortExternalSyncRuns, runExternalSync } from "./core"
 import type { ExternalSyncDriver, ExternalSyncTarget } from "./types"
 
+type PreparedDriver<Item> =
+  ExternalSyncDriver<Item> | { driver: ExternalSyncDriver<Item>; target?: ExternalSyncTarget }
+
 interface Registration {
   target: ExternalSyncTarget
-  factory: () => ExternalSyncDriver<unknown> | Promise<ExternalSyncDriver<unknown>>
+  resolvedTarget?: ExternalSyncTarget
+  factory: () => PreparedDriver<unknown> | Promise<PreparedDriver<unknown>>
   timer?: ReturnType<typeof setTimeout>
   controller?: AbortController
   running?: Promise<void>
   rerun: boolean
   full: boolean
+  signal?: AbortSignal
+  onUnregister?: () => void
 }
 const registrations = new Map<string, Registration>()
 const DEBOUNCE_MS = 2000
@@ -27,14 +33,16 @@ export function pendingExternalSyncKeys(): string[] {
 
 export function registerExternalSync<Item>(
   target: ExternalSyncTarget,
-  driverFactory: () => ExternalSyncDriver<Item> | Promise<ExternalSyncDriver<Item>>
+  driverFactory: () => PreparedDriver<Item> | Promise<PreparedDriver<Item>>,
+  options: { signal?: AbortSignal; onUnregister?: () => void } = {}
 ): () => void {
   if (registrations.has(target.key)) throw new Error("External sync key already registered")
   const entry: Registration = {
-    target,
+    target: { ...target },
     factory: driverFactory as Registration["factory"],
     rerun: false,
     full: false,
+    ...options,
   }
   registrations.set(target.key, entry)
   return () => {
@@ -48,6 +56,7 @@ export function unregisterExternalSync(key: string): void {
     registrations.delete(key)
     clearTimeout(entry.timer)
     entry.controller?.abort()
+    entry.onUnregister?.()
   }
   abortExternalSyncRuns(key)
 }
@@ -57,7 +66,8 @@ export function unregisterExternalSyncTargets(
   matches: (target: ExternalSyncTarget) => boolean
 ): void {
   for (const [key, entry] of registrations) {
-    if (matches(entry.target)) unregisterExternalSync(key)
+    if (matches(entry.target) || (entry.resolvedTarget && matches(entry.resolvedTarget)))
+      unregisterExternalSync(key)
   }
 }
 
@@ -71,12 +81,26 @@ function start(entry: Registration): void {
   entry.controller = controller
   entry.running = Promise.resolve()
     .then(async () => {
-      const driver = await entry.factory()
-      if (!controller.signal.aborted)
-        await runExternalSync(entry.target, driver, {
+      const prepared = await entry.factory()
+      if (
+        !controller.signal.aborted &&
+        !entry.signal?.aborted &&
+        registrations.get(entry.target.key) === entry
+      ) {
+        const { driver, target = entry.target } =
+          "driver" in prepared ? prepared : { driver: prepared }
+        if (target.key !== entry.target.key || target.owner !== entry.target.owner)
+          throw new Error("External sync factory changed target identity")
+        // Host factories resolve credential identity asynchronously. Keep their
+        // per-run snapshot separate from the registered binding (plugins use it as-is).
+        entry.resolvedTarget = Object.freeze({ ...target })
+        await runExternalSync(entry.resolvedTarget, driver, {
           mode: full ? "full" : "auto",
-          signal: controller.signal,
+          signal: entry.signal
+            ? AbortSignal.any([controller.signal, entry.signal])
+            : controller.signal,
         })
+      }
     })
     .catch((error: unknown) => {
       if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError"))
@@ -99,7 +123,7 @@ export function requestExternalSync(
 ): void {
   const entry = registrations.get(key)
   if (!entry) return
-  entry.full ||= reason === "manual" && options.full === true
+  entry.full ||= options.full === true
   if (entry.running) {
     entry.rerun = true
     return

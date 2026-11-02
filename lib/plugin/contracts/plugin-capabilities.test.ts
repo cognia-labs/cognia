@@ -267,3 +267,12 @@ it("binds the public backup destination helper to the live lifecycle bridge", ()
   })
   expect(capabilityPythonExecution("backup-destination")).toBe("unsupported")
 })
+
+it("advertises public sync with plugin lifecycle cleanup and no manifest field", () => {
+  expect(getPluginCapabilityContract("sync")).toMatchObject({
+    support: "supported",
+    manifestFields: [],
+    manifestFieldsOptional: true,
+  })
+  expect(capabilityPythonExecution("sync")).toBe("unsupported")
+})

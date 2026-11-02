@@ -361,7 +361,8 @@ export class FeishuCalendarClient {
       )
     if (typeof envelope.code !== "number" || !Number.isInteger(envelope.code))
       throw new TypeError("Invalid Feishu response envelope code")
-    if (envelope.code !== 0) throw new FeishuApiError(response.status, envelope.code)
+    if (envelope.code !== 0)
+      throw new FeishuApiError(response.status, envelope.code, response.headers["retry-after"])
     return envelope.data === undefined ? {} : record(envelope.data, "response data")
   }
 

@@ -376,3 +376,8 @@ it("declares manifest glance modules and drops runtime ones with them on disable
   expect(glancePluginModules.get(pluginEntryId("glance-plugin-b", "builds"))).not.toBeNull()
   capability.unregisterAllByPlugin("glance-plugin-b")
 })
+
+// Sync is imperative and tracked by the plugin lifecycle, not an overlay.
+it("keeps context-owned sync outside the overlay dispatch", () => {
+  expect(Object.hasOwn(OVERLAY_REGISTRY_CAPABILITIES, "sync")).toBe(false)
+})

@@ -142,6 +142,67 @@ it("resolves the import binding freshly and runs the existing import engine driv
   expect((await getDb().externalSyncCursors.get(importKey))?.cursor).toBe("1")
 })
 
+it.each(["import", "mirror"] as const)(
+  "uses the resolved Host connection lease for background %s runs and existing cursors",
+  async (kind) => {
+    const { deps, provider, pull, request } = setup()
+    const ref = "host-github-connection"
+    const key = kind === "import" ? importKey : mirrorKey
+    const modes: unknown[] = []
+    const assertLease = async () => {
+      expect(await getDb().syncLeases.get(`${ref}:sync:${key}`)).toMatchObject({
+        connectionRef: ref,
+      })
+      expect(await getDb().externalSyncCursors.get(key)).toMatchObject({ connectionRef: ref })
+    }
+    await getDb().authConnections.put({ id: ref, status: "connected" } as never)
+    await getDb().issueProjects.put({
+      id: "p1",
+      projectId: "ws",
+      key: "IP",
+      name: "Import",
+      status: "planned",
+      priority: "none",
+      resources: [],
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    provider.prepare = async () => {
+      await Promise.resolve()
+      return { provider, connectionRef: ref as never }
+    }
+    pull.mockImplementation(async (...args: unknown[]) => {
+      await assertLease()
+      modes.push((args[1] as { mode: string }).mode)
+      return { items: [], cursor: "1" }
+    })
+    request.mockImplementation(async () => {
+      await assertLease()
+      return { status: 200, headers: {}, data: [] }
+    })
+    deps.mirrorDeps = {
+      resolveReadClient: async () => {
+        await Promise.resolve()
+        return { octokit: { request }, connectionRef: ref as never }
+      },
+    }
+    await reconcileIssueSyncRegistrations(deps)
+    for (let run = 0; run < 2; run++) {
+      requestExternalSync(key, "manual")
+      await settle()
+      expect(await getDb().externalSyncCursors.get(key)).toMatchObject({
+        connectionRef: ref,
+        failures: 0,
+        lastSuccessAt: expect.any(Number),
+      })
+      expect((await getDb().externalSyncCursors.get(key))?.generation).toBeUndefined()
+      expect(await getDb().syncLeases.count()).toBe(0)
+    }
+    if (kind === "import") expect(modes).toEqual(["full", "incremental"])
+    else expect(request).toHaveBeenCalledTimes(2)
+  }
+)
+
 it("re-registers after runtime disposal and does not remove another workspace's target", async () => {
   const { deps } = setup()
   await reconcileIssueSyncRegistrations(deps)

@@ -6902,6 +6902,9 @@ export class PluginManager {
       }
     }
 
+    const { clearSyncForPlugin } = await import("@/lib/plugin/api/sync-api")
+    clearSyncForPlugin(pluginId)
+
     if (!plugin) return
 
     this.a2uiBridge?.unregisterPluginComponents(pluginId)

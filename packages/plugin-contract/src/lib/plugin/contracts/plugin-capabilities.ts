@@ -13,6 +13,8 @@ export interface PluginCapabilityContract {
   manifestFields: readonly string[]
   /** The capability also exposes callable context APIs and need not contribute a manifest field. */
   manifestFieldsOptional?: boolean
+  /** Runtime restriction for imperative capabilities with no manifest contribution. */
+  pythonExecution?: CapabilityPythonExecution
   runtimeBinding: string
   hostBindings: readonly string[]
   typescriptSdk: readonly string[]
@@ -75,6 +77,28 @@ export interface PluginCapabilityValidationOutcome {
 }
 
 export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = [
+  {
+    id: "sync",
+    support: "supported",
+    manifestFields: [],
+    manifestFieldsOptional: true,
+    pythonExecution: "unsupported",
+    runtimeBinding:
+      "ctx.sync.register + Host sync runtime; plugin lifecycle disposes registrations",
+    hostBindings: [
+      "lib/plugin/api/sync-api.ts",
+      "lib/plugin/bridge/sync-bridge.ts",
+      "lib/plugin/core/context.ts",
+    ],
+    typescriptSdk: [
+      "packages/plugin-sdk/src/define/define-sync-driver.ts",
+      "packages/plugin-sdk/src/context/index.ts",
+    ],
+    pythonSdk: [],
+    builtinContributionPaths: ["plugins/feishu-calendar/src/sync.ts"],
+    docs: "docs/content/docs/en/plugin-dev/author-sdk.mdx#host-owned-synchronization",
+    requiredTests: ["lib/plugin/api/sync-api.test.ts", "lib/plugin/bridge/sync-bridge.test.ts"],
+  },
   {
     id: "tools",
     support: "supported",
@@ -2056,10 +2080,12 @@ export type CapabilityPythonExecution = "host" | "supported" | "experimental" | 
 
 /**
  * Whether a pure-Python plugin can own this capability at runtime, derived from
- * the contribution contracts rather than from the presence of SDK helper files.
+ * the contribution contracts (or an imperative capability's explicit restriction),
+ * rather than from the presence of SDK helper files.
  *
  * - `"host"` — the capability contributes plain data the host consumes (or has
- *   no manifest contribution at all), so the authoring language is irrelevant.
+ *   neither a manifest contribution nor a language restriction), so the authoring
+ *   language is irrelevant.
  * - `"supported"` / `"experimental"` — at least one contribution can route
  *   through the `plugin_python_call` seam.
  * - `"unsupported"` — every contribution needs a live JS/React factory.
@@ -2070,7 +2096,8 @@ export function capabilityPythonExecution(
   const contributions = PLUGIN_MANIFEST_CONTRIBUTIONS.filter((contract) =>
     contract.capabilities.includes(capability as string)
   )
-  if (contributions.length === 0) return "host"
+  if (contributions.length === 0)
+    return getPluginCapabilityContract(capability)?.pythonExecution ?? "host"
   if (contributions.some((contract) => contract.execution === "host")) return "host"
   if (contributions.some((contract) => contract.pythonExecution === "supported")) return "supported"
   if (contributions.some((contract) => contract.pythonExecution === "experimental")) {

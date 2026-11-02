@@ -701,3 +701,4 @@ export type {
   PluginDocsProvidersAPI,
   PluginDocsProviderRegistration,
 } from "@cognia/plugin-contract/types/plugin/plugin-docs-providers"
+export { defineSyncDriver, syncRateLimited, syncCursorInvalid } from "./define/define-sync-driver"

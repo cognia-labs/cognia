@@ -192,3 +192,62 @@ Frontend and hybrid module plugins receive these APIs on `ctx.project`. Sandboxe
 The project catalog supports frontend/hybrid on desktop, web, and mobile. Python, WASM, and headless runtimes are not advertised for these APIs. Desktop Node activation-call replay does not implement asynchronous host-return reads; use the sandboxed webview transport for that surface instead of relying on replayed calls.
 
 The permission tier `forbid` denies access even when a manifest grant remains stored. Revoking a permission in the host UI also takes effect on the next call and before a pending read returns: the host records an explicit revocation across its existing permission stores. `hasPermission` and `getGrantedPermissions` report these effective grants. Regranting requires a host-approved grant; retained plugin state cannot undo revocation. Public workflow invocations cannot use legacy project metadata or whole-file methods to bypass their bound document scope, and their project-scope reads are denied.
+
+## Host-owned synchronization
+
+Like `ctx.docsProviders`,
+`ctx.sync` is a public frontend/hybrid contribution. Declare `sync:run` (policy
+consent, like `docs:provide`). `defineSyncDriver`, `syncRateLimited(retryAfterMs)`
+and `syncCursorInvalid()` are exported from `@cognia/plugin-sdk`.
+
+```ts
+const registration = ctx.sync.register("items", defineSyncDriver({
+  itemId: (item: { id: string }) => item.id,
+  fetchPage: ({ mode, cursor, page, signal }) => fetchRemote({ mode, cursor, page, signal }),
+  applyPage: (page, { generation, signal }) => applyIdempotently(page, generation, signal),
+}), { connectionRef })
+await ctx.sync.run("items", { signal })
+ctx.sync.request("items", { reason: "poll" })
+const status = await ctx.sync.status("items") // metadata only; no cursor
+await ctx.sync.reset("items") // next run rebuilds in full mode
+registration.dispose()
+```
+
+Keys contain 1–128 characters from `[A-Za-z0-9._:-]`; the Host owns
+`plugin:<pluginId>/<key>`. Duplicate registration throws. Disable/uninstall
+aborts runs and unregisters the target. A connection reference requires the
+plugin's current consumer grant; the Host binds its sync lease and purges the
+target on disconnect/revocation. Set the immutable binding in the third argument
+to `register`. Authorization starts at registration and gates all runs; it is
+checked again before every run. Dispose and re-register to change it. A stored
+target with a different binding fails with `target-mismatch`.
+
+Drivers return up to 1000 items per page, optional deleted string IDs, and
+`nextPage` or a terminal `cursor`. Tokens are limited to 16 KiB. Pages and
+callbacks are validated; callback timeouts and late results never commit the
+cursor. Callback cancellation propagates both ways in-realm. Apply operations
+must be idempotent within the supplied generation. Optional `listKnownIds` and
+`tombstone` reconcile full scans: keep the item and mark its source removed.
+`complete` runs the final authorization/revision check before cursor commit.
+`fullScanOnly` opts out of incremental mode without bypassing retry backoff.
+Outcomes distinguish completed, offline-deferred, backoff, busy, cancelled and
+failed. Error helpers contain only safe tags; never attach remote responses.
+
+**Node-target plugins:** only activation-time `register` is replayed. Revived
+driver callbacks return through `invokeCallback`. Errors reduced to plain
+name/message become generic failures with bounded backoff and no cursor
+commit. Cancellation stops the Host run and discards late results; it is not
+delivered into the child process. `run`, `request`, `status` and `reset` are not
+callable from that realm after activation, matching other replayed ctx APIs.
+
+Subscription renewal remains scheduler-based and **dormant**: no public renewal
+API or active renewal UI is exposed, and tests pin this inert state.
+Feishu Calendar continues polling; it does not create push subscriptions. Its
+Host key is `calendar:` plus the SHA-256 hex digest of the account/calendar tuple
+JSON. Fingerprints are saved after each successful event publication. Delivery
+IDs hash the account, calendar, event, change kind, previous fingerprint and new
+fingerprint, independent of sync generations, so the broker dedupes a replay
+even if publication succeeded before the fingerprint write crashed. A repeated
+A→B→A→B sequence reuses the A→B transition ID and may suppress its second
+notification within broker retention; this collision is accepted.
+See `plugins/example-sync` for an intentionally unbundled author reference.

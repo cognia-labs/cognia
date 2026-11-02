@@ -11,6 +11,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 
 | Namespace | Methods | Declared permissions | Runtimes | Data class |
 | --- | ---: | --- | --- | --- |
+| `ctx.sync` | 5 | `sync:run` | frontend, hybrid | sensitive |
 | `ctx.a2ui` | 8 | None | frontend, hybrid, python | internal |
 | `ctx.agent` | 29 | `agent:control`, `twin:read`, `agent:shared-memory:read`, `agent:dispatch`, `agent:dispatch-external` | frontend, hybrid, python | sensitive |
 | `ctx.agentConfig` | 7 | `agent-config:read`, `agent-config:write` | frontend, hybrid | sensitive |
@@ -118,6 +119,16 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `PROCESS_LIMIT` |
 | `TIMEOUT` |
 | `OUTPUT_TRUNCATED` |
+
+## `ctx.sync`
+
+| Method | Permissions | Risk | Idempotent | Runtimes |
+| --- | --- | --- | --- | --- |
+| `sync.register` | `sync:run` | medium | No | frontend, hybrid |
+| `sync.run` | `sync:run` | medium | No | frontend, hybrid |
+| `sync.request` | `sync:run` | medium | No | frontend, hybrid |
+| `sync.status` | `sync:run` | medium | Yes | frontend, hybrid |
+| `sync.reset` | `sync:run` | medium | No | frontend, hybrid |
 
 ## `ctx.a2ui`
 

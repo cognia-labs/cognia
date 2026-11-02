@@ -160,8 +160,7 @@ export function reconcileIssueSyncRegistrations(
             const prepared = await entry.prepare(controller.signal)
             if (!prepared)
               throw Object.assign(new Error("Issue sync binding removed"), { name: "AbortError" })
-            target.connectionRef = prepared.value.target.connectionRef
-            return prepared.value.driver
+            return { driver: prepared.value.driver, target: prepared.value.target }
           } finally {
             entry.controllers.delete(controller)
           }

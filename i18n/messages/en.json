@@ -36384,6 +36384,7 @@
         "share:read": "Read your created public share links and their view stats",
         "shell:execute": "Execute shell commands",
         "subscription:read": "Read subscription plan and usage metrics",
+        "sync:run": "Run external synchronization through Host-owned cursors",
         "team:read": "Read your agent teams, task boards, run events, and execution reports",
         "team:write": "Create/edit/assign tasks, comment, move cards, and manage non-lead teammates and team config on your agent-team boards",
         "templates:contribute": "Register lifecycle-scoped template packages",

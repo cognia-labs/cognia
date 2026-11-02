@@ -28,6 +28,7 @@ const grantedPermissions = new Map<string, Set<PluginAPIPermission>>()
 
 // Permission mapping from manifest permissions to API permissions
 const permissionMapping: Record<string, PluginAPIPermission[]> = {
+  "sync:run": ["sync:run"],
   "docs:provide": ["docs:provide"],
   "backup:destination": ["backup:destination"],
   "network:fetch": ["network:fetch"],

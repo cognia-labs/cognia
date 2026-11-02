@@ -70,4 +70,14 @@ describe("Feishu plugin distribution", () => {
       label: "Feishu user OAuth",
     })
   })
+
+  it("requires public sync permission in source and standalone calendar manifests", async () => {
+    for (const file of [
+      "plugins/feishu-calendar/plugin.json",
+      ".cache/feishu-calendar-packages/feishu-calendar/plugin.json",
+    ]) {
+      const calendar = JSON.parse(await readFile(file, "utf8"))
+      expect(calendar.permissions).toContain("sync:run")
+    }
+  })
 })

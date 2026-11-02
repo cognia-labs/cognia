@@ -1,10 +1,16 @@
-import type { PluginContext } from "@cognia/plugin-sdk"
+import {
+  defineSyncDriver,
+  syncCursorInvalid,
+  syncRateLimited,
+  type PluginContext,
+} from "@cognia/plugin-sdk"
 
 import { FeishuApiError } from "./api"
 import { calendarAccessCode, calendarConnection, connectedCalendarClient } from "./connection"
 
 export type CalendarSyncHost = {
   auth: PluginContext["auth"]
+  sync: PluginContext["sync"]
   storage: Pick<PluginContext["storage"], "get" | "set">
   integrations: Pick<
     PluginContext["integrations"],
@@ -17,10 +23,20 @@ export type CalendarSyncHost = {
 }
 
 interface SyncState {
-  version: 1
+  version: 1 | 2
   syncToken?: string
   fingerprints: Record<string, string>
-  pending?: { id: string; mode: "full" | "incremental"; startedAt: string }
+  pending?: Record<string, { previous?: string }>
+  /**
+   * A v1 scan (this id) was interrupted at upgrade: it published before it
+   * saved fingerprints, so an accepted change may be newer than the stored
+   * fingerprint. The first completed Host run restates every live event once.
+   */
+  restate?: string
+}
+
+type StoredSyncState = Omit<SyncState, "pending"> & {
+  pending?: SyncState["pending"] | { id: string; mode: "full" | "incremental"; startedAt: string }
 }
 
 export interface CalendarSyncResult {
@@ -46,25 +62,33 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null"
 }
 
-async function digest(value: unknown): Promise<string> {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical(value)))
+async function hash(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("")
 }
 
-/**
- * Only a completed scan advances the durable cursor. A pending generation is
- * persisted before fetching, making event ids stable after a crash or failed
- * publish. The host event broker supplies durable deduplication and projection
- * recovery; this plugin stores only ids and fingerprints, never event content.
- */
+async function digest(value: unknown): Promise<string> {
+  return hash(canonical(value))
+}
+
+/** Fingerprints remain plugin-owned; Host cursors and generations survive retries. */
 export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: AbortSignal) {
   const running = new Map<string, Promise<CalendarSyncResult>>()
+  const registrations = new Map<string, { dispose(): void }>()
   const withLifecycle = (signal?: AbortSignal) =>
     lifecycleSignal
       ? signal
         ? AbortSignal.any([lifecycleSignal, signal])
         : lifecycleSignal
       : signal
+  lifecycleSignal?.addEventListener(
+    "abort",
+    () => {
+      for (const registration of registrations.values()) registration.dispose()
+      registrations.clear()
+    },
+    { once: true }
+  )
 
   async function scan(
     accountId: string,
@@ -73,159 +97,297 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
   ): Promise<CalendarSyncResult> {
     checkAbort(signal)
     if (!accountId || !calendarId) throw new Error("An account and calendar are required")
-    const key = `calendar-sync:${JSON.stringify([accountId, calendarId])}`
-    let state = await host.storage.get<SyncState>(key)
-    if (
-      state &&
-      (state.version !== 1 || !state.fingerprints || typeof state.fingerprints !== "object")
-    ) {
-      throw new Error("Unsupported Feishu calendar sync checkpoint")
-    }
-    state ??= { version: 1, fingerprints: {} }
-    state.pending ??= {
-      id: crypto.randomUUID(),
-      mode: state.syncToken ? "incremental" : "full",
-      startedAt: new Date().toISOString(),
-    }
-    await host.storage.set(key, state)
-    const client = await connectedCalendarClient(host, accountId, signal)
-    const revision = (await calendarConnection(host, accountId)).revision
-    let resets = 0
-
-    while (true) {
-      const pending: NonNullable<SyncState["pending"]> = state.pending!
-      const next = new Map(pending.mode === "incremental" ? Object.entries(state.fingerprints) : [])
-      const seenPages = new Set<string>()
-      let pageToken: string | undefined
-      let terminalToken: string | undefined
-      let pages = 0
-      let published = 0
-
-      const publish = async (
-        eventId: string,
-        event: Record<string, unknown>,
-        kind: "created" | "updated" | "deleted",
-        fingerprint: string
-      ) => {
-        checkAbort(signal)
-        const id = `feishu-calendar:${await digest([accountId, calendarId, pending.id, eventId, kind, fingerprint])}`
-        await host.integrations.publishEvent({
-          schemaVersion: 1,
-          id,
-          pluginId: "feishu-calendar",
-          integrationId: "feishu-calendar",
-          accountId,
-          deliveryId: id,
-          eventType: `calendar.event.${kind}`,
-          resource: { kind: "calendar", id: calendarId },
-          occurredAt: pending.startedAt,
-          receivedAt: pending.startedAt,
-          payload: {
-            calendarId,
-            threadKey: JSON.stringify([calendarId, eventId]),
-            event,
-            title: typeof event.summary === "string" ? event.summary : eventId,
-            change: kind,
-          },
-        })
-        published += 1
+    const storageKey = `calendar-sync:${JSON.stringify([accountId, calendarId])}`
+    const targetKey = `calendar:${await hash(JSON.stringify([accountId, calendarId]))}`
+    const connection = await calendarConnection(host, accountId)
+    checkAbort(signal)
+    let published = 0
+    let failure: unknown
+    const state = async (): Promise<SyncState> => {
+      const stored = await host.storage.get<StoredSyncState>(storageKey)
+      if (
+        stored &&
+        (![1, 2].includes(stored.version) ||
+          !stored.fingerprints ||
+          typeof stored.fingerprints !== "object")
+      )
+        throw new Error("Unsupported Feishu calendar sync checkpoint")
+      if (!stored) return { version: 2, fingerprints: {} }
+      // v1's pending generation was a cursor checkpoint, not a publication intent.
+      const legacyId =
+        stored.version === 1 && typeof stored.pending?.id === "string"
+          ? (stored.pending.id as string)
+          : undefined
+      return {
+        ...stored,
+        pending: legacyId ? undefined : (stored.pending as SyncState["pending"]),
+        ...(legacyId ? { restate: legacyId } : {}),
       }
-
-      try {
-        do {
-          checkAbort(signal)
-          if (++pages > 1000)
-            throw new Error("Feishu calendar sync exceeded the page limit; checkpoint retained")
-          const page = await client.listEvents(calendarId, {
+    }
+    // ctx.storage logs and swallows some browser write failures (quota), so a
+    // write-ahead entry or fingerprint counts only once it reads back.
+    const save = async (value: SyncState, abort: AbortSignal) => {
+      abort.throwIfAborted()
+      await host.storage.set(storageKey, value)
+      const stored = await host.storage.get<SyncState>(storageKey)
+      // Compare the JSON form: storage drops undefined fields.
+      if (canonical(stored) !== canonical(JSON.parse(JSON.stringify(value)))) {
+        throw Object.assign(new Error("Feishu calendar checkpoint could not be saved"), {
+          name: "CalendarCheckpointUnavailable",
+        })
+      }
+      abort.throwIfAborted()
+    }
+    const publish = async (
+      current: SyncState,
+      eventId: string,
+      event: Record<string, unknown>,
+      kind: "created" | "updated" | "deleted",
+      previousFingerprint: string | undefined,
+      fingerprint: string,
+      abort: AbortSignal
+    ) => {
+      abort.throwIfAborted()
+      const identity =
+        previousFingerprint === fingerprint && current.restate
+          ? [accountId, calendarId, eventId, "restated", current.restate, fingerprint]
+          : [accountId, calendarId, eventId, kind, previousFingerprint ?? ""]
+      if (kind !== "deleted" && identity[3] !== "restated") identity.push(fingerprint)
+      const id = `feishu-calendar:${await digest(identity)}`
+      const pending = { ...current.pending, [eventId]: { previous: previousFingerprint } }
+      // Write ahead without event content. Fingerprints stay at the last settled
+      // value until publication and its fingerprint can be settled in one write.
+      await save({ ...current, pending }, abort)
+      current.pending = pending
+      const timestamp = new Date().toISOString()
+      await host.integrations.publishEvent({
+        schemaVersion: 1,
+        id,
+        pluginId: "feishu-calendar",
+        integrationId: "feishu-calendar",
+        accountId,
+        deliveryId: id,
+        eventType: `calendar.event.${kind}`,
+        resource: { kind: "calendar", id: calendarId },
+        occurredAt: timestamp,
+        receivedAt: timestamp,
+        payload: {
+          calendarId,
+          threadKey: JSON.stringify([calendarId, eventId]),
+          event,
+          title: typeof event.summary === "string" ? event.summary : eventId,
+          change: kind,
+        },
+      })
+      abort.throwIfAborted()
+      published += 1
+    }
+    const persistFingerprint = async (
+      current: SyncState,
+      eventId: string,
+      fingerprint: string,
+      abort: AbortSignal
+    ) => {
+      const next = { ...current.fingerprints }
+      Object.defineProperty(next, eventId, {
+        value: fingerprint,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+      const pending = { ...current.pending }
+      delete pending[eventId]
+      await save({ ...current, fingerprints: next, pending }, abort)
+      current.fingerprints = next
+      current.pending = pending
+    }
+    const previousFingerprint = (current: SyncState, eventId: string) =>
+      Object.hasOwn(current.pending ?? {}, eventId)
+        ? current.pending![eventId].previous
+        : Object.hasOwn(current.fingerprints, eventId)
+          ? current.fingerprints[eventId]
+          : undefined
+    const settleDeletion = async (
+      current: SyncState,
+      eventId: string,
+      event: Record<string, unknown>,
+      abort: AbortSignal,
+      incremental = false
+    ) => {
+      const previous = previousFingerprint(current, eventId)
+      const pending = Object.hasOwn(current.pending ?? {}, eventId)
+      if (previous?.startsWith("deleted:") && !pending) return
+      const next = previous?.startsWith("deleted:")
+        ? previous
+        : `deleted:${previous ?? (await digest(event))}`
+      if (previous || incremental || pending)
+        await publish(current, eventId, event, "deleted", previous, next, abort)
+      await persistFingerprint(current, eventId, next, abort)
+    }
+    const driver = defineSyncDriver<Record<string, unknown>>({
+      itemId: (item) => {
+        if (typeof item.event_id !== "string" || !item.event_id)
+          throw new Error("Feishu sync event is missing event_id")
+        return item.event_id
+      },
+      async fetchPage({ mode, cursor, page, signal: abort }) {
+        // An accepted publication may have outlived its fingerprint write.
+        // Incremental pages cannot repair a transition that reverted or vanished.
+        const recovering = await state()
+        if (
+          mode === "incremental" &&
+          (Object.keys(recovering.pending ?? {}).length || recovering.restate)
+        )
+          syncCursorInvalid()
+        try {
+          const client = await connectedCalendarClient(host, accountId, abort)
+          const result = await client.listEvents(calendarId, {
             anchorTime: "0",
-            ...(pending.mode === "incremental" ? { syncToken: state.syncToken } : {}),
-            ...(pageToken ? { pageToken } : {}),
+            syncToken: mode === "incremental" ? cursor : undefined,
+            pageToken: page,
             pageSize: 500,
           })
-          checkAbort(signal)
-          for (const item of page.items) {
-            const event = item as Record<string, unknown>
-            const eventId = event.event_id
-            if (typeof eventId !== "string" || !eventId)
-              throw new Error("Feishu sync event is missing event_id")
-            const fingerprint = await digest(event)
-            const previous = Object.hasOwn(state.fingerprints, eventId)
-              ? state.fingerprints[eventId]
-              : undefined
-            if (event.status === "cancelled") {
-              const tombstone = `deleted:${fingerprint}`
-              next.set(eventId, tombstone)
-              if (previous !== tombstone && (previous || pending.mode === "incremental"))
-                await publish(eventId, event, "deleted", fingerprint)
-            } else {
-              if (previous !== fingerprint)
-                await publish(
-                  eventId,
-                  event,
-                  previous && !previous.startsWith("deleted:") ? "updated" : "created",
-                  fingerprint
-                )
-              next.set(eventId, fingerprint)
+          if (result.has_more && !result.page_token) throw new Error("Missing Feishu page token")
+          return {
+            items: result.items,
+            ...(result.has_more ? { nextPage: result.page_token } : { cursor: result.sync_token }),
+          }
+        } catch (error) {
+          failure = error
+          if (error instanceof FeishuApiError) {
+            if (error.code === 190008) syncCursorInvalid()
+            if (error.status === 429 || error.code === 99991400) {
+              const seconds = Number(error.retryAfter)
+              const date = Date.parse(error.retryAfter ?? "")
+              syncRateLimited(
+                Number.isFinite(seconds) && error.retryAfter
+                  ? seconds * 1000
+                  : Number.isFinite(date)
+                    ? Math.max(0, date - Date.now())
+                    : 30_000
+              )
             }
           }
-          if (page.has_more) {
-            if (!page.page_token || seenPages.has(page.page_token))
-              throw new Error("Missing or repeated Feishu page token")
-            seenPages.add(page.page_token)
-            pageToken = page.page_token
-          } else {
-            pageToken = undefined
-            terminalToken = page.sync_token
-          }
-        } while (pageToken)
-        if (!terminalToken)
-          throw new Error("Feishu calendar response is missing a terminal sync token")
-        if (pending.mode === "full") {
-          for (const [eventId, previous] of Object.entries(state.fingerprints)) {
-            if (!next.has(eventId)) {
-              next.set(eventId, previous.startsWith("deleted:") ? previous : `deleted:${previous}`)
-              if (!previous.startsWith("deleted:"))
-                await publish(
-                  eventId,
-                  { event_id: eventId, status: "cancelled" },
-                  "deleted",
-                  previous
-                )
-            }
-          }
+          throw error
         }
-        checkAbort(signal)
-        // Event publication can await local projections after the final page.
-        // Recheck the read grant through the Host before committing its cursor.
+      },
+      async applyPage({ items, deleted }, { mode, signal: abort }) {
+        const current = await state()
+        for (const event of items) {
+          const eventId = event.event_id as string
+          if (event.status === "cancelled") {
+            await settleDeletion(current, eventId, event, abort, mode === "incremental")
+            continue
+          }
+          const fingerprint = await digest(event)
+          const previous = previousFingerprint(current, eventId)
+          if (
+            previous === fingerprint &&
+            !Object.hasOwn(current.pending ?? {}, eventId) &&
+            !current.restate
+          )
+            continue
+          // Pending entries must republish even if the remote returned to the
+          // previous fingerprint: a different value may already have been accepted.
+          await publish(
+            current,
+            eventId,
+            event,
+            previous && !previous.startsWith("deleted:") ? "updated" : "created",
+            previous,
+            fingerprint,
+            abort
+          )
+          await persistFingerprint(current, eventId, fingerprint, abort)
+        }
+        for (const eventId of deleted) {
+          if (
+            Object.hasOwn(current.fingerprints, eventId) ||
+            Object.hasOwn(current.pending ?? {}, eventId)
+          )
+            await settleDeletion(
+              current,
+              eventId,
+              { event_id: eventId, status: "cancelled" },
+              abort
+            )
+        }
+      },
+      async listKnownIds() {
+        const current = await state()
+        const live = Object.entries(current.fingerprints)
+          .filter(([, fingerprint]) => !fingerprint.startsWith("deleted:"))
+          .map(([id]) => id)
+        return [...new Set([...live, ...Object.keys(current.pending ?? {})])]
+      },
+      async tombstone(ids, { signal: abort }) {
+        const current = await state()
+        for (const eventId of ids) {
+          await settleDeletion(current, eventId, { event_id: eventId, status: "cancelled" }, abort)
+        }
+      },
+      async complete({ signal: abort }) {
+        try {
+          const health = await host.integrations.checkAccountHealth(accountId)
+          if (health.health !== "healthy")
+            throw Object.assign(new Error("Calendar read access is unavailable"), {
+              name:
+                health.code === "consumer-grant-required"
+                  ? "ConsumerGrantRequired"
+                  : "CalendarConnectionUnavailable",
+            })
+          const latest = await calendarConnection(host, accountId)
+          if (latest.ref !== connection.ref || latest.revision !== connection.revision)
+            throw Object.assign(new Error("Calendar connection revision changed"), {
+              name: "ConnectionRevisionChanged",
+            })
+          abort.throwIfAborted()
+        } catch (error) {
+          failure = error
+          throw error
+        }
+      },
+    })
+    // One live registration per account/calendar. Re-registering retains the Host
+    // checkpoint, and permits polling to recover after a grant purge/reapproval.
+    registrations.get(targetKey)?.dispose()
+    registrations.set(
+      targetKey,
+      host.sync.register(targetKey, driver, { connectionRef: connection.ref })
+    )
+    const outcome = await host.sync.run(targetKey, { signal })
+    if (outcome.status !== "completed" || outcome.truncated) {
+      checkAbort(signal)
+      if (outcome.status === "cancelled" && !failure) {
+        // Not our caller: the Host ended the run (a revoked grant, a
+        // disconnect or a purge). Report why, so the account shows it.
         const health = await host.integrations.checkAccountHealth(accountId)
         if (health.health !== "healthy")
-          throw Object.assign(new Error("Calendar read access is unavailable"), {
+          failure = Object.assign(new Error("Calendar read access is unavailable"), {
             name:
               health.code === "consumer-grant-required"
                 ? "ConsumerGrantRequired"
                 : "CalendarConnectionUnavailable",
           })
-        const latest = await calendarConnection(host, accountId)
-        if (latest.revision !== revision)
-          throw Object.assign(new Error("Calendar connection revision changed"), {
-            name: "ConnectionRevisionChanged",
-          })
-        checkAbort(signal)
-        await host.storage.set<SyncState>(key, {
-          version: 1,
-          syncToken: terminalToken,
-          fingerprints: Object.fromEntries(next),
-        })
-        return { accountId, calendarId, mode: pending.mode, pages, published }
-      } catch (error) {
-        if (error instanceof FeishuApiError && error.code === 190008 && resets++ === 0) {
-          state = { ...state, syncToken: undefined, pending: { ...pending, mode: "full" } }
-          await host.storage.set(key, state)
-          continue
-        }
-        throw error
       }
+      const code = calendarAccessCode(failure)
+      if (code)
+        throw Object.assign(new Error(code), {
+          name: failure instanceof Error ? failure.name : "CalendarConnectionUnavailable",
+        })
+      if (outcome.errorCode === "terminal-cursor-missing")
+        throw new Error("Feishu calendar response is missing a terminal sync token")
+      if (outcome.errorCode === "page-cursor-repeated")
+        throw new Error("Missing or repeated Feishu page token")
+      throw new Error(
+        outcome.status === "cancelled"
+          ? "Feishu calendar synchronization cancelled"
+          : `Feishu calendar synchronization failed: ${outcome.errorCode ?? outcome.status}`
+      )
     }
+    const latest = await state()
+    await host.storage.set<SyncState>(storageKey, { version: 2, fingerprints: latest.fingerprints })
+    return { accountId, calendarId, mode: outcome.mode, pages: outcome.pages, published }
   }
 
   function syncCalendar(

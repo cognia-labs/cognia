@@ -29,6 +29,9 @@ class SyncProtocolError extends Error {
 class ExternalSyncTargetRemoved extends Error {}
 
 const activeRuns = new Map<string, Set<AbortController>>()
+export function isExternalSyncRunning(key: string): boolean {
+  return (activeRuns.get(key)?.size ?? 0) > 0
+}
 export function abortExternalSyncRuns(key: string): void {
   for (const controller of activeRuns.get(key) ?? []) controller.abort()
 }
@@ -74,6 +77,7 @@ export async function runExternalSync<Item>(
       : (row?.generation?.mode ?? (!row?.cursor || row.invalidated ? "full" : "incremental"))
   mode = selectMode(initial)
   if (options.signal?.aborted) return outcome("cancelled")
+  if (initial && !matchesTarget(initial)) return outcome("failed", "target-mismatch")
   if (
     (options.isOffline ?? (() => typeof navigator !== "undefined" && navigator.onLine === false))()
   ) {
@@ -157,6 +161,7 @@ export async function runExternalSync<Item>(
       : undefined
     try {
       const current = await db.externalSyncCursors.get(target.key)
+      check()
       if ((persisted && !current) || (current && !matchesTarget(current)))
         throw new ExternalSyncTargetRemoved()
       let row = current ?? { ...target, failures: 0 }
@@ -175,8 +180,9 @@ export async function runExternalSync<Item>(
           const next = generation
           await commit(async () => {
             if (previous) await deleteExternalSyncSeen(target.key, previous.id)
-            if (await db.externalSyncCursors.get(target.key))
-              await updateCursor({ generation: next })
+            const existing = await db.externalSyncCursors.get(target.key)
+            check()
+            if (existing) await updateCursor({ generation: next })
             else await db.externalSyncCursors.add({ ...row, generation: next })
           }, !persisted)
           persisted = true

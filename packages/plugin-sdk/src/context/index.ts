@@ -514,3 +514,4 @@ export type {
   BackupDestinationDeclaration,
   BackupDestinationRegistration,
 } from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"
+export type * from "@cognia/plugin-contract/types/plugin/plugin-sync"

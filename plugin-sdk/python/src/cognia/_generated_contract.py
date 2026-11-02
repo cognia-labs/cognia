@@ -59,6 +59,7 @@ VALID_PERMISSIONS = (
     "decisions:run",
     "decisions:provide",
     "docs:provide",
+    "sync:run",
     "backup:destination",
     "export:session",
     "export:project",
@@ -161,6 +162,7 @@ VALID_ERROR_CODES = (
 )
 
 VALID_CAPABILITIES = (
+    "sync",
     "tools",
     "components",
     "modes",
@@ -244,6 +246,7 @@ VALID_CAPABILITIES = (
 )
 
 CAPABILITY_FIELDS = {
+    "sync": [],
     "tools": [
         "tools",
     ],
@@ -466,6 +469,7 @@ CAPABILITY_FIELDS = {
 }
 
 CAPABILITY_SUPPORT = {
+    "sync": "supported",
     "tools": "supported",
     "components": "supported",
     "modes": "supported",
@@ -549,6 +553,7 @@ CAPABILITY_SUPPORT = {
 }
 
 CAPABILITY_INTRODUCED_VERSIONS = {
+    "sync": "0.1.0",
     "tools": "0.1.0",
     "components": "0.1.0",
     "modes": "0.1.0",
@@ -632,6 +637,7 @@ CAPABILITY_INTRODUCED_VERSIONS = {
 }
 
 CAPABILITY_MINIMUM_HOST_VERSIONS = {
+    "sync": "0.1.0",
     "tools": "0.1.0",
     "components": "0.1.0",
     "modes": "0.1.0",
@@ -4003,6 +4009,103 @@ PLUGIN_POINT_CONTRACTS = [
 ]
 
 API_NAMESPACE_CONTRACTS = [
+    {
+        "id": "sync",
+        "authorPath": "ctx.sync",
+        "type": "PluginSyncAPI",
+        "stability": "stable",
+        "introducedIn": "0.1.0",
+        "runtimes": [
+            "frontend",
+            "hybrid",
+        ],
+        "platforms": [
+            "desktop",
+            "web",
+            "mobile",
+        ],
+        "transport": "direct",
+        "factory": "context.sync",
+        "enforcement": "active",
+        "dataClassification": "sensitive",
+        "timeoutMs": None,
+        "retry": "never",
+        "errorPolicy": "preserve",
+        "lifecycle": "plugin",
+        "methods": [
+            {
+                "id": "sync.register",
+                "name": "register",
+                "requiredPermissions": [
+                    "sync:run",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "returned-handle",
+                    "disposeMethod": "dispose",
+                },
+            },
+            {
+                "id": "sync.run",
+                "name": "run",
+                "requiredPermissions": [
+                    "sync:run",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": True,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "sync.request",
+                "name": "request",
+                "requiredPermissions": [
+                    "sync:run",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "sync.status",
+                "name": "status",
+                "requiredPermissions": [
+                    "sync:run",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": True,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "sync.reset",
+                "name": "reset",
+                "requiredPermissions": [
+                    "sync:run",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+        ],
+    },
     {
         "id": "a2ui",
         "authorPath": "ctx.a2ui",

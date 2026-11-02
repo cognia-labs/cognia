@@ -36384,6 +36384,7 @@
         "share:read": "读取你创建的公开分享链接及其浏览统计",
         "shell:execute": "执行 Shell 命令",
         "subscription:read": "读取订阅套餐和用量指标",
+        "sync:run": "通过 Host 管理的游标执行外部同步",
         "team:read": "读取你的智能体团队、任务看板、运行事件和执行报告",
         "team:write": "在你的智能体团队看板上创建 / 编辑 / 指派任务、发表评论、移动卡片，并管理非队长队友和团队配置",
         "templates:contribute": "注册与生命周期绑定的模板包",

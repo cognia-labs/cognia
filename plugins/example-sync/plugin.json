@@ -1,0 +1,16 @@
+{
+  "id": "cognia-example-sync",
+  "name": "Example Sync",
+  "version": "1.0.0",
+  "description": "Author reference: page a fictional remote through Host-owned sync cursors.",
+  "type": "frontend",
+  "main": "src/index.ts",
+  "author": "Cognia",
+  "license": "MIT",
+  "engines": {
+    "cognia": ">=0.1.0"
+  },
+  "capabilities": ["sync"],
+  "permissions": ["sync:run"],
+  "icon": "assets/icon.png"
+}

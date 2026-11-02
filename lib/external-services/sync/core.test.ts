@@ -2,7 +2,7 @@
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { fenceConnectionSyncLeases } from "../sync-lease"
-import { runExternalSync } from "./core"
+import { isExternalSyncRunning, runExternalSync } from "./core"
 import {
   ExternalSyncCursorInvalid,
   ExternalSyncRateLimited,
@@ -22,6 +22,41 @@ const driver = (): ExternalSyncDriver<string> => ({
   applyPage: jest.fn(async () => {}),
 })
 const row = () => getDb().externalSyncCursors.get(target.key)
+
+it.each([1, 4])(
+  "does not create a first-ever row when cancelled during cursor read %s",
+  async (cancelOnRead) => {
+    const d = driver()
+    const controller = new AbortController()
+    const table = getDb().externalSyncCursors
+    const read = table.get.bind(table)
+    let reads = 0
+    jest.spyOn(table, "get").mockImplementation((criteria) =>
+      read(criteria).then((result) => {
+        if (++reads === cancelOnRead) controller.abort()
+        return result
+      })
+    )
+    expect(
+      await runExternalSync(target, d, { ...options, signal: controller.signal })
+    ).toMatchObject({ status: "cancelled" })
+    expect(await row()).toBeUndefined()
+    expect(d.fetchPage).not.toHaveBeenCalled()
+    expect(d.applyPage).not.toHaveBeenCalled()
+  }
+)
+
+it("reports only live runs, excluding retained failed generations", async () => {
+  const d = driver()
+  d.fetchPage = jest.fn(async () => {
+    expect(isExternalSyncRunning(target.key)).toBe(true)
+    throw new Error("remote unavailable")
+  })
+  expect(isExternalSyncRunning(target.key)).toBe(false)
+  expect((await runExternalSync(target, d, options)).status).toBe("failed")
+  expect((await row())?.generation).toBeDefined()
+  expect(isExternalSyncRunning(target.key)).toBe(false)
+})
 
 it("yields at a page budget and resumes a pending full generation in auto mode", async () => {
   await getDb().externalSyncCursors.put({ ...target, failures: 0, cursor: "old" })

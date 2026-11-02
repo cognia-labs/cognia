@@ -28,6 +28,8 @@ import manifest from "@/plugins/feishu-auth/plugin.json"
 import * as calendar from "@/plugins/feishu-calendar/src/index"
 import type { IntegrationActionHandler } from "@cognia/plugin-sdk/api/integration"
 import { createCalendarSync, type CalendarSyncHost } from "@/plugins/feishu-calendar/src/sync"
+import { createSyncAPI } from "@/lib/plugin/api/sync-api"
+import { createHash } from "node:crypto"
 import { requestCalendarAccess } from "@/plugins/feishu-calendar/src/connection"
 import {
   registerExternalServices,
@@ -640,9 +642,11 @@ it.each(["feishu-auth", "lark"] as const)(
       approvals.push(current.operations.map((operation) => operation.id))
       resolveConnectionPrompt(current.id, { kind: "approved" })
     })
+    const sync = createSyncAPI("feishu-calendar", { hasPermission: () => true })
     const host = {
       auth,
       integrations: api,
+      sync,
       storage: {
         get: async (key: string) =>
           values.has(key) ? structuredClone(values.get(key)) : undefined,
@@ -657,13 +661,24 @@ it.each(["feishu-auth", "lark"] as const)(
       const [account] = await api.listAccounts("feishu-calendar")
       expect(account.connectionId).toBeDefined()
       if (legacyAccountId) expect(account.id).toBe(legacyAccountId)
-      const sync = createCalendarSync(host)
-      await expect(sync.syncCalendar(account.id, "cal")).resolves.toMatchObject({ pages: 1 })
-      const checkpoint = [...values.values()][0]
-      expect(checkpoint).toMatchObject({ syncToken: "saved-cursor" })
+      const calendarSync = createCalendarSync(host)
+      // The Host owns the cursor now (ADR-0246 P8c); the plugin keeps only
+      // fingerprints and drops the v1 token after its first completed run.
+      const targetKey = `plugin:feishu-calendar/calendar:${createHash("sha256")
+        .update(JSON.stringify([account.id, "cal"]))
+        .digest("hex")}`
+      const hostCursor = async () => (await getDb().externalSyncCursors.get(targetKey))?.cursor
+      await expect(calendarSync.syncCalendar(account.id, "cal")).resolves.toMatchObject({
+        pages: 1,
+      })
+      expect(await hostCursor()).toBe("saved-cursor")
+      const checkpoint = [...values.values()][0] as Record<string, unknown>
+      expect(checkpoint).toMatchObject({ version: 2, fingerprints: {} })
+      expect(checkpoint.syncToken).toBeUndefined()
       const call = jest.mocked(proxyFetch).mock.calls[0]!
-      if (legacyAccountId)
-        expect(new URL(String(call[0])).searchParams.get("sync_token")).toBe("legacy-cursor")
+      // The legacy token is never seeded into the Host cursor: the first Host
+      // run is a full scan whose fingerprints republish nothing unchanged.
+      expect(new URL(String(call[0])).searchParams.get("sync_token")).toBeNull()
       expect(new URL(String(call[0])).origin).toBe(
         provider === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn"
       )
@@ -684,15 +699,18 @@ it.each(["feishu-auth", "lark"] as const)(
           { status: 200, headers: { "content-type": "application/json" } }
         )
       })
-      await expect(sync.syncCalendar(account.id, "cal")).rejects.toMatchObject({
+      await expect(calendarSync.syncCalendar(account.id, "cal")).rejects.toMatchObject({
         name: "ConsumerGrantRequired",
       })
       expect((await api.listAccounts("feishu-calendar"))[0].status?.code).toBe(
         "consumer-grant-required"
       )
-      expect([...values.values()][0]).toMatchObject({ syncToken: "saved-cursor" })
-      await expect(sync.syncCalendar(account.id, "cal")).rejects.toThrow()
-      expect([...values.values()][0]).toMatchObject({ syncToken: "saved-cursor" })
+      // Revocation queues the purge of this consumer's derived sync state
+      // (P3d teardown), so the row is either still at the last committed
+      // cursor or already gone; the page fetched before it never commits.
+      expect(["saved-cursor", undefined]).toContain(await hostCursor())
+      await expect(calendarSync.syncCalendar(account.id, "cal")).rejects.toThrow()
+      expect(["saved-cursor", undefined]).toContain(await hostCursor())
       expect(jest.mocked(proxyFetch)).toHaveBeenCalledTimes(count + 1)
       expect(approvals).toHaveLength(1)
     } finally {

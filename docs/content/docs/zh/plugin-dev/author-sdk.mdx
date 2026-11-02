@@ -190,3 +190,53 @@ frontend 和 hybrid 模块通过 `ctx.project` 调用。声明项目读写权限
 目录仅声明 desktop/web/mobile 的 frontend/hybrid 支持，不声明 Python、WASM 或 headless 支持。桌面 Node 的 activation-call replay 不提供异步宿主读取返回值；该场景使用沙箱 webview transport，不应依赖 replay 获取原文。
 
 权限级别 `forbid` 会拒绝访问，即使仍保存 manifest 授权。宿主 UI 撤销权限后，下一次调用及待完成读取返回前都会生效：宿主通过显式撤销记录统一现有权限存储。`hasPermission` 和 `getGrantedPermissions` 返回有效授权。重新授权需要宿主批准，插件保留的状态不能取消撤销。公共工作流调用不能借旧项目元数据或全文接口绕过绑定的文档范围，其项目范围读取也会被拒绝。
+
+## Host 管理的同步
+
+与公共 `ctx.docsProviders` 一样，`ctx.sync` 面向 frontend/hybrid 插件。
+声明 `sync:run` 权限，采用与 `docs:provide` 相同的 policy 授权层级。
+从 `@cognia/plugin-sdk` 导入 `defineSyncDriver`、
+`syncRateLimited(retryAfterMs)` 和 `syncCursorInvalid()`。
+
+```ts
+const registration = ctx.sync.register("items", defineSyncDriver({
+  itemId: (item: { id: string }) => item.id,
+  fetchPage: ({ mode, cursor, page, signal }) => fetchRemote({ mode, cursor, page, signal }),
+  applyPage: (page, { generation, signal }) => applyIdempotently(page, generation, signal),
+}), { connectionRef })
+await ctx.sync.run("items", { signal })
+ctx.sync.request("items", { reason: "poll" })
+const status = await ctx.sync.status("items") // 仅元数据，不返回游标
+await ctx.sync.reset("items") // 下次运行全量重建
+registration.dispose()
+```
+
+本地 key 长度为 1–128，只能包含 `[A-Za-z0-9._:-]`，Host 将其命名为
+`plugin:<pluginId>/<key>`。重复注册会报错；禁用或卸载会取消运行并移除注册。
+连接引用必须具备当前消费者授权，Host 绑定同步租约，并在断开连接或撤销授权时
+清理目标。通过 `register` 的第三个参数设置不可变的连接绑定；授权校验从注册时
+开始，完成前不会执行 driver，每次运行前还会重新校验。更换绑定需要先 dispose
+再注册。持久化目标的连接绑定不匹配时返回 `target-mismatch`。
+
+每页最多 1000 项，支持已删除项的字符串 ID、`nextPage` 和终页 `cursor`，
+令牌最多 16 KiB。Host 校验页面和回调；超时或迟到结果不会提交游标。
+同 realm 内取消双向传播。`applyPage` 必须在相同 generation 内幂等。
+可选的 `listKnownIds`/`tombstone` 用于全量对账：保留内容，将其来源标记为已移除。
+`complete` 在游标提交前做最终授权和 revision 检查。
+`fullScanOnly` 每轮全量扫描，但仍遵守退避。结果区分完成、离线延迟、退避、
+占用、取消和失败。错误辅助函数只携带安全标签，不应附加远端响应内容。
+
+**Node-target plugins（Node 目标插件）：**仅重放激活期的 `register`。
+复活的 driver 回调通过 `invokeCallback` 返回结果。仅剩 name/message 的错误
+按普通失败处理，使用有上限的退避，不推进游标。取消会停止 Host 运行并丢弃
+迟到结果，但不会传入子进程。激活结束后，不能从该 realm 调用
+`run`、`request`、`status`、`reset`，这与其他重放式 ctx API 一致。
+
+订阅续租仍由 scheduler 驱动，当前保持 **dormant（未启用）**：没有公共续租 API，
+也没有启用的续租 UI，测试固定这一惰性状态。飞书日历继续轮询，本阶段不创建
+push 订阅。Host key 为 `calendar:` 加上账户与日历元组 JSON 的 SHA-256 十六进制
+摘要。每次发布成功后立即保存该事件的 fingerprint。delivery ID 对账户、日历、
+事件、变更类型、前后 fingerprint 求摘要，不含 generation；即使发布后尚未写入
+fingerprint 就崩溃，重放仍由 broker 去重。A→B→A→B 中第二次 A→B 会复用首次
+转换的 ID，在 broker 保留期间可能抑制第二次通知；这是已接受的碰撞限制。
+完整作者示例见刻意不随应用打包的 `plugins/example-sync`。

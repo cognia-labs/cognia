@@ -427,3 +427,11 @@ describe("plugin-sdk root barrel", () => {
     expect(assertSdkTypes).toBeDefined()
   })
 })
+
+it("exports public sync drivers and safe error helpers from the SDK root", () => {
+  expect(typeof sdk.defineSyncDriver).toBe("function")
+  expect(() => sdk.syncCursorInvalid()).toThrow(
+    expect.objectContaining({ name: "ExternalSyncCursorInvalid" })
+  )
+  expect(() => sdk.syncRateLimited(5000)).toThrow(expect.objectContaining({ retryAfterMs: 5000 }))
+})

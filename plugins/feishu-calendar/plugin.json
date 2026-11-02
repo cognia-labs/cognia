@@ -30,8 +30,9 @@
       }
     ]
   },
-  "capabilities": ["integrations", "scheduler"],
+  "capabilities": ["integrations", "scheduler", "sync"],
   "permissions": [
+    "sync:run",
     "auth:consume",
     "integrations:read",
     "integrations:events",

@@ -37,3 +37,4 @@ export * from "./plugin-cogset"
 
 export * from "./plugin-docs-providers"
 export * from "./plugin-backup-destinations"
+export type * from "./plugin-sync"

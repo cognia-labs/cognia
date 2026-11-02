@@ -51,6 +51,7 @@ const DISTRIBUTION_FILE = join(
  * reviewed decision, not an accident. Keyed by `plugin.json` id.
  */
 const INTENTIONALLY_UNBUNDLED: Readonly<Record<string, string>> = Object.freeze({
+  "cognia-example-sync": "author reference plugin: public Host-owned sync, not bundled by default",
   "cognia-example-auth-provider": "author reference plugin, copy-paste template, not a default",
   "cognia-example-docs-provider": "author reference plugin, copy-paste template, not a default",
   "cognia-example-issue-sync": "author reference plugin, copy-paste template, not a default",

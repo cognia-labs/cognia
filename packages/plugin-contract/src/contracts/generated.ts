@@ -48,6 +48,7 @@ export const CANONICAL_PLUGIN_PERMISSION_IDS = [
   "decisions:run",
   "decisions:provide",
   "docs:provide",
+  "sync:run",
   "backup:destination",
   "export:session",
   "export:project",
@@ -150,6 +151,22 @@ export const CANONICAL_PLUGIN_ERROR_CODES = [
 ] as const
 export type CanonicalPluginErrorCode = (typeof CANONICAL_PLUGIN_ERROR_CODES)[number]
 export const PLUGIN_API_RESOURCE_EFFECTS = {
+  "ctx.sync.register": {
+    kind: "returned-handle",
+    disposeMethod: "dispose",
+  },
+  "ctx.sync.run": {
+    kind: "none",
+  },
+  "ctx.sync.request": {
+    kind: "none",
+  },
+  "ctx.sync.status": {
+    kind: "none",
+  },
+  "ctx.sync.reset": {
+    kind: "none",
+  },
   "ctx.a2ui.createSurface": {
     kind: "host-owned",
   },

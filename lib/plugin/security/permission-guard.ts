@@ -112,6 +112,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
   externalAgents: ["agent:external:read", "agent:external:manage"],
   agentConfig: ["agent-config:read", "agent-config:write"],
   decisions: ["decisions:run", "decisions:provide"],
+  sync: ["sync:run"],
   docsProviders: ["docs:provide"],
   team: ["team:read", "team:write"],
   connectors: ["connectors:read", "connectors:send", "connectors:manage"],
@@ -147,6 +148,7 @@ export const PERMISSION_GROUPS: Record<string, PluginPermission[]> = {
 }
 
 export const PERMISSION_DESCRIPTIONS: Record<PluginPermission, string> = {
+  "sync:run": "Run external synchronization through Host-owned cursors",
   "docs:provide": "Offer cloud document search and reading through Host connections",
   "backup:destination": "Offer an encrypted backup destination through Host connections",
   "filesystem:read": "Read files from the file system",

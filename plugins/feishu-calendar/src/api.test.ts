@@ -404,3 +404,17 @@ describe("FeishuCalendarClient", () => {
     await expect(client.getEvent("primary", "e1")).rejects.toThrow()
   })
 })
+
+it("preserves Retry-After on Feishu 99991400 envelopes", async () => {
+  const f = fixture()
+  f.request.mockResolvedValueOnce({
+    status: 200,
+    headers: { "retry-after": "60" },
+    data: { code: 99991400, msg: "private remote details" },
+  })
+  await expect(f.client.listEvents("cal")).rejects.toMatchObject({
+    name: "FeishuApiError",
+    code: 99991400,
+    retryAfter: "60",
+  })
+})

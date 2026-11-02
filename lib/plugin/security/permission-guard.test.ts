@@ -815,3 +815,14 @@ it("includes ciphertext destination contributions in the backup permission group
   expect(PERMISSION_GROUPS.backup).toContain("backup:destination")
   expect(PERMISSION_DESCRIPTIONS["backup:destination"]).toContain("encrypted backup destination")
 })
+
+it("describes, grants and revokes Host sync permission", () => {
+  const guard = createPermissionGuard()
+  expect(PERMISSION_GROUPS.sync).toEqual(["sync:run"])
+  expect(PERMISSION_DESCRIPTIONS["sync:run"]).toContain("Host")
+  expect(guard.check("sync-plugin", "sync:run")).toBe(false)
+  guard.registerPlugin("sync-plugin", ["sync:run"])
+  expect(guard.check("sync-plugin", "sync:run")).toBe(true)
+  guard.revoke("sync-plugin", "sync:run")
+  expect(guard.check("sync-plugin", "sync:run")).toBe(false)
+})

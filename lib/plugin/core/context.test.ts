@@ -469,8 +469,16 @@ describe("createPluginContext", () => {
     expect(context.pluginId).toBe("test-plugin")
   })
 
-  it("mounts the public docs provider namespace with permission enforcement", () => {
+  it("mounts the public docs provider and sync namespaces with permission enforcement", () => {
     const ctx = createFullPluginContext(createMockPlugin(), mockManager)
+    expect(typeof ctx.sync.register).toBe("function")
+    expect(() =>
+      ctx.sync.register("sample", {
+        itemId: String,
+        fetchPage: async () => ({ items: [], cursor: "cursor" }),
+        applyPage: async () => {},
+      })
+    ).toThrow(/sync.register.*permission/)
     expect(typeof ctx.docsProviders.register).toBe("function")
     expect(() =>
       ctx.docsProviders.register({

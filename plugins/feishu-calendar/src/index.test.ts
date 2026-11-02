@@ -1,3 +1,28 @@
+/** @jest-environment jsdom */
+/** @cognia-host-integration-test */
+import { createHash, webcrypto } from "node:crypto"
+Object.defineProperty(globalThis.crypto, "subtle", { configurable: true, value: webcrypto.subtle })
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { createSyncAPI, clearSyncForPlugin } from "@/lib/plugin/api/sync-api"
+jest.mock("@/lib/plugin/auth/connection-access", () => ({
+  connectionAccess: () => ({
+    connected: async (ref: string) => ({
+      id: ref,
+      status: "connected",
+      ownerPluginId: "feishu-calendar",
+    }),
+    checked: async (task: () => Promise<unknown>) => task(),
+  }),
+}))
+const database = createDbTestFixture({ seeded: false })
+beforeAll(database.initialize)
+beforeEach(async () => {
+  await database.restore()
+  await getDb().authConnections.put({ id: "ref", status: "connected" } as never)
+})
+afterEach(() => clearSyncForPlugin("feishu-calendar"))
+afterAll(database.dispose)
 import type {
   IntegrationActionHandlerContext,
   IntegrationProviderContext,
@@ -177,6 +202,7 @@ describe("Feishu Calendar plugin", () => {
     })
     const publishEvent = jest.fn()
     const context = {
+      sync: createSyncAPI("feishu-calendar", { hasPermission: () => true }),
       auth: {
         connections: {
           get: async () => ({
@@ -215,7 +241,16 @@ describe("Feishu Calendar plugin", () => {
       await expect(registerHandler.mock.calls[0][1]({}, { signal: task.signal })).rejects.toThrow()
       expect(request).toHaveBeenCalledTimes(1)
       expect(publishEvent).not.toHaveBeenCalled()
-      expect([...values.values()][0]).not.toHaveProperty("syncToken")
+      expect(values.size).toBe(0)
+      expect(
+        (
+          await getDb().externalSyncCursors.get(
+            `plugin:feishu-calendar/calendar:${createHash("sha256")
+              .update(JSON.stringify(["account", "cal"]))
+              .digest("hex")}`
+          )
+        )?.cursor
+      ).toBeUndefined()
     } finally {
       disposers.forEach((dispose) => dispose())
     }

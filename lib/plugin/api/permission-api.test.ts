@@ -80,6 +80,14 @@ describe("Permission API", () => {
     expect(api.hasPermission("docs:provide")).toBe(false)
   })
 
+  it("maps sync permission and honors revocation", () => {
+    initializePluginPermissions(testPluginId, ["sync:run"])
+    const api = createPermissionAPI(testPluginId, ["sync:run"])
+    expect(api.hasPermission("sync:run")).toBe(true)
+    revokePermission(testPluginId, "sync:run")
+    expect(api.hasPermission("sync:run")).toBe(false)
+  })
+
   describe("createPermissionAPI", () => {
     it("should create an API object with all expected methods", () => {
       const api = createPermissionAPI(testPluginId, [])
@@ -533,6 +541,7 @@ describe("Permission API", () => {
       "commands:read",
       "commands:write",
       "docs:provide",
+      "sync:run",
       "backup:destination",
     ] as const satisfies readonly PluginAPIPermission[]
 

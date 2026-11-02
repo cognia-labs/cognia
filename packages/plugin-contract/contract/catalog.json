@@ -61,6 +61,7 @@
     "decisions:run",
     "decisions:provide",
     "docs:provide",
+    "sync:run",
     "backup:destination",
     "export:session",
     "export:project",
@@ -151,6 +152,13 @@
     "hooks:chat-intercept"
   ],
   "capabilities": [
+    {
+      "id": "sync",
+      "support": "supported",
+      "manifestFields": [],
+      "introducedIn": "0.1.0",
+      "minimumHostVersion": "0.1.0"
+    },
     {
       "id": "tools",
       "support": "supported",
@@ -1540,6 +1548,86 @@
     "removalRequiresSdkMajor": true
   },
   "apiNamespaces": [
+    {
+      "id": "sync",
+      "authorPath": "ctx.sync",
+      "type": "PluginSyncAPI",
+      "stability": "stable",
+      "introducedIn": "0.1.0",
+      "runtimes": ["frontend", "hybrid"],
+      "platforms": ["desktop", "web", "mobile"],
+      "transport": "direct",
+      "factory": "context.sync",
+      "enforcement": "active",
+      "dataClassification": "sensitive",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "sync.register",
+          "name": "register",
+          "requiredPermissions": ["sync:run"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "returned-handle",
+            "disposeMethod": "dispose"
+          }
+        },
+        {
+          "id": "sync.run",
+          "name": "run",
+          "requiredPermissions": ["sync:run"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": true,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "sync.request",
+          "name": "request",
+          "requiredPermissions": ["sync:run"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "sync.status",
+          "name": "status",
+          "requiredPermissions": ["sync:run"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "sync.reset",
+          "name": "reset",
+          "requiredPermissions": ["sync:run"],
+          "consentTier": "policy",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        }
+      ]
+    },
     {
       "id": "a2ui",
       "authorPath": "ctx.a2ui",

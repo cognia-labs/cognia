@@ -63,6 +63,7 @@ import type { PluginVerificationSnapshot } from "./plugin-verification"
 import type { PluginOcrProviderDef } from "./plugin-ocr"
 import type { PluginDecisionProviderDef } from "./plugin-decisions"
 import type { PluginDocsProviderDef, PluginDocsProvidersAPI } from "./plugin-docs-providers"
+import type { PluginSyncAPI } from "./plugin-sync"
 import type { PluginWorkspaceBackendDef } from "./plugin-workspace-backend"
 import type { PluginLinkMatcherDef } from "./plugin-link-matcher"
 import type { PluginMessageRendererDef } from "./plugin-message-renderer"
@@ -166,6 +167,7 @@ export type PluginContributionBackend = "js" | "python"
  * Plugin capabilities - what the plugin can provide
  */
 export type PluginCapability =
+  | "sync"
   | "library" // Provides governed runtime RPC and consumer-owned JS modules
   | "tools" // Provides Agent tools
   | "native-anthropic-tool" // Wraps an Anthropic native tool (computer/bash/text_editor)
@@ -2709,6 +2711,7 @@ export interface PluginHostContextAPI {
   services: PluginServicesAPI
   ocr: import("../../lib/plugin/api/ocr-api").PluginOcrAPI
   decisions: import("../../lib/plugin/api/decisions-api").PluginDecisionsAPI
+  sync: PluginSyncAPI
   docsProviders: PluginDocsProvidersAPI
   prompts: import("../../lib/plugin/api/prompts-api").PluginPromptsAPI
   agentConfig: import("../../lib/plugin/api/agent-config-api").PluginAgentConfigAPI
@@ -5591,6 +5594,7 @@ export interface PluginExtensionAPI {
  * Plugin API permissions for extended features
  */
 export type PluginAPIPermission =
+  | "sync:run"
   | "docs:provide"
   | "backup:destination"
   | "shell:execute"

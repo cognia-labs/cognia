@@ -14,7 +14,23 @@ describe("plugin interface catalog", () => {
   it("indexes the canonical ctx method surface", () => {
     // A canary, not a fact worth memorising: any catalog edit lands here so
     // the method surface cannot grow or shrink without someone noticing.
-    expect(listPluginApiMethodContracts()).toHaveLength(945)
+    expect(listPluginApiMethodContracts()).toHaveLength(950)
+    for (const method of ["register", "run", "request", "status", "reset"]) {
+      expect(getPluginApiMethodContract(`sync.${method}`)).toMatchObject({
+        requiredPermissions: ["sync:run"],
+        consentTier: "policy",
+        namespace: {
+          enforcement: "active",
+          runtimes: ["frontend", "hybrid"],
+          platforms: ["desktop", "web", "mobile"],
+          lifecycle: "plugin",
+        },
+      })
+    }
+    expect(getPluginApiMethodContract("sync.register")).toMatchObject({
+      resourceEffect: { kind: "returned-handle", disposeMethod: "dispose" },
+    })
+    expect(getPluginApiMethodContract("sync.run")).toMatchObject({ cancellable: true })
     expect(getPluginApiMethodContract("backup.registerDestination")).toMatchObject({
       requiredPermissions: ["backup:destination"],
       consentTier: "policy",

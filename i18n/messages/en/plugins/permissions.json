@@ -52,6 +52,7 @@
     "debug:control": "Start, inspect, and control debug sessions",
     "decisions:provide": "Offer a decision provider you can pick in Settings",
     "decisions:run": "Ask your selected decision provider typed questions (the request is redacted, then sent to that provider)",
+    "sync:run": "Run external synchronization through Host-owned cursors",
     "docs:provide": "Offer cloud document search and reading through Host connections",
     "editor:read": "See what you are looking at in the project editor — the focused file, your selection, and its diagnostics",
     "editor:write": "Open files and reveal edits in the project editor",
