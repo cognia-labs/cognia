@@ -11,6 +11,7 @@ export function createGoogleDocsTestHost(initial: Partial<GoogleStateReply> = {}
     clients: [],
     pending: [],
     migrationNeedsClientId: false,
+    backupMigrationNeedsClientId: false,
     ...initial,
   }
   const calls: GoogleStateInput[] = []

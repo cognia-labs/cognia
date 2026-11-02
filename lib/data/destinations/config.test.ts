@@ -27,25 +27,30 @@ jest.mock("@/lib/plugin/auth/auth-provider-registry", () => ({
       : undefined,
 }))
 
+const driveAuthState = { bound: false, secret: false }
+jest.mock("./google-oauth", () => ({
+  resolveGoogleDriveConnection: async () => (driveAuthState.bound ? { id: "connection" } : null),
+}))
+jest.mock("@/lib/docs-providers/providers/google/state", () => ({
+  googleState: async () => ({
+    clients: [{ clientId: "cid", hasClientSecret: driveAuthState.secret }],
+  }),
+}))
+
 import {
   DEFAULT_GITHUB_BACKUP_PATH,
   DEFAULT_GOOGLE_DRIVE_FOLDER_NAME,
   __setBackupDestinationSecretStoreForTesting,
   clearGithubBackupToken,
-  clearGoogleDriveTokens,
   describeBackupDestinationReadiness,
   getBackupDestinationsSettings,
   getGithubBackupToken,
-  getGoogleDriveClientSecret,
   isDeprecatedBackupDestination,
-  loadGoogleDriveTokens,
   normalizeGithubPath,
   parseRepoFullName,
   resolveGithubBackupConfig,
   resolveGoogleDriveBackupConfig,
-  saveGoogleDriveTokens,
   setGithubBackupToken,
-  setGoogleDriveClientSecret,
   updateBackupDestinationsSettings,
 } from "./config"
 
@@ -67,6 +72,8 @@ let store: MemoryStore
 beforeEach(() => {
   store = new MemoryStore()
   __setBackupDestinationSecretStoreForTesting(store)
+  driveAuthState.bound = false
+  driveAuthState.secret = false
   settingsState.current = {}
   saveSettingsMock.mockClear()
   for (const key of Object.keys(providerSessions)) delete providerSessions[key]
@@ -214,33 +221,6 @@ describe("google drive config + secrets", () => {
       )
     ).toMatchObject({ folderId: "f" })
   })
-
-  it("stores the client secret and the token blob", async () => {
-    await expect(setGoogleDriveClientSecret("")).rejects.toThrow(/empty/)
-    await setGoogleDriveClientSecret("sec")
-    expect(await getGoogleDriveClientSecret()).toBe("sec")
-    expect(await loadGoogleDriveTokens()).toBeNull()
-    await saveGoogleDriveTokens({
-      accessToken: "a",
-      refreshToken: "r",
-      expiresAt: 5,
-      scope: "s",
-      tokenType: "Bearer",
-    })
-    expect(await loadGoogleDriveTokens()).toEqual({
-      accessToken: "a",
-      refreshToken: "r",
-      expiresAt: 5,
-      scope: "s",
-      tokenType: "Bearer",
-    })
-    await store.save("google-drive-tokens", "{bad")
-    expect(await loadGoogleDriveTokens()).toBeNull()
-    await store.save("google-drive-tokens", JSON.stringify({ accessToken: 1 }))
-    expect(await loadGoogleDriveTokens()).toBeNull()
-    await clearGoogleDriveTokens()
-    expect(await loadGoogleDriveTokens()).toBeNull()
-  })
 })
 
 describe("readiness matrix", () => {
@@ -270,7 +250,8 @@ describe("readiness matrix", () => {
         googleDrive: { enabled: true, clientId: "cid" },
       },
     }
-    await saveGoogleDriveTokens({ accessToken: "a", refreshToken: "r", expiresAt: 1 })
+    driveAuthState.bound = true
+    driveAuthState.secret = true
     await setGithubBackupToken("github-token")
     readiness = await describeBackupDestinationReadiness()
     expect(readiness.find((row) => row.destination === "github")?.state).toBe("ready")

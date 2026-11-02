@@ -17,22 +17,18 @@ jest.mock("@cognia/logging", () => {
   return { loggers: { export: stub }, createLogger: () => stub }
 })
 
-import { __setBackupDestinationSecretStoreForTesting, saveGoogleDriveTokens } from "./config"
-import { ensureGoogleDriveFolder, uploadSnapshotToGoogleDrive } from "./google-drive"
+import { ConnectionRevisionChanged } from "@/lib/plugin/auth/connection-manager"
+import {
+  ensureGoogleDriveFolder,
+  uploadSnapshotToGoogleDrive,
+  listGoogleDriveSnapshots,
+  downloadGoogleDriveSnapshot,
+} from "./google-drive"
+import { getGoogleDriveCredentialLease } from "./google-oauth"
 import type { BackupHttpFn, BackupHttpRequest } from "./http"
 
-class MemoryStore {
-  data = new Map<string, string>()
-  async save(k: string, v: string) {
-    this.data.set(k, v)
-  }
-  async load(k: string) {
-    return this.data.get(k) ?? null
-  }
-  async delete(k: string) {
-    this.data.delete(k)
-  }
-}
+jest.mock("./google-oauth", () => ({ getGoogleDriveCredentialLease: jest.fn() }))
+const assertCurrent = jest.fn(async () => undefined)
 
 const meta = { filename: "f", exportedAt: "2026-08-16T02:00:00.000Z", sizeBytes: 3 }
 const config = { clientId: "cid", folderName: "Cognia Backups" }
@@ -100,18 +96,13 @@ function makeDrive(state: DriveState = {}) {
 }
 
 beforeEach(async () => {
-  __setBackupDestinationSecretStoreForTesting(new MemoryStore())
+  jest.mocked(getGoogleDriveCredentialLease).mockResolvedValue({ accessToken: "at", assertCurrent })
+  assertCurrent.mockReset().mockResolvedValue(undefined)
   settingsState.current = {
     backupAutoSchedule: { enabled: false, intervalDays: 7, retainCount: 1 },
     backupDestinations: { googleDrive: { enabled: true, clientId: "cid" } },
   }
-  await saveGoogleDriveTokens({
-    accessToken: "at",
-    refreshToken: "rt",
-    expiresAt: Date.now() + 3_600_000,
-  })
 })
-afterAll(() => __setBackupDestinationSecretStoreForTesting(null))
 
 describe("ensureGoogleDriveFolder", () => {
   it("reuses a valid remembered folder id, else finds by name, else creates", async () => {
@@ -150,7 +141,6 @@ describe("uploadSnapshotToGoogleDrive", () => {
     await expect(
       uploadSnapshotToGoogleDrive("encrypted", meta, {
         config,
-        accessToken: "t",
         http,
         assertActive: () => {
           if (!current) throw new Error("owner changed")
@@ -167,7 +157,7 @@ describe("uploadSnapshotToGoogleDrive", () => {
     settingsState.current = {
       backupDestinations: { googleDrive: { enabled: true, clientId: "cid" } },
     }
-    __setBackupDestinationSecretStoreForTesting(new MemoryStore())
+    jest.mocked(getGoogleDriveCredentialLease).mockRejectedValueOnce(new Error("not bound"))
     expect(await uploadSnapshotToGoogleDrive("b", meta, { http: makeDrive().http })).toMatchObject({
       code: "not-connected",
     })
@@ -186,7 +176,6 @@ describe("uploadSnapshotToGoogleDrive", () => {
     const result = await uploadSnapshotToGoogleDrive("body", meta, {
       http: drive.http,
       config,
-      accessToken: "at",
       now: () => Date.UTC(2026, 7, 16, 2, 0, 5),
     })
     expect(result).toMatchObject({
@@ -213,7 +202,6 @@ describe("uploadSnapshotToGoogleDrive", () => {
     const result = await uploadSnapshotToGoogleDrive("body", meta, {
       http: drive.http,
       config,
-      accessToken: "at",
     })
     expect(result.ok).toBe(true)
     expect(
@@ -227,14 +215,12 @@ describe("uploadSnapshotToGoogleDrive", () => {
         return { status: 500, headers: {}, body: JSON.stringify({ error: { message: "boom" } }) }
       return makeDrive({ folderExists: true }).http(request)
     }
-    expect(
-      await uploadSnapshotToGoogleDrive("b", meta, { http: failing, config, accessToken: "at" })
-    ).toEqual({
+    expect(await uploadSnapshotToGoogleDrive("b", meta, { http: failing, config })).toEqual({
       ok: false,
       code: "http",
       error: "boom",
     })
-    await saveGoogleDriveTokens({ accessToken: "stale", refreshToken: "rt", expiresAt: 1 })
+    jest.mocked(getGoogleDriveCredentialLease).mockRejectedValueOnce(new Error("invalid_grant"))
     const refreshFails: BackupHttpFn = async () => ({
       status: 400,
       headers: {},
@@ -247,4 +233,67 @@ describe("uploadSnapshotToGoogleDrive", () => {
       code: "not-connected",
     })
   })
+})
+
+it("drops an upload whose connection revision moved during the request", async () => {
+  const stale = new ConnectionRevisionChanged("connection" as never, 1, 2)
+  const drive = makeDrive({ folderExists: true })
+  const http = jest.fn(async (request: BackupHttpRequest) => {
+    const response = await drive.http(request)
+    if (request.url.includes("/upload/")) assertCurrent.mockRejectedValue(stale)
+    return response
+  })
+  await expect(uploadSnapshotToGoogleDrive("ciphertext", meta, { http, config })).rejects.toBe(
+    stale
+  )
+  expect(http).toHaveBeenCalledTimes(2)
+  expect(http.mock.calls[1][0].method).toBe("POST")
+  expect(settingsState.current.backupDestinations?.googleDrive?.lastSyncAt).toBeUndefined()
+})
+it("lists and downloads ciphertext with the same Host credential lease", async () => {
+  const cfg = { ...config, folderId: "folder" }
+  const http = jest.fn<ReturnType<BackupHttpFn>, Parameters<BackupHttpFn>>(async (request) => {
+    const url = new URL(request.url)
+    if (url.searchParams.get("alt") === "media")
+      return { status: 200, headers: {}, body: "ciphertext" }
+    if (url.pathname.endsWith("/snapshot"))
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ name: "cognia-backup-one.enc.cbk", parents: ["folder"] }),
+      }
+    return {
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        files: [{ id: "snapshot", name: "cognia-backup-one.enc.cbk", size: "10" }],
+      }),
+    }
+  })
+  expect(await listGoogleDriveSnapshots({ http, config: cfg })).toEqual([
+    { remoteId: "snapshot", label: "cognia-backup-one.enc.cbk", bytes: 10 },
+  ])
+  expect(
+    new TextDecoder().decode(await downloadGoogleDriveSnapshot("snapshot", { http, config: cfg }))
+  ).toBe("ciphertext")
+  expect(getGoogleDriveCredentialLease).toHaveBeenCalledTimes(2)
+  for (const [request] of http.mock.calls) expect(request.headers?.Authorization).toBe("Bearer at")
+})
+it.each(["list", "download"])("drops a stale %s result", async (operation) => {
+  const stale = new ConnectionRevisionChanged("connection" as never, 1, 2)
+  const http: BackupHttpFn = async (request) => {
+    if (operation === "download" && !request.url.includes("alt=media"))
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ name: "cognia-backup-one.enc.cbk", parents: ["folder"] }),
+      }
+    assertCurrent.mockRejectedValue(stale)
+    return { status: 200, headers: {}, body: "{}" }
+  }
+  await expect(
+    operation === "list"
+      ? listGoogleDriveSnapshots({ http, config: { ...config, folderId: "folder" } })
+      : downloadGoogleDriveSnapshot("snapshot", { http, config: { ...config, folderId: "folder" } })
+  ).rejects.toBe(stale)
 })

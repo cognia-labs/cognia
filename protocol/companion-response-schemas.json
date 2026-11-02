@@ -22704,6 +22704,12 @@
         "migrationNeedsClientId": {
           "type": "boolean"
         },
+        "backupMigrationNeedsClientId": {
+          "type": "boolean"
+        },
+        "lineageId": {
+          "type": "string"
+        },
         "attempt": {
           "type": "object",
           "properties": {
@@ -22768,7 +22774,13 @@
           "additionalProperties": false
         }
       },
-      "required": ["lineages", "clients", "pending", "migrationNeedsClientId"],
+      "required": [
+        "lineages",
+        "clients",
+        "pending",
+        "migrationNeedsClientId",
+        "backupMigrationNeedsClientId"
+      ],
       "additionalProperties": false
     },
     "browser_recording_control": {

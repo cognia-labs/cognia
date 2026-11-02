@@ -5474,6 +5474,9 @@
                 },
                 "legacyClientId": {
                   "type": "string"
+                },
+                "legacyBackupClientId": {
+                  "type": "string"
                 }
               },
               "required": [

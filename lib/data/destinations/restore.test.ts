@@ -75,3 +75,31 @@ it("aborts a download on disposal and never decrypts a late result", async () =>
   await Promise.resolve()
   expect(restoreBackupCiphertext).not.toHaveBeenCalled()
 })
+
+jest.mock("./google-drive", () => ({
+  listGoogleDriveSnapshots: jest.fn(async () => [
+    { remoteId: "drive-snapshot", label: "Drive snapshot" },
+  ]),
+  downloadGoogleDriveSnapshot: jest.fn(async () => new TextEncoder().encode("drive-ciphertext")),
+}))
+import { downloadGoogleDriveSnapshot, listGoogleDriveSnapshots } from "./google-drive"
+
+it("routes built-in Drive listing and restore through the shared connection-checked destination", async () => {
+  // The public barrel installs the built-in descriptor, including list/download.
+  await import("./index")
+  expect(supportsBackupDestinationRestore("googledrive")).toBe(true)
+  expect(await listBackupDestinationSnapshots("googledrive")).toEqual([
+    { remoteId: "drive-snapshot", label: "Drive snapshot" },
+  ])
+  const options = { passphrase: "pass", mergeStrategy: "skip" as const }
+  await restoreFromBackupDestination("googledrive", "drive-snapshot", options)
+  expect(listGoogleDriveSnapshots).toHaveBeenCalledWith({ assertActive: expect.any(Function) })
+  expect(downloadGoogleDriveSnapshot).toHaveBeenCalledWith("drive-snapshot", {
+    assertActive: expect.any(Function),
+  })
+  expect(restoreBackupCiphertext).toHaveBeenCalledWith(
+    "drive-ciphertext",
+    options,
+    expect.any(Function)
+  )
+})

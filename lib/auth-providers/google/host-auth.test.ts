@@ -39,6 +39,7 @@ import {
   resolveGoogleConnection,
   authorizeGoogleConnection,
   startGoogleHostAuth,
+  createGoogleDeviceAuthorization,
 } from "./host-auth"
 
 jest.mock("@/lib/docs-providers/providers/google/state", () => ({
@@ -92,6 +93,7 @@ beforeEach(async () => {
     clients: [{ clientId: "desktop-client", hasClientSecret: true }],
     pending: [],
     migrationNeedsClientId: false,
+    backupMigrationNeedsClientId: false,
   }
   jest.mocked(googleState).mockImplementation(async (input) => {
     if (input.action === "accessToken")
@@ -345,6 +347,19 @@ it("reauthorizes through Begin with the native client, scopes, lineage and actua
   expect(getHostConnectionDriver("google")?.reauthorize).toBeDefined()
 })
 
+it("passes the backup client hint alongside the Docs client during reconciliation", async () => {
+  jest.mocked(getSettings).mockResolvedValue({
+    docsProviders: { google: { clientId: "desktop-client" } },
+    backupDestinations: { googleDrive: { enabled: true, clientId: " backup-client " } },
+  } as never)
+  await reconcileGoogleConnections()
+  expect(googleState).toHaveBeenCalledWith({
+    action: "snapshot",
+    legacyClientId: "desktop-client",
+    legacyBackupClientId: "backup-client",
+  })
+})
+
 it.each(["desktop", "headless"])(
   "reconciles on %s boot and native change signals and stops its subscription",
   async (host) => {
@@ -451,3 +466,74 @@ it("requires the business consumer grant at injection for auth.google and expose
   )
   expect(JSON.stringify(await api.list())).not.toMatch(/private-access|refreshToken|hostMetadata/)
 })
+
+it("reauthorizes device-code lineages through the Host driver without starting loopback", async () => {
+  snapshot.lineages[0].method = "device-code"
+  const [row] = await reconcileGoogleConnections()
+  const answer = jest.mocked(googleState).getMockImplementation()!
+  jest.mocked(googleState).mockImplementation(async (input) =>
+    input.action === "beginDevice"
+      ? {
+          ...snapshot,
+          attempt: {
+            attemptId: "device",
+            userCode: "ABCD",
+            verificationUrl: "https://google.com/device",
+            expiresAt: Date.now() + 60_000,
+            interval: 5,
+          },
+        }
+      : answer(input)
+  )
+  const authorization = await getHostConnectionDriver("google")!.reauthorize!(row.id, {})
+  expect(googleState).toHaveBeenCalledWith({
+    action: "beginDevice",
+    clientId: "desktop-client",
+    scopes: ["docs.read"],
+    reauthorizeLineage: "native-lineage",
+  })
+  expect(authorization).toMatchObject({ kind: "device-code", userCode: "ABCD", intervalSeconds: 5 })
+  await authorization!.cancel()
+  expect(googleState).toHaveBeenCalledWith({ action: "cancel", attemptId: "device" })
+  expect(connectorsEnsureServer).not.toHaveBeenCalled()
+  expect(openUrl).not.toHaveBeenCalled()
+})
+
+it("adapts device polls, applies slow_down and reconciles the exact authorized lineage before resolving", async () => {
+  const authorization = createGoogleDeviceAuthorization({
+    attemptId: "device",
+    userCode: "ABCD",
+    verificationUrl: "https://google.com/device",
+    expiresAt: Date.now() + 60_000,
+    interval: 5,
+  })
+  jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: "pending" })
+  expect(await authorization.poll()).toEqual({ status: "pending", intervalSeconds: 5 })
+  jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: "slow_down" })
+  expect(await authorization.poll()).toEqual({ status: "slow_down", intervalSeconds: 10 })
+  snapshot.lineages[0].revision = "reauthorized"
+  jest
+    .mocked(googleState)
+    .mockResolvedValueOnce({ ...snapshot, pollStatus: "connected", lineageId: "native-lineage" })
+  expect(await authorization.poll()).toEqual({ status: "authorized" })
+  expect(authorization.lineageId).toBe("native-lineage")
+  expect((await listAuthConnections("google"))[0].hostMetadata?.authorizationEpoch).toBe(
+    "reauthorized"
+  )
+  expect(googleState).toHaveBeenCalledWith({ action: "pollDevice", attemptId: "device" })
+})
+
+it.each(["denied", "expired"] as const)(
+  "passes through device poll %s without authorizing",
+  async (status) => {
+    const authorization = createGoogleDeviceAuthorization({
+      attemptId: "device",
+      userCode: "ABCD",
+      verificationUrl: "https://google.com/device",
+      expiresAt: Date.now() + 60_000,
+    })
+    jest.mocked(googleState).mockResolvedValueOnce({ ...snapshot, pollStatus: status })
+    expect(await authorization.poll()).toMatchObject({ status })
+    expect(authorization.lineageId).toBeUndefined()
+  }
+)

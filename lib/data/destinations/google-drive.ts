@@ -8,7 +8,7 @@
  *
  * Retention prunes timestamped copies down to `retainCount`. Every request
  * goes through the host-neutral HTTP helper; the access token comes from
- * `google-oauth.ts` (device flow + silent refresh).
+ * the bound Google Host connection. Rust owns refresh.
  */
 
 import { getSettings } from "@/lib/db/settings"
@@ -19,7 +19,12 @@ import {
   updateBackupDestinationsSettings,
   type ResolvedGoogleDriveBackupConfig,
 } from "./config"
-import { getGoogleDriveAccessToken, type GoogleOAuthDeps } from "./google-oauth"
+import { getGoogleDriveCredentialLease } from "./google-oauth"
+import {
+  ConnectionRevisionChanged,
+  ConnectionUnavailableError,
+} from "@/lib/plugin/auth/connection-manager"
+import type { BackupDestinationSnapshot } from "@cognia/plugin-contract/types/plugin/plugin-backup-destinations"
 import { backupHttpRequest, parseJsonBody, type BackupHttpFn } from "./http"
 import { webdavSnapshotName, type SnapshotMeta } from "./webdav"
 
@@ -37,17 +42,18 @@ export type GoogleDriveUploadResult =
   | { ok: true; remotePath: string; fileId: string }
   | { ok: false; error: string; code?: "not-configured" | "not-connected" | "http" }
 
-export interface GoogleDriveDestinationDeps extends GoogleOAuthDeps {
+export interface GoogleDriveDestinationDeps {
+  now?: () => number
   assertActive?: () => void
   http?: BackupHttpFn
   config?: ResolvedGoogleDriveBackupConfig
-  accessToken?: string
 }
 
 interface DriveFile {
   id: string
   name: string
   createdTime?: string
+  size?: string
 }
 
 function authHeaders(token: string): Record<string, string> {
@@ -76,22 +82,27 @@ async function listFiles(
 ): Promise<DriveFile[]> {
   const params = new URLSearchParams({
     q: query,
-    fields: "files(id,name,createdTime)",
+    fields: "nextPageToken,files(id,name,createdTime,size)",
     spaces: "drive",
     pageSize: "1000",
     ...extra,
   })
-  const response = await http({
-    url: `${DRIVE_API}/files?${params.toString()}`,
-    method: "GET",
-    headers: authHeaders(token),
-  })
-  if (response.status !== 200) {
-    const parsed = parseJsonBody<{ error?: { message?: string } }>(response.body)
-    throw new Error(parsed?.error?.message ?? `Google Drive returned HTTP ${response.status}`)
+  const files: DriveFile[] = []
+  for (;;) {
+    const response = await http({
+      url: `${DRIVE_API}/files?${params.toString()}`,
+      method: "GET",
+      headers: authHeaders(token),
+    })
+    if (response.status !== 200) {
+      const parsed = parseJsonBody<{ error?: { message?: string } }>(response.body)
+      throw new Error(parsed?.error?.message ?? `Google Drive returned HTTP ${response.status}`)
+    }
+    const parsed = parseJsonBody<{ files?: DriveFile[]; nextPageToken?: string }>(response.body)
+    if (Array.isArray(parsed?.files)) files.push(...parsed.files)
+    if (!parsed?.nextPageToken) return files
+    params.set("pageToken", parsed.nextPageToken)
   }
-  const parsed = parseJsonBody<{ files?: DriveFile[] }>(response.body)
-  return Array.isArray(parsed?.files) ? parsed!.files! : []
 }
 
 /** Find (or create) the backup folder; returns its id and persists it. */
@@ -225,11 +236,13 @@ async function pruneSnapshots(http: BackupHttpFn, token: string, folderId: strin
           method: "DELETE",
           headers: authHeaders(token),
         })
-      } catch {
+      } catch (error) {
+        rethrowConnectionError(error)
         // Best-effort; a failed prune doesn't fail the upload.
       }
     }
-  } catch {
+  } catch (error) {
+    rethrowConnectionError(error)
     // Listing failed — non-fatal, the snapshot is already uploaded.
   }
 }
@@ -242,27 +255,22 @@ export async function uploadSnapshotToGoogleDrive(
 ): Promise<GoogleDriveUploadResult> {
   const assertActive = deps.assertActive ?? (() => undefined)
   assertActive()
-  const http: BackupHttpFn = async (request) => {
-    assertActive()
-    const response = await (deps.http ?? backupHttpRequest)(request)
-    assertActive()
-    return response
-  }
   const settings = await getBackupDestinationsSettings()
   const config = deps.config ?? resolveGoogleDriveBackupConfig(settings.googleDrive)
   if (!config)
     return { ok: false, code: "not-configured", error: "Google Drive backup is not configured." }
-  let token: string | null
+  let context: Awaited<ReturnType<typeof driveContext>>
   try {
-    token = deps.accessToken ?? (await getGoogleDriveAccessToken({ http, now: deps.now }))
-  } catch (err) {
+    context = await driveContext(deps)
+  } catch (error) {
+    if (error instanceof ConnectionRevisionChanged) throw error
     return {
       ok: false,
       code: "not-connected",
-      error: err instanceof Error ? err.message : String(err),
+      error: error instanceof Error ? error.message : String(error),
     }
   }
-  if (!token) return { ok: false, code: "not-connected", error: "Google Drive is not connected." }
+  const { http, token, assertCurrent } = context
 
   try {
     const folderId = await ensureGoogleDriveFolder(config, token, http, assertActive)
@@ -278,6 +286,7 @@ export async function uploadSnapshotToGoogleDrive(
     else await createFile(http, token, folderId, LATEST_POINTER, envelopeJson)
 
     await pruneSnapshots(http, token, folderId)
+    await assertCurrent()
     const stamp = new Date(deps.now?.() ?? Date.now()).toISOString()
     await updateBackupDestinationsSettings(
       (current) => ({
@@ -289,11 +298,117 @@ export async function uploadSnapshotToGoogleDrive(
       assertActive
     ).catch(() => undefined)
     assertActive()
+    await assertCurrent()
     return { ok: true, fileId, remotePath: `${config.folderName}/${snapshotName}` }
   } catch (err) {
     assertActive()
+    rethrowConnectionError(err)
     const error = err instanceof Error ? err.message : String(err)
     log.error("google_drive_upload_failed", undefined, { error })
     return { ok: false, code: "http", error }
   }
+}
+
+function rethrowConnectionError(error: unknown): void {
+  if (error instanceof ConnectionRevisionChanged || error instanceof ConnectionUnavailableError)
+    throw error
+}
+
+/** Every request, including retention/list/download, carries the same connection revision. */
+async function driveContext(deps: GoogleDriveDestinationDeps) {
+  const lease = await getGoogleDriveCredentialLease()
+  const http: BackupHttpFn = async (request) => {
+    deps.assertActive?.()
+    await lease.assertCurrent()
+    try {
+      return await (deps.http ?? backupHttpRequest)(request)
+    } finally {
+      deps.assertActive?.()
+      await lease.assertCurrent()
+    }
+  }
+  return { http, token: lease.accessToken, assertCurrent: lease.assertCurrent }
+}
+
+async function readFolder(
+  config: ResolvedGoogleDriveBackupConfig,
+  http: BackupHttpFn,
+  token: string
+) {
+  if (config.folderId) return config.folderId
+  return (
+    await listFiles(
+      http,
+      token,
+      `name = '${escapeQuery(config.folderName)}' and mimeType = '${FOLDER_MIME}' and trashed = false and 'root' in parents`
+    )
+  )[0]?.id
+}
+
+export async function listGoogleDriveSnapshots(
+  deps: GoogleDriveDestinationDeps = {}
+): Promise<BackupDestinationSnapshot[]> {
+  const cfg =
+    deps.config ??
+    resolveGoogleDriveBackupConfig((await getBackupDestinationsSettings()).googleDrive, {
+      requireEnabled: false,
+    })
+  if (!cfg) throw new ConnectionUnavailableError("backup-not-configured")
+  const { http, token, assertCurrent } = await driveContext(deps)
+  const folder = await readFolder(cfg, http, token)
+  if (!folder) return []
+  const files = await listFiles(
+    http,
+    token,
+    `'${escapeQuery(folder)}' in parents and trashed = false and name contains 'cognia-backup-'`,
+    { orderBy: "name desc" }
+  )
+  await assertCurrent()
+  return files
+    .filter((file) => SNAPSHOT_RE.test(file.name))
+    .map((file) => ({
+      remoteId: file.id,
+      label: file.name,
+      createdAt: file.createdTime,
+      ...(file.size !== undefined ? { bytes: Number(file.size) } : {}),
+    }))
+}
+
+export async function downloadGoogleDriveSnapshot(
+  remoteId: string,
+  deps: GoogleDriveDestinationDeps = {}
+): Promise<Uint8Array> {
+  const cfg =
+    deps.config ??
+    resolveGoogleDriveBackupConfig((await getBackupDestinationsSettings()).googleDrive, {
+      requireEnabled: false,
+    })
+  if (!cfg) throw new ConnectionUnavailableError("backup-not-configured")
+  const { http, token, assertCurrent } = await driveContext(deps)
+  const folder = await readFolder(cfg, http, token)
+  const metadata = await http({
+    url: `${DRIVE_API}/files/${encodeURIComponent(remoteId)}?fields=name,parents,trashed`,
+    method: "GET",
+    headers: authHeaders(token),
+  })
+  const file = parseJsonBody<{ name?: string; parents?: string[]; trashed?: boolean }>(
+    metadata.body
+  )
+  if (
+    !folder ||
+    metadata.status !== 200 ||
+    file?.trashed ||
+    !file?.parents?.includes(folder) ||
+    !file.name ||
+    !(SNAPSHOT_RE.test(file.name) || file.name === LATEST_POINTER)
+  )
+    throw new Error("Google Drive backup snapshot is unavailable")
+  const response = await http({
+    url: `${DRIVE_API}/files/${encodeURIComponent(remoteId)}?alt=media`,
+    method: "GET",
+    headers: authHeaders(token),
+  })
+  if (response.status !== 200) throw new Error(`Google Drive returned HTTP ${response.status}`)
+  await assertCurrent()
+  return new TextEncoder().encode(response.body)
 }

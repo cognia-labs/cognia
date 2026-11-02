@@ -84,6 +84,8 @@ ruma = { version = "0.17.0", features = ["client-api-c", "events", "rand"] }
 
 [dev-dependencies]
 cognia-secrets = { path = "../cognia-secrets", features = ["test-inmemory"] }
+# Mock-server suites share one loopback host, so they reset its request budget.
+cognia-net = { path = "../cognia-net", features = ["test-support"] }
 # Router unit tests drive the axum app through tower::ServiceExt.
 tower = { workspace = true, features = ["util", "limit", "timeout"] }
 # HTTP mock server for http_client / attachments / media_upload tests.

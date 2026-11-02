@@ -1,166 +1,295 @@
 /** @jest-environment jsdom */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-
-const settingsState: { current: Record<string, unknown> } = { current: {} }
-const updateMock = jest.fn(async (patch: unknown) => {
-  const next =
-    typeof patch === "function" ? (patch as (c: unknown) => unknown)(settingsState.current) : patch
-  settingsState.current = next as Record<string, unknown>
-  return next
-})
-const secretState = { secret: null as string | null }
-const setSecretMock = jest.fn(async (s: string) => {
-  secretState.secret = s.trim()
-})
-const clearTokensMock = jest.fn(async () => undefined)
-jest.mock("@/lib/data/destinations/config", () => ({
-  ...jest.requireActual("@/lib/data/destinations/config"),
-  getBackupDestinationsSettings: async () => settingsState.current,
-  updateBackupDestinationsSettings: (patch: unknown) => updateMock(patch),
-  getGoogleDriveClientSecret: async () => secretState.secret,
-  setGoogleDriveClientSecret: (s: string) => setSecretMock(s),
-  clearGoogleDriveTokens: () => clearTokensMock(),
-}))
-const beginMock = jest.fn()
-const completeMock = jest.fn()
-jest.mock("@/lib/data/destinations/google-oauth", () => ({
-  beginGoogleDeviceAuth: () => beginMock(),
-  completeGoogleDeviceAuth: (...a: unknown[]) => completeMock(...a),
-}))
-const syncMock = jest.fn()
-jest.mock("@/lib/data/destinations/sync-now", () => ({
-  runRemoteBackupSyncNow: (...a: unknown[]) => syncMock(...a),
-}))
-const passphraseState = { unlocked: true }
-jest.mock("@/lib/webdav/passphrase-cache", () => ({
-  hasSyncPassphrase: () => passphraseState.unlocked,
-  loadPersistedSyncPassphrase: async () => passphraseState.unlocked,
-}))
-jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
-
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getSettings, saveSettings } from "@/lib/db/settings"
+import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
+import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
+import { __setGoogleStatePortForTests } from "@/lib/docs-providers/providers/google/state"
+import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
+import {
+  bindGoogleDriveConnection,
+  resolveGoogleDriveConnection,
+  GOOGLE_DRIVE_SCOPE,
+} from "@/lib/data/destinations/google-oauth"
+import "@/lib/data/destinations/builtins"
+import { listBackupDestinations } from "@/lib/data/destinations/registry"
 import { toast } from "sonner"
+import { runRemoteBackupSyncNow } from "@/lib/data/destinations/sync-now"
 import { GoogleDriveBackupCard } from "./google-drive-backup-card"
 
-const challenge = {
-  deviceCode: "dc",
-  userCode: "ABCD-EFGH",
-  verificationUrl: "https://www.google.com/device",
-  intervalSeconds: 5,
-  expiresAt: Date.now() + 100_000,
-}
-
-beforeEach(() => {
-  settingsState.current = {}
-  secretState.secret = null
-  passphraseState.unlocked = true
+jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
+jest.mock("@/lib/data/destinations/sync-now", () => ({ runRemoteBackupSyncNow: jest.fn() }))
+jest.mock("@/lib/webdav/passphrase-cache", () => ({
+  hasSyncPassphrase: () => true,
+  loadPersistedSyncPassphrase: async () => true,
+}))
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+afterAll(fixture.dispose)
+let host: ReturnType<typeof createGoogleDocsTestHost>
+beforeEach(async () => {
+  await fixture.restore()
+  __resetAuthRegistryForTesting()
   jest.clearAllMocks()
+  await saveSettings({ backupDestinations: { googleDrive: { enabled: true, clientId: "backup" } } })
+  host = createGoogleDocsTestHost({ clients: [{ clientId: "backup", hasClientSecret: true }] })
+  __setGoogleStatePortForTests(host.call)
+})
+afterEach(async () => {
+  cleanup()
+  jest.useRealTimers()
+  // Drain native reconciliation before replacing its port or disposing Dexie.
+  await listGoogleConnections()
+  __setGoogleStatePortForTests(null)
 })
 
-describe("GoogleDriveBackupCard", () => {
-  it("requires a client id to save and stores the secret in the keyring", async () => {
-    render(<GoogleDriveBackupCard />)
-    await waitFor(() => expect(screen.getByTestId("google-drive-save")).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId("google-drive-save"))
-    expect(toast.error).toHaveBeenCalled()
-    fireEvent.change(screen.getByTestId("google-drive-client-id"), { target: { value: " cid " } })
-    fireEvent.change(screen.getByTestId("google-drive-client-secret"), { target: { value: "sec" } })
-    fireEvent.change(screen.getByTestId("google-drive-folder"), { target: { value: "" } })
-    fireEvent.click(screen.getByTestId("google-drive-save"))
-    await waitFor(() => expect(updateMock).toHaveBeenCalled())
-    expect(setSecretMock).toHaveBeenCalledWith("sec")
-    expect(settingsState.current).toMatchObject({
-      googleDrive: { clientId: "cid", folderName: "Cognia Backups" },
+function addAccount(status: "connected" | "needs-reauth" = "connected") {
+  host.snapshot.lineages = [
+    {
+      id: "native",
+      clientId: "backup",
+      method: "device-code",
+      scopes: ["openid", "email", GOOGLE_DRIVE_SCOPE],
+      sub: "sub",
+      email: "ada@example.test",
+      status,
+      revision: "r1",
+      credentialRevision: "c1",
+      needsIdentity: false,
+    },
+  ]
+}
+async function begin() {
+  fireEvent.click(screen.getByRole("button", { name: "Connect Google Drive" }))
+  await waitFor(() => expect(screen.getByText("ABCD")).toBeVisible())
+  expect(screen.getByRole("link", { name: "https://google.com/device" })).toHaveAttribute(
+    "href",
+    "https://google.com/device"
+  )
+}
+async function tick(ms: number) {
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(ms)
+  })
+}
+
+it("writes the secret to Rust without reading it back and clears the input", async () => {
+  render(<GoogleDriveBackupCard />)
+  const input = await screen.findByRole("textbox", { name: "OAuth client ID" })
+  await waitFor(() => expect(input).toHaveValue("backup"))
+  const secret = screen.getByLabelText("OAuth client secret")
+  expect(secret).toHaveValue("")
+  fireEvent.change(secret, { target: { value: "private-secret" } })
+  fireEvent.click(screen.getByRole("button", { name: "Save" }))
+  await waitFor(() =>
+    expect(host.calls).toContainEqual({
+      action: "setClientSecret",
+      clientId: "backup",
+      secret: "private-secret",
     })
+  )
+  await waitFor(() => expect(secret).toHaveValue(""))
+  await waitFor(() =>
+    expect(toast.success).toHaveBeenCalledWith("Google Drive backup settings saved")
+  )
+  expect(JSON.stringify(await getSettings())).not.toContain("private-secret")
+})
+it("displays the device code, honors pending and slow_down intervals, then binds the reported lineage", async () => {
+  render(<GoogleDriveBackupCard />)
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeEnabled()
+  )
+  jest.useFakeTimers({ doNotFake: ["queueMicrotask"] })
+  let polls = 0
+  host.handle = async (input) => {
+    if (input.action !== "pollDevice") return undefined
+    polls++
+    if (polls === 1) return { ...host.snapshot, pollStatus: "pending" }
+    if (polls === 2) return { ...host.snapshot, pollStatus: "slow_down" }
+    addAccount()
+    return { ...host.snapshot, pollStatus: "connected", lineageId: "native" }
+  }
+  await begin()
+  expect(host.calls).toContainEqual({
+    action: "beginDevice",
+    clientId: "backup",
+    scopes: ["openid", "email", GOOGLE_DRIVE_SCOPE],
   })
-
-  it("connect is disabled until client id + secret exist, then runs the device flow", async () => {
-    settingsState.current = { googleDrive: { enabled: true, clientId: "cid" } }
-    secretState.secret = "sec"
-    beginMock.mockResolvedValue(challenge)
-    let resolveComplete: (v: unknown) => void = () => undefined
-    completeMock.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveComplete = resolve
-        })
-    )
+  await tick(4999)
+  expect(polls).toBe(0)
+  await tick(1)
+  expect(polls).toBe(1)
+  await tick(5000)
+  expect(polls).toBe(2)
+  await tick(9999)
+  expect(polls).toBe(2)
+  await tick(1)
+  expect(polls).toBe(3)
+  jest.useRealTimers()
+  await listGoogleConnections()
+  await screen.findByText("Connected as ada@example.test", {}, { timeout: 5000 })
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeTruthy()
+})
+it.each(["denied", "expired"] as const)(
+  "reports terminal device authorization %s",
+  async (pollStatus) => {
     render(<GoogleDriveBackupCard />)
-    await waitFor(() => expect(screen.getByTestId("google-drive-connect")).not.toBeDisabled())
-    fireEvent.click(screen.getByTestId("google-drive-connect"))
-    await waitFor(() => expect(screen.getByTestId("google-drive-device-code")).toBeInTheDocument())
-    expect(screen.getByText("ABCD-EFGH")).toBeInTheDocument()
-    settingsState.current = {
-      googleDrive: { enabled: true, clientId: "cid", accountEmail: "me@x" },
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeEnabled()
+    )
+    jest.useFakeTimers({ doNotFake: ["queueMicrotask"] })
+    host.handle = async (input) =>
+      input.action === "pollDevice" ? { ...host.snapshot, pollStatus } : undefined
+    await begin()
+    await tick(5000)
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      pollStatus === "denied" ? "Authorization was denied" : "The device code expired — try again"
+    )
+    expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeUndefined()
+  }
+)
+it.each(["cancel", "unmount"])("cancels the Rust attempt on %s", async (action) => {
+  const view = render(<GoogleDriveBackupCard />)
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeEnabled()
+  )
+  jest.useFakeTimers({ doNotFake: ["queueMicrotask"] })
+  await begin()
+  if (action === "unmount") view.unmount()
+  else fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await tick(10_000)
+  expect(host.calls).toContainEqual({ action: "cancel", attemptId: "google:fixture-1" })
+  expect(host.calls.some((input) => input.action === "pollDevice")).toBe(false)
+})
+it("shows the connected account and disconnects through the driver before clearing the binding", async () => {
+  addAccount()
+  render(<GoogleDriveBackupCard />)
+  await screen.findByText("Connected as ada@example.test")
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }))
+  await waitFor(() =>
+    expect(host.calls).toContainEqual({ action: "disconnect", lineageId: "native" })
+  )
+  await waitFor(async () =>
+    expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
+  )
+  expect(host.snapshot.lineages[0].status).toBe("disconnected")
+})
+it("re-authorizes a device-code lineage through the Host driver", async () => {
+  addAccount()
+  render(<GoogleDriveBackupCard />)
+  await screen.findByText("Connected as ada@example.test")
+  jest.useFakeTimers({ doNotFake: ["queueMicrotask"] })
+  fireEvent.click(screen.getByRole("button", { name: "Re-authorize" }))
+  await waitFor(() => expect(screen.getByText("ABCD")).toBeVisible())
+  expect(host.calls).toContainEqual({
+    action: "beginDevice",
+    clientId: "backup",
+    scopes: ["openid", "email", GOOGLE_DRIVE_SCOPE],
+    reauthorizeLineage: "native",
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await tick(1)
+})
+it("syncs the connected destination through the Host backup pipeline", async () => {
+  addAccount()
+  jest.mocked(runRemoteBackupSyncNow).mockResolvedValue({ ok: true } as never)
+  render(<GoogleDriveBackupCard />)
+  await waitFor(() => expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled())
+  fireEvent.click(screen.getByRole("button", { name: "Sync now" }))
+  await waitFor(() =>
+    expect(runRemoteBackupSyncNow).toHaveBeenCalledWith("googledrive", "", expect.any(Object))
+  )
+})
+
+it("requires a stored secret for the selected client before connecting", async () => {
+  host.snapshot.clients = [{ clientId: "another-client", hasClientSecret: true }]
+  render(<GoogleDriveBackupCard />)
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "OAuth client ID" })).toHaveValue("backup")
+  )
+  expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeDisabled()
+  expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
+})
+it("cancels a challenge that arrives after the card has unmounted", async () => {
+  let release!: () => void
+  let pending = false
+  host.handle = async (input) => {
+    if (input.action === "beginDevice") {
+      pending = true
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
     }
-    resolveComplete({ status: "authorized", tokens: { accessToken: "a", expiresAt: 1 } })
-    await waitFor(() =>
-      expect(screen.getByTestId("google-drive-connected-badge")).toBeInTheDocument()
-    )
-    expect(toast.success).toHaveBeenCalled()
-    // Disconnect clears the tokens.
-    fireEvent.click(screen.getByTestId("google-drive-disconnect"))
-    await waitFor(() => expect(clearTokensMock).toHaveBeenCalled())
-  })
+    return undefined
+  }
+  const view = render(<GoogleDriveBackupCard />)
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeEnabled()
+  )
+  fireEvent.click(screen.getByRole("button", { name: "Connect Google Drive" }))
+  await waitFor(() => expect(pending).toBe(true))
+  view.unmount()
+  release()
+  await waitFor(() =>
+    expect(host.calls).toContainEqual({ action: "cancel", attemptId: "google:fixture-1" })
+  )
+})
 
-  it("reports denied / expired / error outcomes and lets the user cancel", async () => {
-    settingsState.current = { googleDrive: { enabled: true, clientId: "cid" } }
-    secretState.secret = "sec"
-    beginMock.mockResolvedValue(challenge)
-    render(<GoogleDriveBackupCard />)
-    await waitFor(() => expect(screen.getByTestId("google-drive-connect")).not.toBeDisabled())
-    for (const outcome of [
-      { status: "denied" },
-      { status: "expired" },
-      { status: "error", error: "x" },
-    ]) {
-      completeMock.mockResolvedValueOnce(outcome)
-      fireEvent.click(screen.getByTestId("google-drive-connect"))
-      await waitFor(() => expect(completeMock).toHaveBeenCalled())
-      await waitFor(() => expect(toast.error).toHaveBeenCalled())
-      jest.mocked(toast.error).mockClear()
-    }
-    beginMock.mockRejectedValueOnce(new Error("no client"))
-    fireEvent.click(screen.getByTestId("google-drive-connect"))
-    await waitFor(() => expect(toast.error).toHaveBeenCalled())
-
-    // Cancel aborts the in-flight poll loop through the signal.
-    let signalSeen: AbortSignal | undefined
-    completeMock.mockImplementation((_c: unknown, deps: { signal?: AbortSignal }) => {
-      signalSeen = deps.signal
-      return new Promise((resolve) =>
-        deps.signal?.addEventListener("abort", () => resolve({ status: "denied" }))
-      )
-    })
-    fireEvent.click(screen.getByTestId("google-drive-connect"))
-    await waitFor(() =>
-      expect(screen.getByTestId("google-drive-cancel-connect")).toBeInTheDocument()
-    )
-    fireEvent.click(screen.getByTestId("google-drive-cancel-connect"))
-    await waitFor(() => expect(signalSeen?.aborted).toBe(true))
+it("disconnects account A without rebinding B, needs auth, then explicitly binds the polled lineage", async () => {
+  addAccount()
+  host.snapshot.lineages.push({
+    ...host.snapshot.lineages[0],
+    id: "other",
+    sub: "other",
+    email: "bob@example.test",
   })
-
-  it("syncs only when enabled + connected + unlocked", async () => {
-    settingsState.current = { googleDrive: { enabled: true, clientId: "cid", connected: true } }
-    render(<GoogleDriveBackupCard />)
-    await waitFor(() => expect(screen.getByTestId("google-drive-sync")).not.toBeDisabled())
-    syncMock.mockResolvedValueOnce({ ok: true })
-    fireEvent.click(screen.getByTestId("google-drive-sync"))
-    await waitFor(() =>
-      expect(syncMock).toHaveBeenCalledWith("googledrive", "", expect.any(Object))
-    )
-    syncMock.mockResolvedValueOnce({ ok: false, error: "quota" })
-    fireEvent.click(screen.getByTestId("google-drive-sync"))
-    await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    passphraseState.unlocked = false
+  await bindGoogleDriveConnection("native")
+  render(<GoogleDriveBackupCard />)
+  await screen.findByText("Connected as ada@example.test")
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }))
+  await waitFor(async () =>
+    expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
+  )
+  expect(await resolveGoogleDriveConnection()).toBeNull()
+  const destination = listBackupDestinations().find((value) => value.id === "googledrive")!
+  expect(await destination.readiness(new AbortController().signal)).toEqual({
+    state: "needs-auth",
+    reasonKey: "googledrive",
   })
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Connect Google Drive" })).toBeEnabled()
+  )
+  jest.useFakeTimers({ doNotFake: ["queueMicrotask"] })
+  host.handle = async (input) => {
+    if (input.action !== "pollDevice") return undefined
+    host.snapshot.lineages[0].status = "connected"
+    host.snapshot.lineages[0].revision = "reauthorized"
+    return { ...host.snapshot, pollStatus: "connected", lineageId: "native" }
+  }
+  await begin()
+  await tick(5000)
+  jest.useRealTimers()
+  await listGoogleConnections()
+  await screen.findByText("Connected as ada@example.test", {}, { timeout: 5000 })
+  expect((await resolveGoogleDriveConnection())?.hostMetadata?.adapterId).toBe("native")
+  expect(await destination.readiness(new AbortController().signal)).toEqual({ state: "ready" })
+})
 
-  it("blocks sync while the passphrase is locked", async () => {
-    passphraseState.unlocked = false
-    settingsState.current = { googleDrive: { enabled: true, clientId: "cid", connected: true } }
-    render(<GoogleDriveBackupCard />)
-    await waitFor(() => expect(screen.getByTestId("google-drive-sync")).not.toBeDisabled())
-    fireEvent.click(screen.getByTestId("google-drive-sync"))
-    expect(syncMock).not.toHaveBeenCalled()
-    expect(toast.error).toHaveBeenCalled()
+it("preserves explicit unbinding when saving a different backup client", async () => {
+  await saveSettings({
+    backupDestinations: { googleDrive: { enabled: true, clientId: "backup", connectionId: null } },
   })
+  addAccount()
+  host.snapshot.lineages[0].clientId = "other-client"
+  render(<GoogleDriveBackupCard />)
+  const input = await screen.findByRole("textbox", { name: "OAuth client ID" })
+  await waitFor(() => expect(input).toHaveValue("backup"))
+  fireEvent.change(input, { target: { value: "other-client" } })
+  fireEvent.click(screen.getByRole("button", { name: "Save" }))
+  await waitFor(() =>
+    expect(toast.success).toHaveBeenCalledWith("Google Drive backup settings saved")
+  )
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
+  expect(await resolveGoogleDriveConnection()).toBeNull()
 })

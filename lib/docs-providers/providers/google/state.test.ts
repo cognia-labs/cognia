@@ -15,6 +15,7 @@ const reply: GoogleStateReply = {
   clients: [],
   pending: [],
   migrationNeedsClientId: false,
+  backupMigrationNeedsClientId: false,
 }
 beforeEach(() => {
   jest.clearAllMocks()
@@ -89,4 +90,11 @@ it("notifies local observers after mutations, including failed cleanup, but neve
   } finally {
     off()
   }
+})
+
+it("forwards the backup migration hint through the selected Host transport", async () => {
+  await googleState({ action: "snapshot", legacyBackupClientId: "backup" })
+  expect(call).toHaveBeenCalledWith("connectors_google_docs_auth", {
+    input: { action: "snapshot", legacyBackupClientId: "backup" },
+  })
 })

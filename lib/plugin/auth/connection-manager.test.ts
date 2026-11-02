@@ -14,6 +14,8 @@ import {
   AuthRefreshRejected,
   forgetProfileAuthSecrets,
   registerHostConnectionDriver,
+  getHostConnectionDriver,
+  type HostDeviceAuthorization,
 } from "./connection-manager"
 import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credentials"
 import { authConnectionIdentityKey, type AuthConnectionRow } from "@/lib/db/auth-connections"
@@ -33,6 +35,36 @@ import {
 } from "@/lib/db/integrations"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
+
+it("hands a vendor-neutral device authorization from a Host driver to its caller", async () => {
+  const authorization: HostDeviceAuthorization = {
+    kind: "device-code",
+    userCode: "ABCD",
+    verificationUrl: "https://issuer.test/device",
+    expiresAt: Date.now() + 60_000,
+    intervalSeconds: 5,
+    poll: async () => ({ status: "pending", intervalSeconds: 5 }),
+    cancel: jest.fn(async () => {}),
+  }
+  const dispose = registerHostConnectionDriver("device-contract-test", {
+    publisher: "cognia",
+    getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
+    disconnect: async () => {},
+    reauthorize: async () => authorization,
+  })
+  try {
+    const result = await getHostConnectionDriver("device-contract-test")!.reauthorize!(
+      "ref" as AuthConnectionRow["id"],
+      {}
+    )
+    expect(result).toBe(authorization)
+    expect(await result!.poll()).toEqual({ status: "pending", intervalSeconds: 5 })
+    await result!.cancel()
+    expect(authorization.cancel).toHaveBeenCalledTimes(1)
+  } finally {
+    dispose()
+  }
+})
 
 const old: AuthCredentialSet = {
   accessToken: "old",

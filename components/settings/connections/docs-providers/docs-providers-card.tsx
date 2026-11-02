@@ -24,11 +24,12 @@
  */
 
 import { useDocsProvidersRevision } from "@/hooks/chat/use-docs-providers"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { toast } from "sonner"
 import { CloudIcon, ExternalLinkIcon } from "lucide-react"
+import { DeviceAuthorizationDialog } from "@/components/plugins/auth/device-authorization-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -60,10 +61,11 @@ import {
   subscribeGoogleStateChanged,
   type GoogleStateReply,
 } from "@/lib/docs-providers/providers/google/state"
+import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
 import {
-  listGoogleConnections,
-  authorizeGoogleConnection,
-} from "@/lib/auth-providers/google/host-auth"
+  getHostConnectionDriver,
+  type HostDeviceAuthorization,
+} from "@/lib/plugin/auth/connection-manager"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 
 export function DocsProvidersCard() {
@@ -218,8 +220,16 @@ function GoogleDocsRow() {
   const [snapshot, setSnapshot] = useState<GoogleStateReply | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
+  const [authorization, setAuthorization] = useState<HostDeviceAuthorization | null>(null)
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [operation, setOperation] = useState<GoogleOperation | null>(null)
-  const busy = operation !== null
+  const busy = operation !== null || authorization !== null
   const inert = !reach.available
   const refresh = useCallback(() => setReloadVersion((version) => version + 1), [])
   const hasClientSecret = Boolean(
@@ -401,7 +411,16 @@ function GoogleDocsRow() {
                     onClick={() =>
                       void run(
                         { action: "reauthorize", connectionId: connection.id },
-                        () => authorizeGoogleConnection(connection.id),
+                        async () => {
+                          const result = await getHostConnectionDriver("google")?.reauthorize?.(
+                            connection.id,
+                            {}
+                          )
+                          if (result) {
+                            if (mounted.current) setAuthorization(result)
+                            else await result.cancel()
+                          }
+                        },
                         "connectFailed"
                       )
                     }
@@ -426,6 +445,15 @@ function GoogleDocsRow() {
         <p role="status" className="text-muted-foreground text-xs">
           {t("settings.disconnecting")}
         </p>
+      )}
+      {authorization && (
+        <DeviceAuthorizationDialog
+          authorization={authorization}
+          onClose={() => {
+            setAuthorization(null)
+            refresh()
+          }}
+        />
       )}
       <FieldGroup className="gap-2">
         <Field orientation="horizontal" data-disabled={inert || busy}>

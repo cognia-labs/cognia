@@ -18,8 +18,10 @@ import {
   getConnectionManager,
   getHostConnectionDriver,
   registerHostConnectionDriver,
+  type HostDeviceAuthorization,
 } from "@/lib/plugin/auth/connection-manager"
 import {
+  type GoogleAuthAttempt,
   googleState,
   subscribeGoogleStateChanged,
 } from "@/lib/docs-providers/providers/google/state"
@@ -30,6 +32,48 @@ import { openUrl } from "@/lib/native/opener"
 
 export const GOOGLE_ISSUER = "https://accounts.google.com"
 const GOOGLE_RECONCILE_LOCK = "cognia-auth-provider:google:reconcile"
+export interface GoogleDeviceAuthorization extends HostDeviceAuthorization {
+  /** The exact native lineage reported by a successful poll, after reconciliation. */
+  lineageId?: string
+}
+
+/** Adapt Host metadata for the shared dialog; OAuth credentials remain in Rust. */
+export function createGoogleDeviceAuthorization(
+  attempt: GoogleAuthAttempt
+): GoogleDeviceAuthorization {
+  if (!attempt.userCode || !attempt.verificationUrl)
+    throw new ConnectionUnavailableError("device-challenge-missing")
+  let intervalSeconds = Math.max(1, attempt.interval ?? 5)
+  let cancelled = false
+  const authorization: GoogleDeviceAuthorization = {
+    kind: "device-code",
+    userCode: attempt.userCode,
+    verificationUrl: attempt.verificationUrl,
+    expiresAt: attempt.expiresAt,
+    intervalSeconds,
+    async poll() {
+      const reply = await googleState({ action: "pollDevice", attemptId: attempt.attemptId })
+      if (cancelled) return { status: "expired" }
+      if (reply.pollStatus === "connected") {
+        if (!reply.lineageId) throw new ConnectionUnavailableError("authorized-lineage-missing")
+        await reconcileGoogleConnections()
+        if (cancelled) return { status: "expired" }
+        authorization.lineageId = reply.lineageId
+        return { status: "authorized" }
+      }
+      if (reply.pollStatus === "slow_down") intervalSeconds += 5
+      if (!reply.pollStatus) throw new ConnectionUnavailableError("device-poll-status-missing")
+      return { status: reply.pollStatus, intervalSeconds }
+    },
+    async cancel() {
+      if (cancelled) return
+      cancelled = true
+      await googleState({ action: "cancel", attemptId: attempt.attemptId })
+    },
+  }
+  return authorization
+}
+
 let disposeRegistration: (() => void) | undefined
 let reconciliation: Promise<unknown> = Promise.resolve()
 
@@ -120,8 +164,10 @@ export function reconcileGoogleConnections(): Promise<AuthConnectionRow[]> {
 async function publishGoogleSnapshot(): Promise<AuthConnectionRow[]> {
   const preferences = await getSettings()
   const legacyClientId = preferences.docsProviders?.google?.clientId?.trim()
+  const legacyBackupClientId = preferences.backupDestinations?.googleDrive?.clientId?.trim()
   const snapshot = await googleState({
     action: "snapshot",
+    ...(legacyBackupClientId ? { legacyBackupClientId } : {}),
     ...(legacyClientId ? { legacyClientId } : {}),
   })
   const manager = getConnectionManager()
@@ -173,7 +219,9 @@ export async function resolveGoogleConnection(
 }
 
 /** A Host reconnect binds to the same native lineage and client, including rejected grants. */
-export async function authorizeGoogleConnection(ref: string): Promise<void> {
+export async function authorizeGoogleConnection(
+  ref: string
+): Promise<void | GoogleDeviceAuthorization> {
   ensureGoogleHostProvider()
   await reconcileGoogleConnections()
   const row = await getAuthConnection(ref)
@@ -184,6 +232,17 @@ export async function authorizeGoogleConnection(ref: string): Promise<void> {
   if (!lineage) throw new ConnectionUnavailableError("unknown-lineage")
   if (lineage.revision !== row.hostMetadata!.authorizationEpoch)
     throw new ConnectionRevisionChanged(row.id, row.revision)
+  if (lineage.method === "device-code") {
+    const reply = await googleState({
+      action: "beginDevice",
+      clientId: lineage.clientId,
+      scopes: lineage.scopes,
+      reauthorizeLineage: nativeId,
+    })
+    if (!reply.attempt?.userCode || !reply.attempt.verificationUrl)
+      throw new ConnectionUnavailableError("device-challenge-missing")
+    return createGoogleDeviceAuthorization(reply.attempt)
+  }
   const bound = await connectorsEnsureServer(CONNECTORS_SERVER_PORT)
   const reply = await googleState({
     action: "begin",

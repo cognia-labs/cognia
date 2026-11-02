@@ -42682,6 +42682,8 @@ paths:
                           const: snapshot
                         legacyClientId:
                           type: string
+                        legacyBackupClientId:
+                          type: string
                       required:
                         - action
                       additionalProperties: false
@@ -42898,6 +42900,10 @@ paths:
                       additionalProperties: false
                   migrationNeedsClientId:
                     type: boolean
+                  backupMigrationNeedsClientId:
+                    type: boolean
+                  lineageId:
+                    type: string
                   attempt:
                     type: object
                     properties:
@@ -42959,6 +42965,7 @@ paths:
                   - clients
                   - pending
                   - migrationNeedsClientId
+                  - backupMigrationNeedsClientId
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.

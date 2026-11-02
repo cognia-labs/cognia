@@ -1,10 +1,11 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
-import { act, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import en from "@/i18n/messages/en/settings/externalServices.json"
 import zh from "@/i18n/messages/zh-CN/settings/externalServices.json"
+import auth from "@/i18n/messages/en/plugins/auth.json"
 import { listAuthConnections } from "@/lib/db/auth-connections"
 import { listCapabilityGrants, listServiceConnections } from "@/lib/db/external-services"
 import { listPlugins } from "@/lib/db/plugins"
@@ -72,7 +73,10 @@ const row: AuthConnectionRow = {
 }
 function mount() {
   return render(
-    <NextIntlClientProvider locale="en" messages={{ settings: { externalServices: en } }}>
+    <NextIntlClientProvider
+      locale="en"
+      messages={{ settings: { externalServices: en }, plugins: { auth } }}
+    >
       <ConnectionsPanel />
     </NextIntlClientProvider>
   )
@@ -220,3 +224,50 @@ it.each(["lark", "google"])(
     }
   }
 )
+
+it("opens the shared device dialog for a Host reconnect and polls that authorization", async () => {
+  const authorization = {
+    kind: "device-code" as const,
+    userCode: "PANEL-CODE",
+    verificationUrl: "https://vendor.test/device",
+    expiresAt: Date.now() + 60_000,
+    intervalSeconds: 5,
+    poll: jest.fn(async () => ({ status: "pending" as const })),
+    cancel: jest.fn(async () => {}),
+  }
+  const reauthorize = jest.fn(async () => authorization)
+  const dispose = registerHostConnectionDriver("device-vendor", {
+    publisher: "cognia",
+    getCredentials: async () => ({ accessToken: "unused", scopes: [] }),
+    disconnect: async () => {},
+    reauthorize,
+  })
+  jest
+    .mocked(listAuthConnections)
+    .mockResolvedValue([{ ...row, providerId: "device-vendor", ownerPluginId: null }])
+  jest
+    .mocked(listProviders)
+    .mockReturnValue([{ id: "device-vendor", label: "Device vendor", pluginId: null }] as never)
+  const view = mount()
+  try {
+    await screen.findByText("Person")
+    jest.useFakeTimers()
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }))
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByRole("dialog", { name: auth.deviceTitle })).toBeVisible()
+    expect(screen.getByText("PANEL-CODE")).toBeVisible()
+    expect(reauthorize).toHaveBeenCalledWith("host", { ingressBase: "https://relay.example" })
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5000)
+    })
+    expect(authorization.poll).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole("button", { name: auth.deviceCancel }))
+    expect(authorization.cancel).toHaveBeenCalledTimes(1)
+  } finally {
+    view.unmount()
+    jest.useRealTimers()
+    dispose()
+  }
+})

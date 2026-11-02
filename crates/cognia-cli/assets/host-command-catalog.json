@@ -19086,6 +19086,9 @@
                   },
                   "legacyClientId": {
                     "type": "string"
+                  },
+                  "legacyBackupClientId": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -19411,6 +19414,12 @@
           "migrationNeedsClientId": {
             "type": "boolean"
           },
+          "backupMigrationNeedsClientId": {
+            "type": "boolean"
+          },
+          "lineageId": {
+            "type": "string"
+          },
           "attempt": {
             "type": "object",
             "properties": {
@@ -19495,7 +19504,8 @@
           "lineages",
           "clients",
           "pending",
-          "migrationNeedsClientId"
+          "migrationNeedsClientId",
+          "backupMigrationNeedsClientId"
         ],
         "additionalProperties": false
       },
@@ -110576,5 +110586,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "ade39a67209a7c7b81d724e0eb7ef3a9cf3042da8f11aac976b1da4fbbd4ee34"
+  "catalogHash": "060c449803de4ef69c5b9328687ecc8498aafa6b3cd5c7149495f8e55203db2f"
 }

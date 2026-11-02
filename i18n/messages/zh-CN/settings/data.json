@@ -444,6 +444,13 @@
     "verifyFailed": "仓库校验失败"
   },
   "googleDriveBackup": {
+    "reauthorize": "重新授权",
+    "loadFailed": "无法加载 Google Drive 连接",
+    "saveFailed": "无法保存 Google Drive 设置",
+    "disconnectFailed": "无法断开 Google Drive 连接",
+    "clientIdPlaceholder": "xxxx.apps.googleusercontent.com",
+    "clientSecretPlaceholder": "GOCSPX-…",
+    "migrationNeedsClientId": "请保存原备份客户端 ID，以迁移已有登录。",
     "cancelConnect": "取消",
     "clientHelp": "在 Google Cloud Console（API 和服务 → 凭据）创建一个“桌面应用”类型的 OAuth 客户端并启用 Drive API。密钥和令牌保存在宿主密钥环中。",
     "clientIdLabel": "OAuth 客户端 ID",

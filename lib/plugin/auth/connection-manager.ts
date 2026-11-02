@@ -44,13 +44,31 @@ export { AuthRefreshRejected }
 export const AUTH_REFRESH_TIMEOUT_MS = 30_000
 export const AUTH_REVOKE_TIMEOUT_MS = 30_000
 
+/** RFC 8628 device authorization a Host driver hands to any UI; metadata only. */
+export interface HostDeviceAuthorization {
+  kind: "device-code"
+  userCode: string
+  verificationUrl: string
+  expiresAt: number // epoch ms
+  intervalSeconds: number
+  /** One poll. The driver applies slow_down to the interval it returns. */
+  poll(): Promise<{
+    status: "pending" | "slow_down" | "authorized" | "denied" | "expired"
+    intervalSeconds?: number
+  }>
+  cancel(): Promise<void>
+}
+
 /** Built-in controllers keep their own CAS/keyring authority; never copy their tokens. */
 export interface HostConnectionDriver {
   publisher: string
   synchronize?(row: AuthConnectionRow): Promise<void>
   getCredentials(row: AuthConnectionRow): Promise<AuthCredentialSet>
   disconnect(row: AuthConnectionRow): Promise<void>
-  reauthorize?(ref: AuthConnectionRef, options: { ingressBase?: string | null }): Promise<void>
+  reauthorize?(
+    ref: AuthConnectionRef,
+    options: { ingressBase?: string | null }
+  ): Promise<void | HostDeviceAuthorization>
 }
 const hostDrivers = new Map<string, HostConnectionDriver>()
 export function registerHostConnectionDriver(

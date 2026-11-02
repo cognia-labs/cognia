@@ -1,13 +1,14 @@
-/** Built-ins retain their upload/encryption formats and credential owners (Drive auth is P6). */
+/** Built-ins retain their upload/encryption formats and credential owners. */
 import { registerBackupDestination, readBackupDestinationBody } from "./registry"
 import { uploadSnapshotToWebDav } from "./webdav"
 import {
   getBackupDestinationsSettings,
   getGithubBackupToken,
-  loadGoogleDriveTokens,
   resolveGithubBackupConfig,
   resolveGoogleDriveBackupConfig,
 } from "./config"
+import { googleState } from "@/lib/docs-providers/providers/google/state"
+import { resolveGoogleDriveConnection } from "./google-oauth"
 import { saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
 import { resolveWebDavConfig } from "@/lib/webdav/config"
@@ -40,12 +41,32 @@ function descriptor(
           ? { state: "ready" }
           : { state: "needs-auth", reasonKey: "github" }
       }
-      if (!resolveGoogleDriveBackupConfig(settings.googleDrive))
+      const config = resolveGoogleDriveBackupConfig(settings.googleDrive, { requireEnabled: false })
+      if (!config) return { state: "needs-setup", reasonKey: "googledrive" }
+      const connection = await resolveGoogleDriveConnection()
+      const snapshot = await googleState({ action: "snapshot" })
+      if (
+        !snapshot.clients.some(
+          (client) => client.clientId === config.clientId && client.hasClientSecret
+        )
+      )
         return { state: "needs-setup", reasonKey: "googledrive" }
-      return (await loadGoogleDriveTokens())?.refreshToken
-        ? { state: "ready" }
-        : { state: "needs-auth", reasonKey: "googledrive" }
+      return connection ? { state: "ready" } : { state: "needs-auth", reasonKey: "googledrive" }
     },
+    ...(id === "googledrive"
+      ? {
+          async list(signal: AbortSignal) {
+            return (await import("./google-drive")).listGoogleDriveSnapshots({
+              assertActive: () => signal.throwIfAborted(),
+            })
+          },
+          async download(remoteId: string, signal: AbortSignal) {
+            return (await import("./google-drive")).downloadGoogleDriveSnapshot(remoteId, {
+              assertActive: () => signal.throwIfAborted(),
+            })
+          },
+        }
+      : {}),
     async upload({ body, meta }, signal, assertOwner) {
       const assertActive = () => {
         signal.throwIfAborted()

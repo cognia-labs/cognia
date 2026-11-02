@@ -11,8 +11,9 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CloudIcon, ExternalLinkIcon } from "lucide-react"
+import { CloudIcon } from "lucide-react"
 import { toast } from "sonner"
+import { DeviceAuthorizationDialog } from "@/components/plugins/auth/device-authorization-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -21,17 +22,30 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import {
   DEFAULT_GOOGLE_DRIVE_FOLDER_NAME,
-  clearGoogleDriveTokens,
   getBackupDestinationsSettings,
-  getGoogleDriveClientSecret,
-  setGoogleDriveClientSecret,
   updateBackupDestinationsSettings,
 } from "@/lib/data/destinations/config"
 import {
-  beginGoogleDeviceAuth,
-  completeGoogleDeviceAuth,
-  type GoogleDeviceAuthChallenge,
+  bindGoogleDriveConnection,
+  resolveGoogleDriveConnection,
+  GOOGLE_DRIVE_AUTH_SCOPES,
+  GOOGLE_DRIVE_SCOPE,
 } from "@/lib/data/destinations/google-oauth"
+import {
+  listGoogleConnections,
+  createGoogleDeviceAuthorization,
+} from "@/lib/auth-providers/google/host-auth"
+import {
+  googleState,
+  subscribeGoogleStateChanged,
+  type GoogleStateReply,
+} from "@/lib/docs-providers/providers/google/state"
+import {
+  getConnectionManager,
+  getHostConnectionDriver,
+  type HostDeviceAuthorization,
+} from "@/lib/plugin/auth/connection-manager"
+import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 import {
   runRemoteBackupSyncNow,
   type RemoteBackupSyncPhase,
@@ -43,34 +57,89 @@ export function GoogleDriveBackupCard() {
   const [enabled, setEnabled] = useState(false)
   const [clientId, setClientId] = useState("")
   const [clientSecret, setClientSecret] = useState("")
-  const [secretSaved, setSecretSaved] = useState(false)
+  const [snapshot, setSnapshot] = useState<GoogleStateReply | null>(null)
+  const [savedClientId, setSavedClientId] = useState("")
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reload, setReload] = useState(0)
+  const [connection, setConnection] = useState<AuthConnectionRow | null>(null)
+  const secretSaved = Boolean(
+    snapshot?.clients.find((client) => client.clientId === clientId.trim())?.hasClientSecret
+  )
   const [folderName, setFolderName] = useState(DEFAULT_GOOGLE_DRIVE_FOLDER_NAME)
-  const [connected, setConnected] = useState(false)
-  const [accountEmail, setAccountEmail] = useState<string | undefined>()
+  const connected =
+    connection?.status === "connected" && connection.scopes.includes(GOOGLE_DRIVE_SCOPE)
+  const accountEmail = connection?.accountLabel
   const [lastSyncAt, setLastSyncAt] = useState<string | undefined>()
-  const [challenge, setChallenge] = useState<GoogleDeviceAuthChallenge | null>(null)
+  const [challenge, setChallenge] = useState<HostDeviceAuthorization | null>(null)
   const [saving, setSaving] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [working, setBusy] = useState(false)
+  const busy = working || challenge !== null
   const [phase, setPhase] = useState<RemoteBackupSyncPhase | null>(null)
   const [unlocked, setUnlocked] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    let active = true
     void (async () => {
       const settings = await getBackupDestinationsSettings()
+      if (!active) return
       const cfg = settings.googleDrive
       setEnabled(cfg?.enabled ?? false)
       setClientId(cfg?.clientId ?? "")
+      setSavedClientId(cfg?.clientId?.trim() ?? "")
       setFolderName(cfg?.folderName ?? DEFAULT_GOOGLE_DRIVE_FOLDER_NAME)
-      setConnected(cfg?.connected ?? false)
-      setAccountEmail(cfg?.accountEmail)
       setLastSyncAt(cfg?.lastSyncAt)
-      setSecretSaved(Boolean(await getGoogleDriveClientSecret()))
       await loadPersistedSyncPassphrase()
-      setUnlocked(hasSyncPassphrase())
-    })()
-    return () => abortRef.current?.abort()
+      if (active) setUnlocked(hasSyncPassphrase())
+    })().catch(() => {
+      if (active) setLoadFailed(true)
+    })
+    return () => {
+      active = false
+      abortRef.current?.abort()
+      abortRef.current = null
+    }
   }, [])
+
+  useEffect(() => {
+    const refresh = () => setReload((value) => value + 1)
+    const stopNative = subscribeGoogleStateChanged(refresh)
+    const stopConnections = getConnectionManager().onDidChange((event) => {
+      if (event.providerId === "google") refresh()
+    })
+    return () => {
+      stopNative()
+      stopConnections()
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      await resolveGoogleDriveConnection()
+      if (!active) return
+      const rows = await listGoogleConnections()
+      if (!active) return
+      const settings = await getBackupDestinationsSettings()
+      if (!active) return
+      const metadata = await googleState({ action: "snapshot" })
+      if (!active) return
+      setSnapshot(metadata)
+      setConnection(
+        rows.find(
+          (row) => row.id === settings.googleDrive?.connectionId && row.clientId === clientId.trim()
+        ) ?? null
+      )
+    })().catch(() => {
+      if (active) {
+        setSnapshot(null)
+        setConnection(null)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [clientId, reload])
 
   const onSave = async () => {
     if (!clientId.trim()) {
@@ -80,9 +149,14 @@ export function GoogleDriveBackupCard() {
     setSaving(true)
     try {
       if (clientSecret.trim()) {
-        await setGoogleDriveClientSecret(clientSecret)
+        setSnapshot(
+          await googleState({
+            action: "setClientSecret",
+            clientId: clientId.trim(),
+            secret: clientSecret.trim(),
+          })
+        )
         setClientSecret("")
-        setSecretSaved(true)
       }
       await updateBackupDestinationsSettings((current) => ({
         ...current,
@@ -90,69 +164,83 @@ export function GoogleDriveBackupCard() {
           ...(current.googleDrive ?? { enabled: false }),
           enabled,
           clientId: clientId.trim(),
+          ...(current.googleDrive?.clientId?.trim() !== clientId.trim()
+            ? {
+                connectionId: current.googleDrive?.connectionId === undefined ? undefined : null,
+                folderId: undefined,
+              }
+            : {}),
           folderName: folderName.trim() || DEFAULT_GOOGLE_DRIVE_FOLDER_NAME,
         },
       }))
+      setSavedClientId(clientId.trim())
+      setReload((value) => value + 1)
       toast.success(t("saved"))
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+    } catch {
+      toast.error(t("saveFailed"))
     } finally {
       setSaving(false)
     }
   }
 
-  const onConnect = async () => {
+  const onConnect = async (reauthorize = false) => {
     setBusy(true)
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      const next = await beginGoogleDeviceAuth()
-      setChallenge(next)
-      const outcome = await completeGoogleDeviceAuth(next, { signal: controller.signal })
-      switch (outcome.status) {
-        case "authorized": {
-          const settings = await getBackupDestinationsSettings()
-          setConnected(true)
-          setAccountEmail(settings.googleDrive?.accountEmail)
-          toast.success(t("connected"))
-          break
-        }
-        case "denied":
-          toast.error(t("connectDenied"))
-          break
-        case "expired":
-          toast.error(t("connectExpired"))
-          break
-        case "error":
-          toast.error(t("connectFailed"), { description: outcome.error })
-          break
-        default:
-          break
+      let authorization: HostDeviceAuthorization | void
+      if (reauthorize && connection) {
+        authorization = await getHostConnectionDriver("google")?.reauthorize?.(connection.id, {})
+      } else {
+        const reply = await googleState({
+          action: "beginDevice",
+          clientId: savedClientId,
+          scopes: GOOGLE_DRIVE_AUTH_SCOPES,
+        })
+        if (!reply.attempt) throw new Error("device-challenge-missing")
+        authorization = createGoogleDeviceAuthorization(reply.attempt)
       }
-    } catch (err) {
-      toast.error(t("connectFailed"), {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      // A challenge arriving after unmount still belongs to this caller to cancel.
+      if (controller.signal.aborted) {
+        await authorization?.cancel()
+        return
+      }
+      if (authorization) setChallenge(authorization)
+    } catch {
+      if (!controller.signal.aborted) toast.error(t("connectFailed"))
     } finally {
-      setChallenge(null)
-      setBusy(false)
-      abortRef.current = null
+      if (abortRef.current === controller) {
+        abortRef.current = null
+        setBusy(false)
+      }
     }
   }
 
-  const onCancelConnect = () => abortRef.current?.abort()
-
   const onDisconnect = async () => {
-    await clearGoogleDriveTokens()
-    await updateBackupDestinationsSettings((current) => ({
-      ...current,
-      googleDrive: current.googleDrive
-        ? { ...current.googleDrive, connected: false, accountEmail: undefined }
-        : current.googleDrive,
-    }))
-    setConnected(false)
-    setAccountEmail(undefined)
-    toast.success(t("disconnected"))
+    if (!connection) return
+    setBusy(true)
+    try {
+      await getConnectionManager().disconnect(connection.id, { revoke: true })
+      await updateBackupDestinationsSettings((current) => ({
+        ...current,
+        googleDrive:
+          current.googleDrive?.connectionId === connection.id
+            ? {
+                ...current.googleDrive,
+                connectionId: null,
+                connected: false,
+                accountEmail: undefined,
+              }
+            : current.googleDrive,
+      }))
+      setConnection(null)
+      toast.success(t("disconnected"))
+    } catch {
+      toast.error(t("disconnectFailed"))
+    } finally {
+      setBusy(false)
+      setReload((value) => value + 1)
+    }
   }
 
   const onSyncNow = async () => {
@@ -199,6 +287,7 @@ export function GoogleDriveBackupCard() {
         />
       </div>
       <p className="text-xs text-muted-foreground">{t("description")}</p>
+      {loadFailed && <p role="alert">{t("loadFailed")}</p>}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
@@ -206,7 +295,9 @@ export function GoogleDriveBackupCard() {
           <Input
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
-            placeholder="xxxx.apps.googleusercontent.com"
+            placeholder={t("clientIdPlaceholder")}
+            aria-label={t("clientIdLabel")}
+            disabled={busy}
             className="h-9 font-mono text-xs"
             data-testid="google-drive-client-id"
           />
@@ -217,7 +308,9 @@ export function GoogleDriveBackupCard() {
             type="password"
             value={clientSecret}
             onChange={(e) => setClientSecret(e.target.value)}
-            placeholder={secretSaved ? t("clientSecretSaved") : "GOCSPX-…"}
+            placeholder={secretSaved ? t("clientSecretSaved") : t("clientSecretPlaceholder")}
+            aria-label={t("clientSecretLabel")}
+            disabled={busy}
             className="h-9 font-mono text-xs"
             data-testid="google-drive-client-secret"
           />
@@ -228,6 +321,7 @@ export function GoogleDriveBackupCard() {
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             placeholder={DEFAULT_GOOGLE_DRIVE_FOLDER_NAME}
+            aria-label={t("folderLabel")}
             className="h-9 text-xs"
             data-testid="google-drive-folder"
           />
@@ -236,36 +330,29 @@ export function GoogleDriveBackupCard() {
       <p className="text-xs text-muted-foreground">{t("clientHelp")}</p>
 
       {challenge && (
-        <div
-          className="rounded-md border border-dashed p-3 text-sm"
-          data-testid="google-drive-device-code"
-        >
-          <p>{t("deviceInstructions")}</p>
-          <p className="mt-1 font-mono text-lg tracking-widest">{challenge.userCode}</p>
-          <a
-            href={challenge.verificationUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-flex items-center gap-1 text-xs underline"
-          >
-            {challenge.verificationUrl}
-            <ExternalLinkIcon className="h-3 w-3" aria-hidden="true" />
-          </a>
-          <div className="mt-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={onCancelConnect}
-              data-testid="google-drive-cancel-connect"
-            >
-              {t("cancelConnect")}
-            </Button>
-          </div>
-        </div>
+        <DeviceAuthorizationDialog
+          authorization={challenge}
+          onAuthorized={async () => {
+            if (!("lineageId" in challenge) || typeof challenge.lineageId !== "string")
+              throw new Error("authorized-lineage-missing")
+            const bound = await bindGoogleDriveConnection(challenge.lineageId)
+            setConnection(bound)
+            toast.success(t("connected"))
+          }}
+          onClose={() => {
+            setChallenge(null)
+            setReload((value) => value + 1)
+          }}
+        />
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={onSave} disabled={saving} data-testid="google-drive-save">
+        <Button
+          size="sm"
+          onClick={onSave}
+          disabled={saving || busy}
+          data-testid="google-drive-save"
+        >
           {t("save")}
         </Button>
         {connected ? (
@@ -282,12 +369,25 @@ export function GoogleDriveBackupCard() {
           <Button
             size="sm"
             variant="outline"
-            onClick={onConnect}
-            disabled={busy || !clientId.trim() || !secretSaved}
+            onClick={() => void onConnect()}
+            disabled={busy || !savedClientId || clientId.trim() !== savedClientId || !secretSaved}
             data-testid="google-drive-connect"
           >
             {t("connect")}
           </Button>
+        )}
+        {connection && connection.status !== "tombstoned" && connection.status !== "revoked" && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void onConnect(true)}
+            disabled={busy || !secretSaved}
+          >
+            {t("reauthorize")}
+          </Button>
+        )}
+        {snapshot?.backupMigrationNeedsClientId && (
+          <p className="text-xs text-muted-foreground">{t("migrationNeedsClientId")}</p>
         )}
         <Button
           size="sm"

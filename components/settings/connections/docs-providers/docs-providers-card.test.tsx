@@ -1,5 +1,5 @@
 import { registerDocsProvider } from "@/lib/docs-providers/registry"
-import { act, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en.json"
@@ -49,6 +49,12 @@ jest.mock("@/lib/docs-providers/providers/google/state", () => ({
 jest.mock("@/lib/auth-providers/google/host-auth", () => ({
   listGoogleConnections: jest.fn(async () => []),
   authorizeGoogleConnection: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  getHostConnectionDriver: () => ({
+    reauthorize: (...args: unknown[]) =>
+      jest.requireMock("@/lib/auth-providers/google/host-auth").authorizeGoogleConnection(...args),
+  }),
 }))
 jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
   beginGoogleDocsAuth: jest.fn(async () => ({
@@ -113,6 +119,7 @@ beforeEach(() => {
     clients: [],
     pending: [],
     migrationNeedsClientId: false,
+    backupMigrationNeedsClientId: false,
   })
   ;(subscribeGoogleStateChanged as jest.Mock).mockImplementation(() => () => undefined)
   ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation(() => () => undefined)
@@ -246,6 +253,7 @@ function showConnections(rows: AuthConnectionRow[], lineages: Partial<GoogleLine
     clients: [],
     pending: [],
     migrationNeedsClientId: false,
+    backupMigrationNeedsClientId: false,
   })
 }
 
@@ -313,6 +321,7 @@ describe("DocsProvidersCard — Google connections", () => {
       clients: [{ clientId: "cid", hasClientSecret: true }],
       pending: [],
       migrationNeedsClientId: false,
+      backupMigrationNeedsClientId: false,
     })
     const user = userEvent.setup()
     renderCard()
@@ -323,6 +332,7 @@ describe("DocsProvidersCard — Google connections", () => {
       clients: [],
       pending: [],
       migrationNeedsClientId: false,
+      backupMigrationNeedsClientId: false,
     })
     await user.click(screen.getByRole("button", { name: "Clear saved secret" }))
     await waitFor(() => expect(clearGoogleClientSecret).toHaveBeenCalledWith("cid"))
@@ -350,8 +360,59 @@ describe("DocsProvidersCard — Google connections", () => {
     renderCard()
     await screen.findByText("Reauthorize to confirm this Google account's identity.")
     await user.click(screen.getByRole("button", { name: "Reauthorize" }))
-    await waitFor(() => expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada"))
+    await waitFor(() =>
+      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada", {})
+    )
     expect(beginAuthMock).not.toHaveBeenCalled()
+  })
+
+  it("reauthorizes the clicked device-code row with two accounts through the shared dialog", async () => {
+    const ada = connection()
+    const bob = connection({
+      id: "connection-bob" as AuthConnectionRow["id"],
+      accountLabel: "bob@example.com",
+      hostMetadata: { adapterId: "native-bob", authorizationEpoch: "nonce-bob", bot: false },
+    })
+    showConnections(
+      [ada, bob],
+      [{ method: "device-code" }, { id: "native-bob", method: "device-code" }]
+    )
+    const pollAda = jest.fn(async () => ({ status: "pending" }))
+    const pollBob = jest.fn(async () => ({ status: "pending" }))
+    const cancelBob = jest.fn(async () => {})
+    ;(authorizeGoogleConnection as jest.Mock).mockImplementation(async (ref) => ({
+      kind: "device-code",
+      userCode: ref === bob.id ? "BOB-CODE" : "ADA-CODE",
+      verificationUrl: "https://google.com/device",
+      expiresAt: Date.now() + 60_000,
+      intervalSeconds: 5,
+      poll: ref === bob.id ? pollBob : pollAda,
+      cancel: cancelBob,
+    }))
+    const view = renderCard()
+    const label = await screen.findByText("bob@example.com")
+    const row = label.closest("li")!
+    jest.useFakeTimers()
+    try {
+      fireEvent.click(within(row).getByRole("button", { name: "Reauthorize" }))
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByRole("dialog", { name: "Authorize connection" })).toBeVisible()
+      expect(screen.getByText("BOB-CODE")).toBeVisible()
+      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-bob", {})
+      expect(authorizeGoogleConnection).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5000)
+      })
+      expect(pollBob).toHaveBeenCalledTimes(1)
+      expect(pollAda).not.toHaveBeenCalled()
+      await act(async () => view.unmount())
+      expect(cancelBob).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+    expect(screen.queryByRole("link", { name: "Google Drive backup" })).not.toBeInTheDocument()
   })
 
   it("explains when a legacy saved secret still needs its client id", async () => {
@@ -360,6 +421,7 @@ describe("DocsProvidersCard — Google connections", () => {
       clients: [],
       pending: [],
       migrationNeedsClientId: true,
+      backupMigrationNeedsClientId: false,
     })
     renderCard()
     expect(

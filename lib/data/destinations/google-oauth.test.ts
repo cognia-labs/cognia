@@ -1,305 +1,169 @@
 /** @jest-environment jsdom */
-import type { AppSettings } from "@cognia/agent-config-types"
-
-const settingsState: { current: Partial<AppSettings> } = { current: {} }
-jest.mock("@/lib/db/settings", () => ({
-  getSettings: async () => settingsState.current,
-  saveSettings: async (
-    patch: Partial<AppSettings> | ((current: Partial<AppSettings>) => Partial<AppSettings>)
-  ) => {
-    const resolved = typeof patch === "function" ? patch(settingsState.current) : patch
-    settingsState.current = { ...settingsState.current, ...resolved }
-    return settingsState.current
-  },
-}))
-
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getSettings, saveSettings } from "@/lib/db/settings"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
+import { createGoogleDocsTestHost } from "@/lib/testing/google-docs-host"
+import { __setGoogleStatePortForTests } from "@/lib/docs-providers/providers/google/state"
+import { listGoogleConnections } from "@/lib/auth-providers/google/host-auth"
 import {
-  __setBackupDestinationSecretStoreForTesting,
-  loadGoogleDriveTokens,
-  saveGoogleDriveTokens,
-  setGoogleDriveClientSecret,
-} from "./config"
-import {
-  GOOGLE_DEVICE_CODE_URL,
-  GOOGLE_TOKEN_URL,
-  GOOGLE_USERINFO_URL,
-  beginGoogleDeviceAuth,
-  completeGoogleDeviceAuth,
-  getGoogleDriveAccessToken,
-  pollGoogleDeviceAuth,
-  refreshGoogleDriveTokens,
+  GOOGLE_DRIVE_SCOPE,
+  resolveGoogleDriveConnection,
+  bindGoogleDriveConnection,
+  getGoogleDriveCredentialLease,
 } from "./google-oauth"
-import type { BackupHttpFn, BackupHttpRequest } from "./http"
 
-class MemoryStore {
-  data = new Map<string, string>()
-  async save(k: string, v: string) {
-    this.data.set(k, v)
-  }
-  async load(k: string) {
-    return this.data.get(k) ?? null
-  }
-  async delete(k: string) {
-    this.data.delete(k)
-  }
-}
-
-function scripted(responses: Array<(req: BackupHttpRequest) => { status: number; body: unknown }>) {
-  const calls: BackupHttpRequest[] = []
-  const http: BackupHttpFn = async (request) => {
-    calls.push(request)
-    const next = responses.shift()
-    if (!next) throw new Error(`unexpected request ${request.method} ${request.url}`)
-    const { status, body } = next(request)
-    return { status, headers: {}, body: typeof body === "string" ? body : JSON.stringify(body) }
-  }
-  return { http, calls }
-}
-
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+afterAll(fixture.dispose)
+let host: ReturnType<typeof createGoogleDocsTestHost>
 beforeEach(async () => {
-  __setBackupDestinationSecretStoreForTesting(new MemoryStore())
-  settingsState.current = {
-    backupDestinations: { googleDrive: { enabled: true, clientId: "cid" } },
-  }
-  await setGoogleDriveClientSecret("sec")
-})
-afterAll(() => __setBackupDestinationSecretStoreForTesting(null))
-
-describe("device flow", () => {
-  it("begins with a device code request for drive.file", async () => {
-    const api = scripted([
-      () => ({
-        status: 200,
-        body: {
-          device_code: "dc",
-          user_code: "ABCD-EFGH",
-          verification_url: "https://www.google.com/device",
-          expires_in: 1800,
-          interval: 5,
-        },
-      }),
-    ])
-    const challenge = await beginGoogleDeviceAuth({ http: api.http, now: () => 1_000 })
-    expect(challenge).toEqual({
-      deviceCode: "dc",
-      userCode: "ABCD-EFGH",
-      verificationUrl: "https://www.google.com/device",
-      intervalSeconds: 5,
-      expiresAt: 1_000 + 1800 * 1000,
-    })
-    expect(api.calls[0].url).toBe(GOOGLE_DEVICE_CODE_URL)
-    expect(api.calls[0].body).toBe(
-      "client_id=cid&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file"
-    )
-  })
-
-  it("begin fails without a client id or on a Google error", async () => {
-    settingsState.current = { backupDestinations: {} }
-    await expect(beginGoogleDeviceAuth({ http: scripted([]).http })).rejects.toThrow(/client id/)
-    settingsState.current = {
-      backupDestinations: { googleDrive: { enabled: true, clientId: "cid" } },
-    }
-    const api = scripted([
-      () => ({ status: 400, body: { error: "invalid_client", error_description: "bad" } }),
-    ])
-    await expect(beginGoogleDeviceAuth({ http: api.http })).rejects.toThrow("bad")
-    const minimal = scripted([
-      () => ({
-        status: 200,
-        body: { device_code: "dc", user_code: "u", verification_uri: "https://v" },
-      }),
-    ])
-    const c = await beginGoogleDeviceAuth({ http: minimal.http, now: () => 0 })
-    expect(c.verificationUrl).toBe("https://v")
-    expect(c.intervalSeconds).toBe(5)
-    expect(c.expiresAt).toBe(1800 * 1000)
-  })
-
-  it("maps every poll outcome and stores tokens + account email on success", async () => {
-    const challenge = { deviceCode: "dc", expiresAt: 10_000 }
-    const pending = scripted([() => ({ status: 428, body: { error: "authorization_pending" } })])
-    expect(await pollGoogleDeviceAuth(challenge, { http: pending.http, now: () => 1 })).toEqual({
-      status: "pending",
-    })
-    expect(pending.calls[0].url).toBe(GOOGLE_TOKEN_URL)
-    expect(pending.calls[0].body).toContain(
-      "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
-    )
-
-    const slow = scripted([() => ({ status: 403, body: { error: "slow_down", interval: 12 } })])
-    expect(await pollGoogleDeviceAuth(challenge, { http: slow.http, now: () => 1 })).toEqual({
-      status: "slow_down",
-      intervalSeconds: 12,
-    })
-    const denied = scripted([() => ({ status: 403, body: { error: "access_denied" } })])
-    expect(await pollGoogleDeviceAuth(challenge, { http: denied.http, now: () => 1 })).toEqual({
-      status: "denied",
-    })
-    const expired = scripted([() => ({ status: 400, body: { error: "expired_token" } })])
-    expect(await pollGoogleDeviceAuth(challenge, { http: expired.http, now: () => 1 })).toEqual({
-      status: "expired",
-    })
-    const other = scripted([
-      () => ({ status: 400, body: { error: "invalid_grant", error_description: "nope" } }),
-    ])
-    expect(await pollGoogleDeviceAuth(challenge, { http: other.http, now: () => 1 })).toEqual({
-      status: "error",
-      error: "nope",
-    })
-    expect(
-      await pollGoogleDeviceAuth(challenge, { http: scripted([]).http, now: () => 20_000 })
-    ).toEqual({
-      status: "expired",
-    })
-
-    const ok = scripted([
-      () => ({
-        status: 200,
-        body: {
-          access_token: "at",
-          refresh_token: "rt",
-          expires_in: 3600,
-          scope: "s",
-          token_type: "Bearer",
-        },
-      }),
-      (req) => {
-        expect(req.url).toBe(GOOGLE_USERINFO_URL)
-        return { status: 200, body: { email: "me@example.com" } }
-      },
-    ])
-    const result = await pollGoogleDeviceAuth(challenge, { http: ok.http, now: () => 1_000 })
-    expect(result).toEqual({
-      status: "authorized",
-      tokens: {
-        accessToken: "at",
-        refreshToken: "rt",
-        expiresAt: 1_000 + 3_600_000,
-        scope: "s",
-        tokenType: "Bearer",
-      },
-    })
-    expect(await loadGoogleDriveTokens()).toMatchObject({ accessToken: "at", refreshToken: "rt" })
-    expect(settingsState.current.backupDestinations?.googleDrive).toMatchObject({
-      connected: true,
-      accountEmail: "me@example.com",
-    })
-  })
-
-  it("poll reports configuration problems", async () => {
-    settingsState.current = { backupDestinations: {} }
-    expect(
-      await pollGoogleDeviceAuth(
-        { deviceCode: "dc", expiresAt: 10 },
-        { http: scripted([]).http, now: () => 1 }
-      )
-    ).toEqual({
-      status: "error",
-      error: "Google Drive backup is not configured.",
-    })
-    settingsState.current = {
-      backupDestinations: { googleDrive: { enabled: true, clientId: "cid" } },
-    }
-    __setBackupDestinationSecretStoreForTesting(new MemoryStore())
-    expect(
-      await pollGoogleDeviceAuth(
-        { deviceCode: "dc", expiresAt: 10 },
-        { http: scripted([]).http, now: () => 1 }
-      )
-    ).toEqual({
-      status: "error",
-      error: "Google OAuth client secret is missing.",
-    })
-    await setGoogleDriveClientSecret("sec")
-    const junk = scripted([() => ({ status: 500, body: "" })])
-    expect(
-      await pollGoogleDeviceAuth(
-        { deviceCode: "dc", expiresAt: 10 },
-        { http: junk.http, now: () => 1 }
-      )
-    ).toEqual({
-      status: "error",
-      error: "Google returned HTTP 500",
-    })
-  })
-
-  it("completeGoogleDeviceAuth loops through pending/slow_down to a terminal state", async () => {
-    const api = scripted([
-      () => ({ status: 428, body: { error: "authorization_pending" } }),
-      () => ({ status: 403, body: { error: "slow_down", interval: 7 } }),
-      () => ({ status: 200, body: { access_token: "at", refresh_token: "rt", expires_in: 10 } }),
-      () => ({ status: 200, body: { email: "e" } }),
-    ])
-    const sleeps: number[] = []
-    const result = await completeGoogleDeviceAuth(
+  await fixture.restore()
+  __resetAuthRegistryForTesting()
+  await saveSettings({ backupDestinations: { googleDrive: { enabled: true, clientId: "backup" } } })
+  host = createGoogleDocsTestHost({
+    lineages: [
       {
-        deviceCode: "dc",
-        userCode: "u",
-        verificationUrl: "v",
-        intervalSeconds: 5,
-        expiresAt: 10_000,
+        id: "native",
+        clientId: "backup",
+        sub: "sub",
+        email: "ada@example.test",
+        method: "device-code",
+        scopes: [GOOGLE_DRIVE_SCOPE],
+        status: "connected",
+        revision: "auth-1",
+        credentialRevision: "creds-1",
+        needsIdentity: false,
       },
-      { http: api.http, now: () => 1, sleep: async (ms) => void sleeps.push(ms) }
-    )
-    expect(result.status).toBe("authorized")
-    expect(sleeps).toEqual([5_000, 7_000])
-    const aborted = new AbortController()
-    aborted.abort()
-    expect(
-      await completeGoogleDeviceAuth(
-        {
-          deviceCode: "dc",
-          userCode: "u",
-          verificationUrl: "v",
-          intervalSeconds: 5,
-          expiresAt: 10_000,
-        },
-        { http: scripted([]).http, signal: aborted.signal }
-      )
-    ).toEqual({ status: "denied" })
+    ],
+  })
+  __setGoogleStatePortForTests(host.call)
+})
+afterEach(() => __setGoogleStatePortForTests(null))
+
+it("persists the single exact candidate and honors its connectionId on later reads", async () => {
+  const row = await resolveGoogleDriveConnection()
+  expect(row?.accountLabel).toBe("ada@example.test")
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBe(row?.id)
+  host.snapshot.lineages.push({ ...host.snapshot.lineages[0], id: "other", sub: "other" })
+  expect((await resolveGoogleDriveConnection())?.id).toBe(row?.id)
+})
+it("never falls back for an unknown reference or chooses among ambiguous candidates", async () => {
+  await saveSettings({
+    backupDestinations: {
+      googleDrive: { enabled: true, clientId: "backup", connectionId: "unknown" },
+    },
+  })
+  host.snapshot.lineages.push({ ...host.snapshot.lineages[0], id: "other", sub: "other" })
+  expect(await resolveGoogleDriveConnection()).toBeNull()
+  host.snapshot.lineages.pop()
+  expect(await resolveGoogleDriveConnection()).toBeNull()
+})
+it("does not fall back after an explicit unbind even with one eligible account", async () => {
+  await saveSettings({
+    backupDestinations: {
+      googleDrive: { enabled: true, clientId: "backup", connectionId: null },
+    },
+  })
+  expect(await resolveGoogleDriveConnection()).toBeNull()
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBeNull()
+  const row = await bindGoogleDriveConnection("native")
+  expect(row.hostMetadata?.adapterId).toBe("native")
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBe(row.id)
+})
+it.each(["client", "scope", "needs-reauth", "disconnected"])(
+  "does not bind a wrong client, missing scope or unavailable grant: %s",
+  async (variant) => {
+    const lineage = host.snapshot.lineages[0]
+    if (variant === "client") lineage.clientId = "wrong"
+    if (variant === "scope") lineage.scopes = ["docs.read"]
+    if (variant === "needs-reauth") lineage.status = "needs-reauth"
+    if (variant === "disconnected") lineage.status = "disconnected"
+    expect(await resolveGoogleDriveConnection()).toBeNull()
+  }
+)
+it("never silently replaces a known disconnected binding with another account", async () => {
+  const row = await resolveGoogleDriveConnection()
+  host.snapshot.lineages[0].status = "disconnected"
+  host.snapshot.lineages[0].revision = "disconnected"
+  host.snapshot.lineages.push({
+    ...host.snapshot.lineages[0],
+    id: "other",
+    sub: "other",
+    status: "connected",
+  })
+  expect(await resolveGoogleDriveConnection()).toBeNull()
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBe(row?.id)
+})
+it("binds the exact authorized lineage even when several accounts are connected", async () => {
+  host.snapshot.lineages.push({ ...host.snapshot.lineages[0], id: "other", sub: "other" })
+  const row = await bindGoogleDriveConnection("other")
+  expect(row.hostMetadata?.adapterId).toBe("other")
+  await expect(bindGoogleDriveConnection("unknown")).rejects.toMatchObject({
+    name: "ConnectionUnavailableError",
   })
 })
+it("gets an access-token lease from the Host connection and rejects a moved revision", async () => {
+  host.handle = async (input) =>
+    input.action === "accessToken"
+      ? {
+          ...host.snapshot,
+          credential: {
+            accessToken: "host-access",
+            expiresAt: Date.now() + 3_600_000,
+            revision: "auth-1",
+            credentialRevision: "creds-1",
+          },
+        }
+      : undefined
+  const credentials = jest.spyOn(getConnectionManager(), "getCredentials")
+  const lease = await getGoogleDriveCredentialLease()
+  expect(lease.accessToken).toBe("host-access")
+  expect(credentials).toHaveBeenCalledWith((await listGoogleConnections())[0].id, {
+    minValidityMs: 60_000,
+  })
+  expect(host.calls).toContainEqual(
+    expect.objectContaining({ action: "accessToken", lineageId: "native" })
+  )
+  host.snapshot.lineages[0].revision = "auth-2"
+  await expect(lease.assertCurrent()).rejects.toMatchObject({ name: "ConnectionRevisionChanged" })
+  credentials.mockRestore()
+})
 
-describe("token refresh", () => {
-  it("returns a fresh token, refreshes near expiry, and preserves the refresh token", async () => {
-    await saveGoogleDriveTokens({ accessToken: "fresh", refreshToken: "rt", expiresAt: 10_000_000 })
-    expect(await getGoogleDriveAccessToken({ http: scripted([]).http, now: () => 1 })).toBe("fresh")
-
-    await saveGoogleDriveTokens({ accessToken: "stale", refreshToken: "rt", expiresAt: 1_000 })
-    const api = scripted([
-      () => ({ status: 200, body: { access_token: "renewed", expires_in: 3600 } }),
-    ])
-    expect(await getGoogleDriveAccessToken({ http: api.http, now: () => 990 })).toBe("renewed")
-    expect(api.calls[0].body).toContain("grant_type=refresh_token")
-    expect(api.calls[0].body).toContain("refresh_token=rt")
-    expect(await loadGoogleDriveTokens()).toMatchObject({
-      accessToken: "renewed",
-      refreshToken: "rt",
+it("makes simultaneous single-candidate binding idempotent", async () => {
+  const [first, second] = await Promise.all([
+    resolveGoogleDriveConnection(),
+    resolveGoogleDriveConnection(),
+  ])
+  expect(first?.id).toBe(second?.id)
+  expect((await getSettings()).backupDestinations?.googleDrive?.connectionId).toBe(first?.id)
+})
+it("retains the revision fence when credential acquisition fails after reauthorization", async () => {
+  const credentials = jest.spyOn(getConnectionManager(), "getCredentials")
+  credentials.mockImplementationOnce(async () => {
+    host.snapshot.lineages[0].revision = "reauthorized-during-refresh"
+    throw new Error("late refresh refused")
+  })
+  try {
+    await expect(getGoogleDriveCredentialLease()).rejects.toMatchObject({
+      name: "ConnectionRevisionChanged",
     })
+  } finally {
+    credentials.mockRestore()
+  }
+})
+it("does not replace a known wrong-client binding with an eligible account", async () => {
+  host.snapshot.lineages.push({
+    ...host.snapshot.lineages[0],
+    id: "wrong",
+    clientId: "wrong-client",
+    sub: "wrong-sub",
   })
-
-  it("returns null when disconnected and throws on refresh failures", async () => {
-    expect(await getGoogleDriveAccessToken({ http: scripted([]).http })).toBeNull()
-    await saveGoogleDriveTokens({ accessToken: "stale", expiresAt: 1 })
-    expect(await getGoogleDriveAccessToken({ http: scripted([]).http, now: () => 5 })).toBeNull()
-    await expect(
-      refreshGoogleDriveTokens({ accessToken: "stale", expiresAt: 1 }, { http: scripted([]).http })
-    ).rejects.toThrow(/reconnect/)
-    const bad = scripted([
-      () => ({ status: 400, body: { error: "invalid_grant", error_description: "revoked" } }),
-    ])
-    await expect(
-      refreshGoogleDriveTokens(
-        { accessToken: "s", refreshToken: "rt", expiresAt: 1 },
-        { http: bad.http }
-      )
-    ).rejects.toThrow("revoked")
-    settingsState.current = { backupDestinations: {} }
-    await expect(
-      refreshGoogleDriveTokens(
-        { accessToken: "s", refreshToken: "rt", expiresAt: 1 },
-        { http: scripted([]).http }
-      )
-    ).rejects.toThrow(/not configured/)
+  const wrong = (await listGoogleConnections()).find((row) => row.clientId === "wrong-client")!
+  await saveSettings({
+    backupDestinations: {
+      googleDrive: { enabled: true, clientId: "backup", connectionId: wrong.id },
+    },
   })
+  expect(await resolveGoogleDriveConnection()).toBeNull()
 })

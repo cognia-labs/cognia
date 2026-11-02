@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useTranslations } from "next-intl"
+import { DeviceAuthorizationDialog } from "@/components/plugins/auth/device-authorization-dialog"
 import { Button } from "@/components/ui/button"
 import { useAuthConnections } from "@/hooks/external-services/use-auth-connections"
 import { connectProvider } from "@/lib/plugin/auth/connect"
@@ -9,6 +10,7 @@ import {
   disconnect,
   ConnectionIdentityConflict,
   getHostConnectionDriver,
+  type HostDeviceAuthorization,
 } from "@/lib/plugin/auth/connection-manager"
 import { useConnectorIngress } from "@/hooks/use-connector-ingress"
 import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
@@ -18,6 +20,14 @@ export function ConnectionsPanel() {
   const t = useTranslations("settings.externalServices")
   const { rows, providers, loading, failed } = useAuthConnections()
   const ingress = useConnectorIngress()
+  const [authorization, setAuthorization] = useState<HostDeviceAuthorization | null>(null)
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [busy, setBusy] = useState(false)
   const [actionFailed, setActionFailed] = useState(false)
   const [identityConflict, setIdentityConflict] = useState(false)
@@ -79,18 +89,26 @@ export function ConnectionsPanel() {
             view={view}
             busy={busy}
             onReconnect={() =>
-              void run(() => {
+              void run(async () => {
                 const driver =
                   view.connection.ownerPluginId === null
                     ? getHostConnectionDriver(view.connection.providerId)
                     : undefined
-                return driver?.reauthorize
-                  ? driver.reauthorize(view.connection.id, { ingressBase: ingress.base })
-                  : connectProvider({
-                      providerId: view.connection.providerId,
-                      reconnect: view.connection.id,
-                      scopes: [...view.connection.scopes],
-                    })
+                if (driver?.reauthorize) {
+                  const result = await driver.reauthorize(view.connection.id, {
+                    ingressBase: ingress.base,
+                  })
+                  if (result) {
+                    if (mounted.current) setAuthorization(result)
+                    else await result.cancel()
+                  }
+                } else {
+                  await connectProvider({
+                    providerId: view.connection.providerId,
+                    reconnect: view.connection.id,
+                    scopes: [...view.connection.scopes],
+                  })
+                }
               })
             }
             onDisconnect={() => void run(() => disconnect(view.connection.id, { revoke: true }))}
@@ -100,6 +118,12 @@ export function ConnectionsPanel() {
           />
         ))}
       </div>
+      {authorization && (
+        <DeviceAuthorizationDialog
+          authorization={authorization}
+          onClose={() => setAuthorization(null)}
+        />
+      )}
     </section>
   )
 }

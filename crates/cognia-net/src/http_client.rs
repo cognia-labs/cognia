@@ -175,6 +175,13 @@ fn rate_limits() -> &'static Arc<Mutex<HashMap<String, TokenBucket>>> {
     RATE_LIMITS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+/// Mock-server suites in dependent crates all target one loopback host, so a
+/// whole test process shares a single per-host budget; they refill it here.
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_rate_limits_for_tests() {
+    rate_limits().lock().unwrap().clear();
+}
+
 fn check_rate_limit(host: &str) -> Result<(), Duration> {
     let mut map = rate_limits().lock().unwrap();
     let bucket = map

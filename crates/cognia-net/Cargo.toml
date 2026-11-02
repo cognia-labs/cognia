@@ -52,6 +52,10 @@ sysinfo = { workspace = true, features = ["system", "network"] }
 dirs.workspace = true
 regex.workspace = true
 
+[features]
+# Test-only hooks for dependent crates' suites (never enabled by a shipping build).
+test-support = []
+
 [dev-dependencies]
 # HTTP mock server for `http_client`.
 wiremock.workspace = true

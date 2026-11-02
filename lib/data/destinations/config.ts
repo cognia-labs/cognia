@@ -6,8 +6,7 @@
  * the service transport) and the desktop (OS keyring) share the same code:
  *
  *   backup-destinations / github-token                 — GitHub PAT (keyring credential mode)
- *   backup-destinations / google-drive-client-secret   — OAuth client secret (user supplied)
- *   backup-destinations / google-drive-tokens          — JSON `GoogleOAuthTokens`
+ * Google credentials and legacy migration belong exclusively to the Rust Host.
  *
  * `convex` stays in the `BackupDestination` enum only so persisted rows keep
  * type-checking; it is DEPRECATED — it would require the user to deploy
@@ -27,8 +26,6 @@ import { createKeyringStore, type KeyringStore } from "@/lib/credentials/keyring
 
 export const BACKUP_DESTINATION_KEYRING_NAMESPACE = "backup-destinations"
 export const GITHUB_TOKEN_KEY = "github-token"
-export const GOOGLE_DRIVE_CLIENT_SECRET_KEY = "google-drive-client-secret"
-export const GOOGLE_DRIVE_TOKENS_KEY = "google-drive-tokens"
 
 export const DEFAULT_GITHUB_BACKUP_PATH = "cognia-backups"
 export const DEFAULT_GOOGLE_DRIVE_FOLDER_NAME = "Cognia Backups"
@@ -170,15 +167,6 @@ export async function clearGithubBackupToken(): Promise<void> {
 
 // ── Google Drive ────────────────────────────────────────────────────────────
 
-export interface GoogleOAuthTokens {
-  accessToken: string
-  refreshToken?: string
-  /** Epoch ms when `accessToken` expires. */
-  expiresAt: number
-  scope?: string
-  tokenType?: string
-}
-
 export interface ResolvedGoogleDriveBackupConfig {
   clientId: string
   folderName: string
@@ -198,42 +186,6 @@ export function resolveGoogleDriveBackupConfig(
     folderName: settings.folderName?.trim() || DEFAULT_GOOGLE_DRIVE_FOLDER_NAME,
     folderId: settings.folderId?.trim() || undefined,
   }
-}
-
-export async function getGoogleDriveClientSecret(): Promise<string | null> {
-  return backupDestinationSecrets().load(GOOGLE_DRIVE_CLIENT_SECRET_KEY)
-}
-
-export async function setGoogleDriveClientSecret(secret: string): Promise<void> {
-  const trimmed = secret.trim()
-  if (!trimmed) throw new Error("Google OAuth client secret must not be empty")
-  await backupDestinationSecrets().save(GOOGLE_DRIVE_CLIENT_SECRET_KEY, trimmed)
-}
-
-export async function loadGoogleDriveTokens(): Promise<GoogleOAuthTokens | null> {
-  const raw = await backupDestinationSecrets().load(GOOGLE_DRIVE_TOKENS_KEY)
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as Partial<GoogleOAuthTokens>
-    if (typeof parsed.accessToken !== "string" || typeof parsed.expiresAt !== "number") return null
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
-      expiresAt: parsed.expiresAt,
-      scope: typeof parsed.scope === "string" ? parsed.scope : undefined,
-      tokenType: typeof parsed.tokenType === "string" ? parsed.tokenType : undefined,
-    }
-  } catch {
-    return null
-  }
-}
-
-export async function saveGoogleDriveTokens(tokens: GoogleOAuthTokens): Promise<void> {
-  await backupDestinationSecrets().save(GOOGLE_DRIVE_TOKENS_KEY, JSON.stringify(tokens))
-}
-
-export async function clearGoogleDriveTokens(): Promise<void> {
-  await backupDestinationSecrets().delete(GOOGLE_DRIVE_TOKENS_KEY)
 }
 
 // ── Aggregate readiness (used by the scheduler dialog + host matrix) ────────

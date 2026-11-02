@@ -6637,21 +6637,27 @@ export interface GithubBackupDestinationSettings {
 /**
  * Google Drive backup destination (OAuth 2.0 device flow, `drive.file` scope).
  * The user supplies their own OAuth client id (installed-app type); the client
- * secret and the tokens are keyring-only.
+ * secret and refresh tokens remain in the Rust Host secret store.
  */
 export interface GoogleDriveBackupDestinationSettings {
   enabled: boolean
   /** OAuth 2.0 client id of the user's Google Cloud "Desktop app" credential. */
   clientId?: string
+  /**
+   * Device-local Host connection reference, never synced (backupDestinations is
+   * desktop-only) or shown to plugins. Undefined allows first-run migration;
+   * null records an explicit unbind and requires sign-in to bind again.
+   */
+  connectionId?: string | null
   /** Drive folder name (created under My Drive when missing); default `Cognia Backups`. */
   folderName?: string
   /** Resolved folder id once created/found. */
   folderId?: string
-  /** Google account email the tokens belong to (display only). */
+  /** Legacy display metadata; current account identity comes from the Host connection. */
   accountEmail?: string
   /** ISO timestamp of the last successful upload. */
   lastSyncAt?: string
-  /** True once a refresh token has been stored (display only; the tokens live in the keyring). */
+  /** Legacy display flag; readiness is derived from the Host connection. */
   connected?: boolean
 }
 
@@ -6668,7 +6674,8 @@ export interface BackupDestinationsSettings {
  * files this app created), while reading a user's existing Docs and Sheets
  * needs broad read scopes. Widening the backup connection would hand a
  * write-only-to-its-own-folder integration a read of the user's entire Drive,
- * so the two are separate connections and may be separate Google accounts.
+ * so each consumer checks its own required scopes. They share a Host connection
+ * only when its client and granted scopes match both consumers.
  */
 export interface GoogleDocsProviderSettings {
   /** OAuth 2.0 client id of the user's Google Cloud "Desktop app" credential. */

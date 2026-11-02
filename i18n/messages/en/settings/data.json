@@ -444,6 +444,13 @@
     "verifyFailed": "Repository check failed"
   },
   "googleDriveBackup": {
+    "reauthorize": "Re-authorize",
+    "loadFailed": "Could not load Google Drive connection",
+    "saveFailed": "Could not save Google Drive settings",
+    "disconnectFailed": "Could not disconnect Google Drive",
+    "clientIdPlaceholder": "xxxx.apps.googleusercontent.com",
+    "clientSecretPlaceholder": "GOCSPX-…",
+    "migrationNeedsClientId": "Save the original backup client ID to migrate your existing sign-in.",
     "cancelConnect": "Cancel",
     "clientHelp": "Create a “Desktop app” OAuth client in Google Cloud Console (APIs & Services → Credentials) with the Drive API enabled. The secret and the tokens live in the host keyring.",
     "clientIdLabel": "OAuth client ID",
