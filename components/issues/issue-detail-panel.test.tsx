@@ -419,6 +419,30 @@ describe("IssueDetailPanel", () => {
     )
   })
 
+  it.each(["external_departed", "external_returned"])(
+    "renders %s in the activity trail",
+    (kind) => {
+      liveValue = [
+        {
+          id: "source",
+          issueId: "i1",
+          kind,
+          ts: 1,
+          payload: {
+            kind,
+            provider: "github",
+            label: "o/r#1",
+            by: { kind: "agent", id: "sync:github" },
+          },
+        },
+      ]
+      render(<IssueDetailPanel item={item()} />)
+      expect(screen.getByTestId("issue-detail-activity")).toHaveTextContent(
+        `activity.${kind}:github,o/r#1`
+      )
+    }
+  )
+
   it("renders a comment's body alongside its activity line", () => {
     liveValue = [
       {

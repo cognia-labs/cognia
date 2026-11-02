@@ -13,6 +13,8 @@ export interface ExternalSyncPage<Item> {
 }
 
 export interface ExternalSyncDriver<Item> {
+  /** Enumerate full pages every pass without bypassing persisted retry delays. */
+  fullScanOnly?: boolean
   itemId(item: Item): string
   fetchPage(input: {
     mode: ExternalSyncMode
@@ -28,6 +30,8 @@ export interface ExternalSyncDriver<Item> {
   listKnownIds?(signal: AbortSignal): Promise<string[]>
   /** Idempotent: a crash before committing the terminal cursor repeats tombstones. */
   tombstone?(ids: string[], ctx: { generation: string; signal: AbortSignal }): Promise<void>
+  /** Finalize under the same exclusion, after tombstones and before committing the cursor. */
+  complete?(ctx: { signal: AbortSignal }): Promise<void>
 }
 
 export class ExternalSyncRateLimited extends Error {

@@ -40,6 +40,9 @@ function provider(id: string, bindings: IssueSyncBinding[]): IssueSyncProvider {
 }
 
 const outcome = (b: IssueSyncBinding): ReconcileOutcome => ({
+  status: "completed",
+  pages: 1,
+  tombstoned: 0,
   binding: b,
   created: 1,
   updated: 0,
@@ -69,6 +72,34 @@ describe("resolveWorkspaceSyncBindings", () => {
 })
 
 describe("runWorkspaceIssueSync", () => {
+  it("reports failed/backoff outcomes as typed failures and keeps sequential binding order", async () => {
+    const registry = new IssueSyncRegistry()
+    const bindings = [binding("a", "p1"), binding("a", "p2"), binding("a", "p3")]
+    registry.register(provider("a", bindings))
+    const order: string[] = []
+    const result = await runWorkspaceIssueSync(
+      { mirror: false },
+      {
+        registry,
+        listContainers: async () => [],
+        reconcile: async (b) => {
+          order.push(b.issueProjectId)
+          return {
+            ...outcome(b),
+            status:
+              b.issueProjectId === "p1" ? "failed" : b.issueProjectId === "p2" ? "backoff" : "busy",
+            errorCode: b.issueProjectId === "p2" ? "rate-limited" : "sync-failed",
+          }
+        },
+      }
+    )
+    expect(order).toEqual(["p1", "p2", "p3"])
+    expect(result.outcomes).toHaveLength(3)
+    expect(result.failures.map((failure) => failure.error)).toEqual([
+      expect.objectContaining({ name: "IssueSyncOutcomeError", code: "sync-failed" }),
+      expect.objectContaining({ name: "IssueSyncOutcomeError", code: "rate-limited" }),
+    ])
+  })
   it("defers remaining snapshot bindings when a provider is replaced mid-sweep", async () => {
     const registry = new IssueSyncRegistry()
     registry.register(provider("a", [binding("a", "p1"), binding("a", "p2")]))

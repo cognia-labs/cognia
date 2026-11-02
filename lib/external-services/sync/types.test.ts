@@ -1,7 +1,12 @@
 import { ExternalSyncCursorInvalid, ExternalSyncRateLimited } from "./types"
-it("uses typed failures without accepting service error messages", () => {
+
+it("carries a retry interval without exposing provider response content", () => {
   expect(new ExternalSyncCursorInvalid()).toBeInstanceOf(Error)
-  const error = new ExternalSyncRateLimited(5000)
+  const error = new ExternalSyncRateLimited(123_000)
   expect(error).toBeInstanceOf(Error)
-  expect(error.retryAfterMs).toBe(5000)
+  expect(error).toMatchObject({
+    name: "ExternalSyncRateLimited",
+    retryAfterMs: 123_000,
+    message: "External sync rate limited",
+  })
 })

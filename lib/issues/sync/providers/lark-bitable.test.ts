@@ -2,6 +2,7 @@ import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject, LarkBitableFieldMap } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
 import {
   bitableFieldsFromIssue,
   bitableFieldsFromPatch,
@@ -26,6 +27,7 @@ it("describes its built-in resource without migrating its account binding", () =
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
 
 const fieldMap: LarkBitableFieldMap = {
   title: "Name",
@@ -189,6 +191,11 @@ describe("provider", () => {
         issueProjectId: "p1",
         key: "cai_1:app:tbl",
       }),
+      expect.objectContaining({
+        providerId: "lark-bitable",
+        issueProjectId: "p2",
+        key: "cai_1:app:tbl",
+      }),
     ])
   })
 
@@ -249,7 +256,66 @@ it("uses the selected account's user identity for configured resources", async (
   jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], notModified: false } as never)
   await createLarkBitableSyncProvider().pull(binding(), { full: true })
   expect(withLarkAuthedApi).toHaveBeenCalledWith(
-    { adapterId: "cai_1", identity: "user" },
+    expect.objectContaining({ adapterId: "cai_1", identity: "user" }),
     expect.any(Function)
   )
+})
+
+it("pages all Bitable records with a terminal cursor and no since filter", async () => {
+  const paths: string[] = []
+  const api: LarkAuthedApi = {
+    get: async () => {
+      throw new Error("Unexpected read")
+    },
+    post: async <T>(path: string): Promise<T> => {
+      paths.push(path)
+      return (
+        paths.length === 1
+          ? {
+              items: [{ record_id: "one", fields: { Name: "One", State: "To do" } }],
+              has_more: true,
+              page_token: "next",
+            }
+          : { items: [{ record_id: "two", fields: { Name: "Done", State: "Finished" } }] }
+      ) as T
+    },
+  }
+  const provider = createLarkBitableSyncProvider({
+    withApi: async (_id, fn) => fn(api),
+    now: () => 5000,
+  })
+  expect(provider).toMatchObject({ fullScanOnly: true, completeFullScan: true })
+  const first = await provider.pullPage!(binding(), { mode: "full", cursor: "9999" })
+  expect(first.cursor).toBeUndefined()
+  expect(first.nextPage).toBe("next")
+  expect(first.items).toHaveLength(1)
+  const terminal = await provider.pullPage!(binding(), { mode: "full", page: first.nextPage })
+  expect(terminal).toMatchObject({
+    cursor: "5000",
+    items: [expect.objectContaining({ status: "done" })],
+  })
+  expect(terminal.nextPage).toBeUndefined()
+  expect(paths[1]).toContain("page_token=next")
+})
+
+it("resolves the Bitable adapter's Host connection before sync", async () => {
+  jest.mocked(resolveLarkConnection).mockResolvedValueOnce({
+    id: "lark-connection",
+    hostMetadata: { authorizationEpoch: "epoch-a" },
+  } as never)
+  const provider = createLarkBitableSyncProvider()
+  const prepared = await provider.prepare!(binding())
+  expect(prepared.connectionRef).toBe("lark-connection")
+  expect(prepared.provider.prepare).toBeUndefined()
+  jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], cursor: "next" })
+  await prepared.provider.pullPage!(binding(), { mode: "full" })
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      adapterId: "cai_1",
+      expectedAuthorizationEpoch: "epoch-a",
+      identity: "user",
+    }),
+    expect.any(Function)
+  )
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1")
 })

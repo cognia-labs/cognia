@@ -11,7 +11,7 @@
  * no priority, no labels and no estimate, so those never leave.
  */
 
-import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type {
   Issue,
   IssueExternalRef,
@@ -25,6 +25,8 @@ import type {
   IssueSyncProvider,
   PullOptions,
   PullResult,
+  PullPage,
+  PullPageOptions,
   PushOutcome,
   RemoteCycle,
   RemoteIssue,
@@ -32,6 +34,9 @@ import type {
 } from "../types"
 import {
   createLarkTask,
+  withIssueLarkApi,
+  issueLarkError,
+  listLarkTasklistTasksPage,
   listLarkSections,
   listLarkTasklistTasks,
   updateLarkTask,
@@ -63,6 +68,8 @@ export function sectionExternalId(guid: string): string {
 export interface LarkTaskProviderDeps {
   /** Test seam over `withLarkAuthedApi`. */
   withApi?: <T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) => Promise<T>
+  /** Pin all calls in a prepared pass to this authorization. */
+  expectedAuthorizationEpoch?: string
   now?: () => number
 }
 
@@ -100,13 +107,39 @@ export function toLarkTaskPatch(patch: RemotePatch): LarkTaskPatch {
 }
 
 export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): IssueSyncProvider {
-  const withApi =
-    deps.withApi ??
-    (<T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) =>
-      withLarkAuthedApi({ adapterId, identity: "user" }, (api) => fn(api)))
+  const withApi = <T>(
+    adapterId: string,
+    fn: (api: LarkAuthedApi) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> =>
+    (deps.withApi
+      ? deps.withApi(adapterId, fn)
+      : withIssueLarkApi(adapterId, fn, signal, deps.expectedAuthorizationEpoch)
+    ).catch((error) => {
+      throw issueLarkError(error)
+    })
   const now = deps.now ?? Date.now
 
-  return {
+  const provider: IssueSyncProvider = {
+    completeFullScan: true,
+    fullScanOnly: true,
+    ...(!deps.withApi && !deps.expectedAuthorizationEpoch
+      ? {
+          prepare: async (binding: IssueSyncBinding) => {
+            const resource = binding.resource
+            if (resource.kind !== "lark-tasklist") throw new Error("Invalid Lark binding")
+            const { resolveLarkConnection } =
+              await import("@/lib/connectors/adapters/lark/host-auth")
+            const connection = await resolveLarkConnection(resource.adapterId)
+            const epoch = connection.hostMetadata?.authorizationEpoch
+            if (!epoch) throw new Error("Lark authorization epoch unavailable")
+            return {
+              provider: createLarkTaskSyncProvider({ ...deps, expectedAuthorizationEpoch: epoch }),
+              connectionRef: connection.id,
+            }
+          },
+        }
+      : {}),
     id: LARK_TASK_PROVIDER_ID,
     label: "Lark tasks",
     resource: {
@@ -129,8 +162,8 @@ export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): Iss
         for (const resource of container.resources) {
           if (resource.kind !== "lark-tasklist") continue
           const key = `${resource.adapterId}:${resource.tasklistGuid}`
-          if (seen.has(key)) continue
-          seen.add(key)
+          if (seen.has(`${container.id}:${key}`)) continue
+          seen.add(`${container.id}:${key}`)
           bindings.push({
             providerId: LARK_TASK_PROVIDER_ID,
             projectId: container.projectId,
@@ -142,6 +175,30 @@ export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): Iss
         }
       }
       return bindings
+    },
+
+    async pullPage(binding: IssueSyncBinding, options: PullPageOptions): Promise<PullPage> {
+      const resource = binding.resource
+      if (resource.kind !== "lark-tasklist") throw new Error("not a lark-tasklist binding")
+      return withApi(
+        resource.adapterId,
+        async (api) => {
+          const listed = await listLarkTasklistTasksPage(api, resource.tasklistGuid, options.page)
+          options.signal?.throwIfAborted()
+          const sections = await listLarkSections(api, resource.tasklistGuid)
+          return {
+            items: listed.tasks.map((task) => larkTaskToRemote(task, resource.tasklistGuid)),
+            cycles: sections.map((section) => ({
+              externalId: sectionExternalId(section.guid),
+              kind: "cycle",
+              name: section.name,
+              status: "active",
+            })),
+            ...(listed.nextPage ? { nextPage: listed.nextPage } : { cursor: String(now()) }),
+          }
+        },
+        options.signal
+      )
     },
 
     async pull(binding: IssueSyncBinding, options: PullOptions): Promise<PullResult> {
@@ -173,12 +230,15 @@ export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): Iss
       binding: IssueSyncBinding,
       ref: IssueExternalRef,
       patch: RemotePatch,
-      _issue: Issue
+      _issue: Issue,
+      context: { signal?: AbortSignal }
     ): Promise<PushOutcome> {
       const resource = binding.resource
       if (resource.kind !== "lark-tasklist") throw new Error("not a lark-tasklist binding")
-      const updated = await withApi(resource.adapterId, (api) =>
-        updateLarkTask(api, ref.externalId, toLarkTaskPatch(patch), now())
+      const updated = await withApi(
+        resource.adapterId,
+        (api) => updateLarkTask(api, ref.externalId, toLarkTaskPatch(patch), now()),
+        context.signal
       )
       return {
         status: "applied",
@@ -209,4 +269,5 @@ export function createLarkTaskSyncProvider(deps: LarkTaskProviderDeps = {}): Iss
       }
     },
   }
+  return provider
 }

@@ -1,8 +1,16 @@
 import type { IssueExternalRef, IssueProject } from "@/types/issues"
 import type { OctokitLike } from "@/lib/github/issues"
 import type { IssueSyncBinding } from "../types"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import {
+  githubReadAccountsFor,
+  resolveGithubAccountGitAccess,
+} from "@/lib/integrations/github-read-credential"
+import { getOctokitForRepo } from "@/lib/github/octokit-factory"
+import { ghCliToken } from "@/lib/ai/agent/team/pr-feedback/resolvers"
 import {
   createGithubSyncProvider,
+  resolveGithubSyncReadClient,
   extractIssueMentions,
   githubLoginOfAssignee,
   nextGithubAssignees,
@@ -12,6 +20,7 @@ import {
   toRemoteIssue,
   toUpdateIssueInput,
 } from "./github"
+import { ExternalSyncCursorInvalid } from "@/lib/external-services/sync/types"
 
 it("describes its built-in resource through the shared descriptor", () => {
   const descriptor = createGithubSyncProvider().resource!
@@ -24,7 +33,13 @@ it("describes its built-in resource through the shared descriptor", () => {
 
 jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
   createResolveOctokit: () => async () => null,
+  ghCliToken: jest.fn(async () => null),
 }))
+jest.mock("@/lib/integrations/github-read-credential", () => ({
+  githubReadAccountsFor: jest.fn(),
+  resolveGithubAccountGitAccess: jest.fn(),
+}))
+jest.mock("@/lib/github/octokit-factory", () => ({ getOctokitForRepo: jest.fn() }))
 jest.mock("@/lib/integrations/action-runner", () => ({ executeIntegrationAction: jest.fn() }))
 jest.mock("@/lib/issues/github-writeback", () => ({
   GITHUB_DELIVERY_PLUGIN_ID: "github-delivery",
@@ -177,6 +192,7 @@ describe("resolveBindings", () => {
         projectKey: "MERC",
         key: "acme/one",
       }),
+      expect.objectContaining({ providerId: "github", issueProjectId: "p2", key: "acme/one" }),
     ])
   })
 })
@@ -662,4 +678,419 @@ describe("assignee push", () => {
     ).resolves.toEqual({ status: "applied" })
     expect(execute).not.toHaveBeenCalled()
   })
+})
+
+it("pages GitHub updates by keyset and commits only a terminal cursor", async () => {
+  let reads = 0
+  const request = jest.fn(async (route: string, _params: Record<string, unknown> = {}) => {
+    if (route.endsWith("/issues")) {
+      reads += 1
+      return {
+        status: 200,
+        headers:
+          reads === 1
+            ? { link: '<https://api.github.com/repos/acme/one/issues?page=2>; rel="next"' }
+            : {},
+        data: [
+          {
+            number: reads === 1 ? 1 : 2,
+            title: "Issue",
+            state: reads === 1 ? "open" : "closed",
+            html_url: "https://github.com/acme/one/issues/1",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: reads === 1 ? "2026-01-02T00:00:00Z" : "2026-01-03T00:00:00Z",
+          },
+        ],
+      }
+    }
+    return { status: 200, headers: {}, data: [] }
+  })
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  const b = { ...binding(), resource: { ...importRepo, sync: { mode: "import" as const } } }
+  const first = await provider.pullPage!(b, { mode: "full" })
+  expect(first.cursor).toBeUndefined()
+  expect(JSON.parse(first.nextPage!)).toEqual({
+    since: Date.parse("2026-01-02T00:00:00Z"),
+    page: 1,
+    max: Date.parse("2026-01-02T00:00:00Z"),
+  })
+  const last = await provider.pullPage!(b, { mode: "full", page: first.nextPage })
+  expect(last).toMatchObject({
+    cursor: String(Date.parse("2026-01-03T00:00:00Z")),
+    items: [expect.objectContaining({ status: "done" })],
+  })
+  expect(last.nextPage).toBeUndefined()
+  expect(
+    request.mock.calls.filter(([route]) => route.endsWith("/issues")).map(([, params]) => params)
+  ).toEqual([
+    expect.objectContaining({
+      page: 1,
+      state: "all",
+      sort: "updated",
+      direction: "asc",
+      per_page: 100,
+      since: new Date(0).toISOString(),
+    }),
+    expect.objectContaining({
+      page: 1,
+      state: "all",
+      sort: "updated",
+      direction: "asc",
+      per_page: 100,
+      since: "2026-01-01T23:59:59.000Z",
+    }),
+  ])
+  await provider.pullPage!(b, { mode: "incremental", cursor: last.cursor })
+  expect(
+    request.mock.calls.filter(([route]) => route.endsWith("/issues")).at(-1)?.[1]
+  ).toMatchObject({ since: "2026-01-02T23:59:59.000Z" })
+})
+
+it("keeps earlier pages' progress when the terminal page holds only pull requests", async () => {
+  let reads = 0
+  const request = jest.fn(async (route: string) => {
+    if (route !== "GET /repos/{owner}/{repo}/issues") return { status: 200, headers: {}, data: [] }
+    reads += 1
+    return {
+      status: 200,
+      headers:
+        reads === 1
+          ? { link: '<https://api.github.com/repos/acme/one/issues?page=2>; rel="next"' }
+          : {},
+      data:
+        reads === 1
+          ? [
+              {
+                number: 1,
+                title: "Issue",
+                state: "open",
+                html_url: "https://github.com/acme/one/issues/1",
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-02T00:00:00Z",
+              },
+            ]
+          : [
+              {
+                number: 2,
+                title: "PR",
+                state: "open",
+                html_url: "https://github.com/acme/one/pull/2",
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-05T00:00:00Z",
+                pull_request: {},
+              },
+            ],
+    }
+  })
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  const b = { ...binding(), resource: { ...importRepo, sync: { mode: "import" as const } } }
+  const first = await provider.pullPage!(b, { mode: "incremental", cursor: "0" })
+  const last = await provider.pullPage!(b, {
+    mode: "incremental",
+    cursor: "0",
+    page: first.nextPage,
+  })
+  expect(last.items).toEqual([])
+  // Not "0": the next incremental pass must not rescan the whole history.
+  expect(last.cursor).toBe(String(Date.parse("2026-01-05T00:00:00Z")))
+})
+
+it.each([
+  [429, { "retry-after": "123" }, undefined, 123_000],
+  [403, { "x-ratelimit-remaining": "0" }, undefined, 60_000],
+  [403, {}, "You have exceeded a secondary rate limit", 60_000],
+] as const)(
+  "translates GitHub %s into sanitized retry backoff",
+  async (status, headers, message, delay) => {
+    const provider = createGithubSyncProvider({
+      resolveOctokitOrNull: async () => ({
+        request: async () => {
+          throw { status, response: { headers, data: { message } } }
+        },
+      }),
+    })
+    await expect(provider.pullPage!(binding(), { mode: "full" })).rejects.toMatchObject({
+      name: "ExternalSyncRateLimited",
+      retryAfterMs: delay,
+      message: "External sync rate limited",
+    })
+  }
+)
+
+it("prepares the exact read connection alongside a client reused for that pass", async () => {
+  const request = jest.fn(async () => ({ status: 200, headers: {}, data: [] }))
+  const provider = createGithubSyncProvider({
+    resolveReadClient: async () => ({
+      octokit: { request },
+      connectionRef: "read-connection" as AuthConnectionRef,
+    }),
+  })
+  const prepared = await provider.prepare!(binding())
+  expect(prepared.connectionRef).toBe("read-connection")
+  await prepared.provider.pullPage!(
+    { ...binding(), resource: { ...importRepo, sync: { mode: "import" } } },
+    { mode: "full" }
+  )
+  expect(request).toHaveBeenCalled()
+})
+
+it("uses x-ratelimit-reset when Retry-After is absent", async () => {
+  const clock = jest.spyOn(Date, "now").mockReturnValue(1000)
+  try {
+    const provider = createGithubSyncProvider({
+      resolveOctokitOrNull: async () => ({
+        request: async () => ({
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "91" },
+          data: { message: "private" },
+        }),
+      }),
+    })
+    await expect(provider.pullPage!(binding(), { mode: "full" })).rejects.toMatchObject({
+      retryAfterMs: 90_000,
+      message: "External sync rate limited",
+    })
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+it("binds the first usable read account rather than the first listed account", async () => {
+  const unavailable = { id: "first", connectionId: "wrong-connection" }
+  const selected = { id: "second", connectionId: "actual-connection" }
+  jest.mocked(githubReadAccountsFor).mockResolvedValueOnce([unavailable, selected] as never)
+  jest
+    .mocked(resolveGithubAccountGitAccess)
+    .mockRejectedValueOnce(new Error("unavailable"))
+    .mockResolvedValueOnce({ host: { id: "github.com" }, token: "test-credential" } as never)
+  const octokit = { request: jest.fn() }
+  jest.mocked(getOctokitForRepo).mockResolvedValueOnce(octokit as never)
+  const client = await resolveGithubSyncReadClient("acme/one")
+  expect(client).toEqual({ octokit, connectionRef: "actual-connection" })
+  expect(resolveGithubAccountGitAccess).toHaveBeenNthCalledWith(2, selected)
+  expect(getOctokitForRepo).toHaveBeenCalledWith(
+    expect.objectContaining({ repoFullName: "acme/one", pat: { token: "test-credential" } })
+  )
+  expect(ghCliToken).not.toHaveBeenCalled()
+})
+
+it("uses a named-lock target when only gh can provide a read credential", async () => {
+  jest.mocked(githubReadAccountsFor).mockResolvedValueOnce([])
+  jest.mocked(ghCliToken).mockResolvedValueOnce("cli-test-credential")
+  const octokit = { request: jest.fn() }
+  jest.mocked(getOctokitForRepo).mockResolvedValueOnce(octokit as never)
+  expect(await resolveGithubSyncReadClient("acme/one")).toEqual({ octokit })
+})
+
+it("advances page indices for identical boundary timestamps", async () => {
+  const timestamp = Date.parse("2026-01-02T00:00:00Z")
+  const request = jest.fn(async (route: string, params: Record<string, unknown> = {}) => ({
+    status: 200,
+    headers:
+      route.endsWith("/issues") && params.page === 1
+        ? { link: '<https://api.github.com/repos/o/r/issues?page=2>; rel="next"' }
+        : {},
+    data: route.endsWith("/issues")
+      ? [
+          {
+            number: params.page,
+            title: "Same update time",
+            state: "open",
+            html_url: "https://github.com/o/r/issues/1",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: new Date(timestamp).toISOString(),
+          },
+        ]
+      : [],
+  }))
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  const b = { ...binding(), resource: { ...importRepo, sync: { mode: "import" as const } } }
+  const first = await provider.pullPage!(b, { mode: "incremental", cursor: String(timestamp) })
+  expect(JSON.parse(first.nextPage!)).toEqual({
+    since: timestamp,
+    page: 2,
+    floor: timestamp,
+    max: timestamp,
+  })
+  const terminal = await provider.pullPage!(b, {
+    mode: "incremental",
+    cursor: String(timestamp),
+    page: first.nextPage,
+  })
+  expect(terminal).toMatchObject({
+    cursor: String(timestamp),
+    items: [expect.objectContaining({ externalId: "acme/one#2" })],
+  })
+  expect(
+    request.mock.calls.filter(([route]) => route.endsWith("/issues")).map(([, params]) => params)
+  ).toEqual([
+    expect.objectContaining({ since: "2026-01-01T23:59:59.000Z", page: 1, sort: "updated" }),
+    expect.objectContaining({ since: "2026-01-01T23:59:59.000Z", page: 2, sort: "updated" }),
+  ])
+})
+
+it("rejects obsolete offset checkpoints so the core can rebuild a full scan", async () => {
+  const request = jest.fn()
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  await expect(
+    provider.pullPage!(binding(), { mode: "full", page: JSON.stringify({ page: 2, newest: 1000 }) })
+  ).rejects.toBeInstanceOf(ExternalSyncCursorInvalid)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("persists the earliest tie floor across keyset boundaries and resumed providers", async () => {
+  const request = jest.fn(async (route: string) => ({
+    status: 200,
+    headers: route.endsWith("/issues")
+      ? { link: '<https://api.github.com/repos/acme/one/issues?page=3>; rel="next"' }
+      : {},
+    data: route.endsWith("/issues")
+      ? [
+          {
+            number: 1,
+            title: "Issue",
+            state: "open",
+            html_url: "https://github.com/acme/one/issues/1",
+            created_at: new Date(1000).toISOString(),
+            updated_at: new Date(30_000).toISOString(),
+          },
+        ]
+      : [],
+  }))
+  const b = { ...binding(), resource: { ...importRepo, sync: { mode: "import" as const } } }
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  const page = await provider.pullPage!(b, {
+    mode: "full",
+    cursor: "90000",
+    page: JSON.stringify({ since: 20_000, page: 2, floor: 20_000 }),
+  })
+  expect(JSON.parse(page.nextPage!)).toEqual({
+    since: 30_000,
+    page: 1,
+    floor: 20_000,
+    max: 30_000,
+  })
+  const resumed = createGithubSyncProvider({
+    resolveOctokitOrNull: async () => ({
+      request: async (route) => ({
+        status: 200,
+        headers: {},
+        data: route.endsWith("/issues")
+          ? [
+              {
+                number: 2,
+                title: "Later",
+                state: "open",
+                html_url: "https://github.com/acme/one/issues/2",
+                created_at: new Date(1000).toISOString(),
+                updated_at: new Date(40_000).toISOString(),
+              },
+            ]
+          : [],
+      }),
+    }),
+  })
+  expect(
+    await resumed.pullPage!(b, { mode: "full", cursor: "90000", page: page.nextPage })
+  ).toMatchObject({ cursor: "20000" })
+})
+
+it("confirms only missing or transferred GitHub issues", async () => {
+  const controller = new AbortController()
+  const request = jest.fn(async (_route: string, params: Record<string, unknown> = {}) => {
+    const number = Number(params.issue_number)
+    if (number === 1) return { status: 404, headers: {}, data: { message: "Not Found" } }
+    if (number === 2) throw { status: 410, response: { data: { message: "Gone" } } }
+    if (number === 5)
+      return { status: 200, headers: {}, data: { number, repository: { full_name: "other/repo" } } }
+    if (number === 7)
+      return {
+        status: 200,
+        headers: {},
+        data: { number, html_url: "https://github.com/other/repo/issues/7" },
+      }
+    return {
+      status: 200,
+      headers: {},
+      data: {
+        number,
+        repository_url: `https://api.github.com/repos/${number === 4 ? "other/repo" : "ACME/ONE"}`,
+      },
+    }
+  })
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  expect(
+    await provider.confirmDeparted!(
+      binding(),
+      Array.from({ length: 7 }, (_, index) => `acme/one#${index + 1}`),
+      { signal: controller.signal }
+    )
+  ).toEqual(["acme/one#1", "acme/one#2", "acme/one#4", "acme/one#5", "acme/one#7"])
+  expect(request).toHaveBeenCalledTimes(7)
+  expect(request).toHaveBeenCalledWith(
+    "GET /repos/{owner}/{repo}/issues/{issue_number}",
+    expect.objectContaining({
+      owner: "acme",
+      repo: "one",
+      issue_number: 3,
+      request: { signal: controller.signal },
+    })
+  )
+})
+
+it("skips ids that do not name an issue of the bound repository", async () => {
+  const request = jest.fn(async () => ({ status: 404, headers: {}, data: {} }))
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  expect(
+    await provider.confirmDeparted!(binding(), ["other/repo#1", "acme/one#x", "acme/one#2"], {})
+  ).toEqual(["acme/one#2"])
+  expect(request).toHaveBeenCalledTimes(1)
+})
+
+it("caps GitHub departure verification at 50 requests", async () => {
+  const request = jest.fn(async () => ({ status: 404, headers: {}, data: {} }))
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  const ids = Array.from({ length: 60 }, (_, index) => `acme/one#${index + 1}`)
+  expect(await provider.confirmDeparted!(binding(), ids, {})).toEqual(ids.slice(0, 50))
+  expect(request).toHaveBeenCalledTimes(50)
+})
+
+it.each([500, 403, 429])(
+  "stops departure verification on GitHub %s without failing the run or exposing its body",
+  async (status) => {
+    const request = jest.fn(async (_route: string, params: Record<string, unknown> = {}) => ({
+      status: params.issue_number === 1 ? 404 : status,
+      headers: { "retry-after": "7" },
+      data: { message: "private response body" },
+    }))
+    const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+    const pending = provider.confirmDeparted!(
+      binding(),
+      ["acme/one#1", "acme/one#2", "acme/one#3"],
+      {}
+    )
+    if (status === 429)
+      await expect(pending).rejects.toMatchObject({
+        retryAfterMs: 7000,
+        message: "External sync rate limited",
+      })
+    // One unreadable issue must not fail every sync: keep what was proven.
+    else await expect(pending).resolves.toEqual(["acme/one#1"])
+    expect(request).toHaveBeenCalledTimes(2)
+  }
+)
+
+it("stops departure verification on cancellation before requesting another id", async () => {
+  const controller = new AbortController()
+  const request = jest.fn(async () => {
+    controller.abort()
+    return { status: 404, headers: {}, data: {} }
+  })
+  const provider = createGithubSyncProvider({ resolveOctokitOrNull: async () => ({ request }) })
+  await expect(
+    provider.confirmDeparted!(binding(), ["acme/one#1", "acme/one#2"], {
+      signal: controller.signal,
+    })
+  ).rejects.toThrow()
+  expect(request).toHaveBeenCalledTimes(1)
 })

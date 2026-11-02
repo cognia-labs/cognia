@@ -16,7 +16,15 @@ it("preserves the schema and callbacks without importing Host code", async () =>
       }),
     },
     pull: async () => ({ items: [], notModified: true }),
+    pullPage: async () => ({ items: [], cursor: "next" }),
+    confirmDeparted: async (_binding: unknown, ids: string[]) => ids,
+    completeFullScan: true,
+    fullScanOnly: true,
   }
   expect(defineIssueSyncProvider(provider)).toBe(provider)
+  expect(defineIssueSyncProvider(provider).pullPage).toBe(provider.pullPage)
+  expect(defineIssueSyncProvider(provider).confirmDeparted).toBe(provider.confirmDeparted)
+  expect(() => defineIssueSyncProvider({ ...provider, confirmDeparted: true } as never)).toThrow()
+  expect(() => defineIssueSyncProvider({ ...provider, pullPage: undefined })).toThrow(/pullPage/)
   expect(await defineIssueSyncProvider(provider).pull()).toEqual({ items: [], notModified: true })
 })

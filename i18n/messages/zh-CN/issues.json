@@ -159,6 +159,8 @@
     "pr_state_changed": "{to, select, merged {发现关联的拉取请求已合并} closed {发现关联的拉取请求已关闭} other {发现关联的拉取请求已打开}}",
     "pr_checks_changed": "{to, select, passing {发现关联的拉取请求检查已通过} failing {发现关联的拉取请求检查失败} other {发现关联的拉取请求检查已开始}}",
     "cycle_changed": "移到了另一个迭代",
+    "external_departed": "{provider} 上的来源已移除：{label}",
+    "external_returned": "{provider} 上的来源已恢复：{label}",
     "external_linked": "关联了外部记录",
     "external_unlinked": "移除了外部关联",
     "synced_in": "应用了来自 {provider} 的更改",
@@ -665,6 +667,8 @@
     "working": "删除中…"
   },
   "planning": {
+    "sourceRemoved": "来源已移除",
+    "sourceRemovedHint": "已在 {provider} 删除或移出同步容器。本地事项将保留。",
     "section": "规划",
     "cycle": "迭代",
     "noCycle": "未排入迭代",
@@ -959,6 +963,8 @@
       "pr_state_changed": "关联拉取请求变化",
       "pr_checks_changed": "关联拉取请求检查变化",
       "cycle_changed": "周期变化",
+      "external_departed": "外部来源已移除",
+      "external_returned": "外部来源已恢复",
       "external_linked": "新增外部链接",
       "external_unlinked": "移除外部链接",
       "work_started": "工作开始",

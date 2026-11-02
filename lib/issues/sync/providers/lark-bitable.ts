@@ -13,7 +13,7 @@
  * field more recently. That is the honest default for a table with no clock.
  */
 
-import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type {
   Issue,
   IssueExternalRef,
@@ -29,12 +29,17 @@ import type {
   IssueSyncProvider,
   PullOptions,
   PullResult,
+  PullPage,
+  PullPageOptions,
   PushOutcome,
   RemoteIssue,
   RemotePatch,
 } from "../types"
 import {
   bitableCellDate,
+  withIssueLarkApi,
+  issueLarkError,
+  listBitableRecordsPage,
   bitableCellNumber,
   bitableCellText,
   createBitableRecord,
@@ -47,6 +52,8 @@ export const LARK_BITABLE_PROVIDER_ID = "lark-bitable"
 
 export interface LarkBitableProviderDeps {
   withApi?: <T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) => Promise<T>
+  /** Pin all calls in a prepared pass to this authorization. */
+  expectedAuthorizationEpoch?: string
   now?: () => number
 }
 
@@ -147,13 +154,42 @@ export function bitableFieldsFromIssue(
 export function createLarkBitableSyncProvider(
   deps: LarkBitableProviderDeps = {}
 ): IssueSyncProvider {
-  const withApi =
-    deps.withApi ??
-    (<T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) =>
-      withLarkAuthedApi({ adapterId, identity: "user" }, (api) => fn(api)))
+  const withApi = <T>(
+    adapterId: string,
+    fn: (api: LarkAuthedApi) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> =>
+    (deps.withApi
+      ? deps.withApi(adapterId, fn)
+      : withIssueLarkApi(adapterId, fn, signal, deps.expectedAuthorizationEpoch)
+    ).catch((error) => {
+      throw issueLarkError(error)
+    })
   const now = deps.now ?? Date.now
 
-  return {
+  const provider: IssueSyncProvider = {
+    completeFullScan: true,
+    fullScanOnly: true,
+    ...(!deps.withApi && !deps.expectedAuthorizationEpoch
+      ? {
+          prepare: async (binding: IssueSyncBinding) => {
+            const resource = binding.resource
+            if (resource.kind !== "lark-bitable") throw new Error("Invalid Lark binding")
+            const { resolveLarkConnection } =
+              await import("@/lib/connectors/adapters/lark/host-auth")
+            const connection = await resolveLarkConnection(resource.adapterId)
+            const epoch = connection.hostMetadata?.authorizationEpoch
+            if (!epoch) throw new Error("Lark authorization epoch unavailable")
+            return {
+              provider: createLarkBitableSyncProvider({
+                ...deps,
+                expectedAuthorizationEpoch: epoch,
+              }),
+              connectionRef: connection.id,
+            }
+          },
+        }
+      : {}),
     id: LARK_BITABLE_PROVIDER_ID,
     label: "Lark Bitable",
     resource: {
@@ -176,8 +212,8 @@ export function createLarkBitableSyncProvider(
         for (const resource of container.resources) {
           if (resource.kind !== "lark-bitable") continue
           const key = `${resource.adapterId}:${resource.appToken}:${resource.tableId}`
-          if (seen.has(key)) continue
-          seen.add(key)
+          if (seen.has(`${container.id}:${key}`)) continue
+          seen.add(`${container.id}:${key}`)
           bindings.push({
             providerId: LARK_BITABLE_PROVIDER_ID,
             projectId: container.projectId,
@@ -189,6 +225,33 @@ export function createLarkBitableSyncProvider(
         }
       }
       return bindings
+    },
+
+    async pullPage(binding: IssueSyncBinding, options: PullPageOptions): Promise<PullPage> {
+      const resource = binding.resource
+      if (resource.kind !== "lark-bitable") throw new Error("not a lark-bitable binding")
+      return withApi(
+        resource.adapterId,
+        async (api) => {
+          const listed = await listBitableRecordsPage(
+            api,
+            resource.appToken,
+            resource.tableId,
+            options.page
+          )
+          options.signal?.throwIfAborted()
+          const items = listed.records.map((record) =>
+            bitableRecordToRemote(record, resource.fieldMap, now())
+          )
+          if (items.some((item) => item === null))
+            throw new Error("Bitable record cannot be mapped")
+          return {
+            items: items as RemoteIssue[],
+            ...(listed.nextPage ? { nextPage: listed.nextPage } : { cursor: String(now()) }),
+          }
+        },
+        options.signal
+      )
     },
 
     async pull(binding: IssueSyncBinding, options: PullOptions): Promise<PullResult> {
@@ -215,14 +278,19 @@ export function createLarkBitableSyncProvider(
     async push(
       binding: IssueSyncBinding,
       ref: IssueExternalRef,
-      patch: RemotePatch
+      patch: RemotePatch,
+      _issue: Issue,
+      context: { signal?: AbortSignal }
     ): Promise<PushOutcome> {
       const resource = binding.resource
       if (resource.kind !== "lark-bitable") throw new Error("not a lark-bitable binding")
       const fields = bitableFieldsFromPatch(patch, resource.fieldMap)
       if (Object.keys(fields).length === 0) return { status: "applied" }
-      await withApi(resource.adapterId, (api) =>
-        updateBitableRecord(api, resource.appToken, resource.tableId, ref.externalId, fields)
+      await withApi(
+        resource.adapterId,
+        (api) =>
+          updateBitableRecord(api, resource.appToken, resource.tableId, ref.externalId, fields),
+        context.signal
       )
       return { status: "applied", remoteUpdatedAt: now() }
     },
@@ -249,4 +317,5 @@ export function createLarkBitableSyncProvider(
       }
     },
   }
+  return provider
 }

@@ -3,6 +3,15 @@ import { activityValues } from "./activity-values"
 const t = (key: string) => `T:${key}`
 
 describe("activityValues", () => {
+  it.each(["external_departed", "external_returned"])(
+    "renders %s with only its cached source label",
+    (kind) => {
+      expect(activityValues({ kind, provider: "github", label: "o/r#1" }, t)).toMatchObject({
+        provider: "github",
+        label: "o/r#1",
+      })
+    }
+  )
   it("localizes a status transition through the status catalogue", () => {
     expect(activityValues({ kind: "status_changed", from: "todo", to: "done" }, t)).toEqual({
       from: "T:status.todo",

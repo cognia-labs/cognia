@@ -34,6 +34,8 @@ export type {
   IssueSyncResourceSchema,
   PullOptions,
   PullResult,
+  PullPage,
+  PullPageOptions,
   PushOutcome,
   RemoteCycle,
   RemoteIssue,

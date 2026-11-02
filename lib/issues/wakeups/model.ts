@@ -764,6 +764,8 @@ export const ISSUE_WAKEUP_EVENT_KINDS = [
   "cycle_changed",
   "external_linked",
   "external_unlinked",
+  "external_departed",
+  "external_returned",
   "work_started",
   "work_settled",
   "synced_in",

@@ -313,6 +313,8 @@ export interface IssueExternalRef {
   syncedAt?: number
   /** The remote `updated_at` observed at that reconciliation. */
   remoteUpdatedAt?: number
+  /** Remote item deleted or left the bound container; the local issue is kept. */
+  departedAt?: number
   /** Provider-private cursor data (etag, revision, section). */
   meta?: Record<string, string | number>
 }
@@ -527,6 +529,8 @@ export type IssueEventKind =
   | "cycle_changed"
   | "external_linked"
   | "external_unlinked"
+  | "external_departed"
+  | "external_returned"
   /** A durable work submission (a chat turn, a plan step) bound to this issue. */
   | "work_started"
   | "work_settled"
@@ -609,6 +613,18 @@ export type IssueEventPayload =
   | { kind: "work_started"; submissionId: string; source: string; by: IssueActor }
   | { kind: "work_settled"; submissionId: string; source: string; to: string }
   | { kind: "external_unlinked"; ref: IssueExternalRef; by: IssueActor }
+  | {
+      kind: "external_departed"
+      provider: string
+      label: string
+      by: IssueActor
+    }
+  | {
+      kind: "external_returned"
+      provider: string
+      label: string
+      by: IssueActor
+    }
   /** A remote change was applied to a local field by the sync engine. */
   | { kind: "synced_in"; provider: string; field: IssueSyncField; by: IssueActor }
   /**

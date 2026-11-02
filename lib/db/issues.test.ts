@@ -31,10 +31,13 @@ import {
   listIssuesByExternalKey,
   setIssueParent,
   touchIssueExternalRef,
+  setIssueExternalRefDeparted,
+  adoptIssueExternalRefBinding,
   unlinkIssueExternal,
   applyRuntimeIssueStatus,
   cascadeIssueWakeups,
   createIssue,
+  createIssueWithResult,
   deleteIssue,
   getIssue,
   getIssueByIdentifier,
@@ -79,6 +82,68 @@ async function kindsOf(issueId: string) {
 }
 
 describe("createIssue", () => {
+  it("atomically records departure/return once and checks binding ownership", async () => {
+    const ref = {
+      provider: "fake",
+      externalId: "remote",
+      label: "Cached label",
+      meta: { binding: "own" },
+    }
+    const issue = await make({ externalRefs: [ref] })
+    expect(
+      await setIssueExternalRefDeparted(issue.id, { ...ref, binding: "other" }, 100, HUMAN)
+    ).toBe(false)
+    const input = { ...ref, binding: "own" }
+    expect(await setIssueExternalRefDeparted(issue.id, input, 100, HUMAN)).toBe(true)
+    expect(await setIssueExternalRefDeparted(issue.id, input, 200, HUMAN)).toBe(false)
+    expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toBe(100)
+    expect(await setIssueExternalRefDeparted(issue.id, input, undefined, HUMAN)).toBe(true)
+    expect(await setIssueExternalRefDeparted(issue.id, input, undefined, HUMAN)).toBe(false)
+    const events = await listIssueEvents({ issueId: issue.id })
+    expect(events.map((event) => event.kind)).toEqual([
+      "created",
+      "external_departed",
+      "external_returned",
+    ])
+    expect(events[1].payload).toEqual({
+      kind: "external_departed",
+      provider: "fake",
+      label: "Cached label",
+      by: HUMAN,
+    })
+    expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toBeUndefined()
+  })
+  it("atomically deduplicates concurrent imports by every external key", async () => {
+    const externalRefs = [{ provider: "fake", externalId: "remote-1" }]
+    const [first, second] = await Promise.all([
+      make({ title: "First", externalRefs }),
+      make({ title: "Second", externalRefs }),
+    ])
+    expect(second).toEqual(first)
+    expect(await getDb().issues.count()).toBe(1)
+    expect(await kindsOf(first.id)).toEqual(["created"])
+    const again = await make({
+      externalRefs: [{ provider: "other", externalId: "new" }, ...externalRefs],
+    })
+    expect(again).toEqual(first)
+  })
+  it("reports which concurrent import created the issue without changing a deduped row", async () => {
+    const input = {
+      projectId: "w1",
+      issueProjectId: projectId,
+      title: "Import",
+      createdBy: HUMAN,
+      externalRefs: [{ provider: "github", externalId: "o/r#1" }],
+    }
+    const results = await Promise.all([
+      createIssueWithResult(input),
+      createIssueWithResult({ ...input, title: "Duplicate" }),
+    ])
+    expect(results.filter((result) => result.created)).toHaveLength(1)
+    expect(results[0].issue).toEqual(results[1].issue)
+    expect(await getDb().issues.count()).toBe(1)
+    expect(await kindsOf(results[0].issue.id)).toEqual(["created"])
+  })
   it("refuses a container owned by another workspace", async () => {
     // The workspace and the container arrive as two independent inputs, and an
     // agent tool takes the container id from a model. A row that satisfied
@@ -395,6 +460,71 @@ describe("moveIssueToProject", () => {
 })
 
 describe("linkIssueToGithub", () => {
+  it("atomically adopts an unowned ref once without changing its other metadata", async () => {
+    const ref = {
+      provider: "github",
+      externalId: "o/r#7",
+      syncedAt: 1000,
+      remoteUpdatedAt: 900,
+      meta: { etag: "cached" },
+    }
+    const issue = await make({ externalRefs: [ref] })
+    const scope = { projectId: "w1", issueProjectId: projectId }
+    const results = await Promise.all([
+      adoptIssueExternalRefBinding(issue.id, ref, { ...scope, binding: "first" }),
+      adoptIssueExternalRefBinding(issue.id, ref, { ...scope, binding: "second" }),
+    ])
+    expect(results.filter(Boolean)).toHaveLength(1)
+    const winner = results[0] ? "first" : "second"
+    expect((await getIssue(issue.id))?.externalRefs).toEqual([
+      { ...ref, meta: { ...ref.meta, binding: winner } },
+    ])
+    expect(await adoptIssueExternalRefBinding(issue.id, ref, { ...scope, binding: winner })).toBe(
+      true
+    )
+    expect(
+      await adoptIssueExternalRefBinding(issue.id, ref, {
+        ...scope,
+        projectId: "other",
+        binding: winner,
+      })
+    ).toBe(false)
+    expect(
+      await adoptIssueExternalRefBinding(issue.id, ref, {
+        ...scope,
+        issueProjectId: "other",
+        binding: winner,
+      })
+    ).toBe(false)
+    expect(await kindsOf(issue.id)).toEqual(["created"])
+  })
+  it.each([false, true])(
+    "preserves sync metadata when re-linking the same external key (githubRef=%s)",
+    async (hasGithubRef) => {
+      const ref = { repoFullName: "o/r", number: 7, htmlUrl: "https://example.test/7" }
+      const syncRef = {
+        provider: "github",
+        externalId: "o/r#7",
+        syncedAt: 1000,
+        remoteUpdatedAt: 900,
+        departedAt: 800,
+        meta: { binding: "o/r", etag: "cached" },
+      }
+      const issue = await make({
+        externalRefs: [syncRef],
+        ...(hasGithubRef ? { githubRef: ref } : {}),
+      })
+      await linkIssueToGithub(
+        issue.id,
+        { ...ref, htmlUrl: "https://example.test/refreshed" },
+        HUMAN
+      )
+      await linkIssueToGithub(issue.id, ref, HUMAN)
+      expect((await getIssue(issue.id))?.externalRefs).toEqual([
+        { ...syncRef, url: ref.htmlUrl, label: "o/r#7" },
+      ])
+    }
+  )
   it("records the ref and the event", async () => {
     const issue = await make()
     const ref = { repoFullName: "o/r", number: 7, htmlUrl: "https://example.test/7" }

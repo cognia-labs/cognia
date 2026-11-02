@@ -58,7 +58,7 @@ export interface IssueSyncBinding {
   resource: IssueProjectResource
   /**
    * Stable per (provider, remote container). Stamped on every ref's
-   * `meta.binding` so the engine can compute a per-binding watermark and a
+   * `meta.binding` so the engine can identify a binding's refs and a
    * provider can tell its own refs apart from another binding's.
    */
   key: string
@@ -147,6 +147,24 @@ export interface PullResult {
   truncated?: boolean
 }
 
+export interface PullPageOptions {
+  mode: "incremental" | "full"
+  cursor?: string
+  page?: string
+  signal?: AbortSignal
+}
+
+export interface PullPage {
+  items: RemoteIssue[]
+  cycles?: RemoteCycle[]
+  links?: RemoteLink[]
+  deleted?: string[]
+  /** Absent on the terminal page. */
+  nextPage?: string
+  /** Only the terminal page supplies the new committed cursor. */
+  cursor?: string
+}
+
 /** The fields the engine wants written back, already in remote-neutral form. */
 export interface RemotePatch {
   title?: string
@@ -185,9 +203,24 @@ export interface IssueSyncProvider {
   readonly pullFields: readonly IssueSyncField[]
   /** Fields the engine may send TO the remote. Empty means read-only. */
   readonly pushFields: readonly IssueSyncField[]
+  /** Full pages enumerate every live item, including closed/done items. Requires pullPage. */
+  readonly completeFullScan?: boolean
+  /** No change feed: enumerate the full container on every pass. */
+  readonly fullScanOnly?: boolean
   /** Which resource kind(s) this provider binds. */
   resolveBindings(containers: readonly IssueProject[]): IssueSyncBinding[]
+  /** Legacy single-page interface. A truncated result never advances the stored cursor. */
   pull(binding: IssueSyncBinding, options: PullOptions): Promise<PullResult>
+  pullPage?(binding: IssueSyncBinding, options: PullPageOptions): Promise<PullPage>
+  /**
+   * Confirm deleted/moved ids before tombstoning. Return only verified departures;
+   * reject on an uncertain response. The Host budgets at most 50 ids per run.
+   */
+  confirmDeparted?(
+    binding: IssueSyncBinding,
+    ids: string[],
+    options: { signal?: AbortSignal }
+  ): Promise<string[]>
   push?(
     binding: IssueSyncBinding,
     ref: IssueExternalRef,

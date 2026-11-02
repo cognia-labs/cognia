@@ -117,7 +117,7 @@ export function githubExternalRef(ref: IssueGithubRef): IssueExternalRef {
 /**
  * Write `externalRefs` together with its indexed mirror. One entry per
  * `provider:externalId`; a later entry for the same key replaces the earlier
- * one, so re-linking refreshes `syncedAt` instead of duplicating the link.
+ * one. Link writers merge existing sync metadata when refreshing a ref.
  */
 function withExternalRefs(row: Issue, refs: readonly IssueExternalRef[]): Issue {
   const byKey = new Map<string, IssueExternalRef>()
@@ -132,6 +132,13 @@ function withExternalRefs(row: Issue, refs: readonly IssueExternalRef[]): Issue 
  * burn an identifier or leave an issue with no trail.
  */
 export async function createIssue(input: CreateIssueInput): Promise<Issue> {
+  return (await createIssueWithResult(input)).issue
+}
+
+/** The same atomic create, with its deduplication result for import reconciliation. */
+export async function createIssueWithResult(
+  input: CreateIssueInput
+): Promise<{ issue: Issue; created: boolean }> {
   const db = getDb()
   const title = input.title.trim()
   if (!title) throw new Error("Issue title is required")
@@ -161,6 +168,12 @@ export async function createIssue(input: CreateIssueInput): Promise<Issue> {
       }
 
       const status = input.status ?? "backlog"
+      // IndexedDB serializes these read/write transactions across tabs too.
+      // Check before allocating a number or recording a second creation event.
+      for (const ref of input.externalRefs ?? []) {
+        const existing = await db.issues.where("externalKeys").equals(externalKeyOf(ref)).first()
+        if (existing) return { issue: existing, created: false }
+      }
       const number = await allocateIssueNumber(input.issueProjectId)
       const now = Date.now()
 
@@ -217,7 +230,7 @@ export async function createIssue(input: CreateIssueInput): Promise<Issue> {
           payload: { kind: "assigned", to: input.assignee, by: input.createdBy },
         })
       }
-      return row
+      return { issue: row, created: true }
     }
   )
 }
@@ -527,10 +540,14 @@ export async function linkIssueToGithub(
     const kept = (existing.externalRefs ?? []).filter(
       (candidate) => !previous.includes(externalKeyOf(candidate))
     )
+    const nextRef = githubExternalRef(ref)
+    const currentRef = existing.externalRefs?.find(
+      (candidate) => externalKeyOf(candidate) === externalKeyOf(nextRef)
+    )
     await db.issues.put(
       withExternalRefs({ ...existing, githubRef: ref, updatedAt: now }, [
         ...kept,
-        githubExternalRef(ref),
+        { ...currentRef, ...nextRef },
       ])
     )
     await appendIssueEvent({
@@ -1030,6 +1047,77 @@ export async function touchIssueExternalRef(
       externalKeyOf(candidate) === key ? { ...candidate, ...patch } : candidate
     )
     await db.issues.put(withExternalRefs(existing, refs))
+  })
+}
+
+/** Claim an unowned ref actually read by a binding, without stealing another binding's ref. */
+export async function adoptIssueExternalRefBinding(
+  id: string,
+  ref: Pick<IssueExternalRef, "provider" | "externalId">,
+  scope: { projectId: string; issueProjectId: string; binding: string }
+): Promise<boolean> {
+  const db = getDb()
+  return db.transaction("rw", db.issues, async () => {
+    const issue = await db.issues.get(id)
+    if (
+      !issue ||
+      issue.projectId !== scope.projectId ||
+      issue.issueProjectId !== scope.issueProjectId
+    )
+      return false
+    const key = externalKeyOf(ref)
+    const current = issue.externalRefs?.find((candidate) => externalKeyOf(candidate) === key)
+    if (!current || (current.meta?.binding !== undefined && current.meta.binding !== scope.binding))
+      return false
+    if (current.meta?.binding === scope.binding) return true
+    const next = { ...current, meta: { ...(current.meta ?? {}), binding: scope.binding } }
+    await db.issues.put(
+      withExternalRefs(
+        issue,
+        issue.externalRefs!.map((candidate) =>
+          externalKeyOf(candidate) === key ? next : candidate
+        )
+      )
+    )
+    return true
+  })
+}
+
+/** Idempotent ref lifecycle transition and its activity event in one transaction. */
+export async function setIssueExternalRefDeparted(
+  id: string,
+  ref: Pick<IssueExternalRef, "provider" | "externalId"> & { binding: string },
+  departedAt: number | undefined,
+  by: IssueActor
+): Promise<boolean> {
+  const db = getDb()
+  return db.transaction("rw", db.issues, db.issueEvents, async () => {
+    const issue = await db.issues.get(id)
+    const current = issue?.externalRefs?.find(
+      (candidate) =>
+        externalKeyOf(candidate) === externalKeyOf(ref) && candidate.meta?.binding === ref.binding
+    )
+    if (!issue || !current || (current.departedAt === undefined) === (departedAt === undefined))
+      return false
+    const next = { ...current }
+    if (departedAt === undefined) delete next.departedAt
+    else next.departedAt = departedAt
+    await db.issues.put(
+      withExternalRefs(
+        issue,
+        issue.externalRefs!.map((candidate) => (candidate === current ? next : candidate))
+      )
+    )
+    await appendIssueEvent({
+      issueId: id,
+      payload: {
+        kind: departedAt === undefined ? "external_returned" : "external_departed",
+        provider: current.provider,
+        label: current.label ?? current.externalId,
+        by,
+      },
+    })
+    return true
   })
 }
 

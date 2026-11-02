@@ -2,8 +2,8 @@
  * GitHub as a sync provider (spec 2026-09-06, D11), for `github-repo`
  * resources in `import` mode.
  *
- * Pull reuses `fetchRepoIssues` (the same incremental `since` walk the mirror
- * uses) and adds three reads: milestones (REST), the repository's Projects v2
+ * Pull keyset pages in update order with an overlapped incremental `since` cursor.
+ * Legacy pull retains `fetchRepoIssues`. Both add milestones (REST), Projects v2
  * iterations (GraphQL, only when the binding names a project number) and the
  * most recently updated pull requests, whose titles, bodies and head branches
  * are scanned for `KEY-n` identifiers and `#n` issue numbers so the PR
@@ -15,7 +15,18 @@
  * key until the remote reflects the change.
  */
 
-import { fetchRepoIssues, type OctokitLike } from "@/lib/github/issues"
+import {
+  fetchRepoIssues,
+  toMirrorRow,
+  ISSUES_PER_PAGE,
+  type OctokitLike,
+} from "@/lib/github/issues"
+import {
+  ExternalSyncRateLimited,
+  ExternalSyncCursorInvalid,
+  type ExternalSyncTarget,
+} from "@/lib/external-services/sync/types"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { githubStateToStatus } from "@/lib/issues/sources/github-source"
 import {
   GITHUB_DELIVERY_PLUGIN_ID,
@@ -45,6 +56,8 @@ import type {
   IssueSyncProvider,
   PullOptions,
   PullResult,
+  PullPage,
+  PullPageOptions,
   PushOutcome,
   RemoteCycle,
   RemoteIssue,
@@ -119,6 +132,9 @@ export function iterationExternalId(id: string): string {
 }
 
 export interface GithubSyncProviderDeps {
+  resolveReadClient?: (
+    repoFullName: string
+  ) => Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }>
   /** Returns null when no credential is available. */
   resolveOctokitOrNull?: (repoFullName: string) => Promise<OctokitLike | null>
   execute?: typeof executeIntegrationAction
@@ -130,6 +146,111 @@ export interface GithubSyncProviderDeps {
    * requests each, so the sweep's cost stays bounded however busy the repo.
    */
   pullRequestCiLimit?: number
+}
+
+/** Resolve the client and its exact source together; failed accounts may fall through to gh. */
+export async function resolveGithubSyncReadClient(
+  repoFullName: string
+): Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }> {
+  const { githubReadAccountsFor, resolveGithubAccountGitAccess } =
+    await import("@/lib/integrations/github-read-credential")
+  const { getOctokitForRepo } = await import("@/lib/github/octokit-factory")
+  for (const account of await githubReadAccountsFor(repoFullName)) {
+    const access = await resolveGithubAccountGitAccess(account).catch(() => null)
+    if (!access || access.host.id !== "github.com") continue
+    const octokit = await getOctokitForRepo({
+      repoFullName,
+      mode: "pat",
+      pat: { token: access.token },
+      host: access.host,
+    })
+    return {
+      octokit: octokit as unknown as OctokitLike,
+      ...(account.connectionId ? { connectionRef: account.connectionId as AuthConnectionRef } : {}),
+    }
+  }
+  const { ghCliToken } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
+  const token = await ghCliToken()
+  if (!token) throw new MissingGithubCredentialError(repoFullName)
+  return {
+    octokit: (await getOctokitForRepo({
+      repoFullName,
+      mode: "pat",
+      pat: { token },
+    })) as unknown as OctokitLike,
+  }
+}
+
+function githubRateLimit(error: {
+  status?: number
+  headers?: Record<string, string | undefined>
+  data?: unknown
+  message?: string
+}): ExternalSyncRateLimited | undefined {
+  const headers = Object.fromEntries(
+    Object.entries(error.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+  )
+  const message =
+    error.data && typeof error.data === "object" && "message" in error.data
+      ? String(error.data.message)
+      : (error.message ?? "")
+  if (
+    error.status !== 429 &&
+    !(
+      error.status === 403 &&
+      (headers["x-ratelimit-remaining"] === "0" || /secondary rate limit/i.test(message))
+    )
+  )
+    return undefined
+  const retry = headers["retry-after"]
+  const delay = retry
+    ? /^\d+(?:\.\d+)?$/.test(retry.trim())
+      ? Number(retry) * 1000
+      : Date.parse(retry) - Date.now()
+    : NaN
+  const reset = Number(headers["x-ratelimit-reset"]) * 1000 - Date.now()
+  return new ExternalSyncRateLimited(
+    Number.isFinite(delay) && delay >= 0
+      ? delay
+      : Number.isFinite(reset) && reset >= 0
+        ? reset
+        : 60_000
+  )
+}
+
+class GithubSyncHttpError extends Error {
+  constructor(readonly status: number) {
+    super("GitHub sync request failed")
+  }
+}
+
+function rateAwareOctokit(octokit: OctokitLike): OctokitLike {
+  return {
+    request: async (route, params) => {
+      try {
+        const response = await octokit.request(route, params)
+        const limited = githubRateLimit(response)
+        if (limited) throw limited
+        if (response.status >= 400) throw new GithubSyncHttpError(response.status)
+        return response
+      } catch (error) {
+        if (error && typeof error === "object") {
+          const value = error as {
+            status?: number
+            response?: { headers?: Record<string, string | undefined>; data?: unknown }
+            message?: string
+          }
+          const limited = githubRateLimit({
+            status: value.status,
+            ...value.response,
+            message: value.message,
+          })
+          if (limited) throw limited
+        }
+        throw error
+      }
+    },
+  }
 }
 
 interface RawMilestone {
@@ -477,7 +598,8 @@ async function fetchPullLinks(
       ciReads += 1
       try {
         ciState = await fetchPullRequestCi(octokit, owner, repo, pull.head.sha)
-      } catch {
+      } catch (error) {
+        if (error instanceof ExternalSyncRateLimited) throw error
         // A token without checks access, or a transient error, leaves this
         // PR's CI unread this pass; the links and states still land.
         ciState = undefined
@@ -509,11 +631,30 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
   async function octokitFor(repoFullName: string): Promise<OctokitLike> {
     const octokit = await resolveOctokitOrNull(repoFullName)
     if (!octokit) throw new MissingGithubCredentialError(repoFullName)
-    return octokit
+    return rateAwareOctokit(octokit)
   }
 
   return {
     id: GITHUB_SYNC_PROVIDER_ID,
+    completeFullScan: true,
+    ...(!deps.resolveOctokitOrNull
+      ? {
+          prepare: async (binding: IssueSyncBinding) => {
+            const resource = binding.resource
+            if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
+            const client = await (deps.resolveReadClient ?? resolveGithubSyncReadClient)(
+              resource.repoFullName
+            )
+            return {
+              provider: createGithubSyncProvider({
+                ...deps,
+                resolveOctokitOrNull: async () => client.octokit,
+              }),
+              connectionRef: client.connectionRef,
+            }
+          },
+        }
+      : {}),
     label: "GitHub",
     resource: {
       label: "GitHub",
@@ -534,8 +675,8 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       for (const container of [...containers].sort((a, b) => a.id.localeCompare(b.id))) {
         for (const resource of container.resources) {
           if (!isGithubImportBinding(resource) || resource.kind !== "github-repo") continue
-          if (seen.has(resource.repoFullName)) continue
-          seen.add(resource.repoFullName)
+          if (seen.has(`${container.id}:${resource.repoFullName}`)) continue
+          seen.add(`${container.id}:${resource.repoFullName}`)
           bindings.push({
             providerId: GITHUB_SYNC_PROVIDER_ID,
             projectId: container.projectId,
@@ -547,6 +688,162 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
         }
       }
       return bindings
+    },
+
+    async pullPage(binding: IssueSyncBinding, options: PullPageOptions): Promise<PullPage> {
+      const resource = binding.resource
+      if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
+      const [owner, repo] = resource.repoFullName.split("/")
+      const previous = Number(options.cursor ?? 0)
+      // `max`: newest updated_at read on earlier pages of this scan, pull
+      // requests included. Every row up to it has been read in keyset order.
+      let token: { since: number; page: number; floor?: number; max?: number }
+      try {
+        token = options.page
+          ? JSON.parse(options.page)
+          : { since: options.mode === "full" ? 0 : previous, page: 1 }
+      } catch {
+        throw new ExternalSyncCursorInvalid()
+      }
+      if (
+        !Number.isFinite(previous) ||
+        previous < 0 ||
+        !token ||
+        !Number.isFinite(token.since) ||
+        token.since < 0 ||
+        !Number.isSafeInteger(token.page) ||
+        token.page < 1 ||
+        (token.floor !== undefined &&
+          (!Number.isFinite(token.floor) || token.floor < 0 || token.floor > token.since)) ||
+        (token.max !== undefined && (!Number.isFinite(token.max) || token.max < 0))
+      )
+        // Old offset tokens cannot safely resume a keyset generation.
+        throw new ExternalSyncCursorInvalid()
+      const octokit = await octokitFor(resource.repoFullName)
+      const response = await octokit.request("GET /repos/{owner}/{repo}/issues", {
+        owner,
+        repo,
+        state: "all",
+        sort: "updated",
+        direction: "asc",
+        per_page: ISSUES_PER_PAGE,
+        page: token.page,
+        since: new Date(Math.max(0, token.since - 1000)).toISOString(),
+        request: { signal: options.signal },
+      })
+      if (!Array.isArray(response.data)) throw new Error("Invalid GitHub issue page")
+      const raw = response.data as Array<Parameters<typeof toMirrorRow>[0]>
+      const milestones = await fetchMilestones(octokit, owner, repo)
+      const project = resource.sync?.projectV2Number
+        ? await fetchProjectV2(octokit, owner, repo, resource.sync.projectV2Number)
+        : { cycles: [], iterationByIssue: new Map<number, string>() }
+      const items = raw
+        .filter((row) => !row.pull_request)
+        .map((row) => {
+          if (!Number.isFinite(Date.parse(row.updated_at)))
+            throw new Error("GitHub issue update time missing")
+          return toRemoteIssue(
+            toMirrorRow(row, { repoFullName: resource.repoFullName, syncedAt: Date.now() }),
+            resource.repoFullName,
+            project.iterationByIssue
+          )
+        })
+      const hasMore = /<[^>]+>;\s*rel="next"/.test(response.headers.link ?? "")
+      // Pull requests are filtered out of `items` but still advance the keyset:
+      // a terminal page of only pull requests must not drop the scan's progress.
+      const pageMax = raw.reduce((max, row) => {
+        const updated = Date.parse(row.updated_at)
+        return Number.isFinite(updated) ? Math.max(max, updated) : max
+      }, token.max ?? 0)
+      let floor = token.page > 1 ? Math.min(token.floor ?? token.since, token.since) : token.floor
+      let nextPage: string | undefined
+      if (hasMore) {
+        const boundary = Date.parse(raw.at(-1)?.updated_at ?? "")
+        if (!Number.isFinite(boundary)) throw new Error("GitHub issue page boundary missing")
+        // The overlap may re-read a boundary (including PR-only pages). Only
+        // advance by offset while its timestamp cannot move the keyset forward.
+        if (boundary <= token.since) floor = Math.min(floor ?? token.since, token.since)
+        nextPage = JSON.stringify({
+          ...(boundary > token.since
+            ? { since: boundary, page: 1 }
+            : { since: token.since, page: token.page + 1 }),
+          ...(floor !== undefined ? { floor } : {}),
+          ...(pageMax > 0 ? { max: pageMax } : {}),
+        })
+      }
+      options.signal?.throwIfAborted()
+      const links = nextPage
+        ? []
+        : await fetchPullLinks(octokit, owner, repo, binding, pullPageSize, pullCiLimit)
+      // Offset fallback within a same-second bucket may shift on deletion.
+      // Pin the cursor to its earliest bucket so the next pass re-reads it.
+      // Replaying from this bucket (including later pages) avoids permanent gaps.
+      const terminalCursor = String(Math.min(Math.max(previous, pageMax), floor ?? Infinity))
+      return {
+        items,
+        cycles: [...milestones, ...project.cycles],
+        links,
+        ...(nextPage ? { nextPage } : { cursor: terminalCursor }),
+      }
+    },
+
+    async confirmDeparted(binding, ids, options) {
+      const resource = binding.resource
+      if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
+      const [owner, repo] = resource.repoFullName.split("/")
+      const octokit = await octokitFor(resource.repoFullName)
+      const departed: string[] = []
+      for (const id of [...new Set(ids)].slice(0, 50)) {
+        options.signal?.throwIfAborted()
+        const match = /^(.*)#([1-9]\d*)$/.exec(id)
+        if (
+          !match ||
+          match[1].toLowerCase() !== resource.repoFullName.toLowerCase() ||
+          !Number.isSafeInteger(Number(match[2]))
+        )
+          continue
+        try {
+          const response = await octokit.request(
+            "GET /repos/{owner}/{repo}/issues/{issue_number}",
+            {
+              owner,
+              repo,
+              issue_number: Number(match[2]),
+              request: { signal: options.signal },
+            }
+          )
+          options.signal?.throwIfAborted()
+          const row = response.data as {
+            number?: number
+            repository?: { full_name?: string }
+            repository_url?: string
+            html_url?: string
+          }
+          const repository =
+            row.repository?.full_name ??
+            (row.repository_url
+              ? new URL(row.repository_url).pathname.match(/^\/repos\/([^/]+\/[^/]+)\/?$/)?.[1]
+              : undefined) ??
+            (row.html_url
+              ? new URL(row.html_url).pathname.match(/^\/([^/]+\/[^/]+)\/issues\/\d+\/?$/)?.[1]
+              : undefined)
+          // An unreadable answer proves nothing; stop and leave the rest linked.
+          if (!Number.isSafeInteger(row.number) || Number(row.number) <= 0 || !repository) break
+          if (repository.toLowerCase() !== resource.repoFullName.toLowerCase()) departed.push(id)
+          // Live items stay linked. The pinned cursor lets the next scan apply
+          // their normal field-clock/conflict reconciliation without a second path.
+        } catch (error) {
+          options.signal?.throwIfAborted()
+          if (error instanceof ExternalSyncRateLimited) throw error
+          const status =
+            error && typeof error === "object" && "status" in error ? error.status : undefined
+          if (status === 404 || status === 410) departed.push(id)
+          // Any other failure (403 on one issue, a transient 5xx) must not fail
+          // the whole sync run every pass: stop verifying and keep what is proven.
+          else break
+        }
+      }
+      return departed
     },
 
     async pull(binding: IssueSyncBinding, options: PullOptions): Promise<PullResult> {

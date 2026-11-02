@@ -31,10 +31,21 @@ it("namespaces even built-in ids and tears down providers without allowing a sta
       describe: () => ({ key: "one", label: "One" }),
     },
     pull: async () => ({ items: [], notModified: true }),
+    pullPage: async () => ({ items: [], cursor: "next" }),
+    confirmDeparted: async (_binding: unknown, ids: string[]) => ids,
+    completeFullScan: true,
+    fullScanOnly: true,
   }
   api.registerSyncProvider(provider)
   expect(getIssueSyncRegistry().get("github")).toBeUndefined()
   expect(getIssueSyncRegistry().get("plugin:bridge-test/github")).toBeDefined()
+  expect(getIssueSyncRegistry().get("plugin:bridge-test/github")).toMatchObject({
+    pullPage: expect.any(Function),
+    confirmDeparted: expect.any(Function),
+    completeFullScan: true,
+    fullScanOnly: true,
+  })
+  expect(() => api.registerSyncProvider({ ...provider, pullPage: undefined })).toThrow(/descriptor/)
   expect(() => api.registerSyncProvider({ ...provider, id: "lark-task" })).toThrow(/declared/)
   expect(() =>
     registerIssueSyncProvidersForPlugin({

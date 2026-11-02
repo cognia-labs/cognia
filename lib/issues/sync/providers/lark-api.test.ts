@@ -1,4 +1,11 @@
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
+import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
+import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsHttpRequest: jest.fn(),
+}))
 import {
   bitableCellDate,
   bitableCellNumber,
@@ -16,7 +23,52 @@ import {
   normalizeLarkTask,
   updateBitableRecord,
   updateLarkTask,
+  issueLarkHttpRequest,
+  issueLarkError,
+  listLarkTasklistTasksPage,
+  listBitableRecordsPage,
 } from "./lark-api"
+
+it.each([
+  [429, {}, { "Retry-After": "120", "x-ogw-ratelimit-reset": "99" }, 120_000],
+  [200, { code: 99991400 }, { "x-ogw-ratelimit-reset": "45" }, 45_000],
+  [429, {}, {}, 60_000],
+] as const)(
+  "translates Lark HTTP %s with retry headers and no remote content in errors",
+  async (status, body, headers, delay) => {
+    jest.mocked(connectorsHttpRequest).mockResolvedValueOnce({
+      status,
+      body: JSON.stringify({ ...body, msg: "private remote content" }),
+      headers,
+    } as never)
+    await expect(
+      issueLarkHttpRequest({ url: "https://open.feishu.cn/open-apis/task/v2/tasks", method: "GET" })
+    ).rejects.toMatchObject({
+      name: "ExternalSyncRateLimited",
+      retryAfterMs: delay,
+      message: "External sync rate limited",
+    })
+    const projected = issueLarkError(
+      new LarkApiError({
+        status: 429,
+        code: null,
+        message: "private",
+        headers: { "x-ogw-ratelimit-reset": "45" },
+      })
+    )
+    expect(projected).toBeInstanceOf(ExternalSyncRateLimited)
+    expect(projected).toMatchObject({ retryAfterMs: 45_000, message: "External sync rate limited" })
+  }
+)
+
+it("refuses incomplete paging metadata rather than claiming a complete scan", async () => {
+  const api: LarkAuthedApi = {
+    get: async () => ({ has_more: true }) as never,
+    post: async () => ({ has_more: true }) as never,
+  }
+  await expect(listLarkTasklistTasksPage(api, "tl")).rejects.toThrow(/token missing/)
+  await expect(listBitableRecordsPage(api, "app", "table")).rejects.toThrow(/token missing/)
+})
 
 function fakeApi(routes: Record<string, (body?: unknown) => unknown>) {
   const calls: Array<{ method: string; path: string; body?: unknown }> = []

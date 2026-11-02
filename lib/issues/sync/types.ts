@@ -9,14 +9,17 @@
  */
 
 import type { IssueSyncBinding } from "@cognia/plugin-contract/lib/issues/sync/types"
+import type { IssueSyncProvider as ContractProvider } from "@cognia/plugin-contract/lib/issues/sync/types"
+import type { ExternalSyncOutcome, ExternalSyncTarget } from "@/lib/external-services/sync/types"
 export type {
   IssueSyncBinding,
-  IssueSyncProvider,
   IssueSyncResourceDescriptor,
   IssueSyncResourceSchema,
   PluginIssueSyncProviderDef,
   PullOptions,
   PullResult,
+  PullPage,
+  PullPageOptions,
   PushOutcome,
   RemoteCycle,
   RemoteIssue,
@@ -24,7 +27,19 @@ export type {
   RemotePatch,
 } from "@cognia/plugin-contract/lib/issues/sync/types"
 
+/** Host-only credential preparation; plugin registrations never copy this hook. */
+export interface IssueSyncProvider extends ContractProvider {
+  prepare?(binding: IssueSyncBinding): Promise<{
+    provider: IssueSyncProvider
+    connectionRef?: ExternalSyncTarget["connectionRef"]
+  }>
+}
+
 export interface ReconcileOutcome {
+  status: ExternalSyncOutcome["status"]
+  errorCode?: string
+  tombstoned: number
+  pages: number
   binding: IssueSyncBinding
   created: number
   updated: number
@@ -35,6 +50,13 @@ export interface ReconcileOutcome {
   cycles: number
   notModified: boolean
   truncated: boolean
+}
+
+export class IssueSyncOutcomeError extends Error {
+  constructor(readonly code: string) {
+    super(`Issue sync failed: ${code}`)
+    this.name = "IssueSyncOutcomeError"
+  }
 }
 
 export interface IssueSyncFailure {

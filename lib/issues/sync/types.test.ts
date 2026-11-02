@@ -7,6 +7,7 @@
 
 import type { IssueExternalRef, IssueProject } from "@/types/issues"
 import type { IssueSyncBinding, IssueSyncProvider, PushOutcome, RemoteIssue } from "./types"
+import { IssueSyncOutcomeError } from "./types"
 
 const binding: IssueSyncBinding = {
   providerId: "fake",
@@ -34,6 +35,12 @@ const writable: IssueSyncProvider = {
 }
 
 describe("issue sync contract", () => {
+  it("preserves the machine-readable failure code for runner callers", () => {
+    expect(new IssueSyncOutcomeError("rate-limited")).toMatchObject({
+      name: "IssueSyncOutcomeError",
+      code: "rate-limited",
+    })
+  })
   it("distinguishes a read-only provider by the absence of push", () => {
     expect(readOnly.push).toBeUndefined()
     expect(readOnly.pushFields).toEqual([])

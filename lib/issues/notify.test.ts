@@ -273,6 +273,8 @@ describe("installIssueNotifications", () => {
     })
     const errors: unknown[] = []
     const dispose = installIssueNotifications({
+      // This case tests error routing, independently of the wall-clock boot cutoff.
+      since: 0,
       notify: async () => {
         throw new Error("center down")
       },

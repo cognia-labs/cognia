@@ -23,6 +23,7 @@ import { useTranslations } from "next-intl"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
 import { issueHref } from "@/lib/issues/hrefs"
 import type { IssueMenuSection } from "@/lib/issues/menu-model"
@@ -388,7 +389,29 @@ export function IssuePlanningSection({
                       t("planning.provider.other"))
                     : t(`planning.provider.${providerKey(ref.provider)}`)}
                 </Badge>
-                {ref.url ? (
+                {ref.departedAt !== undefined ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        tabIndex={0}
+                        className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+                      >
+                        <span className="truncate">{ref.label ?? ref.externalId}</span>
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          {t("planning.sourceRemoved")}
+                        </Badge>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {t("planning.sourceRemovedHint", {
+                        provider: ref.provider.startsWith("plugin:")
+                          ? (getIssueSyncRegistry().get(ref.provider)?.resource?.label ??
+                            t("planning.provider.other"))
+                          : t(`planning.provider.${providerKey(ref.provider)}`),
+                      })}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : ref.url ? (
                   <a
                     href={ref.url}
                     target="_blank"

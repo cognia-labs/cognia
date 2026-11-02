@@ -328,3 +328,33 @@ it("cancels finalization if tombstoning replaces the generation", async () => {
   expect(await row()).toMatchObject({ failures: 0, generation: { id: "replacement" } })
   expect((await row())?.cursor).toBeUndefined()
 })
+
+it("fullScanOnly preserves retry delays and finalizes after tombstones under exclusion", async () => {
+  const d = driver()
+  d.fullScanOnly = true
+  d.fetchPage = jest.fn(async () => {
+    throw new ExternalSyncRateLimited(90_000)
+  })
+  expect(await runExternalSync(target, d, options)).toMatchObject({ status: "backoff" })
+  expect(await runExternalSync(target, d, { now: () => 90_999 })).toMatchObject({
+    status: "backoff",
+  })
+  expect(d.fetchPage).toHaveBeenCalledTimes(1)
+  d.fetchPage = jest.fn(async () => ({ items: ["a"], cursor: "next" }))
+  d.listKnownIds = async () => ["gone"]
+  const order: string[] = []
+  d.tombstone = async () => {
+    order.push("tombstone")
+  }
+  d.complete = async () => {
+    order.push("complete")
+    expect((await row())?.cursor).toBeUndefined()
+    expect((await runExternalSync(target, driver(), options)).status).toBe("busy")
+  }
+  expect(await runExternalSync(target, d, { now: () => 91_000 })).toMatchObject({
+    status: "completed",
+    mode: "full",
+  })
+  expect(order).toEqual(["tombstone", "complete"])
+  expect((await row())?.cursor).toBe("next")
+})

@@ -8,6 +8,8 @@ jest.mock("next-intl", () => ({
 }))
 
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { registerIssueSyncProvider, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
 import { statusCategoryOf } from "@/types/issues"
 import type { IssueCycle, IssueStatus } from "@/types/issues"
@@ -52,6 +54,36 @@ const cycle: IssueCycle = {
 }
 
 describe("IssuePlanningSection", () => {
+  it("shows a removed source with an accessible explanation and restores the live link on return", async () => {
+    const user = userEvent.setup()
+    const ref = {
+      provider: "github",
+      externalId: "o/r#1",
+      label: "o/r#1",
+      url: "https://github.com/o/r/issues/1",
+      departedAt: 123,
+    }
+    const item = local({ externalRefs: [ref] })
+    const { rerender } = render(
+      <TooltipProvider delayDuration={0}>
+        <IssuePlanningSection item={item} items={[item]} cycles={[]} />
+      </TooltipProvider>
+    )
+    expect(screen.getByText("planning.sourceRemoved")).toBeVisible()
+    expect(screen.queryByRole("link", { name: "o/r#1" })).not.toBeInTheDocument()
+    await user.hover(screen.getByText("planning.sourceRemoved"))
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      'planning.sourceRemovedHint:{"provider":"planning.provider.github"}'
+    )
+    const returned = { ...item, externalRefs: [{ ...ref, departedAt: undefined }] }
+    rerender(
+      <TooltipProvider>
+        <IssuePlanningSection item={returned} items={[returned]} cycles={[]} />
+      </TooltipProvider>
+    )
+    expect(screen.getByRole("link", { name: "o/r#1" })).toHaveAttribute("href", ref.url)
+    expect(screen.queryByText("planning.sourceRemoved")).not.toBeInTheDocument()
+  })
   afterEach(resetIssueSyncRegistry)
   it("updates external-ref labels when a plugin provider registers and is disposed", () => {
     const id = "plugin:planning/tracker"

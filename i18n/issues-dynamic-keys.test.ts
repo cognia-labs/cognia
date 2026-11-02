@@ -114,6 +114,8 @@ const EVENT_KINDS = exhaustive<IssueEventKind>({
   pr_state_changed: true,
   pr_checks_changed: true,
   cycle_changed: true,
+  external_departed: true,
+  external_returned: true,
   external_linked: true,
   external_unlinked: true,
   work_started: true,
@@ -277,7 +279,7 @@ describe("issue tracker dynamic message keys", () => {
     })
 
     it("covers every event kind the activity trail can be handed", () => {
-      expect(EVENT_KINDS).toHaveLength(38)
+      expect(EVENT_KINDS).toHaveLength(40)
     })
   })
 })

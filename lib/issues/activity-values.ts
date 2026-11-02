@@ -16,6 +16,7 @@ export interface IssueActivityPayload {
   to?: unknown
   /** Sync events (v223) name the remote side and the field they touched. */
   provider?: unknown
+  label?: unknown
   field?: unknown
   winner?: unknown
   /** `wakeup_fired`: what the fire became. */
@@ -63,6 +64,7 @@ export function activityValues(
   // Sync events (v223) carry three more named slots. Added only when present,
   // so every older event still resolves to exactly the two the tests pin.
   if (typeof payload?.provider === "string") values.provider = payload.provider
+  if (typeof payload?.label === "string") values.label = payload.label
   if (typeof payload?.field === "string") values.field = payload.field
   if (typeof payload?.winner === "string") values.winner = t(`activitySide.${payload.winner}`)
   if (typeof payload?.delivery === "string") {

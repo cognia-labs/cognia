@@ -15,6 +15,9 @@ const binding: IssueSyncBinding = {
 function outcome(over: Partial<ReconcileOutcome> = {}): ReconcileOutcome {
   return {
     binding,
+    status: "completed",
+    pages: 1,
+    tombstoned: 0,
     created: 0,
     updated: 0,
     pushed: 0,

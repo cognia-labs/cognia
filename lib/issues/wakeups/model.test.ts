@@ -10,6 +10,7 @@ import type { ScheduledTask } from "@/types/scheduler"
 import {
   ISSUE_WAKEUP_DEFAULT_MAX_FIRES,
   ISSUE_WAKEUP_RATE_LIMIT_PER_HOUR,
+  ISSUE_WAKEUP_EVENT_KINDS,
   appendDeferred,
   attributeIssueEvent,
   barrierAdvanced,
@@ -450,6 +451,11 @@ describe("reading payloads and activity", () => {
 })
 
 describe("summarizeIssueEventPayload", () => {
+  it("includes source departure/return in the event vocabulary", () => {
+    expect(ISSUE_WAKEUP_EVENT_KINDS).toEqual(
+      expect.arrayContaining(["external_departed", "external_returned"])
+    )
+  })
   it("includes the exact accepted delivery identity in subsequent wakeups", () => {
     expect(
       summarizeIssueEventPayload({

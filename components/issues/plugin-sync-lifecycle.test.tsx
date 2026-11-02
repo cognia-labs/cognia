@@ -11,7 +11,7 @@ import { createIssuesAPI } from "@/lib/plugin/api/issues-api"
 import { unregisterIssueSyncProvidersForPlugin } from "@/lib/plugin/bridge/issue-sync-providers-bridge"
 import { getIssueSyncRegistry, resetIssueSyncRegistry } from "@/lib/issues/sync/registry"
 import { resolveWorkspaceSyncBindings, runWorkspaceIssueSync } from "@/lib/issues/sync/runner"
-import { bindingWatermark } from "@/lib/issues/sync/engine"
+import { issueSyncTarget } from "@/lib/issues/sync/engine"
 import { exportAuthoredContent } from "@/lib/data/authored-content"
 import { readDexieDelta } from "@/lib/sync/desktop-sync-source"
 import { defineIssueSyncProvider } from "@cognia/plugin-sdk/api/issues"
@@ -196,7 +196,7 @@ it("registers, renders the schema/mapping, saves, syncs and resumes after disabl
   expect(screen.queryByText("projects.providerUnavailable")).not.toBeInTheDocument()
   const binding = (await resolveWorkspaceSyncBindings())[0]
   expect(binding.resource).toMatchObject({ schemaVersion: 2, config: { extra: true } })
-  expect(await bindingWatermark(binding)).toBe(1000)
+  expect((await getDb().externalSyncCursors.get(issueSyncTarget(binding).key))?.cursor).toBe("1000")
   expect((await runWorkspaceIssueSync({ mirror: false })).failures).toEqual([])
   expect(pull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ since: 1000 }))
   expect((await getIssueProject(project.id))!.resources[0]).toEqual(saved)
@@ -250,7 +250,13 @@ it("drops a late push after provider replacement without advancing its externalR
   pending.resolve({ status: "applied", remoteUpdatedAt: 9000 })
   expect((await run).outcomes).toEqual([])
   expect((await getIssueByExternalKey(providerId, "remote-1"))!.externalRefs).toEqual(before)
-  expect(await bindingWatermark((await resolveWorkspaceSyncBindings())[0])).toBe(1000)
+  expect(
+    (
+      await getDb().externalSyncCursors.get(
+        issueSyncTarget((await resolveWorkspaceSyncBindings())[0]).key
+      )
+    )?.cursor
+  ).toBe("1000")
 })
 
 it("projects portable resources into real backup and companion delta payloads without device identity", async () => {

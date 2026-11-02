@@ -69,7 +69,9 @@ export async function runExternalSync<Item>(
       throw new ExternalSyncTargetRemoved()
   }
   const selectMode = (row?: ExternalSyncCursorRow): ExternalSyncMode =>
-    options.mode === "full" || !row?.cursor || row.invalidated ? "full" : "incremental"
+    options.mode === "full" || driver.fullScanOnly || !row?.cursor || row.invalidated
+      ? "full"
+      : "incremental"
   mode = selectMode(initial)
   if (options.signal?.aborted) return outcome("cancelled")
   if (
@@ -253,6 +255,8 @@ export async function runExternalSync<Item>(
           check()
           tombstoned = unseen.length
         }
+        await driver.complete?.({ signal })
+        await assertTarget()
         await commit(async () => {
           await updateCursor({
             cursor: pending.terminalCursor,

@@ -16,6 +16,7 @@ import { runWorkspaceGithubSync, type RunWorkspaceGithubSyncResult } from "@/lib
 import { reconcileBinding } from "./engine"
 import { getIssueSyncRegistry, type IssueSyncRegistry } from "./registry"
 import type { IssueSyncBinding, IssueSyncFailure, ReconcileOutcome } from "./types"
+import { IssueSyncOutcomeError } from "./types"
 import { resolvePluginSyncBindings } from "./plugin-resources"
 
 export interface RunWorkspaceIssueSyncInput {
@@ -25,7 +26,7 @@ export interface RunWorkspaceIssueSyncInput {
   providerId?: string
   /** Skip the GitHub mirror refresh. */
   mirror?: boolean
-  /** Ignore watermarks and read everything again. */
+  /** Rebuild the stored cursor with a full scan. */
   full?: boolean
 }
 
@@ -106,7 +107,14 @@ export async function runWorkspaceIssueSync(
         ...(input.full ? { full: true } : {}),
         signal,
       })
-      if (!signal.aborted) outcomes.push(outcome)
+      if (!signal.aborted) {
+        outcomes.push(outcome)
+        if (outcome.status === "failed" || outcome.status === "backoff")
+          failures.push({
+            binding,
+            error: new IssueSyncOutcomeError(outcome.errorCode ?? outcome.status),
+          })
+      }
     } catch (error) {
       if (!signal.aborted) failures.push({ binding, error })
     }

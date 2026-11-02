@@ -2,6 +2,7 @@ import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
 import {
   createLarkTaskSyncProvider,
   larkTaskToRemote,
@@ -21,6 +22,7 @@ it("describes its built-in resource without migrating its account binding", () =
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
 
 const resource = {
   kind: "lark-tasklist" as const,
@@ -146,6 +148,7 @@ describe("provider", () => {
     ])
     expect(bindings).toEqual([
       expect.objectContaining({ providerId: "lark-task", issueProjectId: "p1", key: "cai_1:tl" }),
+      expect.objectContaining({ providerId: "lark-task", issueProjectId: "p2", key: "cai_1:tl" }),
     ])
   })
 
@@ -225,7 +228,95 @@ it("uses the selected account's user identity for configured resources", async (
   jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], notModified: false } as never)
   await createLarkTaskSyncProvider().pull(binding(), { full: true })
   expect(withLarkAuthedApi).toHaveBeenCalledWith(
-    { adapterId: "cai_1", identity: "user" },
+    expect.objectContaining({ adapterId: "cai_1", identity: "user" }),
+    expect.any(Function)
+  )
+})
+
+it("returns one task page at a time without filtering unchanged or completed tasks", async () => {
+  let listReads = 0
+  const { api, calls } = fakeApi({
+    "/open-apis/task/v2/tasklists/tl/tasks?": () =>
+      ++listReads === 1
+        ? { items: [{ guid: "t1" }], has_more: true, page_token: "next" }
+        : { items: [{ guid: "t2" }] },
+    "/open-apis/task/v2/tasks/t1?": () => ({
+      task: { guid: "t1", summary: "Open", updated_at: "1" },
+    }),
+    "/open-apis/task/v2/tasks/t2?": () => ({
+      task: { guid: "t2", summary: "Done", updated_at: "2", completed_at: "2" },
+    }),
+    "/open-apis/task/v2/sections?": () => ({ items: [] }),
+  })
+  const provider = createLarkTaskSyncProvider({
+    withApi: async (_id, fn) => fn(api),
+    now: () => 5000,
+  })
+  expect(provider).toMatchObject({ completeFullScan: true, fullScanOnly: true })
+  const first = await provider.pullPage!(binding(), { mode: "full", cursor: "9999" })
+  expect(first).toMatchObject({
+    nextPage: "next",
+    items: [expect.objectContaining({ externalId: "t1" })],
+  })
+  expect(first.cursor).toBeUndefined()
+  expect(await provider.pullPage!(binding(), { mode: "full", page: first.nextPage })).toMatchObject(
+    { cursor: "5000", items: [expect.objectContaining({ externalId: "t2", status: "done" })] }
+  )
+  expect(calls.some((call) => call.path.includes("page_token=next"))).toBe(true)
+})
+
+it("resolves the bound adapter's Host connection before sync", async () => {
+  jest.mocked(resolveLarkConnection).mockResolvedValueOnce({
+    id: "lark-connection",
+    hostMetadata: { authorizationEpoch: "epoch-a" },
+  } as never)
+  const provider = createLarkTaskSyncProvider()
+  const prepared = await provider.prepare!(binding())
+  expect(prepared.connectionRef).toBe("lark-connection")
+  expect(prepared.provider.prepare).toBeUndefined()
+  jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], cursor: "next" })
+  await prepared.provider.pullPage!(binding(), { mode: "full" })
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      adapterId: "cai_1",
+      expectedAuthorizationEpoch: "epoch-a",
+      identity: "user",
+    }),
+    expect.any(Function)
+  )
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1")
+})
+
+it("refuses a pending push if another context switches the prepared adapter's authorization", async () => {
+  jest.mocked(resolveLarkConnection).mockResolvedValueOnce({
+    id: "connection-a",
+    hostMetadata: { authorizationEpoch: "epoch-a" },
+  } as never)
+  const prepared = await createLarkTaskSyncProvider().prepare!(binding())
+  const patch = jest.fn(async () => ({}))
+  let currentEpoch = "epoch-a"
+  jest.mocked(withLarkAuthedApi).mockImplementation(async (opts, fn) => {
+    // The real harness asserts this against the native snapshot before credential capture or I/O.
+    if (opts.expectedAuthorizationEpoch !== currentEpoch)
+      throw new Error("authorization epoch changed")
+    return fn(
+      { get: async () => ({}) as never, post: async () => ({}) as never, patch: patch as never },
+      { adapterId: opts.adapterId, displayName: "Account" }
+    )
+  })
+  currentEpoch = "epoch-b"
+  await expect(
+    prepared.provider.push!(
+      binding(),
+      { provider: "lark-task", externalId: "task-a" },
+      { title: "Account A data" },
+      {} as never,
+      { by: { kind: "human" }, idempotencyKey: "a" }
+    )
+  ).rejects.toThrow(/epoch changed/)
+  expect(patch).not.toHaveBeenCalled()
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({ expectedAuthorizationEpoch: "epoch-a" }),
     expect.any(Function)
   )
 })

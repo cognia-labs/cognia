@@ -223,6 +223,16 @@ describe("createIssuesAPI", () => {
         await pending
         return { items: [], notModified: true }
       },
+      completeFullScan: true,
+      fullScanOnly: true,
+      pullPage: async () => {
+        await pending
+        return { items: [], cursor: "next" }
+      },
+      confirmDeparted: async () => {
+        await pending
+        return ["removed"]
+      },
       push: async () => {
         await pending
         return { status: "applied", remoteUpdatedAt: 9999 }
@@ -231,6 +241,8 @@ describe("createIssuesAPI", () => {
     const registered = mockRegister.mock
       .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
     const pulled = registered.pull({} as never, {})
+    const paged = registered.pullPage!({} as never, { mode: "full" })
+    const confirmed = registered.confirmDeparted!({} as never, ["removed"], {})
     const pushed = registered.push!({} as never, {} as never, {}, {} as never, {
       idempotencyKey: "test",
       by: { kind: "human" },
@@ -238,6 +250,72 @@ describe("createIssuesAPI", () => {
     mockHasWrite.mockReturnValue(false)
     finish()
     await expect(pulled).rejects.toThrow(/issue:write/)
+    await expect(paged).rejects.toThrow(/issue:write/)
+    await expect(confirmed).rejects.toThrow(/issue:write/)
     await expect(pushed).rejects.toThrow(/issue:write/)
+  })
+
+  it("drops paged results after cancellation or provider disposal", async () => {
+    const api = createIssuesAPI("paged", {
+      id: "paged",
+      issueSyncProviders: [{ id: "tracker", label: "Tracker", schemaVersion: 1 }],
+    })
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const input = {
+      id: "tracker",
+      label: "Tracker",
+      pullFields: [],
+      pushFields: [],
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object" as const, properties: {} },
+        describe: () => ({ key: "one", label: "One" }),
+      },
+      pull: async () => ({ items: [], notModified: true }),
+      pullPage: jest.fn(async () => {
+        await pending
+        return { items: [], cursor: "next" }
+      }),
+      confirmDeparted: jest.fn(async () => {
+        await pending
+        return ["removed"]
+      }),
+      completeFullScan: true,
+      fullScanOnly: true,
+    }
+    const dispose = api.registerSyncProvider(input)
+    const registered = mockRegister.mock
+      .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+    const controller = new AbortController()
+    const cancelled = registered.pullPage!({} as never, { mode: "full", signal: controller.signal })
+    const cancelledConfirmation = registered.confirmDeparted!({} as never, ["removed"], {
+      signal: controller.signal,
+    })
+    controller.abort()
+    finish()
+    await expect(cancelled).rejects.toThrow()
+    await expect(cancelledConfirmation).rejects.toThrow()
+    await expect(
+      registered.pullPage!({} as never, { mode: "full", signal: controller.signal })
+    ).rejects.toThrow()
+    expect(input.pullPage).toHaveBeenCalledTimes(1)
+    await expect(
+      registered.confirmDeparted!({} as never, ["removed"], { signal: controller.signal })
+    ).rejects.toThrow()
+    expect(input.confirmDeparted).toHaveBeenCalledTimes(1)
+    dispose()
+    await expect(registered.pullPage!({} as never, { mode: "full" })).rejects.toThrow(/issue:write/)
+    await expect(registered.confirmDeparted!({} as never, ["removed"], {})).rejects.toThrow(
+      /issue:write/
+    )
+    expect(registered).toMatchObject({ completeFullScan: true, fullScanOnly: true })
+    expect(() => api.registerSyncProvider({ ...input, pullPage: undefined })).toThrow(/descriptor/)
+    expect(() => api.registerSyncProvider({ ...input, confirmDeparted: true } as never)).toThrow(
+      /descriptor/
+    )
   })
 })

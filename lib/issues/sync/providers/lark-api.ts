@@ -23,7 +23,67 @@
  * millisecond numbers. Both are normalised to epoch ms numbers here.
  */
 
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
+import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
+import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
+import { isTauri } from "@/lib/tauri"
+
+/** Preserve retry headers before the shared harness projects them into LarkApiError. */
+export async function issueLarkHttpRequest(input: Parameters<typeof connectorsHttpRequest>[0]) {
+  const response = await connectorsHttpRequest(input)
+  let code: unknown
+  try {
+    code = JSON.parse(response.body).code
+  } catch {
+    /* Status still applies to non-JSON responses. */
+  }
+  if (response.status === 429 || code === 99991400) {
+    const headers = Object.fromEntries(
+      Object.entries(response.headers).map(([key, value]) => [key.toLowerCase(), value])
+    )
+    const retry = headers["retry-after"]
+    const delay = retry
+      ? /^\d+(?:\.\d+)?$/.test(retry.trim())
+        ? Number(retry) * 1000
+        : Date.parse(retry) - Date.now()
+      : NaN
+    const reset = Number(headers["x-ogw-ratelimit-reset"]) * 1000
+    throw new ExternalSyncRateLimited(
+      Number.isFinite(delay) && delay >= 0
+        ? delay
+        : Number.isFinite(reset) && reset >= 0
+          ? reset
+          : 60_000
+    )
+  }
+  return response
+}
+
+export function issueLarkError(error: unknown): unknown {
+  return error instanceof LarkApiError && (error.status === 429 || error.code === 99991400)
+    ? new ExternalSyncRateLimited(error.retryAfterMs ?? 60_000)
+    : error
+}
+
+export function withIssueLarkApi<T>(
+  adapterId: string,
+  fn: (api: LarkAuthedApi) => Promise<T>,
+  signal?: AbortSignal,
+  expectedAuthorizationEpoch?: string
+): Promise<T> {
+  return withLarkAuthedApi(
+    {
+      adapterId,
+      identity: "user",
+      signal,
+      expectedAuthorizationEpoch,
+      ...(isTauri() ? { httpImpl: issueLarkHttpRequest } : {}),
+      mapError: issueLarkError,
+    },
+    (api) => fn(api)
+  )
+}
 
 const PAGE = 100
 
@@ -216,6 +276,26 @@ export async function listLarkTasklistTasks(
   return { tasks, truncated }
 }
 
+/** One complete page, including completed tasks. No per-run cap. */
+export async function listLarkTasklistTasksPage(
+  api: LarkAuthedApi,
+  tasklistGuid: string,
+  token?: string
+): Promise<{ tasks: LarkTask[]; nextPage?: string }> {
+  const page = await api.get<Paged<{ guid?: string }>>(
+    `/open-apis/task/v2/tasklists/${encodeURIComponent(tasklistGuid)}/tasks?user_id_type=open_id&page_size=${PAGE}${token ? `&page_token=${encodeURIComponent(token)}` : ""}`
+  )
+  if (page.has_more && !page.page_token) throw new Error("Lark task page token missing")
+  const tasks: LarkTask[] = []
+  for (const summary of page.items ?? []) {
+    if (!summary.guid) throw new Error("Lark task id missing")
+    const task = await getLarkTask(api, summary.guid)
+    if (!task) throw new Error("Lark task read incomplete")
+    tasks.push(task)
+  }
+  return { tasks, ...(page.has_more ? { nextPage: page.page_token } : {}) }
+}
+
 export async function getLarkTask(api: LarkAuthedApi, guid: string): Promise<LarkTask | null> {
   const data = await api.get<{ task?: RawTask }>(
     `/open-apis/task/v2/tasks/${encodeURIComponent(guid)}?user_id_type=open_id`
@@ -387,6 +467,32 @@ export async function listBitableRecords(
     if (guard === 19) truncated = true
   }
   return { records, truncated }
+}
+
+export async function listBitableRecordsPage(
+  api: LarkAuthedApi,
+  appToken: string,
+  tableId: string,
+  token?: string
+): Promise<{ records: BitableRecord[]; nextPage?: string }> {
+  const page = await api.post<
+    Paged<{ record_id?: string; fields?: Record<string, unknown>; last_modified_time?: number }>
+  >(
+    `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/search?page_size=${MAX_BITABLE_PAGE}${token ? `&page_token=${encodeURIComponent(token)}` : ""}`,
+    {}
+  )
+  if (page.has_more && !page.page_token) throw new Error("Bitable page token missing")
+  const records = (page.items ?? []).map((row) => {
+    if (!row.record_id) throw new Error("Bitable record id missing")
+    return {
+      recordId: row.record_id,
+      fields: row.fields ?? {},
+      ...(typeof row.last_modified_time === "number"
+        ? { lastModifiedAt: row.last_modified_time }
+        : {}),
+    }
+  })
+  return { records, ...(page.has_more ? { nextPage: page.page_token } : {}) }
 }
 
 export async function updateBitableRecord(

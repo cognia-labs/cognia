@@ -202,6 +202,13 @@ export function createIssuesAPI(
         descriptor.schema?.type !== "object" ||
         !descriptor.schema.properties ||
         typeof provider.pull !== "function" ||
+        (provider.pullPage !== undefined && typeof provider.pullPage !== "function") ||
+        (provider.confirmDeparted !== undefined &&
+          typeof provider.confirmDeparted !== "function") ||
+        (provider.completeFullScan !== undefined &&
+          typeof provider.completeFullScan !== "boolean") ||
+        (provider.fullScanOnly !== undefined && typeof provider.fullScanOnly !== "boolean") ||
+        (provider.completeFullScan && !provider.pullPage) ||
         (descriptor.kind && descriptor.kind !== "plugin")
       )
         throw new Error("Issue-sync provider does not match its manifest descriptor")
@@ -223,18 +230,50 @@ export function createIssuesAPI(
         id: `plugin:${pluginId}/${def.id}`,
         label: def.label,
         resource: { ...descriptor, kind: "plugin" },
+        prepare: undefined,
         resolveBindings: () => [],
         pull: async (binding, options) => {
           check()
+          options.signal?.throwIfAborted()
           const result = await input.pull(binding, options)
           check()
           options.signal?.throwIfAborted()
           return result
         },
+        ...(input.pullPage
+          ? {
+              pullPage: async (
+                binding: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[0],
+                options: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[1]
+              ) => {
+                check()
+                options.signal?.throwIfAborted()
+                const result = await input.pullPage!(binding, options)
+                check()
+                options.signal?.throwIfAborted()
+                return result
+              },
+            }
+          : {}),
+        ...(input.confirmDeparted
+          ? {
+              confirmDeparted: async (
+                ...args: Parameters<NonNullable<IssueSyncProvider["confirmDeparted"]>>
+              ) => {
+                check()
+                args[2].signal?.throwIfAborted()
+                const result = await input.confirmDeparted!(...args)
+                check()
+                args[2].signal?.throwIfAborted()
+                return result
+              },
+            }
+          : {}),
         ...(input.push
           ? {
               push: async (...args: Parameters<NonNullable<IssueSyncProvider["push"]>>) => {
                 check()
+                args[4].signal?.throwIfAborted()
                 const result = await input.push!(...args)
                 check()
                 args[4].signal?.throwIfAborted()
