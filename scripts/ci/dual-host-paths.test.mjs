@@ -120,6 +120,8 @@ test("workflow always reports its required status and uses the slim minimal stac
   assert.match(runs, /--cache-from type=gha,scope=dual-host/)
   assert.match(runs, /--cache-to type=gha,scope=dual-host,mode=max/)
   assert.match(runs, /--profile server --profile tls up -d --wait cognia-server caddy/)
+  // caddy depends on cognia-server: building it with only `tls` is an invalid project.
+  assert.match(runs, /--profile server --profile tls build caddy/)
   assert.match(runs, /test:e2e:dual-host:web-headless/)
   // Both images take plugins only as the set produced before either builds.
   const produce = lane.steps.findIndex(

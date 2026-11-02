@@ -127,7 +127,9 @@ jobs:
         working-directory: deploy/compose
         env:
           COGNIA_PLUGIN_ARTIFACTS_CONTEXT: ${{ steps.plugins.outputs.path }}
-        run: docker compose --profile tls build caddy
+        # caddy depends on cognia-server, so compose refuses the project unless
+        # its profile is enabled too; `build caddy` still builds only caddy.
+        run: docker compose --profile server --profile tls build caddy
       - name: Up + wait
         working-directory: deploy/compose
         # These entry services pull in signaling and the Anthropic fixture.
