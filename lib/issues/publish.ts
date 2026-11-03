@@ -14,10 +14,28 @@
 
 import { getIssue, linkIssueExternal, linkIssueToGithub, githubExternalRef } from "@/lib/db/issues"
 import type { Issue, IssueActor, IssueExternalRef, IssueProject } from "@/types/issues"
-import { createGithubIssue } from "./github-writeback"
+import { createGithubIssue, resolveGithubWritebackAccount } from "./github-writeback"
 import { getIssueSyncRegistry, type IssueSyncRegistry } from "./sync/registry"
 import { GITHUB_SYNC_PROVIDER_ID } from "./sync/providers/github"
 import type { IssueSyncBinding } from "./sync/types"
+import { assertIssueSyncSource, resolveIssueSyncSource } from "./sync/kept-copy-source"
+import { KeptCopySourceError } from "@/lib/docs-providers/kept-copy-source"
+import { getDb } from "@/lib/db/schema"
+
+function capturedGithubBinding(
+  project: IssueProject,
+  resource: IssueProject["resources"][number]
+): IssueSyncBinding | undefined {
+  if (resource.kind !== "github-repo" || !resource.captureId) return undefined
+  return {
+    providerId: GITHUB_SYNC_PROVIDER_ID,
+    projectId: project.projectId,
+    issueProjectId: project.id,
+    projectKey: project.key,
+    key: resource.repoFullName,
+    resource,
+  }
+}
 
 export type PublishTarget =
   | {
@@ -83,7 +101,8 @@ export function listPublishTargets(
     for (const resource of container.resources) {
       if (resource.kind !== "github-repo" || seen.has(resource.repoFullName)) continue
       seen.add(resource.repoFullName)
-      const binding = githubBindings.get(resource.repoFullName)
+      const binding =
+        githubBindings.get(resource.repoFullName) ?? capturedGithubBinding(container, resource)
       targets.push({
         kind: "github",
         id: `github:${resource.repoFullName}`,
@@ -141,14 +160,40 @@ export async function publishIssue(
   }
   const issue = await deps.getIssue(issueId)
   if (!issue) throw new Error(`Issue "${issueId}" was not found`)
+  let binding = target.binding
+  // A cached picker target may predate provenance or provider registration.
+  if (!binding && target.kind === "github" && issue.issueProjectId) {
+    const project = await getDb().issueProjects.get(issue.issueProjectId)
+    const resource = project?.resources.find(
+      (item) =>
+        item.kind === "github-repo" &&
+        item.repoFullName.toLowerCase() === target.repoFullName.toLowerCase()
+    )
+    if (project && resource) binding = capturedGithubBinding(project, resource)
+  }
+  const source = binding ? await resolveIssueSyncSource(binding) : undefined
+  if (binding && source) binding = { ...binding, connectionRef: source.id }
 
   if (target.kind === "github") {
-    const created = await deps.createGithubIssue({
+    const input = {
       repoFullName: target.repoFullName,
       title: issue.title,
       ...(issue.description?.trim() ? { body: issue.description } : {}),
       idempotencyKey: `issue-publish:${issue.id}:${target.repoFullName}`,
-    })
+    }
+    const created =
+      source && binding
+        ? await deps.createGithubIssue(input, {
+            resolveAccount: async (repo) => {
+              await assertIssueSyncSource(binding)
+              const account = await resolveGithubWritebackAccount(repo, undefined, source.id)
+              if (!account || account.connectionId !== source.id)
+                throw new KeptCopySourceError("source-disconnected")
+              return account
+            },
+          })
+        : await deps.createGithubIssue(input)
+    if (binding) await assertIssueSyncSource(binding)
     await deps.linkIssueToGithub(
       issueId,
       { repoFullName: created.repoFullName, number: created.number, htmlUrl: created.htmlUrl },
@@ -159,7 +204,7 @@ export async function publishIssue(
       number: created.number,
       htmlUrl: created.htmlUrl,
     })
-    if (!target.binding) return ref
+    if (!binding) return ref
     // Import mode: mark the ref as in step with the remote as of now, so the
     // next pass does not push the very content it was just created from.
     const now = deps.now()
@@ -167,7 +212,7 @@ export async function publishIssue(
       ...ref,
       syncedAt: now,
       remoteUpdatedAt: created.updatedAt ?? now,
-      meta: { binding: target.binding.key },
+      meta: { binding: binding.key },
     }
     await deps.linkIssueExternal(issueId, synced, by)
     return synced
@@ -177,7 +222,10 @@ export async function publishIssue(
   if (!provider?.create) {
     throw new Error(`Issue sync provider "${target.providerId}" cannot create items`)
   }
-  const ref = await provider.create(target.binding, issue)
+  const writeBinding = binding ?? target.binding
+  await assertIssueSyncSource(writeBinding)
+  const ref = await provider.create(writeBinding, issue)
+  await assertIssueSyncSource(writeBinding)
   const linked: IssueExternalRef = {
     ...ref,
     meta: { ...(ref.meta ?? {}), binding: target.binding.key },

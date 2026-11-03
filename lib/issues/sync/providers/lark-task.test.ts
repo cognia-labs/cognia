@@ -2,7 +2,10 @@ import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import {
+  resolveLarkConnection,
+  larkConnectionAdapter,
+} from "@/lib/connectors/adapters/lark/host-auth"
 import {
   createLarkTaskSyncProvider,
   larkTaskToRemote,
@@ -22,7 +25,29 @@ it("describes its built-in resource without migrating its account binding", () =
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  resolveLarkConnection: jest.fn(),
+  larkConnectionAdapter: jest.fn(),
+}))
+
+it("uses the same identity's restored adapter and epoch for the prepared tasklist", async () => {
+  jest.mocked(larkConnectionAdapter).mockResolvedValueOnce({
+    adapterId: "restored-adapter",
+    connection: { id: "restored-ref", hostMetadata: { authorizationEpoch: "restored-epoch" } },
+  } as never)
+  const b = { ...binding(), connectionRef: "restored-ref" as never }
+  const prepared = await createLarkTaskSyncProvider().prepare!(b)
+  expect(prepared.connectionRef).toBe("restored-ref")
+  jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], cursor: "done" })
+  await prepared.provider.pullPage!(b, { mode: "full" })
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      adapterId: "restored-adapter",
+      expectedAuthorizationEpoch: "restored-epoch",
+    }),
+    expect.any(Function)
+  )
+})
 
 const resource = {
   kind: "lark-tasklist" as const,
@@ -320,3 +345,8 @@ it("refuses a pending push if another context switches the prepared adapter's au
     expect.any(Function)
   )
 })
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)

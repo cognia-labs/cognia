@@ -30,6 +30,16 @@ import {
 import { parseLarkDocUrl, type LarkDocRef, type LarkDocRefKind } from "./lark-url"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import type { DocsProviderAccountBinding } from "@/lib/docs-providers/types"
+import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
+import {
+  recordKeptCopySourceFailure,
+  requireKeptCopySource,
+  resolveKeptCopyConnection,
+  type KeptCopySourceReference,
+} from "@/lib/docs-providers/kept-copy-source"
+import { DocsProviderError } from "@/lib/docs-providers/types"
 
 export type LarkFetchChannel = "api" | "cli"
 
@@ -95,6 +105,7 @@ export const LARK_RATE_LIMIT_CODES: ReadonlySet<number> = new Set([
  * result is a drop-in for the pre-add preview and `createTwinSource` staging.
  */
 export interface LarkFetchedDoc {
+  accountBinding?: DocsProviderAccountBinding
   url: string
   title: string
   contentType: string
@@ -120,6 +131,8 @@ interface ExecLarkCliLike {
 }
 
 export interface FetchLarkDocOptions {
+  /** Required when reopening a kept copy; fresh imports have no prior capture. */
+  sourceProvenance?: RemoteDocumentProvenanceV1 | KeptCopySourceReference
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
   expectedAuthorizationEpoch?: string
@@ -144,6 +157,16 @@ export async function fetchLarkDocAsRawSource(
   opts: FetchLarkDocOptions
 ): Promise<LarkFetchedDoc> {
   throwIfRequestAborted(opts.signal)
+  if (opts.sourceProvenance) await requireKeptCopySource(opts.sourceProvenance)
+  const restored = opts.sourceProvenance
+    ? await resolveKeptCopyConnection(opts.sourceProvenance)
+    : undefined
+  if (restored?.hostMetadata)
+    opts = {
+      ...opts,
+      adapterId: restored.hostMetadata.adapterId,
+      expectedAuthorizationEpoch: restored.hostMetadata.authorizationEpoch,
+    }
   const ref = parseLarkDocUrl(urlOrToken, opts.kind)
   if (!ref) throw new LarkIngestError("larkInvalidUrl")
 
@@ -153,9 +176,19 @@ export async function fetchLarkDocAsRawSource(
         ? await withRequestAbort(opts.signal, () => fetchViaCli(urlOrToken, ref, opts))
         : await fetchViaApi(urlOrToken, ref, opts)
     throwIfRequestAborted(opts.signal)
+    if (opts.sourceProvenance) await requireKeptCopySource(opts.sourceProvenance)
+    throwIfRequestAborted(opts.signal)
     return result
   } catch (error) {
     throwIfRequestAborted(opts.signal)
+    if (
+      error instanceof LarkIngestError &&
+      (error.code === "larkNotFound" || error.code === "larkNoPermission")
+    )
+      await recordKeptCopySourceFailure(
+        opts.sourceProvenance,
+        new DocsProviderError(error.code === "larkNotFound" ? "notFound" : "noPermission")
+      )
     throw error
   }
 }
@@ -180,7 +213,17 @@ async function fetchViaApi(
         expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
         maxResponseBytes: opts.maxResponseBytes ?? MAX_REMOTE_DOC_RESPONSE_BYTES,
       },
-      (api) => readDoc(api, input, ref, opts.adapterId)
+      async (api) => {
+        const connection = await resolveLarkConnection(opts.adapterId)
+        const result = await readDoc(api, input, ref, opts.adapterId)
+        return {
+          ...result,
+          accountBinding: {
+            accountId: connection.id,
+            authorizationEpoch: String(connection.revision),
+          },
+        }
+      }
     )
   } catch (err) {
     throw mapAccessError(err)
@@ -329,6 +372,8 @@ async function fetchViaCli(
   // itself, so every ref kind goes through the same subcommand.
   let result: Awaited<ReturnType<ExecLarkCliLike>>
   throwIfRequestAborted(opts.signal)
+  const connection = await resolveLarkConnection(opts.adapterId)
+  throwIfRequestAborted(opts.signal)
   try {
     result = await exec({
       args: ["docs", "+fetch", "--doc", ref.token, "--doc-format", "markdown"],
@@ -351,6 +396,11 @@ async function fetchViaCli(
     throw new LarkIngestError("larkNetwork", { reason: result.message })
   }
 
+  const current = await resolveLarkConnection(opts.adapterId)
+  if (current.id !== connection.id || current.revision !== connection.revision)
+    throw new LarkIngestError("larkNotAuthorized")
+  throwIfRequestAborted(opts.signal)
+
   const { text, title } = normalizeCliPayload(result.data)
   if (!text.trim()) {
     throw new LarkIngestError("larkEmptyDoc", { title: title || ref.token })
@@ -365,6 +415,7 @@ async function fetchViaCli(
     wikiToken: ref.kind === "wiki" ? ref.token : undefined,
     adapterId: opts.adapterId,
     channel: "cli",
+    accountBinding: { accountId: connection.id, authorizationEpoch: String(connection.revision) },
   }
 }
 

@@ -468,7 +468,10 @@
       "linked": "关联 {count}",
       "written": "镜像 {count}"
     },
-    "joiner": "，"
+    "joiner": "，",
+    "sourceDisconnected": "来源已断开连接",
+    "sourceDeleted": "来源已删除或无法访问",
+    "sourceNotOnDevice": "此设备上没有来源连接"
   },
   "writeback": {
     "section": "GitHub 操作",

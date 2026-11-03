@@ -13,6 +13,8 @@
  *     a second store to keep in step.
  */
 
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+
 /** GitHub's own issue state, kept verbatim rather than pre-mapped. */
 export type GithubIssueState = "open" | "closed"
 
@@ -29,6 +31,10 @@ export interface GithubIssueMirrorLabel {
 }
 
 export interface GithubIssueMirrorRow {
+  /** Device-local cache ownership, independent of the disposable sync cursor. */
+  connectionRef?: AuthConnectionRef
+  consumerPluginId?: string
+  providerPluginId?: string
   /** The milestone number, when the issue is in one. Feeds `issueCycles` in import mode. */
   milestoneNumber?: number
   /** Milestone title, cached so the cycle can be named before its own row exists. */

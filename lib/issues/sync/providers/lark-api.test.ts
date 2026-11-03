@@ -2,6 +2,13 @@ import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
+import { assertIssueSyncSource } from "../kept-copy-source"
+import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+jest.mock("../kept-copy-source", () => ({ assertIssueSyncSource: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
+  ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
+  withLarkAuthedApi: jest.fn(),
+}))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   ...jest.requireActual("@/lib/connectors/tauri/commands"),
   connectorsHttpRequest: jest.fn(),
@@ -27,7 +34,39 @@ import {
   issueLarkError,
   listLarkTasklistTasksPage,
   listBitableRecordsPage,
+  withIssueLarkBindingApi,
 } from "./lark-api"
+
+it("checks the captured identity again before invoking a write callback", async () => {
+  const source = {
+    id: "A",
+    identityKey: "person-A",
+    revision: 1,
+    hostMetadata: { adapterId: "adapter-A", authorizationEpoch: "epoch-A" },
+  } as never
+  const replaced = {
+    id: "A",
+    identityKey: "person-B",
+    revision: 2,
+    hostMetadata: { adapterId: "adapter-A", authorizationEpoch: "epoch-B" },
+  } as never
+  jest.mocked(assertIssueSyncSource).mockResolvedValueOnce(source).mockResolvedValueOnce(replaced)
+  jest
+    .mocked(withLarkAuthedApi)
+    .mockImplementationOnce(async (_opts, fn) => fn({} as never, {} as never))
+  const send = jest.fn(async () => "sent")
+  await expect(
+    withIssueLarkBindingApi(
+      { resource: { kind: "lark-tasklist", adapterId: "old" } } as never,
+      send
+    )
+  ).rejects.toMatchObject({ code: "source-disconnected" })
+  expect(send).not.toHaveBeenCalled()
+  expect(withLarkAuthedApi).toHaveBeenCalledWith(
+    expect.objectContaining({ adapterId: "adapter-A", expectedAuthorizationEpoch: "epoch-A" }),
+    expect.any(Function)
+  )
+})
 
 it.each([
   [429, {}, { "Retry-After": "120", "x-ogw-ratelimit-reset": "99" }, 120_000],

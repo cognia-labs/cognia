@@ -1,6 +1,29 @@
 import type { TwinSource } from "@/types/twin"
 import { createTwinSource, type TwinSourceDraft } from "@/lib/db/twin-sources"
 import { getDb } from "@/lib/db/schema"
+import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
+
+/** Non-indexed portable fields; device-local identity stays in remoteDocumentConnections. */
+export type TwinKeptSource = TwinSource & {
+  captureId?: string
+  remoteDocument?: RemoteDocumentProvenanceV1
+}
+
+/** Rows predating captureId deliberately retain unknown provenance. */
+export function twinSourceProvenance(source: TwinSource) {
+  const kept = source as TwinKeptSource
+  if (!kept.captureId) return undefined
+  return (
+    parseRemoteDocumentProvenance(kept.remoteDocument) ?? {
+      captureId: kept.captureId,
+      providerId: "lark",
+      connectionScoped: true as const,
+    }
+  )
+}
 
 export async function sourceFingerprint(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text)
@@ -11,7 +34,7 @@ export async function sourceFingerprint(text: string): Promise<string> {
 }
 
 export interface RegisterTwinSourceResult {
-  source: TwinSource
+  source: TwinKeptSource
   created: boolean
   revived: boolean
 }
@@ -22,7 +45,10 @@ export interface RegisterTwinSourceResult {
  * active rows for the same Twin.
  */
 export async function registerTwinSource(
-  draft: Omit<TwinSourceDraft, "fingerprint"> & { fingerprint?: string }
+  draft: Omit<TwinSourceDraft, "fingerprint"> & {
+    fingerprint?: string
+    remoteDocument?: RemoteDocumentProvenanceV1
+  }
 ): Promise<RegisterTwinSourceResult> {
   const fingerprint = draft.fingerprint || (await sourceFingerprint(draft.source))
   const db = getDb()
@@ -32,6 +58,15 @@ export async function registerTwinSource(
       .equals([draft.twinId, fingerprint])
       .first()
     if (existing && existing.status !== "failed" && existing.status !== "deleted") {
+      if (draft.remoteDocument && !(existing as TwinKeptSource).captureId) {
+        const source: TwinKeptSource = {
+          ...existing,
+          captureId: draft.remoteDocument.captureId,
+          remoteDocument: draft.remoteDocument,
+        }
+        await db.twinSources.put(source)
+        return { source, created: false, revived: false }
+      }
       return { source: existing, created: false, revived: false }
     }
     if (existing) {
@@ -50,6 +85,12 @@ export async function registerTwinSource(
         redactionMapEnc: draft.redactionMapEnc,
         tags: draft.tags,
         speakers: draft.speakers,
+        ...(draft.remoteDocument
+          ? {
+              captureId: draft.remoteDocument.captureId,
+              remoteDocument: draft.remoteDocument,
+            }
+          : {}),
       })
       return {
         source: (await db.twinSources.get(existing.id))!,
@@ -57,7 +98,15 @@ export async function registerTwinSource(
         revived: true,
       }
     }
-    const source = await createTwinSource({ ...draft, fingerprint, status: "pending" })
+    const created = await createTwinSource({ ...draft, fingerprint, status: "pending" })
+    const source: TwinKeptSource = draft.remoteDocument
+      ? {
+          ...created,
+          captureId: draft.remoteDocument.captureId,
+          remoteDocument: draft.remoteDocument,
+        }
+      : created
+    if (draft.remoteDocument) await db.twinSources.put(source)
     return { source, created: true, revived: false }
   })
 }

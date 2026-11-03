@@ -11,6 +11,12 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${Object.values(vars).join(",")}` : key,
 }))
+const mockSyncAvailability = jest.fn(
+  (): { canSync: boolean; reason?: "sync.sourceDisconnected" } => ({ canSync: true })
+)
+jest.mock("./kept-copy-source-state", () => ({
+  useIssueSyncAvailability: () => mockSyncAvailability(),
+}))
 
 let shellProps: Record<string, unknown> = {}
 jest.mock("@/components/feature-shell/feature-page-shell", () => ({
@@ -287,6 +293,7 @@ function callProp<T extends unknown[]>(
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockSyncAvailability.mockReturnValue({ canSync: true })
   window.localStorage.clear()
   useIssueViewStore.getState().reset()
   shellProps = {}
@@ -307,6 +314,23 @@ beforeEach(() => {
   viewerForTest = { selfKey: "human:self", agentKeys: [] }
   mockListAll.mockResolvedValue({ items: [], errors: [] })
   mockRunSync.mockResolvedValue({ repoCount: 0, results: [], failures: [] })
+})
+
+it("disables manual sync with the disconnected source reason", async () => {
+  mockSyncAvailability.mockReturnValue({ canSync: false, reason: "sync.sourceDisconnected" })
+  render(<IssueConsole />)
+  await screen.findByTestId("board-stub")
+  const sync = (
+    headerProps.secondaryActions as Array<{
+      id: string
+      label: string
+      disabled: boolean
+      onSelect(): void
+    }>
+  ).find((action) => action.id === "sync")!
+  expect(sync).toMatchObject({ disabled: true, label: "sync.sourceDisconnected" })
+  await act(async () => sync.onSelect())
+  expect(mockRunSync).not.toHaveBeenCalled()
 })
 
 describe("IssueConsole", () => {

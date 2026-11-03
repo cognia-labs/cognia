@@ -894,7 +894,7 @@ it("uses x-ratelimit-reset when Retry-After is absent", async () => {
 
 it("binds the first usable read account rather than the first listed account", async () => {
   const unavailable = { id: "first", connectionId: "wrong-connection" }
-  const selected = { id: "second", connectionId: "actual-connection" }
+  const selected = { id: "second", connectionId: "actual-connection", pluginId: "github-delivery" }
   jest.mocked(githubReadAccountsFor).mockResolvedValueOnce([unavailable, selected] as never)
   jest
     .mocked(resolveGithubAccountGitAccess)
@@ -903,7 +903,11 @@ it("binds the first usable read account rather than the first listed account", a
   const octokit = { request: jest.fn() }
   jest.mocked(getOctokitForRepo).mockResolvedValueOnce(octokit as never)
   const client = await resolveGithubSyncReadClient("acme/one")
-  expect(client).toEqual({ octokit, connectionRef: "actual-connection" })
+  expect(client).toEqual({
+    octokit,
+    connectionRef: "actual-connection",
+    consumerPluginId: "github-delivery",
+  })
   expect(resolveGithubAccountGitAccess).toHaveBeenNthCalledWith(2, selected)
   expect(getOctokitForRepo).toHaveBeenCalledWith(
     expect.objectContaining({ repoFullName: "acme/one", pat: { token: "test-credential" } })
@@ -917,6 +921,27 @@ it("uses a named-lock target when only gh can provide a read credential", async 
   const octokit = { request: jest.fn() }
   jest.mocked(getOctokitForRepo).mockResolvedValueOnce(octokit as never)
   expect(await resolveGithubSyncReadClient("acme/one")).toEqual({ octokit })
+})
+
+it("only selects a bound read connection and never falls through to another identity or gh", async () => {
+  const selected = { id: "selected", connectionId: "bound", pluginId: "github-delivery" }
+  const other = { id: "other", connectionId: "other" }
+  jest.mocked(githubReadAccountsFor).mockResolvedValueOnce([other, selected] as never)
+  jest
+    .mocked(resolveGithubAccountGitAccess)
+    .mockResolvedValueOnce({ host: { id: "github.com" }, token: "bound-token" } as never)
+  const octokit = { request: jest.fn() }
+  jest.mocked(getOctokitForRepo).mockResolvedValueOnce(octokit as never)
+  expect(await resolveGithubSyncReadClient("acme/one", "bound" as AuthConnectionRef)).toMatchObject(
+    { connectionRef: "bound", consumerPluginId: "github-delivery" }
+  )
+  expect(resolveGithubAccountGitAccess).toHaveBeenLastCalledWith(selected)
+  jest.mocked(githubReadAccountsFor).mockResolvedValueOnce([other] as never)
+  const before = jest.mocked(ghCliToken).mock.calls.length
+  await expect(
+    resolveGithubSyncReadClient("acme/one", "bound" as AuthConnectionRef)
+  ).rejects.toThrow()
+  expect(ghCliToken).toHaveBeenCalledTimes(before)
 })
 
 it("advances page indices for identical boundary timestamps", async () => {
@@ -1131,3 +1156,8 @@ it("stops departure verification on cancellation before requesting another id", 
   ).rejects.toThrow()
   expect(request).toHaveBeenCalledTimes(1)
 })
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)

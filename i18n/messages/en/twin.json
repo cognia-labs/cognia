@@ -502,7 +502,10 @@
       "urlEmpty": "Enter a URL first",
       "urlFetchFailed": "Couldn’t fetch that URL: {reason}",
       "urlInvalid": "That doesn’t look like a valid URL",
-      "urlNoText": "That URL returned no readable text"
+      "urlNoText": "That URL returned no readable text",
+      "source-disconnected": "Source disconnected",
+      "source-deleted": "Source deleted or no longer accessible",
+      "not-on-this-device": "Source connection is not on this device"
     },
     "fetching": "Fetching…",
     "filesDescription": "Text formats (Markdown / CSV / HTML / JSON / source code / .eml / .mbox) are stored as-is. Binary formats (PDF / DOCX / PPTX / EPUB / ODT / ODP) are parsed in the browser; only the extracted text lands in Dexie. Chat exports (ChatGPT / Claude / Gemini / Slack / Lark / WeChat / DingTalk) and mbox files fan out into one source per conversation.",
@@ -581,7 +584,10 @@
     "historicalVersion": "This citation refers to an earlier document version. The original version is shown.",
     "pageLocation": "Pages {start}–{end}",
     "lineLocation": "Lines {start}–{end}",
-    "characterLocation": "Characters {start}–{end}"
+    "characterLocation": "Characters {start}–{end}",
+    "source-disconnected": "Source disconnected",
+    "source-deleted": "Source deleted or no longer accessible",
+    "not-on-this-device": "Source connection is not on this device"
   },
   "status": {
     "accepted": "Accepted",

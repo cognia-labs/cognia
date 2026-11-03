@@ -71,7 +71,8 @@ export class GithubWritebackError extends Error {
  */
 export async function resolveGithubWritebackAccount(
   repoFullName = "",
-  connectorAccountId?: string
+  connectorAccountId?: string,
+  connectionRef?: string
 ): Promise<IntegrationAccount | null> {
   const accounts = await githubReadAccountsFor(repoFullName, GITHUB_DOT_COM, {
     listAccounts: () => listIntegrationAccounts(GITHUB_DELIVERY_PLUGIN_ID, GITHUB_INTEGRATION_ID),
@@ -82,7 +83,9 @@ export async function resolveGithubWritebackAccount(
   })
   return (
     accounts.find(
-      (account) => connectorAccountId === undefined || account.id === connectorAccountId
+      (account) =>
+        (connectorAccountId === undefined || account.id === connectorAccountId) &&
+        (connectionRef === undefined || account.connectionId === connectionRef)
     ) ?? null
   )
 }

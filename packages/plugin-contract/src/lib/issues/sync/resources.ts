@@ -80,5 +80,6 @@ export function pluginResourceForStorage(
     schemaVersion: resource.schemaVersion,
     config: JSON.parse(canonicalIssueSyncConfig(resource.config)) as Record<string, unknown>,
     ...(typeof resource.name === "string" ? { name: resource.name } : {}),
+    ...(typeof resource.captureId === "string" ? { captureId: resource.captureId } : {}),
   }
 }

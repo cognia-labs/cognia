@@ -502,7 +502,10 @@
       "urlEmpty": "请先输入 URL",
       "urlFetchFailed": "无法抓取该 URL：{reason}",
       "urlInvalid": "这不是有效的 URL",
-      "urlNoText": "该 URL 未返回可读文本"
+      "urlNoText": "该 URL 未返回可读文本",
+      "source-disconnected": "来源已断开连接",
+      "source-deleted": "来源已删除或无法访问",
+      "not-on-this-device": "此设备上没有来源连接"
     },
     "fetching": "抓取中…",
     "filesDescription": "文本格式（Markdown / CSV / HTML / JSON / 源代码 / .eml / .mbox）按原样存储。二进制格式（PDF / DOCX / PPTX / EPUB / ODT / ODP）在浏览器解析，仅提取出的文本会落入 Dexie。聊天导出（ChatGPT / Claude / Gemini / Slack / 飞书 / 微信 / 钉钉）和 mbox 文件会按会话拆分为多个源。",
@@ -581,7 +584,10 @@
     "historicalVersion": "此引用来自文档的旧版本，当前显示引用时的原文。",
     "pageLocation": "第 {start}–{end} 页",
     "lineLocation": "第 {start}–{end} 行",
-    "characterLocation": "字符 {start}–{end}"
+    "characterLocation": "字符 {start}–{end}",
+    "source-disconnected": "来源已断开连接",
+    "source-deleted": "来源已删除或无法访问",
+    "not-on-this-device": "此设备上没有来源连接"
   },
   "status": {
     "accepted": "已接受",

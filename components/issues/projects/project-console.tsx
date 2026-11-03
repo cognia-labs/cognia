@@ -40,6 +40,7 @@ import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { TrackerTabs } from "@/components/issues/tracker-tabs"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { useClientLiveQuery } from "@/hooks/data"
+import { useIssueSyncAvailability } from "../kept-copy-source-state"
 import { listIssues } from "@/lib/db/issues"
 import {
   deleteIssueProject,
@@ -139,6 +140,7 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
   const hasSyncedBinding = (projects ?? []).some((project) =>
     project.resources.some(isSyncedResource)
   )
+  const syncAvailability = useIssueSyncAvailability(projects)
 
   /**
    * Manual refresh. `full` bypasses the watermark, because the reason a user
@@ -146,7 +148,7 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
    * path missed something.
    */
   async function syncNow() {
-    if (!workspaceId) return
+    if (!workspaceId || !syncAvailability.canSync) return
     setSyncing(true)
     try {
       const result = await runWorkspaceIssueSync({ projectId: workspaceId, full: true })
@@ -212,10 +214,14 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
           secondaryActions={[
             {
               id: "sync",
-              label: syncing ? t("sync.running") : t("sync.now"),
+              label: syncAvailability.reason
+                ? t(syncAvailability.reason)
+                : syncing
+                  ? t("sync.running")
+                  : t("sync.now"),
               icon: RefreshCwIcon,
               onSelect: () => void syncNow(),
-              disabled: !workspaceId || syncing || !hasSyncedBinding,
+              disabled: !workspaceId || syncing || !hasSyncedBinding || !syncAvailability.canSync,
               testId: "project-sync-now",
             },
           ]}

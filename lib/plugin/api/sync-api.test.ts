@@ -2,7 +2,7 @@
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { type PluginSyncDriver, syncCursorInvalid, syncRateLimited } from "@cognia/plugin-sdk"
-import { clearSyncForPlugin, createSyncAPI } from "./sync-api"
+import { assertSyncConnection, clearSyncForPlugin, createSyncAPI } from "./sync-api"
 import { connectionAccess } from "@/lib/plugin/auth/connection-access"
 import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import { pendingExternalSyncKeys } from "@/lib/external-services/sync/runtime"
@@ -27,6 +27,60 @@ const driver = () =>
     applyPage: jest.fn(async () => {}),
   }) satisfies PluginSyncDriver<string>
 const api = () => createSyncAPI("sync-test", { hasPermission: () => true })
+
+it("checks Host integration grants without requiring a legacy builtin to declare auth services", async () => {
+  const db = getDb()
+  await db.authConnections.put({
+    id: "github-ref",
+    providerId: "github-pat",
+    status: "connected",
+    revision: 1,
+    ownerPluginId: null,
+  } as never)
+  await db.integrationAccounts.put({
+    id: "github-account",
+    pluginId: "github-delivery",
+    providerId: "github-pat",
+    connectionId: "github-ref",
+  } as never)
+  await db.serviceConnections.put({
+    id: "github-projection",
+    pluginId: "github-delivery",
+    status: "connected",
+    providerFingerprint: "fp",
+    providerRef: {
+      kind: "integration",
+      accountId: "github-account",
+      authConnectionRef: "github-ref",
+    },
+  } as never)
+  await db.capabilityGrants.put({
+    id: "github-grant",
+    connectionId: "github-projection",
+    consumerPluginId: "github-delivery",
+    connectionRevision: 1,
+    providerFingerprint: "fp",
+    operationPatterns: ["github.request.GET"],
+  } as never)
+  jest.mocked(connectionAccess).mockReturnValue({
+    connected: async () => undefined,
+    checked: async <T>(read: () => Promise<T>) => read(),
+  } as never)
+  await expect(
+    assertSyncConnection("github-delivery", "github-ref" as never, () => {}, {
+      hostIntegration: true,
+    })
+  ).resolves.toBeUndefined()
+  await expect(
+    assertSyncConnection("github-delivery", "github-ref" as never, () => {})
+  ).rejects.toThrow(/unavailable/)
+  await db.capabilityGrants.delete("github-grant")
+  await expect(
+    assertSyncConnection("github-delivery", "github-ref" as never, () => {}, {
+      hostIntegration: true,
+    })
+  ).rejects.toThrow(/grant/)
+})
 
 it("namespaces a registration, hides cursors, resets to full and disposes", async () => {
   const sync = api()

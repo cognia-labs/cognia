@@ -44,6 +44,9 @@ jest.mock("@/lib/issues/sync/registry", () => ({
 }))
 const guarded = jest.fn()
 const mockHasWrite = jest.fn(() => true)
+jest.mock("./sync-api", () => ({
+  assertSyncConnection: jest.fn(async (_id, _ref, check) => check()),
+}))
 jest.mock("@/lib/plugin/security/permission-guard", () => ({
   getPermissionGuard: () => ({ check: (...args: unknown[]) => mockHasWrite(...(args as [])) }),
   createGuardedAPI: (_id: string, api: unknown, map: Record<string, string>) => {
@@ -55,6 +58,7 @@ jest.mock("@/lib/plugin/security/permission-guard", () => ({
 import { emitIssueEvent } from "@/lib/issues/event-bus"
 import type { IssueEvent } from "@/types/issues"
 import { createIssuesAPI, pluginIssueActor } from "./issues-api"
+import { assertSyncConnection } from "./sync-api"
 
 const issue = { id: "i1", identifier: "MERC-1", projectId: "w1", externalKeys: ["k"] }
 
@@ -62,9 +66,104 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockHasWrite.mockReturnValue(true)
   mockResolve.mockResolvedValue(issue)
+  jest.mocked(assertSyncConnection).mockImplementation(async (_id, _ref, check) => check())
 })
 
 describe("createIssuesAPI", () => {
+  it("retries authorization on prepare after the same connection's grant is restored", async () => {
+    let granted = false
+    jest.mocked(assertSyncConnection).mockImplementation(async (_id, _ref, check) => {
+      check()
+      if (!granted) throw new Error("Sync consumer grant required")
+    })
+    const api = createIssuesAPI("restored", {
+      id: "restored",
+      issueSyncProviders: [{ id: "tracker", label: "Tracker", schemaVersion: 1 }],
+    })
+    const pull = jest.fn(async () => ({ items: [], notModified: true }))
+    api.registerSyncProvider({
+      id: "tracker",
+      label: "Tracker",
+      connectionRef: "same-connection" as never,
+      pullFields: [],
+      pushFields: [],
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object", properties: {} },
+        describe: () => ({ key: "a", label: "A" }),
+      },
+      pull,
+    })
+    const registered = mockRegister.mock
+      .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+    const binding = { resource: { kind: "plugin" } } as never
+    await expect(registered.prepare!(binding)).rejects.toThrow(/grant/)
+    granted = true
+    const prepared = await registered.prepare!(binding)
+    expect(prepared.connectionRef).toBe("same-connection")
+    await expect(prepared.provider.pull(binding, {})).resolves.toMatchObject({ notModified: true })
+    expect(pull).toHaveBeenCalledTimes(1)
+    expect(mockRegister).toHaveBeenCalledTimes(1)
+  })
+  it("grant-checks an immutable connection before registration execution and every read", async () => {
+    const api = createIssuesAPI("bound", {
+      id: "bound",
+      issueSyncProviders: [{ id: "tracker", label: "Tracker", schemaVersion: 1 }],
+    })
+    const input = {
+      id: "tracker",
+      label: "Tracker",
+      connectionRef: "connection" as never,
+      pullFields: [],
+      pushFields: [],
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: { type: "object" as const, properties: {} },
+        describe: () => ({ key: "a", label: "A" }),
+      },
+      pull: jest.fn(async () => ({ items: [], notModified: true })),
+      pullPage: jest.fn(async () => ({ items: [], cursor: "next" })),
+      confirmDeparted: jest.fn(async () => ["one"]),
+      push: jest.fn(async () => ({ status: "applied" as const })),
+      create: jest.fn(async () => ({ provider: "tracker", externalId: "one" })),
+    }
+    api.registerSyncProvider(input)
+    const registered = mockRegister.mock
+      .calls[0][0] as import("@/lib/issues/sync/types").IssueSyncProvider
+    input.connectionRef = "changed" as never
+    expect(registered.connectionRef).toBe("connection")
+    expect(() => Object.assign(registered, { connectionRef: "changed" })).toThrow()
+    const b = { resource: { kind: "plugin" } } as never
+    expect((await registered.prepare!(b)).connectionRef).toBe("connection")
+    expect(assertSyncConnection).toHaveBeenCalledWith("bound", "connection", expect.any(Function))
+    input.pull.mockImplementationOnce(async (...args: unknown[]) => {
+      const pluginBinding = args[0] as { connectionRef?: string }
+      pluginBinding.connectionRef = "other-granted-ref"
+      return { items: [], notModified: true }
+    })
+    const stableBinding = { connectionRef: "connection", resource: { kind: "plugin" } } as never
+    await expect(registered.pull(stableBinding, {})).rejects.toThrow()
+    expect(stableBinding).toMatchObject({ connectionRef: "connection" })
+    input.pull.mockClear()
+    jest.mocked(assertSyncConnection).mockRejectedValue(new Error("Sync consumer grant required"))
+    await expect(registered.pull(b, {})).rejects.toThrow(/grant/)
+    expect(input.pull).not.toHaveBeenCalled()
+    await expect(registered.pullPage!(b, { mode: "full" })).rejects.toThrow(/grant/)
+    await expect(registered.confirmDeparted!(b, ["one"], {})).rejects.toThrow(/grant/)
+    await expect(
+      registered.push!(b, {} as never, {}, {} as never, {
+        by: { kind: "human" },
+        idempotencyKey: "one",
+      })
+    ).rejects.toThrow(/grant/)
+    await expect(registered.create!(b, {} as never)).rejects.toThrow(/grant/)
+    expect(input.pullPage).not.toHaveBeenCalled()
+    expect(input.confirmDeparted).not.toHaveBeenCalled()
+    expect(input.push).not.toHaveBeenCalled()
+    expect(input.create).not.toHaveBeenCalled()
+  })
   it("gates every method, reads and subscriptions on issue:read, the rest on issue:write", () => {
     const api = createIssuesAPI("p")
     const map = guarded.mock.calls[0][0] as Record<string, string>

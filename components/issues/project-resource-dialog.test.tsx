@@ -50,6 +50,52 @@ import { createGithubSyncProvider } from "@/lib/issues/sync/providers/github"
 import { createLarkTaskSyncProvider } from "@/lib/issues/sync/providers/lark-task"
 import { createLarkBitableSyncProvider } from "@/lib/issues/sync/providers/lark-bitable"
 
+it.each([false, true])(
+  "retains capture provenance only when editing the same remote identity (changed=%s)",
+  async (changed) => {
+    const providerId = "plugin:resource-test/tracker"
+    registerIssueSyncProvider({
+      id: providerId,
+      label: "Tracker",
+      pullFields: [],
+      pushFields: [],
+      resolveBindings: () => [],
+      pull: async () => ({ items: [], notModified: true }),
+      resource: {
+        label: "Tracker",
+        schemaVersion: 1,
+        schema: {
+          type: "object",
+          properties: {
+            project: { type: "string", title: "Remote project" },
+          },
+        },
+        describe: (config) => ({ key: String(config.project), label: String(config.project) }),
+      },
+    })
+    const initialResource = {
+      kind: "plugin" as const,
+      providerId,
+      schemaVersion: 1,
+      config: { project: "original" },
+      captureId: "portable-capture",
+    }
+    const user = userEvent.setup()
+    renderDialog({ initialResource })
+    if (changed) {
+      const input = screen.getByRole("textbox", { name: /Remote project/ })
+      await user.clear(input)
+      await user.type(input, "different")
+    }
+    await user.click(screen.getByRole("button", { name: "projects.saveResource" }))
+    await waitFor(() => expect(mockAddResource).toHaveBeenCalled())
+    const saved = mockAddResource.mock.calls[0][1]
+    expect(saved.config.project).toBe(changed ? "different" : "original")
+    if (changed) expect(saved).not.toHaveProperty("captureId")
+    else expect(saved.captureId).toBe("portable-capture")
+  }
+)
+
 const ROOTS: WorkspaceRoot[] = [
   { id: "root-1", path: "/src/app", label: "app", isPrimary: true },
   { id: "root-2", path: "/src/docs" },

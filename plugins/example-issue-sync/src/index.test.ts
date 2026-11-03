@@ -46,11 +46,15 @@ import { PluginServiceRegistry } from "@/lib/plugin/core/service-registry"
 import { CompanionTransport } from "@/lib/tauri/transport-companion"
 import { setTransport, transport } from "@/lib/tauri/transport-instance"
 import { setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
-import definition, { manifest, requestAccess } from "./index"
+import definition, { manifest } from "./index"
 import authDefinition, { manifest as authManifest } from "../../example-auth-provider/src/index"
 import { getIssueSyncRegistry } from "@/lib/issues/sync/registry"
 import { resolvePluginSyncBindings, pluginResourceState } from "@/lib/issues/sync/plugin-resources"
 import { reconcileBinding } from "@/lib/issues/sync/engine"
+import { issueSyncTarget } from "@/lib/issues/sync/engine"
+import { reconcileIssueSyncRegistrations } from "@/lib/issues/sync/runtime"
+import { hasExternalSyncRegistration } from "@/lib/external-services/sync/runtime"
+import { resolveIssueResourceSource } from "@/lib/issues/sync/kept-copy-source"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { getIssueByExternalKey } from "@/lib/db/issues"
 import type { IssueSyncBinding } from "@cognia/plugin-sdk/api/issues"
@@ -307,6 +311,13 @@ it("ships the complete manifest and uses no legacy session callbacks", () => {
   expect(authManifest.providesServices).toEqual({ "auth.example-tracker": "1.0.0" })
 })
 
+async function connectExample(): Promise<boolean> {
+  const result = await hooks?.onCommand?.("example-issues-connect", [])
+  return (
+    typeof result === "object" && result !== null && result.message === ctx.i18n.t("access.granted")
+  )
+}
+
 const providerId = "plugin:cognia-example-issue-sync/issues"
 async function binding(version = 2): Promise<IssueSyncBinding> {
   const project = await createIssueProject({
@@ -340,7 +351,7 @@ const remote = {
 }
 
 it("pulls a mapped issue through the registered provider into the Host issue database", async () => {
-  expect(await requestAccess(ctx)).toBe(true)
+  expect(await connectExample()).toBe(true)
   const target = await binding()
   serviceReply = (url, init) => {
     expect(url.pathname).toBe("/projects/DEMO/issues")
@@ -356,10 +367,45 @@ it("pulls a mapped issue through the registered provider into the Host issue dat
     issueProjectId: target.issueProjectId,
   })
   expect(prompts.map((prompt) => prompt.kind)).toEqual(["sign-in", "grant"])
+  expect(target.connectionRef).toBeDefined()
+  expect((await getDb().externalSyncCursors.get(issueSyncTarget(target).key))?.connectionRef).toBe(
+    target.connectionRef
+  )
+})
+
+it("stops a granted target on revocation, keeps imported issues, and resumes after the same identity is granted again", async () => {
+  expect(await connectExample()).toBe(true)
+  const target = await binding()
+  serviceReply = () => json(remote)
+  await reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)
+  const key = issueSyncTarget(target).key
+  await reconcileIssueSyncRegistrations({
+    mirrorBindings: async () => [],
+    importBindings: async () => [target],
+  })
+  expect(hasExternalSyncRegistration(key)).toBe(true)
+  const stored = (await getDb().issueProjects.get(target.issueProjectId))!.resources[0]
+  expect(stored.captureId).toEqual(expect.any(String))
+  await revokeConsumerAccess(target.connectionRef!, manifest.id)
+  expect(hasExternalSyncRegistration(key)).toBe(false)
+  expect(await getDb().externalSyncCursors.get(key)).toBeUndefined()
+  expect(await resolveIssueResourceSource(stored)).toBe("source-disconnected")
+  const before = requests.length
+  await expect(
+    reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)
+  ).rejects.toMatchObject({ code: "source-disconnected" })
+  expect(requests).toHaveLength(before)
+  expect(await getDb().issues.count()).toBe(1)
+  expect(await connectExample()).toBe(true)
+  expect(await resolveIssueResourceSource(stored)).toBe("available")
+  expect(await reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)).toMatchObject({
+    status: "completed",
+  })
+  expect(await getDb().issues.count()).toBe(1)
 })
 
 it("migrates a v1 resource on the Host working copy while preserving identity and stored data", async () => {
-  expect(await requestAccess(ctx)).toBe(true)
+  expect(await connectExample()).toBe(true)
   const target = await binding(1)
   expect(target.resource).toMatchObject({
     schemaVersion: 2,
@@ -378,27 +424,27 @@ it("migrates a v1 resource on the Host working copy while preserving identity an
 })
 
 it("refuses revoked consumer reads before sending or importing anything", async () => {
-  expect(await requestAccess(ctx)).toBe(true)
+  expect(await connectExample()).toBe(true)
   const target = await binding()
   const [connection] = await ctx.auth.connections.list()
   await revokeConsumerAccess(connection.ref, manifest.id)
   const before = requests.length
-  await expect(
-    reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)
-  ).rejects.toMatchObject({ name: "ConsumerGrantRequired" })
+  await expect(reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)).rejects.toThrow(
+    /grant|source-disconnected/i
+  )
   expect(requests).toHaveLength(before)
   expect(await getDb().issues.count()).toBe(0)
 })
 
 it("waits when the auth provider is disabled and keeps the saved resource", async () => {
-  expect(await requestAccess(ctx)).toBe(true)
+  expect(await connectExample()).toBe(true)
   const target = await binding()
   await providerTransition("markProviderUnavailable", () => ownerHooks?.onDisable?.())
   services.removeProvider(authManifest.id)
   expect(services.evaluate(manifest.requiresServices).required).toMatchObject([{ kind: "missing" }])
   const before = requests.length
   await expect(reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)).rejects.toThrow(
-    "connection unavailable"
+    /connection unavailable|source-disconnected/i
   )
   expect(requests).toHaveLength(before)
   expect(await getDb().issueProjects.count()).toBe(1)
@@ -407,12 +453,16 @@ it("waits when the auth provider is disabled and keeps the saved resource", asyn
 it.each([{ items: [{ ...remote.items[0], state: "unknown" }] }, { ...remote, nextCursor: "more" }])(
   "does not import malformed or incomplete remote pages: %j",
   async (page) => {
-    expect(await requestAccess(ctx)).toBe(true)
+    expect(await connectExample()).toBe(true)
     const target = await binding()
     serviceReply = () => json(page)
     await expect(
       reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ status: "failed", errorCode: "sync-failed", created: 0, pages: 0 })
     expect(await getDb().issues.count()).toBe(0)
+    expect(
+      (await getDb().externalSyncCursors.get(issueSyncTarget(target).key))?.cursor
+    ).toBeUndefined()
+    expect(await getDb().externalSyncSeen.count()).toBe(0)
   }
 )

@@ -15,7 +15,14 @@
  * `twin.sourceUploader.errors.*`.
  */
 
-import { registerTwinSource, sourceFingerprint } from "./source-registration"
+import { registerTwinSource, sourceFingerprint, twinSourceProvenance } from "./source-registration"
+import { getDb } from "@/lib/db/schema"
+import {
+  captureKeptCopyProvenance,
+  KeptCopySourceError,
+  requireKeptCopySource,
+} from "@/lib/docs-providers/kept-copy-source"
+import type { DocsProviderAccountBinding, RemoteDocContent } from "@/lib/docs-providers/types"
 import {
   parseMbox,
   parseEml,
@@ -74,6 +81,9 @@ export type IngestErrorCode =
   | "urlInvalid"
   | "urlNoText"
   | "urlFetchFailed"
+  | "source-disconnected"
+  | "source-deleted"
+  | "not-on-this-device"
   | LarkIngestErrorCode
 
 /**
@@ -93,6 +103,8 @@ export type StagedSourceOrigin = "file" | "url" | "paste" | "git" | "lark"
 
 /** An extracted-but-uncommitted twin source, held in UI state for preview. */
 export interface StagedSource {
+  /** Held only until commit; the persisted source contains portable provenance. */
+  remoteSource?: { content: RemoteDocContent; binding: DocsProviderAccountBinding }
   kind: TwinSourceKind
   format: TwinSourceFormat
   title: string
@@ -435,9 +447,18 @@ export async function stageUrl(url: string, opts: StageUrlOptions = {}): Promise
  */
 export async function stageLarkDoc(
   urlOrToken: string,
-  opts: FetchLarkDocOptions
+  opts: FetchLarkDocOptions & { twinId?: string }
 ): Promise<StageResult> {
   try {
+    if (opts.twinId && !opts.sourceProvenance) {
+      const ref = parseLarkDocUrl(urlOrToken, opts.kind)
+      const sources = await getDb().twinSources.where("twinId").equals(opts.twinId).toArray()
+      const prior = sources
+        .map(twinSourceProvenance)
+        .find((source) => source && "resourceId" in source && source.resourceId === ref?.token)
+      if (prior) opts = { ...opts, sourceProvenance: prior }
+    }
+    await requireKeptCopySource(opts.sourceProvenance)
     const fetched = await fetchLarkDocAsRawSource(urlOrToken, opts)
     throwIfRequestAborted(opts.signal)
     const ref = parseLarkDocUrl(urlOrToken)
@@ -453,10 +474,31 @@ export async function stageLarkDoc(
           bytes: fetched.text.length,
           tags,
           origin: "lark",
+          ...(fetched.accountBinding
+            ? {
+                remoteSource: {
+                  binding: fetched.accountBinding,
+                  content: {
+                    ref: {
+                      providerId: "lark",
+                      kind: ref?.kind === "wiki" ? "wiki" : "doc",
+                      id: fetched.wikiToken ?? fetched.docToken,
+                      url: fetched.url,
+                      title: fetched.title,
+                      sourceType: fetched.objType,
+                    },
+                    title: fetched.title,
+                    text: fetched.text,
+                    format: "markdown" as const,
+                  },
+                },
+              }
+            : {}),
         },
       ],
     }
   } catch (err) {
+    if (err instanceof KeptCopySourceError) return fail(err.code)
     if (err instanceof LarkIngestError) {
       throwIfRequestAborted(opts.signal)
       return fail(err.code, err.params)
@@ -542,19 +584,36 @@ export async function commitStagedSources(
   let count = 0
   for (const item of staged) {
     const fingerprint = await sourceFingerprint(item.text)
-    const result = await registerTwinSource({
-      twinId,
-      kind: item.kind,
-      format: item.format,
-      source: item.text,
-      title: item.title,
-      bytes: item.bytes,
-      fingerprint,
-      redacted: false,
-      status: "pending",
-      ...(item.tags && item.tags.length > 0 ? { tags: item.tags } : {}),
-      ...(item.speakers && item.speakers.length > 0 ? { speakers: item.speakers } : {}),
-    })
+    const db = getDb()
+    const result = await db.transaction(
+      "rw",
+      db.twinSources,
+      db.authConnections,
+      db.remoteDocumentConnections,
+      async () => {
+        const provenance = item.remoteSource
+          ? await captureKeptCopyProvenance(item.remoteSource.content, item.remoteSource.binding)
+          : undefined
+        const registered = await registerTwinSource({
+          twinId,
+          kind: item.kind,
+          format: item.format,
+          source: item.text,
+          title: item.title,
+          bytes: item.bytes,
+          fingerprint,
+          redacted: false,
+          status: "pending",
+          ...(provenance ? { remoteDocument: provenance } : {}),
+          ...(item.tags && item.tags.length > 0 ? { tags: item.tags } : {}),
+          ...(item.speakers && item.speakers.length > 0 ? { speakers: item.speakers } : {}),
+        })
+        if (provenance?.captureId && registered.source.captureId !== provenance.captureId) {
+          await db.remoteDocumentConnections.delete(provenance.captureId)
+        }
+        return registered
+      }
+    )
     if (result.created || result.revived) count += 1
   }
   return count

@@ -6,6 +6,8 @@ import { getDocsProvider } from "./registry"
 import { DocsProviderError, type DocsProvider, type RemoteDocContent } from "./types"
 import {
   captureKeptCopyProvenance,
+  captureKeptCopyConnection,
+  requireKeptCopySource,
   recordKeptCopySourceFailure,
   resolveKeptCopyConnection,
   resolveKeptCopySource,
@@ -215,4 +217,25 @@ it.each([
   const provenance = await capture()
   await recordKeptCopySourceFailure(provenance, error)
   expect(await resolveKeptCopySource(provenance)).toBe("available")
+})
+
+it("keeps Issue Sync provenance without requiring a document provider", async () => {
+  await getDb().authConnections.put(connection)
+  const captureId = await captureKeptCopyConnection({
+    providerId: "github",
+    connectionRef: connection.id,
+    revision: connection.revision,
+  })
+  const source = { providerId: "github", captureId, connectionScoped: true as const }
+  jest.mocked(getDocsProvider).mockReturnValue(undefined)
+  expect(await resolveKeptCopySource(source)).toBe("available")
+  await getDb().authConnections.put(tombstoneAuthConnection(connection, "tombstoned"))
+  expect(await resolveKeptCopySource(source)).toBe("source-disconnected")
+  await expect(requireKeptCopySource(source)).rejects.toMatchObject({
+    name: "KeptCopySourceError",
+    code: "source-disconnected",
+  })
+  await getDb().authConnections.put({ ...connection, id: "restored" as never })
+  await expect(requireKeptCopySource(source)).resolves.toBeUndefined()
+  expect((await resolveKeptCopyConnection(source))?.id).toBe("restored")
 })

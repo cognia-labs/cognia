@@ -2,7 +2,10 @@ import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject, LarkBitableFieldMap } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import {
+  resolveLarkConnection,
+  larkConnectionAdapter,
+} from "@/lib/connectors/adapters/lark/host-auth"
 import {
   bitableFieldsFromIssue,
   bitableFieldsFromPatch,
@@ -27,7 +30,29 @@ it("describes its built-in resource without migrating its account binding", () =
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  resolveLarkConnection: jest.fn(),
+  larkConnectionAdapter: jest.fn(),
+}))
+
+it("uses the same identity's restored adapter and epoch for the prepared table", async () => {
+  jest.mocked(larkConnectionAdapter).mockResolvedValueOnce({
+    adapterId: "restored-adapter",
+    connection: { id: "restored-ref", hostMetadata: { authorizationEpoch: "restored-epoch" } },
+  } as never)
+  const b = { ...binding(), connectionRef: "restored-ref" as never }
+  const prepared = await createLarkBitableSyncProvider().prepare!(b)
+  expect(prepared.connectionRef).toBe("restored-ref")
+  jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], cursor: "done" })
+  await prepared.provider.pullPage!(b, { mode: "full" })
+  expect(withLarkAuthedApi).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      adapterId: "restored-adapter",
+      expectedAuthorizationEpoch: "restored-epoch",
+    }),
+    expect.any(Function)
+  )
+})
 
 const fieldMap: LarkBitableFieldMap = {
   title: "Name",
@@ -319,3 +344,8 @@ it("resolves the Bitable adapter's Host connection before sync", async () => {
   )
   expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1")
 })
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)

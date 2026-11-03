@@ -46,8 +46,63 @@ it("pins the Host purgers with connection provenance today", () => {
     "integration-ingress",
     "integration-event-audit",
     "external-sync",
+    "github-issue-mirror",
   ])
 })
+
+it.each(["connection", "consumer", "plugin-data", "provider-data"] as const)(
+  "purges only the mirror rows owned by a %s, after its sync cursors are gone",
+  async (kind) => {
+    const db = getDb()
+    const rows = [
+      {
+        id: "a/r#1",
+        repoFullName: "a/r",
+        connectionRef: "a",
+        consumerPluginId: "reader",
+        providerPluginId: "auth",
+      },
+      {
+        id: "a/s#1",
+        repoFullName: "a/s",
+        connectionRef: "a",
+        consumerPluginId: "other",
+        providerPluginId: "auth",
+      },
+      {
+        id: "b/r#1",
+        repoFullName: "b/r",
+        connectionRef: "b",
+        consumerPluginId: "other",
+        providerPluginId: "other-auth",
+      },
+      { id: "legacy/r#1", repoFullName: "legacy/r" },
+    ]
+    await db.githubIssueMirror.bulkPut(rows as never)
+    await db.externalSyncCursors.put({
+      key: "github-mirror:p:a/r",
+      owner: "plugin:reader",
+      connectionRef: "a" as never,
+      failures: 0,
+    })
+    const target =
+      kind === "connection"
+        ? { kind: "connection" as const, ref: "a" as never }
+        : kind === "consumer"
+          ? { kind: "consumer" as const, ref: "a" as never, consumerPluginId: "reader" }
+          : { kind: "plugin-data" as const, pluginId: kind === "provider-data" ? "auth" : "reader" }
+    // Exercise the real registry: external-sync runs first and removes its only identity record.
+    expect((await purgeDerivedData(target)).failed).toEqual([])
+    if (kind !== "provider-data") expect(await db.externalSyncCursors.count()).toBe(0)
+    expect((await db.githubIssueMirror.toArray()).map((row) => row.id).sort()).toEqual(
+      kind === "connection" || kind === "provider-data"
+        ? ["b/r#1", "legacy/r#1"]
+        : ["a/s#1", "b/r#1", "legacy/r#1"]
+    )
+    // Retry has no cursor to consult, and must produce the same isolated result.
+    expect((await purgeDerivedData(target)).failed).toEqual([])
+  }
+)
 
 it("purges connection checkpoints, seen ids, renewal tasks and in-flight runtime work", async () => {
   const db = getDb()

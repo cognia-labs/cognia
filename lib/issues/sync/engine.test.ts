@@ -44,6 +44,8 @@ import { listIssueEvents, __resetIssueEventClockForTesting } from "@/lib/db/issu
 import { createIssueCycle, listIssueCycles } from "@/lib/db/issue-cycles"
 import { listLabels } from "@/lib/db/labels"
 import { getDb } from "@/lib/db/schema"
+import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
+import { captureIssueSyncSource } from "./kept-copy-source"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { claimSyncLease } from "@/lib/db/sync-leases"
 import { purgePluginExternalServices } from "@/lib/external-services/lifecycle"
@@ -113,6 +115,39 @@ function binding(over: Partial<IssueSyncBinding> = {}): IssueSyncBinding {
     ...over,
   }
 }
+
+it("refuses an engine write if the captured source disconnects during local field reads", async () => {
+  const connection = {
+    id: "engine-source",
+    identityKey: "engine-person",
+    providerId: "github",
+    revision: 1,
+    status: "connected",
+  } as AuthConnectionRow
+  await getDb().authConnections.put(connection)
+  const b = binding()
+  await getDb().issueProjects.update(container.id, { resources: [b.resource] })
+  await captureIssueSyncSource(b, connection.id)
+  const push = jest.fn(async () => ({ status: "applied" as const }))
+  const provider: IssueSyncProvider = {
+    id: "fake",
+    label: "Fake",
+    pullFields: ["title"],
+    pushFields: ["title"],
+    resolveBindings: () => [b],
+    pull: async () => ({ items: [remote()], notModified: false }),
+    push,
+  }
+  await reconcileBinding(b, provider)
+  const issue = (await getDb().issues.toArray())[0]
+  await updateIssue(issue.id, { title: "Local edit" }, HUMAN)
+  mockAfterLabelRead.mockImplementationOnce(async () => {
+    await getDb().authConnections.put(tombstoneAuthConnection(connection, "tombstoned"))
+  })
+  await reconcileBinding(b, provider)
+  expect(push).not.toHaveBeenCalled()
+  expect((await getIssue(issue.id))?.title).toBe("Local edit")
+})
 
 function remote(over: Partial<RemoteIssue> = {}): RemoteIssue {
   return {
@@ -1074,6 +1109,18 @@ it("defers offline before credential resolution and binds the actual connection 
   expect(
     (await getDb().externalSyncCursors.get(issueSyncTarget(binding()).key))?.connectionRef
   ).toBe("resolved-online")
+})
+
+it("carries a plugin binding's connection into its target before any cursor exists", () => {
+  const bound = {
+    ...binding(),
+    providerId: "plugin:reader/issues",
+    connectionRef: "host-ref" as AuthConnectionRef,
+  }
+  expect(issueSyncTarget(bound)).toMatchObject({
+    owner: "plugin:reader",
+    connectionRef: "host-ref",
+  })
 })
 
 function mutableGithubRows(count: number) {

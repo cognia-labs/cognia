@@ -22,6 +22,11 @@ it("preserves the schema and callbacks without importing Host code", async () =>
     fullScanOnly: true,
   }
   expect(defineIssueSyncProvider(provider)).toBe(provider)
+  const bound = { ...provider, connectionRef: "host-connection" as never }
+  expect(defineIssueSyncProvider(bound).connectionRef).toBe("host-connection")
+  expect(() => defineIssueSyncProvider({ ...provider, connectionRef: "" as never })).toThrow(
+    /connectionRef/
+  )
   expect(defineIssueSyncProvider(provider).pullPage).toBe(provider.pullPage)
   expect(defineIssueSyncProvider(provider).confirmDeparted).toBe(provider.confirmDeparted)
   expect(() => defineIssueSyncProvider({ ...provider, confirmDeparted: true } as never)).toThrow()

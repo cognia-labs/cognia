@@ -85,6 +85,21 @@ describe("toIntegrationAction", () => {
 })
 
 describe("resolveGithubWritebackAccount", () => {
+  it("pins writes to the captured connection and never falls back to another identity", async () => {
+    mockListAccounts.mockResolvedValue([
+      account({ id: "B", connectionId: "connection-B" as never }),
+      account({ id: "A", connectionId: "connection-A" as never }),
+    ])
+    await expect(
+      resolveGithubWritebackAccount("acme/one", undefined, "connection-A")
+    ).resolves.toMatchObject({ id: "A" })
+    mockListAccounts.mockResolvedValue([
+      account({ id: "B", connectionId: "connection-B" as never }),
+    ])
+    await expect(
+      resolveGithubWritebackAccount("acme/one", undefined, "connection-A")
+    ).resolves.toBeNull()
+  })
   it("never selects a newer enterprise account for a public issue", async () => {
     mockListAccounts.mockResolvedValue([
       account({ id: "enterprise", authSessionId: "enterprise-session" }),

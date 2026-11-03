@@ -9,6 +9,12 @@ export interface RemoteDocumentConnectionRow {
   /** Original identity key, retained when a terminal connection releases its identity slot. */
   identityKey: string
   capturedAt: number
+  /** Issue imports use the same kept-copy identity rule without a docs provider. */
+  sourceKind?: "issue-sync"
+  /** The consumer whose grant authorized this copy, when applicable. */
+  consumerPluginId?: string
+  /** Built-in Host integration reads predate the public auth:consume service API. */
+  consumerKind?: "integration"
   /** A provider confirmed the remote item is missing or forbidden. */
   sourceDeletedAt?: number
 }

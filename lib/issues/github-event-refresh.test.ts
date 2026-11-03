@@ -7,6 +7,8 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { createIssue, getIssue } from "@/lib/db/issues"
 import { listIssueEvents } from "@/lib/db/issue-events"
+import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
+import { captureIssueSyncSource, resolveIssueResourceSource } from "./sync/kept-copy-source"
 import {
   deleteGithubIssues,
   getGithubIssue,
@@ -160,6 +162,131 @@ it.each(["issues.transferred", "issues.deleted"])(
   }
 )
 
+it.each(["disconnected", "grant-revoked", "foreign", "race-disconnect", "race-grant"] as const)(
+  "a B departure preserves A's kept import when its source is %s",
+  async (state) => {
+    const db = getDb()
+    const a = {
+      id: "connection-A",
+      providerId: "github-pat",
+      ownerPluginId: null,
+      identityKey: "person-A",
+      revision: 1,
+      status: "connected",
+    } as AuthConnectionRow
+    await db.authConnections.put(a)
+    await db.authConnections.put({ ...a, id: "connection-B" as never, identityKey: "person-B" })
+    await db.integrationAccounts.bulkPut([
+      {
+        id: "account-A",
+        pluginId: "github-delivery",
+        providerId: "github-pat",
+        connectionId: a.id,
+        enabled: true,
+        status: "connected",
+      },
+      {
+        id: "account-B",
+        pluginId: "github-delivery",
+        providerId: "github-pat",
+        connectionId: "connection-B",
+        enabled: true,
+        status: "connected",
+      },
+    ] as never)
+    await db.serviceConnections.put({
+      id: "projection-A",
+      pluginId: "github-delivery",
+      status: "connected",
+      providerFingerprint: "fp",
+      providerRef: { kind: "integration", accountId: "account-A", authConnectionRef: a.id },
+    } as never)
+    await db.capabilityGrants.put({
+      id: "grant-A",
+      connectionId: "projection-A",
+      consumerPluginId: "github-delivery",
+      connectionRevision: 1,
+      providerFingerprint: "fp",
+      operationPatterns: ["github.request.GET"],
+    } as never)
+    await db.issueProjects.put({
+      id: "ip2",
+      projectId: "ws",
+      key: "IP",
+      name: "Kept",
+      status: "planned",
+      priority: "none",
+      resources: [imported.resource],
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const binding = { ...imported, resource: { ...imported.resource } }
+    await captureIssueSyncSource(binding, a.id, "github-delivery", "integration")
+    expect(await resolveIssueResourceSource(binding.resource)).toBe("available")
+    const issue = await createIssue({
+      projectId: "ws",
+      issueProjectId: "ip2",
+      title: "Kept A",
+      createdBy: { kind: "human" },
+      externalRefs: [
+        { provider: "github", externalId: "Acme/App#7", meta: { binding: "Acme/App" } },
+      ],
+    })
+    const originalRefs = issue.externalRefs
+    if (state === "disconnected")
+      await db.authConnections.put(tombstoneAuthConnection(a, "tombstoned"))
+    if (state === "grant-revoked") await db.capabilityGrants.delete("grant-A")
+    const { refresher, deps } = setup({
+      reconcileRegistrations: jest.fn(async () => ({ mirror: [], imported: [binding] })),
+    })
+    let raced = false
+    const transact = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>
+    const spy = state.startsWith("race")
+      ? jest.spyOn(db, "transaction").mockImplementation(((...args: unknown[]) => {
+          const tables = args.slice(1, -1).flat()
+          if (
+            !raced &&
+            args[0] === "rw" &&
+            tables.includes(db.issues) &&
+            tables.includes(db.issueEvents)
+          ) {
+            raced = true
+            return (async () => {
+              if (state === "race-disconnect")
+                await db.authConnections.put(tombstoneAuthConnection(a, "tombstoned"))
+              else await db.capabilityGrants.delete("grant-A")
+              return transact(...args)
+            })()
+          }
+          return transact(...args)
+        }) as never)
+      : undefined
+    try {
+      await refresher.handle(
+        event({
+          eventType: "issues.deleted",
+          accountId: state.startsWith("race") ? "account-A" : "account-B",
+        })
+      )
+    } finally {
+      spy?.mockRestore()
+    }
+    expect(deps.onError).not.toHaveBeenCalled()
+    if (state.startsWith("race")) expect(raced).toBe(true)
+    expect((await getIssue(issue.id))?.externalRefs).toEqual(originalRefs)
+    expect(
+      await tombstoneIssueSyncRefs(binding, ["Acme/App#7"], {
+        eventAccount: { pluginId: "github-delivery", accountId: "account-B" },
+      })
+    ).toBe(0)
+    expect((await getIssue(issue.id))?.externalRefs).toEqual(originalRefs)
+    if (state === "foreign") {
+      await refresher.handle(event({ eventType: "issues.deleted", accountId: "account-A" }))
+      expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toEqual(expect.any(Number))
+    }
+  }
+)
+
 it("an authoritative departure tombstones an import ref once and records external_departed", async () => {
   await getDb().issueProjects.put({
     id: "ip2",
@@ -185,7 +312,9 @@ it("an authoritative departure tombstones an import ref once and records externa
   await refresher.handle(event({ eventType: "issues.transferred" }))
   await refresher.handle(event({ eventType: "issues.deleted" }))
   // No payload updated_at: the Host receipt time is never used as a barrier.
-  expect(deps.departImport).toHaveBeenCalledWith(imported, ["Acme/App#7"], {})
+  expect(deps.departImport).toHaveBeenCalledWith(imported, ["Acme/App#7"], {
+    eventAccount: { pluginId: "github-delivery", accountId: "acc" },
+  })
   expect((await getIssue(issue.id))?.externalRefs?.[0].departedAt).toEqual(expect.any(Number))
   expect((await getIssue(issue.id))?.title).toBe("Keep this issue")
   expect(

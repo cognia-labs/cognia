@@ -468,7 +468,10 @@
       "linked": "{count, plural, one {# link added} other {# links added}}",
       "written": "{count, plural, one {# mirrored} other {# mirrored}}"
     },
-    "joiner": ", "
+    "joiner": ", ",
+    "sourceDisconnected": "Source disconnected",
+    "sourceDeleted": "Source deleted or no longer accessible",
+    "sourceNotOnDevice": "Source connection is not on this device"
   },
   "writeback": {
     "section": "GitHub actions",

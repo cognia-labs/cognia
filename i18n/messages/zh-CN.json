@@ -24589,6 +24589,9 @@
         "written": "镜像 {count}"
       },
       "running": "同步中…",
+      "sourceDeleted": "来源已删除或无法访问",
+      "sourceDisconnected": "来源已断开连接",
+      "sourceNotOnDevice": "此设备上没有来源连接",
       "upToDate": "已是最新"
     },
     "syncConflicts": {
@@ -65180,10 +65183,13 @@
         "noCommitsFound": "所选仓库未发现提交",
         "noMessagesParsed": "未解析到任何消息",
         "noTextExtracted": "未能从文件中提取文本",
+        "not-on-this-device": "此设备上没有来源连接",
         "parseFailed": "文件解析失败",
         "parseFailedFallback": "文件解析失败（备用解析器也拒绝处理）",
         "pasteContentRequired": "保存前请先粘贴内容",
         "shapeNoMessages": "导出文件中没有任何消息",
+        "source-deleted": "来源已删除或无法访问",
+        "source-disconnected": "来源已断开连接",
         "unknownFileType": "未知文件类型",
         "urlEmpty": "请先输入 URL",
         "urlFetchFailed": "无法抓取该 URL：{reason}",
@@ -65259,6 +65265,7 @@
       "lineLocation": "第 {start}–{end} 行",
       "moreRows": "另有 {count} 行",
       "noTables": "该源中未检测到表格。",
+      "not-on-this-device": "此设备上没有来源连接",
       "pageLocation": "第 {start}–{end} 页",
       "pendingIngestBusy": "排队中…",
       "pendingIngestCta": "开始 ingest",
@@ -65266,6 +65273,8 @@
       "preview": "预览",
       "previewDescription": "检测到的表格与已存储的源文本。",
       "previewTitle": "预览：{title}",
+      "source-deleted": "来源已删除或无法访问",
+      "source-disconnected": "来源已断开连接",
       "tableStats": "{rows} 行 × {cols} 列 · {numeric} 个数值列",
       "tablesHeading": "检测到的表格（{count}）"
     },

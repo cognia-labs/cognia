@@ -20,6 +20,18 @@ import {
 import { LarkIngestError } from "./lark-doc-fetcher"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { listTwinSourcesByTwin } from "@/lib/db/twin-sources"
+import { twinSourceProvenance } from "./source-registration"
+import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
+import { tombstoneAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
+import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
+import { createTwinChunk } from "@/lib/db/twin-chunks"
+import { markRemoteDocumentSourceDeleted } from "@/lib/db/remote-document-connections"
+import { NativeVectorStore } from "@cognia/vector/store"
+
+jest.mock("@/lib/docs-providers/registry", () => ({
+  getDocsProvider: () => ({ id: "lark" }),
+  listDocsProviders: () => [],
+}))
 
 jest.mock("@/lib/twin/ingest/url-fetcher", () => ({
   fetchUrlAsRawSource: jest.fn(),
@@ -565,6 +577,102 @@ describe("commitStagedSources", () => {
     expect(one?.tags).toEqual(["url", "example.com"])
     expect(two?.speakers).toEqual(["Alice"])
     expect(one?.source).toBe("body one")
+    expect(twinSourceProvenance(one!)).toBeUndefined()
+    expect(await resolveKeptCopySource(twinSourceProvenance(one!))).toBe("unknown")
+  })
+
+  it("captures a connection-backed Lark commit and retains its chunks and vector pointers on disconnect", async () => {
+    const connection = {
+      id: "lark-source",
+      identityKey: "same-person",
+      revision: 1,
+      status: "connected",
+    } as AuthConnectionRow
+    await getDb().authConnections.put(connection)
+    mockFetchLark.mockResolvedValue({
+      url: "https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890",
+      title: "Kept Lark",
+      text: "body",
+      docToken: "doxcnAbCdEfGh1234567890",
+      objType: "docx",
+      accountBinding: { accountId: connection.id, authorizationEpoch: "1" },
+    })
+    const staged = await stageLarkDoc("https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890", {
+      adapterId: "adapter",
+    })
+    expect(await getDb().remoteDocumentConnections.count()).toBe(0)
+    expect(await commitStagedSources(TWIN, staged.staged)).toBe(1)
+    const [source] = await listTwinSourcesByTwin(TWIN)
+    const provenance = twinSourceProvenance(source)!
+    expect(source).toMatchObject({ captureId: expect.any(String) })
+    expect(await getDb().remoteDocumentConnections.get(provenance.captureId!)).toMatchObject({
+      connectionRef: connection.id,
+      identityKey: connection.identityKey,
+    })
+    expect(JSON.stringify(source)).not.toMatch(/same-person|lark-source|accountBinding/)
+    expect(await commitStagedSources(TWIN, staged.staged)).toBe(0)
+    expect(await getDb().remoteDocumentConnections.count()).toBe(1)
+    expect(twinSourceProvenance((await listTwinSourcesByTwin(TWIN))[0])).toEqual(provenance)
+    const chunk = await createTwinChunk({
+      twinId: TWIN,
+      sourceId: source.id,
+      content: "body",
+      contentRedacted: "body",
+      charStart: 0,
+      charEnd: 4,
+      strategy: "recursive",
+      tokenCount: 1,
+      metadata: {},
+      vectorBackend: "native",
+      vectorCollection: "kept-vectors",
+      vectorDocId: "kept-vector",
+      generationId: "kept-generation",
+    })
+    await getDb().authConnections.put(tombstoneAuthConnection(connection, "tombstoned"))
+    const deleteVectors = jest
+      .spyOn(NativeVectorStore.prototype, "deleteDocuments")
+      .mockResolvedValue()
+    const deleteCollection = jest
+      .spyOn(NativeVectorStore.prototype, "deleteCollection")
+      .mockResolvedValue()
+    try {
+      expect((await purgeDerivedData({ kind: "connection", ref: connection.id })).failed).toEqual(
+        []
+      )
+      expect(deleteVectors).not.toHaveBeenCalled()
+      expect(deleteCollection).not.toHaveBeenCalled()
+    } finally {
+      deleteVectors.mockRestore()
+      deleteCollection.mockRestore()
+    }
+    expect(await resolveKeptCopySource(provenance)).toBe("source-disconnected")
+    mockFetchLark.mockClear()
+    expect(
+      await stageLarkDoc("https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890", {
+        adapterId: "adapter",
+        twinId: TWIN,
+      })
+    ).toMatchObject({ error: { code: "source-disconnected" }, staged: [] })
+    expect(mockFetchLark).not.toHaveBeenCalled()
+    expect(await getDb().twinSources.get(source.id)).toEqual(source)
+    expect(await getDb().twinChunks.get(chunk.id)).toEqual(chunk)
+    await getDb().authConnections.put({ ...connection, id: "restored-lark" as never })
+    expect(await resolveKeptCopySource(provenance)).toBe("available")
+    expect(
+      await stageLarkDoc("https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890", {
+        adapterId: "adapter",
+        twinId: TWIN,
+      })
+    ).toMatchObject({ staged: [expect.objectContaining({ title: "Kept Lark" })] })
+    await markRemoteDocumentSourceDeleted(provenance.captureId!)
+    mockFetchLark.mockClear()
+    expect(
+      await stageLarkDoc("https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890", {
+        adapterId: "adapter",
+        twinId: TWIN,
+      })
+    ).toMatchObject({ error: { code: "source-deleted" }, staged: [] })
+    expect(mockFetchLark).not.toHaveBeenCalled()
   })
 })
 

@@ -16,6 +16,7 @@ import type {
   IssueSyncField,
 } from "../../../types/issues/index"
 import type { PluginConfigSchema } from "../../../types/plugin/plugin"
+import type { AuthConnectionRef } from "../../../types/plugin/plugin-auth"
 
 /** Host namespaces this local id; implementations must be declared in the manifest. */
 export interface PluginIssueSyncProviderDef {
@@ -45,10 +46,14 @@ export interface IssueSyncResourceDescriptor {
 /** The Host resolves plugin resources from the schema; plugins need no private registry imports. */
 export type PluginIssueSyncProvider = Omit<IssueSyncProvider, "resolveBindings" | "resource"> & {
   resource: IssueSyncResourceDescriptor
+  /** Host connection, grant-checked and immutable for this registration. Never resource config. */
+  connectionRef?: AuthConnectionRef
 }
 
 /** One remote container bound to one local container. */
 export interface IssueSyncBinding {
+  /** Host-resolved execution identity; never persisted in portable resource config. */
+  connectionRef?: AuthConnectionRef
   providerId: string
   /** Owning workspace id. */
   projectId: string

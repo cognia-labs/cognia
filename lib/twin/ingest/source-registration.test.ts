@@ -4,6 +4,7 @@ import "fake-indexeddb/auto"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { updateTwinSource } from "@/lib/db/twin-sources"
 import { registerTwinSource } from "./source-registration"
+import { twinSourceProvenance } from "./source-registration"
 
 beforeEach(async () => {
   await getDb().delete()
@@ -31,6 +32,28 @@ it("reuses an active source with the same Twin fingerprint", async () => {
   expect(second).toMatchObject({ created: false, revived: false })
   expect(second.source.id).toBe(first.source.id)
   expect(await getDb().twinSources.count()).toBe(1)
+})
+
+it("retains portable capture fields through registration and duplicate/retry paths", async () => {
+  const remoteDocument = {
+    v: 1 as const,
+    providerId: "lark",
+    resourceKind: "doc" as const,
+    resourceId: "doc-token",
+    title: "Notes",
+    url: "",
+    fetchedAt: 1,
+    completeness: { status: "complete" as const },
+    captureId: crypto.randomUUID(),
+    connectionScoped: true as const,
+  }
+  const first = await registerTwinSource({ ...draft, remoteDocument })
+  expect(twinSourceProvenance(first.source)).toEqual(remoteDocument)
+  const duplicate = await registerTwinSource(draft)
+  expect(duplicate.source.captureId).toBe(remoteDocument.captureId)
+  await updateTwinSource(first.source.id, { status: "failed" })
+  const revived = await registerTwinSource(draft)
+  expect(twinSourceProvenance(revived.source)).toEqual(remoteDocument)
 })
 
 it("revives a failed source instead of creating a duplicate", async () => {

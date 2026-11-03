@@ -45,6 +45,8 @@ import type {
 } from "@/types/issues"
 import { statusCategoryOf } from "@/types/issues"
 import { isGithubImportBinding } from "../bindings"
+import { assertIssueSyncSource, readIssueSyncSource } from "../kept-copy-source"
+import { KeptCopySourceError } from "@/lib/docs-providers/kept-copy-source"
 import {
   PULL_REQUEST_REF_PROVIDER,
   fetchPullRequestCi,
@@ -133,8 +135,13 @@ export function iterationExternalId(id: string): string {
 
 export interface GithubSyncProviderDeps {
   resolveReadClient?: (
-    repoFullName: string
-  ) => Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }>
+    repoFullName: string,
+    connectionRef?: AuthConnectionRef
+  ) => Promise<{
+    octokit: OctokitLike
+    connectionRef?: ExternalSyncTarget["connectionRef"]
+    consumerPluginId?: string
+  }>
   /** Returns null when no credential is available. */
   resolveOctokitOrNull?: (repoFullName: string) => Promise<OctokitLike | null>
   execute?: typeof executeIntegrationAction
@@ -150,12 +157,18 @@ export interface GithubSyncProviderDeps {
 
 /** Resolve the client and its exact source together; failed accounts may fall through to gh. */
 export async function resolveGithubSyncReadClient(
-  repoFullName: string
-): Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }> {
+  repoFullName: string,
+  connectionRef?: AuthConnectionRef
+): Promise<{
+  octokit: OctokitLike
+  connectionRef?: ExternalSyncTarget["connectionRef"]
+  consumerPluginId?: string
+}> {
   const { githubReadAccountsFor, resolveGithubAccountGitAccess } =
     await import("@/lib/integrations/github-read-credential")
   const { getOctokitForRepo } = await import("@/lib/github/octokit-factory")
   for (const account of await githubReadAccountsFor(repoFullName)) {
+    if (connectionRef && account.connectionId !== connectionRef) continue
     const access = await resolveGithubAccountGitAccess(account).catch(() => null)
     if (!access || access.host.id !== "github.com") continue
     const octokit = await getOctokitForRepo({
@@ -167,8 +180,10 @@ export async function resolveGithubSyncReadClient(
     return {
       octokit: octokit as unknown as OctokitLike,
       ...(account.connectionId ? { connectionRef: account.connectionId as AuthConnectionRef } : {}),
+      consumerPluginId: account.pluginId,
     }
   }
+  if (connectionRef) throw new MissingGithubCredentialError(repoFullName)
   const { ghCliToken } = await import("@/lib/ai/agent/team/pr-feedback/resolvers")
   const token = await ghCliToken()
   if (!token) throw new MissingGithubCredentialError(repoFullName)
@@ -571,7 +586,8 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
             const resource = binding.resource
             if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
             const client = await (deps.resolveReadClient ?? resolveGithubSyncReadClient)(
-              resource.repoFullName
+              resource.repoFullName,
+              binding.connectionRef
             )
             return {
               provider: createGithubSyncProvider({
@@ -579,6 +595,8 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
                 resolveOctokitOrNull: async () => client.octokit,
               }),
               connectionRef: client.connectionRef,
+              consumerPluginId: client.consumerPluginId,
+              consumerKind: "integration" as const,
             }
           },
         }
@@ -623,10 +641,12 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const [owner, repo] = resource.repoFullName.split("/")
       const octokit = await octokitFor(resource.repoFullName)
-      const page = await fetchGithubIssuePage(octokit, {
-        ...options,
-        repoFullName: resource.repoFullName,
-      })
+      const page = await readIssueSyncSource(binding, () =>
+        fetchGithubIssuePage(octokit, {
+          ...options,
+          repoFullName: resource.repoFullName,
+        })
+      )
       const raw = page.raw
       const milestones = await fetchMilestones(octokit, owner, repo)
       const project = resource.sync?.projectV2Number
@@ -722,12 +742,14 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const octokit = await octokitFor(resource.repoFullName)
 
       const [issues, milestones, project] = await Promise.all([
-        fetchRepoIssues(octokit, {
-          repoFullName: resource.repoFullName,
-          ...(options.since !== undefined && !options.full
-            ? { since: new Date(options.since).toISOString() }
-            : {}),
-        }),
+        readIssueSyncSource(binding, () =>
+          fetchRepoIssues(octokit, {
+            repoFullName: resource.repoFullName,
+            ...(options.since !== undefined && !options.full
+              ? { since: new Date(options.since).toISOString() }
+              : {}),
+          })
+        ),
         fetchMilestones(octokit, owner, repo),
         resource.sync?.projectV2Number
           ? fetchProjectV2(octokit, owner, repo, resource.sync.projectV2Number)
@@ -759,6 +781,22 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       const resource = binding.resource
       if (resource.kind !== "github-repo") throw new Error("not a github-repo binding")
       const hash = ref.externalId.lastIndexOf("#")
+      const source = await assertIssueSyncSource(binding)
+      let capturedClient: OctokitLike | undefined
+      const readClient = async () => {
+        if (!source) return octokitFor(resource.repoFullName)
+        if (!capturedClient) {
+          const client = await (deps.resolveReadClient ?? resolveGithubSyncReadClient)(
+            resource.repoFullName,
+            source.id
+          )
+          if (client.connectionRef !== source.id)
+            throw new KeptCopySourceError("source-disconnected")
+          capturedClient = client.octokit
+        }
+        await assertIssueSyncSource(binding, source.id)
+        return capturedClient
+      }
       const issueNumber = Number(ref.externalId.slice(hash + 1))
       if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
         throw new Error(`Not a GitHub issue ref: ${ref.externalId}`)
@@ -773,7 +811,7 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
         if (resource.sync?.projectV2Number) {
           const [owner, repo] = resource.repoFullName.split("/")
           const project = await fetchProjectV2(
-            await octokitFor(resource.repoFullName),
+            await readClient(),
             owner,
             repo,
             resource.sync.projectV2Number,
@@ -793,7 +831,7 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
         if (login !== undefined) {
           const [owner, repo] = resource.repoFullName.split("/")
           const current = await (
-            await octokitFor(resource.repoFullName)
+            await readClient()
           ).request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
             owner,
             repo,
@@ -811,8 +849,13 @@ export function createGithubSyncProvider(deps: GithubSyncProviderDeps = {}): Iss
       // Nothing left to send (the patch was only a local-only assignee).
       if (Object.keys(input).length <= 2) return { status: "applied" }
 
-      const account = await resolveAccount(resource.repoFullName)
+      const account = source
+        ? await resolveAccount(resource.repoFullName, undefined, source.id)
+        : await resolveAccount(resource.repoFullName)
       if (!account) throw new MissingGithubCredentialError(resource.repoFullName)
+      if (source && account.connectionId !== source.id)
+        throw new KeptCopySourceError("source-disconnected")
+      await assertIssueSyncSource(binding, source?.id)
       const request = {
         integrationId: GITHUB_INTEGRATION_ID,
         accountId: account.id,

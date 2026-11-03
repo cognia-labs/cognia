@@ -29,9 +29,12 @@ export type {
 
 /** Host-only credential preparation; plugin registrations never copy this hook. */
 export interface IssueSyncProvider extends ContractProvider {
+  readonly connectionRef?: ExternalSyncTarget["connectionRef"]
   prepare?(binding: IssueSyncBinding): Promise<{
     provider: IssueSyncProvider
     connectionRef?: ExternalSyncTarget["connectionRef"]
+    consumerPluginId?: string
+    consumerKind?: "integration"
   }>
 }
 

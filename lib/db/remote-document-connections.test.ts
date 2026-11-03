@@ -19,6 +19,8 @@ it("retains the capture binding and remote loss until explicitly removed", async
     connectionRef: "connection" as RemoteDocumentConnectionRow["connectionRef"],
     identityKey: "original-identity",
     capturedAt: 1,
+    sourceKind: "issue-sync",
+    consumerPluginId: "consumer",
   }
   await putRemoteDocumentConnection(row)
   expect(await getRemoteDocumentConnection(row.captureId)).toEqual(row)

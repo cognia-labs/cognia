@@ -65,9 +65,45 @@ import { TwinSourcesTab } from "./twin-sources-tab"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { createTwinSource, listTwinSourcesByTwin } from "@/lib/db/twin-sources"
 import { listTwinJobsByTwin } from "@/lib/db/twin-jobs"
+import { captureKeptCopyConnection } from "@/lib/docs-providers/kept-copy-source"
+import { markRemoteDocumentSourceDeleted } from "@/lib/db/remote-document-connections"
 
 const mockToastError = jest.fn()
 jest.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args) } }))
+
+it("shows a disconnected/deleted kept source while retaining local preview and no remote refresh action", async () => {
+  const source = await createTwinSource({
+    twinId: "twin_alice",
+    kind: "document",
+    format: "markdown",
+    source: "Kept body",
+    title: "Kept remote source",
+    bytes: 9,
+    fingerprint: "kept",
+    redacted: false,
+  })
+  await getDb().authConnections.put({
+    id: "ui-connection",
+    revision: 1,
+    status: "connected",
+    identityKey: "ui-same",
+  } as never)
+  const captureId = await captureKeptCopyConnection({
+    providerId: "lark",
+    connectionRef: "ui-connection" as never,
+    revision: 1,
+  })
+  await getDb().twinSources.put({ ...source, captureId } as typeof source)
+  await getDb().authConnections.update("ui-connection", { status: "revoked" })
+  render(<TwinSourcesTab twinId="twin_alice" />)
+  expect(await screen.findByText(/source-disconnected|Source disconnected/i)).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: /preview/i })).toBeEnabled()
+  expect(screen.queryByRole("button", { name: /refresh/i })).not.toBeInTheDocument()
+  await act(async () => {
+    await markRemoteDocumentSourceDeleted(captureId)
+  })
+  expect(await screen.findByText(/source-deleted|Source deleted/i)).toBeInTheDocument()
+})
 
 beforeEach(async () => {
   mockToastError.mockClear()

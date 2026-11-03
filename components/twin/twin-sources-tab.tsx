@@ -24,6 +24,8 @@ import { StatusBadge } from "@/components/status-badge"
 import { listTwinSourcesByTwin } from "@/lib/db/twin-sources"
 import { enqueueIngestJob } from "@/lib/twin/ingest"
 import { removeTwinSource } from "@/lib/twin/lifecycle"
+import { twinSourceProvenance } from "@/lib/twin/ingest/source-registration"
+import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
 import type { TwinSource, TwinSourceStatus } from "@/types/twin"
 import { TwinAddSourceDialog } from "./add-source/add-source-dialog"
 import { TwinSourcePreviewDialog } from "./twin-source-preview-dialog"
@@ -276,6 +278,11 @@ const SourceRow = memo(function SourceRow({
 }) {
   const t = useTranslations("twin.sources")
   const tFormat = useTranslations("twin.format")
+  const sourceState = useLiveQuery(
+    () => resolveKeptCopySource(twinSourceProvenance(source)),
+    [source],
+    "unknown"
+  )
   const [previewOpen, setPreviewOpen] = useState(false)
   return (
     <Card className="flex items-center justify-between gap-3 p-3">
@@ -293,6 +300,11 @@ const SourceRow = memo(function SourceRow({
           <Badge variant="outline" className="shrink-0">
             {tFormat(source.format)}
           </Badge>
+          {sourceState === "source-disconnected" ||
+          sourceState === "source-deleted" ||
+          sourceState === "not-on-this-device" ? (
+            <Badge variant="outline">{t(sourceState)}</Badge>
+          ) : null}
         </div>
         <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
           <span>{formatBytes(source.bytes)}</span>

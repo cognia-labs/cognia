@@ -169,44 +169,48 @@ export interface LarkBitableFieldMap {
 }
 
 /** A resource attached to an issue-project. Reference-only — see below. */
-export type IssueProjectResource =
+export type IssueProjectResource = {
+  /** Portable kept-copy handle; identity is device-local. */ captureId?: string
+} &
   /** Portable resource data only. Resolve device-local connections at pull/push time. */
-  | {
-      kind: "plugin"
-      /** Host-assigned `plugin:<pluginId>/<id>`. */
-      providerId: string
-      schemaVersion: number
-      config: Record<string, unknown>
-      name?: string
-    }
-  | { kind: "github-repo"; repoFullName: string; addedAt: number; sync?: GithubRepoSyncSettings }
-  /** A Feishu/Lark tasklist (Task v2), synced both ways through the bound adapter. */
-  | {
-      kind: "lark-tasklist"
-      /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
-      adapterId: string
-      tasklistGuid: string
-      name: string
-      addedAt: number
-    }
-  /** One table of a Feishu/Lark Bitable app, mapped column by column. */
-  | {
-      kind: "lark-bitable"
-      adapterId: string
-      appToken: string
-      tableId: string
-      name: string
-      fieldMap: LarkBitableFieldMap
-      addedAt: number
-    }
-  /**
-   * References a `WorkspaceRoot.id` already mounted on the owning workspace.
-   * The tracker NEVER mounts a directory itself — doing so would create a
-   * second directory source of truth and bypass `lib/workspace/trust-gate.ts`.
-   * The "Add local directory" affordance runs the existing mount flow first,
-   * then records the reference here.
-   */
-  | { kind: "workspace-root"; rootId: string; addedAt: number }
+  (
+    | {
+        kind: "plugin"
+        /** Host-assigned `plugin:<pluginId>/<id>`. */
+        providerId: string
+        schemaVersion: number
+        config: Record<string, unknown>
+        name?: string
+      }
+    | { kind: "github-repo"; repoFullName: string; addedAt: number; sync?: GithubRepoSyncSettings }
+    /** A Feishu/Lark tasklist (Task v2), synced both ways through the bound adapter. */
+    | {
+        kind: "lark-tasklist"
+        /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
+        adapterId: string
+        tasklistGuid: string
+        name: string
+        addedAt: number
+      }
+    /** One table of a Feishu/Lark Bitable app, mapped column by column. */
+    | {
+        kind: "lark-bitable"
+        adapterId: string
+        appToken: string
+        tableId: string
+        name: string
+        fieldMap: LarkBitableFieldMap
+        addedAt: number
+      }
+    /**
+     * References a `WorkspaceRoot.id` already mounted on the owning workspace.
+     * The tracker NEVER mounts a directory itself — doing so would create a
+     * second directory source of truth and bypass `lib/workspace/trust-gate.ts`.
+     * The "Add local directory" affordance runs the existing mount flow first,
+     * then records the reference here.
+     */
+    | { kind: "workspace-root"; rootId: string; addedAt: number }
+  )
 
 export const ISSUE_PROJECT_STATUSES = [
   "backlog",

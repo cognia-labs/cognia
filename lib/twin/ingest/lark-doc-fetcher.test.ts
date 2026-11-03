@@ -10,10 +10,144 @@ import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import type { TauriHttpRequest } from "@/lib/connectors/tauri/commands"
 import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { inspect } from "node:util"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
+
+jest.mock("@/lib/docs-providers/registry", () => ({
+  getDocsProvider: () => ({ id: "lark" }),
+  listDocsProviders: () => [],
+}))
+
+describe("kept source authority", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  const source = {
+    captureId: "3696b50c-fbf3-49d5-8965-b4169111100a",
+    providerId: "lark",
+    connectionScoped: true as const,
+  }
+  beforeAll(fixture.initialize)
+  beforeEach(async () => {
+    await fixture.restore()
+    await getDb().authConnections.put({
+      id: "old",
+      identityKey: "tombstoned:old",
+      revision: 1,
+      status: "revoked",
+    } as never)
+    await getDb().remoteDocumentConnections.put({
+      captureId: source.captureId,
+      providerId: "lark",
+      connectionRef: "old" as never,
+      identityKey: "same",
+      capturedAt: 1,
+    })
+  })
+  afterAll(fixture.dispose)
+
+  const restore = async () => {
+    const connection = {
+      id: "restored",
+      identityKey: "same",
+      revision: 2,
+      status: "connected",
+      hostMetadata: { adapterId: "restored-adapter", authorizationEpoch: "twin-fixture" },
+    }
+    await getDb().authConnections.put(connection as never)
+    jest.mocked(resolveLarkConnection).mockResolvedValue(connection as never)
+  }
+  it("refuses disconnected reads before transport and selects the restored identity's adapter", async () => {
+    const http = jest.fn(async (request: TauriHttpRequest) =>
+      ok(
+        request.url.includes("raw_content")
+          ? { content: "Kept body" }
+          : { document: { title: "Kept" } }
+      )
+    )
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        sourceProvenance: source,
+        httpImpl: http,
+      })
+    ).rejects.toMatchObject({ code: "source-disconnected" })
+    expect(http).not.toHaveBeenCalled()
+    await restore()
+    expect(
+      await fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        sourceProvenance: source,
+        httpImpl: http,
+      })
+    ).toMatchObject({
+      accountBinding: { accountId: "restored", authorizationEpoch: "2" },
+      text: "Kept body",
+    })
+    expect(resolveLarkConnection).toHaveBeenCalledWith("restored-adapter")
+  })
+  it("drops a result whose source disconnected during the remote read", async () => {
+    await restore()
+    const http = jest.fn(async (request: TauriHttpRequest) => {
+      await getDb().authConnections.update("restored", { status: "revoked" })
+      return ok(
+        request.url.includes("raw_content")
+          ? { content: "late body" }
+          : { document: { title: "Late" } }
+      )
+    })
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        sourceProvenance: source,
+        httpImpl: http,
+      })
+    ).rejects.toMatchObject({ code: "source-disconnected" })
+  })
+  it("records confirmed deletion and refuses the next read before transport", async () => {
+    await restore()
+    const http = jest.fn(async () => larkFail(404, 1254005))
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        sourceProvenance: source,
+        httpImpl: http,
+      })
+    ).rejects.toMatchObject({ code: "larkNotFound" })
+    expect(await resolveKeptCopySource(source)).toBe("source-deleted")
+    http.mockClear()
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        sourceProvenance: source,
+        httpImpl: http,
+      })
+    ).rejects.toMatchObject({ code: "source-deleted" })
+    expect(http).not.toHaveBeenCalled()
+  })
+})
 
 jest.mock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
+// This transport unit suite uses a stable Host identity; lifecycle is covered in stage.test.ts.
+jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+  resolveLarkConnection: jest.fn(async () => ({
+    id: "lark-fixture",
+    revision: 1,
+    status: "connected",
+    hostMetadata: { adapterId: "cai_test1", authorizationEpoch: "twin-fixture" },
+  })),
+}))
+jest.mock("@/lib/plugin/auth/connection-manager", () => {
+  const getToken = jest.requireMock("@/lib/connectors/adapters/lark/auth").getUserAccessToken
+  return {
+    getConnectionManager: () => ({
+      getConnection: async () => ({ id: "lark-fixture", revision: 1 }),
+      getCredentials: async () => ({ accessToken: await getToken("cai_test1") }),
+    }),
+  }
+})
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
@@ -25,6 +159,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   })),
 }))
 jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
+  ...jest.requireActual("@/lib/connectors/adapters/lark/auth"),
   getUserAccessToken: jest.fn(),
   getTenantAccessToken: jest.fn(),
   refreshUserToken: jest.fn(),

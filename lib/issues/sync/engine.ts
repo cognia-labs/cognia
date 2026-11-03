@@ -22,6 +22,16 @@
  */
 
 import {
+  captureIssueSyncSource,
+  assertIssueSyncSource,
+  issueResourceProvenance,
+  resolveIssueSyncSource,
+} from "./kept-copy-source"
+import {
+  KeptCopySourceError,
+  recordKeptCopySourceFailure,
+} from "@/lib/docs-providers/kept-copy-source"
+import {
   createIssueWithResult,
   getIssueByExternalKey,
   linkIssueExternal,
@@ -37,6 +47,7 @@ import { listIssueEvents } from "@/lib/db/issue-events"
 import { hasActiveIssueRun } from "@/lib/db/issue-runs"
 import { listLabels } from "@/lib/db/labels"
 import { getDb } from "@/lib/db/schema"
+import { getIntegrationAccount } from "@/lib/db/integrations"
 import { appendIssueEvent } from "@/lib/db/issue-events"
 import type { Issue, IssueExternalRef, IssueStatus, IssueSyncField } from "@/types/issues"
 import { externalKeyOf, ISSUE_SYNC_FIELDS, statusCategoryOf, syncActorFor } from "@/types/issues"
@@ -425,12 +436,15 @@ async function pushPatch(
     patchFields(patch)
   )
   signal?.throwIfAborted()
-  const outcome = await provider.push(binding, ref, patch, issue, {
+  const source = await assertIssueSyncSource(binding)
+  const writeBinding = source ? { ...binding, connectionRef: source.id } : binding
+  const outcome = await provider.push(writeBinding, ref, patch, issue, {
     idempotencyKey: pushIdempotencyKey(issue.id, patch),
     by,
     editedBy,
     signal,
   })
+  await assertIssueSyncSource(writeBinding)
   signal?.throwIfAborted()
   if (outcome.status === "queued") {
     tally.queued += 1
@@ -515,6 +529,7 @@ export function issueSyncTarget(binding: IssueSyncBinding): ExternalSyncTarget {
   return {
     key: `issues:${binding.issueProjectId}:${binding.key}`,
     owner: plugin ? `plugin:${plugin[1]}` : "host",
+    ...(binding.connectionRef ? { connectionRef: binding.connectionRef } : {}),
   }
 }
 
@@ -603,11 +618,32 @@ export async function tombstoneIssueSyncRefs(
     now?: () => number
     label?: string
     departedRemoteAt?: number
+    /** Host event identity; portable repository names alone do not establish ownership. */
+    eventAccount?: { pluginId: string; accountId: string }
   } = {}
 ): Promise<number> {
+  const acceptsSource = async () => {
+    try {
+      const source = await assertIssueSyncSource(binding)
+      const expected = source?.id ?? binding.connectionRef
+      if (expected && options.eventAccount) {
+        const account = await getIntegrationAccount(
+          options.eventAccount.pluginId,
+          options.eventAccount.accountId
+        )
+        if (!account || account.enabled === false || account.connectionId !== expected) return false
+      }
+      return true
+    } catch (error) {
+      if (error instanceof KeptCopySourceError) return false
+      throw error
+    }
+  }
+  if (!(await acceptsSource())) return 0
   const requested = new Set(ids)
   let count = 0
-  const issues = await getDb().issues.where("projectId").equals(binding.projectId).toArray()
+  const db = getDb()
+  const issues = await db.issues.where("projectId").equals(binding.projectId).toArray()
   for (const issue of issues) {
     if (issue.issueProjectId !== binding.issueProjectId) continue
     for (const ref of issue.externalRefs ?? []) {
@@ -618,8 +654,9 @@ export async function tombstoneIssueSyncRefs(
       )
         continue
       options.signal?.throwIfAborted()
-      if (
-        await observeIssueSyncRef(
+      if (!(await acceptsSource())) return count
+      const observe = () =>
+        observeIssueSyncRef(
           binding,
           issue.id,
           ref.externalId,
@@ -631,8 +668,26 @@ export async function tombstoneIssueSyncRefs(
           },
           options
         )
-      )
-        count += 1
+      // Webhooks bypass the sync lease: serialize their final authority check
+      // with the departure write and event against disconnect/grant teardown.
+      const changed = options.eventAccount
+        ? await db.transaction(
+            "rw",
+            [
+              db.issues,
+              db.issueEvents,
+              db.issueProjects,
+              db.remoteDocumentConnections,
+              db.authConnections,
+              db.integrationAccounts,
+              db.serviceConnections,
+              db.capabilityGrants,
+              db.integrationAudit,
+            ],
+            async () => ((await acceptsSource()) ? observe() : false)
+          )
+        : await observe()
+      if (changed) count += 1
     }
   }
   return count
@@ -643,6 +698,8 @@ export async function prepareIssueSync(
   provider: IssueSyncProvider,
   options: ReconcileOptions = {}
 ) {
+  const sourceConnection = await resolveIssueSyncSource(binding)
+  if (sourceConnection) binding = { ...binding, connectionRef: sourceConnection.id }
   const now = options.now ?? Date.now
   const tally: ReconcileOutcome = {
     binding,
@@ -669,6 +726,16 @@ export async function prepareIssueSync(
     const prepared = await provider.prepare(binding)
     provider = prepared.provider
     if (prepared.connectionRef) target.connectionRef = prepared.connectionRef
+    if (target.connectionRef) {
+      const consumerPluginId =
+        prepared.consumerPluginId ?? /^plugin:([^/]+)\//.exec(binding.providerId)?.[1]
+      await captureIssueSyncSource(
+        binding,
+        target.connectionRef,
+        consumerPluginId,
+        prepared.consumerKind
+      )
+    }
     // A first offline request has no credential identity or checkpoint yet.
     // Replace only that empty deferral when the real identity becomes known.
     const table = getDb().externalSyncCursors
@@ -729,35 +796,47 @@ export async function prepareIssueSync(
     fullScanOnly: provider.fullScanOnly,
     itemId: (item: RemoteIssue) => item.externalId,
     fetchPage: async (input) => {
-      if (provider.pullPage) {
-        // A full scan starts from the beginning, but the provider still needs
-        // its previously committed cursor as a floor for the terminal cursor.
-        const previous = input.cursor ?? (await getDb().externalSyncCursors.get(target.key))?.cursor
-        fetched = await provider.pullPage(binding, {
-          ...input,
-          ...(previous !== undefined ? { cursor: previous } : {}),
-        })
-        tally.notModified &&= fetched.items.length === 0
-      } else {
-        // The legacy adapter uses only the committed cursor, never ref timestamps.
-        const previous = (await getDb().externalSyncCursors.get(target.key))?.cursor
-        const pulled = await provider.pull(binding, {
-          ...(input.mode === "incremental" && input.cursor !== undefined
-            ? { since: Number(input.cursor) }
-            : {}),
-          ...(input.mode === "full" ? { full: true } : {}),
-          signal: input.signal,
-        })
-        tally.notModified &&= pulled.notModified
-        tally.truncated ||= pulled.truncated ?? false
-        const previousTime = Number(previous ?? 0)
-        const newest = pulled.items.reduce(
-          (max, item) => Math.max(max, item.remoteUpdatedAt),
-          Number.isFinite(previousTime) ? previousTime : 0
+      const currentSource = await resolveIssueSyncSource(binding)
+      if (currentSource && currentSource.id !== target.connectionRef)
+        throw new KeptCopySourceError("source-disconnected")
+      try {
+        if (provider.pullPage) {
+          // A full scan starts from the beginning, but the provider still needs
+          // its previously committed cursor as a floor for the terminal cursor.
+          const previous =
+            input.cursor ?? (await getDb().externalSyncCursors.get(target.key))?.cursor
+          fetched = await provider.pullPage(binding, {
+            ...input,
+            ...(previous !== undefined ? { cursor: previous } : {}),
+          })
+          tally.notModified &&= fetched.items.length === 0
+        } else {
+          // The legacy adapter uses only the committed cursor, never ref timestamps.
+          const previous = (await getDb().externalSyncCursors.get(target.key))?.cursor
+          const pulled = await provider.pull(binding, {
+            ...(input.mode === "incremental" && input.cursor !== undefined
+              ? { since: Number(input.cursor) }
+              : {}),
+            ...(input.mode === "full" ? { full: true } : {}),
+            signal: input.signal,
+          })
+          tally.notModified &&= pulled.notModified
+          tally.truncated ||= pulled.truncated ?? false
+          const previousTime = Number(previous ?? 0)
+          const newest = pulled.items.reduce(
+            (max, item) => Math.max(max, item.remoteUpdatedAt),
+            Number.isFinite(previousTime) ? previousTime : 0
+          )
+          fetched = { ...pulled, cursor: pulled.truncated ? (previous ?? "0") : String(newest) }
+        }
+        return fetched
+      } catch (error) {
+        await recordKeptCopySourceFailure(
+          issueResourceProvenance(binding.resource, binding.providerId),
+          error
         )
-        fetched = { ...pulled, cursor: pulled.truncated ? (previous ?? "0") : String(newest) }
+        throw error
       }
-      return fetched
     },
     applyPage: async ({ items, deleted }, { signal }) => {
       if (fetched.cycles?.length) {

@@ -44,6 +44,7 @@ import type { IssueProjectUpdatePatch } from "@/lib/db/issue-projects"
 import { ISSUE_PRIORITIES, ISSUE_PROJECT_STATUSES, type IssueProject } from "@/types/issues"
 import { IssueTextEditor } from "../editors/issue-text-editor"
 import { IssuePriorityIcon } from "../issue-glyphs"
+import { IssueResourceSourceState } from "../kept-copy-source-state"
 
 export interface ProjectInspectorProps {
   project: IssueProject
@@ -298,6 +299,7 @@ export function ProjectInspector({
                       </Badge>
                     </>
                   )}
+                  <IssueResourceSourceState resource={resource} />
                   {resource.kind === "plugin" && onEditResource ? (
                     <Button
                       size="sm"

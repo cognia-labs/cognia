@@ -237,6 +237,7 @@ export interface LarkSourceInputProps extends SourceInputProps {
 }
 
 export function LarkSourceInput({
+  twinId,
   busy,
   setBusy,
   onStaged,
@@ -256,7 +257,7 @@ export function LarkSourceInput({
     }
     setBusy(true)
     try {
-      const result = await stageLarkDoc(url.trim(), { adapterId })
+      const result = await stageLarkDoc(url.trim(), { adapterId, twinId })
       if (result.error) onError(result.error)
       else onStaged(result.staged)
     } finally {

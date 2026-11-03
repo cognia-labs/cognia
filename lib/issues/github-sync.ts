@@ -13,6 +13,7 @@ import {
 } from "@/lib/db/github-issue-mirror"
 import { getDb } from "@/lib/db/schema"
 import type { GithubIssueMirrorRow } from "@/lib/db/github-issue-mirror-types"
+import type { DerivedDataTarget } from "@/lib/external-services/derived-data-registry"
 import { runExternalSync } from "@/lib/external-services/sync/core"
 import type {
   ExternalSyncDriver,
@@ -24,9 +25,11 @@ export interface SyncRepoIssuesDeps {
   /** Workspace sweeps execute only a still-registered, freshly resolved target. */
   runRegistered?: (input: SyncRepoIssuesInput) => Promise<SyncRepoIssuesResult | undefined>
   resolveOctokit?: (repoFullName: string) => Promise<OctokitLike>
-  resolveReadClient?: (
-    repoFullName: string
-  ) => Promise<{ octokit: OctokitLike; connectionRef?: ExternalSyncTarget["connectionRef"] }>
+  resolveReadClient?: (repoFullName: string) => Promise<{
+    octokit: OctokitLike
+    connectionRef?: ExternalSyncTarget["connectionRef"]
+    consumerPluginId?: string
+  }>
   upsertGithubIssues?: typeof upsertGithubIssues
   now?: () => number
   /** At most MAX_ISSUE_PAGES; smaller budgets let a Host share API spend. */
@@ -57,7 +60,22 @@ export class GithubMirrorSyncOutcomeError extends Error {
   }
 }
 
-export function githubMirrorSyncTarget(input: SyncRepoIssuesInput): ExternalSyncTarget {
+export interface GithubMirrorSyncOwnership {
+  consumerPluginId?: string
+  providerPluginId?: string
+  mirrorRunToken?: string
+}
+
+class GithubMirrorDataPurged extends Error {
+  constructor() {
+    super("GitHub mirror data purged")
+    this.name = "AbortError"
+  }
+}
+
+export function githubMirrorSyncTarget(
+  input: SyncRepoIssuesInput
+): ExternalSyncTarget & GithubMirrorSyncOwnership {
   return {
     key: `github-mirror:${input.issueProjectId}:${input.repoFullName.toLowerCase()}`,
     owner: "host",
@@ -72,7 +90,31 @@ export async function prepareGithubMirrorSync(
   const target = githubMirrorSyncTarget(input)
   const table = getDb().externalSyncCursors
   const stored = await table.get(target.key)
+  // A purge during credential preparation must also fence a factory without rows/cursors yet.
+  const fences = new Map(
+    (await getDb().integrationAudit.where("kind").equals("github-mirror.purge").toArray()).map(
+      (row) => [row.id, row.detail?.generation]
+    )
+  )
   let octokit: OctokitLike | undefined
+  let consumerPluginId: string | undefined
+  let providerPluginId: string | undefined
+  const assertNotPurged = async () => {
+    for (const fence of await getDb()
+      .integrationAudit.where("kind")
+      .equals("github-mirror.purge")
+      .toArray()) {
+      const purged = fence.detail?.target as DerivedDataTarget | undefined
+      const matches =
+        purged?.kind === "plugin-data"
+          ? purged.pluginId === consumerPluginId || purged.pluginId === providerPluginId
+          : purged?.ref === target.connectionRef &&
+            (purged?.kind === "connection" ||
+              (purged?.kind === "consumer" && purged.consumerPluginId === consumerPluginId))
+      if (matches && fence.detail?.generation !== fences.get(fence.id))
+        throw new GithubMirrorDataPurged()
+    }
+  }
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     target.connectionRef = stored?.connectionRef
   } else {
@@ -84,6 +126,11 @@ export async function prepareGithubMirrorSync(
         )(input.repoFullName)
     octokit = client.octokit
     target.connectionRef = client.connectionRef
+    consumerPluginId = client.consumerPluginId
+    if (target.connectionRef) {
+      const { getAuthConnection } = await import("@/lib/db/auth-connections")
+      providerPluginId = (await getAuthConnection(target.connectionRef))?.ownerPluginId ?? undefined
+    }
     // Match the import engine: an empty offline deferral has no credential identity yet.
     await getDb().transaction("rw", table, async () => {
       const current = await table.get(target.key)
@@ -97,6 +144,20 @@ export async function prepareGithubMirrorSync(
         await table.delete(target.key)
     })
   }
+  Object.assign(target, { consumerPluginId, providerPluginId, mirrorRunToken: crypto.randomUUID() })
+  await getDb().transaction("rw", table, getDb().integrationAudit, async () => {
+    await assertNotPurged()
+    const current = await table.get(target.key)
+    if (current?.owner === target.owner && current.connectionRef === target.connectionRef) {
+      const owned = {
+        ...current,
+        consumerPluginId,
+        providerPluginId,
+        mirrorRunToken: target.mirrorRunToken,
+      }
+      await table.put(owned)
+    }
+  })
   const result: SyncRepoIssuesResult = {
     repoFullName: input.repoFullName,
     written: 0,
@@ -112,33 +173,67 @@ export async function prepareGithubMirrorSync(
     ),
     itemId: (row) => String(row.number),
     fetchPage: async (options) => {
-      const previous = options.cursor ?? (await table.get(target.key))?.cursor
-      const page = await fetchGithubIssuePage(octokit!, {
-        ...options,
-        cursor: previous,
-        repoFullName: input.repoFullName,
-      })
-      if (page.rateLimitRemaining !== undefined) result.rateLimitRemaining = page.rateLimitRemaining
-      return {
-        items: page.raw
-          .filter((row) => !row.pull_request)
-          .map((row) =>
-            toMirrorRow(row, {
-              repoFullName: input.repoFullName,
-              issueProjectId: input.issueProjectId,
-              syncedAt: (deps.now ?? Date.now)(),
-            })
-          ),
-        ...(page.nextPage
-          ? { nextPage: page.nextPage }
-          : { cursor: String(Math.max(Number(previous ?? 0), Number(page.cursor))) }),
+      try {
+        await assertNotPurged()
+        const previous = options.cursor ?? (await table.get(target.key))?.cursor
+        const page = await fetchGithubIssuePage(octokit!, {
+          ...options,
+          cursor: previous,
+          repoFullName: input.repoFullName,
+        })
+        await assertNotPurged()
+        if (page.rateLimitRemaining !== undefined)
+          result.rateLimitRemaining = page.rateLimitRemaining
+        return {
+          items: page.raw
+            .filter((row) => !row.pull_request)
+            .map((row) =>
+              toMirrorRow(row, {
+                repoFullName: input.repoFullName,
+                issueProjectId: input.issueProjectId,
+                syncedAt: (deps.now ?? Date.now)(),
+              })
+            ),
+          ...(page.nextPage
+            ? { nextPage: page.nextPage }
+            : { cursor: String(Math.max(Number(previous ?? 0), Number(page.cursor))) }),
+        }
+      } catch (error) {
+        await clearPurgedCheckpoint()
+        throw error
       }
     },
     applyPage: async ({ items }, { signal }) => {
       signal.throwIfAborted()
-      if (items.length) await (deps.upsertGithubIssues ?? upsertGithubIssues)(items)
-      signal.throwIfAborted()
-      result.written += items.length
+      try {
+        await getDb().transaction(
+          "rw",
+          getDb().githubIssueMirror,
+          getDb().integrationAudit,
+          async () => {
+            await assertNotPurged()
+            const ownership = {
+              connectionRef: target.connectionRef,
+              consumerPluginId,
+              providerPluginId,
+            }
+            // Revalidation also binds previously cached rows, including a successful empty page.
+            await getDb()
+              .githubIssueMirror.where("repoFullName")
+              .equals(input.repoFullName)
+              .modify(ownership)
+            if (items.length)
+              await (deps.upsertGithubIssues ?? upsertGithubIssues)(
+                items.map((row) => ({ ...row, ...ownership }))
+              )
+          }
+        )
+        signal.throwIfAborted()
+        result.written += items.length
+      } catch (error) {
+        await clearPurgedCheckpoint()
+        throw error
+      }
     },
     listKnownIds: async (signal) => {
       const generation = (await table.get(target.key))?.generation
@@ -158,18 +253,41 @@ export async function prepareGithubMirrorSync(
       signal.throwIfAborted()
     },
   }
-  return { target, driver, result }
+  const clearPurgedCheckpoint = async () => {
+    try {
+      await assertNotPurged()
+    } catch (error) {
+      if (!(error instanceof GithubMirrorDataPurged)) throw error
+      const db = getDb()
+      await db.transaction("rw", db.externalSyncCursors, db.externalSyncSeen, async () => {
+        const current = (await table.get(target.key)) as
+          (ExternalSyncTarget & GithubMirrorSyncOwnership) | undefined
+        if (current?.mirrorRunToken !== target.mirrorRunToken) return
+        await db.externalSyncSeen.filter((row) => row.key === target.key).delete()
+        await table.delete(target.key)
+      })
+    }
+  }
+  return { target, driver, result, clearPurgedCheckpoint }
 }
 
 export async function syncRepoIssues(
   input: SyncRepoIssuesInput,
   deps: SyncRepoIssuesDeps = {}
 ): Promise<SyncRepoIssuesResult> {
-  const { target, driver, result } = await prepareGithubMirrorSync(input, deps)
-  const outcome = await runExternalSync(target, driver, {
-    mode: input.full ? "full" : "auto",
-    now: deps.now,
-  })
+  const { target, driver, result, clearPurgedCheckpoint } = await prepareGithubMirrorSync(
+    input,
+    deps
+  )
+  let outcome: ExternalSyncOutcome
+  try {
+    outcome = await runExternalSync(target, driver, {
+      mode: input.full ? "full" : "auto",
+      now: deps.now,
+    })
+  } finally {
+    await clearPurgedCheckpoint()
+  }
   return {
     ...result,
     status: outcome.status,

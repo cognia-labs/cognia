@@ -40,6 +40,10 @@ import {
 } from "@cognia/plugin-contract/lib/issues/sync/resources"
 import { ISSUE_STAGE_MAX, type IssueActor } from "@/types/issues"
 import type { PluginIssuesAPI } from "@cognia/plugin-contract/lib/plugin/api/issues-api"
+import { assertSyncConnection } from "./sync-api"
+import { getAuthConnection } from "@/lib/db/auth-connections"
+import { getRemoteDocumentConnection } from "@/lib/db/remote-document-connections"
+import { resolveIssueSyncSource } from "@/lib/issues/sync/kept-copy-source"
 export type {
   PluginIssueCreateInput,
   PluginIssueEventOptions,
@@ -215,6 +219,9 @@ export function createIssuesAPI(
       // A resource form must never solicit a device-local identity or secret.
       assertPortableIssueSyncConfig(descriptor.schema as unknown as Record<string, unknown>)
       const input = { ...provider }
+      const connectionRef = input.connectionRef
+      if (connectionRef !== undefined && (typeof connectionRef !== "string" || !connectionRef))
+        throw new Error("Invalid sync connectionRef")
       let active = true
       const check = () => {
         if (
@@ -225,18 +232,67 @@ export function createIssuesAPI(
           throw new Error("Issue-sync provider unavailable or permission denied: issue:write")
       }
       check()
+      const checkConnection = () => {
+        check()
+        if (!getPermissionGuard().check(pluginId, "auth:consume"))
+          throw new Error("Permission denied: auth:consume is required")
+      }
+      const verify = async (binding?: Parameters<IssueSyncProvider["pull"]>[0]) => {
+        check()
+        const source = binding?.resource?.captureId
+          ? await resolveIssueSyncSource(binding)
+          : undefined
+        if (connectionRef) {
+          checkConnection()
+          const ref = binding?.connectionRef ?? connectionRef
+          if (source && source.id !== ref) throw new Error("Issue-sync connection identity changed")
+          if (ref !== connectionRef && binding) {
+            const restored = await resolveIssueSyncSource(binding)
+            const captured = binding.resource.captureId
+              ? await getRemoteDocumentConnection(binding.resource.captureId)
+              : undefined
+            const registeredConnection = await getAuthConnection(connectionRef)
+            if (
+              restored?.id !== ref ||
+              (captured?.connectionRef !== connectionRef &&
+                registeredConnection?.identityKey !== restored.identityKey)
+            )
+              throw new Error("Issue-sync connection identity changed")
+          }
+          await assertSyncConnection(pluginId, ref, checkConnection)
+          checkConnection()
+        }
+      }
+      if (connectionRef) checkConnection()
+      // Synchronous registration follows ctx.sync; all executions await authorization.
+      if (connectionRef) void verify().catch(() => {})
+      // Plugins receive a disposable copy, never the Host's mutable authority snapshot.
+      const callbackBinding = (binding: Parameters<IssueSyncProvider["pull"]>[0]) =>
+        !connectionRef && !binding.resource?.captureId
+          ? binding
+          : Object.freeze({
+              ...binding,
+              resource: Object.freeze(structuredClone(binding.resource)),
+            })
       const registered: IssueSyncProvider = {
         ...input,
         id: `plugin:${pluginId}/${def.id}`,
         label: def.label,
         resource: { ...descriptor, kind: "plugin" },
-        prepare: undefined,
+        prepare: connectionRef
+          ? async (binding) => {
+              await verify(binding)
+              return { provider: registered, connectionRef: binding.connectionRef ?? connectionRef }
+            }
+          : undefined,
         resolveBindings: () => [],
         pull: async (binding, options) => {
-          check()
+          if (connectionRef) await verify(binding)
+          else check()
           options.signal?.throwIfAborted()
-          const result = await input.pull(binding, options)
-          check()
+          const result = await input.pull(callbackBinding(binding), options)
+          if (connectionRef) await verify(binding)
+          else check()
           options.signal?.throwIfAborted()
           return result
         },
@@ -246,10 +302,12 @@ export function createIssuesAPI(
                 binding: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[0],
                 options: Parameters<NonNullable<IssueSyncProvider["pullPage"]>>[1]
               ) => {
-                check()
+                if (connectionRef) await verify(binding)
+                else check()
                 options.signal?.throwIfAborted()
-                const result = await input.pullPage!(binding, options)
-                check()
+                const result = await input.pullPage!(callbackBinding(binding), options)
+                if (connectionRef) await verify(binding)
+                else check()
                 options.signal?.throwIfAborted()
                 return result
               },
@@ -260,10 +318,16 @@ export function createIssuesAPI(
               confirmDeparted: async (
                 ...args: Parameters<NonNullable<IssueSyncProvider["confirmDeparted"]>>
               ) => {
-                check()
+                if (connectionRef) await verify(args[0])
+                else check()
                 args[2].signal?.throwIfAborted()
-                const result = await input.confirmDeparted!(...args)
-                check()
+                const result = await input.confirmDeparted!(
+                  callbackBinding(args[0]),
+                  args[1],
+                  args[2]
+                )
+                if (connectionRef) await verify(args[0])
+                else check()
                 args[2].signal?.throwIfAborted()
                 return result
               },
@@ -272,16 +336,45 @@ export function createIssuesAPI(
         ...(input.push
           ? {
               push: async (...args: Parameters<NonNullable<IssueSyncProvider["push"]>>) => {
-                check()
+                if (connectionRef) await verify(args[0])
+                else check()
                 args[4].signal?.throwIfAborted()
-                const result = await input.push!(...args)
-                check()
+                const result = await input.push!(
+                  callbackBinding(args[0]),
+                  args[1],
+                  args[2],
+                  args[3],
+                  args[4]
+                )
+                if (connectionRef) await verify(args[0])
+                else check()
                 args[4].signal?.throwIfAborted()
                 return result
               },
             }
           : {}),
+        ...(input.create
+          ? {
+              create: async (
+                binding: Parameters<NonNullable<IssueSyncProvider["create"]>>[0],
+                issue: Parameters<NonNullable<IssueSyncProvider["create"]>>[1]
+              ) => {
+                if (connectionRef || binding.resource?.captureId) await verify(binding)
+                else check()
+                const result = await input.create!(callbackBinding(binding), issue)
+                if (connectionRef || binding.resource?.captureId) await verify(binding)
+                else check()
+                return result
+              },
+            }
+          : {}),
       }
+      Object.defineProperty(registered, "connectionRef", {
+        value: connectionRef,
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      })
       const unregister = registerIssueSyncProvider(registered)
       const owned = registrations.get(pluginId) ?? new Set<() => void>()
       registrations.set(pluginId, owned)

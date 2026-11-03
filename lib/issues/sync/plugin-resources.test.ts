@@ -1,4 +1,4 @@
-import { pluginResourceState } from "./plugin-resources"
+import { pluginResourceState, resolvePluginSyncBindings } from "./plugin-resources"
 import { IssueSyncRegistry } from "./registry"
 import type { IssueSyncProvider, IssueSyncResourceDescriptor } from "./types"
 import type { IssueProjectResource } from "@/types/issues"
@@ -35,6 +35,27 @@ it("migrates only the working copy, preserving the binding identity and stored c
   expect(state.key).toBe("plugin:acme/tracker:a")
   expect(resource.config).toEqual({ project: "a" })
   expect(resource.schemaVersion).toBe(1)
+})
+
+it("carries the registration connection to the Host binding without storing it in config", () => {
+  const registry = new IssueSyncRegistry()
+  registry.register({ ...provider, connectionRef: "bound-ref" as never })
+  const [binding] = resolvePluginSyncBindings(
+    [
+      {
+        id: "project",
+        projectId: "ws",
+        key: "IP",
+        resources: [{ ...resource, captureId: "portable-capture" }],
+      } as never,
+    ],
+    registry
+  )
+  expect(binding).toMatchObject({
+    connectionRef: "bound-ref",
+    resource: { captureId: "portable-capture" },
+  })
+  expect(binding.resource).not.toHaveProperty("connectionRef")
 })
 
 it("keeps an unavailable resource and rejects missing/failed migration or a newer version", () => {

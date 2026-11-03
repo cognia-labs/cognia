@@ -2,7 +2,21 @@ import {
   assertPortableIssueSyncConfig,
   canonicalIssueSyncConfig,
   validatePluginIssueSyncProviderDef,
+  pluginResourceForStorage,
 } from "./resources"
+
+it("keeps a portable capture handle while excluding device-local connection metadata", () => {
+  const saved = pluginResourceForStorage({
+    kind: "plugin",
+    providerId: "plugin:tracker/issues",
+    schemaVersion: 1,
+    config: { project: "one" },
+    captureId: "random-capture",
+    connectionRef: "private",
+  } as never)
+  expect(saved).toMatchObject({ captureId: "random-capture" })
+  expect(saved).not.toHaveProperty("connectionRef")
+})
 
 it("validates a declaration and refuses namespaced ids and invalid versions", () => {
   expect(

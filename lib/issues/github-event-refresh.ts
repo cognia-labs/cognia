@@ -110,11 +110,10 @@ export class GithubEventIssueRefresher {
             await this.deps.removeFromMirror(binding.repoFullName, [number])
           for (const binding of boundImports) {
             const remoteAt = departedRemoteAt(event)
-            await this.deps.departImport(
-              binding,
-              [`${binding.key}#${number}`],
-              remoteAt !== undefined ? { departedRemoteAt: remoteAt } : {}
-            )
+            await this.deps.departImport(binding, [`${binding.key}#${number}`], {
+              eventAccount: { pluginId: event.pluginId, accountId: event.accountId },
+              ...(remoteAt !== undefined ? { departedRemoteAt: remoteAt } : {}),
+            })
           }
         }
       }

@@ -3,6 +3,11 @@ import type { PluginIssueSyncProvider } from "@cognia/plugin-contract/lib/issues
 /** Preserve inferred config callbacks while checking the public issue-sync contract. */
 export function defineIssueSyncProvider<T extends PluginIssueSyncProvider>(provider: T): T {
   if (
+    provider.connectionRef !== undefined &&
+    (typeof provider.connectionRef !== "string" || !provider.connectionRef)
+  )
+    throw new Error("Invalid sync connectionRef")
+  if (
     typeof provider.pull !== "function" ||
     (provider.pullPage !== undefined && typeof provider.pullPage !== "function") ||
     (provider.confirmDeparted !== undefined && typeof provider.confirmDeparted !== "function") ||

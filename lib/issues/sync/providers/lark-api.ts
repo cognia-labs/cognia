@@ -28,6 +28,9 @@ import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { isTauri } from "@/lib/tauri"
+import { assertIssueSyncSource } from "../kept-copy-source"
+import { KeptCopySourceError } from "@/lib/docs-providers/kept-copy-source"
+import type { IssueSyncBinding } from "../types"
 
 /** Preserve retry headers before the shared harness projects them into LarkApiError. */
 export async function issueLarkHttpRequest(input: Parameters<typeof connectorsHttpRequest>[0]) {
@@ -83,6 +86,52 @@ export function withIssueLarkApi<T>(
     },
     (api) => fn(api)
   )
+}
+
+/** Direct publish/update calls need the same captured identity as prepared syncs. */
+export async function withIssueLarkBindingApi<T>(
+  binding: IssueSyncBinding,
+  fn: (api: LarkAuthedApi) => Promise<T>,
+  options: {
+    signal?: AbortSignal
+    expectedAuthorizationEpoch?: string
+    withApi?: <R>(adapterId: string, read: (api: LarkAuthedApi) => Promise<R>) => Promise<R>
+  } = {}
+): Promise<T> {
+  const source = await assertIssueSyncSource(binding)
+  const resource = binding.resource
+  if (resource.kind !== "lark-tasklist" && resource.kind !== "lark-bitable")
+    throw new Error("Invalid Lark binding")
+  const adapterId = source?.hostMetadata?.adapterId ?? resource.adapterId
+  const epoch = source?.hostMetadata?.authorizationEpoch ?? options.expectedAuthorizationEpoch
+  if (
+    source &&
+    (!source.hostMetadata?.adapterId ||
+      !epoch ||
+      (options.expectedAuthorizationEpoch && options.expectedAuthorizationEpoch !== epoch))
+  )
+    throw new KeptCopySourceError("source-disconnected")
+  const assertCurrent = async () => {
+    options.signal?.throwIfAborted()
+    if (!source) return
+    const current = await assertIssueSyncSource(binding, source.id)
+    if (
+      current?.identityKey !== source.identityKey ||
+      current?.revision !== source.revision ||
+      current?.hostMetadata?.authorizationEpoch !== epoch
+    )
+      throw new KeptCopySourceError("source-disconnected")
+    options.signal?.throwIfAborted()
+  }
+  const guarded = async (api: LarkAuthedApi) => {
+    await assertCurrent()
+    return fn(api)
+  }
+  const result = await (options.withApi
+    ? options.withApi(adapterId, guarded)
+    : withIssueLarkApi(adapterId, guarded, options.signal, epoch))
+  await assertCurrent()
+  return result
 }
 
 const PAGE = 100

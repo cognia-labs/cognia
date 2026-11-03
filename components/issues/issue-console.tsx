@@ -48,6 +48,7 @@ import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useClientLiveQuery } from "@/hooks/data"
+import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
 import { useIssueShortcuts } from "@/hooks/issues/use-issue-shortcuts"
@@ -474,6 +475,7 @@ export function IssueConsole({
   const [manageCyclesOpen, setManageCyclesOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const syncAvailability = useIssueSyncAvailability(projects)
   /** Any container bound to something the sync engine or the mirror refreshes. */
   const hasSyncedBinding = (projects ?? []).some((project) =>
     project.resources.some(isSyncedResource)
@@ -491,7 +493,7 @@ export function IssueConsole({
    * path missed something.
    */
   async function syncNow() {
-    if (!projectId) return
+    if (!projectId || syncAvailability.reason) return
     setSyncing(true)
     try {
       const result = await runWorkspaceIssueSync({ projectId, full: true })
@@ -728,10 +730,14 @@ export function IssueConsole({
             },
             {
               id: "sync",
-              label: syncing ? t("sync.running") : t("sync.now"),
+              label: syncAvailability.reason
+                ? t(syncAvailability.reason)
+                : syncing
+                  ? t("sync.running")
+                  : t("sync.now"),
               icon: RefreshCwIcon,
               onSelect: () => void syncNow(),
-              disabled: !projectId || syncing || !hasSyncedBinding,
+              disabled: !projectId || syncing || !hasSyncedBinding || !syncAvailability.canSync,
               testId: "issue-sync-now",
             },
           ]}

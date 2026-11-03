@@ -6,7 +6,9 @@ jest.mock("next-intl", () => ({
 }))
 
 import userEvent from "@testing-library/user-event"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
 import type { IssueProject } from "@/types/issues"
 import { ProjectInspector } from "./project-inspector"
 
@@ -38,6 +40,34 @@ function renderInspector(over: Partial<React.ComponentProps<typeof ProjectInspec
 }
 
 describe("ProjectInspector", () => {
+  it("renders a kept resource's disconnected and deleted source states in its actual row", async () => {
+    const fixture = createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    const captureId = crypto.randomUUID()
+    await getDb().remoteDocumentConnections.put({
+      captureId,
+      providerId: "github",
+      connectionRef: "missing" as never,
+      identityKey: "original",
+      capturedAt: 1,
+      sourceKind: "issue-sync",
+    })
+    const view = renderInspector({
+      project: project({
+        resources: [{ kind: "github-repo", repoFullName: "kept/repo", addedAt: 1, captureId }],
+      }),
+    })
+    try {
+      expect(await screen.findByText("sync.sourceDisconnected")).toBeInTheDocument()
+      await act(async () => {
+        await getDb().remoteDocumentConnections.update(captureId, { sourceDeletedAt: 1 })
+      })
+      expect(await screen.findByText("sync.sourceDeleted")).toBeInTheDocument()
+    } finally {
+      view.unmount()
+      await fixture.dispose()
+    }
+  })
   it("keeps an unavailable plugin resource visible and allows editing it", async () => {
     const { props } = renderInspector({
       onEditResource: jest.fn(),

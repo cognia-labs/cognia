@@ -89,6 +89,9 @@ export function resolvePluginSyncBindings(
           projectKey: container.key,
           resource: state.resource,
           key: state.key,
+          ...(registry.get(resource.providerId)?.connectionRef
+            ? { connectionRef: registry.get(resource.providerId)!.connectionRef }
+            : {}),
         },
       ]
     })

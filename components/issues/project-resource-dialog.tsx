@@ -848,6 +848,11 @@ function PluginResourceForm({
               schemaVersion: descriptor.schemaVersion,
               config,
               name: description.label,
+              ...(initialResource?.captureId &&
+              state?.status === "ready" &&
+              state.key === `${provider.id}:${description.key}`
+                ? { captureId: initialResource.captureId }
+                : {}),
             })
           }}
         >

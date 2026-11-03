@@ -192,6 +192,7 @@ describe("LarkSourceInput", () => {
     await waitFor(() =>
       expect(stageLarkMock).toHaveBeenCalledWith("doxcnAbCdEfGh1234567890", {
         adapterId: "cai_solo",
+        twinId: props.twinId,
       })
     )
     expect(props.onStaged).toHaveBeenCalledWith([STAGED])

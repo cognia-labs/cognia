@@ -4,6 +4,12 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${Object.values(vars).join(",")}` : key,
 }))
+const mockSyncAvailability = jest.fn(
+  (): { canSync: boolean; reason?: "sync.sourceDisconnected" } => ({ canSync: true })
+)
+jest.mock("../kept-copy-source-state", () => ({
+  useIssueSyncAvailability: () => mockSyncAvailability(),
+}))
 
 let shellProps: Record<string, unknown> = {}
 jest.mock("@/components/feature-shell/feature-page-shell", () => ({
@@ -140,6 +146,7 @@ function callProp(props: Record<string, unknown>, name: string, ...args: unknown
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockSyncAvailability.mockReturnValue({ canSync: true })
   shellProps = {}
   headerProps = {}
   tableProps = {}
@@ -305,6 +312,21 @@ describe("ProjectConsole", () => {
   })
 
   describe("sync", () => {
+    it("disables manual sync with its source reason even if the action is invoked directly", async () => {
+      projectsForTest = [
+        project({ resources: [{ kind: "github-repo", repoFullName: "o/r", addedAt: 0 }] }),
+      ]
+      mockSyncAvailability.mockReturnValue({ canSync: false, reason: "sync.sourceDisconnected" })
+      render(<ProjectConsole />)
+      const [sync] = headerProps.secondaryActions as Array<{
+        disabled: boolean
+        label: string
+        onSelect(): void
+      }>
+      expect(sync).toMatchObject({ disabled: true, label: "sync.sourceDisconnected" })
+      await act(async () => sync.onSelect())
+      expect(mockRunSync).not.toHaveBeenCalled()
+    })
     it("is disabled until a repo is bound somewhere in the workspace", () => {
       projectsForTest = [project()]
       render(<ProjectConsole />)

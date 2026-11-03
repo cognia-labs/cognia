@@ -8,6 +8,7 @@ import {
 } from "@/lib/db/github-issue-mirror"
 import { toMirrorRow, type OctokitLike } from "@/lib/github/issues"
 import { claimSyncLease } from "@/lib/db/sync-leases"
+import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
   githubMirrorSyncTarget,
@@ -87,6 +88,94 @@ it("uses the stored cursor, never the newest cached row or its ETag", async () =
   })
   expect(calls[0]).not.toHaveProperty("headers")
 })
+
+it("stamps durable connection and consumer ownership on mirrored rows", async () => {
+  const ref = "mirror-connection" as AuthConnectionRef
+  await getDb().authConnections.put({
+    id: ref,
+    status: "connected",
+    ownerPluginId: "auth-plugin",
+  } as never)
+  const { client } = octokit([{ data: [rawIssue(1)] }])
+  expect(
+    await syncRepoIssues(INPUT, {
+      resolveReadClient: async () => ({
+        octokit: client,
+        connectionRef: ref,
+        consumerPluginId: "reader",
+      }),
+    })
+  ).toMatchObject({ status: "completed", written: 1 })
+  await getDb().externalSyncCursors.clear()
+  expect(await listGithubIssues()).toEqual([
+    expect.objectContaining({
+      connectionRef: ref,
+      consumerPluginId: "reader",
+      providerPluginId: "auth-plugin",
+    }),
+  ])
+})
+
+it.each(["fetch", "credential"] as const)(
+  "plugin-data purge fences a mirror paused in %s before its first row",
+  async (phase) => {
+    const ref = "purge-ref" as AuthConnectionRef
+    await getDb().authConnections.put({
+      id: ref,
+      status: "connected",
+      ownerPluginId: "auth-plugin",
+    } as never)
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const client: OctokitLike = {
+      request: async () => {
+        if (phase === "fetch") {
+          entered()
+          await gate
+        }
+        return { status: 200, headers: {}, data: [rawIssue(1)] }
+      },
+    }
+    const pending = syncRepoIssues(INPUT, {
+      resolveReadClient: async () => {
+        if (phase === "credential") {
+          entered()
+          await gate
+        }
+        return { octokit: client, connectionRef: ref, consumerPluginId: "reader" }
+      },
+    })
+    // Observe rejection immediately for a credential factory fenced before core starts.
+    const settled = pending.then(
+      (value) => value,
+      (error: unknown) => error
+    )
+    await started
+    const purge = purgeDerivedData({ kind: "plugin-data", pluginId: "reader" })
+    if (phase === "credential") await purge
+    else {
+      const deadline = Date.now() + 5000
+      while (await cursor()) {
+        if (Date.now() >= deadline) throw new Error("Mirror cursor purge did not start")
+        await new Promise<void>((resolve) => setTimeout(resolve, 5))
+      }
+    }
+    release()
+    const result = await settled
+    expect(result).toMatchObject(
+      phase === "credential" ? { name: "AbortError" } : { status: "cancelled" }
+    )
+    expect((await purge).failed).toEqual([])
+    expect(await listGithubIssues()).toEqual([])
+    expect(await cursor()).toBeUndefined()
+  }
+)
 
 it("heals old gaps with a first full scan instead of seeding from latestMirroredUpdate", async () => {
   await cache(99, { updated_at: "2026-10-01T00:00:00Z" })

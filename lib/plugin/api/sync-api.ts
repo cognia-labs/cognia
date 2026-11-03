@@ -6,6 +6,7 @@ import type {
   PluginSyncRegistrationOptions,
 } from "@cognia/plugin-contract/types/plugin/plugin-sync"
 import { getDb } from "@/lib/db/schema"
+import { getAuthConnection } from "@/lib/db/auth-connections"
 import { connectionAccess } from "@/lib/plugin/auth/connection-access"
 import {
   hasPendingConnectionCleanup,
@@ -49,12 +50,17 @@ export interface PluginSyncRuntime {
 export async function assertSyncConnection(
   pluginId: string,
   ref: AuthConnectionRef,
-  check: () => void
+  check: () => void,
+  options: { hostIntegration?: boolean } = {}
 ): Promise<void> {
   const { connected, checked } = connectionAccess(pluginId, check)
   let connection: Awaited<ReturnType<typeof connected>>
   try {
-    connection = await connected(ref)
+    // Host-owned built-ins use integration projections/grants, not the public
+    // auth service visibility contract. Public ctx.sync always takes connected().
+    connection = options.hostIntegration
+      ? await checked(() => getAuthConnection(ref))
+      : await connected(ref)
     check()
   } catch {
     check()
@@ -62,7 +68,8 @@ export async function assertSyncConnection(
   }
   const pendingCleanup = await checked(() => hasPendingConnectionCleanup(ref, pluginId))
   check()
-  if (!connection || pendingCleanup) throw new Error("Sync connection unavailable")
+  if (!connection || connection.status !== "connected" || pendingCleanup)
+    throw new Error("Sync connection unavailable")
   if (connection.ownerPluginId === pluginId) return
   const projections = await checked(() => listServiceConnections({ pluginId }))
   check()

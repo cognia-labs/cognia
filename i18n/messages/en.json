@@ -24589,6 +24589,9 @@
         "written": "{count, plural, one {# mirrored} other {# mirrored}}"
       },
       "running": "Syncing…",
+      "sourceDeleted": "Source deleted or no longer accessible",
+      "sourceDisconnected": "Source disconnected",
+      "sourceNotOnDevice": "Source connection is not on this device",
       "upToDate": "Everything is up to date"
     },
     "syncConflicts": {
@@ -65180,10 +65183,13 @@
         "noCommitsFound": "No commits found in the selected repository",
         "noMessagesParsed": "No messages parsed",
         "noTextExtracted": "No text could be extracted",
+        "not-on-this-device": "Source connection is not on this device",
         "parseFailed": "Failed to parse file",
         "parseFailedFallback": "Failed to parse file (fallback parser also rejected it)",
         "pasteContentRequired": "Paste some content before saving",
         "shapeNoMessages": "Export contains no messages",
+        "source-deleted": "Source deleted or no longer accessible",
+        "source-disconnected": "Source disconnected",
         "unknownFileType": "Unknown file type",
         "urlEmpty": "Enter a URL first",
         "urlFetchFailed": "Couldn’t fetch that URL: {reason}",
@@ -65259,6 +65265,7 @@
       "lineLocation": "Lines {start}–{end}",
       "moreRows": "+{count} more rows",
       "noTables": "No tables detected in this source.",
+      "not-on-this-device": "Source connection is not on this device",
       "pageLocation": "Pages {start}–{end}",
       "pendingIngestBusy": "Queuing…",
       "pendingIngestCta": "Start ingest",
@@ -65266,6 +65273,8 @@
       "preview": "Preview",
       "previewDescription": "Detected tables and the stored source text.",
       "previewTitle": "Preview: {title}",
+      "source-deleted": "Source deleted or no longer accessible",
+      "source-disconnected": "Source disconnected",
       "tableStats": "{rows} rows × {cols} cols · {numeric} numeric",
       "tablesHeading": "Detected tables ({count})"
     },

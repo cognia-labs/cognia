@@ -183,7 +183,11 @@ describe("publishIssue", () => {
 
   it("marks an import-mode link as in step, so the next sync does not push it back", async () => {
     const d = deps()
-    const binding = { key: "acme/api" } as IssueSyncBinding
+    const binding = {
+      key: "acme/api",
+      issueProjectId: "c1",
+      resource: { kind: "github-repo", repoFullName: "acme/api", addedAt: 1 },
+    } as IssueSyncBinding
     await publishIssue(
       "i1",
       { kind: "github", id: "github:acme/api", repoFullName: "acme/api", binding },
@@ -209,7 +213,12 @@ describe("publishIssue", () => {
       label: "Crash",
     }))
     const d = deps({ registry: registry({ larkCreate: create }) })
-    const binding = { key: "tl-1", providerId: "lark-task" } as IssueSyncBinding
+    const binding = {
+      key: "tl-1",
+      providerId: "lark-task",
+      issueProjectId: "c1",
+      resource: tasklist,
+    } as IssueSyncBinding
     const ref = await publishIssue(
       "i1",
       {
@@ -240,7 +249,7 @@ describe("publishIssue", () => {
       providerId: "lark-task",
       providerLabel: "Lark tasks",
       resourceName: "Sprint board",
-      binding: { key: "tl-1" } as IssueSyncBinding,
+      binding: { key: "tl-1", issueProjectId: "c1", resource: tasklist } as IssueSyncBinding,
     }
     await expect(publishIssue("i1", target, { kind: "human" }, deps())).rejects.toThrow(
       "cannot create"
@@ -255,3 +264,8 @@ describe("publishIssue", () => {
     ).rejects.toThrow("not found")
   })
 })
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
