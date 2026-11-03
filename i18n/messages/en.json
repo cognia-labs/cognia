@@ -48089,8 +48089,22 @@
         "workflowProduction": "Production"
       },
       "audit": {
+        "adapterFilterLabel": "Adapters",
+        "allAdapters": "All adapters",
+        "allKinds": "All event types",
         "collapseAria": "Collapse audit entry",
+        "columns": {
+          "adapter": "Adapter",
+          "details": "Details",
+          "event": "Event",
+          "time": "Time"
+        },
+        "contentProtectionBlocked": "Content protection blocked",
+        "detail": {
+          "conversationKey": "Conversation key"
+        },
         "empty": "No audit entries match the current filters.",
+        "entryCount": "{count, plural, one {# entry} other {# entries}}",
         "expandAria": "Expand audit entry",
         "exportCsv": "Download CSV",
         "exportJson": "Download JSON",
@@ -48098,7 +48112,7 @@
         "filterByAdapter": "Filter by adapter",
         "filterByAdapterAria": "Filter by adapter {name}",
         "filterByConversationKey": "Conversation key",
-        "filterByConversationKeyPlaceholder": "substring match — e.g. telegram:tg-1:12345",
+        "filterByConversationKeyPlaceholder": "Search conversation key, e.g. telegram:tg-1:12345",
         "filterByKind": "Filter by kind",
         "filterByKindAria": "Filter by {kind}",
         "kind": {
@@ -48271,7 +48285,13 @@
           "workflow_approval_failed": "Workflow approval failed",
           "workflow_fanout_failed": "Workflow fan-out failed"
         },
+        "kindFilterLabel": "Event types",
+        "limitNotice": "The view loads at most the latest {count} records for the selected time range.",
         "redactionNotice": "Audit logs are allowlist-redacted; tokens and message bodies never appear here.",
+        "resetFilters": "Reset filters",
+        "safetyOnly": "Content protection only",
+        "safetySummary": "{count, plural, one {# protection event} other {# protection events}}",
+        "selectedCount": "{count} selected",
         "timeRange": {
           "1h": "Last hour",
           "24h": "Last 24h",
@@ -49370,6 +49390,11 @@
         "confirmImpact": "It can block skills and host capabilities across every conversation on this adapter.",
         "confirmImpactTitle": "Save this permission ceiling?",
         "conversationGrantRequired": "The adapter can only cap this capability; each conversation must grant it explicitly.",
+        "groups": {
+          "attachments": "Media",
+          "capabilities": "Skills and Host features",
+          "safety": "Safety"
+        },
         "hitl": "Require HITL for write skills",
         "hitlHelp": "Conversation settings may override this default. Destructive skills always require approval.",
         "host": {
@@ -49379,15 +49404,48 @@
           "schedule_tools": "Schedule Tools"
         },
         "hostCapabilities": "Host Capabilities",
+        "hostCapabilitiesHelp": "Choose the Host features this bot may use. Conversation grants still apply where required.",
+        "hostCapabilityAll": "All Host features",
+        "hostCapabilityNone": "No Host features",
+        "injectionProtection": "Prompt-injection protection",
+        "injectionProtectionHelp": "Enabled by default. Checks bot requests and external model context for known instruction attacks. Privacy checks, tool permissions, and knowledge-source quarantine remain active when this is off.",
+        "intro": "Bot-wide limits that apply to every conversation on this adapter.",
         "mediaPolicy": "Attachments and the model",
         "mediaPolicyCloud": "Send raw attachments",
         "mediaPolicyHelp": "The bot-wide floor. A conversation can grant more than this, scoped to a provider and revocable; this setting cannot be scoped or expired.",
         "mediaPolicyLocal": "Local extraction only",
         "mediaPolicyWarning": "Every image, voice note and file this bot receives will be uploaded to its model provider, in every conversation.",
+        "safetyTest": {
+          "actions": {
+            "allow": "Would allow",
+            "block": "Would block",
+            "quarantine": "Would withhold external content"
+          },
+          "clear": "Clear sample",
+          "disabledNotice": "Known risks were detected, but protection is off in this form.",
+          "external": "External content",
+          "help": "Runs locally without calling a model or saving the sample. Up to 16,384 characters. Clear or collapse to remove it. Results use this form's settings; save to apply setting changes.",
+          "incomplete": "The inspection limit was reached. Enabled protection withholds content that cannot be fully inspected.",
+          "noFindings": "No known instruction attack was detected. This does not establish that the sample is safe.",
+          "otherFinding": "Content could not be safely inspected.",
+          "reasons": {
+            "credential_exfiltration": "Requests credentials be sent outside",
+            "forged_role_boundary": "Impersonates a system or developer message",
+            "instruction_override": "Overrides earlier or system instructions",
+            "safety_bypass": "Requests bypassing safety controls",
+            "system_prompt_extraction": "Requests hidden system instructions"
+          },
+          "run": "Check sample",
+          "sample": "Sample text",
+          "source": "Content source",
+          "title": "Test protection locally",
+          "user": "Bot message"
+        },
         "save": "Save",
         "skillHelp": "Comma-separated skill ids or wildcards. Leave blank to impose no additional adapter restriction; an explicit empty conversation allowlist still blocks all skills.",
         "skillPlaceholder": "lark.calendar.*, lark.task.list",
-        "title": "Permissions"
+        "title": "Permissions",
+        "unsaved": "Unsaved changes"
       },
       "pluginConnector": {
         "create": "Add connector",

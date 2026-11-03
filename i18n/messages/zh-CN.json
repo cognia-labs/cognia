@@ -48089,8 +48089,22 @@
         "workflowProduction": "生产部署"
       },
       "audit": {
+        "adapterFilterLabel": "适配器",
+        "allAdapters": "全部适配器",
+        "allKinds": "全部事件类型",
         "collapseAria": "收起审计条目",
+        "columns": {
+          "adapter": "适配器",
+          "details": "详情",
+          "event": "事件",
+          "time": "时间"
+        },
+        "contentProtectionBlocked": "内容防护已拦截",
+        "detail": {
+          "conversationKey": "会话 key"
+        },
         "empty": "当前筛选条件下没有审计条目。",
+        "entryCount": "{count} 条记录",
         "expandAria": "展开审计条目",
         "exportCsv": "下载 CSV",
         "exportJson": "下载 JSON",
@@ -48098,7 +48112,7 @@
         "filterByAdapter": "按适配器筛选",
         "filterByAdapterAria": "按适配器筛选 {name}",
         "filterByConversationKey": "会话 key",
-        "filterByConversationKeyPlaceholder": "支持子串匹配，例如 telegram:tg-1:12345",
+        "filterByConversationKeyPlaceholder": "搜索会话 key，例如 telegram:tg-1:12345",
         "filterByKind": "按类型筛选",
         "filterByKindAria": "按 {kind} 筛选",
         "kind": {
@@ -48271,7 +48285,13 @@
           "workflow_approval_failed": "工作流审批失败",
           "workflow_fanout_failed": "工作流分发失败"
         },
+        "kindFilterLabel": "事件类型",
+        "limitNotice": "当前时间范围内最多载入最近 {count} 条记录。",
         "redactionNotice": "审计日志按白名单脱敏，Token 与消息正文不会出现在这里。",
+        "resetFilters": "重置筛选",
+        "safetyOnly": "仅显示内容防护事件",
+        "safetySummary": "{count} 条防护事件",
+        "selectedCount": "已选 {count} 项",
         "timeRange": {
           "1h": "最近 1 小时",
           "24h": "最近 24 小时",
@@ -49370,6 +49390,11 @@
         "confirmImpact": "它可能阻止该适配器全部会话中的 Skill 和主机能力。",
         "confirmImpactTitle": "保存此权限上限？",
         "conversationGrantRequired": "Adapter 只能限制此能力上限；每个会话仍需显式授权。",
+        "groups": {
+          "attachments": "媒体",
+          "capabilities": "技能与 Host 能力",
+          "safety": "安全"
+        },
         "hitl": "写入类 Skill 需要 HITL",
         "hitlHelp": "会话设置可覆盖此默认值；破坏性 Skill 始终需要审批。",
         "host": {
@@ -49379,15 +49404,48 @@
           "schedule_tools": "Schedule Tools"
         },
         "hostCapabilities": "主机能力",
+        "hostCapabilitiesHelp": "选择此 Bot 可以使用的 Host 功能；需要对话授权的能力仍须另行授权。",
+        "hostCapabilityAll": "全部 Host 能力",
+        "hostCapabilityNone": "不允许任何 Host 能力",
+        "injectionProtection": "提示词注入防护",
+        "injectionProtectionHelp": "默认开启。检查机器人请求和模型使用的外部上下文中的已知指令攻击。关闭后，隐私检查、工具权限和知识来源隔离仍然生效。",
+        "intro": "适用于该适配器下所有会话的 Bot 级上限。",
         "mediaPolicy": "附件与模型",
         "mediaPolicyCloud": "发送原始附件",
         "mediaPolicyHelp": "机器人级的底线。单个会话可以在此之上按供应商授权、并可随时撤销；这个设置既不能限定供应商也不会过期。",
         "mediaPolicyLocal": "仅本地识别",
         "mediaPolicyWarning": "这个机器人在所有会话中收到的每一张图片、每一段语音、每一个文件，都会被上传给它的模型供应商。",
+        "safetyTest": {
+          "actions": {
+            "allow": "预计放行",
+            "block": "预计拦截",
+            "quarantine": "预计隔离外部内容"
+          },
+          "clear": "清除文本",
+          "disabledNotice": "检测到已知风险，但当前表单已关闭防护。",
+          "external": "外部内容",
+          "help": "仅在本地检测，不调用模型、不保存测试文本。最多 16,384 个字符，清除或收起后移除。结果按当前表单设置预览，修改设置后需保存才会生效。",
+          "incomplete": "已达到检测上限。开启防护时，无法完整检测的内容会被拦截。",
+          "noFindings": "未检测到已知的指令攻击，这不代表文本一定安全。",
+          "otherFinding": "无法安全完成内容检测。",
+          "reasons": {
+            "credential_exfiltration": "要求将访问凭据发送至外部",
+            "forged_role_boundary": "伪装成系统或开发者消息",
+            "instruction_override": "覆盖先前指令或系统指令",
+            "safety_bypass": "要求绕过安全防护",
+            "system_prompt_extraction": "要求读取隐藏的系统指令"
+          },
+          "run": "检测文本",
+          "sample": "测试文本",
+          "source": "内容来源",
+          "title": "本地测试防护",
+          "user": "Bot 消息"
+        },
         "save": "保存",
         "skillHelp": "使用逗号分隔 Skill ID 或通配符。留空表示 Adapter 不追加限制；会话显式空白名单仍会阻止全部 Skill。",
         "skillPlaceholder": "lark.calendar.*, lark.task.list",
-        "title": "权限"
+        "title": "权限",
+        "unsaved": "有未保存的更改"
       },
       "pluginConnector": {
         "create": "添加连接器",

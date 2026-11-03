@@ -253,6 +253,15 @@
     "workflowProduction": "Production"
   },
   "audit": {
+    "adapterFilterLabel": "Adapters",
+    "kindFilterLabel": "Event types",
+    "allAdapters": "All adapters",
+    "allKinds": "All event types",
+    "selectedCount": "{count} selected",
+    "resetFilters": "Reset filters",
+    "contentProtectionBlocked": "Content protection blocked",
+    "safetyOnly": "Content protection only",
+    "safetySummary": "{count, plural, one {# protection event} other {# protection events}}",
     "collapseAria": "Collapse audit entry",
     "empty": "No audit entries match the current filters.",
     "expandAria": "Expand audit entry",
@@ -262,7 +271,7 @@
     "filterByAdapter": "Filter by adapter",
     "filterByAdapterAria": "Filter by adapter {name}",
     "filterByConversationKey": "Conversation key",
-    "filterByConversationKeyPlaceholder": "substring match — e.g. telegram:tg-1:12345",
+    "filterByConversationKeyPlaceholder": "Search conversation key, e.g. telegram:tg-1:12345",
     "filterByKind": "Filter by kind",
     "filterByKindAria": "Filter by {kind}",
     "kind": {
@@ -442,7 +451,18 @@
       "7d": "Last 7d",
       "all": "All"
     },
-    "timeRangeLabel": "Time range"
+    "timeRangeLabel": "Time range",
+    "entryCount": "{count, plural, one {# entry} other {# entries}}",
+    "limitNotice": "The view loads at most the latest {count} records for the selected time range.",
+    "columns": {
+      "time": "Time",
+      "adapter": "Adapter",
+      "event": "Event",
+      "details": "Details"
+    },
+    "detail": {
+      "conversationKey": "Conversation key"
+    }
   },
   "behaviorEditor": {
     "a2ui": "Interactive cards",
@@ -1513,6 +1533,35 @@
     "statusUnknown": "Unknown"
   },
   "permissionsEditor": {
+    "hostCapabilitiesHelp": "Choose the Host features this bot may use. Conversation grants still apply where required.",
+    "safetyTest": {
+      "title": "Test protection locally",
+      "source": "Content source",
+      "user": "Bot message",
+      "external": "External content",
+      "sample": "Sample text",
+      "help": "Runs locally without calling a model or saving the sample. Up to 16,384 characters. Clear or collapse to remove it. Results use this form's settings; save to apply setting changes.",
+      "run": "Check sample",
+      "clear": "Clear sample",
+      "disabledNotice": "Known risks were detected, but protection is off in this form.",
+      "incomplete": "The inspection limit was reached. Enabled protection withholds content that cannot be fully inspected.",
+      "noFindings": "No known instruction attack was detected. This does not establish that the sample is safe.",
+      "otherFinding": "Content could not be safely inspected.",
+      "actions": {
+        "allow": "Would allow",
+        "block": "Would block",
+        "quarantine": "Would withhold external content"
+      },
+      "reasons": {
+        "instruction_override": "Overrides earlier or system instructions",
+        "system_prompt_extraction": "Requests hidden system instructions",
+        "credential_exfiltration": "Requests credentials be sent outside",
+        "forged_role_boundary": "Impersonates a system or developer message",
+        "safety_bypass": "Requests bypassing safety controls"
+      }
+    },
+    "injectionProtection": "Prompt-injection protection",
+    "injectionProtectionHelp": "Enabled by default. Checks bot requests and external model context for known instruction attacks. Privacy checks, tool permissions, and knowledge-source quarantine remain active when this is off.",
     "builtInSkills": "Built-in Skills ceiling",
     "cancel": "Cancel",
     "confirmImpact": "It can block skills and host capabilities across every conversation on this adapter.",
@@ -1535,7 +1584,16 @@
     "skillHelp": "Comma-separated skill ids or wildcards. Leave blank to impose no additional adapter restriction; an explicit empty conversation allowlist still blocks all skills.",
     "skillPlaceholder": "lark.calendar.*, lark.task.list",
     "title": "Permissions",
-    "confirmImpactTitle": "Save this permission ceiling?"
+    "confirmImpactTitle": "Save this permission ceiling?",
+    "intro": "Bot-wide limits that apply to every conversation on this adapter.",
+    "groups": {
+      "capabilities": "Skills and Host features",
+      "attachments": "Media",
+      "safety": "Safety"
+    },
+    "hostCapabilityAll": "All Host features",
+    "hostCapabilityNone": "No Host features",
+    "unsaved": "Unsaved changes"
   },
   "qqOfficial": {
     "adapterCreated": "QQ Official Bot added",
