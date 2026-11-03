@@ -1,4 +1,31 @@
 /** @jest-environment jsdom */
+jest.mock("next-intl", () => {
+  const messages = {
+    plugins: { auth: jest.requireActual("@/i18n/messages/en/plugins/auth.json") },
+    settings: {
+      externalServices: jest.requireActual("@/i18n/messages/en/settings/externalServices.json"),
+    },
+  }
+  return {
+    useLocale: () => "en",
+    useTranslations: (namespace: string) => (key: string, values?: Record<string, unknown>) => {
+      const value = `${namespace}.${key}`
+        .split(".")
+        .reduce<unknown>(
+          (item, segment) =>
+            item && typeof item === "object"
+              ? (item as Record<string, unknown>)[segment]
+              : undefined,
+          messages
+        )
+      return Object.entries(values ?? {}).reduce(
+        (text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)),
+        typeof value === "string" ? value : key
+      )
+    },
+    NextIntlClientProvider: ({ children }: { children: import("react").ReactNode }) => children,
+  }
+})
 import "fake-indexeddb/auto"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -16,7 +43,7 @@ import {
   ConnectionIdentityConflict,
 } from "@/lib/plugin/auth/connection-manager"
 import { listProviders } from "@/lib/plugin/auth/auth-provider-registry"
-import { connectProvider } from "@/lib/plugin/auth/connect"
+import { AuthConnectError, connectProvider } from "@/lib/plugin/auth/connect"
 import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
 import { ConnectionsPanel } from "./connections-panel"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
@@ -35,7 +62,13 @@ jest.mock("@/lib/plugin/auth/connection-manager", () => ({
 jest.mock("@/hooks/use-connector-ingress", () => ({
   useConnectorIngress: () => ({ base: "https://relay.example" }),
 }))
-jest.mock("@/lib/plugin/auth/connect", () => ({ connectProvider: jest.fn(async () => "host") }))
+jest.mock("@/lib/plugin/auth/connect", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connect"),
+  connectProvider: jest.fn(async () => "host"),
+}))
+jest.mock("@/hooks/plugins/use-external-service-runtime-profile", () => ({
+  useExternalServiceRuntimeProfile: () => ({ local: "browser", gateway: "browser" }),
+}))
 jest.mock("@/lib/plugin/auth/revoke-consumer-access", () => ({
   revokeConsumerAccess: jest.fn(async () => {}),
 }))
@@ -185,6 +218,58 @@ it("has matching Settings translation keys in both locales", () => {
     )
   }
   expect(keys(en).sort()).toEqual(keys(zh).sort())
+})
+
+it("shows runtime reasons and pairing for unavailable providers and reconnects", async () => {
+  jest.mocked(listPlugins).mockResolvedValue([
+    {
+      id: "owner",
+      manifest: {
+        authProviders: [{ id: "vendor", label: "Vendor", methods: ["client-credentials"] }],
+      },
+    },
+  ] as never)
+  mount()
+  await screen.findByText("Person")
+  expect(screen.getByRole("button", { name: "Sign in to Vendor" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Reconnect" })).toBeDisabled()
+  expect(
+    screen.getAllByText(auth.runtimeSupport.reasons["confidential-exchange-unavailable"])
+  ).toHaveLength(2)
+  expect(screen.getAllByRole("link", { name: "Pair with desktop" })[0]).toHaveAttribute(
+    "href",
+    "/pair"
+  )
+})
+
+it("honors a manifest's declared trusted-exchange restriction even for public PKCE", async () => {
+  jest.mocked(listPlugins).mockResolvedValue([
+    {
+      id: "owner",
+      manifest: {
+        runtimeCompatibility: {
+          browser: { availability: "blocked", reason: "confidential-exchange-unavailable" },
+        },
+        authProviders: [{ id: "vendor", label: "Vendor", methods: ["oauth-pkce"] }],
+      },
+    },
+  ] as never)
+  mount()
+  await screen.findByText("Person")
+  expect(screen.getByRole("button", { name: "Sign in to Vendor" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Reconnect" })).toBeDisabled()
+})
+
+it("keeps a mapped vault failure recoverable without showing provider exceptions", async () => {
+  jest.mocked(connectProvider).mockRejectedValueOnce(
+    new AuthConnectError("UNAVAILABLE", "non-persistent-until-vault-unlock", {
+      recovery: ["unlock-vault"],
+    })
+  )
+  mount()
+  await screen.findByText("Person")
+  await userEvent.click(screen.getByRole("button", { name: "Sign in to Vendor" }))
+  expect(await screen.findByRole("button", { name: "Unlock vault" })).toBeVisible()
 })
 
 it("maps duplicate-lineage refusal to the localized existing-connection reason", async () => {

@@ -29,6 +29,12 @@ import {
 import { pushHeldIntegrationJob, withdrawHeldIntegrationJob } from "./outbound-hold"
 import { buildShadowReport } from "@/lib/policy/action-review/shadow-report"
 import { configuredGithubHosts } from "./github-auth"
+import { AuthConnectionManager, getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import {
+  ConnectionCredentialStore,
+  HostAuthSecrets,
+} from "@/lib/plugin/auth/connection-credentials"
+import { withNamedLock } from "@/lib/locks/named-lock"
 import { parseGithubHost } from "@/lib/github/host"
 import { isIntegrationRuntimeOwner } from "./runtime-owner"
 import {
@@ -54,6 +60,13 @@ jest.mock("dexie", () => {
     liveQuery: jest.fn(actual.liveQuery),
   }
 })
+
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
+  getConnectionManager: jest.fn(
+    jest.requireActual("@/lib/plugin/auth/connection-manager").getConnectionManager
+  ),
+}))
 
 jest.mock("@/lib/db/integrations", () => {
   const actual = jest.requireActual("@/lib/db/integrations")
@@ -224,6 +237,106 @@ describe("Integration action runner", () => {
     })
     return { promise, resolve }
   }
+
+  it.each([
+    [401, undefined, "needs-reauth", "degraded", "api-key", "{}"],
+    [401, "refresh", "connected", "degraded", "oauth-pkce", "{}"],
+    [403, undefined, "connected", "degraded", "api-key", "{}"],
+    [200, undefined, "connected", "healthy", "api-key", "{}"],
+    [401, undefined, "connected", "degraded", "oauth-pkce", "{}"],
+    [401, undefined, "needs-reauth", "degraded", "api-key", "invalid-json"],
+  ] as const)(
+    "HTTP %s with refresh lineage %s preserves health and sets %s",
+    async (status, refreshToken, expected, health, authMethod, body) => {
+      const account = await setup()
+      const provider = {
+        id: account.providerId,
+        label: "Key provider",
+        pluginId: "example-delivery",
+        getSessions: async () => [],
+        createSession: jest.fn(),
+        removeSession: jest.fn(),
+        refresh: jest.fn(),
+        describe: async () => ({
+          issuer: "https://api.example.test",
+          clientId: "key",
+          principal: { id: "person", kind: "user" as const },
+          accountLabel: "Key account",
+          scopes: [],
+        }),
+      }
+      const dispose = registerAuthenticationProvider(provider)
+      const values = new Map<string, string>()
+      const lock: typeof import("@/lib/plugin/auth/connection-credentials").withAuthLock = (
+        name,
+        task
+      ) => withNamedLock(name, task, { mode: "in-process" })
+      const manager = new AuthConnectionManager({
+        credentials: new ConnectionCredentialStore(
+          new HostAuthSecrets("test", {
+            native: false,
+            lock,
+            store: {
+              load: async (key) => values.get(key) ?? null,
+              save: async (key, value) => {
+                values.set(key, value)
+              },
+              delete: async (key) => {
+                values.delete(key)
+              },
+              isPersistent: () => true,
+            },
+          })
+        ),
+        lock,
+        providerIdentity: async () => ({
+          providerId: provider.id,
+          ownerPluginId: provider.pluginId,
+          publisher: null,
+          contractMajor: 1,
+        }),
+      })
+      jest.mocked(getConnectionManager).mockReturnValue(manager)
+      const ref = await manager.createConnectionFromCredentials(
+        provider,
+        {
+          accessToken: "key-secret",
+          refreshToken,
+          scopes: [],
+        },
+        { authMethod }
+      )
+      await getDb().integrationAccounts.update(account.id, { connectionId: ref })
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      const fetchMock = jest
+        .spyOn(global, "fetch")
+        .mockResolvedValue(
+          new Response(body, { status, headers: { "content-type": "application/json" } })
+        )
+      try {
+        const pending = authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          "https://api.example.test/issues/1"
+        )
+        if (body === "invalid-json") await expect(pending).rejects.toBeInstanceOf(SyntaxError)
+        else await expect(pending).resolves.toMatchObject({ status })
+        expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("authorization")).toBe(
+          "Bearer key-secret"
+        )
+        expect(await getDb().authConnections.get(ref)).toMatchObject({ status: expected })
+        expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({ health })
+        expect(provider.refresh).not.toHaveBeenCalled()
+      } finally {
+        dispose()
+        jest
+          .mocked(getConnectionManager)
+          .mockImplementation(
+            jest.requireActual("@/lib/plugin/auth/connection-manager").getConnectionManager
+          )
+      }
+    }
+  )
 
   async function queue(accountId: string, actionId = "issue.update") {
     return enqueueIntegrationActionJob({

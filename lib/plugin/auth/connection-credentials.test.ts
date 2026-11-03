@@ -40,6 +40,26 @@ import {
 } from "./connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
 
+it("keeps the Host-selected auth method outside provider credentials across rotation and tombstoning", async () => {
+  const store = new ConnectionCredentialStore(new HostAuthSecrets("method-test", { native: false }))
+  const credentials = { accessToken: "key", scopes: [] }
+  const committed = await store.commit(
+    "method-ref",
+    { raw: null, revision: 0 },
+    credentials,
+    undefined,
+    "api-key"
+  )
+  expect(committed).toMatchObject({ authMethod: "api-key", credentials })
+  expect(committed.credentials).not.toHaveProperty("authMethod")
+  const rotated = await store.commit("method-ref", committed, {
+    accessToken: "replacement",
+    scopes: [],
+  })
+  expect(rotated.authMethod).toBe("api-key")
+  expect((await store.tombstone("method-ref", rotated)).authMethod).toBe("api-key")
+})
+
 it("uses the CLI backend override and restores platform defaults with null", async () => {
   const values = new Map<string, string>()
   const storeFor = jest.fn(() => ({

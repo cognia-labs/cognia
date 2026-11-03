@@ -78,6 +78,49 @@ const fresh: AuthCredentialSet = {
   scopes: ["read"],
   expiresAt: "2100-01-01T00:00:00Z",
 }
+
+it("marks plugin credentials without hostMetadata for reauth and fences a replaced key", async () => {
+  const f = fixture()
+  const key = { accessToken: "key", scopes: ["read"] }
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, key, {
+    authMethod: "api-key",
+  })
+  await f.manager.retireHostConnection(ref, "needs-reauth", 0, "api-key")
+  expect(f.rows.get(ref)?.status).toBe("connected")
+  await f.manager.retireHostConnection(ref, "needs-reauth", 1, "api-key")
+  expect(f.rows.get(ref)).toMatchObject({ status: "needs-reauth", revision: 1 })
+  await expect(f.manager.getCredentials(ref)).rejects.toMatchObject({ reason: "needs-reauth" })
+  expect(f.provider.refresh).not.toHaveBeenCalled()
+})
+
+it("keeps OAuth connections without an exposed refresh token out of API-key reauth", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(
+    f.provider,
+    { accessToken: "oauth-access", scopes: [] },
+    { authMethod: "oauth-pkce" }
+  )
+  await f.manager.retireHostConnection(ref, "needs-reauth", 1, "api-key")
+  expect(f.rows.get(ref)?.status).toBe("connected")
+})
+
+it("replaces API-key method provenance when reconnect switches to OAuth", async () => {
+  const f = fixture()
+  const key = { accessToken: "key", scopes: [] }
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, key, {
+    authMethod: "api-key",
+  })
+  expect(
+    await f.manager.createConnectionFromCredentials(
+      f.provider,
+      { accessToken: "oauth", scopes: [] },
+      { reconnect: ref, authMethod: "oauth-pkce" }
+    )
+  ).toBe(ref)
+  expect((await f.credentials.read(ref)).authMethod).toBe("oauth-pkce")
+  await f.manager.retireHostConnection(ref, "needs-reauth", 2, "api-key")
+  expect(f.rows.get(ref)?.status).toBe("connected")
+})
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((yes) => {

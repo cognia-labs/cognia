@@ -1,5 +1,16 @@
 import { buildSessionDeeplink, parseCogniaDeeplink } from "./cognia-deeplink"
 
+it("routes only the exact Host plugin auth callback authority and path", () => {
+  const raw = "cognia://auth/callback?code=code&state=bound"
+  expect(parseCogniaDeeplink(raw)).toEqual({ kind: "plugin_auth_callback", raw })
+  for (const raw of [
+    "cognia://auth/other",
+    "cognia://attacker@auth/callback",
+    "cognia://auth:42/callback",
+  ])
+    expect(parseCogniaDeeplink(raw).kind).toBe("unknown")
+})
+
 describe("parseCogniaDeeplink", () => {
   it("parses routes shared by the desktop and mobile shells", () => {
     expect(parseCogniaDeeplink("cognia://session/s-1")).toMatchObject({

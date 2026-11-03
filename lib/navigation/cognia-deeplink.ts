@@ -5,6 +5,7 @@
 import { parseFilesViewParams, type ParsedFilesView } from "@/lib/filespace/link-params"
 
 export type CogniaDeeplinkRoute =
+  | { kind: "plugin_auth_callback"; raw: string }
   | {
       kind: "oauth_callback"
       provider: string
@@ -103,6 +104,10 @@ export function parseCogniaDeeplink(raw: string): CogniaDeeplinkRoute {
   const host = url.hostname || url.pathname.replace(/^\/+/, "").split("/")[0] || ""
   const path = url.pathname.replace(/^\/+/, "")
   const params = url.searchParams
+
+  if (host === "auth" && path === "callback" && !url.username && !url.password && !url.port) {
+    return { kind: "plugin_auth_callback", raw }
+  }
 
   if (host === "oauth") {
     return {

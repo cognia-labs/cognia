@@ -19,19 +19,22 @@
       "entrypoint": "dist/index.js"
     },
     "browser": {
-      "availability": "degraded",
+      "availability": "blocked",
       "entrypoint": "dist/index.js",
-      "reason": "Sign-in and refresh require a connected trusted Host for auth:exchange."
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
     },
     "mobile": {
-      "availability": "degraded",
+      "availability": "blocked",
       "entrypoint": "dist/index.js",
-      "reason": "Requires a connected trusted Host and a configured OAuth callback."
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
     },
     "headless": {
-      "availability": "degraded",
+      "availability": "blocked",
       "entrypoint": "dist/index.js",
-      "reason": "Uses an existing connection; initial PKCE sign-in needs an interactive shell."
+      "reason": "no-interactive-browser",
+      "recovery": ["use-another-method"]
     }
   },
   "providesServices": {

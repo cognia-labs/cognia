@@ -1,3 +1,5 @@
+import { assertRuntimeSupported } from "@/lib/external-services/runtime-support"
+import { currentRuntimeProfile } from "@/lib/plugin/character-pack/platform-availability"
 import type { AuthCallbackParams } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
   AuthAttemptRejected,
@@ -207,6 +209,7 @@ export function isHostAuthCallback(raw: string): boolean {
 }
 export async function routeHostAuthCallback(raw: string): Promise<boolean> {
   if (!isHostAuthCallback(raw)) return false
+  assertRuntimeSupported("auth:callback", currentRuntimeProfile())
   const params = new URL(raw).searchParams
   await acceptCallback(
     {

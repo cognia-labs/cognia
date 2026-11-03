@@ -6,6 +6,7 @@ import type {
   AuthCredentialSet,
   AuthIdentityDescription,
   AuthLineageContext,
+  AuthMethod,
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
   getProvider,
@@ -126,6 +127,13 @@ export class ReconnectIdentityMismatch extends Error {
   }
 }
 interface ConnectOptions {
+  authMethod?: AuthMethod
+  /**
+   * False when the credentials were supplied by the user (an API key) rather
+   * than freshly issued for this attempt: a failed connect must never revoke
+   * a key that may still be in use elsewhere.
+   */
+  discardOnFailure?: boolean
   reconnect?: AuthConnectionRef
   signal?: AbortSignal
   expectedRevision?: number
@@ -467,14 +475,24 @@ export class AuthConnectionManager {
       "identity"
     )
   }
-  /** Native credential deletion / invalid_grant must invalidate online access too. */
+  /** Native deletion and rejected non-refreshable plugin credentials invalidate access too. */
   async retireHostConnection(
     ref: AuthConnectionRef,
-    status: "tombstoned" | "needs-reauth" = "tombstoned"
+    status: "tombstoned" | "needs-reauth" = "tombstoned",
+    expectedCredentialRevision?: number,
+    expectedMethod?: AuthMethod
   ): Promise<void> {
     await this.mutate(ref, async () => {
       const row = await this.store.get(ref)
-      if (!row?.hostMetadata || terminal(row) || row.status === status) return
+      if (!row || terminal(row) || row.status === status) return
+      if (!row.hostMetadata && status !== "needs-reauth") return
+      // A late 401 must not retire a key replaced while the request was in flight.
+      if (
+        expectedCredentialRevision !== undefined &&
+        row.credentialRevision !== expectedCredentialRevision
+      )
+        return
+      if (expectedMethod && (await this.credentials.read(ref)).authMethod !== expectedMethod) return
       const next = {
         ...row,
         status,
@@ -525,7 +543,8 @@ export class AuthConnectionManager {
     } catch (error) {
       // Fresh credentials rejected by identity checks or a disconnect fence
       // never reach storage. Revoke that fresh grant, not the stored lineage.
-      await this.discardCredentials(provider, credentials, description)
+      if (options.discardOnFailure !== false)
+        await this.discardCredentials(provider, credentials, description)
       throw error
     }
   }
@@ -689,7 +708,8 @@ export class AuthConnectionManager {
                 ref,
                 lineageId: row.lineageId,
                 identity: identityOf(row),
-              }
+              },
+              options.authMethod
             )
             row.credentialRevision = next.revision
             committed = next

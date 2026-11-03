@@ -49,11 +49,16 @@ it("shows metadata and grouped grant operations, and disables destructive action
   const onReconnect = jest.fn(),
     onDisconnect = jest.fn(),
     onRevokeConsumer = jest.fn()
-  const content = (busy: boolean) => (
+  const content = (busy: boolean, blocked = false) => (
     <NextIntlClientProvider locale="en" messages={{ settings: { externalServices: en } }}>
       <ConnectionRow
         view={view}
         busy={busy}
+        runtimeSupport={
+          blocked
+            ? { availability: "blocked", reason: "confidential-exchange-unavailable", recovery: [] }
+            : undefined
+        }
         onReconnect={onReconnect}
         onDisconnect={onDisconnect}
         onRevokeConsumer={onRevokeConsumer}
@@ -70,6 +75,9 @@ it("shows metadata and grouped grant operations, and disables destructive action
   expect(screen.queryByText("Needs re-approval")).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }))
   expect(onReconnect).toHaveBeenCalledTimes(1)
+  rerender(content(false, true))
+  expect(screen.getByRole("button", { name: "Reconnect" })).toBeDisabled()
+  expect(screen.getByText("reasons.confidential-exchange-unavailable")).toBeVisible()
   rerender(content(true))
   expect(screen.getByRole("button", { name: "Disconnect" })).toBeDisabled()
   expect(screen.getByRole("button", { name: "Revoke access for Business" })).toBeDisabled()

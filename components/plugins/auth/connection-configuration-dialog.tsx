@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { NativeSelect } from "@/components/ui/native-select"
+import { resolveAuthMethodSupport } from "@/lib/external-services/runtime-support"
+import { useExternalServiceRuntimeProfile } from "@/hooks/plugins/use-external-service-runtime-profile"
+import { RuntimeSupportNotice } from "./runtime-support-notice"
 import {
   Dialog,
   DialogContent,
@@ -26,9 +29,21 @@ export function ConnectionConfigurationDialog({
   onResolve: (result: ConnectionPromptResult) => void
 }) {
   const t = useTranslations("plugins.auth.connections")
+  const tRuntime = useTranslations("plugins.auth.runtimeSupport")
+  const profile = useExternalServiceRuntimeProfile()
+  const supportFor = (item: AuthMethod) =>
+    resolveAuthMethodSupport(
+      item,
+      profile,
+      request.kind === "configure" ? request.providerDefinition : undefined
+    )
   const [values, setValues] = useState(request.kind === "configure" ? request.defaults : {})
   const [method, setMethod] = useState<AuthMethod>(
-    request.kind === "configure" ? request.methods[0] : "oauth-pkce"
+    request.kind === "configure"
+      ? (request.initialMethod ??
+          request.methods.find((item) => supportFor(item).availability !== "blocked") ??
+          request.methods[0])
+      : "oauth-pkce"
   )
   const dismiss = () => onResolve({ kind: "dismissed" })
   return (
@@ -47,7 +62,7 @@ export function ConnectionConfigurationDialog({
           </DialogTitle>
           <DialogDescription>
             {request.kind === "configure"
-              ? t("setupDescription")
+              ? t(method === "api-key" ? "apiKeyDescription" : "setupDescription")
               : t(
                   request.reason === "tenant-scope-required"
                     ? "tenantScopeRequired"
@@ -59,6 +74,7 @@ export function ConnectionConfigurationDialog({
           <form
             onSubmit={(event) => {
               event.preventDefault()
+              if (supportFor(method).availability === "blocked") return
               onResolve({
                 kind: "configured",
                 method,
@@ -70,22 +86,24 @@ export function ConnectionConfigurationDialog({
             className="space-y-6"
           >
             <FieldGroup className="gap-4">
-              <Field>
-                <FieldLabel htmlFor="auth-issuer">{t("deployment")}</FieldLabel>
-                <NativeSelect
-                  native
-                  id="auth-issuer"
-                  className="w-full"
-                  value={values.issuer}
-                  onChange={(event) => setValues({ ...values, issuer: event.target.value })}
-                >
-                  {request.issuers.map((issuer) => (
-                    <option key={issuer} value={issuer}>
-                      {issuer}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </Field>
+              {method !== "api-key" && (
+                <Field>
+                  <FieldLabel htmlFor="auth-issuer">{t("deployment")}</FieldLabel>
+                  <NativeSelect
+                    native
+                    id="auth-issuer"
+                    className="w-full"
+                    value={values.issuer}
+                    onChange={(event) => setValues({ ...values, issuer: event.target.value })}
+                  >
+                    {request.issuers.map((issuer) => (
+                      <option key={issuer} value={issuer}>
+                        {issuer}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              )}
               <Field>
                 <FieldLabel htmlFor="auth-method">{t("principal")}</FieldLabel>
                 <NativeSelect
@@ -96,21 +114,41 @@ export function ConnectionConfigurationDialog({
                   onChange={(event) => setMethod(event.target.value as AuthMethod)}
                 >
                   {request.methods.map((item) => (
-                    <option key={item} value={item}>
-                      {t(
-                        item === "oauth-pkce"
-                          ? "userPrincipal"
-                          : item === "client-credentials"
-                            ? "botPrincipal"
-                            : "otherMethod",
-                        { method: item }
-                      )}
+                    <option
+                      key={item}
+                      value={item}
+                      disabled={supportFor(item).availability === "blocked"}
+                    >
+                      {tRuntime(`methods.${item}`)}
+                      {supportFor(item).availability === "blocked"
+                        ? ` — ${tRuntime(`reasons.${supportFor(item).reason}`)}`
+                        : ""}
                     </option>
                   ))}
                 </NativeSelect>
               </Field>
+              <RuntimeSupportNotice support={supportFor(method)} />
+              {method === "api-key" && (
+                <Field>
+                  <FieldLabel htmlFor="auth-api-key">{t("apiKey")}</FieldLabel>
+                  <Input
+                    id="auth-api-key"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    value={values.apiKey ?? ""}
+                    onChange={(event) => setValues({ ...values, apiKey: event.target.value })}
+                  />
+                </Field>
+              )}
               {Object.entries(request.schema.properties)
-                .filter(([key]) => key !== "redirectUri" || method === "oauth-pkce")
+                .filter(
+                  ([key]) =>
+                    method !== "api-key" &&
+                    (key !== "redirectUri" ||
+                      method === "oauth-pkce" ||
+                      method === "oauth-confidential")
+                )
                 .map(([key, field]) => (
                   <Field key={key}>
                     <FieldLabel htmlFor={`auth-config-${key}`}>
@@ -159,7 +197,9 @@ export function ConnectionConfigurationDialog({
               <Button type="button" variant="outline" onClick={dismiss}>
                 {t("dismiss")}
               </Button>
-              <Button type="submit">{t("signIn")}</Button>
+              <Button type="submit" disabled={supportFor(method).availability === "blocked"}>
+                {t("signIn")}
+              </Button>
             </DialogFooter>
           </form>
         ) : (

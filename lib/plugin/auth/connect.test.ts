@@ -12,11 +12,17 @@ import type { AuthenticationProvider } from "./auth-provider-registry"
 import { connectProvider } from "./connect"
 import { acceptCallback } from "./callback-acceptor"
 import { AuthConnectionManager, getConnectionManager } from "./connection-manager"
-import { setHostAuthBackend } from "./connection-credentials"
+import { ConnectionCredentialStore, setHostAuthBackend } from "./connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
 import { PluginGatewayError } from "@/lib/plugin/core/transport"
 import { subscribeConnectionPrompts, resolveConnectionPrompt } from "./connection-prompts"
 import { registerLegacySessionMigration } from "./legacy-session-migrations"
+import { detectPlatform } from "@/lib/platform/detect"
+
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  detectPlatform: jest.fn(() => "web"),
+}))
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/tauri/opener", () => ({ openExternal: jest.fn() }))
@@ -31,6 +37,10 @@ afterAll(fixture.dispose)
 let provider: AuthenticationProvider
 let secrets: Map<string, Map<string, string>>
 beforeEach(() => {
+  jest
+    .mocked(getConnectionManager)
+    .mockImplementation(jest.requireActual("./connection-manager").getConnectionManager)
+  jest.mocked(detectPlatform).mockReturnValue("web")
   __resetAuthRegistryForTesting()
   secrets = new Map()
   setHostAuthBackend({
@@ -125,6 +135,7 @@ it("creates a PKCE connection through authorize, single acceptance, exchange and
 })
 
 it("exchanges client credentials without opening a browser", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
   await connectProvider({ providerId: "acme", scopes: ["read"], method: "client-credentials" })
   expect(provider.authorize).not.toHaveBeenCalled()
   expect(openExternal).not.toHaveBeenCalled()
@@ -147,6 +158,7 @@ it("uses the manifest authorization binding for Host-managed providers", async (
 })
 
 it("refuses to exchange until the registered legacy migration succeeds", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
   provider.management = "host"
   const plugin = (await getPlugin("owner"))!
   const manifest = plugin.manifest as { authProviders: Array<Record<string, unknown>> }
@@ -235,6 +247,7 @@ it.each([undefined, "", 42])(
 )
 
 it("asks the Host configuration form and uses its selected method", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
   provider.management = "host"
   const plugin = (await getPlugin("owner"))!
   const definition = (plugin.manifest.authProviders as Array<Record<string, unknown>>)[0]
@@ -427,6 +440,7 @@ it.each(["exchange", "describe"] as const)(
 )
 
 it("reconnects through the coordinator with the same ref and incremented credentials", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
   const ref = await connectProvider({
     providerId: "acme",
     scopes: ["read"],
@@ -453,6 +467,7 @@ it("reconnects through the coordinator with the same ref and incremented credent
 })
 
 it("returns the committed result if cancellation arrives after publication starts", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
   let started!: () => void
   let resume!: () => void
   const publishing = new Promise<void>((resolve) => {
@@ -499,5 +514,209 @@ it("rejects unsupported device-code and sanitizes provider failures", async () =
     name: "AuthConnectError",
     code: "INTERNAL",
     message: expect.not.stringContaining("private-token"),
+  })
+})
+
+it("stores an API key through the connection coordinator without exchange or refresh", async () => {
+  // Pin the coordinator to this test's newly installed secret backend.
+  jest.mocked(getConnectionManager).mockReturnValue(new AuthConnectionManager())
+  const plugin = (await getPlugin("owner"))!
+  ;(plugin.manifest.authProviders as Array<Record<string, unknown>>)[0].methods = ["api-key"]
+  provider.exchange = undefined
+  provider.refresh = jest.fn()
+  const ref = await connectProvider({
+    providerId: "acme",
+    scopes: ["read"],
+    method: "api-key",
+    configuration: { apiKey: "host-key" },
+  })
+  expect(provider.describe).toHaveBeenCalledWith({ accessToken: "host-key", scopes: ["read"] })
+  expect(await getConnectionManager().getCredentials(ref)).toEqual({
+    accessToken: "host-key",
+    scopes: ["read"],
+  })
+  expect(provider.refresh).not.toHaveBeenCalled()
+  expect(openExternal).not.toHaveBeenCalled()
+  expect(await getAuthConnection(ref)).toMatchObject({ status: "connected", credentialRevision: 1 })
+  expect((await new ConnectionCredentialStore().read(ref)).authMethod).toBe("api-key")
+  expect(
+    await connectProvider({
+      providerId: "acme",
+      scopes: ["read"],
+      method: "api-key",
+      reconnect: ref,
+      configuration: { apiKey: "replacement-key" },
+    })
+  ).toBe(ref)
+  expect(await getAuthConnection(ref)).toMatchObject({ credentialRevision: 2 })
+  expect(provider.refresh).not.toHaveBeenCalled()
+})
+
+it("never revokes a user-supplied API key when connecting fails", async () => {
+  jest.mocked(getConnectionManager).mockReturnValue(new AuthConnectionManager())
+  const plugin = (await getPlugin("owner"))!
+  ;(plugin.manifest.authProviders as Array<Record<string, unknown>>)[0].methods = ["api-key"]
+  provider.exchange = undefined
+  const ref = await connectProvider({
+    providerId: "acme",
+    scopes: [],
+    method: "api-key",
+    configuration: { apiKey: "first-key" },
+  })
+  // A key for another account reaches identity checks and is rejected there;
+  // that key belongs to the user and may be live elsewhere.
+  provider.describe = jest.fn(async (credentials) => ({
+    issuer: "https://issuer.test",
+    clientId: "client",
+    principal: { id: "someone-else", kind: "user" as const },
+    accountLabel: "Other",
+    scopes: credentials.scopes,
+  }))
+  await expect(
+    connectProvider({
+      providerId: "acme",
+      scopes: [],
+      method: "api-key",
+      reconnect: ref,
+      configuration: { apiKey: "other-account-key" },
+    })
+  ).rejects.toMatchObject({ name: "ReconnectIdentityMismatch" })
+  expect(provider.describe).toHaveBeenCalled()
+  expect(provider.revoke).not.toHaveBeenCalled()
+  expect(await getConnectionManager().getCredentials(ref)).toMatchObject({
+    accessToken: "first-key",
+  })
+})
+
+it("does not let a confidential token endpoint block API-key sign-in in the browser", async () => {
+  jest.mocked(getConnectionManager).mockReturnValue(new AuthConnectionManager())
+  jest.mocked(detectPlatform).mockReturnValue("web")
+  const plugin = (await getPlugin("owner"))!
+  const definition = (plugin.manifest.authProviders as Array<Record<string, unknown>>)[0]
+  definition.methods = ["oauth-pkce", "api-key"]
+  definition.tokenEndpoints = [{ url: "https://auth.example.com/token", clientSecret: "form" }]
+  provider.exchange = undefined
+  const ref = await connectProvider({
+    providerId: "acme",
+    scopes: [],
+    method: "api-key",
+    configuration: { apiKey: "browser-key" },
+  })
+  expect(await getConnectionManager().getCredentials(ref)).toMatchObject({
+    accessToken: "browser-key",
+  })
+  await expect(
+    connectProvider({ providerId: "acme", scopes: [], method: "oauth-pkce" })
+  ).rejects.toMatchObject({ code: "NOT_SUPPORTED", reason: "confidential-exchange-unavailable" })
+})
+
+it("runs confidential authorization-code flow without a PKCE verifier", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("tauri")
+  const plugin = (await getPlugin("owner"))!
+  ;(plugin.manifest.authProviders as Array<Record<string, unknown>>)[0].methods = [
+    "oauth-confidential",
+  ]
+  await connectProvider({ providerId: "acme", scopes: [], method: "oauth-confidential" })
+  expect(provider.authorize).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "oauth-confidential",
+      codeVerifier: undefined,
+      codeChallenge: undefined,
+      redirectUri: "cognia://auth/callback",
+    })
+  )
+  expect(provider.exchange).toHaveBeenCalledWith(
+    expect.objectContaining({ method: "oauth-confidential" }),
+    expect.objectContaining({ code: "code" })
+  )
+  expect(jest.mocked(provider.exchange!).mock.calls[0][0]).not.toHaveProperty("codeVerifier")
+})
+
+it("uses the native callback on mobile", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("mobile")
+  await connectProvider({ providerId: "acme", scopes: [] })
+  expect(provider.authorize).toHaveBeenCalledWith(
+    expect.objectContaining({ redirectUri: "cognia://auth/callback" })
+  )
+})
+
+it("refuses headless PKCE with a recovery reason before authorization", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
+  await expect(
+    connectProvider({ providerId: "acme", scopes: [], method: "oauth-pkce" })
+  ).rejects.toMatchObject({
+    code: "NOT_SUPPORTED",
+    reason: "no-interactive-browser",
+    details: { recovery: ["use-another-method"] },
+  })
+  expect(provider.authorize).not.toHaveBeenCalled()
+})
+
+it("refuses unsupported methods before invoking legacy migration", async () => {
+  provider.management = "host"
+  const migrate = jest.fn(async () => {})
+  const dispose = registerLegacySessionMigration("owner", provider.id, {
+    migrate,
+    aliases: async () => new Map(),
+  })
+  try {
+    await expect(
+      connectProvider({ providerId: "acme", scopes: [], method: "client-credentials" })
+    ).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      reason: "confidential-exchange-unavailable",
+      details: { recovery: ["pair-with-desktop", "use-always-on-host"] },
+    })
+    expect(migrate).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+  }
+})
+
+it("maps a locked persistent credential store to unlock-vault without describing the API key", async () => {
+  const plugin = (await getPlugin("owner"))!
+  ;(plugin.manifest.authProviders as Array<Record<string, unknown>>)[0].methods = ["api-key"]
+  setHostAuthBackend({
+    lock: (name, task) => withNamedLock(name, task, { mode: "in-process" }),
+    storeFor: () => ({
+      load: async () => null,
+      save: async () => {},
+      delete: async () => {},
+      isPersistent: () => false,
+    }),
+  })
+  await expect(
+    connectProvider({
+      providerId: "acme",
+      method: "api-key",
+      scopes: [],
+      configuration: { apiKey: "secret" },
+    })
+  ).rejects.toMatchObject({
+    code: "UNAVAILABLE",
+    reason: "non-persistent-until-vault-unlock",
+    details: { recovery: ["unlock-vault"] },
+  })
+  expect(provider.describe).not.toHaveBeenCalled()
+})
+
+it("preserves a client-secret gateway refusal as a recoverable connect error", async () => {
+  provider.exchange = jest.fn(async () => {
+    throw new PluginGatewayError({
+      code: "NOT_SUPPORTED",
+      message: "trusted Host required",
+      details: {
+        reason: "confidential-exchange-unavailable",
+        recovery: ["pair-with-desktop", "use-always-on-host"],
+      },
+      pluginId: "owner",
+      api: "auth:exchange",
+      requestId: "request",
+    })
+  })
+  await expect(connectProvider({ providerId: "acme", scopes: [] })).rejects.toMatchObject({
+    code: "NOT_SUPPORTED",
+    reason: "confidential-exchange-unavailable",
+    details: { recovery: ["pair-with-desktop", "use-always-on-host"] },
   })
 })

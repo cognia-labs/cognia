@@ -37,6 +37,7 @@ import { Badge } from "@/components/ui/badge"
 // about this hook too.
 import { useEffectivePluginRuntimeProfile } from "@/hooks/plugins/use-plugin-enable-gate"
 import { collectPluginRuntimeProfileDiagnostics } from "@/lib/plugin/core/runtime-compatibility"
+import { isRuntimeSupportReason } from "@/lib/external-services/runtime-support"
 import { cn } from "@/lib/utils"
 import type { PluginManifest } from "@/types/plugin"
 
@@ -61,6 +62,7 @@ export function PluginCompatibilityBadge({
   labelClassName,
 }: PluginCompatibilityBadgeProps) {
   const t = useTranslations("plugins.compatibility")
+  const tSupport = useTranslations("plugins.auth.runtimeSupport")
   const profile = useEffectivePluginRuntimeProfile()
 
   // `tauri` short-circuits inside the collector, so the desktop render is
@@ -96,7 +98,11 @@ export function PluginCompatibilityBadge({
             (`runtimeCompatibility.<profile>.reason`) or from the collector, and
             are the only part that can name THIS plugin's actual limitation.
           */}
-          <p className="text-muted-foreground">{worst.message}</p>
+          <p className="text-muted-foreground">
+            {isRuntimeSupportReason(worst.reason)
+              ? tSupport(`reasons.${worst.reason}`)
+              : worst.message}
+          </p>
           {worst.hint ? <p className="text-muted-foreground">{worst.hint}</p> : null}
         </>
       }

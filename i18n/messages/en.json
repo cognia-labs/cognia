@@ -34530,6 +34530,8 @@
         "accountScopes": "Available scopes: {scopes}",
         "addScopesDescription": "{plugin} needs additional access: {scopes}. Reconnect {account} to grant it. You will then review this plugin’s access at the new connection revision.",
         "addScopesTitle": "Additional access for {plugin}",
+        "apiKey": "API key / personal access token",
+        "apiKeyDescription": "The Host stores this key in your connection and supplies it to the authentication provider to identify your account. It is never saved in plugin settings.",
         "appId": "App ID",
         "approve": "Allow access",
         "botPrincipal": "Bot (client credentials)",
@@ -34577,7 +34579,42 @@
       "deviceFailed": "Authorization failed — try again",
       "deviceInstructions": "Open the verification page and enter this code to sign in.",
       "devicePending": "Waiting for authorization…",
-      "deviceTitle": "Authorize connection"
+      "deviceTitle": "Authorize connection",
+      "runtimeSupport": {
+        "availability": {
+          "blocked": "Unavailable",
+          "degraded": "Limited",
+          "supported": "Available"
+        },
+        "methods": {
+          "api-key": "API key",
+          "client-credentials": "Bot (client credentials)",
+          "device-code": "Device code — Not available yet",
+          "oauth-confidential": "User (confidential OAuth)",
+          "oauth-pkce": "User (PKCE)"
+        },
+        "reasons": {
+          "background-sync-unavailable": "Background sync does not run on this runtime.",
+          "confidential-exchange-unavailable": "Confidential exchange requires a trusted Host.",
+          "device-code-deferred": "Not available yet.",
+          "host-process-required": "Sync runs while the Host process is running.",
+          "no-external-callback": "This runtime cannot receive an external OAuth callback.",
+          "no-interactive-browser": "Initial sign-in needs an interactive browser.",
+          "non-persistent-until-vault-unlock": "Unlock the vault to store credentials persistently.",
+          "runtime-supported": "Available on this runtime.",
+          "vendor-cors-required": "The service must allow browser requests (CORS)."
+        },
+        "recovery": {
+          "keep-app-open": "Keep the Host running",
+          "pair-with-desktop": "Pair with desktop",
+          "unlock-vault": "Unlock vault",
+          "use-always-on-host": "Use an always-on Host",
+          "use-another-method": "Use another sign-in method",
+          "use-desktop": "Use the desktop app"
+        },
+        "recoveryFailed": "Could not open vault unlock. Try again.",
+        "title": "Runtime support ({profile})"
+      }
     },
     "backup": {
       "cancel": "Cancel",

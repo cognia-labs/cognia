@@ -16,10 +16,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import type { ConnectionView } from "@/lib/external-services/connection-view"
+import type { RuntimeSupportCell } from "@/lib/external-services/runtime-support"
+import { RuntimeSupportNotice } from "@/components/plugins/auth/runtime-support-notice"
 
 export interface ConnectionRowProps {
   view: ConnectionView
   busy: boolean
+  runtimeSupport?: RuntimeSupportCell
   onReconnect: () => void
   onDisconnect: () => void
   onRevokeConsumer: (pluginId: string) => void
@@ -28,6 +31,7 @@ export interface ConnectionRowProps {
 export function ConnectionRow({
   view,
   busy,
+  runtimeSupport,
   onReconnect,
   onDisconnect,
   onRevokeConsumer,
@@ -46,6 +50,7 @@ export function ConnectionRow({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
+        {runtimeSupport && <RuntimeSupportNotice support={runtimeSupport} />}
         <dl className="space-y-1 break-words text-muted-foreground">
           <div>
             <dt className="inline">{t("connections.issuer")}</dt>{" "}
@@ -119,7 +124,10 @@ export function ConnectionRow({
         </section>
         <div className="flex flex-wrap justify-end gap-2">
           {view.canReconnect && (
-            <Button disabled={busy} onClick={onReconnect}>
+            <Button
+              disabled={busy || runtimeSupport?.availability === "blocked"}
+              onClick={onReconnect}
+            >
               {t("connections.reconnect")}
             </Button>
           )}

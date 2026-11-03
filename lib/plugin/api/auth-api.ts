@@ -1,3 +1,4 @@
+import { currentExternalServiceRuntimeContext } from "@/lib/external-services/runtime-profile"
 /**
  * `ctx.auth` — native auth/OAuth provider API (C1).
  *
@@ -39,11 +40,11 @@ import {
   enforceConsumerTokenReadPolicy,
   type ConsumerTokenReadPolicy,
 } from "@/lib/plugin/auth/consumer-token-read-policy"
+import { invokePluginApi, PluginGatewayError } from "@/lib/plugin/core/transport"
 import {
-  invokePluginApi,
-  isPluginGatewayAvailable,
-  PluginGatewayError,
-} from "@/lib/plugin/core/transport"
+  assertRuntimeSupported,
+  RuntimeSupportError,
+} from "@/lib/external-services/runtime-support"
 export { AuthRefreshRejected } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 import type {
   CreateAuthAPIOptions,
@@ -190,11 +191,14 @@ export function createAuthAPI(
     async exchangeConfidential(request) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.exchangeConfidential")
       requirePermission(hasPermission, "network:fetch", "ctx.auth.exchangeConfidential")
-      if (!isPluginGatewayAvailable()) {
+      try {
+        assertRuntimeSupported("auth:confidential-exchange", currentExternalServiceRuntimeContext())
+      } catch (error) {
+        if (!(error instanceof RuntimeSupportError)) throw error
         throw new PluginGatewayError({
           code: "NOT_SUPPORTED",
           message: "Confidential token exchange requires a trusted Host.",
-          details: { reason: "confidential-exchange-unavailable" },
+          details: { reason: error.reason, recovery: error.recovery },
           requestId: "",
           api: "auth:exchange",
           pluginId,

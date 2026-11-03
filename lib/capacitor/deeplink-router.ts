@@ -33,6 +33,11 @@ export interface DeeplinkNavigators {
 
 export function dispatchRoute(route: DeeplinkRoute, navigators: DeeplinkNavigators): void {
   switch (route.kind) {
+    case "plugin_auth_callback":
+      void import("@/lib/plugin/auth/callback-acceptor")
+        .then(({ routeHostAuthCallback }) => routeHostAuthCallback(route.raw))
+        .catch(() => log.warn("deeplink-router: auth callback could not be accepted"))
+      return
     case "open_session":
       // A conversation files link (`route.files`, ADR-0222) opens just the
       // conversation here: the phone has no workspace filesystem backend, so

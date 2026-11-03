@@ -34530,6 +34530,8 @@
         "accountScopes": "可用权限范围：{scopes}",
         "addScopesDescription": "{plugin} 需要额外权限：{scopes}。请重新连接 {account} 以授予这些权限，随后将请你审核此插件在新连接修订版本下的访问权限。",
         "addScopesTitle": "{plugin} 需要更多权限",
+        "apiKey": "API key / 个人访问令牌",
+        "apiKeyDescription": "Host 将密钥保存在连接中，并交给认证提供者识别账号，不会将其存入插件设置。",
         "appId": "App ID",
         "approve": "允许访问",
         "botPrincipal": "机器人（client credentials）",
@@ -34577,7 +34579,42 @@
       "deviceFailed": "授权失败，请重试",
       "deviceInstructions": "打开验证页面并输入此代码以登录。",
       "devicePending": "等待授权……",
-      "deviceTitle": "授权连接"
+      "deviceTitle": "授权连接",
+      "runtimeSupport": {
+        "availability": {
+          "blocked": "不可用",
+          "degraded": "受限",
+          "supported": "可用"
+        },
+        "methods": {
+          "api-key": "API key",
+          "client-credentials": "机器人（客户端凭证）",
+          "device-code": "设备码 — 暂未开放",
+          "oauth-confidential": "用户（机密 OAuth）",
+          "oauth-pkce": "用户（PKCE）"
+        },
+        "reasons": {
+          "background-sync-unavailable": "此运行环境不执行后台同步。",
+          "confidential-exchange-unavailable": "机密令牌交换需要可信 Host。",
+          "device-code-deferred": "暂未开放。",
+          "host-process-required": "Host 进程运行期间可执行同步。",
+          "no-external-callback": "此运行环境无法接收外部 OAuth 回调。",
+          "no-interactive-browser": "首次登录需要交互式浏览器。",
+          "non-persistent-until-vault-unlock": "解锁保险库后才能持久保存凭证。",
+          "runtime-supported": "此运行环境可用。",
+          "vendor-cors-required": "服务需要允许浏览器跨域请求（CORS）。"
+        },
+        "recovery": {
+          "keep-app-open": "保持 Host 运行",
+          "pair-with-desktop": "与桌面端配对",
+          "unlock-vault": "解锁保险库",
+          "use-always-on-host": "使用常驻 Host",
+          "use-another-method": "使用其他登录方式",
+          "use-desktop": "使用桌面应用"
+        },
+        "recoveryFailed": "无法打开保险库解锁，请重试。",
+        "title": "运行环境支持（{profile}）"
+      }
     },
     "backup": {
       "cancel": "取消",

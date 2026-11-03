@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect } from "react"
-import { detectPlatform } from "@/lib/platform/detect"
+import { currentRuntimeProfile } from "@/lib/plugin/character-pack/platform-availability"
+import { resolveRuntimeSupport } from "@/lib/external-services/runtime-support"
 import { startIntegrationRuntime } from "@/lib/integrations/runtime"
 import { isIntegrationRuntimeOwner } from "@/lib/integrations/runtime-owner"
 import { useAccountStore } from "@/stores/account/account-store"
@@ -12,8 +13,12 @@ export function IntegrationRuntimeInitializer() {
   const runtimeOwnerKey = unlockedAccountId ? `${unlockedAccountId}:${accountRevision}` : null
   useEffect(() => {
     if (!runtimeOwnerKey) return
-    const platform = detectPlatform()
-    if (platform !== "tauri" && platform !== "headless") return
+    // This initializer installs a LOCAL runtime. A mirrored client's paired
+    // Host owns its own initializer and must not start a second local drain.
+    if (
+      resolveRuntimeSupport("sync:background", currentRuntimeProfile()).availability === "blocked"
+    )
+      return
 
     let cancelled = false
     let disposeRuntime: (() => void) | undefined

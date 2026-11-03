@@ -293,6 +293,8 @@ export type PluginRuntimeAvailability = (typeof CANONICAL_PLUGIN_RUNTIME_AVAILAB
 export interface PluginRuntimeCompatibilityTarget {
   availability: PluginRuntimeAvailability
   reason?: string
+  /** Stable recovery action ids, interpreted by the Host's runtime support UI. */
+  recovery?: string[]
   entrypoint?: string
 }
 
@@ -340,6 +342,9 @@ export interface ExtensionCompatibilityDiagnostic {
   expected?: string
   actual?: string
   hint?: string
+  /** Machine-readable runtime cause, separate from the descriptive message. */
+  reason?: string
+  recovery?: string[]
 }
 
 export interface ExtensionCompatibilitySummary {

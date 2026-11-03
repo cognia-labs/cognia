@@ -7,6 +7,22 @@ import {
   startHostAuthCallbackListeners,
 } from "./callback-acceptor"
 import { AuthAttemptRejected, type AuthAttempt } from "./auth-attempts"
+import { detectPlatform } from "@/lib/platform/detect"
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  detectPlatform: jest.fn(() => "web"),
+}))
+beforeEach(() => jest.mocked(detectPlatform).mockReturnValue("web"))
+it("refuses external callbacks on a headless Host with the matrix recovery", async () => {
+  jest.mocked(detectPlatform).mockReturnValue("headless")
+  await expect(
+    routeHostAuthCallback("cognia://auth/callback?state=bound&code=code")
+  ).rejects.toMatchObject({
+    code: "NOT_SUPPORTED",
+    reason: "no-external-callback",
+    recovery: ["use-another-method"],
+  })
+})
 
 jest.mock("./auth-attempts", () => {
   const actual = jest.requireActual("./auth-attempts")

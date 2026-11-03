@@ -12,5 +12,27 @@
   },
   "capabilities": ["sync"],
   "permissions": ["sync:run"],
+  "runtimeCompatibility": {
+    "tauri": {
+      "availability": "supported",
+      "entrypoint": "src/index.ts"
+    },
+    "browser": {
+      "availability": "degraded",
+      "entrypoint": "src/index.ts",
+      "reason": "background-sync-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
+    },
+    "mobile": {
+      "availability": "degraded",
+      "entrypoint": "src/index.ts",
+      "reason": "background-sync-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
+    },
+    "headless": {
+      "availability": "supported",
+      "entrypoint": "src/index.ts"
+    }
+  },
   "icon": "assets/icon.png"
 }

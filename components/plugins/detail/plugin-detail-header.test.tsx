@@ -55,6 +55,13 @@ import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import { PluginDetailHeader } from "./plugin-detail-header"
 import { usePluginsStore } from "@/stores/plugins"
 
+it("mounts the runtime support section for declared auth providers", () => {
+  const plugin = makePlugin()
+  plugin.manifest.authProviders = [{ id: "vendor", label: "Vendor", methods: ["device-code"] }]
+  render(<PluginDetailHeader plugin={plugin} />)
+  expect(screen.getByText(/title:/)).toBeInTheDocument()
+})
+
 function makePlugin(overrides: Partial<PluginRow> = {}): PluginRow {
   return {
     id: "alpha",

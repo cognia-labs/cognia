@@ -251,3 +251,28 @@ even if publication succeeded before the fingerprint write crashed. A repeated
 A→B→A→B sequence reuses the A→B transition ID and may suppress its second
 notification within broker retention; this collision is accepted.
 See `plugins/example-sync` for an intentionally unbundled author reference.
+
+## Runtime support
+
+External-service auth uses the single Host matrix in lib/external-services/runtime-support.ts. A blocked facet refuses before authorization; degraded support requires the stated condition (vault unlock or vendor CORS). Tests prevent this table from drifting.
+
+{/* external-service-runtime:start */}
+| Facet | browser | tauri | mobile | headless |
+| --- | --- | --- | --- | --- |
+| auth-method:oauth-pkce | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | blocked: no-interactive-browser (use-another-method) |
+| auth-method:oauth-confidential | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | blocked: no-interactive-browser (use-another-method) |
+| auth-method:client-credentials | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported |
+| auth-method:device-code | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) |
+| auth-method:api-key | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported |
+| auth:confidential-exchange | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported |
+| auth:callback | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | blocked: no-external-callback (use-another-method) |
+| secrets:persistent | degraded: non-persistent-until-vault-unlock (unlock-vault) | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported |
+| network:cross-origin | degraded: vendor-cors-required (pair-with-desktop) | supported: runtime-supported | degraded: vendor-cors-required (pair-with-desktop) | supported: runtime-supported |
+| sync:background | blocked: background-sync-unavailable (pair-with-desktop, use-always-on-host) | supported: host-process-required (keep-app-open, use-always-on-host) | blocked: background-sync-unavailable (pair-with-desktop, use-always-on-host) | supported: host-process-required (keep-app-open, use-always-on-host) |
+{/* external-service-runtime:end */}
+
+A mirrored client runs its plugins on the paired desktop, so every facet is judged as tauri. A client that only has an active paired gateway is judged per facet: confidential exchange (including client-credentials and confidential OAuth) and plugin network requests execute on the trusted Host and use its tauri cells, while secrets, OAuth callbacks and background sync stay in the local runtime and use its own cells. Standalone Capacitor receives cognia://auth/callback; browser redirects use /plugin-auth/callback. Headless initial PKCE/confidential sign-in is refused with a recovery reason. Plugin device-code stays dormant on every runtime.
+
+API keys require persistent Host connection storage (an unlocked browser vault), never ctx.config or plugin storage. No refresh token is created and refresh is never called; a credential-injected request returning 401 marks the connection needs-reauth. Confidential OAuth uses authorization code without a PKCE verifier and requires trusted exchange. Background sync runs while the desktop/brain Host process is running; a paired client does not install a second local drain.
+
+The Example Tracker auth provider calls ctx.auth.exchangeConfidential even with placement none, so its manifest blocks standalone browser/mobile although public PKCE is generally supported. Its business examples require that provider; a headless Host can use existing connections.

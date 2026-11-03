@@ -46,15 +46,19 @@
     },
     "browser": {
       "availability": "blocked",
-      "reason": "Connecting a Feishu OAuth account requires the desktop host."
+      "entrypoint": "src/index.ts",
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
     },
     "mobile": {
       "availability": "blocked",
-      "reason": "Connecting a Feishu OAuth account requires the desktop host."
+      "entrypoint": "src/index.ts",
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
     },
     "headless": {
-      "availability": "blocked",
-      "reason": "Interactive Feishu authorization currently requires the desktop host."
+      "availability": "supported",
+      "entrypoint": "src/index.ts"
     }
   },
   "scheduledTasks": [

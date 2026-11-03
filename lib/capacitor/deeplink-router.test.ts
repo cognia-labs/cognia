@@ -4,6 +4,18 @@
 import { dispatchRoute, makeRouterNavigators } from "./deeplink-router"
 import type { DeeplinkNavigators } from "./deeplink-router"
 import { parseCogniaDeeplink } from "@/lib/navigation/cognia-deeplink"
+import { routeHostAuthCallback } from "@/lib/plugin/auth/callback-acceptor"
+jest.mock("@/lib/plugin/auth/callback-acceptor", () => ({
+  routeHostAuthCallback: jest.fn(async () => true),
+}))
+it("dispatches a native plugin auth callback to the shared Host acceptor without navigation", async () => {
+  const raw = "cognia://auth/callback?state=single-use&code=code"
+  const navs = makeNavigators()
+  dispatchRoute(parseCogniaDeeplink(raw), navs)
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  expect(routeHostAuthCallback).toHaveBeenCalledWith(raw)
+  for (const navigate of Object.values(navs)) expect(navigate).not.toHaveBeenCalled()
+})
 
 function makeNavigators(): DeeplinkNavigators & {
   pushSession: jest.Mock

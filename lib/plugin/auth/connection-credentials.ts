@@ -8,6 +8,7 @@ import { getActiveBrowserVault } from "@/lib/runtime/browser-vault"
 import type {
   AuthCredentialSet,
   AuthLineageContext,
+  AuthMethod,
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 export class AuthProfileDeleted extends Error {
@@ -239,6 +240,8 @@ export interface CredentialSnapshot {
   revision: number
   tombstoned?: boolean
   credentials?: AuthCredentialSet
+  /** Host-selected method, kept outside provider credential payloads. */
+  authMethod?: AuthMethod
   /** Protected revocation context, usable when deleting an inactive profile. */
   lineage?: Omit<AuthLineageContext, "credentials" | "credentialRevision">
 }
@@ -273,7 +276,8 @@ export class ConnectionCredentialStore {
     ref: string,
     expected: CredentialSnapshot,
     credentials: AuthCredentialSet,
-    lineage = expected.lineage
+    lineage = expected.lineage,
+    authMethod = expected.authMethod
   ): Promise<CredentialSnapshot> {
     if (expected.tombstoned) throw new CredentialRevisionConflict()
     if (
@@ -282,13 +286,14 @@ export class ConnectionCredentialStore {
       credentials.scopes.some((scope) => typeof scope !== "string")
     )
       throw new Error("Invalid Host auth credentials")
-    return this.write(ref, expected, { credentials, lineage })
+    return this.write(ref, expected, { credentials, lineage, authMethod })
   }
   tombstone(ref: string, expected: CredentialSnapshot): Promise<CredentialSnapshot> {
     return this.write(ref, expected, {
       tombstoned: true,
       credentials: expected.credentials,
       lineage: expected.lineage,
+      authMethod: expected.authMethod,
     })
   }
   /** Roll back only our unpublished write; never overwrite a later CAS winner.
@@ -310,7 +315,7 @@ export class ConnectionCredentialStore {
   private async write(
     ref: string,
     expected: CredentialSnapshot,
-    value: Pick<CredentialSnapshot, "credentials" | "tombstoned" | "lineage">
+    value: Pick<CredentialSnapshot, "credentials" | "tombstoned" | "lineage" | "authMethod">
   ): Promise<CredentialSnapshot> {
     this.assertPersistent()
     const record = { revision: expected.revision + 1, ...value }

@@ -548,16 +548,35 @@ async function defaultAuthenticatedRequest<T>(
     health: response.status === 401 || response.status === 403 ? "degraded" : "healthy",
   })
   const contentType = response.headers.get("content-type") ?? ""
-  const data = contentType.includes("application/json")
-    ? ((await response.json()) as T)
-    : ((await response.text()) as T)
-  if (connection)
-    await authorizeAccountConnection(
-      account,
-      (init.method ?? "GET").toUpperCase(),
-      init.operation,
-      connection.revision
+  let data: T
+  try {
+    data = contentType.includes("application/json")
+      ? ((await response.json()) as T)
+      : ((await response.text()) as T)
+    if (connection)
+      await authorizeAccountConnection(
+        account,
+        (init.method ?? "GET").toUpperCase(),
+        init.operation,
+        connection.revision
+      )
+  } finally {
+    // HTTP rejection is authoritative even if its response body is malformed.
+    // Host/legacy OAuth drivers own refresh independently of the token payload.
+    if (
+      connection &&
+      !connection.hostMetadata &&
+      !connection.legacySessionId &&
+      response.status === 401 &&
+      !("refreshToken" in credential && credential.refreshToken)
     )
+      await getConnectionManager().retireHostConnection(
+        connection.id,
+        "needs-reauth",
+        connection.credentialRevision,
+        "api-key"
+      )
+  }
   return { status: response.status, headers: responseHeaders, data }
 }
 

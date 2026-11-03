@@ -110,6 +110,22 @@ describe("PluginCompatibilityBadge", () => {
     expect(screen.queryByTestId("plugin-compatibility-badge")).toBeNull()
   })
 
+  it("translates a Host runtime-support reason id instead of printing the raw code", async () => {
+    const user = userEvent.setup()
+    render(
+      <PluginCompatibilityBadge
+        manifest={manifest({
+          runtimeCompatibility: {
+            browser: { availability: "blocked", reason: "confidential-exchange-unavailable" },
+          },
+        })}
+      />
+    )
+    await user.click(screen.getByRole("button", { name: "blockedLabel" }))
+    expect(await screen.findByText("reasons.confidential-exchange-unavailable")).toBeInTheDocument()
+    expect(screen.queryByText("confidential-exchange-unavailable")).toBeNull()
+  })
+
   // The reason used to live in a hover-only tooltip on a span: unreachable by
   // keyboard and by touch. jsdom has no hover, so this is the tap path.
   it("exposes the reason through a focusable, tappable trigger", async () => {

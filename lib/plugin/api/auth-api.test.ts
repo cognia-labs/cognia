@@ -19,6 +19,12 @@ import { setHostAuthBackend } from "@/lib/plugin/auth/connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
 import { acceptCallback } from "@/lib/plugin/auth/callback-acceptor"
 import { openExternal } from "@/lib/tauri/opener"
+import { detectPlatform } from "@/lib/platform/detect"
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  detectPlatform: jest.fn(() => "tauri"),
+}))
+beforeEach(() => jest.mocked(detectPlatform).mockReturnValue("tauri"))
 import { createIntegrationAccount } from "@/lib/db/integrations"
 import { listServiceConnections, putCapabilityGrant } from "@/lib/db/external-services"
 import {
@@ -551,13 +557,17 @@ describe("confidential exchange", () => {
     }
   )
   it("fails closed without a trusted runtime", async () => {
+    jest.mocked(detectPlatform).mockReturnValue("web")
     jest.mocked(isPluginGatewayAvailable).mockReturnValue(false)
     jest.mocked(invokePluginApi).mockClear()
     const result = createAuthAPI("owner", allow).exchangeConfidential(request)
     await expect(result).rejects.toBeInstanceOf(PluginGatewayError)
     await expect(result).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      details: { reason: "confidential-exchange-unavailable" },
+      details: {
+        reason: "confidential-exchange-unavailable",
+        recovery: ["pair-with-desktop", "use-always-on-host"],
+      },
     })
     expect(invokePluginApi).not.toHaveBeenCalled()
   })

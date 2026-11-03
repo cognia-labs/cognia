@@ -60,6 +60,8 @@ import { usePluginsStore } from "@/stores/plugins"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import type { PluginRow } from "@/lib/db/plugin-types"
 import { PluginCompatibilityBadge } from "../_shared/plugin-compatibility-badge"
+import { PluginRuntimeSupportSection } from "./plugin-runtime-support-section"
+import type { PluginManifest } from "@/types/plugin"
 import { PluginSourceBadge } from "../plugin-source-badge"
 import { PluginSignatureBadge, type SignatureState } from "../plugin-signature-badge"
 import { PluginActivationProgress } from "../plugin-activation-progress"
@@ -226,6 +228,7 @@ export function PluginDetailHeader({ plugin, onClose, reserveCloseCorner }: Prop
       </div>
 
       {diagnostics.length > 0 && <DiagnosticsSummary entries={diagnostics} />}
+      <PluginRuntimeSupportSection manifest={plugin.manifest as unknown as PluginManifest} />
 
       {/* Inline, not a tooltip: a disabled Switch cannot be hovered on a
           phone, and the reason is the whole point of disabling it. */}

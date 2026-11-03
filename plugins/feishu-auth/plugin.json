@@ -115,20 +115,23 @@
       "availability": "supported",
       "entrypoint": "src/index.ts"
     },
+    "browser": {
+      "availability": "blocked",
+      "entrypoint": "src/index.ts",
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
+    },
+    "mobile": {
+      "availability": "blocked",
+      "entrypoint": "src/index.ts",
+      "reason": "confidential-exchange-unavailable",
+      "recovery": ["pair-with-desktop", "use-always-on-host"]
+    },
     "headless": {
       "availability": "degraded",
       "entrypoint": "src/index.ts",
-      "reason": "Bot connections and existing user connections require a trusted Host; initial PKCE sign-in needs an interactive shell."
-    },
-    "browser": {
-      "availability": "degraded",
-      "entrypoint": "src/index.ts",
-      "reason": "Confidential exchange requires a connected trusted Host and PKCE requires a registered callback."
-    },
-    "mobile": {
-      "availability": "degraded",
-      "entrypoint": "src/index.ts",
-      "reason": "Confidential exchange requires a connected trusted Host and PKCE requires a registered callback."
+      "reason": "no-interactive-browser",
+      "recovery": ["use-another-method"]
     }
   },
   "i18n": {

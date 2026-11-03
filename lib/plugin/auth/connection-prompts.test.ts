@@ -159,3 +159,31 @@ it("queues, rejects answers to a queued prompt and dismisses everything on unmou
   dispose()
   await expect(second).resolves.toEqual({ kind: "dismissed" })
 })
+it("preserves the Host-selected initial method and provider requirements in a configure prompt", async () => {
+  let state!: ConnectionPromptState
+  const dispose = subscribeConnectionPrompts((value) => {
+    state = value
+  })
+  try {
+    const pending = requestConnectionPrompt({
+      kind: "configure",
+      pluginId: "p",
+      pluginName: "P",
+      providerLabel: "Provider",
+      methods: ["api-key", "oauth-pkce"],
+      initialMethod: "oauth-pkce",
+      providerDefinition: { id: "vendor", label: "Vendor", methods: ["api-key", "oauth-pkce"] },
+      schema: { type: "object", properties: {} },
+      defaults: {},
+      issuers: [],
+    })
+    expect(state.current).toMatchObject({
+      initialMethod: "oauth-pkce",
+      providerDefinition: { id: "vendor" },
+    })
+    resolveConnectionPrompt(state.current!.id, { kind: "dismissed" })
+    await expect(pending).resolves.toEqual({ kind: "dismissed" })
+  } finally {
+    dispose()
+  }
+})

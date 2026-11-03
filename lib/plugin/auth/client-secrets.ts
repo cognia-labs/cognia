@@ -1,9 +1,10 @@
+import { currentExternalServiceRuntimeContext } from "@/lib/external-services/runtime-profile"
 /** Host configuration helpers. These write-only operations are never on ctx. */
+import { invokePluginApi, PluginGatewayError } from "@/lib/plugin/core/transport"
 import {
-  invokePluginApi,
-  isPluginGatewayAvailable,
-  PluginGatewayError,
-} from "@/lib/plugin/core/transport"
+  assertRuntimeSupported,
+  RuntimeSupportError,
+} from "@/lib/external-services/runtime-support"
 
 /** Existing gateway taxonomy, with a specific recoverable auth configuration reason. */
 export function isClientSecretRequired(error: unknown): boolean {
@@ -20,12 +21,15 @@ function invokeClientSecretOp<T>(
   api: string,
   payload: Record<string, unknown>
 ): Promise<T> {
-  if (!isPluginGatewayAvailable()) {
+  try {
+    assertRuntimeSupported("auth:confidential-exchange", currentExternalServiceRuntimeContext())
+  } catch (error) {
+    if (!(error instanceof RuntimeSupportError)) throw error
     return Promise.reject(
       new PluginGatewayError({
         code: "NOT_SUPPORTED",
         message: "Client secret configuration requires a trusted Host.",
-        details: { reason: "confidential-exchange-unavailable" },
+        details: { reason: error.reason, recovery: error.recovery },
         requestId: "",
         api,
         pluginId,

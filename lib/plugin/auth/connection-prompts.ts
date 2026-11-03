@@ -3,6 +3,7 @@ import type {
   AuthConnectionRef,
   AuthMethod,
   AuthProviderConfigurationSchema,
+  PluginAuthProviderDef,
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 export interface ConnectionGrantOperation {
@@ -19,6 +20,8 @@ type PromptInput =
       schema: AuthProviderConfigurationSchema
       issuers: string[]
       methods: AuthMethod[]
+      initialMethod?: AuthMethod
+      providerDefinition?: PluginAuthProviderDef
       defaults: Record<string, string>
     }
   | { kind: "connect-error"; reason: "tenant-scope-required" | "identity-conflict" }

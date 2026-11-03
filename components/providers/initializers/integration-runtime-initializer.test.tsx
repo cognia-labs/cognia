@@ -28,10 +28,18 @@ beforeEach(() => {
   mockedStartRuntime.mockResolvedValue(disposeRuntime)
 })
 
-it("does not execute platform actions in web or mobile clients", () => {
-  mockedDetectPlatform.mockReturnValue("web")
+it.each(["web", "mobile"] as const)("does not install a local sync runtime on %s", (profile) => {
+  mockedDetectPlatform.mockReturnValue(profile)
   render(<IntegrationRuntimeInitializer />)
   expect(mockedStartRuntime).not.toHaveBeenCalled()
+})
+
+it("installs the sync runtime while the headless Host process runs", async () => {
+  mockedDetectPlatform.mockReturnValue("headless")
+  const { unmount } = render(<IntegrationRuntimeInitializer />)
+  await waitFor(() => expect(mockedStartRuntime).toHaveBeenCalledTimes(1))
+  unmount()
+  expect(disposeRuntime).toHaveBeenCalledTimes(1)
 })
 
 it("starts and disposes the shared runtime on the desktop host", async () => {

@@ -240,3 +240,28 @@ push 订阅。Host key 为 `calendar:` 加上账户与日历元组 JSON 的 SHA-
 fingerprint 就崩溃，重放仍由 broker 去重。A→B→A→B 中第二次 A→B 会复用首次
 转换的 ID，在 broker 保留期间可能抑制第二次通知；这是已接受的碰撞限制。
 完整作者示例见刻意不随应用打包的 `plugins/example-sync`。
+
+## 运行环境支持
+
+外部服务认证统一使用 lib/external-services/runtime-support.ts 中的 Host 矩阵。blocked 会在授权前拒绝；degraded 表示需要满足所列条件（保险库解锁或服务端允许 CORS）。测试确保此表不会与矩阵产生偏差。
+
+{/* external-service-runtime:start */}
+| Facet | browser | tauri | mobile | headless |
+| --- | --- | --- | --- | --- |
+| auth-method:oauth-pkce | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | blocked: no-interactive-browser (use-another-method) |
+| auth-method:oauth-confidential | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | blocked: no-interactive-browser (use-another-method) |
+| auth-method:client-credentials | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported |
+| auth-method:device-code | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) | blocked: device-code-deferred (use-another-method) |
+| auth-method:api-key | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported |
+| auth:confidential-exchange | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported | blocked: confidential-exchange-unavailable (pair-with-desktop, use-always-on-host) | supported: runtime-supported |
+| auth:callback | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported | blocked: no-external-callback (use-another-method) |
+| secrets:persistent | degraded: non-persistent-until-vault-unlock (unlock-vault) | supported: runtime-supported | supported: runtime-supported | supported: runtime-supported |
+| network:cross-origin | degraded: vendor-cors-required (pair-with-desktop) | supported: runtime-supported | degraded: vendor-cors-required (pair-with-desktop) | supported: runtime-supported |
+| sync:background | blocked: background-sync-unavailable (pair-with-desktop, use-always-on-host) | supported: host-process-required (keep-app-open, use-always-on-host) | blocked: background-sync-unavailable (pair-with-desktop, use-always-on-host) | supported: host-process-required (keep-app-open, use-always-on-host) |
+{/* external-service-runtime:end */}
+
+镜像客户端的插件运行在配对桌面上，因此所有维度都按 tauri 评估。仅激活了配对网关的客户端按维度分别评估：机密交换（包括 client-credentials 和机密 OAuth）与插件网络请求在可信 Host 执行，按 tauri 一列判断；密钥存储、OAuth 回调和后台同步仍留在本地运行环境，按本地一列判断。独立 Capacitor 接收 cognia://auth/callback，浏览器使用 /plugin-auth/callback。Headless 首次 PKCE/机密 OAuth 登录会返回带恢复建议的拒绝。插件设备码在所有运行环境中均暂未开放。
+
+API key 要求持久 Host 连接存储（浏览器保险库已解锁），不会进入 ctx.config 或插件存储。不会创建 refresh token，也不会调用 refresh；注入凭证的请求返回 401 后，连接进入 needs-reauth。机密 OAuth 使用不带 PKCE verifier 的授权码流程，并要求可信交换。后台同步仅在桌面/brain Host 进程运行期间执行；配对客户端不会安装第二个本地执行器。
+
+Example Tracker 认证插件即使使用 placement none 也调用 ctx.auth.exchangeConfidential，因此其 manifest 会阻止独立浏览器/移动端使用，尽管公开 PKCE 本身受支持。业务示例依赖此认证插件；Headless Host 可使用已有连接。

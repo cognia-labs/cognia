@@ -8,7 +8,12 @@
 /** ADR-0243 credential lanes: user → delegated or bound person; bot/service → service. */
 export type AuthPrincipalKind = "user" | "bot" | "service"
 
-/** Authentication methods a provider may support. */
+/** Authentication methods a provider may support.
+ * API keys use Host connection storage without a refresh flow. Confidential
+ * OAuth uses authorization code without PKCE and requires a trusted Host.
+ * `device-code` is dormant for plugin providers (ADR-0246 §7, Later): the
+ * Host always refuses it with `device-code-deferred`. Keep it visible and inert.
+ */
 export type AuthMethod =
   "oauth-pkce" | "oauth-confidential" | "client-credentials" | "device-code" | "api-key"
 

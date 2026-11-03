@@ -1,3 +1,4 @@
+import { currentExternalServiceRuntimeContext } from "@/lib/external-services/runtime-profile"
 import type {
   AuthConnectionRef,
   AuthCredentialSet,
@@ -6,7 +7,17 @@ import type {
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getPlugin } from "@/lib/db/plugins"
 import { getAuthConnection } from "@/lib/db/auth-connections"
-import { isTauri } from "@/lib/tauri"
+import { currentRuntimeProfile } from "@/lib/plugin/character-pack/platform-availability"
+import {
+  assertRuntimeSupported,
+  authMethodFacets,
+  resolveAuthMethodSupport,
+  resolveRuntimeSupport,
+  RuntimeSupportError,
+  type RuntimeRecoveryAction,
+} from "@/lib/external-services/runtime-support"
+import { ConnectionCredentialStore, CredentialStoreDegraded } from "./connection-credentials"
+import { PluginGatewayError } from "@/lib/plugin/core/transport"
 import { openExternal } from "@/lib/tauri/opener"
 import { getProvider } from "./auth-provider-registry"
 import { isClientSecretRequired, setProviderClientSecret } from "./client-secrets"
@@ -40,7 +51,8 @@ export class AuthConnectError extends Error {
       | "INTERNAL"
       | "CLIENT_SECRET_REQUIRED"
       | "UNAVAILABLE",
-    readonly reason: string
+    readonly reason: string,
+    readonly details: { recovery: RuntimeRecoveryAction[] } = { recovery: [] }
   ) {
     super(`Host sign-in failed: ${reason}`)
     this.name = "AuthConnectError"
@@ -80,12 +92,48 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
   try {
     active()
     if (!provider) throw new AuthConnectError("NOT_FOUND", "provider-not-registered")
+    const profile = currentExternalServiceRuntimeContext()
+    if (requestedMethod) assertRuntimeSupported(`auth-method:${requestedMethod}`, profile)
+    const manifest =
+      provider.pluginId === null ? undefined : (await getPlugin(provider.pluginId))?.manifest
+    const declarations = manifest?.authProviders
+    // Installed manifests are validated at install time, but the database
+    // intentionally stores their JSON as Record<string, unknown>.
+    const definition = (
+      Array.isArray(declarations)
+        ? declarations.find((item: PluginAuthProviderDef) => item.id === providerId)
+        : undefined
+    ) as PluginAuthProviderDef | undefined
+    if (provider.describe && provider.pluginId !== null && !definition)
+      throw new AuthConnectError("UNAVAILABLE", "provider-declaration-missing")
+    const supported = (method: AuthMethod) =>
+      method === "api-key" ||
+      Boolean(
+        provider.exchange &&
+        (method === "client-credentials" ||
+          ((method === "oauth-pkce" || method === "oauth-confidential") && provider.authorize))
+      )
+    const declared = definition?.methods ?? (["oauth-pkce", "client-credentials"] as AuthMethod[])
+    const checkMethod = (method: AuthMethod) => {
+      for (const facet of authMethodFacets(method, definition))
+        assertRuntimeSupported(facet, profile)
+    }
+    // Refuse explicit unsupported methods before opening any configuration prompt.
+    if (requestedMethod) checkMethod(requestedMethod)
+    const firstMethod =
+      requestedMethod ??
+      declared.find(
+        (method) =>
+          supported(method) &&
+          resolveAuthMethodSupport(method, profile, definition).availability !== "blocked"
+      ) ??
+      declared[0]
+    if (firstMethod && (provider.describe || definition || requestedMethod))
+      checkMethod(firstMethod)
     // The connection UI can connect directly, bypassing createSession. It must
     // also wait for activation's legacy lineage handover before exchanging.
     if (provider.management === "host") await runLegacySessionMigrations(provider)
     active()
-    if (requestedMethod === "device-code")
-      throw new AuthConnectError("NOT_SUPPORTED", "device-code-deferred")
     const scopes = [...new Set(request.scopes)]
     const manager = getConnectionManager()
     const original = reconnect ? await getAuthConnection(reconnect) : undefined
@@ -112,35 +160,25 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
         throw error
       }
     }
-    const manifest =
-      provider.pluginId === null ? undefined : (await getPlugin(provider.pluginId))?.manifest
-    const declarations = manifest?.authProviders
-    // Installed manifests are validated at install time, but the database
-    // intentionally stores their JSON as Record<string, unknown>.
-    const definition = (
-      Array.isArray(declarations)
-        ? declarations.find((item: PluginAuthProviderDef) => item.id === providerId)
-        : undefined
-    ) as PluginAuthProviderDef | undefined
-    if (provider.pluginId !== null && !definition)
-      throw new AuthConnectError("UNAVAILABLE", "provider-declaration-missing")
     let submitted = request.configuration
     let chosenMethod: AuthMethod | undefined = requestedMethod
-    if (definition?.configurationSchema && !submitted) {
+    if ((definition?.configurationSchema || declared.includes("api-key")) && !submitted) {
       const result = await requestConnectionPrompt(
         {
           kind: "configure",
           pluginId: provider.pluginId ?? "__host__",
           pluginName: provider.label,
           providerLabel: provider.label,
-          schema: definition.configurationSchema,
-          issuers: definition.issuers ?? [
-            definition.authorization?.issuer ?? provider.authorization?.issuer ?? "",
+          schema: definition?.configurationSchema ?? { type: "object", properties: {} },
+          providerDefinition: definition,
+          issuers: definition?.issuers ?? [
+            definition?.authorization?.issuer ?? provider.authorization?.issuer ?? "",
           ],
-          methods: definition.methods ?? ["oauth-pkce"],
+          methods: declared,
+          initialMethod: firstMethod,
           defaults: {
-            issuer: original?.issuer ?? definition.authorization?.issuer ?? "",
-            ...(original && definition.authorization?.clientIdFrom
+            issuer: original?.issuer ?? definition?.authorization?.issuer ?? "",
+            ...(original && definition?.authorization?.clientIdFrom
               ? { [definition.authorization.clientIdFrom.configuration]: original.clientId }
               : {}),
           },
@@ -153,15 +191,29 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       submitted = result.configuration
       chosenMethod ??= result.method
     }
-    const supported = (method: AuthMethod) =>
-      Boolean(
-        provider.exchange &&
-        (method === "client-credentials" || (method === "oauth-pkce" && provider.authorize))
-      )
-    const declared = definition?.methods ?? (["oauth-pkce", "client-credentials"] as AuthMethod[])
-    const method = chosenMethod ?? declared.find(supported)
+    const method = chosenMethod ?? firstMethod
     if (!method || !declared.includes(method) || !supported(method))
       throw new AuthConnectError("NOT_SUPPORTED", "auth-method-unavailable")
+    checkMethod(method)
+    if (method === "api-key") {
+      if (!new ConnectionCredentialStore().isPersistent()) throw new CredentialStoreDegraded()
+      const key = submitted?.apiKey
+      if (typeof key !== "string" || !key)
+        throw new AuthConnectError("INVALID_REQUEST", "api-key-required")
+      active()
+      // No OAuth attempt, refresh token, expiry, or plugin configuration write.
+      return await manager.createConnectionFromCredentials(
+        provider,
+        { accessToken: key, scopes },
+        {
+          authMethod: method,
+          discardOnFailure: false,
+          reconnect,
+          signal: controller.signal,
+          expectedRevision,
+        }
+      )
+    }
     const defaults =
       provider.management === "host" && provider.pluginId !== null
         ? definition?.authorization
@@ -210,16 +262,17 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     const allowed = definition?.issuers
     if (allowed && !allowed.includes(issuer.origin))
       throw new AuthConnectError("INVALID_REQUEST", "undeclared-issuer")
-    const redirectUri =
-      method === "oauth-pkce"
-        ? (configuration.redirectUri ??
-          (isTauri()
-            ? "cognia://auth/callback"
-            : typeof window !== "undefined"
-              ? `${window.location.origin}/plugin-auth/callback`
-              : undefined))
-        : undefined
-    if (method === "oauth-pkce" && !redirectUri)
+    const redirectMethod = method === "oauth-pkce" || method === "oauth-confidential"
+    const local = currentRuntimeProfile()
+    const redirectUri = redirectMethod
+      ? (configuration.redirectUri ??
+        (local === "tauri" || local === "mobile"
+          ? "cognia://auth/callback"
+          : typeof window !== "undefined" && window.location?.origin
+            ? `${window.location.origin}/plugin-auth/callback`
+            : undefined))
+      : undefined
+    if (redirectMethod && !redirectUri)
       throw new AuthConnectError("NOT_SUPPORTED", "browser-unavailable")
     if (redirectUri) {
       let redirect: URL
@@ -281,7 +334,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     const bounded = <T>(task: Promise<T>) => Promise.race([task, stopped])
     let callback
     let accepted = attempt
-    if (method === "oauth-pkce") {
+    if (redirectMethod) {
       waiter = registerAuthCallbackWaiter(attempt.state, binding, attempt.expiresAt)
       void waiter.promise.catch(() => {})
       const result = await bounded(provider.authorize!({ ...attempt, scopes: [...scopes] }))
@@ -322,6 +375,7 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
     fresh = undefined // The manager owns cleanup from here, including identity mismatch.
     return await bounded(
       manager.createConnectionFromCredentials(provider, credentials, {
+        authMethod: method,
         reconnect,
         signal: controller.signal,
         expectedRevision,
@@ -337,6 +391,20 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       })
     )
   } catch (error) {
+    if (error instanceof RuntimeSupportError)
+      throw new AuthConnectError("NOT_SUPPORTED", error.reason, { recovery: error.recovery })
+    if (error instanceof CredentialStoreDegraded)
+      throw new AuthConnectError("UNAVAILABLE", error.reason, {
+        recovery: resolveRuntimeSupport("secrets:persistent", "browser").recovery,
+      })
+    if (error instanceof PluginGatewayError && error.code === "NOT_SUPPORTED") {
+      const details = error.details as
+        { reason?: string; recovery?: RuntimeRecoveryAction[] } | undefined
+      if (details?.reason)
+        throw new AuthConnectError("NOT_SUPPORTED", details.reason, {
+          recovery: details.recovery ?? [],
+        })
+    }
     const tenantScopeRequired =
       (error as { code?: unknown } | null)?.code === "AUTH_TENANT_SCOPE_REQUIRED"
     if (tenantScopeRequired || error instanceof ConnectionIdentityConflict) {

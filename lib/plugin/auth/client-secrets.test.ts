@@ -4,21 +4,22 @@ import {
   hasProviderClientSecret,
   isClientSecretRequired,
 } from "./client-secrets"
-import {
-  invokePluginApi,
-  isPluginGatewayAvailable,
-  PluginGatewayError,
-} from "@/lib/plugin/core/transport"
+import { invokePluginApi, PluginGatewayError } from "@/lib/plugin/core/transport"
+import { detectPlatform } from "@/lib/platform/detect"
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  detectPlatform: jest.fn(() => "tauri"),
+}))
+jest.mock("@/lib/plugin/core/mirrored-client", () => ({ isMirroredPluginClient: () => false }))
 
 jest.mock("@/lib/plugin/core/transport", () => ({
   ...jest.requireActual("@/lib/plugin/core/transport"),
   invokePluginApi: jest.fn(),
-  isPluginGatewayAvailable: jest.fn(() => true),
 }))
 
 beforeEach(() => {
   jest.mocked(invokePluginApi).mockReset()
-  jest.mocked(isPluginGatewayAvailable).mockReturnValue(true)
+  jest.mocked(detectPlatform).mockReturnValue("tauri")
 })
 
 it("routes Host configuration to the selected plugin and exposes only presence", async () => {
@@ -56,7 +57,7 @@ it("routes Host configuration to the selected plugin and exposes only presence",
 })
 
 it("refuses every configuration operation without a trusted gateway", async () => {
-  jest.mocked(isPluginGatewayAvailable).mockReturnValue(false)
+  jest.mocked(detectPlatform).mockReturnValue("web")
   for (const operation of [
     () => setProviderClientSecret("owner", "acme", "client", "secret"),
     () => clearProviderClientSecret("owner", "acme", "client"),
@@ -66,7 +67,10 @@ it("refuses every configuration operation without a trusted gateway", async () =
     await expect(result).rejects.toBeInstanceOf(PluginGatewayError)
     await expect(result).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
-      details: { reason: "confidential-exchange-unavailable" },
+      details: {
+        reason: "confidential-exchange-unavailable",
+        recovery: ["pair-with-desktop", "use-always-on-host"],
+      },
     })
   }
   expect(invokePluginApi).not.toHaveBeenCalled()
