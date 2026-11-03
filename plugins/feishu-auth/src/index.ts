@@ -7,11 +7,9 @@ export const manifest = definePluginManifest(manifestJson)
 export default definePlugin({
   manifest,
   activate(ctx: PluginContext) {
-    const auth = createFeishuAuthProvider(ctx)
-    const unregister = ctx.auth.registerProvider(auth.provider)
-    ctx.lifecycle.onDispose(() => {
-      auth.dispose()
-      unregister()
-    }, "feishu-auth:provider")
+    ctx.lifecycle.onDispose(
+      ctx.auth.registerProvider(createFeishuAuthProvider(ctx)),
+      "feishu-auth:provider"
+    )
   },
 })
