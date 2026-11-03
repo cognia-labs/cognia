@@ -525,13 +525,24 @@ jest.mock("@/hooks/ui/use-media-query", () => ({
 }))
 const APPBAR_INBOX_QUERY = "(min-width: 26rem)"
 const APPBAR_ARTIFACTS_QUERY = "(min-width: 30rem)"
-const APPBAR_GLANCE_QUERY = "(min-width: 24rem)"
+const APPBAR_GLANCE_QUERY = "(min-width: 30rem)"
 
 // Header children that reach Dexie / native polling on mount. Stubbed so the
 // bar's own layout contract is what these tests measure.
 jest.mock("@/components/mobile/shell/mobile-workspace-chip", () => ({
-  MobileWorkspaceChip: ({ className }: { className?: string }) => (
-    <span data-testid="mobile-workspace-chip-stub" className={className} />
+  MobileWorkspaceChip: ({
+    className,
+    variant = "icon",
+    fallback,
+  }: {
+    className?: string
+    variant?: "icon" | "title"
+    fallback?: React.ReactNode
+  }) => (
+    <>
+      <span data-testid="mobile-workspace-chip-stub" data-variant={variant} className={className} />
+      {fallback ? <span data-testid="mobile-workspace-chip-fallback">{fallback}</span> : null}
+    </>
   ),
 }))
 jest.mock("@/components/chat/background-runs-chip", () => ({
@@ -539,8 +550,21 @@ jest.mock("@/components/chat/background-runs-chip", () => ({
     <span data-testid="background-runs-chip-stub" className={className} />
   ),
 }))
+// Records the shell's wiring: the panel owns its own idle state, so the stub
+// reports idle through `onIdleChange` when a test asks it to.
+const jobCenterProps: {
+  current: {
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+    hideIdleTrigger?: boolean
+    onIdleChange?: (idle: boolean) => void
+  } | null
+} = { current: null }
 jest.mock("@/components/desktop/job-center-panel", () => ({
-  JobCenterPanel: () => <button type="button" data-testid="status-job-center" />,
+  JobCenterPanel: (props: typeof jobCenterProps.current) => {
+    jobCenterProps.current = props
+    return <button type="button" data-testid="status-job-center" data-open={String(props?.open)} />
+  },
 }))
 jest.mock("@/components/mobile/home/mobile-home-layout-sheet", () => ({
   MobileHomeLayoutSheet: ({ open }: { open: boolean }) =>
@@ -797,6 +821,49 @@ describe("<AppShellMobile />", () => {
     await user.click(screen.getByTestId("mobile-actions-trigger"))
     await waitFor(() => expect(screen.getByTestId("mobile-action-inbox")).toBeInTheDocument())
     expect(screen.getByTestId("mobile-action-artifacts")).toBeInTheDocument()
+  })
+
+  it("titles the home screen with the workspace, falling back to the brand without one", () => {
+    render(<AppShellMobile />)
+    const chip = screen.getByTestId("mobile-workspace-chip-stub")
+    expect(chip).toHaveAttribute("data-variant", "title")
+    // The brand title exists only as the chip's fallback, not beside it.
+    expect(
+      within(screen.getByTestId("mobile-workspace-chip-fallback")).getByTestId(
+        "mobile-active-title"
+      )
+    ).toBeInTheDocument()
+    expect(screen.getAllByTestId("mobile-active-title")).toHaveLength(1)
+  })
+
+  it("leads a conversation with its title and shrinks the workspace to an icon", () => {
+    sessionsRef.current = [
+      { id: "s-1", title: "Greetings", kind: "direct", createdAt: 0, updatedAt: 0 } as ChatSession,
+    ]
+    activeSessionId = "s-1"
+    render(<AppShellMobile />)
+    expect(screen.getByTestId("mobile-active-title")).toHaveTextContent("Greetings")
+    expect(screen.getByTestId("mobile-workspace-chip-stub")).toHaveAttribute("data-variant", "icon")
+    expect(screen.queryByTestId("mobile-workspace-chip-fallback")).toBeNull()
+  })
+
+  it("opens an idle Job Center from the overflow menu, and drops the row once it has work", async () => {
+    const user = userEvent.setup()
+    render(<AppShellMobile />)
+    expect(jobCenterProps.current?.hideIdleTrigger).toBe(true)
+
+    await user.click(screen.getByTestId("mobile-actions-trigger"))
+    await user.click(await screen.findByTestId("mobile-action-job-center"))
+    await waitFor(() =>
+      expect(screen.getByTestId("status-job-center")).toHaveAttribute("data-open", "true")
+    )
+    act(() => jobCenterProps.current?.onOpenChange?.(false))
+    expect(screen.getByTestId("status-job-center")).toHaveAttribute("data-open", "false")
+
+    act(() => jobCenterProps.current?.onIdleChange?.(false))
+    await user.click(screen.getByTestId("mobile-actions-trigger"))
+    await waitFor(() => expect(screen.getByTestId("mobile-action-new-chat")).toBeInTheDocument())
+    expect(screen.queryByTestId("mobile-action-job-center")).toBeNull()
   })
 
   it("puts them back in the bar once it is wide enough, and never in both places", async () => {

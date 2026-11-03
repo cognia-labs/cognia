@@ -29,6 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
+  BriefcaseBusinessIcon,
   InboxIcon,
   LayoutGridIcon,
   MenuIcon,
@@ -139,9 +140,9 @@ const log = loggers.shell
 /**
  * Width tiers for the app bar's secondary controls.
  *
- * The bar's fixed cost at 375px is 303px — burger, workspace chip, job centre,
- * search, ⋮, their gaps and the row's own padding — which leaves 72px for the
- * session title and nothing else. Every control beyond that has to earn its
+ * The bar's fixed cost at 375px is 259px — burger, workspace chip, search, ⋮,
+ * their gaps and the row's own padding — which leaves 116px for the session
+ * title. The job centre takes 44px of that only while it has work to count. Every control beyond that has to earn its
  * place by width, so the two with a cheap menu equivalent (a route push and a
  * store toggle) are the ones that fold.
  *
@@ -152,12 +153,13 @@ const log = loggers.shell
  */
 const APPBAR_INBOX_QUERY = "(min-width: 26rem)"
 /**
- * The Glance button (ADR-0225 §9). It folds later than the inbox: the drawer
- * is the phone's tray panel, and its dot (something waiting or failed) is the
- * signal worth keeping in reach. Below this (a 375px phone) it moves into ⋮
- * with its dot, like the others.
+ * The Glance button (ADR-0225 §9). Phones fold it into ⋮, dot and all (the ⋮
+ * trigger carries the dot, so something waiting or failed is still one glance
+ * away): the home screen under the bar already shows the pinned modules, and
+ * a bar of six icons on a 390px phone read as a toolbar rather than a title.
+ * It stays in the bar from small-tablet width up.
  */
-const APPBAR_GLANCE_QUERY = "(min-width: 24rem)"
+const APPBAR_GLANCE_QUERY = "(min-width: 30rem)"
 const APPBAR_ARTIFACTS_QUERY = "(min-width: 30rem)"
 /**
  * The missing-credential warning's text label. Below this the warning is a key
@@ -256,6 +258,10 @@ export function AppShellMobile() {
   // on "Model & account", the ⋮ menu on the top as usual.
   const [sessionSettingsFocus, setSessionSettingsFocus] = useState<"account" | undefined>()
   const [searchOpen, setSearchOpen] = useState(false)
+  // The Job Center leaves the bar while it has nothing to count (see
+  // `hideIdleTrigger`); the ⋮ menu opens the same sheet meanwhile.
+  const [jobCenterOpen, setJobCenterOpen] = useState(false)
+  const [jobsIdle, setJobsIdle] = useState(true)
   const [characterPickerOpen, setCharacterPickerOpen] = useState(false)
   const [homeLayoutOpen, setHomeLayoutOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
@@ -728,15 +734,30 @@ export function AppShellMobile() {
             </Sheet>
           </MobileChannelListSourceProvider>
 
-          <CharacterHeader
-            subject={canvasGuild ? null : headerSubject}
-            fallbackTitle={canvasGuild ? tRail("canvas") : headerTitle}
-            streaming={chatStatus === "streaming"}
-          />
+          {/* On the home screen the workspace IS the title: the brand name
+            said nothing the greeting below did not, and which workspace a
+            send runs in is the one thing worth reading up here. With no
+            workspace the brand comes back. In a conversation its title leads
+            and the workspace shrinks to an icon. */}
+          {!activeSession && !canvasGuild ? (
+            <MobileWorkspaceChip
+              variant="title"
+              className="min-w-0 shrink"
+              fallback={<CharacterHeader subject={null} fallbackTitle={headerTitle} />}
+            />
+          ) : (
+            <>
+              <CharacterHeader
+                subject={canvasGuild ? null : headerSubject}
+                fallbackTitle={canvasGuild ? tRail("canvas") : headerTitle}
+                streaming={chatStatus === "streaming"}
+              />
 
-          {/* No `ml-2`: the header's own gap already spaces it, and the
-            doubled margin came straight out of the title's width. */}
-          <MobileWorkspaceChip className="min-w-0 shrink" />
+              {/* No `ml-2`: the header's own gap already spaces it, and the
+                doubled margin came straight out of the title's width. */}
+              <MobileWorkspaceChip className="min-w-0 shrink" />
+            </>
+          )}
 
           {/* A phone shows one conversation, so turns started and navigated away
             from had no representation at all here. Tapping goes to one. */}
@@ -775,7 +796,13 @@ export function AppShellMobile() {
               Folded into the ⋮ menu below the width tier — see
               `APPBAR_ARTIFACTS_QUERY`. */}
             {artifactsInBar ? <ArtifactDockToggle className="touch-target" /> : null}
-            <JobCenterPanel compact />
+            <JobCenterPanel
+              compact
+              hideIdleTrigger
+              open={jobCenterOpen}
+              onOpenChange={setJobCenterOpen}
+              onIdleChange={setJobsIdle}
+            />
 
             {/* The Glance drawer's door (ADR-0225 §9). Folded into ⋮ below
               `APPBAR_GLANCE_QUERY`, dot and all. */}
@@ -878,6 +905,18 @@ export function AppShellMobile() {
                   </DropdownMenuItem>
                 )}
                 {glanceInBar ? null : <MobileGlanceTrigger variant="menu" />}
+                {jobsIdle ? (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      // Defer so the menu can close before the sheet grabs focus.
+                      setTimeout(() => setJobCenterOpen(true), 0)
+                    }}
+                    data-testid="mobile-action-job-center"
+                  >
+                    <BriefcaseBusinessIcon className="size-4" />
+                    <span>{tShell("jobCenter")}</span>
+                  </DropdownMenuItem>
+                ) : null}
                 {artifactsInBar ? null : (
                   <DropdownMenuItem
                     onSelect={() => toggleArtifactDock()}

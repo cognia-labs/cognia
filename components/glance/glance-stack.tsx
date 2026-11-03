@@ -53,47 +53,69 @@ export interface GlanceStackProps {
   entries: readonly GlanceLayoutEntry[]
   renderers?: Partial<Record<GlanceModuleId, GlanceModuleRenderer>>
   className?: string
+  /**
+   * `"list"` (default): one column, hairline-separated — a list to scan (the
+   * tray panel, the Glance drawer). `"cards"`: each module on a soft card of
+   * its own with air between them — a home screen to land on, where four
+   * unrelated modules under one border read as one long form.
+   */
+  variant?: "list" | "cards"
 }
 
-export function GlanceStack({ entries, renderers, className }: GlanceStackProps) {
+const CARD_CLASS =
+  "overflow-hidden rounded-2xl bg-foreground/[0.035] ring-1 ring-inset ring-border/50 empty:hidden"
+
+export function GlanceStack({ entries, renderers, className, variant = "list" }: GlanceStackProps) {
   const { originOf, snapshot } = useGlance()
   const table = { ...DEFAULT_GLANCE_RENDERERS, ...renderers }
   const catalog = snapshot.plugins?.catalog ?? []
+  const cards = variant === "cards"
+  const renderEntry = (entry: GlanceLayoutEntry) => {
+    const unavailable = originOf?.(entry.id)?.kind === "unavailable"
+    if (isPluginEntryId(entry.id)) {
+      const def = catalog.find((c) => c.id === entry.id)
+      // A paired phone that never heard from its desktop knows the entry
+      // but not the module yet: it says so rather than vanishing.
+      if (unavailable) {
+        return <GlanceUnavailableModule key={entry.id} moduleId={entry.id} title={def?.title} />
+      }
+      if (!def) return null
+      return (
+        <GlancePluginModule
+          key={entry.id}
+          entryId={entry.id}
+          size={effectiveSizeIn(def.sizes, entry.size)}
+        />
+      )
+    }
+    const Module = table[entry.id]
+    if (!Module) return null
+    // A paired phone whose desktop cannot supply this module says so in
+    // place, rather than leaving the module "loading" forever.
+    if (unavailable) {
+      return <GlanceUnavailableModule key={entry.id} moduleId={entry.id} />
+    }
+    return <Module key={entry.id} size={effectiveSize(entry.id, entry.size)} />
+  }
+
   return (
     <div
       data-testid="glance-stack"
-      className={cn("flex flex-col divide-y divide-border", className)}
+      data-variant={variant}
+      className={cn("flex flex-col", cards ? "gap-2.5" : "divide-y divide-border", className)}
     >
       {entries
         .filter((entry) => !entry.hidden)
         .map((entry) => {
-          const unavailable = originOf?.(entry.id)?.kind === "unavailable"
-          if (isPluginEntryId(entry.id)) {
-            const def = catalog.find((c) => c.id === entry.id)
-            // A paired phone that never heard from its desktop knows the entry
-            // but not the module yet: it says so rather than vanishing.
-            if (unavailable) {
-              return (
-                <GlanceUnavailableModule key={entry.id} moduleId={entry.id} title={def?.title} />
-              )
-            }
-            if (!def) return null
-            return (
-              <GlancePluginModule
-                key={entry.id}
-                entryId={entry.id}
-                size={effectiveSizeIn(def.sizes, entry.size)}
-              />
-            )
-          }
-          const Module = table[entry.id]
-          if (!Module) return null
-          // A paired phone whose desktop cannot supply this module says so in
-          // place, rather than leaving the module "loading" forever.
-          if (unavailable) {
-            return <GlanceUnavailableModule key={entry.id} moduleId={entry.id} />
-          }
-          return <Module key={entry.id} size={effectiveSize(entry.id, entry.size)} />
+          const node = renderEntry(entry)
+          if (!node || !cards) return node
+          // `empty:hidden`: a module with nothing to say renders null, and its
+          // card must not stay behind as an empty ring.
+          return (
+            <div key={entry.id} className={CARD_CLASS} data-slot="glance-card">
+              {node}
+            </div>
+          )
         })}
     </div>
   )

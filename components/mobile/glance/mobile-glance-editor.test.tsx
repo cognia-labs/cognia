@@ -123,24 +123,24 @@ describe("MobileGlanceEditor", () => {
 
   it("saves a shortcut change with withShortcuts", async () => {
     const { save, user } = setup()
-    await user.click(screen.getByRole("button", { name: "Remove Search" }))
+    await user.click(screen.getByRole("button", { name: "Remove Templates" }))
     expect(save).toHaveBeenCalledWith(
       withShortcuts(
         SETTINGS,
-        SETTINGS.shortcuts.filter((id) => id !== "search")
+        SETTINGS.shortcuts.filter((id) => id !== "templates")
       )
     )
   })
 
   it("toasts the error key a save resolves to", async () => {
     const { user } = setup({ saveResult: "errors.requestFailed" })
-    await user.click(screen.getByRole("button", { name: "Remove Search" }))
+    await user.click(screen.getByRole("button", { name: "Remove Templates" }))
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("Cognia couldn't do that."))
   })
 
   it("toasts nothing for a save that succeeds", async () => {
     const { save, user } = setup()
-    await user.click(screen.getByRole("button", { name: "Remove Search" }))
+    await user.click(screen.getByRole("button", { name: "Remove Templates" }))
     await waitFor(() => expect(save).toHaveBeenCalled())
     await Promise.resolve()
     expect(toastError).not.toHaveBeenCalled()

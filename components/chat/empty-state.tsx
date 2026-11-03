@@ -1,6 +1,6 @@
 "use client"
 
-import type { ReactNode } from "react"
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react"
 import Image from "next/image"
 import { useTranslations, useFormatter, useNow } from "next-intl"
 import { motion, useReducedMotion } from "motion/react"
@@ -163,6 +163,18 @@ interface Props {
    */
   composerSlot?: ReactNode
   /**
+   * Dock `composerSlot` at the bottom of the surface instead of under the
+   * greeting (fullscreen variant only).
+   *
+   * The phone home uses this. There the composer sits where it sits in every
+   * conversation, at the thumb's reach above the tab bar, so starting a chat
+   * moves nothing. Centred under the greeting it landed in the top quarter of
+   * a tall screen and jumped to the bottom as soon as the first turn opened
+   * the conversation. The greeting and `quickActionsSlot` scroll above it on
+   * their own; the composer never scrolls away.
+   */
+  composerDock?: boolean
+  /**
    * Density — of information, not just of decoration.
    *
    * `"rich"` (default) is the dashboard: the ambient artwork, a display-size
@@ -293,6 +305,12 @@ function RecentSessionList({
   )
 }
 
+/** Viewport top of the welcome composer (or the first screen holding it). */
+function welcomeComposerTop(screen: HTMLElement | null): number | null {
+  const anchor = screen?.querySelector("[data-testid=welcome-composer]") ?? screen
+  return anchor ? anchor.getBoundingClientRect().top : null
+}
+
 export function EmptyChatState({
   onCreate,
   onUseSample,
@@ -310,6 +328,7 @@ export function EmptyChatState({
   statsSlot,
   executionControlsSlot,
   composerSlot,
+  composerDock,
   welcomeStyle = "rich",
   onToggleStyle,
   userName,
@@ -324,6 +343,37 @@ export function EmptyChatState({
   const reduce = useReducedMotion()
 
   const rich = welcomeStyle === "rich"
+
+  // Rich and minimal place the first screen differently (a larger hero, the
+  // optical centre over a dashboard), so switching moves the composer. Glide
+  // it there instead of snapping: the composer's offset is read just before
+  // the switch, and once the new layout commits the first screen plays from
+  // that offset back to rest (FLIP, one compositor transform). A switch from
+  // anywhere else (settings) has no "before" and simply lands.
+  const firstScreenRef = useRef<HTMLDivElement>(null)
+  const glideFromRef = useRef<number | null>(null)
+  const toggleStyle = useCallback(
+    (next: WelcomeStyle) => {
+      glideFromRef.current = welcomeComposerTop(firstScreenRef.current)
+      onToggleStyle?.(next)
+    },
+    [onToggleStyle]
+  )
+  useLayoutEffect(() => {
+    const from = glideFromRef.current
+    glideFromRef.current = null
+    const screen = firstScreenRef.current
+    const to = welcomeComposerTop(screen)
+    if (from === null || to === null || !screen || reduce) return
+    const delta = from - to
+    if (Math.abs(delta) < 1 || typeof screen.animate !== "function") return
+    screen.animate([{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }], {
+      duration: 240,
+      easing: "cubic-bezier(.215,.61,.355,1)",
+    })
+    // The switch itself is the trigger; `reduce` is read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rich])
 
   const recents = (recentSessions ?? []).slice(0, MAX_RECENT)
   const showRecents = recents.length > 0 && typeof onResumeSession === "function"
@@ -638,8 +688,18 @@ export function EmptyChatState({
     const showChips = aiPrompts.length > 0 || charPrompts.length > 0 || showStarters
     const richRecents = Boolean(showRecents && rich)
     const dashboard = richRecents || Boolean(statsSlot)
-    return (
-      <div className="@container relative flex flex-1 flex-col overflow-x-hidden overflow-y-auto">
+    // Docked, the composer leaves the column (see `composerDock`): the rest
+    // sits on 1:2 spacers, a third of the way down the space above the box,
+    // and collapses to the top once the modules outgrow it.
+    const docked = Boolean(composerDock && composerSlot)
+    const scroller = (
+      <div
+        className={cn(
+          "@container relative flex flex-1 flex-col overflow-x-hidden overflow-y-auto",
+          docked && "min-h-0 overscroll-contain"
+        )}
+        data-testid={docked ? "welcome-body" : undefined}
+      >
         {/* Inline rich/minimal switch (desktop only). */}
         {onToggleStyle ? (
           <div className="absolute right-3 top-3 z-20 sm:right-5 sm:top-5">
@@ -648,7 +708,7 @@ export function EmptyChatState({
               variant="ghost"
               size="sm"
               className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-              onClick={() => onToggleStyle(rich ? "minimal" : "rich")}
+              onClick={() => toggleStyle(rich ? "minimal" : "rich")}
               aria-label={t("style.toggleLabel")}
             >
               <Settings2Icon className="size-3.5" aria-hidden />
@@ -660,15 +720,24 @@ export function EmptyChatState({
         {headerExtraSlot}
 
         {/* First screen: hero, composer and chips. With a dashboard below,
-            the band follows the chips directly and the whole stack sits on
-            2:3 spacers, the optical centre, collapsing to the top once it
-            outgrows the pane. Stretching the first screen to the viewport
-            instead left a screen-tall gap under the chips and pushed the band
-            out of sight. With nothing below, the first screen fills the pane
-            and its own equal spacers simply centre the column. */}
-        {dashboard ? <div aria-hidden className="min-h-0 flex-[2]" /> : null}
+            the band follows the chips directly and the first screen sits on
+            2:3 spacers, the optical centre, collapsing to the top once the
+            page outgrows the pane. Stretching the first screen to the
+            viewport instead left a screen-tall gap under the chips and pushed
+            the band out of sight. With nothing below, the first screen fills
+            the pane and its own equal spacers simply centre the column.
+
+            The band rides INSIDE the lower spacer rather than between the
+            first screen and it. Centring the whole stack made the composer's
+            position depend on the band's height, and that height changes
+            after the first frame (the usage panel paints its loading state,
+            then its data; recents arrive late): the composer jumped ~20px
+            every time Rich was switched on. Now the band only moves the
+            composer once it is taller than the lower spacer's share. */}
+        {dashboard ? <div aria-hidden className="min-h-0 flex-[2_1_0%]" /> : null}
         <div
           className={cn("relative flex w-full shrink-0 flex-col", dashboard ? null : "flex-1")}
+          ref={firstScreenRef}
           data-testid="welcome-first-screen"
         >
           {/* Ambient bloom — texture only, carries no information. Rich style
@@ -683,7 +752,10 @@ export function EmptyChatState({
               className="pointer-events-none absolute left-1/2 top-[48%] size-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/[0.03] blur-3xl"
             />
           ) : null}
-          <div aria-hidden className={cn("min-h-6", dashboard ? null : "flex-1")} />
+          <div
+            aria-hidden
+            className={cn("min-h-6", docked ? "flex-[1_1_0%]" : dashboard ? null : "flex-1")}
+          />
 
           <motion.div
             className="relative z-10 mx-auto flex w-full max-w-[46rem] flex-col items-center gap-6 px-4 py-4"
@@ -743,7 +815,7 @@ export function EmptyChatState({
             {/* The primary affordance: the live composer (floored at ~4 lines —
               this surface's only job is that box), or the New chat button on
               surfaces that render no composer. */}
-            {composerSlot || showHeroAction || executionControlsSlot ? (
+            {!docked && (composerSlot || showHeroAction || executionControlsSlot) ? (
               <motion.div
                 className="w-full [&_textarea]:min-h-24 [&_[data-testid=composer-param-preview]]:min-h-24"
                 variants={STAGGER_CHILD}
@@ -835,7 +907,7 @@ export function EmptyChatState({
               "New chat" button here: the first send already creates the
               session, so a second control for the same outcome is redundant
               and discards the draft. */}
-            {composerSlot && executionControlsSlot ? (
+            {composerSlot && executionControlsSlot && !docked ? (
               <motion.div
                 className="flex w-full flex-wrap items-center justify-center gap-2"
                 variants={STAGGER_CHILD}
@@ -871,36 +943,62 @@ export function EmptyChatState({
               </motion.div>
             ) : null}
           </motion.div>
-          <div aria-hidden className={cn("min-h-6", dashboard ? null : "flex-1")} />
+          <div
+            aria-hidden
+            className={cn("min-h-6", docked ? "flex-[2_1_0%]" : dashboard ? null : "flex-1")}
+          />
         </div>
 
         {/* The dashboard band: rich recents, then the usage panel. One width
             and one left edge, the composer's, so the page hangs on a single
             axis instead of three measures stacked under each other. */}
         {dashboard ? (
-          <div
-            className="relative z-10 mx-auto flex w-full max-w-[46rem] shrink-0 flex-col gap-8 px-4 pb-10"
-            data-testid="welcome-dashboard"
-          >
-            {richRecents ? (
-              <section className="w-full" data-testid="welcome-recents" data-style="rich">
-                <SectionHeading label={t("sections.continue")} />
-                <RecentSessionList
-                  sessions={recents}
-                  now={now}
-                  onResume={(id) => onResumeSession?.(id)}
-                  columns={2}
-                />
-              </section>
-            ) : null}
-            {statsSlot ? (
-              <div className="w-full" data-testid="welcome-stats-slot">
-                {statsSlot}
-              </div>
-            ) : null}
+          // `flex-[3_1_0%]` with the default `min-height: auto`: the item
+          // takes 3/5 of the free space, but never less than the band.
+          <div className="flex flex-[3_1_0%] flex-col" data-testid="welcome-lower">
+            <div
+              className="relative z-10 mx-auto flex w-full max-w-[46rem] shrink-0 flex-col gap-8 px-4 pb-10"
+              data-testid="welcome-dashboard"
+            >
+              {richRecents ? (
+                <section className="w-full" data-testid="welcome-recents" data-style="rich">
+                  <SectionHeading label={t("sections.continue")} />
+                  <RecentSessionList
+                    sessions={recents}
+                    now={now}
+                    onResume={(id) => onResumeSession?.(id)}
+                    columns={2}
+                  />
+                </section>
+              ) : null}
+              {statsSlot ? (
+                <div className="w-full" data-testid="welcome-stats-slot">
+                  {statsSlot}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
-        {dashboard ? <div aria-hidden className="min-h-0 flex-[3]" /> : null}
+      </div>
+    )
+    if (!docked) return scroller
+    return (
+      <div className="relative flex min-h-0 flex-1 flex-col" data-testid="welcome-docked">
+        {scroller}
+        {/* The execution picker rides the composer's top edge: it configures
+            the turn this box sends, so it stays with the box rather than
+            scrolling away with the greeting. */}
+        {executionControlsSlot ? (
+          <div
+            className="mx-auto flex w-full max-w-[46rem] shrink-0 flex-wrap items-center justify-center gap-2 px-4 pt-2"
+            data-testid="welcome-actions"
+          >
+            {executionControlsSlot}
+          </div>
+        ) : null}
+        <div className="w-full shrink-0" data-testid="welcome-composer">
+          {composerSlot}
+        </div>
       </div>
     )
   }

@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { useState } from "react"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { SparklesIcon } from "lucide-react"
@@ -430,6 +431,77 @@ describe("<EmptyChatState />", () => {
     )
   })
 
+  describe("composerDock (the phone home)", () => {
+    function renderDocked(extra: Partial<Parameters<typeof EmptyChatState>[0]> = {}) {
+      return render(
+        <EmptyChatState
+          {...baseProps()}
+          variant="fullscreen"
+          welcomeStyle="minimal"
+          composerDock
+          composerSlot={<div data-testid="hero-composer" />}
+          quickActionsSlot={<div data-testid="home-modules" />}
+          {...extra}
+        />
+      )
+    }
+
+    it("pins the composer under the scrolling body instead of under the greeting", () => {
+      renderDocked()
+      const docked = screen.getByTestId("welcome-docked")
+      const body = screen.getByTestId("welcome-body")
+      const composer = screen.getByTestId("welcome-composer")
+      // Body first, composer last: the composer never scrolls with the page.
+      expect(Array.from(docked.children)).toEqual([body, composer])
+      expect(body).toHaveClass("overflow-y-auto", "min-h-0")
+      expect(body).not.toContainElement(screen.getByTestId("hero-composer"))
+      expect(composer).toHaveClass("shrink-0")
+      // The greeting and the home modules stay in the body.
+      expect(body).toContainElement(screen.getByTestId("welcome-hero"))
+      expect(body).toContainElement(screen.getByTestId("home-modules"))
+      // No 4-line floor: the docked box is the conversation's box.
+      expect(composer.className).not.toContain("min-h-24")
+    })
+
+    it("sits the body a third of the way down, collapsing to the top when it outgrows it", () => {
+      renderDocked()
+      const screenEl = screen.getByTestId("welcome-first-screen")
+      const spacers = Array.from(screenEl.children).filter(
+        (el) => el.getAttribute("aria-hidden") === "true"
+      )
+      expect(spacers.map((el) => el.className)).toEqual([
+        expect.stringContaining("flex-[1_1_0%]"),
+        expect.stringContaining("flex-[2_1_0%]"),
+      ])
+      for (const spacer of spacers) expect(spacer).toHaveClass("min-h-6")
+    })
+
+    it("keeps the execution controls on the composer's top edge", () => {
+      renderDocked({ executionControlsSlot: <div data-testid="exec-controls" /> })
+      const actions = screen.getByTestId("welcome-actions")
+      expect(actions).toContainElement(screen.getByTestId("exec-controls"))
+      expect(screen.getByTestId("welcome-body")).not.toContainElement(actions)
+      expect(actions.compareDocumentPosition(screen.getByTestId("welcome-composer"))).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+      expect(screen.getAllByTestId("exec-controls")).toHaveLength(1)
+    })
+
+    it("leaves the layout alone without a composer to dock", () => {
+      renderDocked({ composerSlot: undefined })
+      expect(screen.queryByTestId("welcome-docked")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("welcome-body")).not.toBeInTheDocument()
+    })
+
+    it("is off by default: the composer stays under the greeting", () => {
+      renderDocked({ composerDock: undefined })
+      expect(screen.queryByTestId("welcome-docked")).not.toBeInTheDocument()
+      expect(screen.getByTestId("welcome-first-screen")).toContainElement(
+        screen.getByTestId("hero-composer")
+      )
+    })
+  })
+
   it("keeps the execution controls beside New chat when there is no composer", () => {
     render(
       <EmptyChatState
@@ -611,22 +683,24 @@ describe("<EmptyChatState />", () => {
     // the fold starts on the composer's left edge.
     expect(band.className).toContain("max-w-[46rem]")
     // The band follows the chips directly: the first screen never stretches to
-    // the pane (that left a screen-tall gap under the chips). The whole stack
-    // sits on 2:3 spacers instead, the optical centre.
+    // the pane (that left a screen-tall gap under the chips). It sits on 2:3
+    // spacers instead, the optical centre.
     expect(firstScreen.className).not.toContain("min-h-[calc")
     expect(firstScreen.className).not.toContain("flex-1")
     const page = firstScreen.parentElement!
-    const outerSpacers = Array.from(page.children).filter(
+    const upper = Array.from(page.children).filter(
       (child) => child.getAttribute("aria-hidden") === "true"
     )
-    expect(outerSpacers.map((spacer) => spacer.className)).toEqual([
-      "min-h-0 flex-[2]",
-      "min-h-0 flex-[3]",
-    ])
-    expect(outerSpacers[0].compareDocumentPosition(firstScreen)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    )
-    expect(band.compareDocumentPosition(outerSpacers[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(upper.map((spacer) => spacer.className)).toEqual(["min-h-0 flex-[2_1_0%]"])
+    expect(upper[0].compareDocumentPosition(firstScreen)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    // The band rides inside the lower 3/5 share, which is never shorter than
+    // the band: its height (a loading usage panel, recents arriving late) no
+    // longer moves the composer until it outgrows that share.
+    const lower = screen.getByTestId("welcome-lower")
+    expect(lower).toHaveClass("flex-[3_1_0%]")
+    expect(lower.className).not.toContain("min-h-0")
+    expect(lower).toContainElement(band)
+    expect(firstScreen.compareDocumentPosition(lower)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     expect(firstScreen).toContainElement(screen.getByTestId("welcome-bloom"))
   })
 
@@ -639,6 +713,62 @@ describe("<EmptyChatState />", () => {
       (child) => child.getAttribute("aria-hidden") === "true"
     )
     expect(spacers.map((spacer) => spacer.className)).toEqual(["min-h-6 flex-1", "min-h-6 flex-1"])
+  })
+
+  describe("switching between rich and minimal", () => {
+    /** Report the composer at `top`, as layout would. */
+    function placeComposer(top: number) {
+      jest
+        .spyOn(screen.getByTestId("welcome-composer"), "getBoundingClientRect")
+        .mockReturnValue({ top } as DOMRect)
+    }
+    function Harness() {
+      const [style, setStyle] = useState<"rich" | "minimal">("minimal")
+      return (
+        <EmptyChatState
+          {...baseProps()}
+          welcomeStyle={style}
+          onToggleStyle={(next) => {
+            setStyle(next)
+            // The new layout puts the composer 24px higher.
+            placeComposer(379)
+          }}
+          composerSlot={<textarea aria-label="composer" />}
+        />
+      )
+    }
+
+    it("glides the first screen from where the composer was instead of snapping", async () => {
+      const animate = jest.fn()
+      HTMLElement.prototype.animate = animate
+      try {
+        render(<Harness />)
+        placeComposer(403)
+        await userEvent.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+        expect(animate).toHaveBeenCalledTimes(1)
+        expect(animate.mock.contexts[0]).toBe(screen.getByTestId("welcome-first-screen"))
+        expect(animate.mock.calls[0][0]).toEqual([
+          { transform: "translateY(24px)" },
+          { transform: "translateY(0)" },
+        ])
+      } finally {
+        delete (HTMLElement.prototype as { animate?: unknown }).animate
+      }
+    })
+
+    it("lands without a glide under reduced motion", async () => {
+      mockUseReducedMotion.mockReturnValue(true)
+      const animate = jest.fn()
+      HTMLElement.prototype.animate = animate
+      try {
+        render(<Harness />)
+        placeComposer(403)
+        await userEvent.click(screen.getByRole("button", { name: "style.toggleLabel" }))
+        expect(animate).not.toHaveBeenCalled()
+      } finally {
+        delete (HTMLElement.prototype as { animate?: unknown }).animate
+      }
+    })
   })
 
   it("omits the stats section entirely when no slot is passed", () => {

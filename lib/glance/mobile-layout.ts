@@ -22,7 +22,6 @@ import {
   type StoredWelcomeStatsPrefs,
 } from "@/lib/chat/welcome-stats-prefs"
 import {
-  DEFAULT_MOBILE_HOME_LAYOUT,
   LEGACY_MOBILE_QUICK_ACTION_IDS,
   MOBILE_QUICK_ACTION_CATALOG,
   type MobileHomeLayout,
@@ -102,9 +101,18 @@ export function mobileLayoutFromPreset(preset: GlancePresetId): GlanceMobileEntr
   return [...visible, ...rest]
 }
 
-/** The shortcut grid a fresh phone starts with. */
-export const DEFAULT_GLANCE_MOBILE_SHORTCUTS: readonly string[] =
-  DEFAULT_MOBILE_HOME_LAYOUT.quickActions
+/**
+ * The shortcut grid a fresh phone starts with: places with no other door on
+ * the home screen. The old grid's four (new chat, search, workflows, discover)
+ * were each one tap away already, in the composer under the grid, the app
+ * bar's search and the tab bar, so the grid only ever repeated them.
+ */
+export const DEFAULT_GLANCE_MOBILE_SHORTCUTS: readonly string[] = [
+  "inbox",
+  "templates",
+  "squads",
+  "devices",
+]
 
 export const DEFAULT_GLANCE_MOBILE_SETTINGS: GlanceMobileSettings = {
   version: 1,

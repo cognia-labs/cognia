@@ -241,3 +241,68 @@ describe("GlanceStack", () => {
     })
   })
 })
+
+describe("GlanceStack variants", () => {
+  function renderVariant(variant: "list" | "cards" | undefined, renderers?: GlanceStackRenderers) {
+    const value: GlanceContextValue = {
+      snapshot: makeSnapshot(),
+      platform: "mobile",
+      width: "standard",
+      now: 5_000,
+      send: jest.fn(async () => null),
+      route: jest.fn(),
+    }
+    return render(
+      <GlanceProvider value={value}>
+        <GlanceStack
+          entries={[
+            { id: "usage", size: "compact", hidden: false },
+            { id: "quick", size: "standard", hidden: false },
+            { id: "recents", size: "compact", hidden: false },
+          ]}
+          renderers={renderers}
+          variant={variant}
+        />
+      </GlanceProvider>
+    )
+  }
+
+  it("is a hairline-divided list by default, with no card wrappers", () => {
+    const { container } = renderVariant(undefined, {
+      quick: () => <div data-glance-module="quick" />,
+    })
+    const stack = screen.getByTestId("glance-stack")
+    expect(stack).toHaveAttribute("data-variant", "list")
+    expect(stack).toHaveClass("divide-y")
+    expect(container.querySelector("[data-slot=glance-card]")).toBeNull()
+  })
+
+  it("puts each module on a card of its own, in layout order", () => {
+    renderVariant("cards", { quick: () => <div data-glance-module="quick" /> })
+    const stack = screen.getByTestId("glance-stack")
+    expect(stack).toHaveAttribute("data-variant", "cards")
+    expect(stack).not.toHaveClass("divide-y")
+    const cards = Array.from(stack.children)
+    expect(cards.map((card) => card.getAttribute("data-slot"))).toEqual([
+      "glance-card",
+      "glance-card",
+      "glance-card",
+    ])
+    expect(cards.map((card) => renderedModuleIds(card as HTMLElement)[0])).toEqual([
+      "usage",
+      "quick",
+      "recents",
+    ])
+  })
+
+  it("hides the card of a module that renders nothing", () => {
+    renderVariant("cards", { quick: () => null })
+    const cards = screen.getByTestId("glance-stack").querySelectorAll("[data-slot=glance-card]")
+    expect(cards).toHaveLength(3)
+    // jsdom cannot evaluate `:empty`; the class is the contract.
+    expect(cards[1]).toBeEmptyDOMElement()
+    expect(cards[1]).toHaveClass("empty:hidden")
+  })
+})
+
+type GlanceStackRenderers = Parameters<typeof GlanceStack>[0]["renderers"]

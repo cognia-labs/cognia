@@ -1,10 +1,10 @@
 /** @jest-environment jsdom */
-import { act, render } from "@testing-library/react"
+import { act, render, renderHook } from "@testing-library/react"
 import { CompassIcon } from "lucide-react"
 
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
-import { NavigationIcon } from "./navigation-icon"
+import { NavigationIcon, useIllustratedNavigationIcons } from "./navigation-icon"
 
 beforeEach(() => {
   useSettingsStore.setState({ settings: null })
@@ -41,4 +41,14 @@ it("preserves unregistered icons", () => {
   const { container } = render(<NavigationIcon id="third-party:tool" fallback={CompassIcon} />)
   expect(container.querySelector("img")).toBeNull()
   expect(container.querySelector("svg")).toHaveClass("lucide-compass")
+})
+
+it("reports the icon style a host should lay its tiles out for", () => {
+  const { result } = renderHook(() => useIllustratedNavigationIcons())
+  // No saved preference reads as illustrated, like `NavigationIcon` itself.
+  expect(result.current).toBe(true)
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+  expect(result.current).toBe(false)
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+  expect(result.current).toBe(true)
 })

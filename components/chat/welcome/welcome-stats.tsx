@@ -45,6 +45,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useDeferredLoading } from "@/hooks/ui/use-deferred-loading"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { SectionHeading } from "@/components/chat/empty-state"
 import { UsageHeatmap } from "@/components/usage/usage-heatmap"
@@ -282,6 +283,9 @@ export interface WelcomeStatsProps {
   className?: string
 }
 
+/** Settled content eases in rather than popping in under the composer. */
+const SETTLE_IN = "animate-in fade-in-0 duration-300 motion-reduce:animate-none"
+
 /**
  * The desktop welcome's usage dashboard. A phone has none: its usage and
  * activity are glance modules on its home screen (ADR-0225 §9).
@@ -294,6 +298,11 @@ export function WelcomeStats({ className }: WelcomeStatsProps) {
 
   const prefs = useMemo(() => resolveWelcomeStatsPrefs(stored), [stored])
   const { loading, stats, daily, models, modelLabels, now } = useActivityStats(prefs.rangeDays)
+  // The usage table is a Dexie read that almost always settles within a frame
+  // or two. Painting the skeleton for that wait was the flash under the
+  // composer: four pulsing tiles for one frame, then a one-line empty state.
+  // Only a wait long enough to notice gets the skeleton.
+  const showSkeleton = useDeferredLoading(loading)
 
   const numberFormat = useMemo(() => new Intl.NumberFormat(locale), [locale])
   // Locale-aware hour-of-day ("7 PM" / "19时") — no hard-coded clock format.
@@ -394,28 +403,39 @@ export function WelcomeStats({ className }: WelcomeStatsProps) {
       />
 
       {loading ? (
-        <div
-          className="grid grid-cols-2 gap-2 @2xl:grid-cols-4"
-          data-testid="welcome-stats-loading"
-          aria-busy="true"
-        >
-          {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-[62px] rounded-xl" />
-          ))}
-        </div>
+        showSkeleton ? (
+          <div
+            className="grid grid-cols-2 gap-2 @2xl:grid-cols-4"
+            data-testid="welcome-stats-loading"
+            aria-busy="true"
+          >
+            {Array.from({ length: 4 }, (_, i) => (
+              <Skeleton key={i} className="h-[62px] rounded-xl" />
+            ))}
+          </div>
+        ) : (
+          // A quiet line-high hold while the read settles: no skeleton to
+          // flash, and the empty state that usually follows takes this space.
+          <div className="h-4" data-testid="welcome-stats-pending" aria-busy="true" />
+        )
       ) : stats.turns === 0 ? (
-        <p className="text-xs text-muted-foreground" data-testid="welcome-stats-empty">
+        <p
+          className={cn("text-xs text-muted-foreground", SETTLE_IN)}
+          data-testid="welcome-stats-empty"
+        >
           {t("stats.empty")}
         </p>
       ) : prefs.view === "models" ? (
-        <ModelBreakdown
-          models={models}
-          emptyLabel={t("stats.models.empty")}
-          turnsLabel={(turns) => t("stats.models.turns", { count: turns })}
-          modelLabel={fmt.model}
-        />
+        <div className={SETTLE_IN}>
+          <ModelBreakdown
+            models={models}
+            emptyLabel={t("stats.models.empty")}
+            turnsLabel={(turns) => t("stats.models.turns", { count: turns })}
+            modelLabel={fmt.model}
+          />
+        </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className={cn("flex flex-col gap-3", SETTLE_IN)}>
           {prefs.tiles.length > 0 ? (
             <div
               className="grid grid-cols-2 gap-2 @2xl:grid-cols-4"

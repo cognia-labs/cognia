@@ -82,9 +82,19 @@ describe("defaults", () => {
       entries: mobileLayoutFromPreset("balanced"),
       scope: "all",
       options: DEFAULT_GLANCE_MODULE_OPTIONS,
-      shortcuts: DEFAULT_MOBILE_HOME_LAYOUT.quickActions,
+      shortcuts: [...DEFAULT_GLANCE_MOBILE_SHORTCUTS],
     })
-    expect(DEFAULT_GLANCE_MOBILE_SHORTCUTS).toEqual(["newChat", "search", "workflows", "discover"])
+    expect(DEFAULT_GLANCE_MOBILE_SHORTCUTS).toEqual(["inbox", "templates", "squads", "devices"])
+  })
+
+  it("starts the grid on places the home screen has no other door to", () => {
+    // The composer starts a chat, the app bar searches, the tab bar holds
+    // Workflows and Discover: a default tile for any of them only repeats it.
+    for (const repeated of ["newChat", "search", "workflows", "discover"]) {
+      expect(DEFAULT_GLANCE_MOBILE_SHORTCUTS).not.toContain(repeated)
+    }
+    const catalog = new Set(MOBILE_QUICK_ACTION_CATALOG.map((action) => action.id))
+    for (const id of DEFAULT_GLANCE_MOBILE_SHORTCUTS) expect(catalog.has(id)).toBe(true)
   })
 })
 

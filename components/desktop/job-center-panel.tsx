@@ -75,7 +75,29 @@ const SUPERVISOR_POLL_OPEN_MS = 2_000
 /** …and with it shut, where the only consumer is the trigger's badge count. */
 const SUPERVISOR_POLL_CLOSED_MS = 30_000
 
-export function JobCenterPanel({ compact = false }: { compact?: boolean }) {
+export interface JobCenterPanelProps {
+  compact?: boolean
+  /** Controlled open state, for a host that opens the sheet from elsewhere. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /**
+   * Drop the trigger while there is nothing to count (no running, waiting,
+   * settled or live work). The mobile app bar uses this: an idle briefcase
+   * there was a permanent 44px control that only ever opened empty tabs. The
+   * host reaches the sheet through `open` instead while `onIdleChange` says
+   * the trigger is away, so the sheet is never reachable twice at once.
+   */
+  hideIdleTrigger?: boolean
+  onIdleChange?: (idle: boolean) => void
+}
+
+export function JobCenterPanel({
+  compact = false,
+  open: openProp,
+  onOpenChange,
+  hideIdleTrigger = false,
+  onIdleChange,
+}: JobCenterPanelProps) {
   const t = useTranslations("desktop.jobCenter")
   const liveRecords =
     useClientLiveQuery(() => listBackgroundTaskRecords({ host: "renderer" }), [], EMPTY_RECORDS) ??
@@ -87,7 +109,12 @@ export function JobCenterPanel({ compact = false }: { compact?: boolean }) {
   // This panel lives in the status bar (and the mobile shell), so it is mounted
   // for the whole life of the app while its sheet is shut almost all of it.
   // Both timers below are scoped to that fact.
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = openProp ?? ownOpen
+  const setOpen = (next: boolean) => {
+    if (openProp === undefined) setOwnOpen(next)
+    onOpenChange?.(next)
+  }
 
   const anyRunning =
     records.some((record) => record.status === "running") ||
@@ -149,6 +176,10 @@ export function JobCenterPanel({ compact = false }: { compact?: boolean }) {
     history.some((record) => record.status === "interrupted")
   const supervisorCount = jobs.length + monitors.length
   const badgeCount = records.length + runningCount + supervisorCount
+  const idle = badgeCount === 0
+  useEffect(() => {
+    onIdleChange?.(idle)
+  }, [idle, onIdleChange])
   const defaultTab =
     jobs.some((job) => job.status === "running") ||
     monitors.some((monitor) => monitor.status === "waiting")
@@ -177,34 +208,36 @@ export function JobCenterPanel({ compact = false }: { compact?: boolean }) {
         setOpen(next)
       }}
     >
-      <SheetTrigger asChild>
-        <button
-          type="button"
-          data-testid="status-job-center"
-          aria-label={t("open")}
-          // Compact is the mobile app bar, where it sits among ghost icon
-          // buttons (search, ⋮): same 44px box, same full-strength glyph. The
-          // muted tone and extra padding it used to carry read as a different
-          // control and widened the gap to its neighbours.
-          className={cn(
-            "flex shrink-0 items-center transition-colors hover:bg-accent hover:text-foreground",
-            compact
-              ? "touch-target justify-center gap-1 rounded-md px-1.5"
-              : "h-6 gap-1.5 px-2 text-muted-foreground"
-          )}
-        >
-          <BriefcaseBusinessIcon aria-hidden className={compact ? "size-5" : "size-3"} />
-          <span className={compact ? "sr-only" : undefined}>{t("trigger")}</span>
-          {badgeCount > 0 ? (
-            <Badge
-              variant={hasAttention ? "secondary" : "outline"}
-              className="h-4 min-w-4 px-1 text-[10px]"
-            >
-              {badgeCount}
-            </Badge>
-          ) : null}
-        </button>
-      </SheetTrigger>
+      {hideIdleTrigger && idle ? null : (
+        <SheetTrigger asChild>
+          <button
+            type="button"
+            data-testid="status-job-center"
+            aria-label={t("open")}
+            // Compact is the mobile app bar, where it sits among ghost icon
+            // buttons (search, ⋮): same 44px box, same full-strength glyph. The
+            // muted tone and extra padding it used to carry read as a different
+            // control and widened the gap to its neighbours.
+            className={cn(
+              "flex shrink-0 items-center transition-colors hover:bg-accent hover:text-foreground",
+              compact
+                ? "touch-target justify-center gap-1 rounded-md px-1.5"
+                : "h-6 gap-1.5 px-2 text-muted-foreground"
+            )}
+          >
+            <BriefcaseBusinessIcon aria-hidden className={compact ? "size-5" : "size-3"} />
+            <span className={compact ? "sr-only" : undefined}>{t("trigger")}</span>
+            {badgeCount > 0 ? (
+              <Badge
+                variant={hasAttention ? "secondary" : "outline"}
+                className="h-4 min-w-4 px-1 text-[10px]"
+              >
+                {badgeCount}
+              </Badge>
+            ) : null}
+          </button>
+        </SheetTrigger>
+      )}
       <SheetContent className="w-[min(92vw,34rem)] gap-0 p-0 sm:max-w-none">
         <SheetHeader className="border-b">
           <SheetTitle>{t("title")}</SheetTitle>

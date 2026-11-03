@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { ChevronDownIcon, FolderIcon } from "lucide-react"
 
@@ -43,7 +43,30 @@ import { cn } from "@/lib/utils"
  * the same call, asking for the repository and then the branch in one
  * progressive sheet rather than putting both in the chrome.
  */
-export function MobileWorkspaceChip({ className }: { className?: string }) {
+export interface MobileWorkspaceChipProps {
+  className?: string
+  /**
+   * `"icon"` (default): one of the app bar's ghost icon buttons, the name
+   * shown only from 26rem up. It sits beside a conversation's title there,
+   * and the title gets the width.
+   *
+   * `"title"`: the bar's title itself, on the home screen. There the bar had
+   * the brand name ("Cognia") beside a bare folder icon, which said nothing
+   * the greeting below did not, while the one fact that changes what a send
+   * does (which workspace it runs in) hid behind an icon. The name is always
+   * visible here, truncated past `max-w-48`; the full name stays in the
+   * accessible label and the drawer.
+   */
+  variant?: "icon" | "title"
+  /** Rendered instead of nothing when no workspace is active. */
+  fallback?: ReactNode
+}
+
+export function MobileWorkspaceChip({
+  className,
+  variant = "icon",
+  fallback = null,
+}: MobileWorkspaceChipProps) {
   const t = useTranslations("mobile.workspace")
   const [open, setOpen] = useState(false)
   const actions = useWorkspacePickerRequests()
@@ -52,7 +75,8 @@ export function MobileWorkspaceChip({ className }: { className?: string }) {
     return id ? (s.projects.find((p) => p.id === id)?.name ?? null) : null
   })
 
-  if (!name) return null
+  if (!name) return fallback
+  const title = variant === "title"
 
   return (
     <>
@@ -65,18 +89,28 @@ export function MobileWorkspaceChip({ className }: { className?: string }) {
             // Drawn like the app bar's other ghost icon buttons (44px box, 20px
             // glyph, hover fill) rather than as a 10px muted pill: beside the
             // bar's full-size icons the pill read as a stray badge.
+            data-variant={variant}
             className={cn(
-              "flex h-11 min-w-11 items-center justify-center gap-0.5 rounded-md px-1.5 text-sm transition-colors hover:bg-accent",
+              "flex h-11 min-w-11 items-center rounded-md transition-colors hover:bg-accent",
+              title
+                ? "min-w-0 gap-1.5 px-2 text-sm font-medium sm:text-base"
+                : "justify-center gap-0.5 px-1.5 text-sm",
               className
             )}
           >
-            <FolderIcon className="size-5 shrink-0" />
-            {/* Icon-only below 26rem, the same tier the app bar folds its inbox
-                at. At 375px with the credential warning showing, the name was
-                clipped to "D…" while squeezing the conversation title to one
-                letter; the aria-label and the drawer still say which one. */}
+            <FolderIcon
+              className={cn("shrink-0", title ? "size-4 text-muted-foreground" : "size-5")}
+            />
+            {/* The icon variant drops the name below 26rem, the same tier the
+                app bar folds its inbox at. At 375px with the credential
+                warning showing, the name was clipped to "D…" while squeezing
+                the conversation title to one letter; the aria-label and the
+                drawer still say which one. */}
             <span
-              className="hidden max-w-24 truncate min-[26rem]:inline-block"
+              className={cn(
+                "truncate",
+                title ? "min-w-0 max-w-48" : "hidden max-w-24 min-[26rem]:inline-block"
+              )}
               data-testid="mobile-workspace-chip-name"
             >
               {name}

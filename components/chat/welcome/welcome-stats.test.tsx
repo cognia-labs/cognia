@@ -1,12 +1,13 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import type { AppSettings } from "@cognia/agent-config-types"
 import { EMPTY_ACTIVITY_STATS, type ActivityStats } from "@/lib/usage/activity-stats"
 import { DEFAULT_WELCOME_STATS_PREFS } from "@/lib/chat/welcome-stats-prefs"
+import { LOADING_DELAY_MS } from "@/hooks/ui/use-deferred-loading"
 
 // next-intl is globally mocked against en.json in jest.setup.ts.
 
@@ -176,11 +177,29 @@ describe("<WelcomeStats />", () => {
     expect(screen.queryByTestId("welcome-stats")).not.toBeInTheDocument()
   })
 
-  it("shows a skeleton while the first Dexie snapshot is in flight", () => {
+  it("holds a quiet line, not a skeleton, while a fast first read settles", () => {
+    // A Dexie read nearly always settles within a frame or two; painting the
+    // skeleton for it was a one-frame flash under the composer.
     mockHook({ loading: true, stats: { ...EMPTY_ACTIVITY_STATS } })
     render(<WelcomeStats />)
-    expect(screen.getByTestId("welcome-stats-loading")).toBeInTheDocument()
+    expect(screen.getByTestId("welcome-stats-pending")).toBeInTheDocument()
+    expect(screen.queryByTestId("welcome-stats-loading")).not.toBeInTheDocument()
     expect(screen.queryByTestId("welcome-stats-grid")).not.toBeInTheDocument()
+  })
+
+  it("shows the skeleton once the first read is slow enough to notice", () => {
+    jest.useFakeTimers()
+    try {
+      mockHook({ loading: true, stats: { ...EMPTY_ACTIVITY_STATS } })
+      render(<WelcomeStats />)
+      act(() => {
+        jest.advanceTimersByTime(LOADING_DELAY_MS)
+      })
+      expect(screen.getByTestId("welcome-stats-loading")).toBeInTheDocument()
+      expect(screen.queryByTestId("welcome-stats-pending")).not.toBeInTheDocument()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it("explains an empty window instead of showing a grid of zeros", () => {

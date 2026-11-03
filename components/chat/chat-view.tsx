@@ -898,6 +898,9 @@ function ChatPaneContent({
           welcomeStyle={welcomeStyle}
           userName={userName}
           onToggleStyle={isMobileShell ? undefined : handleToggleWelcomeStyle}
+          // A phone keeps the composer where every conversation has it: at the
+          // bottom, in thumb reach, so the first send moves nothing.
+          composerDock={isMobileShell}
           // The real composer, not a lookalike — so a first message carries
           // attachments, slash commands and @-mentions like any other turn.
           // `onHeroSend` creates the session, then sends into it.
@@ -915,7 +918,7 @@ function ChatPaneContent({
                   </div>
                 ) : null}
                 <Composer
-                  placement="hero"
+                  placement={isMobileShell ? "docked" : "hero"}
                   // The mono `dense` box is the desktop welcome's look. A phone
                   // keeps the one composer it uses in every conversation, so the
                   // box does not change style between the home and the chat.

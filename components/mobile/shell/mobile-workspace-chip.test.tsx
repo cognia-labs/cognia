@@ -97,6 +97,44 @@ it("draws as one of the app bar's 44px ghost icon buttons, not a muted pill", ()
   expect(chip).not.toHaveClass("bg-muted/60", "text-[10px]")
 })
 
+describe('variant="title" (the home screen\'s app-bar title)', () => {
+  it("always shows the name, capped so a long one truncates", () => {
+    act(() => {
+      useProjectStore.setState({
+        projects: [{ id: "p1", name: "cognia-next-monorepo-workspace", roots: [] } as never],
+        activeProjectId: "p1",
+      })
+    })
+    render(<MobileWorkspaceChip variant="title" />)
+    const chip = screen.getByTestId("mobile-workspace-chip")
+    expect(chip).toHaveAttribute("data-variant", "title")
+    expect(chip).toHaveClass("min-w-0", "font-medium")
+    const name = screen.getByTestId("mobile-workspace-chip-name")
+    expect(name).toHaveTextContent("cognia-next-monorepo-workspace")
+    expect(name).toHaveClass("truncate", "max-w-48", "min-w-0")
+    expect(name).not.toHaveClass("hidden")
+    // The full name stays readable to assistive tech whatever the truncation.
+    expect(chip.getAttribute("aria-label")).toContain("cognia-next-monorepo-workspace")
+  })
+
+  it("renders its fallback when no workspace is active", () => {
+    render(<MobileWorkspaceChip variant="title" fallback={<h1 data-testid="brand">Cognia</h1>} />)
+    expect(screen.getByTestId("brand")).toBeInTheDocument()
+    expect(screen.queryByTestId("mobile-workspace-chip")).toBeNull()
+  })
+
+  it("leaves the icon variant as it was", () => {
+    act(() => {
+      useProjectStore.setState({
+        projects: [{ id: "p1", name: "Backend", roots: [] } as never],
+        activeProjectId: "p1",
+      })
+    })
+    render(<MobileWorkspaceChip />)
+    expect(screen.getByTestId("mobile-workspace-chip")).toHaveAttribute("data-variant", "icon")
+  })
+})
+
 function activateWorkspace() {
   act(() => {
     useProjectStore.setState({

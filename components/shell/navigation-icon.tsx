@@ -13,6 +13,16 @@ const NAVIGATION_ARTWORK: Partial<Record<string, MobileSpotIconName>> = {
   settings: "preferences",
 }
 
+/**
+ * Whether navigation draws its illustrated artwork (the saved icon style is
+ * anything but "ordinary"). Exported so a host can lay a tile out for the
+ * style it will get: a plate behind a line icon is a box around a glyph,
+ * behind an illustration it is the illustration's frame.
+ */
+export function useIllustratedNavigationIcons(): boolean {
+  return useSettingsStore((s) => s.settings?.settingsIconStyle !== "ordinary")
+}
+
 /** Keeps the rail, expanded rows and overflow menu on the same saved icon style. */
 export function NavigationIcon({
   id,
@@ -23,7 +33,7 @@ export function NavigationIcon({
   fallback: ComponentType<{ className?: string }>
   className?: string
 }) {
-  const anime = useSettingsStore((s) => s.settings?.settingsIconStyle !== "ordinary")
+  const anime = useIllustratedNavigationIcons()
   const artwork = anime ? NAVIGATION_ARTWORK[id] : undefined
   return artwork ? (
     <span

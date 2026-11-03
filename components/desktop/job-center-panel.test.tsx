@@ -191,6 +191,46 @@ it("compact trigger matches the app bar's icon buttons", () => {
   expect(screen.getByTestId("status-job-center")).toHaveClass("text-muted-foreground")
 })
 
+// The mobile app bar drops an idle briefcase and opens the sheet from its ⋮
+// menu instead, so the trigger comes and goes with the work it counts.
+describe("hideIdleTrigger", () => {
+  it("drops the trigger while nothing is counted and reports idle", async () => {
+    useClientLiveQuery.mockReturnValue([])
+    const onIdleChange = jest.fn()
+    render(<JobCenterPanel compact hideIdleTrigger onIdleChange={onIdleChange} />)
+    expect(screen.queryByTestId("status-job-center")).not.toBeInTheDocument()
+    await waitFor(() => expect(listBackgroundJobs).toHaveBeenCalled())
+    expect(onIdleChange).toHaveBeenLastCalledWith(true)
+  })
+
+  it("keeps the trigger while there is work and reports busy", () => {
+    const onIdleChange = jest.fn()
+    render(<JobCenterPanel compact hideIdleTrigger onIdleChange={onIdleChange} />)
+    expect(screen.getByTestId("status-job-center")).toBeInTheDocument()
+    expect(onIdleChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it("still shows an idle trigger without the flag", () => {
+    useClientLiveQuery.mockReturnValue([])
+    render(<JobCenterPanel compact />)
+    expect(screen.getByTestId("status-job-center")).toBeInTheDocument()
+  })
+
+  it("opens from its host while the trigger is away, and reports closing", async () => {
+    useClientLiveQuery.mockReturnValue([])
+    const onOpenChange = jest.fn()
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <JobCenterPanel compact hideIdleTrigger open={false} onOpenChange={onOpenChange} />
+    )
+    expect(screen.queryByRole("heading", { name: "Job Center" })).not.toBeInTheDocument()
+    rerender(<JobCenterPanel compact hideIdleTrigger open onOpenChange={onOpenChange} />)
+    expect(screen.getByRole("heading", { name: "Job Center" })).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    expect(onOpenChange).toHaveBeenLastCalledWith(false)
+  })
+})
+
 // On a phone the panel is a side sheet in the app bar: no swipe-to-dismiss, so
 // its close button, Escape and the Android back button are the ways out.
 it("closes from its close button, from Escape and from the Android back button", async () => {

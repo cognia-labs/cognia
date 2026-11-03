@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 jest.mock("./mobile-glance-provider", () => ({ useMobileGlanceContext: jest.fn() }))
@@ -17,6 +17,7 @@ import type { GlanceRequestBody } from "@/lib/glance/requests"
 import { GLANCE_SNAPSHOT_VERSION, type GlanceSnapshotV1 } from "@/lib/glance/snapshot"
 import { DEFAULT_GLANCE_PANEL_SETTINGS } from "@/lib/glance/presets"
 import type { GlanceModuleSize } from "@/types/glance/layout"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { MobileGlanceQuickModule } from "./mobile-glance-quick-module"
 import { useMobileGlanceContext, type MobileGlanceShellActions } from "./mobile-glance-provider"
@@ -81,6 +82,7 @@ function tileIds(): string[] {
 }
 
 beforeEach(() => {
+  useSettingsStore.setState({ settings: null })
   push.mockReset()
   haptic.mockClear()
   useRouterMock.mockReset().mockReturnValue({ push })
@@ -97,6 +99,41 @@ describe("MobileGlanceQuickModule", () => {
       expect(screen.getByTestId("mobile-quick-action-workflows")).toHaveTextContent("Workflows")
       expect(screen.getByTestId("mobile-quick-action-newChat")).toHaveTextContent("New chat")
       expect(screen.getByTestId("mobile-quick-action-me")).toHaveTextContent("Me")
+    })
+
+    it("lays the shortcuts out as one app-grid row of four, each artwork on its own plate", () => {
+      setup(["workflows", "newChat", "me", "search", "discover"])
+      // Four to a row (a fifth wraps): the two-column grid of large
+      // illustrations spent two tall rows on four buttons.
+      expect(screen.getByTestId("mobile-quick-actions")).toHaveClass("grid-cols-4")
+      for (const id of ["workflows", "newChat", "me", "search", "discover"]) {
+        const tile = screen.getByTestId(`mobile-quick-action-${id}`)
+        const plate = tile.querySelector('[data-slot="quick-action-plate"]')
+        expect(plate).not.toBeNull()
+        expect(plate).toHaveAttribute("aria-hidden")
+        // The label sits under the plate and truncates rather than wrapping.
+        expect(plate!.nextElementSibling).toHaveClass("truncate")
+      }
+    })
+
+    it("frames illustrations on a plate and leaves ordinary line icons bare", () => {
+      setup(["squads", "inbox"])
+      const plates = () =>
+        Array.from(document.querySelectorAll('[data-slot="quick-action-plate"]'))
+      // Illustrated (the default): the artwork sits on a soft filled plate.
+      for (const plate of plates()) {
+        expect(plate).toHaveAttribute("data-style", "plate")
+        expect(plate).toHaveClass("size-14", "bg-foreground/[0.05]")
+      }
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+      // Ordinary: no fill and no ring at rest; only a press paints one.
+      for (const plate of plates()) {
+        expect(plate).toHaveAttribute("data-style", "plain")
+        expect(plate).not.toHaveClass("bg-foreground/[0.05]")
+        expect(plate.className).not.toContain("shadow-")
+        expect(plate).toHaveClass("group-active:bg-foreground/[0.07]")
+        expect(plate.querySelector("svg")).toHaveClass("size-6", "stroke-[1.5]")
+      }
     })
 
     it("starts a chat and opens search through the shell, with a haptic tick", async () => {

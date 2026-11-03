@@ -1817,6 +1817,27 @@ describe("ChatPane — welcome personalization reaches the welcome page", () => 
     }
   })
 
+  it("docks the phone's home composer at the bottom, where every conversation has it", () => {
+    render(<ChatPane {...makeProps()} activeSession={null} onHeroSend={jest.fn()} />)
+    expect(emptyStateMock.mock.calls.at(-1)?.[0].composerDock).toBe(false)
+    mockComposerProps.length = 0
+    render(<>{emptyStateMock.mock.calls.at(-1)?.[0].composerSlot}</>)
+    expect(mockComposerProps.at(-1)?.placement).toBe("hero")
+
+    isCompactLayout = true
+    try {
+      render(<ChatPane {...makeProps()} activeSession={null} onHeroSend={jest.fn()} />)
+      expect(emptyStateMock.mock.calls.at(-1)?.[0].composerDock).toBe(true)
+      mockComposerProps.length = 0
+      render(<>{emptyStateMock.mock.calls.at(-1)?.[0].composerSlot}</>)
+      // The docked placement: the same scrim, padding and keyboard tracking as
+      // the box under a message list.
+      expect(mockComposerProps.at(-1)?.placement).toBe("docked")
+    } finally {
+      isCompactLayout = false
+    }
+  })
+
   it("omits the hero composer when the shell cannot create a session", () => {
     expect(renderWelcome().composerSlot).toBeUndefined()
   })

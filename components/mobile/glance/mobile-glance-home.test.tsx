@@ -122,21 +122,30 @@ function moduleIds(root: HTMLElement): string[] {
 beforeEach(() => useMobileGlanceMock.mockReset())
 
 describe("MobileGlanceHome", () => {
-  it("renders the visible home-pinned modules, in layout order, in one container", () => {
+  it("renders the visible home-pinned modules, in layout order, one card each", () => {
     mockGlance({
       entries: [
-        entry("usage"),
-        entry("quota", false),
+        entry("quota"),
+        entry("usage", false),
         entry("quick", true, false, "standard"),
-        entry("agenda", true, true),
-        entry("recents"),
+        entry("recents", true, true),
+        entry("agenda"),
       ],
     })
     renderHome()
     const home = screen.getByTestId("mobile-glance-home")
-    expect(home).toHaveClass("rounded-2xl", "border", "mt-2")
-    expect(within(home).getAllByTestId("glance-stack")).toHaveLength(1)
-    expect(moduleIds(home)).toEqual(["usage", "quick", "recents"])
+    expect(home).toHaveClass("mt-2")
+    expect(home).not.toHaveClass("border")
+    const stacks = within(home).getAllByTestId("glance-stack")
+    expect(stacks).toHaveLength(1)
+    expect(stacks[0]).toHaveAttribute("data-variant", "cards")
+    expect(moduleIds(home)).toEqual(["quota", "quick", "agenda"])
+    const cards = home.querySelectorAll("[data-slot=glance-card]")
+    expect(Array.from(cards, (card) => moduleIds(card as HTMLElement)[0])).toEqual([
+      "quota",
+      "quick",
+      "agenda",
+    ])
   })
 
   it("registers itself as the home screen while mounted", () => {
@@ -174,19 +183,19 @@ describe("MobileGlanceHome", () => {
 
   it("shows Fleet once something runs, and drops a quiet one beside a speaking module", () => {
     mockGlance({
-      entries: [entry("fleet"), entry("usage")],
+      entries: [entry("fleet"), entry("quota")],
       fleet: makeFleet({ counts: { working: 2, awaiting: 0, failed: 0 } }),
     })
     const view = renderHome()
-    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["fleet", "usage"])
+    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["fleet", "quota"])
 
-    mockGlance({ entries: [entry("fleet"), entry("usage")], fleet: makeFleet() })
+    mockGlance({ entries: [entry("fleet"), entry("quota")], fleet: makeFleet() })
     view.rerender(
       <MobileGlanceProvider actions={ACTIONS}>
         <MobileGlanceHome />
       </MobileGlanceProvider>
     )
-    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["usage"])
+    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["quota"])
   })
 
   it("asks where each pinned module's data came from", () => {
@@ -194,14 +203,14 @@ describe("MobileGlanceHome", () => {
       id === "fleet" ? { kind: "unavailable", reason: "host-offline" } : null
     )
     mockGlance({
-      entries: [entry("fleet"), entry("usage")],
+      entries: [entry("fleet"), entry("quota")],
       fleet: makeFleet({ counts: { working: 1, awaiting: 0, failed: 0 } }),
       originOf,
     })
     renderHome()
     expect(originOf).toHaveBeenCalledWith("fleet")
     // An unavailable Fleet is quiet on the home screen (the drawer says why).
-    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["usage"])
+    expect(moduleIds(screen.getByTestId("mobile-glance-home"))).toEqual(["quota"])
   })
 })
 
@@ -260,7 +269,39 @@ describe("speaksOnHome", () => {
     })
   })
 
-  it.each<GlanceModuleId>(["usage", "quota", "agenda", "activity", "recents", "pet"])(
+  describe("usage, activity and recents", () => {
+    // `speaksOnHome` reads one field of each slice; the rest is irrelevant here.
+    const withSlices = (slices: Partial<GlanceSnapshotV1>): GlanceSnapshotV1 => ({
+      ...snapshot(null),
+      ...slices,
+    })
+    const usage = (turns: number) =>
+      ({ month: { turns, tokens: 0, knownCostUsd: 0 } }) as GlanceSnapshotV1["usage"]
+    const activity = (activeDays: number) => ({ activeDays }) as GlanceSnapshotV1["activity"]
+    const recents = (count: number): GlanceSnapshotV1["recents"] => ({
+      updatedAt: 1,
+      rows: Array.from({ length: count }, (_, i) => ({ id: `s${i}`, title: `S${i}`, updatedAt: 1 })),
+    })
+
+    it("are quiet on a fresh phone: no slice yet, or nothing in it", () => {
+      for (const id of ["usage", "activity", "recents"] as const) {
+        expect(speaksOnHome(entry(id), snapshot(null), [], null)).toBe(false)
+      }
+      const empty = withSlices({ usage: usage(0), activity: activity(0), recents: recents(0) })
+      expect(speaksOnHome(entry("usage"), empty, [], null)).toBe(false)
+      expect(speaksOnHome(entry("activity"), empty, [], null)).toBe(false)
+      expect(speaksOnHome(entry("recents"), empty, [], null)).toBe(false)
+    })
+
+    it("speak once there is something to show", () => {
+      const busy = withSlices({ usage: usage(3), activity: activity(1), recents: recents(2) })
+      expect(speaksOnHome(entry("usage"), busy, [], null)).toBe(true)
+      expect(speaksOnHome(entry("activity"), busy, [], null)).toBe(true)
+      expect(speaksOnHome(entry("recents"), busy, [], null)).toBe(true)
+    })
+  })
+
+  it.each<GlanceModuleId>(["quota", "agenda", "pet"])(
     "always lets %s speak",
     (id) => {
       expect(speaksOnHome(entry(id), snapshot(null), [], null)).toBe(true)

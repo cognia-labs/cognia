@@ -4,9 +4,10 @@
  * The quick module on a phone (ADR-0225 §9): the layout's shortcut list,
  * which used to be the home screen's quick-action grid.
  *
- * `standard` is the grid, two or four columns of illustrated tiles; `compact`
- * is one row of icons. Tiles are buttons on the module's surface, not cards:
- * the module already sits in the glance container, and a card in it would be
+ * `standard` is an app-grid row of four (wrapping in rows of four): the
+ * illustrated style sets each artwork on a soft plate, the ordinary style a
+ * bare line icon; `compact` is one row of icons. Tiles are buttons on the
+ * module's surface, not cards: the module already sits in the glance container, and a card in it would be
  * a card in a card (§3). Editing the list is the layout editor's job; the
  * module's own "Edit" opens it.
  */
@@ -24,9 +25,11 @@ import {
   GlanceSection,
 } from "@/components/glance/glance-primitives"
 import { MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
+import { useIllustratedNavigationIcons } from "@/components/shell/navigation-icon"
 import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { getMobileQuickActionCatalog, type MobileQuickActionItem } from "@/lib/shell/mobile-home-nav"
 import { MOBILE_SPRING, STAGGER_CHILD, STAGGER_CONTAINER } from "@/lib/ui/motion"
+import { cn } from "@/lib/utils"
 import type { GlanceModuleSize } from "@/types/glance/layout"
 
 import { useMobileGlanceContext } from "./mobile-glance-provider"
@@ -36,6 +39,7 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
   const tActions = useTranslations("mobile.home.actions")
   const router = useRouter()
   const reduce = useReducedMotion()
+  const illustrated = useIllustratedNavigationIcons()
   const { route } = useGlance()
   const { settings, actions } = useMobileGlanceContext()
 
@@ -105,10 +109,14 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
         </GlanceLinkButton>
       }
     >
-      {/* The home screen's centrepiece on a first launch: the tiles deal
-          themselves in, and each takes a press. */}
+      {/* One row of four, like a phone's app grid: each shortcut is its
+          icon (on a soft plate when illustrated) with a short label under
+          it, and a fifth wraps to a second row of four. The two-column grid
+          of large illustrations it replaced spent two tall rows (~200px) on
+          four buttons and pushed the usage module below the fold. The tiles
+          deal themselves in on a first launch, and each takes a press. */}
       <motion.div
-        className="-mx-1.5 grid grid-cols-2 gap-1 sm:grid-cols-4"
+        className="-mx-1 grid grid-cols-4 gap-x-1 gap-y-2"
         variants={reduce ? undefined : STAGGER_CONTAINER}
         initial={reduce ? false : "initial"}
         animate="animate"
@@ -122,12 +130,34 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
             data-testid={`mobile-quick-action-${item.id}`}
             onClick={() => dispatch(item)}
             variants={reduce ? undefined : STAGGER_CHILD}
-            whileTap={reduce ? undefined : { scale: 0.95 }}
+            whileTap={reduce ? undefined : { scale: 0.94 }}
             transition={MOBILE_SPRING}
-            className="flex min-h-24 flex-col items-center justify-center gap-1 rounded-xl p-2 text-center transition-colors active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="group flex min-w-0 flex-col items-center gap-1.5 rounded-xl px-0.5 py-1 text-center focus-visible:outline-none"
           >
-            <MobileSpotIcon name={item.spotIcon} size={52} className="-my-1" />
-            <span className="line-clamp-1 text-xs font-medium">{tActions(item.i18nKey)}</span>
+            <span
+              aria-hidden
+              data-slot="quick-action-plate"
+              data-style={illustrated ? "plate" : "plain"}
+              className={cn(
+                "grid place-items-center rounded-2xl transition-colors group-focus-visible:ring-2 group-focus-visible:ring-ring/50",
+                illustrated
+                  ? "size-14 overflow-hidden bg-foreground/[0.05] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--foreground)_7%,transparent)] group-active:bg-foreground/[0.1]"
+                  : // A line icon needs no frame: the plate boxed each glyph
+                    // in a grey tile, and four of them in a card made a card
+                    // of cards. The glyph stands on the card at the label's
+                    // tone and only the press paints a fill.
+                    "size-12 text-foreground/85 group-hover:text-foreground group-active:bg-foreground/[0.07] group-active:text-foreground"
+              )}
+            >
+              {illustrated ? (
+                <MobileSpotIcon name={item.spotIcon} size={44} />
+              ) : (
+                <item.Icon aria-hidden className="size-6 stroke-[1.5]" />
+              )}
+            </span>
+            <span className="w-full truncate text-[11px] leading-tight text-muted-foreground group-active:text-foreground">
+              {tActions(item.i18nKey)}
+            </span>
           </motion.button>
         ))}
       </motion.div>
