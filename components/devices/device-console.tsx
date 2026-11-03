@@ -120,25 +120,6 @@ export function DeviceConsole() {
           title={t("title")}
           description={t("description")}
           summary={t("summary", { online: summary.online, total: summary.total })}
-          /* Where this window's calls land, on the page that is about
-             machines. The desktop status bar carries the same control; this is
-             the copy a browser or a phone can see. */
-          context={
-            companionHost ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 px-2.5 text-xs font-normal"
-                aria-label={t("executionHost.aria", { label: companionHost.label })}
-                onClick={() => select(companionHost.ref)}
-              >
-                <ServerIcon className="size-3.5" />
-                <span className="max-w-40 truncate">{companionHost.label}</span>
-              </Button>
-            ) : (
-              <ExecutionHostChip onAddHost={() => addHost.setOpen(true)} />
-            )
-          }
           primaryAction={{
             id: "pair",
             label: t("actions.pair"),
@@ -161,29 +142,52 @@ export function DeviceConsole() {
             testId: "devices-refresh",
           }}
           actions={
-            /**
-             * The one number a fleet is actually scanned for, and now the way
-             * to the rows behind it. A revoked phone or a host stuck in
-             * `versionMismatch` used to be findable only by opening every row.
-             * It is a filter toggle, not a status, so it sits with the actions
-             * rather than in the header's status chip.
-             */
-            summary.needsAttention > 0 ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-xs font-normal text-amber-600 dark:text-amber-400"
-                onClick={showAttention}
-                aria-pressed={attentionOnly}
-                data-testid="devices-attention-count"
-              >
-                <span
-                  aria-hidden="true"
-                  className="inline-block size-1.5 rounded-full bg-current"
-                />
-                {t("attentionCount", { count: summary.needsAttention })}
-              </Button>
-            ) : null
+            <>
+              {/* Where this window's calls land, on the page that is about
+                  machines. The desktop status bar carries the same control;
+                  this is the copy a browser or a phone can see. It opens a
+                  switcher, so it sits with the actions (as the scheduler's
+                  host control does) rather than squeezing the description. */}
+              {companionHost ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2.5 text-xs font-normal"
+                  aria-label={t("executionHost.aria", { label: companionHost.label })}
+                  onClick={() => select(companionHost.ref)}
+                >
+                  <ServerIcon className="size-3.5" />
+                  <span className="max-w-40 truncate">{companionHost.label}</span>
+                </Button>
+              ) : (
+                <ExecutionHostChip onAddHost={() => addHost.setOpen(true)} />
+              )}
+              {
+                /**
+                 * The one number a fleet is actually scanned for, and now the way
+                 * to the rows behind it. A revoked phone or a host stuck in
+                 * `versionMismatch` used to be findable only by opening every row.
+                 * It is a filter toggle, not a status, so it sits with the actions
+                 * rather than in the header's status chip.
+                 */
+                summary.needsAttention > 0 ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 px-2 text-xs font-normal text-amber-600 dark:text-amber-400"
+                    onClick={showAttention}
+                    aria-pressed={attentionOnly}
+                    data-testid="devices-attention-count"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="inline-block size-1.5 rounded-full bg-current"
+                    />
+                    {t("attentionCount", { count: summary.needsAttention })}
+                  </Button>
+                ) : null
+              }
+            </>
           }
           secondaryActions={[
             {

@@ -34,11 +34,9 @@ interface Props {
    * The panel is inside a host that already owns the page's identity and its
    * way back: the Settings shell, or `/me/skills` under `SubPageShell`.
    *
-   * Without it this header put a second back arrow next to the host's, and
-   * that one pointed at `/`, so the control that looked like "up one level"
-   * actually left Settings altogether. It also emitted a second `<h1>` for a
-   * page that already had one, and on a 375px phone the two titles competed
-   * for the same row until this one truncated to "S…".
+   * Without it this header emitted a second `<h1>` for a page that already
+   * had one, and on a 375px phone the two titles competed for the same row
+   * until this one truncated to "S…".
    */
   embedded?: boolean
 }
@@ -70,7 +68,6 @@ export function SkillPanelHeader({ totalCount, filteredCount, embedded }: Props)
   return (
     <FeaturePageHeader
       icon={<LayersIcon />}
-      back={embedded ? undefined : { label: t("back"), href: "/" }}
       title={t("panel.headerTitle")}
       description={t("panel.headerDescription")}
       summary={

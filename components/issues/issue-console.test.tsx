@@ -39,14 +39,23 @@ jest.mock("@/components/feature-shell/feature-page-shell", () => ({
   },
 }))
 
+// The rail is a column only at the desktop tier; below it the shell draws it as
+// a drawer, which these tests check by switching the tier.
+let breakpoint: "mobile" | "tablet" | "desktop" = "desktop"
+jest.mock("@/hooks/ui", () => ({
+  ...jest.requireActual("@/hooks/ui"),
+  useBreakpoint: () => breakpoint,
+}))
+
 let headerProps: Record<string, unknown> = {}
 jest.mock("@/components/feature-shell/feature-page-header", () => ({
   FeaturePageHeader: (props: Record<string, unknown>) => {
     headerProps = props
-    const { actions, controls, context } = props as Record<string, React.ReactNode>
+    const { actions, controls, context, breadcrumb } = props as Record<string, React.ReactNode>
     const status = props.status as { label: string; tone?: string; testId?: string } | undefined
     return (
       <div data-testid="header-stub">
+        {breadcrumb}
         {status ? (
           <span data-testid={status.testId} data-tone={status.tone} data-slot="status">
             {status.label}
@@ -303,6 +312,7 @@ beforeEach(() => {
   mockSyncAvailability.mockReturnValue({ canSync: true })
   window.localStorage.clear()
   useIssueViewStore.getState().reset()
+  breakpoint = "desktop"
   shellProps = {}
   headerProps = {}
   boardProps = {}
@@ -368,6 +378,24 @@ describe("IssueConsole", () => {
       fireEvent.click(screen.getByTestId("issue-rail-toggle"))
       await waitFor(() => expect(screen.queryByTestId("rail-stub")).not.toBeInTheDocument())
       expect(shellProps.leftPane).toBeUndefined()
+    })
+
+    it("leads the header with the rail toggle, not the action strip", async () => {
+      render(<IssueConsole />)
+      await screen.findByTestId("rail-stub")
+      expect(headerProps.actions).toBeUndefined()
+      expect(headerProps.breadcrumb).toBeDefined()
+    })
+
+    it("below the desktop tier, leaves the rail to the shell's drawer, even when collapsed", async () => {
+      breakpoint = "tablet"
+      useIssueViewStore.getState().setRailCollapsed(true)
+      render(<IssueConsole />)
+      // No second control for the pane the shell's drawer trigger already opens.
+      expect(screen.queryByTestId("issue-rail-toggle")).toBeNull()
+      // A rail collapsed at full width must not take the drawer away too.
+      expect(await screen.findByTestId("rail-stub")).toBeInTheDocument()
+      expect(shellProps.leftPane).toBeDefined()
     })
 
     it("renders the filter bar above the layout rather than in the header", async () => {

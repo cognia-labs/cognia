@@ -140,6 +140,16 @@ const DEFAULT_RIGHT_MIN = 16
 const DEFAULT_RIGHT_MAX = 32
 const DEFAULT_CENTER_MIN = 30
 
+/**
+ * The leading list toggle, in both tiers. It lines up with the header's
+ * identity row, not the whole header: a header with a view bar is two rows
+ * tall, and a centred toggle floated between the title and the tabs. The row
+ * is 60px: 8px of padding either side of the 44px title-and-description
+ * block, and every page header carries a description (pinned by
+ * `feature-page-header-usage.test.ts`).
+ */
+const LEADING_TOGGLE_SLOT = "flex h-15 shrink-0 items-center self-start pl-3"
+
 export function FeaturePageShell({
   storageId,
   header,
@@ -207,7 +217,7 @@ export function FeaturePageShell({
         data-testid={`feature-shell-${storageId}-header`}
       >
         {leftPane && collapsibleLeftPane ? (
-          <div className="flex shrink-0 items-center pl-3">
+          <div className={LEADING_TOGGLE_SLOT}>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -358,7 +368,13 @@ function FeaturePageShellOverlay({
 }: Omit<FeaturePageShellProps, "storageId"> & { storageId: string }) {
   const leftTrigger = leftPane ? leftPane.overlayTrigger !== false : false
   const rightTrigger = rightPane ? rightPane.overlayTrigger !== false : false
-  const showStrip = leftTrigger || rightTrigger
+  // With a header, the list trigger leads the header row: the same place the
+  // full-width tier draws its collapse toggle, so the control does not jump
+  // between rows as the window narrows, and no 36px strip is spent on one
+  // glyph. The strip remains for a right-pane trigger, and for a headerless
+  // shell, which has no row to lead.
+  const leftInHeader = Boolean(header) && leftTrigger
+  const showStrip = (leftTrigger && !leftInHeader) || rightTrigger
 
   return (
     <div
@@ -367,8 +383,19 @@ function FeaturePageShellOverlay({
       data-testid={`feature-shell-${storageId}`}
     >
       {header ? (
-        <div className="shrink-0" data-testid={`feature-shell-${storageId}-header`}>
-          {header}
+        <div
+          className={cn("shrink-0", leftInHeader && "flex")}
+          data-testid={`feature-shell-${storageId}-header`}
+        >
+          {leftPane && leftInHeader ? (
+            <div
+              className={LEADING_TOGGLE_SLOT}
+              data-testid={`feature-shell-${storageId}-header-pane-trigger`}
+            >
+              <OverlayPane pane={leftPane} side="left" trigger />
+            </div>
+          ) : null}
+          {leftInHeader ? <div className="min-w-0 flex-1">{header}</div> : header}
         </div>
       ) : null}
 
@@ -377,7 +404,11 @@ function FeaturePageShellOverlay({
           className="flex min-h-9 shrink-0 items-center justify-between bg-muted/40 px-2"
           data-testid={`feature-shell-${storageId}-pane-controls`}
         >
-          {leftPane && leftTrigger ? <OverlayPane pane={leftPane} side="left" trigger /> : <span />}
+          {leftPane && leftTrigger && !leftInHeader ? (
+            <OverlayPane pane={leftPane} side="left" trigger />
+          ) : (
+            <span />
+          )}
           {rightPane && rightTrigger ? <OverlayPane pane={rightPane} side="right" trigger /> : null}
         </div>
       ) : null}

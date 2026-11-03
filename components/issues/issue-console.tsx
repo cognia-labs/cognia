@@ -50,6 +50,7 @@ import {
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { Button } from "@/components/ui/button"
 import { useClientLiveQuery } from "@/hooks/data"
+import { useBreakpoint } from "@/hooks/ui"
 import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
@@ -172,6 +173,12 @@ export function IssueConsole({
   const railCollapsed = useIssueViewStore((s) => s.railCollapsed)
   const setViewId = useIssueViewStore((s) => s.setViewId)
   const setRailCollapsed = useIssueViewStore((s) => s.setRailCollapsed)
+  // Collapsing is a column's affordance. Below `lg` the shell turns the rail
+  // into a drawer with its own trigger at the head of the header, so the
+  // collapse toggle would be a second control for the same pane, and a
+  // collapsed rail would take the drawer's trigger away with it.
+  const railIsColumn = useBreakpoint() === "desktop"
+  const railShown = !railIsColumn || !railCollapsed
   const setFilter = useIssueViewStore((s) => s.setFilter)
   const setLayout = useIssueViewStore((s) => s.setLayout)
   const setGroupBy = useIssueViewStore((s) => s.setGroupBy)
@@ -731,19 +738,21 @@ export function IssueConsole({
           summary={t("summary", { count: sorted.length })}
           tabs={trackerTabs}
           status={headerStatus}
-          // A pressed-state toggle, not a plain button: it stays in `actions`.
-          actions={
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={railCollapsed ? t("rail.show") : t("rail.hide")}
-              title={railCollapsed ? t("rail.show") : t("rail.hide")}
-              aria-pressed={!railCollapsed}
-              onClick={() => setRailCollapsed(!railCollapsed)}
-              data-testid="issue-rail-toggle"
-            >
-              <PanelLeftIcon className="size-4" />
-            </Button>
+          // A leading pane toggle, where Devices and Scheduler draw theirs.
+          breadcrumb={
+            railIsColumn ? (
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label={railCollapsed ? t("rail.show") : t("rail.hide")}
+                title={railCollapsed ? t("rail.show") : t("rail.hide")}
+                aria-pressed={!railCollapsed}
+                onClick={() => setRailCollapsed(!railCollapsed)}
+                data-testid="issue-rail-toggle"
+              >
+                <PanelLeftIcon className="size-4" />
+              </Button>
+            ) : undefined
           }
           primaryAction={{
             id: "create",
@@ -778,7 +787,7 @@ export function IssueConsole({
         />
       }
       leftPane={
-        railCollapsed
+        !railShown
           ? undefined
           : {
               label: t("rail.label"),

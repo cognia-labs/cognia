@@ -72,9 +72,12 @@ beforeEach(() => {
 })
 
 describe("SkillPanelHeader", () => {
-  it("keeps its own way back and its h1 when it is the page", () => {
+  it("is a top-level page: its icon tile and h1, with no back arrow", () => {
+    // Skills sits in the nav like Agents or Memory. A back arrow to `/` took
+    // the icon tile's place and made it the one top-level page that looked
+    // like a sub-page.
     renderHeader({ totalCount: 5, filteredCount: 5 })
-    expect(screen.getByRole("link", { name: "back" })).toHaveAttribute("href", "/")
+    expect(screen.queryByRole("link", { name: "back" })).not.toBeInTheDocument()
     expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument()
   })
 

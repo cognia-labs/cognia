@@ -171,6 +171,18 @@ describe("DeviceConsole", () => {
   })
 
   /**
+   * The host switcher opens a popover, so it is an action. In the context
+   * slot it truncated the description at 900px and vanished with the
+   * description line below the header's `lg` width.
+   */
+  it("keeps the execution-host switcher with the header's actions", () => {
+    renderConsole()
+    expect(screen.getByTestId("feature-header-actions")).toContainElement(
+      screen.getByTestId("execution-host-chip")
+    )
+  })
+
+  /**
    * This machine is the one row that is always present and always safe to
    * show. Reopening pinned to a phone that has since been revoked would leave
    * the pane empty with no explanation.

@@ -333,6 +333,51 @@ describe("narrow desktop windows", () => {
     fireEvent.click(screen.getByLabelText("openRight:Details"))
     expect(screen.getByTestId("tablet-open-right")).toBeInTheDocument()
   })
+
+  test("with a header, the list trigger leads the header row instead of a strip", () => {
+    breakpointValue = "tablet"
+    render(
+      <FeaturePageShell
+        storageId="headed"
+        header={<h1>Agents</h1>}
+        leftPane={{ label: "Agents", content: <div data-testid="headed-left" /> }}
+      >
+        <div />
+      </FeaturePageShell>
+    )
+    const header = screen.getByTestId("feature-shell-headed-header")
+    // The trigger sits before the title, where the wide tier's toggle sits.
+    const trigger = screen.getByRole("button", { name: "openLeft:Agents" })
+    expect(header).toContainElement(trigger)
+    expect(
+      trigger.compareDocumentPosition(screen.getByRole("heading", { name: "Agents" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // One glyph no longer costs a row of its own.
+    expect(screen.queryByTestId("feature-shell-headed-pane-controls")).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getByTestId("headed-left")).toBeInTheDocument()
+  })
+
+  test("a right-pane trigger keeps the strip while the list trigger leads the header", () => {
+    breakpointValue = "tablet"
+    render(
+      <FeaturePageShell
+        storageId="headed-both"
+        header={<h1>Issues</h1>}
+        leftPane={{ label: "Rail", content: <div /> }}
+        rightPane={{ label: "Details", content: <div /> }}
+      >
+        <div />
+      </FeaturePageShell>
+    )
+    expect(screen.getByTestId("feature-shell-headed-both-header")).toContainElement(
+      screen.getByRole("button", { name: "openLeft:Rail" })
+    )
+    const strip = screen.getByTestId("feature-shell-headed-both-pane-controls")
+    expect(strip).toContainElement(screen.getByRole("button", { name: "openRight:Details" }))
+    expect(strip).not.toContainElement(screen.getByRole("button", { name: "openLeft:Rail" }))
+  })
 })
 
 test("an opt-in desktop list collapses without remounting the list or detail", () => {
