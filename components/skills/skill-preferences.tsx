@@ -18,7 +18,9 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { useSettingsStore } from "@/stores/settings"
+import { resolveSkillBundleMirrors } from "@/stores/settings/settings-store"
 import { useSkillPanelPrefs } from "@/hooks/skills"
+import { canReadHostSkills, canWriteHostSkills } from "@/lib/skills/sync"
 import {
   clampEnabledWarnThreshold,
   SKILL_ENABLED_WARN_MAX,
@@ -33,12 +35,14 @@ function SwitchRow({
   hint,
   checked,
   onChange,
+  disabled,
   testId,
 }: {
   label: string
   hint?: string
   checked: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
   testId?: string
 }) {
   return (
@@ -47,7 +51,14 @@ function SwitchRow({
         <p className="text-xs font-medium">{label}</p>
         {hint && <p className="text-[10px] leading-tight text-muted-foreground">{hint}</p>}
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} size="sm" data-testid={testId} />
+      <Switch
+        checked={checked}
+        onCheckedChange={onChange}
+        disabled={disabled}
+        size="sm"
+        aria-label={label}
+        data-testid={testId}
+      />
     </div>
   )
 }
@@ -266,6 +277,61 @@ export function SkillPreferencesForm({ className }: { className?: string }) {
 }
 
 /**
+ * Where a native push mirrors each skill, and whether the host can take one.
+ *
+ * These used to sit in the toolbar's "⋯" between Push and Empty trash, as
+ * checkbox items in an action menu. They are settings, so they moved here when
+ * the actions became the page header's typed overflow; the note explains why
+ * Push and Pull are greyed out there.
+ *
+ * Gated on the host-skills predicates, not `isTauri()`: the commands behind a
+ * native sync are remote-reachable, so a browser or phone driving a paired
+ * Host that serves `~/.claude/skills/` can use them.
+ */
+export function SkillSyncTargets() {
+  const t = useTranslations("skills")
+  const hostSkillsReachable = canReadHostSkills() || canWriteHostSkills()
+  // Select the raw field so Zustand's referential equality holds across
+  // renders — wrapping `resolveSkillBundleMirrors` in the selector creates
+  // a fresh object every read and triggers an update loop in React 19.
+  const rawMirrors = useSettingsStore((s) => s.settings?.skillBundleMirrors)
+  const mirrorSettings = resolveSkillBundleMirrors(
+    rawMirrors ? ({ skillBundleMirrors: rawMirrors } as never) : null
+  )
+  const setMirror = useSettingsStore((s) => s.setSkillBundleMirrors)
+
+  return (
+    <div className="flex flex-col gap-1" data-testid="skill-panel-toolbar-sync">
+      <GroupLabel>{t("syncLabel")}</GroupLabel>
+      {/* `unavailableRead` is the sentence `useSkillSync` shows when it
+          refuses; "requires desktop" would be wrong for a phone paired to a
+          Host that serves its skills directory. */}
+      <p
+        className="text-[10px] leading-tight text-muted-foreground"
+        data-testid="skill-panel-toolbar-sync-hint"
+      >
+        {hostSkillsReachable ? t("toolbar.syncNative") : t("sync.unavailableRead")}
+      </p>
+      <p className="pt-1 text-xs font-medium">{t("sync.mirrorTargetsLabel")}</p>
+      <SwitchRow
+        label={t("sync.mirrorClaude")}
+        checked={mirrorSettings.claude}
+        onChange={(v) => void setMirror({ claude: v })}
+        disabled={!hostSkillsReachable}
+        testId="skill-panel-toolbar-mirror-claude"
+      />
+      <SwitchRow
+        label={t("sync.mirrorCodex")}
+        checked={mirrorSettings.codex}
+        onChange={(v) => void setMirror({ codex: v })}
+        disabled={!hostSkillsReachable}
+        testId="skill-panel-toolbar-mirror-codex"
+      />
+    </div>
+  )
+}
+
+/**
  * Header gear button that opens the preferences form in a popover. Shared entry
  * point on the skill panel header (reachable everywhere the panel renders,
  * including inside Settings).
@@ -288,6 +354,8 @@ export function SkillPreferencesPopover() {
       <PopoverContent align="end" className="max-h-[70vh] w-80 overflow-y-auto p-3">
         <p className="mb-1 text-sm font-semibold">{t("prefs.title")}</p>
         <SkillPreferencesForm />
+        <div className="my-2 border-t" />
+        <SkillSyncTargets />
       </PopoverContent>
     </Popover>
   )

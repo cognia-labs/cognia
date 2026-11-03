@@ -45,6 +45,12 @@ interface Props {
   selected: boolean
   /** Whether this row is the one shown in the detail pane. */
   active: boolean
+  /**
+   * Whether any row in the list is selected. While a batch is being built every
+   * checkbox stays visible; otherwise a row's checkbox waits for hover or focus
+   * so the list reads as names, not as a form.
+   */
+  selecting?: boolean
   onToggleSelect: (id: string) => void
   onOpen: (id: string) => void
   /** Display options (density, view mode, per-field visibility). */
@@ -56,12 +62,14 @@ interface Props {
  * preferences: comfortable/compact density, list/grid layout, and per-field
  * visibility (description, tags, source badge, usage count). The checkbox is a
  * sibling of the row button (never nested) so batch selection doesn't trigger
- * `onOpen`.
+ * `onOpen`. In the list it sits over the category icon and takes its place on
+ * hover, focus or while selecting (and always on touch, which has no hover).
  */
 export const SkillListItem = memo(function SkillListItem({
   skill,
   selected,
   active,
+  selecting = false,
   onToggleSelect,
   onOpen,
   display = DEFAULT_LIST_DISPLAY,
@@ -83,20 +91,32 @@ export const SkillListItem = memo(function SkillListItem({
   // secondary text takes the accent's own foreground.
   const subtleInk = active ? "text-accent-foreground" : "text-muted-foreground"
 
+  // Selected, or part of a batch being built: the checkbox owns the slot.
+  const checkboxShown = selected || selecting
+  const revealOnHover =
+    "opacity-0 group-hover/skill-row:opacity-100 group-focus-within/skill-row:opacity-100 [@media(hover:none)]:opacity-100"
   const selectCheckbox = (
     <Checkbox
       checked={selected}
       onCheckedChange={() => onToggleSelect(skill.id)}
       aria-label={t("card.selectAria", { name: skill.name })}
+      className={cn("bg-background transition-opacity", !checkboxShown && revealOnHover)}
+      data-revealed={checkboxShown ? "true" : undefined}
     />
   )
 
   const iconBox = (
     <span
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-md",
+        "flex shrink-0 items-center justify-center rounded-md transition-opacity",
         compact ? "h-6 w-6" : "h-7 w-7",
-        category.color
+        category.color,
+        // In the list the checkbox draws over the icon; the icon steps aside
+        // whenever the checkbox shows.
+        !grid &&
+          (checkboxShown
+            ? "opacity-0"
+            : "group-hover/skill-row:opacity-0 group-focus-within/skill-row:opacity-0 [@media(hover:none)]:opacity-0")
       )}
     >
       <Icon className="size-3.5" />
@@ -167,8 +187,8 @@ export const SkillListItem = memo(function SkillListItem({
 
   if (grid) {
     return (
-      <div className="relative min-w-0">
-        <span className="absolute right-2 top-2 z-10">{selectCheckbox}</span>
+      <div className="group/skill-row relative min-w-0">
+        <span className="absolute right-2 top-2 z-10 flex">{selectCheckbox}</span>
         <Button
           type="button"
           variant="ghost"
@@ -204,8 +224,17 @@ export const SkillListItem = memo(function SkillListItem({
   }
 
   return (
-    <div className="flex items-center gap-1.5 ps-2">
-      {selectCheckbox}
+    <div className="group/skill-row relative flex items-center">
+      <span
+        className={cn(
+          "absolute top-1/2 z-10 flex -translate-y-1/2",
+          // Centred on the icon: the button's 10px inset plus half the icon,
+          // less half the 16px checkbox.
+          compact ? "left-3.5" : "left-4"
+        )}
+      >
+        {selectCheckbox}
+      </span>
       <Button
         type="button"
         variant="ghost"

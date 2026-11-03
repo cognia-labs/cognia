@@ -10,12 +10,17 @@
  * Links, not tabs: each destination is its own URL (`/issues`, `/projects`,
  * `/projects?tab=cycles`), which keeps deep links, back navigation and the
  * static export honest. `aria-current` marks where you already are.
+ *
+ * Two renderings of the one destination list: `TrackerTabs`, the segmented
+ * strip the compact bodies draw, and `useTrackerHeaderTabs`, the same three
+ * links as `FeaturePageHeader` route tabs for the desktop consoles.
  */
 
 import { CircleDotIcon, FolderKanbanIcon, RotateCwIcon } from "lucide-react"
 import Link from "next/link"
 import { useTranslations } from "next-intl"
 
+import type { FeatureHeaderTabs } from "@/components/feature-shell/feature-page-header"
 import { cn } from "@/lib/utils"
 
 export type TrackerDestination = "issues" | "projects" | "cycles"
@@ -75,4 +80,25 @@ export function TrackerTabs({ active, compact, className }: TrackerTabsProps) {
       })}
     </nav>
   )
+}
+
+/**
+ * The tracker's destinations as the page header's route tabs: one link per
+ * destination, the current route as the value, no `onValueChange` (the links
+ * do the switching). Same ids, hrefs, labels and test ids as `TrackerTabs`.
+ */
+export function useTrackerHeaderTabs(active: TrackerDestination): FeatureHeaderTabs {
+  const t = useTranslations("issues")
+  return {
+    ariaLabel: t("rail.trackerNav"),
+    value: active,
+    testId: "tracker-nav",
+    items: TRACKER_DESTINATIONS.map((destination) => ({
+      value: destination.id,
+      label: t(destination.labelKey),
+      icon: destination.icon,
+      href: destination.href,
+      testId: `tracker-nav-${destination.id}`,
+    })),
+  }
 }

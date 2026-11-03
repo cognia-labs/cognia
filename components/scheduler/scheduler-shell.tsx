@@ -4,6 +4,9 @@
  * Responsive scheduler shell — owns the page's three layout tiers (mirrors
  * `components/inbox/inbox-shell.tsx`):
  *
+ * The header spans the full width above every tier; the list and the detail
+ * share the row below it.
+ *
  *   - ≥ 1024 px (desktop): a `ResizablePanelGroup` with a draggable split
  *     between the task list (sidebar content) and the detail pane; splits
  *     persist via `useResizableLayout("scheduler-panels")`. The shadcn
@@ -133,72 +136,78 @@ function DesktopSchedulerShell({ sidebar, header, detail, rail }: SchedulerShell
       open={!isListCollapsed}
       onOpenChange={handleSidebarOpenChange}
       data-bg-target="chat"
-      className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
+      className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden"
     >
-      <ResizablePanelGroup
-        orientation="horizontal"
-        className={cn(
-          "min-h-0 flex-1",
-          // v4 sizes the outer [data-panel] elements; className on Panel
-          // styles its inner scroller. Only toggles animate, never dragging.
-          animateToggle &&
-            "[&>[data-panel]]:transition-[flex-grow] [&>[data-panel]]:duration-200 [&>[data-panel]]:ease-out"
-        )}
-        onTransitionEnd={(event) => {
-          if (event.propertyName === "flex-grow") setAnimateToggle(false)
-        }}
-        defaultLayout={initialLayout}
-        onLayoutChanged={handleLayoutChanged}
-      >
-        <ResizablePanel
-          id="scheduler-list"
-          panelRef={listPanelRef}
-          groupResizeBehavior="preserve-pixel-size"
-          collapsible
-          collapsedSize="0%"
-          defaultSize={initialCollapsed ? "0%" : LIST_WIDTH}
-          minSize={LIST_WIDTH}
-          maxSize={`${PANEL_BOUNDS.listMax}%`}
-          style={{ overflow: "hidden" }}
+      {/* The header spans the page, over the list and the detail, the way
+          every other feature page draws it. Inside the detail panel it left
+          the list's search and filters beside the title, at a different
+          height from it. */}
+      {header}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <ResizablePanelGroup
+          orientation="horizontal"
           className={cn(
-            "flex flex-col overflow-hidden text-sidebar-foreground",
-            // The sidebar tint, as glass inside a wallpaper (see globals.css
-            // `--sidebar-pane-bg`).
-            "bg-[var(--sidebar-pane-bg,var(--sidebar))] [backdrop-filter:var(--sidebar-pane-filter,none)]",
-            !isListCollapsed && "border-e"
+            "min-h-0 flex-1",
+            // v4 sizes the outer [data-panel] elements; className on Panel
+            // styles its inner scroller. Only toggles animate, never dragging.
+            animateToggle &&
+              "[&>[data-panel]]:transition-[flex-grow] [&>[data-panel]]:duration-200 [&>[data-panel]]:ease-out"
           )}
-          data-testid="scheduler-list-pane"
-          data-collapsed={isListCollapsed || undefined}
+          onTransitionEnd={(event) => {
+            if (event.propertyName === "flex-grow") setAnimateToggle(false)
+          }}
+          defaultLayout={initialLayout}
+          onLayoutChanged={handleLayoutChanged}
         >
-          <div
-            className="flex h-full min-h-0 min-w-[15rem] flex-col"
-            inert={isListCollapsed}
-            aria-hidden={isListCollapsed || undefined}
+          <ResizablePanel
+            id="scheduler-list"
+            panelRef={listPanelRef}
+            groupResizeBehavior="preserve-pixel-size"
+            collapsible
+            collapsedSize="0%"
+            defaultSize={initialCollapsed ? "0%" : LIST_WIDTH}
+            minSize={LIST_WIDTH}
+            maxSize={`${PANEL_BOUNDS.listMax}%`}
+            style={{ overflow: "hidden" }}
+            className={cn(
+              "flex flex-col overflow-hidden text-sidebar-foreground",
+              // The sidebar tint, as glass inside a wallpaper (see globals.css
+              // `--sidebar-pane-bg`).
+              "bg-[var(--sidebar-pane-bg,var(--sidebar))] [backdrop-filter:var(--sidebar-pane-filter,none)]",
+              !isListCollapsed && "border-e"
+            )}
+            data-testid="scheduler-list-pane"
+            data-collapsed={isListCollapsed || undefined}
           >
-            {sidebar("content")}
-          </div>
-        </ResizablePanel>
-        <ResizableHandle
-          withHandle
-          onPointerDownCapture={() => setAnimateToggle(false)}
-          onKeyDownCapture={() => setAnimateToggle(false)}
-          aria-label={t("resize.listHandle")}
-          className={cn(isListCollapsed && "hidden")}
-        />
-        <ResizablePanel
-          id="scheduler-detail"
-          defaultSize="100%"
-          style={{ overflow: "hidden" }}
-          minSize={`${PANEL_BOUNDS.detailMin}%`}
-          className="flex min-w-0 flex-col overflow-hidden"
-          data-testid="scheduler-detail-pane"
-          data-bg-target="chat"
-        >
-          {header}
-          <div className="min-h-0 flex-1 overflow-auto">{detail}</div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
-      {rail}
+            <div
+              className="flex h-full min-h-0 min-w-[15rem] flex-col"
+              inert={isListCollapsed}
+              aria-hidden={isListCollapsed || undefined}
+            >
+              {sidebar("content")}
+            </div>
+          </ResizablePanel>
+          <ResizableHandle
+            withHandle
+            onPointerDownCapture={() => setAnimateToggle(false)}
+            onKeyDownCapture={() => setAnimateToggle(false)}
+            aria-label={t("resize.listHandle")}
+            className={cn(isListCollapsed && "hidden")}
+          />
+          <ResizablePanel
+            id="scheduler-detail"
+            defaultSize="100%"
+            style={{ overflow: "hidden" }}
+            minSize={`${PANEL_BOUNDS.detailMin}%`}
+            className="flex min-w-0 flex-col overflow-hidden"
+            data-testid="scheduler-detail-pane"
+            data-bg-target="chat"
+          >
+            <div className="min-h-0 flex-1 overflow-auto">{detail}</div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+        {rail}
+      </div>
     </SidebarProvider>
   )
 }
@@ -219,12 +228,15 @@ export function SchedulerShell(props: SchedulerShellProps) {
       defaultOpen={false}
       style={{ "--sidebar-width": LIST_WIDTH } as React.CSSProperties}
       data-bg-target="chat"
-      className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden"
+      className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden"
     >
-      <div className="flex h-full w-full min-w-0 flex-1">
+      {header}
+      {/* `relative`: the sidebar container is `absolute inset-y-0`, and this
+          row, not the provider, is what it should fill — otherwise an open
+          list covers the header. */}
+      <div className="relative flex min-h-0 w-full min-w-0 flex-1">
         {sidebar("chrome")}
-        <SidebarInset data-bg-target="chat">
-          {header}
+        <SidebarInset data-bg-target="chat" className="min-h-0">
           <div className="min-h-0 flex-1 overflow-auto">{detail}</div>
         </SidebarInset>
       </div>

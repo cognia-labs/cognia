@@ -798,7 +798,8 @@
     "annotate": "轨迹分析",
     "calibrate": "评委校准",
     "compare": "运行与对比",
-    "datasets": "数据集"
+    "datasets": "数据集",
+    "ariaLabel": "评测视图"
   },
   "title": "Agent 评估",
   "versions": {

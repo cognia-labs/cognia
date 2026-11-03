@@ -174,7 +174,6 @@ export function CapabilitiesSection({ row }: { row: DeviceRow }) {
       id="capabilities"
       title={t("capabilities.title")}
       icon={LayersIcon}
-      wide
       meta={t("capabilities.reportedCount", { reported, total: row.capabilities.length })}
     >
       <div className="space-y-4" data-testid="device-capabilities">

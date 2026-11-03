@@ -248,7 +248,6 @@ export function OrgModelsSection({
       icon={BuildingIcon}
       meta={loaded ? t("meta", { count: loaded.credentials.length }) : undefined}
       description={t("description", { host })}
-      wide
     >
       <div className="space-y-4" data-testid="org-models-section">
         {refusal ? (

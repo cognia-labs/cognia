@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { ItemHero, type ItemActions } from "./item-hero"
@@ -31,7 +31,8 @@ function actions(overrides: Partial<ItemActions> = {}): ItemActions {
 }
 
 describe("ItemHero", () => {
-  it("names the item and dispatches the primary actions", () => {
+  it("names the item and dispatches the primary actions", async () => {
+    const user = userEvent.setup()
     const a = actions({ onEdit: jest.fn() })
     render(<ItemHero item={item()} actions={a} />)
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Nightly build")
@@ -40,12 +41,27 @@ describe("ItemHero", () => {
     fireEvent.click(screen.getByTestId("item-action-run"))
     fireEvent.click(screen.getByTestId("item-action-pause"))
     fireEvent.click(screen.getByTestId("item-action-edit"))
-    fireEvent.click(screen.getByTestId("item-action-delete"))
     expect(a.onRunNow).toHaveBeenCalled()
     expect(a.onPause).toHaveBeenCalled()
     expect(a.onEdit).toHaveBeenCalled()
+    // Delete waits behind ⋯ as a destructive item, not a red word beside Edit.
+    expect(
+      within(screen.getByTestId("item-hero-actions")).queryByText("Delete")
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByTestId("item-action-more"))
+    const remove = await screen.findByTestId("item-action-delete")
+    expect(remove).toHaveAttribute("data-variant", "destructive")
+    await user.click(remove)
     expect(a.onDelete).toHaveBeenCalled()
-    expect(screen.queryByTestId("item-action-more")).not.toBeInTheDocument()
+  })
+
+  it("keeps the status badge beside the name and the verbs on the title row", () => {
+    render(<ItemHero item={item()} actions={actions({ onEdit: jest.fn() })} />)
+    const heading = screen.getByRole("heading", { level: 2 })
+    expect(heading).not.toHaveClass("flex-1")
+    const actionsRow = screen.getByTestId("item-hero-actions")
+    // Name block and verbs share one wrapping row.
+    expect(actionsRow.parentElement).toContainElement(heading)
   })
 
   it("says where a placeholder runs, links there, and offers nothing to do here", () => {
@@ -80,7 +96,8 @@ describe("ItemHero", () => {
     expect(screen.getByTestId("item-action-run")).toBeDisabled()
   })
 
-  it("disables a control with a reason rather than hiding it", () => {
+  it("disables a control with a reason rather than hiding it", async () => {
+    const user = userEvent.setup()
     render(
       <ItemHero
         item={item({
@@ -97,7 +114,8 @@ describe("ItemHero", () => {
     )
     expect(screen.getByTestId("item-action-pause")).toBeDisabled()
     expect(screen.getByTestId("item-action-edit-disabled")).toBeDisabled()
-    expect(screen.getByTestId("item-action-delete")).toBeDisabled()
+    await user.click(screen.getByTestId("item-action-more"))
+    expect(await screen.findByTestId("item-action-delete")).toHaveAttribute("data-disabled")
   })
 
   it("points at the source editor when the item is editable but not here", () => {
@@ -148,7 +166,8 @@ describe("ItemHero", () => {
 })
 
 describe("ItemHero · feedback while an action is in flight", () => {
-  it("shows Run now as starting and holds every other action", () => {
+  it("shows Run now as starting and holds every other action", async () => {
+    const user = userEvent.setup()
     render(
       <ItemHero item={item()} actions={actions({ onEdit: jest.fn() })} pendingAction="starting" />
     )
@@ -157,7 +176,8 @@ describe("ItemHero · feedback while an action is in flight", () => {
     expect(run).toHaveAttribute("aria-busy", "true")
     expect(run).toHaveTextContent("Starting…")
     expect(screen.getByTestId("item-action-pause")).toBeDisabled()
-    expect(screen.getByTestId("item-action-delete")).toBeDisabled()
+    await user.click(screen.getByTestId("item-action-more"))
+    expect(await screen.findByTestId("item-action-delete")).toHaveAttribute("data-disabled")
   })
 
   it("marks the pause toggle busy while it is being answered", () => {
@@ -175,7 +195,8 @@ describe("ItemHero · feedback while an action is in flight", () => {
     expect(screen.queryByTestId("item-hero-back")).not.toBeInTheDocument()
   })
 
-  it("points a disabled control at its reason, not only a hover title", () => {
+  it("points a disabled control at its reason, not only a hover title", async () => {
+    const user = userEvent.setup()
     render(
       <ItemHero
         item={item({ capabilities: { runNow: false, pause: true, edit: true, delete: false } })}
@@ -186,20 +207,16 @@ describe("ItemHero · feedback while an action is in flight", () => {
     const describedBy = run.getAttribute("aria-describedby")
     expect(describedBy).toBeTruthy()
     expect(document.getElementById(describedBy!)).toHaveTextContent(run.getAttribute("title")!)
-    expect(screen.getByTestId("item-action-delete")).toHaveAttribute("aria-describedby")
     expect(screen.getByTestId("item-action-pause")).not.toHaveAttribute("aria-describedby")
+    await user.click(screen.getByTestId("item-action-more"))
+    expect(await screen.findByTestId("item-action-delete")).toHaveAttribute("aria-describedby")
   })
 
-  it("keeps Edit and Delete named while their words hide on a phone", () => {
+  it("keeps Edit named while its word hides on a phone", () => {
     render(<ItemHero item={item()} actions={actions({ onEdit: jest.fn() })} />)
-    for (const [id, name] of [
-      ["item-action-edit", "Edit"],
-      ["item-action-delete", "Delete"],
-    ] as const) {
-      const button = screen.getByTestId(id)
-      expect(button).toHaveAccessibleName(name)
-      expect(button.querySelector("span")).toHaveClass("hidden", "sm:inline")
-    }
+    const edit = screen.getByTestId("item-action-edit")
+    expect(edit).toHaveAccessibleName("Edit")
+    expect(edit.querySelector("span")).toHaveClass("hidden", "sm:inline")
     // Run and Pause keep their words at every width.
     expect(screen.getByTestId("item-action-run").querySelector(".hidden")).toBeNull()
   })

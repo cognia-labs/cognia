@@ -194,7 +194,29 @@ const lastBulk = () =>
   }
 const toggle = { ctrlKey: true, metaKey: false, shiftKey: false }
 
+/** Radix menus open in jsdom from the keyboard, not a synthetic click. */
+function openOverflow() {
+  const trigger = screen.getByRole("button", { name: "More actions" })
+  act(() => {
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: "Enter" })
+  })
+}
+
 describe("ConversationManager", () => {
+  it("puts the search, its tools and the tabs in the header's view bar", () => {
+    render(<ConversationManager />)
+    const header = screen.getByTestId("conversation-manager-header")
+    const search = within(header).getByRole("searchbox", { name: "Search conversations" })
+    expect(search).toBe(screen.getByTestId("conversation-manager-search"))
+    expect(within(header).getByTestId("conversation-manager-search-content")).toBeInTheDocument()
+    expect(within(header).getByTestId("filter-menu")).toBeInTheDocument()
+    expect(
+      within(header).getByRole("tablist", { name: "Which conversations to show" })
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("conversation-manager-compact-tools")).not.toBeInTheDocument()
+  })
+
   it("names the page, and counts each tab", () => {
     render(<ConversationManager />)
     // A desktop keeps the tabs in the header, beside the search.
@@ -204,8 +226,9 @@ describe("ConversationManager", () => {
       )
     ).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Conversations" })).toBeInTheDocument()
-    expect(screen.getByTestId("conversation-manager-tab-count-active")).toHaveTextContent("2")
-    expect(screen.getByTestId("conversation-manager-tab-count-archived")).toHaveTextContent("1")
+    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    expect(screen.getByTestId("conversation-manager-tab-active")).toHaveTextContent(/2$/)
+    expect(screen.getByTestId("conversation-manager-tab-archived")).toHaveTextContent(/1$/)
     // The tabs carry both counts; the header no longer repeats them.
     expect(screen.queryByText(/2 active/)).not.toBeInTheDocument()
   })
@@ -240,6 +263,9 @@ describe("ConversationManager", () => {
     mockData = data({ tab: "archived" })
     render(<ConversationManager />)
     expect(screen.queryByTestId("conversation-manager-new-chat")).not.toBeInTheDocument()
+    // Destructive, so it sits behind "⋯" rather than as the primary button.
+    expect(screen.queryByTestId("conversation-manager-empty-archive")).not.toBeInTheDocument()
+    openOverflow()
     fireEvent.click(screen.getByTestId("conversation-manager-empty-archive"))
     expect(screen.getByTestId("empty-archive-dialog")).toHaveTextContent("All workspaces")
     expect(mockEmptyArchiveProps).toHaveBeenLastCalledWith(
@@ -250,7 +276,11 @@ describe("ConversationManager", () => {
   it("cannot empty an empty archive", () => {
     mockData = data({ tab: "archived", archivedSessions: [] })
     render(<ConversationManager />)
-    expect(screen.getByTestId("conversation-manager-empty-archive")).toBeDisabled()
+    openOverflow()
+    expect(screen.getByTestId("conversation-manager-empty-archive")).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    )
   })
 
   it("shows the archive's rules and the auto-archive policy on the Archived tab", () => {
@@ -272,7 +302,9 @@ describe("ConversationManager", () => {
         jest.advanceTimersByTime(150)
       })
       expect(mockUseManager).toHaveBeenLastCalledWith({ query: "plan" })
-      fireEvent.click(screen.getByTestId("conversation-manager-search-clear"))
+      // The header's search field is `type="search"`: its native clear
+      // control empties the value, which clears the query at once.
+      fireEvent.change(field, { target: { value: "" } })
       expect(mockUseManager).toHaveBeenLastCalledWith({ query: "" })
       expect(field).toHaveValue("")
 
@@ -707,6 +739,15 @@ describe("ConversationManager", () => {
       expect(screen.getAllByTestId("conversation-manager-tabs")).toHaveLength(1)
       expect(lastList().goals.get("a")).toBe(goal)
       expect(lastList().selecting).toBe(false)
+    })
+
+    it("clears the phone's search row from its clear button", () => {
+      render(<ConversationManager />)
+      const field = screen.getByTestId("conversation-manager-search")
+      fireEvent.change(field, { target: { value: "plan" } })
+      fireEvent.click(screen.getByTestId("conversation-manager-search-clear"))
+      expect(field).toHaveValue("")
+      expect(mockUseManager).toHaveBeenLastCalledWith({ query: "" })
     })
 
     it("turns selection on and off from Select", () => {

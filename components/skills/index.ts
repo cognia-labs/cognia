@@ -11,8 +11,7 @@ export { SkillImportDialog } from "./skill-import-dialog"
 export { SkillDeleteDialog } from "./skill-delete-dialog"
 export { SkillResourceManager } from "./skill-resource-manager"
 export { SkillPanelHeader } from "./skill-panel-header"
-export { SkillPanelToolbar } from "./skill-panel-toolbar"
-export { SkillPanelTabs } from "./skill-panel-tabs"
+export { useSkillPanelToolbar, type SkillPanelToolbarModel } from "./skill-panel-toolbar"
 export { SkillPanelProvider, useSkillPanel } from "./skill-panel-context"
 export { SkillListPane } from "./skill-list-pane"
 export { SkillListItem } from "./skill-list-item"
@@ -27,7 +26,11 @@ export { SkillUrlInstallDialog } from "./skill-url-install-dialog"
 export { SkillAnalytics } from "./skill-analytics"
 export { SkillDiscovery } from "./skill-discovery"
 export { SkillSecurityScanner } from "./skill-security-scanner"
-export { SkillPreferencesForm, SkillPreferencesPopover } from "./skill-preferences"
+export {
+  SkillPreferencesForm,
+  SkillPreferencesPopover,
+  SkillSyncTargets,
+} from "./skill-preferences"
 export { SkillRecordingsSection } from "./skill-recordings-section"
 export { SkillRecordingRow } from "./skill-recording-row"
 export { SkillRecorderRoot } from "./recorder/recorder-root"

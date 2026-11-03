@@ -93,6 +93,18 @@ describe("TemplateOriginCard", () => {
     expect(onDetach).toHaveBeenCalled()
   })
 
+  it("draws as a ruled section when the inspector asks for one", () => {
+    renderCard({ variant: "section" })
+    const origin = screen.getByTestId("template-origin")
+    expect(origin.tagName).toBe("SECTION")
+    expect(origin).toHaveAttribute("data-variant", "section")
+  })
+
+  it("keeps the raised card by default", () => {
+    renderCard()
+    expect(screen.getByTestId("template-origin")).not.toHaveAttribute("data-variant")
+  })
+
   /**
    * A phone still gets to SEE where a template came from. It just cannot act,
    * because the merge lands in a draft editor that only exists on desktop.

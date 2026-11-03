@@ -225,6 +225,27 @@ it("opens on the publish flow and switches tabs", () => {
   expect(screen.getByTestId("site-resources-empty")).toBeInTheDocument()
 })
 
+it("draws its sections as the header's tab set over one panel", () => {
+  // The store outlives a test; an earlier one left another tab open.
+  useSiteConsoleStore.getState().setTab("publish")
+  render(<SitesConsole />)
+  const tablist = screen.getByRole("tablist", { name: "tabsLabel" })
+  expect(tablist.closest('[data-slot="feature-header-view-bar"]')).not.toBeNull()
+  expect(screen.getAllByRole("tab")).toHaveLength(7)
+  expect(screen.getByRole("tab", { name: "tabs.publish" })).toHaveAttribute("aria-selected", "true")
+  expect(screen.getAllByRole("tabpanel")).toHaveLength(1)
+  expect(screen.getByRole("tabpanel", { name: "tabs.publish" })).toContainElement(
+    screen.getByTestId("site-publish-tab")
+  )
+
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "tabs.versions" }))
+  expect(screen.getByRole("tab", { name: "tabs.versions" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(screen.getByRole("tabpanel", { name: "tabs.versions" })).toBeInTheDocument()
+})
+
 it("invites the first Site when none exists, with the tabs disabled", () => {
   useSiteLiveDataMock.mockReturnValue(liveData({ sites: [], selectedId: null }))
   render(<SitesConsole />)

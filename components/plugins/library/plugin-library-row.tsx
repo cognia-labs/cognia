@@ -289,8 +289,14 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
             chips be read, and the scrollbar itself is hidden because a visible
             one on every row is louder than the content.
           */}
+          {/*
+            Sized to its chips, never `flex-1`: it sits above the row's
+            stretched open button (`z-10`, so the chips' popovers work), and a
+            strip spanning the rest of line two swallowed every click on the
+            row's lower half.
+          */}
           <div
-            className="relative z-10 hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain [scrollbar-width:none] @sm/plugin-list:flex [&::-webkit-scrollbar]:hidden"
+            className="relative z-10 hidden min-w-0 items-center gap-1 overflow-x-auto overscroll-x-contain [scrollbar-width:none] @sm/plugin-list:flex [&::-webkit-scrollbar]:hidden"
             data-testid="plugin-library-row-capabilities"
           >
             {contributions.slice(0, 3).map((contribution) => (

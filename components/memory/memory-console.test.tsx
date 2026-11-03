@@ -139,6 +139,42 @@ describe("MemoryConsole — layout", () => {
     expect(screen.getByTestId("memory-toolbar")).toBeTruthy()
   })
 
+  it("draws the header's search field, section tabs and recall chip", () => {
+    mockData = [mem(), mem()]
+    render(<MemoryConsole />)
+    const header = screen.getByTestId("memory-header")
+    // The search is the header's own searchbox, in the view bar.
+    const search = within(header).getByRole("searchbox", { name: "Search memories" })
+    expect(search).toBe(screen.getByTestId("memory-search"))
+    expect(within(screen.getByTestId("memory-toolbar")).queryByRole("searchbox")).toBeNull()
+    // Sections are the header's typed tabs; the app tab carries its count.
+    const sections = within(header).getByRole("tablist", { name: "Memory sections" })
+    expect(within(sections).getAllByRole("tab")).toHaveLength(3)
+    expect(screen.getByTestId("memory-tab-app")).toHaveAttribute("data-state", "active")
+    expect(screen.getByTestId("memory-tab-app").textContent).toContain("2")
+    // The recall chip opens a popover, so it rides with the actions.
+    expect(
+      within(within(header).getByTestId("feature-header-actions")).getByTestId(
+        "memory-retrieval-chip"
+      )
+    ).toBeTruthy()
+  })
+
+  it("renders only the active section and drops the app controls off the app tab", async () => {
+    mockData = [mem()]
+    render(<MemoryConsole />)
+    expect(screen.getByTestId("memory-section-app")).toBeTruthy()
+    await userEvent.click(screen.getByTestId("memory-tab-health"))
+    await waitFor(() => expect(screen.getByTestId("memory-section-health")).toBeTruthy())
+    expect(screen.queryByTestId("memory-section-app")).toBeNull()
+    expect(screen.queryByTestId("memory-toolbar")).toBeNull()
+    expect(screen.queryByRole("searchbox")).toBeNull()
+    expect(screen.getByTestId("memory-tab-health")).toHaveAttribute("data-state", "active")
+    await userEvent.click(screen.getByTestId("memory-tab-external"))
+    await waitFor(() => expect(screen.getByTestId("memory-section-external")).toBeTruthy())
+    expect(screen.queryByTestId("memory-section-health")).toBeNull()
+  })
+
   it("separates 'still loading' from 'you have no memories'", () => {
     mockData = undefined
     const { unmount } = render(<MemoryConsole />)
@@ -598,7 +634,10 @@ describe("MemoryConsole — tabs", () => {
     expect(health).toHaveAttribute("aria-selected", "true")
     expect(health).toHaveAttribute("tabindex", "0")
     expect(app).toHaveAttribute("tabindex", "-1")
+    // The header draws the list inside the console's root, so the tab still
+    // controls its panel and the panel is labelled by its tab.
     const panel = screen.getByRole("tabpanel", { name: "Health" })
+    expect(panel).toBeVisible()
     expect(health).toHaveAttribute("aria-controls", panel.id)
     expect(screen.queryByRole("tabpanel", { name: /^App memory/ })).not.toBeInTheDocument()
     await user.keyboard("{ArrowLeft}")

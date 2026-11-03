@@ -472,7 +472,9 @@
     "fallback": "此小部件正在使用其后备渲染方式。"
   },
   "workspace": {
-    "headerLoading": "加载中"
+    "headerLoading": "加载中",
+    "headerDescription": "搭建这个小应用：编辑布局、实时预览，并绑定数据。",
+    "modeTabsAria": "工作区模式"
   },
   "zoomIn": "放大",
   "zoomOut": "缩小"

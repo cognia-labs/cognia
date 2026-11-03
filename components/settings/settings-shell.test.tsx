@@ -138,6 +138,11 @@ describe("SettingsShell reset button", () => {
     const user = userEvent.setup()
     mockSection = "appearance"
     const { unmount } = render(<SettingsShell />)
+    // The header's own back slot, not a hand-built arrow in the breadcrumb.
+    expect(screen.getByRole("button", { name: "backToChat" })).toHaveAttribute(
+      "data-slot",
+      "feature-header-back"
+    )
     // jsdom starts at history.length === 1: nothing to pop, so it replaces home
     // rather than pushing another entry for the global back arrow to land on.
     await user.click(screen.getByRole("button", { name: "backToChat" }))

@@ -399,6 +399,7 @@
     },
     "appearance": {
       "title": "Appearance & settings",
+      "back": "Back to {name}",
       "description": "How your pet looks and behaves, on screen and on the desktop.",
       "index": "Appearance & settings sections",
       "binding": "Character looks",

@@ -74,6 +74,32 @@ describe("SkillListItem", () => {
     )
   })
 
+  // A checkbox on every row made the list read as a form. It waits for hover
+  // or focus, takes the icon's place when it shows, and stays put while a
+  // batch is being built.
+  it("keeps the checkbox out of sight until the row is hovered or a batch is building", () => {
+    const { rerender } = render(
+      <SkillListItem skill={baseSkill} selected={false} active={false} {...handlers} />
+    )
+    const box = screen.getByLabelText('card.selectAria:{"name":"Cite sources"}')
+    expect(box).toHaveClass("opacity-0", "group-hover/skill-row:opacity-100")
+    expect(box).not.toHaveAttribute("data-revealed")
+
+    rerender(
+      <SkillListItem skill={baseSkill} selected={false} active={false} selecting {...handlers} />
+    )
+    expect(box).toHaveAttribute("data-revealed", "true")
+    expect(box).not.toHaveClass("opacity-0")
+  })
+
+  it("shows the checkbox of a selected row even when no batch flag is passed", () => {
+    render(<SkillListItem skill={baseSkill} selected={true} active={false} {...handlers} />)
+    expect(screen.getByLabelText('card.selectAria:{"name":"Cite sources"}')).toHaveAttribute(
+      "data-revealed",
+      "true"
+    )
+  })
+
   it("applies the active highlight to the row button", () => {
     render(<SkillListItem skill={baseSkill} selected={false} active={true} {...handlers} />)
     expect(screen.getByRole("button", { name: /Cite sources/ })).toHaveAttribute(

@@ -51,6 +51,8 @@ import { hasSandboxAdapter } from "@/lib/sandbox/adapter-registry"
 import type { SandboxHealthStatus } from "@/lib/db/sandbox-connections"
 import type { SandboxConnectionRow, SandboxLifecycleState } from "@/types/sandbox"
 import { ManagedDesktopSettings } from "./managed-desktop-settings"
+import { DirectoryField } from "@/components/settings/common/directory-field"
+import { isLoopbackHostname } from "@/lib/connectivity/loopback-hostname"
 import type { ManagedDesktopTarget } from "@/lib/automation/managed-desktop-client"
 import { SandboxConnectionSheet } from "./sandbox-connection-sheet"
 import { LumeSettings } from "./lume-settings"
@@ -103,7 +105,8 @@ export interface SandboxConnectionsTabProps {
 }
 
 export function SandboxConnectionsTab(props: SandboxConnectionsTabProps = {}) {
-  if (props.managedOnly) return <ManagedDesktopSettings target={props.managedDesktopTarget} />
+  if (props.managedOnly)
+    return <ManagedDesktopSettings target={props.managedDesktopTarget} framed={props.framed} />
   return <LocalSandboxConnectionsTab {...props} />
 }
 
@@ -183,7 +186,12 @@ function LocalSandboxConnectionsTab({
         <p className="text-[11px] leading-snug text-muted-foreground">{t("description")}</p>
       )}
       {connections.length === 0 && !adding ? (
-        <p className="text-sm text-muted-foreground">{t("empty")}</p>
+        <p
+          className={cn("text-muted-foreground", framed ? "text-sm" : "text-xs")}
+          data-testid="sandbox-connection-empty"
+        >
+          {t("empty")}
+        </p>
       ) : null}
 
       {connections.length > 0 ? (
@@ -337,10 +345,16 @@ function LocalSandboxConnectionsTab({
             <div className="grid gap-3 @md/sandbox-registry:grid-cols-2">
               <div className="space-y-1">
                 <Label htmlFor="cua-mount-host">{t("workspaceHostPath")}</Label>
-                <Input
+                {/* The mount is resolved by the Docker daemon, so the native
+                    picker is offered only when that daemon is this machine; a
+                    remote daemon's path is typed. */}
+                <DirectoryField
                   id="cua-mount-host"
                   value={workspaceHostPath}
-                  onChange={(e) => setWorkspaceHostPath(e.target.value)}
+                  onChange={setWorkspaceHostPath}
+                  ariaLabel={t("workspaceHostPath")}
+                  browseLabel={t("browse")}
+                  hasPicker={() => desktop && isLoopbackHostname(host.trim())}
                 />
               </div>
               <div className="space-y-1">
@@ -371,7 +385,7 @@ function LocalSandboxConnectionsTab({
         </Button>
       )}
 
-      <ManagedDesktopSettings target={managedDesktopTarget} />
+      <ManagedDesktopSettings target={managedDesktopTarget} framed={framed} />
       <LumeSettings framed={framed} />
 
       <SandboxConnectionSheet

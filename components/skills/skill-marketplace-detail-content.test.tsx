@@ -20,7 +20,7 @@ jest.mock("@/lib/skills/marketplace-install", () => ({
 }))
 
 import { fireEvent, render, screen } from "@testing-library/react"
-import { SkillMarketplaceDetailContent } from "./skill-marketplace-detail-content"
+import { SkillMarketplaceDetailContent, readmeBody } from "./skill-marketplace-detail-content"
 import type { MarketplaceItem } from "@/lib/skills/marketplace-types"
 
 const item: MarketplaceItem = {
@@ -91,6 +91,28 @@ describe("SkillMarketplaceDetailContent", () => {
       />
     )
     expect(await screen.findByTestId("markdown-renderer")).toHaveTextContent("# Readme")
+  })
+
+  // The header already shows the name and description; rendered raw, the
+  // frontmatter's closing `---` made it one big setext heading.
+  it("drops the SKILL.md frontmatter from the readme", async () => {
+    fetchMarketplaceContent.mockResolvedValueOnce({
+      content: "---\nname: x\ndescription: Does x\n---\n\n# X\n\nBody",
+    })
+    render(
+      <SkillMarketplaceDetailContent
+        item={item}
+        installed={false}
+        installing={false}
+        onInstall={jest.fn()}
+        onUninstall={jest.fn()}
+      />
+    )
+    const rendered = await screen.findByTestId("markdown-renderer")
+    expect(rendered).toHaveTextContent("# X Body")
+    expect(rendered).not.toHaveTextContent("name: x")
+    // A plain scroller, so a wide code span cannot widen the pane.
+    expect(screen.getByTestId("skill-marketplace-readme")).toHaveClass("overflow-y-auto")
   })
 
   it("renders author and repository metadata in the header", async () => {
@@ -189,5 +211,20 @@ describe("SkillMarketplaceDetailContent", () => {
     )
     expect(screen.getByText("uninstall").closest("button")).toBeDisabled()
     await screen.findByTestId("markdown-renderer")
+  })
+})
+
+describe("readmeBody", () => {
+  it("strips a leading frontmatter block, BOM and CRLF included", () => {
+    expect(readmeBody("\uFEFF---\r\nname: a\r\n---\r\n# A")).toBe("# A")
+  })
+
+  it("leaves a readme without frontmatter alone", () => {
+    expect(readmeBody("# A\n\n---\n\nB")).toBe("# A\n\n---\n\nB")
+  })
+
+  it("does not treat a horizontal rule later in the text as frontmatter", () => {
+    const text = "Intro\n---\nmore"
+    expect(readmeBody(text)).toBe(text)
   })
 })

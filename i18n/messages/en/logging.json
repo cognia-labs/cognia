@@ -1305,7 +1305,8 @@
       "ios-kscrash": "iOS crash",
       "ios-metrickit": "iOS MetricKit report",
       "other": "Other ({source})"
-    }
+    },
+    "description": "This app's logs, traces and crash reports, read in one place."
   },
   "autoSubmit": {
     "sent": "Crash report sent · support code {code}",

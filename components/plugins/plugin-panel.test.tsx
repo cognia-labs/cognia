@@ -5,6 +5,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { PluginRow } from "@/lib/db/plugin-types"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 // The cogset switcher has its own suite; here it only needs to render.
 jest.mock("@/components/plugins/cogsets/cogset-switcher", () => ({
@@ -273,19 +274,19 @@ beforeEach(() => {
     permissionReviewTarget: null,
     conflictDialogTarget: null,
     rollbackTarget: null,
+    updateDialog: null,
   })
 })
 
-/** The registry sync lives in the toolbar's overflow menu. */
+/** The registry sync is the page header's refresh glyph. */
 async function runSyncRegistry() {
   const user = userEvent.setup({ pointerEventsCheck: 0 })
-  await user.click(screen.getByTestId("plugin-toolbar-more"))
-  await user.click(await screen.findByTestId("plugin-sync-registry"))
+  await user.click(screen.getByTestId("plugin-sync-registry"))
 }
 
 describe("PluginPanel (3-pane shell)", () => {
   it("mounts the FeaturePageShell with left nav, library center, and detail right", () => {
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("feature-page-shell")).toBeInTheDocument()
     // Left nav: PluginNavSidebar renders top-level section buttons.
     expect(screen.getByTestId("plugin-nav-library")).toBeInTheDocument()
@@ -296,7 +297,7 @@ describe("PluginPanel (3-pane shell)", () => {
   })
 
   it("renders the active plugin row inside the library list center", () => {
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByText("Test Plugin")).toBeInTheDocument()
     // The row prints the version once per width tier; CSS shows one.
     expect(screen.getAllByText("v1.2.3").length).toBeGreaterThan(0)
@@ -304,7 +305,7 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("swaps the center pane to Discover when activeSection=discover", () => {
     usePluginsStore.setState({ activeSection: "discover" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("plugin-discover-pane")).toBeInTheDocument()
   })
 
@@ -312,14 +313,48 @@ describe("PluginPanel (3-pane shell)", () => {
   // as `context` text after the description — a trailing "· Library" read as
   // a stray fragment whenever the description truncated.
   it("shows the active section as a badge inside the page header", () => {
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     const header = screen.getByTestId("shell-header")
     expect(within(header).getByTestId("plugin-section-badge")).toHaveTextContent("library")
   })
 
+  // The registry sync is the header's refresh glyph. Check for updates sits
+  // in the toolbar strip just before Install, which ends the header's
+  // actions where its primary button would be.
+  it("draws Check for updates and the registry sync as header actions on Library", () => {
+    render(<PluginPanel />, { wrapper: TooltipProvider })
+    const header = screen.getByTestId("shell-header")
+    expect(within(header).getByTestId("plugin-panel-toolbar")).toHaveAttribute(
+      "data-layout",
+      "header"
+    )
+    expect(within(header).getByTestId("plugin-install-trigger")).toBeInTheDocument()
+    expect(within(header).queryByTestId("plugin-toolbar-more")).toBeNull()
+    expect(within(header).getAllByTestId("plugin-check-updates")).toHaveLength(1)
+    fireEvent.click(within(header).getByTestId("plugin-check-updates"))
+    expect(usePluginsStore.getState().updateDialog).not.toBeNull()
+    expect(within(header).getByTestId("plugin-sync-registry")).toHaveAccessibleName(
+      "syncRegistryAria"
+    )
+    const strip = within(header).getByTestId("feature-header-actions")
+    expect(strip.lastElementChild).toBe(within(header).getByTestId("plugin-panel-toolbar"))
+    expect(within(header).getByTestId("plugin-panel-toolbar").lastElementChild).toBe(
+      within(header).getByTestId("plugin-install-trigger")
+    )
+  })
+
+  it("drops the Library actions in other sections", () => {
+    usePluginsStore.setState({ activeSection: "governance" })
+    render(<PluginPanel />, { wrapper: TooltipProvider })
+    const header = screen.getByTestId("shell-header")
+    expect(within(header).queryByTestId("plugin-panel-toolbar")).toBeNull()
+    expect(within(header).queryByTestId("plugin-check-updates")).toBeNull()
+    expect(within(header).queryByTestId("plugin-sync-registry")).toBeNull()
+  })
+
   it("follows the active section when the section changes", () => {
     usePluginsStore.setState({ activeSection: "governance" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     const header = screen.getByTestId("shell-header")
     expect(within(header).getByTestId("plugin-section-badge")).toHaveTextContent("governance")
   })
@@ -327,7 +362,7 @@ describe("PluginPanel (3-pane shell)", () => {
   // The detail pane exists only while it has something to show: with
   // nothing selected the list takes the whole width.
   it("renders no detail pane while nothing is selected", () => {
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("shell-right")).toBeEmptyDOMElement()
   })
 
@@ -335,7 +370,7 @@ describe("PluginPanel (3-pane shell)", () => {
   // follows a selection there.
   it("shows the detail pane in Governance once a plugin is selected", () => {
     usePluginsStore.setState({ activeSection: "governance", detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("plugin-governance-pane")).toBeInTheDocument()
     expect(screen.getByTestId("plugin-detail-pane-stub")).toHaveTextContent("plugin_x")
   })
@@ -344,13 +379,13 @@ describe("PluginPanel (3-pane shell)", () => {
   // plugin's detail beside them answered a question nobody asked there.
   it("never shows the installed-plugin detail beside Discover", () => {
     usePluginsStore.setState({ activeSection: "discover", detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("shell-right")).toBeEmptyDOMElement()
   })
 
   it("keeps the facets in the nav rail rather than a second rail in the center", () => {
     mockBreakpoint = "desktop"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(
       within(screen.getByTestId("shell-left")).getByTestId("plugin-nav-capability-facets")
     ).toBeInTheDocument()
@@ -361,21 +396,21 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("renders the governance view picker in the header, not the left rail", () => {
     usePluginsStore.setState({ activeSection: "governance" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getByTestId("plugin-governance-view-audit")).toBeInTheDocument()
     expect(screen.queryByTestId("plugin-nav-governance-sub-audit")).not.toBeInTheDocument()
   })
 
   it("switches the governance view from the header segments", () => {
     usePluginsStore.setState({ activeSection: "governance", governanceView: "permissions" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     fireEvent.click(screen.getByTestId("plugin-governance-view-audit"))
     expect(usePluginsStore.getState().governanceView).toBe("audit")
   })
 
   it("uses the full workspace and hides plugin detail when activeSection=devtools", () => {
     usePluginsStore.setState({ activeSection: "devtools", detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
 
     expect(screen.getByTestId("plugin-devtools-pane")).toBeInTheDocument()
     expect(screen.getByTestId("shell-right")).toBeEmptyDOMElement()
@@ -385,7 +420,7 @@ describe("PluginPanel (3-pane shell)", () => {
     useDeveloperModeMock.mockReturnValue(false)
     mockSearchString = "section=devtools"
 
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
 
     await waitFor(() => expect(usePluginsStore.getState().activeSection).toBe("library"))
     expect(mockReplace).toHaveBeenCalledWith("/plugins?section=library", { scroll: false })
@@ -397,7 +432,7 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("opens the rollback dialog when the store target is set", () => {
     usePluginsStore.setState({ rollbackTarget: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(screen.getAllByText(/title/).length).toBeGreaterThan(0)
   })
 
@@ -405,7 +440,7 @@ describe("PluginPanel (3-pane shell)", () => {
     usePluginsStore.setState({
       deleteTarget: { pluginId: "plugin_x", name: "Test Plugin" },
     })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     fireEvent.click(screen.getByRole("button", { name: "confirm" }))
 
     await waitFor(() => expect(unregisterScheduledTasksForPlugin).toHaveBeenCalledWith("plugin_x"))
@@ -414,13 +449,13 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("redirects a legacy ?tab=browse deep link to the canonical ?section=discover URL", () => {
     mockSearchString = "tab=browse"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(mockReplace).toHaveBeenCalledWith("/plugins?section=discover", { scroll: false })
   })
 
   it("redirects ?tab=configure to the configurable library + configure subtab", () => {
     mockSearchString = "tab=configure"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(mockReplace).toHaveBeenCalledWith(
       "/plugins?section=library&sub=configurable&subtab=configure",
       { scroll: false }
@@ -429,14 +464,14 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("hydrates new ?section=governance&gov=audit into the store on mount", () => {
     mockSearchString = "section=governance&gov=audit"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(usePluginsStore.getState().activeSection).toBe("governance")
     expect(usePluginsStore.getState().governanceView).toBe("audit")
   })
 
   it("re-syncs section when ?section= changes after mount", () => {
     mockSearchString = "section=library"
-    const { rerender } = render(<PluginPanel />)
+    const { rerender } = render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(usePluginsStore.getState().activeSection).toBe("library")
 
     mockSearchString = "section=discover"
@@ -446,13 +481,13 @@ describe("PluginPanel (3-pane shell)", () => {
 
   it("does not redirect for an unknown ?tab= value", () => {
     mockSearchString = "tab=garbage"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(mockReplace).not.toHaveBeenCalled()
   })
 
   it("ignores unknown ?section= values without overriding the current section", () => {
     mockSearchString = "section=library"
-    const { rerender } = render(<PluginPanel />)
+    const { rerender } = render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(usePluginsStore.getState().activeSection).toBe("library")
 
     mockSearchString = "section=garbage"
@@ -465,7 +500,7 @@ describe("PluginPanel (3-pane shell)", () => {
   it("opens the plugin named by ?plugin= and strips the one-shot param", () => {
     usePluginsStore.setState({ activeSection: "discover" })
     mockSearchString = "plugin=plugin_x&subtab=capabilities"
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     const state = usePluginsStore.getState()
     expect(state.activeSection).toBe("library")
     expect(state.detailPluginId).toBe("plugin_x")
@@ -487,7 +522,7 @@ describe("PluginPanel (3-pane shell)", () => {
     getPluginMarketplaceMock.mockReturnValue({ checkForUpdates })
     mockRows.push(vscodeRow)
 
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await runSyncRegistry()
 
     await waitFor(() => expect(checkForUpdates).toHaveBeenCalled())
@@ -502,7 +537,7 @@ describe("PluginPanel (3-pane shell)", () => {
       checkForUpdates: jest.fn(async () => [{ id: "plugin_x", latestVersion: "2.0.0" }]),
     })
 
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await runSyncRegistry()
 
     await waitFor(() => expect(jest.mocked(updatePlugin)).toHaveBeenCalled())
@@ -516,7 +551,7 @@ describe("PluginPanel (3-pane shell)", () => {
     // would rewrite all 40 manifests and churn the Dexie table.
     getPluginMarketplaceMock.mockReturnValue({ checkForUpdates: jest.fn(async () => []) })
 
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await runSyncRegistry()
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled())
@@ -532,26 +567,23 @@ describe("PluginPanel (3-pane shell)", () => {
       }),
     })
 
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await runSyncRegistry()
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(jest.mocked(toast.error).mock.calls[0][0]).toContain("registry down")
     // The spinner has to clear even on the failure path.
     await waitFor(() =>
-      expect(screen.getByTestId("plugin-toolbar-more").querySelector(".animate-spin")).toBeNull()
+      expect(screen.getByTestId("plugin-sync-registry")).not.toHaveAttribute("aria-busy")
     )
-    await userEvent
-      .setup({ pointerEventsCheck: 0 })
-      .click(screen.getByTestId("plugin-toolbar-more"))
-    expect(await screen.findByTestId("plugin-sync-registry")).not.toHaveAttribute("data-disabled")
+    expect(screen.getByTestId("plugin-sync-registry")).not.toBeDisabled()
   })
 
   it("cascade uninstall also drops the plugin's permissions and analytics rows", async () => {
     usePluginsStore.setState({
       deleteTarget: { pluginId: "plugin_x", name: "Test Plugin" },
     })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     fireEvent.click(screen.getByRole("checkbox", { name: /cascade/i }))
     fireEvent.click(screen.getByRole("button", { name: "confirm" }))
 
@@ -564,7 +596,7 @@ describe("PluginPanel (3-pane shell)", () => {
     usePluginsStore.setState({
       deleteTarget: { pluginId: "plugin_x", name: "Test Plugin" },
     })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     fireEvent.click(screen.getByRole("button", { name: "confirm" }))
 
     await waitFor(() => expect(jest.mocked(deletePlugin)).toHaveBeenCalledWith("plugin_x"))
@@ -581,13 +613,13 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
 
   it("controls the right pane's sheet instead of leaving it uncontrolled", () => {
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(sheet()).toHaveAttribute("data-sheet-open", "false")
   })
 
   it("opens the detail when the plugin name is clicked", async () => {
     const user = userEvent.setup()
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByTestId("plugin-library-row-plugin_x"))
     expect(usePluginsStore.getState().detailPluginId).toBe("plugin_x")
     expect(sheet()).toHaveAttribute("data-sheet-open", "true")
@@ -596,7 +628,7 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
 
   it("opens the detail from the keyboard (Enter on the focused name)", async () => {
     const user = userEvent.setup()
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     screen.getByTestId("plugin-library-row-plugin_x").focus()
     await user.keyboard("{Enter}")
     expect(usePluginsStore.getState().detailPluginId).toBe("plugin_x")
@@ -605,7 +637,7 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
 
   it("opens the same detail surface from the row menu's Open details", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByRole("button", { name: "actionsMenuAria:Test Plugin" }))
     await user.click(await screen.findByRole("menuitem", { name: "openDetails" }))
     expect(usePluginsStore.getState().detailPluginId).toBe("plugin_x")
@@ -614,7 +646,7 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
 
   it("dismissing the sheet clears the selection so the same name reopens it", async () => {
     const user = userEvent.setup()
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByTestId("plugin-library-row-plugin_x"))
     await user.click(screen.getByRole("button", { name: "stub-dismiss-right-sheet" }))
     expect(usePluginsStore.getState().detailPluginId).toBeNull()
@@ -627,14 +659,14 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
 
   it("does not pop the sheet for a selection that survived navigation", () => {
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(sheet()).toHaveAttribute("data-sheet-open", "false")
   })
 
   it("lets the pane's own trigger reopen the sheet on a surviving selection", async () => {
     const user = userEvent.setup()
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByRole("button", { name: "stub-open-right-sheet" }))
     expect(sheet()).toHaveAttribute("data-sheet-open", "true")
   })
@@ -643,7 +675,7 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
   // list's filters, the sheet steps aside so the result is visible.
   it("dismisses the sheet when the detail applies a list filter", async () => {
     const user = userEvent.setup()
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByTestId("plugin-library-row-plugin_x"))
     await user.click(screen.getByRole("button", { name: "stub-filter-applied" }))
     expect(usePluginsStore.getState().detailPluginId).toBeNull()
@@ -653,7 +685,7 @@ describe("PluginPanel detail sheet (overlay tier)", () => {
   // clear instead of drawing a second one under it.
   it("lets the sheet's corner button close it, with the pane keeping that corner clear", async () => {
     const user = userEvent.setup()
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByTestId("plugin-library-row-plugin_x"))
     expect(screen.queryByRole("button", { name: "stub-close-detail" })).toBeNull()
     expect(screen.getByTestId("plugin-detail-pane-stub")).toHaveAttribute(
@@ -671,7 +703,7 @@ describe("PluginPanel inline detail (desktop tier)", () => {
   it("hands the inline pane a close button that clears the selection", async () => {
     const user = userEvent.setup()
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     await user.click(screen.getByRole("button", { name: "stub-close-detail" }))
     expect(usePluginsStore.getState().detailPluginId).toBeNull()
     expect(screen.getByTestId("shell-right")).toBeEmptyDOMElement()
@@ -679,14 +711,14 @@ describe("PluginPanel inline detail (desktop tier)", () => {
 
   it("closes the inline pane on Escape", () => {
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     fireEvent.keyDown(window, { key: "Escape" })
     expect(usePluginsStore.getState().detailPluginId).toBeNull()
   })
 
   it("leaves Escape to a text field that has focus", () => {
     usePluginsStore.setState({ detailPluginId: "plugin_x" })
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     const input = screen.getAllByRole("searchbox")[0] ?? screen.getAllByRole("textbox")[0]
     input.focus()
     fireEvent.keyDown(input, { key: "Escape" })
@@ -698,7 +730,7 @@ describe("PluginPanel section deep links on the web build", () => {
   it("does not select a desktop-only section from a URL off the desktop shell", () => {
     mockSearchString = "section=agent-packages"
     mockSearchCacheKey = ""
-    render(<PluginPanel />)
+    render(<PluginPanel />, { wrapper: TooltipProvider })
     expect(usePluginsStore.getState().activeSection).toBe("library")
   })
 })

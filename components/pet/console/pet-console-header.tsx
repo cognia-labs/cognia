@@ -7,33 +7,28 @@
 // second row, and two actions on the right: "Appearance & settings", and the
 // "out on the desktop" toggle.
 //
-// Appearance view: a breadcrumb back to the pet, the sub-page's title, and the
-// same desktop toggle; no navigation row.
+// Appearance view: the header's back button to the pet, the sub-page's title,
+// and the same desktop toggle; no navigation row.
 //
 // Presentational: every action arrives as a prop from `PetConsole`, which is
 // the one place that decides what renaming or summoning the pet actually runs.
 //
 // Caring for the desktop pet from a paired phone (ADR-0219), the toggle
-// becomes a read-only chip saying whether the pet is out on the desktop, and
-// the appearance entry carries the "Desktop" badge: its workspace is the
-// desktop's (only the character binding reads remotely).
+// becomes the header's status chip saying whether the pet is out on the
+// desktop, and the appearance entry carries the "Desktop" badge: its workspace
+// is the desktop's (only the character binding reads remotely).
 
 "use client"
 
-import type { ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import {
-  ChevronLeftIcon,
-  Loader2Icon,
-  MonitorIcon,
-  MonitorOffIcon,
-  MonitorUpIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { Loader2Icon, MonitorOffIcon, MonitorUpIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderStatus,
+  type FeatureHeaderTabs,
+} from "@/components/feature-shell/feature-page-header"
 import { normalizeCoins } from "@/types/pet"
 import type { PetProfile, PetSkinId, PetSkinSelection } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
@@ -49,8 +44,8 @@ export interface PetConsoleHeaderProps {
   selection: PetSkinSelection
   lowPower?: boolean
   onRename: (name: string) => void
-  /** The main view's navigation row. */
-  navigation?: ReactNode
+  /** The main view's places, as the header's view tabs. */
+  tabs?: FeatureHeaderTabs
   /** Open the appearance sub-page (main view). */
   onOpenAppearance?: () => void
   /** The appearance workspace only runs on the desktop here: badge the entry. */
@@ -64,8 +59,8 @@ export interface PetConsoleHeaderProps {
     onToggle: () => void
   }
   /**
-   * Remote care: whether the pet is out on the desktop, shown as a read-only
-   * chip in place of the toggle (only the desktop can send it out).
+   * Remote care: whether the pet is out on the desktop, shown as the header's
+   * status chip in place of the toggle (only the desktop can send it out).
    */
   desktopStatus?: { visible: boolean }
 }
@@ -78,7 +73,7 @@ export function PetConsoleHeader({
   selection,
   lowPower,
   onRename,
-  navigation,
+  tabs,
   onOpenAppearance,
   appearanceDesktopOnly,
   onBack,
@@ -152,19 +147,17 @@ export function PetConsoleHeader({
       </Tooltip>
     ) : null
 
-  const desktopControl = desktopStatus ? (
-    <Badge
-      variant="outline"
-      data-testid="pet-console-desktop-status"
-      data-visible={desktopStatus.visible}
-      className="shrink-0 gap-1 text-muted-foreground"
-    >
-      <MonitorIcon className="size-3" aria-hidden />
-      {desktopStatus.visible
-        ? t("console.remote.desktopVisible")
-        : t("console.remote.desktopHidden")}
-    </Badge>
-  ) : desktop ? (
+  const desktopStatusChip: FeatureHeaderStatus | undefined = desktopStatus
+    ? {
+        label: desktopStatus.visible
+          ? t("console.remote.desktopVisible")
+          : t("console.remote.desktopHidden"),
+        tone: desktopStatus.visible ? "success" : "neutral",
+        testId: "pet-console-desktop-status",
+      }
+    : undefined
+
+  const desktopControl = desktopStatus ? null : desktop ? (
     // The console is where people look after the pet, so it is also where
     // they send it out to the desktop and call it back. The same switch as
     // the title bar's and the popup's (`desktopPet.enabled`).
@@ -195,22 +188,16 @@ export function PetConsoleHeader({
     return (
       <FeaturePageHeader
         testId="pet-console-header"
-        avatar={avatar}
-        breadcrumb={
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-testid="pet-console-back"
-            className="-ms-1.5 h-8 gap-1 px-1.5 text-muted-foreground"
-            onClick={onBack}
-          >
-            <ChevronLeftIcon className="size-4" aria-hidden />
-            <span>{profile.soul?.name ?? t("console.title")}</span>
-          </Button>
-        }
+        back={{
+          label: t("console.appearance.back", {
+            name: profile.soul?.name ?? t("console.title"),
+          }),
+          onSelect: onBack,
+          testId: "pet-console-back",
+        }}
         title={appearanceLabel}
         description={t("console.appearance.description")}
+        status={desktopStatusChip}
         actions={desktopControl}
       />
     )
@@ -228,7 +215,10 @@ export function PetConsoleHeader({
         )
       }
       description={meta}
-      navigation={navigation}
+      status={desktopStatusChip}
+      tabs={tabs}
+      // The appearance entry is a badged button and the desktop switch a
+      // toggle (`aria-pressed`), so both stay custom controls.
       actions={
         <>
           {appearanceEntry}

@@ -3,10 +3,9 @@ import { buildLocalHostFeatureManifest } from "@/lib/platform/host-feature-manif
 import type { DeviceCapabilityCell, DeviceRow } from "./types"
 import {
   canOwnTiming,
-  packHalfSections,
+  type DevicePlannedSection,
   pairedHostGrantsFrom,
   planDeviceSections,
-  type DevicePlannedSection,
   managementRefOf,
   remoteDesktopHostOf,
 } from "./section-plan"
@@ -64,12 +63,11 @@ describe("planDeviceSections", () => {
     ])
     expect(plan.notApplicable.map((entry) => entry.id)).toEqual(["sandbox", "workspaces"])
     expect(plan.notApplicable[0]?.reasonKey).toBe("runtime.reason.sandboxNotHosted")
-    expect(plan.notApplicableWide).toBe(false)
   })
 
-  it("pulls the next half card up so a lone half card is not left beside a gap", () => {
-    // No WAN summary and no event plane: `presence` would sit alone above the
-    // wide dispatch card, so `identity` is the partner it gets.
+  it("keeps the task-first order when sections drop out, without reshuffling", () => {
+    // No WAN summary and no event plane. The record is one column, so nothing
+    // is pulled forward to fill a gap beside a short card; the rest close up.
     const plan = planDeviceSections(row({ deviceId: "dev-1" }))
     expect(ids(plan.sections)).toEqual([
       "access",
@@ -136,7 +134,6 @@ describe("planDeviceSections", () => {
       "capabilities",
       "placement",
     ])
-    expect(local.sections.find((section) => section.id === "remote-desktop")?.wide).toBe(true)
     expect(local.notApplicable.map((entry) => entry.id)).not.toContain("remote-desktop")
     expect(
       remoteDesktopHostOf(row({ ref: "local", kind: "local", remoteDesktopHost: true }))
@@ -265,9 +262,6 @@ describe("planDeviceSections", () => {
     expect(
       sections.slice(sections.indexOf("host-secrets"), sections.indexOf("host-secrets") + 2)
     ).toEqual(["host-secrets", "org-models"])
-    expect(
-      planDeviceSections(org).sections.find((section) => section.id === "org-models")?.wide
-    ).toBe(true)
     // A `/pair` Host this app is not routed to cannot be reached at all.
     const unreachable = { ...org, ref: "companion:org", hostId: undefined }
     expect(ids(planDeviceSections(unreachable).sections)).not.toContain("org-models")
@@ -442,7 +436,6 @@ describe("planDeviceSections", () => {
       "sandbox",
       "workspaces",
     ])
-    expect(plan.notApplicableWide).toBe(true)
   })
 
   it("gives an SSH host its two real cards and one record for the rest", () => {
@@ -474,33 +467,9 @@ describe("planDeviceSections", () => {
   })
 })
 
-describe("packHalfSections", () => {
-  const half = (id: DevicePlannedSection["id"]) => ({ id, wide: false })
-  const wide = (id: DevicePlannedSection["id"]) => ({ id, wide: true })
-
-  it("leaves an already paired order alone", () => {
-    const input = [half("identity"), half("presence"), wide("dispatch")]
-    expect(packHalfSections(input)).toEqual(input)
-  })
-
-  it("only pulls the nearest half card, and only upwards", () => {
-    expect(
-      ids(
-        packHalfSections([
-          wide("access"),
-          half("wan"),
-          wide("dispatch"),
-          half("identity"),
-          half("placement"),
-        ])
-      )
-    ).toEqual(["access", "wan", "identity", "dispatch", "placement"])
-  })
-
-  it("leaves a final half card where it is when nothing can partner it", () => {
-    expect(ids(packHalfSections([half("identity"), wide("dispatch")]))).toEqual([
-      "identity",
-      "dispatch",
-    ])
-  })
+// The record carries no widths: every chapter takes the full pane.
+it("plans chapters by id alone, with no width to honour", () => {
+  const plan = planDeviceSections(row({ deviceId: "dev-1" }))
+  for (const section of plan.sections) expect(Object.keys(section)).toEqual(["id"])
+  expect(Object.keys(plan).sort()).toEqual(["notApplicable", "sections"])
 })

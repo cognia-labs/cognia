@@ -38,13 +38,23 @@ describe("FactList", () => {
         <FactRow label="a">1</FactRow>
       </FactList>
     )
-    expect(container.querySelector("dl")?.className).toContain("@sm/console-card:grid-cols-2")
+    expect(container.querySelector("dl")?.className).toContain("@xs/console-card:grid-cols-2")
 
     rerender(
       <FactList pane="device-pane">
         <FactRow label="a">1</FactRow>
       </FactList>
     )
-    expect(container.querySelector("dl")?.className).toContain("@sm/device-card:grid-cols-2")
+    expect(container.querySelector("dl")?.className).toContain("@xs/device-card:grid-cols-2")
+  })
+
+  it("pairs facts from 20rem so a phone's card is not one fact per line", () => {
+    const { container } = render(
+      <FactList>
+        <FactRow label="Timeout">5m</FactRow>
+        <FactRow label="Retries">3</FactRow>
+      </FactList>
+    )
+    expect(container.querySelector("dl")).toHaveClass("@xs/console-card:grid-cols-2")
   })
 })

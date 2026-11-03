@@ -62,7 +62,7 @@ export function FilesSection({ row }: { row: DeviceRow }) {
   )
 
   return (
-    <DeviceSection id="files" title={t("title")} icon={FolderIcon} wide>
+    <DeviceSection id="files" title={t("title")} icon={FolderIcon}>
       {!profileId ? (
         <p className="text-sm text-muted-foreground" data-testid="files-unknown-profile">
           {t("unknownProfile")}

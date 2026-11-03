@@ -150,7 +150,7 @@ flowchart LR
 flowchart TD
   WL["WorkflowLibrary<br/>workflow-library.tsx:56"] --> SB["LibraryStatBar<br/>library-stat-bar.tsx:16"]
   WL --> BAB["WorkflowBulkActionBar<br/>workflow-bulk-action-bar.tsx"]
-  WL --> TB["WorkflowLibraryToolbar<br/>search+filter+sort+view"]
+  WL --> TB["Page header view bar<br/>search (useWorkflowLibrarySearch) + WorkflowLibraryControls"]
   WL --> BC["FolderBreadcrumb"]
   WL --> PIN["WorkflowPinnedSection<br/>(root only)"]
   WL --> DND["DndContext pointerWithin<br/>:165"]
@@ -167,7 +167,7 @@ flowchart TD
 | List | `WorkflowLibraryList` | `workflow-library-list.tsx:29` | virtualized via `@tanstack/react-virtual` `:41`, row 64 `:18`, overscan 8 |
 | Card | `WorkflowCard` | `workflow-card.tsx:189` | checkbox, node/trigger/action/builtin/template/tag badges `:137-168`, pin |
 | Stat bar | `LibraryStatBar` | `library-stat-bar.tsx:16` | 4 cards runs7d/successRate/active/failedToday; self-hides when zero `:36-43` |
-| Toolbar | toolbar | `workflow-library-toolbar.tsx` | search 200ms debounced + filter + sort + view + new-folder/new |
+| Toolbar | header view bar | `workflow-library-toolbar.tsx` | `useWorkflowLibrarySearch` (200ms debounced, fed to the header `search`) + `WorkflowLibraryControls` (filter + sort + view, the header `controls`); Import and New folder are header secondary actions |
 | Filter | filter bar | `workflow-filter-bar.tsx` | type all/user/template/builtin + hasTrigger/recentlyFailed |
 | Sort | sort menu | `workflow-sort-menu.tsx` | nameAsc/nameDesc/updated/created/runCount |
 | Pinned | `WorkflowPinnedSection` | `workflow-pinned-section.tsx` | root-only from `settings.pinnedWorkflowIds` |

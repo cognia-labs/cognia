@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useTranslations } from "next-intl"
+import { useFormatter, useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { Badge } from "@/components/ui/badge"
@@ -23,16 +23,20 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
   ArrowUpCircleIcon,
   CopyIcon,
   DownloadIcon,
+  FileTextIcon,
+  MoreHorizontalIcon,
+  PackageIcon,
   PencilIcon,
-  PowerIcon,
   Trash2Icon,
 } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { Spinner } from "@/components/ui/spinner"
 import { useSkillUpdate } from "@/hooks/skills"
 import { duplicateSkill, inferCategory, inferSource, setSkillStatus } from "@/lib/db/skills"
@@ -58,6 +62,8 @@ interface Props {
   skill: Skill
 }
 
+const DETAIL_TAB =
+  "h-7 flex-none gap-1 rounded-md border-0 px-2 text-xs whitespace-nowrap text-muted-foreground shadow-none hover:text-foreground data-[state=active]:bg-muted data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-muted"
 export function SkillDetail({ skill }: Props) {
   const t = useTranslations("skills")
   const tDetail = useTranslations("skills.detail")
@@ -144,140 +150,163 @@ export function SkillDetail({ skill }: Props) {
     await setSkillStatus(skill.id, status === "enabled" ? "disabled" : "enabled")
   }
 
+  const enabled = status === "enabled"
+  const builtIn = Boolean(skill.isBuiltIn)
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex shrink-0 flex-wrap items-start gap-3 px-4 py-3 sm:px-5 sm:py-4">
-        <div
-          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${category.color}`}
-        >
-          <Icon className="size-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-semibold">{skill.name}</h2>
-          {skill.description && (
-            <p className="line-clamp-2 text-xs text-muted-foreground">{skill.description}</p>
-          )}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <Badge variant={source.badgeVariant} className="h-5 text-[10px]">
-              {t(`source.${source.labelKey}` as never)}
-            </Badge>
-            <Badge variant="outline" className="h-5 text-[10px]">
-              {t(`category.${category.labelKey}` as never)}
-            </Badge>
-            {status === "disabled" && (
-              <Badge variant="secondary" className="h-5 text-[10px]">
-                {t("status.disabled")}
-              </Badge>
-            )}
-            {(skill.tags ?? []).map((tag) => (
-              <Badge key={tag} variant="outline" className="h-5 text-[10px]">
-                {tag}
-              </Badge>
-            ))}
-          </div>
-        </div>
-        <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-1.5 sm:w-auto sm:flex-col sm:items-stretch">
-          {/* Single edit entry: jumps straight to the workspace editor (file
-              tree + Monaco + validation). Metadata is edited from the editor's
-              "Skill settings" panel, so there is no separate form dialog. */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              openSkillInEditor(skill.id, skill.content)
-              setActiveTab("editor")
-              // On mobile the detail renders inside a full-screen Sheet that
-              // would otherwise keep covering the editor tab.
-              closeDetail()
-            }}
-            disabled={skill.isBuiltIn}
-            data-testid="skill-open-in-editor"
+    <div className="@container/skill-detail flex h-full flex-col">
+      <div className="flex shrink-0 flex-col gap-3 px-4 py-3 sm:px-5 sm:py-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${category.color}`}
           >
-            <PencilIcon className="mr-1.5 size-3.5" />
-            {t("card.edit")}
-          </Button>
-          <div className="flex gap-1">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              onClick={() => void handleDuplicate()}
-              aria-label={t("card.duplicate")}
-            >
-              <CopyIcon className="size-3.5" />
-            </Button>
+            <Icon className="size-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold">{skill.name}</h2>
+            {skill.description && (
+              <p className="line-clamp-2 text-xs text-muted-foreground">{skill.description}</p>
+            )}
+          </div>
+          {/* Sized by the pane, not the window: beside the list at 800px the
+              pane is ~420px, and sharing the row cut the name to "Ag…". */}
+          <div className="flex w-full shrink-0 items-center justify-end gap-2 @2xl/skill-detail:w-auto">
+            {/* The on/off state, shown and changed in one place. It was a bare
+                power icon that toggled without ever saying which way the
+                skill currently was. */}
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={enabled}
+                onCheckedChange={() => void handleToggleStatus()}
+                data-testid="skill-status-switch"
+              />
+              {t("status.enabled")}
+            </label>
+            {/* A built-in cannot be edited, only copied. Its Edit button sat
+                there disabled with nothing saying what to do instead; the
+                way to change one is the primary action now. */}
+            {builtIn ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleDuplicate()}
+                data-testid="skill-duplicate-to-edit"
+              >
+                <CopyIcon className="mr-1.5 size-3.5" />
+                {tDetail("duplicateToEdit")}
+              </Button>
+            ) : (
+              /* Single edit entry: jumps straight to the workspace editor (file
+                 tree + Monaco + validation). Metadata is edited from the
+                 editor's "Skill settings" panel, so there is no separate form
+                 dialog. */
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  openSkillInEditor(skill.id, skill.content)
+                  setActiveTab("editor")
+                  // On mobile the detail renders inside a full-screen Sheet
+                  // that would otherwise keep covering the editor tab.
+                  closeDetail()
+                }}
+                data-testid="skill-open-in-editor"
+              >
+                <PencilIcon className="mr-1.5 size-3.5" />
+                {t("card.edit")}
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="size-7"
-                  aria-label={t("card.export")}
+                  className="size-8"
+                  aria-label={t("toolbar.moreActions")}
+                  data-testid="skill-detail-more"
                 >
-                  <DownloadIcon className="size-3.5" />
+                  <MoreHorizontalIcon className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuGroup>
+                  {builtIn ? null : (
+                    <DropdownMenuItem onSelect={() => void handleDuplicate()}>
+                      <CopyIcon className="size-3.5" />
+                      {t("card.duplicate")}
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onSelect={() => void handleBundleExport()}>
+                    <PackageIcon className="size-3.5" />
                     {tDetail("exportBundle")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={requestCompatibilityExport}>
+                    <FileTextIcon className="size-3.5" />
                     {tDetail("exportMarkdownCompatibility")}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
+                {/* Not offered at all for a built-in, rather than a red icon
+                    that did nothing. */}
+                {builtIn ? null : (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => setDeleteTarget({ skillId: skill.id, name: skill.name })}
+                      data-testid="skill-detail-delete"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                      {t("card.delete")}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              onClick={() => void handleToggleStatus()}
-              aria-label={status === "enabled" ? t("card.disable") : t("card.enable")}
-            >
-              <PowerIcon className="size-3.5" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7 text-destructive hover:text-destructive"
-              onClick={() => setDeleteTarget({ skillId: skill.id, name: skill.name })}
-              disabled={skill.isBuiltIn}
-              aria-label={t("card.delete")}
-            >
-              <Trash2Icon className="size-3.5" />
-            </Button>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 sm:ps-[3.25rem]">
+          <Badge variant={source.badgeVariant} className="h-5 text-[10px]">
+            {t(`source.${source.labelKey}` as never)}
+          </Badge>
+          <Badge variant="outline" className="h-5 text-[10px]">
+            {t(`category.${category.labelKey}` as never)}
+          </Badge>
+          {(skill.tags ?? []).map((tag) => (
+            <Badge key={tag} variant="outline" className="h-5 text-[10px]">
+              {tag}
+            </Badge>
+          ))}
         </div>
       </div>
 
       <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">
-        <div className="mx-4 mt-2 overflow-x-auto sm:mx-5">
-          <TabsList className="self-start">
-            <TabsTrigger value="overview" className="whitespace-nowrap">
+        {/* The same quiet text tabs as the page header, a size down: a second
+            segmented control here read as a peer of the page's own tabs. */}
+        <div className="mx-4 overflow-x-auto border-b pb-2 sm:mx-5">
+          <TabsList className="h-auto gap-0.5 self-start rounded-none bg-transparent p-0">
+            <TabsTrigger value="overview" className={DETAIL_TAB}>
               {tDetail("tabOverview")}
             </TabsTrigger>
-            <TabsTrigger value="content" className="whitespace-nowrap">
+            <TabsTrigger value="content" className={DETAIL_TAB}>
               {tDetail("tabContent")}
             </TabsTrigger>
-            <TabsTrigger value="resources" className="whitespace-nowrap">
+            <TabsTrigger value="resources" className={DETAIL_TAB}>
               {tDetail("tabResources")}
               {resources && resources.length > 0 && (
                 <span className="ml-1 text-[10px] opacity-60">{resources.length}</span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="security" className="whitespace-nowrap">
+            <TabsTrigger value="security" className={DETAIL_TAB}>
               {tDetail("tabSecurity")}
             </TabsTrigger>
             {/* Only a recorded skill has a source capture behind it; an
                 empty tab on every hand-written skill would be noise. */}
             {hasRecordings ? (
-              <TabsTrigger value="recordings" className="whitespace-nowrap">
+              <TabsTrigger value="recordings" className={DETAIL_TAB}>
                 {tVersions("tabLabel")}
                 <span className="ml-1 text-[10px] opacity-60">{recordingCount}</span>
               </TabsTrigger>
             ) : null}
-            <TabsTrigger value="validation" className="whitespace-nowrap">
+            <TabsTrigger value="validation" className={DETAIL_TAB}>
               {tDetail("tabValidation")}
               {skill.validationErrors && skill.validationErrors.length > 0 && (
                 <Badge variant="destructive" className="ml-1 h-4 px-1.5 text-[10px]">
@@ -342,33 +371,54 @@ export function SkillDetail({ skill }: Props) {
 
 function OverviewSection({ skill }: { skill: Skill }) {
   const t = useTranslations("skills.detail")
-  const formatTime = (ms?: number) => {
-    if (!ms) return "—"
-    return new Date(ms).toLocaleString()
-  }
+  const tSkills = useTranslations("skills")
+  const format = useFormatter()
+  const category = getCategoryMeta(inferCategory(skill))
+  const source = getSourceMeta(inferSource(skill))
+  const formatTime = (ms?: number) =>
+    ms ? format.dateTime(ms, { dateStyle: "medium", timeStyle: "short" }) : "—"
+  const usageCount = skill.usageCount ?? 0
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <SkillUpdateBanner skill={skill} />
-      <SkillSyncSection skill={skill} />
-      <div className="grid gap-3 text-xs">
-        <Row label={t("metaCategory")}>{skill.category ?? "—"}</Row>
-        <Row label={t("metaSource")}>{skill.source ?? "—"}</Row>
+      {/* Labels in sentence case beside readable values. The values were the
+          raw stored ids ("meta", "builtin"), and the usage row put its count
+          in the label with a dash for a value. */}
+      <dl
+        className="grid grid-cols-[minmax(6rem,auto)_minmax(0,1fr)] items-baseline gap-x-6 gap-y-3"
+        data-testid="skill-overview-details"
+      >
+        <Row label={t("metaCategory")}>{tSkills(`category.${category.labelKey}` as never)}</Row>
+        <Row label={t("metaSource")}>{tSkills(`source.${source.labelKey}` as never)}</Row>
         {skill.author && <Row label={t("metaAuthor")}>{skill.author}</Row>}
         {skill.version && <Row label={t("metaVersion")}>{skill.version}</Row>}
         {skill.license && <Row label={t("metaLicense")}>{skill.license}</Row>}
+        <Row label={t("metaUsageLabel")}>
+          {usageCount === 0 ? (
+            <span className="text-muted-foreground">{t("usageNever")}</span>
+          ) : (
+            <>
+              {t("usageSummary", { count: usageCount })}
+              {skill.lastUsedAt ? (
+                <span className="text-muted-foreground">
+                  {" · "}
+                  {t("metaLastUsed", { when: formatTime(skill.lastUsedAt) })}
+                </span>
+              ) : null}
+            </>
+          )}
+        </Row>
         <Row label={t("metaCreated")}>{formatTime(skill.createdAt)}</Row>
         <Row label={t("metaUpdated")}>{formatTime(skill.updatedAt)}</Row>
-        <Row label={t("metaUsage", { count: skill.usageCount ?? 0 })}>
-          {skill.lastUsedAt
-            ? t("metaLastUsed", { when: new Date(skill.lastUsedAt).toLocaleString() })
-            : "—"}
-        </Row>
         {skill.allowedTools && skill.allowedTools.length > 0 && (
           <Row label={t("metaTools")}>
-            <span className="font-mono">{skill.allowedTools.join(", ")}</span>
+            <span className="font-mono text-xs">{skill.allowedTools.join(", ")}</span>
           </Row>
         )}
-      </div>
+      </dl>
+      {/* After the facts, not before them: off the desktop it is one line
+          saying sync lives there, and it opened every skill's overview. */}
+      <SkillSyncSection skill={skill} />
     </div>
   )
 }
@@ -422,10 +472,10 @@ export function SkillUpdateBanner({ skill }: { skill: Skill }) {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[8rem_1fr] items-baseline gap-2 py-1.5">
-      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      <span>{children}</span>
-    </div>
+    <>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-sm break-words">{children}</dd>
+    </>
   )
 }
 

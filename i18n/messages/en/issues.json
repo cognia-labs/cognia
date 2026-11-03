@@ -1,6 +1,7 @@
 {
   "title": "Issues",
   "summary": "{count, plural, =0 {No issues} one {# issue} other {# issues}}",
+  "pageDescription": "Plan and track this workspace's work across every connected source.",
   "views": {
     "all": "All",
     "assigned": "Assigned",
@@ -278,6 +279,7 @@
   "projects": {
     "title": "Projects",
     "summary": "{count, plural, =0 {No projects} one {# project} other {# projects}}",
+    "pageDescription": "Delivery containers that group issues, with owners, dates and linked resources.",
     "empty": "No projects yet",
     "emptyHint": "A project groups issues for one deliverable and carries the context every agent run sees.",
     "create": "New project",
@@ -386,6 +388,7 @@
   },
   "workspace": {
     "title": "Workspace",
+    "pageDescription": "Everything this workspace holds: issues, agents, environments and spend.",
     "overview": "Overview",
     "environments": "Environments",
     "sourceControl": "Source Control",
@@ -416,6 +419,7 @@
     "projectsOpen": "Open projects",
     "environmentsOpen": "Open the Environments tab",
     "environmentsAttention": "The repository's workspace config needs your decision",
+    "environmentsAttentionShort": "Config needs review",
     "environmentsNoFolderTitle": "This workspace has no folder yet",
     "environmentsNoFolderBody": "Worktrees, agent branches and environment setup all start from a folder. Add one to set them up here.",
     "environmentsAddFolder": "Add a folder"
@@ -771,6 +775,7 @@
     "progressBar": "Cycle progress",
     "title": "Cycles",
     "summary": "{count, plural, =0 {No cycles} one {# cycle} other {# cycles}}",
+    "pageDescription": "Time-boxed cycles and milestones to plan issues into.",
     "viewIssues": "View issues",
     "noWorkspace": "No workspace selected",
     "noWorkspaceHint": "Cycles and milestones belong to a workspace. Pick one to plan into."

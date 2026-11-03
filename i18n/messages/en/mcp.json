@@ -351,6 +351,7 @@
   "tabs": {
     "agents": "Agent Sync",
     "health": "Health & Logs",
+    "label": "MCP sections",
     "myServers": "My Servers",
     "presets": "Preset Market"
   },

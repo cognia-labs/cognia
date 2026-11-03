@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import en from "@/i18n/messages/en.json"
 import { defaultSandboxCapabilities } from "@/lib/sandbox/connection-capabilities"
@@ -26,6 +26,10 @@ jest.mock("./managed-desktop-settings", () => ({
   ManagedDesktopSettings: () => <div data-testid="managed-desktop-settings" />,
 }))
 jest.mock("./sandbox-desktop-viewer", () => ({ SandboxDesktopViewer: () => null }))
+const mockPickDirectory = jest.fn()
+jest.mock("@/lib/files/file-bridge", () => ({
+  pickDirectory: (...args: unknown[]) => mockPickDirectory(...args),
+}))
 
 import { SandboxConnectionsTab } from "@/components/settings/automation/sandbox-connections-tab"
 
@@ -239,6 +243,40 @@ test("renders bare inside a host that already titles it", () => {
   expect(screen.queryByText("home")).toBeInTheDocument()
   expect(document.querySelector('[data-slot="card"]')).toBeNull()
   expect(screen.getByTestId("sandbox-manage-c1")).toBeInTheDocument()
+})
+
+test("keeps the empty line at the host's body size when unframed", () => {
+  const { unmount } = render(
+    <NextIntlClientProvider locale="en" messages={en as Record<string, unknown>}>
+      <SandboxConnectionsTab framed={false} />
+    </NextIntlClientProvider>
+  )
+  expect(screen.getByTestId("sandbox-connection-empty")).toHaveClass("text-xs")
+  unmount()
+  renderTab()
+  expect(screen.getByTestId("sandbox-connection-empty")).toHaveClass("text-sm")
+})
+
+/**
+ * The mount's host path is resolved by the Docker daemon, so the native
+ * folder picker (the one adding a workspace uses) is offered only while that
+ * daemon is this machine. For a remote daemon this Mac's folders are the wrong
+ * ones, and the path is typed.
+ */
+test("picks the mount folder natively only while the Docker daemon is local", async () => {
+  const s = en.automation.sandboxConnections
+  renderTab()
+  fireEvent.click(screen.getByRole("button", { name: s.addConnection }))
+  // Lume's own path fields render below with their own Browse buttons.
+  const mountField = () => screen.getByLabelText(s.workspaceHostPath).parentElement as HTMLElement
+  mockPickDirectory.mockResolvedValue("/Users/me/project")
+  fireEvent.click(within(mountField()).getByRole("button", { name: s.browse }))
+  await waitFor(() =>
+    expect(screen.getByLabelText(s.workspaceHostPath)).toHaveValue("/Users/me/project")
+  )
+  fireEvent.change(screen.getByLabelText(s.host), { target: { value: "10.0.0.8" } })
+  expect(within(mountField()).queryByRole("button", { name: s.browse })).not.toBeInTheDocument()
+  expect(screen.getByLabelText(s.workspaceHostPath)).toHaveValue("/Users/me/project")
 })
 
 test("wires the managed desktop settings into the existing registry", () => {

@@ -1,16 +1,16 @@
 "use client"
 
 /**
- * Search, filter and layout for the Files page (ADR-0223). The search box
- * writes straight to the store; the view defers the filter pass
- * (`useDeferredValue`) so typing never waits on a large list. Sorting moved to
- * the list's column headers.
+ * Filter and layout for the Files page (ADR-0223): the right end of the
+ * header's view bar. The search box is the header's own `search` field
+ * (`files-library.tsx`), which writes straight to the store; the view defers
+ * the filter pass (`useDeferredValue`) so typing never waits on a large list.
+ * Sorting moved to the list's column headers.
  */
 
 import { useTranslations } from "next-intl"
-import { LayoutGridIcon, ListIcon, SearchIcon } from "lucide-react"
+import { LayoutGridIcon, ListIcon } from "lucide-react"
 
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFilesLibraryStore } from "@/stores/files-library"
 
@@ -18,27 +18,11 @@ import { FilesFilterPopover } from "./files-filter-popover"
 
 export function FilesToolbar() {
   const t = useTranslations("files")
-  const search = useFilesLibraryStore((s) => s.search)
-  const setSearch = useFilesLibraryStore((s) => s.setSearch)
   const viewMode = useFilesLibraryStore((s) => s.viewMode)
   const setViewMode = useFilesLibraryStore((s) => s.setViewMode)
 
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="files-toolbar">
-      <InputGroup className="h-8 w-full min-w-0 sm:w-64">
-        <InputGroupAddon>
-          <SearchIcon aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={t("search.placeholder")}
-          aria-label={t("search.aria")}
-          data-testid="files-search"
-        />
-      </InputGroup>
-
+    <div className="flex items-center gap-2" data-testid="files-toolbar">
       <FilesFilterPopover />
 
       <ToggleGroup

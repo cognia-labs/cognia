@@ -32,12 +32,12 @@ import {
 } from "@/lib/issues/sync/registry"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
-import { FolderIcon, RefreshCwIcon } from "lucide-react"
+import { FolderIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
-import { TrackerTabs } from "@/components/issues/tracker-tabs"
+import { useTrackerHeaderTabs } from "@/components/issues/tracker-tabs"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { useClientLiveQuery } from "@/hooks/data"
 import { useIssueSyncAvailability } from "../kept-copy-source-state"
@@ -69,6 +69,7 @@ export interface ProjectConsoleProps {
 
 export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
   const t = useTranslations("issues")
+  const trackerTabs = useTrackerHeaderTabs("projects")
   useSyncExternalStore(
     subscribeIssueSyncProviders,
     getIssueSyncProvidersRevision,
@@ -201,12 +202,13 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
           variant="management"
           icon={<FolderIcon />}
           title={t("projects.title")}
+          description={t("projects.pageDescription")}
           summary={t("projects.summary", { count: (projects ?? []).length })}
-          navigation={<TrackerTabs active="projects" />}
-          navigationPlacement="inline"
+          tabs={trackerTabs}
           primaryAction={{
             id: "create",
             label: t("projects.create"),
+            icon: PlusIcon,
             onSelect: () => setCreateOpen(true),
             disabled: !workspaceId,
             testId: "project-create-trigger",

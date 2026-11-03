@@ -269,7 +269,8 @@
     "refreshing": "Refreshing…",
     "refreshFailed": "Could not refresh the device list",
     "grow": "Pair a device or add a host",
-    "addSshHost": "Add SSH host"
+    "addSshHost": "Add SSH host",
+    "more": "More actions"
   },
   "detail": {
     "noSelectionTitle": "No device selected",

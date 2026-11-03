@@ -173,6 +173,16 @@ describe("GoalConsole", () => {
     expect(screen.getByTestId("goal-quick-create-trigger")).toBeInTheDocument()
   })
 
+  it("opens the quick-create dialog from the header's primary button", async () => {
+    const user = userEvent.setup()
+    renderConsole()
+    expect(screen.queryByTestId("goal-quick-create-dialog")).not.toBeInTheDocument()
+    await user.click(await screen.findByTestId("goal-quick-create-trigger"))
+    expect(await screen.findByTestId("goal-quick-create-dialog")).toBeInTheDocument()
+    // The dialog draws no second trigger of its own.
+    expect(screen.getAllByTestId("goal-quick-create-trigger")).toHaveLength(1)
+  })
+
   it("opens on Overview when the address names no tab", async () => {
     renderConsole()
     expect(await screen.findByTestId("goal-overview-section")).toBeInTheDocument()
@@ -227,9 +237,13 @@ describe("GoalConsole", () => {
       goal("run"),
     ])
     renderConsole({ location: { tab: "analytics" } })
+    // One status chip in words, visible from every tab…
     const badge = await screen.findByTestId("goal-console-needs-you-badge")
-    expect(badge).toHaveTextContent("2")
-    expect(badge).toHaveAccessibleName("2 goals need you")
+    expect(badge).toHaveTextContent("2 goals need you")
+    expect(badge).toHaveAttribute("data-tone", "warning")
+    // …and the count on the Overview tab itself.
+    expect(tab("overview")).toHaveTextContent("Overview2")
+    expect(tab("history")).toHaveTextContent(/^History$/)
   })
 
   it("selects a goal into the inspector pane, replacing the address", async () => {

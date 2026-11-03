@@ -556,6 +556,7 @@
     "resources": "资源",
     "versions": "版本"
   },
+  "tabsLabel": "站点分区",
   "title": "站点",
   "versions": {
     "artifact": "{size} · {count} 个文件",

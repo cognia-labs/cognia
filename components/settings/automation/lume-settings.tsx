@@ -22,7 +22,16 @@ import {
 import { getSandboxConnection, putSandboxConnection } from "@/lib/db/sandbox-connections"
 import { projectLumeResource } from "@/lib/sandbox/lume-projection"
 import { isTauri } from "@/lib/platform/detect"
+import { cn } from "@/lib/utils"
+import { DirectoryField } from "@/components/settings/common/directory-field"
+import { pickFilePath } from "@/lib/files/file-bridge"
 import { SandboxDesktopViewer } from "./sandbox-desktop-viewer"
+
+// Lume runs on this Mac, so these paths are this machine's: the native picker
+// names the right files. The executable and the IPSW are handed to the native
+// host and never read here, hence `pickFilePath` (no renderer read scope).
+const pickExecutable = () => pickFilePath()
+const pickIpsw = () => pickFilePath({ filters: [{ name: "IPSW", extensions: ["ipsw"] }] })
 
 export function LumeSettings({
   client = lumeClient,
@@ -149,15 +158,42 @@ export function LumeSettings({
     ["awaitingConsent", "queued", "running", "provisioning", "finished"].includes(progress.stage)
       ? progress.stage
       : "unknown"
+  // Unframed it is one sub-block of the device console's Sandbox chapter:
+  // no Card padding to indent it off the chapter's edge, and a heading that
+  // sits below the chapter's own, like the managed desktop block beside it.
   const Container = framed ? Card : "section"
+  const buttonSize = framed ? "default" : "sm"
+  // In the sheet the form reads at the sheet's scale: labels below the block's
+  // 12px heading, fields capped to a readable width and packed closer.
+  const fieldGroupClass = framed ? undefined : "max-w-md gap-3"
+  const fieldLabelClass = framed ? undefined : "text-xs"
+  const Body = framed ? CardContent : "div"
   return (
-    <Container>
-      <CardHeader>
-        <CardTitle>{t("title")}</CardTitle>
-        <CardDescription>{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {!desktop && <p>{t("desktopRequired")}</p>}
+    <Container
+      {...(framed ? {} : { className: "space-y-3 border-t pt-4", "aria-label": t("title") })}
+      data-testid="lume-settings"
+      data-framed={framed ? "true" : "false"}
+    >
+      {framed ? (
+        <CardHeader>
+          <CardTitle>{t("title")}</CardTitle>
+          <CardDescription>{t("description")}</CardDescription>
+        </CardHeader>
+      ) : (
+        <>
+          <h3 className="text-xs font-semibold">{t("title")}</h3>
+          <p className="text-[11px] leading-snug text-muted-foreground">{t("description")}</p>
+        </>
+      )}
+      <Body className={cn("flex flex-col", framed ? "gap-4" : "gap-3")}>
+        {!desktop && (
+          <p
+            className={framed ? undefined : "text-xs text-muted-foreground"}
+            data-testid="lume-desktop-required"
+          >
+            {t("desktopRequired")}
+          </p>
+        )}
         {error && (
           <p
             role={error === "cancelled" ? "status" : "alert"}
@@ -178,6 +214,7 @@ export function LumeSettings({
             </p>
             <Button
               variant="outline"
+              size={buttonSize}
               disabled={cancelling}
               onClick={() => {
                 foreground.current?.abort()
@@ -189,19 +226,25 @@ export function LumeSettings({
           </div>
         )}
         {completedAfterCancel && <p role="status">{t("completedAfterCancel")}</p>}
-        <FieldGroup>
+        <FieldGroup className={fieldGroupClass}>
           <Field>
-            <FieldLabel htmlFor={`${id}-binary`}>{t("binary")}</FieldLabel>
-            <Input
+            <FieldLabel className={fieldLabelClass} htmlFor={`${id}-binary`}>
+              {t("binary")}
+            </FieldLabel>
+            <DirectoryField
               id={`${id}-binary`}
               value={binary}
-              onChange={(event) => setBinary(event.target.value)}
+              onChange={setBinary}
+              ariaLabel={t("binary")}
+              browseLabel={t("browse")}
+              pick={pickExecutable}
               disabled={!desktop || busy}
             />
           </Field>
         </FieldGroup>
         <div className="flex flex-wrap gap-2">
           <Button
+            size={buttonSize}
             disabled={!desktop || busy || !binary || diagnostics?.platformSupported === false}
             onClick={() => void run({ kind: "configure", binary, enabled: true })}
           >
@@ -209,19 +252,29 @@ export function LumeSettings({
           </Button>
           <Button
             variant="outline"
+            size={buttonSize}
             disabled={!desktop || busy || !diagnostics?.enabled}
             onClick={() => void run({ kind: "configure", binary, enabled: false })}
           >
             {t("disable")}
           </Button>
-          <Button variant="outline" disabled={!desktop} onClick={() => void refresh()}>
+          <Button
+            variant="outline"
+            size={buttonSize}
+            disabled={!desktop}
+            onClick={() => void refresh()}
+          >
             {t("refresh")}
           </Button>
         </div>
-        <p className="text-sm text-muted-foreground">{t("policyNotice")}</p>
-        <FieldGroup>
+        <p className={cn("text-muted-foreground", framed ? "text-sm" : "text-xs")}>
+          {t("policyNotice")}
+        </p>
+        <FieldGroup className={fieldGroupClass}>
           <Field>
-            <FieldLabel htmlFor={`${id}-mode`}>{t("sourceMode")}</FieldLabel>
+            <FieldLabel className={fieldLabelClass} htmlFor={`${id}-mode`}>
+              {t("sourceMode")}
+            </FieldLabel>
             <NativeSelect
               id={`${id}-mode`}
               value={mode}
@@ -233,27 +286,45 @@ export function LumeSettings({
             </NativeSelect>
           </Field>
           <Field>
-            <FieldLabel htmlFor={`${id}-source`}>
+            <FieldLabel className={fieldLabelClass} htmlFor={`${id}-source`}>
               {mode === "create" ? t("ipsw") : t("vmName")}
             </FieldLabel>
-            <Input
-              id={`${id}-source`}
-              value={source}
-              onChange={(event) => setSource(event.target.value)}
-            />
+            {/* Only an IPSW is a path; a VM name is not, so it keeps a plain input. */}
+            {mode === "create" ? (
+              <DirectoryField
+                id={`${id}-source`}
+                value={source}
+                onChange={setSource}
+                ariaLabel={t("ipsw")}
+                browseLabel={t("browse")}
+                pick={pickIpsw}
+              />
+            ) : (
+              <Input
+                id={`${id}-source`}
+                value={source}
+                onChange={(event) => setSource(event.target.value)}
+              />
+            )}
           </Field>
           {mode === "clone" && (
             <Field>
-              <FieldLabel htmlFor={`${id}-storage`}>{t("seedStorage")}</FieldLabel>
-              <Input
+              <FieldLabel className={fieldLabelClass} htmlFor={`${id}-storage`}>
+                {t("seedStorage")}
+              </FieldLabel>
+              <DirectoryField
                 id={`${id}-storage`}
                 value={storage}
-                onChange={(event) => setStorage(event.target.value)}
+                onChange={setStorage}
+                ariaLabel={t("seedStorage")}
+                browseLabel={t("browse")}
               />
             </Field>
           )}
         </FieldGroup>
         <Button
+          size={buttonSize}
+          className={framed ? undefined : "self-start"}
           disabled={
             busy || !desktop || !diagnostics?.enabled || !source || (mode === "clone" && !storage)
           }
@@ -274,7 +345,9 @@ export function LumeSettings({
         </Button>
         {setup && (
           <Field>
-            <FieldLabel htmlFor={`${id}-setup`}>{t("setupMaterial")}</FieldLabel>
+            <FieldLabel className={fieldLabelClass} htmlFor={`${id}-setup`}>
+              {t("setupMaterial")}
+            </FieldLabel>
             <Textarea id={`${id}-setup`} readOnly value={setup} />
           </Field>
         )}
@@ -287,7 +360,7 @@ export function LumeSettings({
             run={run}
           />
         ))}
-      </CardContent>
+      </Body>
     </Container>
   )
 }
@@ -422,10 +495,12 @@ function LumeResourcePanel({
       <p className="text-sm text-muted-foreground">{t("workspaceNotice")}</p>
       <Field>
         <FieldLabel htmlFor={`${id}-workspace`}>{t("workspaceRoot")}</FieldLabel>
-        <Input
+        <DirectoryField
           id={`${id}-workspace`}
           value={workspaceRoot}
-          onChange={(event) => setWorkspaceRoot(event.target.value)}
+          onChange={setWorkspaceRoot}
+          ariaLabel={t("workspaceRoot")}
+          browseLabel={t("browse")}
         />
       </Field>
       <div className="flex flex-wrap gap-2">

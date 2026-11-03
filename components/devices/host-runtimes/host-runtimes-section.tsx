@@ -101,7 +101,7 @@ export function HostRuntimesSection({ row, deps }: { row: DeviceRow; deps?: UseH
   ).length
 
   return (
-    <DeviceSection id="host-runtimes" title={t("title")} icon={BoxesIcon} meta={refresh} wide>
+    <DeviceSection id="host-runtimes" title={t("title")} icon={BoxesIcon} meta={refresh}>
       <div className="space-y-3 text-sm" data-testid="host-runtimes">
         {unavailable ? (
           <Alert data-testid="host-runtimes-unavailable" data-reason={unavailable}>

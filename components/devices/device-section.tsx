@@ -15,10 +15,9 @@
  * name so the `device-section-*` anchors and test ids keep working, and so a
  * caller here cannot forget to pass `pane="device-pane"`.
  *
- * `wide` is the layout hint rather than a class, so a section declares "I hold
- * a matrix" and the grid decides what that means at the current pane width.
- * Callers passing `col-span-*` themselves is how a grid ends up with one card
- * that never lines up.
+ * No `wide`: the record is one column of chapters (see `device-detail.tsx`),
+ * so every chapter already has the full width, and a span hint would only be
+ * a claim nothing honours.
  */
 
 import { ConsoleSection } from "@/components/surface/console-section"
@@ -32,8 +31,6 @@ export interface DeviceSectionProps {
   meta?: React.ReactNode
   /** One line under the title, for a section whose scope is not obvious. */
   description?: string
-  /** Spans the full grid width, for matrices and lists, not fact pairs. */
-  wide?: boolean
   children: React.ReactNode
   className?: string
 }

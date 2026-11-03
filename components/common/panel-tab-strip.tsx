@@ -3,9 +3,9 @@
 /**
  * Shared panel tab strip.
  *
- * The narrowing contract, previously copied into `components/settings/mcp/
- * mcp-panel-tabs.tsx` and `components/skills/skill-panel-tabs.tsx` and absent
- * from every other multi-tab panel:
+ * The narrowing contract, once copied into the MCP and Skills pages' own tab
+ * strips (both now the page header's shared `tabs`) and absent from every
+ * other multi-tab panel:
  *
  * - **No `overflow-x-auto` of our own.** An unbounded width lets the `w-fit`
  *   list render at max-content and overflow a narrow pane, which is what

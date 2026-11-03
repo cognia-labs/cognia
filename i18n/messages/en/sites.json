@@ -556,6 +556,7 @@
     "resources": "Resources",
     "versions": "Versions"
   },
+  "tabsLabel": "Site sections",
   "title": "Sites",
   "versions": {
     "artifact": "{size} · {count, plural, one {# file} other {# files}}",

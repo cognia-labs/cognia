@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import {
   ArrowUpCircleIcon,
@@ -8,13 +8,15 @@ import {
   FolderIcon,
   LayoutTemplateIcon,
   LinkIcon,
-  MoreHorizontalIcon,
   PackageIcon,
   PlusIcon,
+  RefreshCcwIcon,
   RefreshCwIcon,
   SearchIcon,
   SparklesIcon,
+  Trash2Icon,
   UploadIcon,
+  VideoIcon,
 } from "lucide-react"
 import {
   Sheet,
@@ -23,25 +25,24 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { VideoIcon } from "lucide-react"
 import { openRecorder } from "@/stores/skills/recorder-store"
 import { useRecorderAvailable } from "@/hooks/skills/use-skill-recorder"
+import type {
+  FeatureHeaderAction,
+  FeatureHeaderPrimaryAction,
+} from "@/components/feature-shell/feature-page-header"
 import { SkillDiscovery } from "./skill-discovery"
 import { SkillTemplateDialog } from "./skill-template-dialog"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { useSettingsStore } from "@/stores/settings"
-import { resolveSkillBundleMirrors } from "@/stores/settings/settings-store"
 import { pickAndReadBinaryFiles, pickAndReadFiles, pickDirectory } from "@/lib/files/file-bridge"
 import { isTauri } from "@/lib/tauri"
 import { canReadHostSkills, canWriteHostSkills } from "@/lib/skills/sync"
@@ -95,7 +96,26 @@ function toBundleImportDraft(
   }
 }
 
-export function SkillPanelToolbar() {
+/**
+ * What the Skills page header shows for the panel's own actions.
+ *
+ * The header draws typed actions in one fixed order: New is the
+ * primary button and sits last, Record is a secondary button, and the
+ * occasional jobs (export, update check, native push/pull, empty trash) fold
+ * into the header's own "⋯". Only the Import menu stays free-form, because
+ * every entry carries a one-line hint that a typed overflow item cannot.
+ * The mirror-target switches and the host-reachability note are settings, not
+ * actions, so they live in the preferences popover (`SkillSyncTargets`).
+ */
+export interface SkillPanelToolbarModel {
+  primaryAction: FeatureHeaderPrimaryAction
+  secondaryActions: FeatureHeaderAction[]
+  overflowActions: FeatureHeaderAction[]
+  /** The Import menu, plus the template dialog and discovery sheet it opens. */
+  importMenu: ReactNode
+}
+
+export function useSkillPanelToolbar(): SkillPanelToolbarModel {
   const t = useTranslations("skills.toolbar")
   const tRecorder = useTranslations("skills.recorder")
   const recorderAvailable = useRecorderAvailable()
@@ -110,26 +130,7 @@ export function SkillPanelToolbar() {
   const setImportStaging = useSkillsStore((s) => s.setImportStaging)
   const setUrlInstallOpen = useSkillsStore((s) => s.setUrlInstallOpen)
   const sync = useSkillSync()
-  /**
-   * Whether the *host* can serve its skills directory, which is not the same
-   * question as whether this shell is Tauri. `skills_scan_native`,
-   * `skills_install_native`, `skills_catalog_get` and the atomic-install family
-   * are all `transports: ["http","websocket","webrtc"]`, and `lib/claude/ipc.ts`
-   * already routes them through the transport, so a browser or phone driving a
-   * paired Host can sync that Host's `~/.claude/skills/`. Gating on `isTauri()`
-   * told those clients the feature did not exist. `useSkillSync` has always
-   * checked the real predicates before acting; only these `disabled` flags lied.
-   */
-  const hostSkillsReachable = canReadHostSkills() || canWriteHostSkills()
   const updates = useSkillUpdate()
-  // Select the raw field so Zustand's referential equality holds across
-  // renders — wrapping `resolveSkillBundleMirrors` in the selector creates
-  // a fresh object every read and triggers an update loop in React 19.
-  const rawMirrors = useSettingsStore((s) => s.settings?.skillBundleMirrors)
-  const mirrorSettings = resolveSkillBundleMirrors(
-    rawMirrors ? ({ skillBundleMirrors: rawMirrors } as never) : null
-  )
-  const setMirror = useSettingsStore((s) => s.setSkillBundleMirrors)
   const [trashCount, setTrashCount] = useState(0)
 
   // Refresh the trash badge on mount. Tauri-only — outside Tauri the listing
@@ -394,31 +395,26 @@ export function SkillPanelToolbar() {
     }
   }
 
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <Button size="sm" onClick={() => openCreate()} disabled={busy}>
-        <PlusIcon className="size-3.5 sm:mr-1.5" />
-        <span className="hidden sm:inline">{t("new")}</span>
-      </Button>
-      {/* Gated on the owning plugin rather than on `isTauri()`: disabling the
-          Skill Recorder must take every entry point with it, and the plugin is
-          the thing that holds the native grants. */}
-      {recorderAvailable ? (
-        <Button size="sm" variant="outline" onClick={() => openRecorder("toolbar")} disabled={busy}>
-          <VideoIcon className="size-3.5 sm:mr-1.5" />
-          <span className="hidden sm:inline">{tRecorder("entry.toolbarButton")}</span>
-        </Button>
-      ) : null}
+  const importItemClass = "text-xs"
+  const importMenu = (
+    <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="sm" variant="outline" disabled={busy}>
-            <UploadIcon className="size-3.5 sm:mr-1.5" />
-            <span className="hidden sm:inline">{t("import")}</span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            aria-label={t("import")}
+            data-testid="skill-panel-toolbar-import"
+            className="size-8 px-0 @2xl/feature-header:h-8 @2xl/feature-header:w-auto @2xl/feature-header:px-3"
+          >
+            <UploadIcon className="size-3.5" aria-hidden="true" />
+            <span className="hidden @2xl/feature-header:inline">{t("import")}</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuGroup>
-            <DropdownMenuItem onSelect={() => setTemplateOpen(true)} className="text-xs">
+            <DropdownMenuItem onSelect={() => setTemplateOpen(true)} className={importItemClass}>
               <LayoutTemplateIcon className="mr-2 size-3.5" />
               <div className="flex flex-col gap-0.5">
                 <span>{tCommon("templates.fromTemplate")}</span>
@@ -428,7 +424,10 @@ export function SkillPanelToolbar() {
               </div>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void handleImportFromMarkdown()} className="text-xs">
+            <DropdownMenuItem
+              onSelect={() => void handleImportFromMarkdown()}
+              className={importItemClass}
+            >
               <UploadIcon className="mr-2 size-3.5" />
               <div className="flex flex-col gap-0.5">
                 <span>{t("importFromMarkdown")}</span>
@@ -439,7 +438,7 @@ export function SkillPanelToolbar() {
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => void handleImportFromBundleZip()}
-              className="text-xs"
+              className={importItemClass}
               data-testid="skill-panel-toolbar-import-bundle-zip"
             >
               <PackageIcon className="mr-2 size-3.5" />
@@ -453,7 +452,7 @@ export function SkillPanelToolbar() {
             <DropdownMenuItem
               onSelect={() => void handleImportFromBundleFolder()}
               disabled={!isTauri()}
-              className="text-xs"
+              className={importItemClass}
               data-testid="skill-panel-toolbar-import-bundle-folder"
             >
               <FolderIcon className="mr-2 size-3.5" />
@@ -467,7 +466,7 @@ export function SkillPanelToolbar() {
             <DropdownMenuItem
               onSelect={() => void handleImportFromClaudeCode()}
               disabled={!isTauri()}
-              className="text-xs"
+              className={importItemClass}
             >
               <SparklesIcon className="mr-2 size-3.5" />
               <div className="flex flex-col gap-0.5">
@@ -480,7 +479,7 @@ export function SkillPanelToolbar() {
             <DropdownMenuItem
               onSelect={() => setDiscoveryOpen(true)}
               disabled={!isTauri()}
-              className="text-xs"
+              className={importItemClass}
             >
               <SearchIcon className="mr-2 size-3.5" />
               <div className="flex flex-col gap-0.5">
@@ -493,7 +492,7 @@ export function SkillPanelToolbar() {
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => setUrlInstallOpen(true)}
-              className="text-xs"
+              className={importItemClass}
               data-testid="skill-panel-toolbar-install-from-url"
             >
               <LinkIcon className="mr-2 size-3.5" />
@@ -503,136 +502,6 @@ export function SkillPanelToolbar() {
                   {tCommon("marketplace.urlInstall.description")}
                 </span>
               </div>
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {/* Export + Updates + Sync visible inline at md+ */}
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => void handleExportAll()}
-        disabled={busy}
-        className="hidden md:inline-flex"
-      >
-        <FolderDownIcon className="mr-1.5 size-3.5" />
-        {t("exportAll")}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => void handleCheckUpdates()}
-        disabled={busy || updates.checking}
-        className="hidden md:inline-flex"
-        data-testid="skill-panel-toolbar-check-updates"
-      >
-        <ArrowUpCircleIcon className="mr-1.5 size-3.5" />
-        {updates.checking ? t("checkingUpdates") : t("checkUpdates")}
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!hostSkillsReachable || busy || sync.busy}
-            title={hostSkillsReachable ? t("syncNative") : tSync("unavailableRead")}
-            className="hidden md:inline-flex"
-          >
-            <RefreshCwIcon className="mr-1.5 size-3.5" />
-            {tCommon("syncLabel")}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuGroup>
-            <DropdownMenuItem onSelect={() => void sync.push()} className="text-xs">
-              <RefreshCwIcon className="mr-2 size-3.5" />
-              {tSync("pushAll")}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void sync.pull()} className="text-xs">
-              <RefreshCwIcon className="mr-2 size-3.5 -scale-x-100" />
-              {tSync("pullAll")}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {tSync("mirrorTargetsLabel")}
-            </DropdownMenuLabel>
-            <DropdownMenuCheckboxItem
-              checked={mirrorSettings.claude}
-              onCheckedChange={(v) => void setMirror({ claude: !!v })}
-              className="text-xs"
-              data-testid="skill-panel-toolbar-mirror-claude"
-            >
-              {tSync("mirrorClaude")}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={mirrorSettings.codex}
-              onCheckedChange={(v) => void setMirror({ codex: !!v })}
-              className="text-xs"
-              data-testid="skill-panel-toolbar-mirror-codex"
-            >
-              {tSync("mirrorCodex")}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => void handleEmptyTrash()}
-              disabled={!isTauri() || trashCount === 0 || busy}
-              className="text-xs"
-              data-testid="skill-panel-toolbar-empty-trash"
-            >
-              <FolderDownIcon className="mr-2 size-3.5" />
-              <span>{tSync("emptyTrash", { count: trashCount })}</span>
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {/* Below md, Export + Sync collapse into a single overflow menu. */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-8 md:hidden"
-            disabled={busy}
-            aria-label={t("moreActions")}
-          >
-            <MoreHorizontalIcon className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuGroup>
-            <DropdownMenuItem
-              onSelect={() => void handleExportAll()}
-              disabled={busy}
-              className="text-xs"
-            >
-              <FolderDownIcon className="mr-2 size-3.5" />
-              {t("exportAll")}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void handleCheckUpdates()}
-              disabled={busy || updates.checking}
-              className="text-xs"
-            >
-              <ArrowUpCircleIcon className="mr-2 size-3.5" />
-              {updates.checking ? t("checkingUpdates") : t("checkUpdates")}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void sync.push()}
-              disabled={!canWriteHostSkills() || sync.busy}
-              className="text-xs"
-            >
-              <RefreshCwIcon className="mr-2 size-3.5" />
-              {tSync("pushAll")}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void sync.pull()}
-              disabled={!canReadHostSkills() || sync.busy}
-              className="text-xs"
-            >
-              <RefreshCwIcon className="mr-2 size-3.5 -scale-x-100" />
-              {tSync("pullAll")}
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
@@ -651,6 +520,80 @@ export function SkillPanelToolbar() {
           <SkillDiscovery />
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   )
+
+  return {
+    primaryAction: {
+      id: "new",
+      label: t("new"),
+      icon: PlusIcon,
+      onSelect: () => openCreate(),
+      disabled: busy,
+      testId: "skill-panel-toolbar-new",
+    },
+    // Gated on the owning plugin rather than on `isTauri()`: disabling the
+    // Skill Recorder must take every entry point with it, and the plugin is
+    // the thing that holds the native grants.
+    secondaryActions: recorderAvailable
+      ? [
+          {
+            id: "record",
+            label: tRecorder("entry.toolbarButton"),
+            icon: VideoIcon,
+            onSelect: () => openRecorder("toolbar"),
+            disabled: busy,
+            testId: "skill-panel-toolbar-record",
+          },
+        ]
+      : [],
+    // Export, update check, sync and trash are occasional, so they live in the
+    // header's "⋯" at every width. Inline, they made five outline buttons of
+    // equal weight next to New, and the row wrapped below xl.
+    overflowActions: [
+      {
+        id: "export-all",
+        label: t("exportAll"),
+        icon: FolderDownIcon,
+        onSelect: () => void handleExportAll(),
+        disabled: busy,
+        testId: "skill-panel-toolbar-export-all",
+      },
+      {
+        id: "check-updates",
+        label: updates.checking ? t("checkingUpdates") : t("checkUpdates"),
+        icon: ArrowUpCircleIcon,
+        onSelect: () => void handleCheckUpdates(),
+        disabled: busy || updates.checking,
+        testId: "skill-panel-toolbar-check-updates",
+      },
+      {
+        id: "sync-push",
+        label: tSync("pushAll"),
+        icon: RefreshCwIcon,
+        onSelect: () => void sync.push(),
+        disabled: !canWriteHostSkills() || busy || sync.busy,
+        testId: "skill-panel-toolbar-sync-push",
+      },
+      {
+        id: "sync-pull",
+        label: tSync("pullAll"),
+        // The counter-clockwise glyph: the old menu drew push mirrored.
+        icon: RefreshCcwIcon,
+        onSelect: () => void sync.pull(),
+        disabled: !canReadHostSkills() || busy || sync.busy,
+        testId: "skill-panel-toolbar-sync-pull",
+      },
+      {
+        id: "empty-trash",
+        label: tSync("emptyTrash", { count: trashCount }),
+        icon: Trash2Icon,
+        onSelect: () => void handleEmptyTrash(),
+        disabled: !isTauri() || trashCount === 0 || busy,
+        destructive: true,
+        testId: "skill-panel-toolbar-empty-trash",
+      },
+    ],
+    importMenu,
+  }
 }

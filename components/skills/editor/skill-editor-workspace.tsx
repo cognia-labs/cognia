@@ -39,6 +39,7 @@ import { SkillFileTree } from "./skill-file-tree"
 import { SkillTabStrip } from "./skill-tab-strip"
 import { SkillMonacoEditor } from "./skill-monaco-editor"
 import { LightCodeEditor } from "@/components/editor/light-code-editor"
+import { SkillEditorEmpty } from "./skill-editor-empty"
 import { SkillValidationPanel } from "./skill-validation-panel"
 import { useEditorWorkspace } from "./use-editor-workspace"
 import { languageFromPath } from "./language-from-path"
@@ -168,11 +169,7 @@ export function SkillEditorWorkspace() {
   }, [savedAllSignal])
 
   if (!skill) {
-    return (
-      <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-        {t("emptyPickSkill")}
-      </div>
-    )
+    return <SkillEditorEmpty />
   }
 
   const activeFile = ws.openFiles.find((f) => f.id === ws.activeFileId) ?? ws.openFiles[0]

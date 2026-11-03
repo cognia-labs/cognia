@@ -76,6 +76,7 @@ import {
   saveFileAs,
   saveBinaryFileAs,
   pickDirectory,
+  pickFilePath,
   pickFilePaths,
   saveFilesToDir,
 } from "./file-bridge"
@@ -493,6 +494,42 @@ describe("saveBinaryFileAs", () => {
 
     URL.createObjectURL = originalCreate
     URL.revokeObjectURL = originalRevoke
+  })
+})
+
+describe("pickFilePath", () => {
+  it("returns null off Tauri without opening a dialog", async () => {
+    mockedIsTauri.mockReturnValue(false)
+    expect(await pickFilePath()).toBeNull()
+    expect(mockOpen).not.toHaveBeenCalled()
+  })
+
+  it("opens a single-file dialog with the filters and returns its path", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    mockOpen.mockResolvedValue("/opt/homebrew/bin/lume")
+    const filters = [{ name: "IPSW", extensions: ["ipsw"] }]
+    expect(await pickFilePath({ filters, title: "Pick" })).toBe("/opt/homebrew/bin/lume")
+    expect(mockOpen).toHaveBeenCalledWith({
+      multiple: false,
+      directory: false,
+      filters,
+      title: "Pick",
+    })
+  })
+
+  // The path goes to a native process; the renderer never reads the bytes,
+  // so the pick must not widen its raw-read scope the way pickFilePaths does.
+  it("does not register the folder for renderer reads", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    mockOpen.mockResolvedValue(["/x/a.ipsw"])
+    expect(await pickFilePath()).toBe("/x/a.ipsw")
+    expect(mockedRegisterDialogPath).not.toHaveBeenCalled()
+  })
+
+  it("returns null when the user cancels", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    mockOpen.mockResolvedValue(null)
+    expect(await pickFilePath()).toBeNull()
   })
 })
 

@@ -2,9 +2,15 @@
  * @jest-environment jsdom
  */
 
-import { act, render, screen, fireEvent } from "@testing-library/react"
+import { createRef } from "react"
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
-import { WorkflowLibraryToolbar } from "./workflow-library-toolbar"
+import {
+  SEARCH_DEBOUNCE_MS,
+  WorkflowImportInput,
+  WorkflowLibraryControls,
+  useWorkflowLibrarySearch,
+} from "./workflow-library-toolbar"
 import { DEFAULT_WORKFLOW_FILTERS, useWorkflowLibraryStore } from "@/stores/workflow"
 
 beforeEach(() => {
@@ -19,33 +25,23 @@ beforeEach(() => {
   })
 })
 
-describe("WorkflowLibraryToolbar", () => {
-  it("renders search and secondary actions", () => {
-    render(<WorkflowLibraryToolbar onImportFiles={jest.fn()} />)
-    expect(screen.getByTestId("workflow-library-search")).toBeInTheDocument()
-    expect(screen.getByTestId("workflow-new-folder")).toBeInTheDocument()
-    expect(screen.getByTestId("workflow-import")).toBeInTheDocument()
-  })
-
-  it("forwards picked files to onImportFiles", () => {
-    const onImportFiles = jest.fn()
-    render(<WorkflowLibraryToolbar onImportFiles={onImportFiles} />)
-    const file = new File(['{"nodes":[],"edges":[]}'], "wf.json", { type: "application/json" })
-    fireEvent.change(screen.getByTestId("workflow-import-input"), { target: { files: [file] } })
-    expect(onImportFiles).toHaveBeenCalledTimes(1)
+describe("useWorkflowLibrarySearch", () => {
+  it("starts from the store query", () => {
+    useWorkflowLibraryStore.setState({ query: "digest" })
+    const { result } = renderHook(() => useWorkflowLibrarySearch())
+    expect(result.current.value).toBe("digest")
   })
 
   it("debounces the search text into the store query", () => {
     jest.useFakeTimers()
     try {
-      render(<WorkflowLibraryToolbar onImportFiles={jest.fn()} />)
-      fireEvent.change(screen.getByTestId("workflow-library-search"), {
-        target: { value: "digest" },
-      })
-      // Not written yet — still within the debounce window.
+      const { result } = renderHook(() => useWorkflowLibrarySearch())
+      act(() => result.current.onChange("digest"))
+      // The box follows every keystroke; the store waits out the debounce.
+      expect(result.current.value).toBe("digest")
       expect(useWorkflowLibraryStore.getState().query).toBe("")
       act(() => {
-        jest.advanceTimersByTime(250)
+        jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50)
       })
       expect(useWorkflowLibraryStore.getState().query).toBe("digest")
     } finally {
@@ -53,21 +49,20 @@ describe("WorkflowLibraryToolbar", () => {
     }
   })
 
-  it("empties the search box when the search and filters are cleared", () => {
+  it("empties the search text when the search and filters are cleared", () => {
     jest.useFakeTimers()
     try {
-      render(<WorkflowLibraryToolbar onImportFiles={jest.fn()} />)
-      const search = () => screen.getByTestId<HTMLInputElement>("workflow-library-search")
-      fireEvent.change(search(), { target: { value: "digest" } })
+      const { result } = renderHook(() => useWorkflowLibrarySearch())
+      act(() => result.current.onChange("digest"))
       act(() => {
-        jest.advanceTimersByTime(250)
+        jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50)
       })
       expect(useWorkflowLibraryStore.getState().query).toBe("digest")
 
       act(() => {
         useWorkflowLibraryStore.getState().clearSearchAndFilters()
       })
-      expect(search().value).toBe("")
+      expect(result.current.value).toBe("")
       expect(useWorkflowLibraryStore.getState().query).toBe("")
     } finally {
       jest.useRealTimers()
@@ -77,29 +72,66 @@ describe("WorkflowLibraryToolbar", () => {
   it("drops a keystroke still inside the debounce window when the search is cleared", () => {
     jest.useFakeTimers()
     try {
-      render(<WorkflowLibraryToolbar onImportFiles={jest.fn()} />)
-      fireEvent.change(screen.getByTestId("workflow-library-search"), {
-        target: { value: "digest" },
-      })
+      const { result } = renderHook(() => useWorkflowLibrarySearch())
+      act(() => result.current.onChange("digest"))
       // Cleared before the 200ms write lands.
       act(() => {
         useWorkflowLibraryStore.getState().clearSearchAndFilters()
       })
       act(() => {
-        jest.advanceTimersByTime(500)
+        jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 3)
       })
       // The pending write must not resurrect the query the user just cleared.
       expect(useWorkflowLibraryStore.getState().query).toBe("")
-      expect(screen.getByTestId<HTMLInputElement>("workflow-library-search").value).toBe("")
+      expect(result.current.value).toBe("")
     } finally {
       jest.useRealTimers()
     }
   })
 
-  it("opens the create-folder dialog under the current folder", () => {
-    useWorkflowLibraryStore.setState({ currentFolderId: "wff_x" })
-    render(<WorkflowLibraryToolbar onImportFiles={jest.fn()} />)
-    fireEvent.click(screen.getByTestId("workflow-new-folder"))
-    expect(useWorkflowLibraryStore.getState().createFolderParentId).toBe("wff_x")
+  it("keeps searching normally after a clear", () => {
+    jest.useFakeTimers()
+    try {
+      const { result } = renderHook(() => useWorkflowLibrarySearch())
+      act(() => {
+        useWorkflowLibraryStore.getState().clearSearchAndFilters()
+      })
+      act(() => result.current.onChange("report"))
+      act(() => {
+        jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS + 50)
+      })
+      expect(useWorkflowLibraryStore.getState().query).toBe("report")
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+})
+
+describe("WorkflowLibraryControls", () => {
+  it("renders the filter, sort and view controls", () => {
+    render(<WorkflowLibraryControls />)
+    expect(screen.getByTestId("workflow-filter-trigger")).toBeInTheDocument()
+    expect(screen.getByTestId("workflow-sort-trigger")).toBeInTheDocument()
+    expect(screen.getByTestId("workflow-library-view-toggle")).toBeInTheDocument()
+  })
+})
+
+describe("WorkflowImportInput", () => {
+  it("forwards picked files to onImportFiles and lets the same file be picked again", () => {
+    const onImportFiles = jest.fn()
+    const ref = createRef<HTMLInputElement>()
+    render(<WorkflowImportInput inputRef={ref} onImportFiles={onImportFiles} />)
+    expect(ref.current).toBe(screen.getByTestId("workflow-import-input"))
+    const file = new File(['{"nodes":[],"edges":[]}'], "wf.json", { type: "application/json" })
+    fireEvent.change(screen.getByTestId("workflow-import-input"), { target: { files: [file] } })
+    expect(onImportFiles).toHaveBeenCalledTimes(1)
+    expect(ref.current?.value).toBe("")
+  })
+
+  it("ignores an empty pick", () => {
+    const onImportFiles = jest.fn()
+    render(<WorkflowImportInput inputRef={createRef()} onImportFiles={onImportFiles} />)
+    fireEvent.change(screen.getByTestId("workflow-import-input"), { target: { files: [] } })
+    expect(onImportFiles).not.toHaveBeenCalled()
   })
 })

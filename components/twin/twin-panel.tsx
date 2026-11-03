@@ -1,11 +1,13 @@
 "use client"
 
 /**
- * Top-level twin workbench. Renders four tabs:
+ * Top-level twin workbench. Renders five tabs, listed in the page header's
+ * view bar:
  *
  *   • Sources  — registered raw artefacts (upload + status badges)
  *   • Jobs     — ingest / distill jobs in flight or recently finished
  *   • Drafts   — synth output queue, sorted with low-quality first
+ *   • Persona  — the distilled profile the twin speaks from
  *   • Settings — twin-level config (vector backend, RAG topK, etc.)
  *
  * The panel selects the active twin from a hook-derived list of distinct
@@ -25,7 +27,6 @@ import { useTranslations } from "next-intl"
 import { BotIcon } from "lucide-react"
 import { motion, useReducedMotion } from "motion/react"
 import { toast } from "sonner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
@@ -191,47 +192,31 @@ function TwinPanelInner() {
       </div>
     )
   } else {
+    // The tab list is the header's view bar; the body renders the open tab
+    // only, so there is no second `Tabs` root to keep in step with it.
     center = (
-      <div className="flex h-full flex-col gap-3 overflow-y-auto p-4 @md/twin:gap-4 @md/twin:p-6">
-        <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col">
-          <div className="-mx-1 overflow-x-auto px-1">
-            <TabsList className="w-max">
-              <TabsTrigger value="sources">{t("tabs.sources")}</TabsTrigger>
-              <TabsTrigger value="jobs">{t("tabs.jobs")}</TabsTrigger>
-              <TabsTrigger value="drafts">{t("tabs.drafts")}</TabsTrigger>
-              <TabsTrigger value="persona">{t("tabs.persona")}</TabsTrigger>
-              <TabsTrigger value="settings">{t("tabs.settings")}</TabsTrigger>
-            </TabsList>
-          </div>
-          <TabsContent value="sources" className="mt-3 flex-1 overflow-auto">
-            <AnimatedTabContent tabKey={tab} active="sources">
+      <div className="flex h-full flex-col overflow-y-auto p-4 @md/twin:p-6">
+        <div className="flex-1 overflow-auto" data-testid={`twin-tab-${tab}`}>
+          <AnimatedTabContent tabKey={tab} active={tab}>
+            {tab === "sources" ? (
               <TwinSourcesTab twinId={effectiveTwinId} />
-            </AnimatedTabContent>
-          </TabsContent>
-          <TabsContent value="jobs" className="mt-3 flex-1 overflow-auto">
-            <AnimatedTabContent tabKey={tab} active="jobs">
+            ) : tab === "jobs" ? (
               <TwinJobsTab twinId={effectiveTwinId} />
-            </AnimatedTabContent>
-          </TabsContent>
-          <TabsContent value="drafts" className="mt-3 flex-1 overflow-auto">
-            <AnimatedTabContent tabKey={tab} active="drafts">
+            ) : tab === "drafts" ? (
               <TwinDraftsTab twinId={effectiveTwinId} />
-            </AnimatedTabContent>
-          </TabsContent>
-          <TabsContent value="persona" className="mt-3 flex-1 overflow-auto">
-            <AnimatedTabContent tabKey={tab} active="persona">
+            ) : tab === "persona" ? (
               <TwinPersonaTab twinId={effectiveTwinId} />
-            </AnimatedTabContent>
-          </TabsContent>
-          <TabsContent value="settings" className="mt-3 flex-1 overflow-auto">
-            <AnimatedTabContent tabKey={tab} active="settings">
+            ) : (
               <TwinSettingsTab twinId={effectiveTwinId} />
-            </AnimatedTabContent>
-          </TabsContent>
-        </Tabs>
+            )}
+          </AnimatedTabContent>
+        </div>
       </div>
     )
   }
+
+  // The twin the header's controls act on: none while loading or empty.
+  const headerTwinId = twins !== undefined ? effectiveTwinId : null
 
   return (
     <FeaturePageShell
@@ -239,42 +224,50 @@ function TwinPanelInner() {
       centerClassName="@container/twin"
       header={
         <FeaturePageHeader
-          variant="compact"
           icon={<BotIcon />}
           title={t("title")}
+          description={t("description")}
           testId="twin-toolbar"
           status={
-            twins !== undefined && effectiveTwinId ? (
-              <span
-                className={
-                  workerStatus.active
-                    ? "text-xs text-emerald-600 dark:text-emerald-400"
-                    : "text-xs text-muted-foreground"
+            headerTwinId
+              ? {
+                  label: workerStatus.active ? t("workerActive") : t("workerIdle"),
+                  tone: workerStatus.active ? "success" : "neutral",
+                  ...(workerStatus.reasonKey
+                    ? { title: t(`workerStatus.${workerStatus.reasonKey}`) }
+                    : {}),
+                  testId: "twin-worker-status",
                 }
-                title={
-                  workerStatus.reasonKey ? t(`workerStatus.${workerStatus.reasonKey}`) : undefined
+              : undefined
+          }
+          tabs={
+            headerTwinId
+              ? {
+                  items: VALID_TABS.map((key) => ({
+                    value: key,
+                    label: t(`tabs.${key}`),
+                    testId: `twin-tab-trigger-${key}`,
+                  })),
+                  value: tab,
+                  onValueChange: setTab,
+                  ariaLabel: t("tabsLabel"),
                 }
-              >
-                {workerStatus.active ? t("workerActive") : t("workerIdle")}
-              </span>
-            ) : undefined
+              : undefined
           }
           actions={
-            <div className="flex min-w-0 items-center gap-2">
-              {twins !== undefined && effectiveTwinId ? (
-                <>
-                  <TwinSelector
-                    twins={twinList}
-                    activeTwinId={effectiveTwinId}
-                    onSelect={selectTwin}
-                    onAfterCreate={(twin) => selectTwin(twin.id)}
-                    onAfterDelete={handleAfterDelete}
-                    onGuidedCreate={() => setWizardOpen(true)}
-                  />
-                  <TwinHeaderPluginSlot twinId={effectiveTwinId} tab={tab} />
-                </>
-              ) : null}
-            </div>
+            headerTwinId ? (
+              <div className="flex min-w-0 items-center gap-2">
+                <TwinSelector
+                  twins={twinList}
+                  activeTwinId={headerTwinId}
+                  onSelect={selectTwin}
+                  onAfterCreate={(twin) => selectTwin(twin.id)}
+                  onAfterDelete={handleAfterDelete}
+                  onGuidedCreate={() => setWizardOpen(true)}
+                />
+                <TwinHeaderPluginSlot twinId={headerTwinId} tab={tab} />
+              </div>
+            ) : undefined
           }
         />
       }

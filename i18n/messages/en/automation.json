@@ -80,7 +80,8 @@
       "policy": "This task requires a policy the Lume profile cannot enforce. Review its network, CPU, memory and path requirements.",
       "recovery": "The operation needs recovery. Refresh diagnostics, confirm the VM is stopped and inspect the result before retrying. Applied changes remain applied.",
       "observation": "The operation status could not be confirmed. Cancellation was requested; inspect the VM and source files before retrying. The command was not replayed."
-    }
+    },
+    "browse": "Browse…"
   },
   "accessRules": {
     "admit": {
@@ -709,7 +710,8 @@
         "invalidPath": "Enter an absolute path inside the sandbox without parent-directory traversal.",
         "invalidPayload": "The downloaded file failed its size or checksum check."
       }
-    }
+    },
+    "browse": "Browse…"
   },
   "screenOff": {
     "unsupportedNote": "This platform has no screen-off backend. Computer Use uses the physical display.",

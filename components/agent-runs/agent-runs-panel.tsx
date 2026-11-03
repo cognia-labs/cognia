@@ -31,7 +31,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderTabs,
+} from "@/components/feature-shell/feature-page-header"
 import { useExecutionCockpit } from "@/hooks/agent-runs/use-agent-runs"
 import { useRunControlActions } from "@/hooks/agent-runs/use-agent-run-actions"
 import {
@@ -169,81 +172,108 @@ export function AgentRunsPanel({
     onOrigin !== undefined &&
     (origin !== "all" || allRows.some((row) => (row.origin ?? "local") !== "local"))
 
-  const controls = (
+  const selectStatusGroup = onStatusGroup
+    ? (value: string) => onStatusGroup(value as CockpitStatusGroup | "all")
+    : undefined
+
+  /**
+   * The status axis as the header's view tabs. `statusTotal`, never
+   * `allRows.length`: the "all" tab is "release the status axis", not "every
+   * run in the journal". Under a host that pins the kind or the Squad those
+   * are two different numbers, and the second one describes a list this panel
+   * cannot render. A zero count is left off, as the chips always did.
+   */
+  const statusTabs: FeatureHeaderTabs = {
+    items: [
+      { value: "all", label: t("filters.all"), ...(statusTotal > 0 ? { count: statusTotal } : {}) },
+      ...COCKPIT_STATUS_GROUPS.map((group) => ({
+        value: group,
+        label: t(`filters.${group}`),
+        ...(statusCounts[group] > 0 ? { count: statusCounts[group] } : {}),
+      })),
+    ],
+    value: statusGroup,
+    ...(selectStatusGroup ? { onValueChange: selectStatusGroup } : {}),
+    ariaLabel: t("filters.statusLabel"),
+  }
+
+  const selects =
+    onFilterKind || showOrigin ? (
+      <>
+        {/* Rendered only where it is a CONTROL. The `/squads` Runs tab pins the
+            kind to `team` and passes no setter, and a dropdown that shows a
+            value it will not let you change is a third kind of lie next to the
+            chips this component just stopped telling. The pinned scope is
+            already named by the page around it. */}
+        {onFilterKind ? (
+          <Select
+            value={filterKind}
+            onValueChange={(value) => onFilterKind(value as ExecutionFilterKind | "all")}
+          >
+            <SelectTrigger size="sm" aria-label={t("filters.kindLabel")} className="w-auto">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">
+                {kindTotal
+                  ? t("filters.kindOption", { label: t("filters.allKinds"), count: kindTotal })
+                  : t("filters.allKinds")}
+              </SelectItem>
+              {EXECUTION_FILTER_KINDS.map((kind) => {
+                const label = t(`kind.${filterKindLabelKey(kind)}`)
+                return (
+                  <SelectItem key={kind} value={kind}>
+                    {kindCounts[kind]
+                      ? t("filters.kindOption", { label, count: kindCounts[kind] })
+                      : label}
+                  </SelectItem>
+                )
+              })}
+            </SelectContent>
+          </Select>
+        ) : null}
+        {showOrigin ? (
+          <Select
+            value={origin}
+            onValueChange={(value) => onOrigin?.(value as ExecutionRunOrigin | "all")}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label={t("filters.originLabel")}
+              className="w-auto"
+              data-testid="agent-runs-origin-filter"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("filters.allOrigins")}</SelectItem>
+              <SelectItem value="local">{t("filters.originLocal")}</SelectItem>
+              <SelectItem value="gateway-api">{t("filters.originGatewayApi")}</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : null}
+      </>
+    ) : null
+
+  /**
+   * Embedded, there is no page header to carry the view tabs, so the host's
+   * card gets the same status axis as wrapping chips above the list, with the
+   * same counts and the same selects beside them.
+   */
+  const embeddedControls = (
     <div className="flex flex-wrap items-center gap-1.5">
-      <div className="flex flex-wrap gap-1.5" role="tablist" aria-label={t("filters.statusLabel")}>
-        {/* `statusTotal`, never `allRows.length`. This chip is "release the
-            status axis", not "every run in the journal": under a host that
-            pins the kind or the Squad, those are two different numbers, and
-            the second one describes a list this panel cannot render. */}
-        <FilterChip
-          label={t("filters.all")}
-          count={statusTotal}
-          selected={statusGroup === "all"}
-          onSelect={() => onStatusGroup?.("all")}
-        />
-        {COCKPIT_STATUS_GROUPS.map((group) => (
+      <div className="flex flex-wrap gap-1.5" role="tablist" aria-label={statusTabs.ariaLabel}>
+        {statusTabs.items.map((tab) => (
           <FilterChip
-            key={group}
-            label={t(`filters.${group}`)}
-            count={statusCounts[group]}
-            selected={statusGroup === group}
-            onSelect={() => onStatusGroup?.(group)}
+            key={tab.value}
+            label={tab.label}
+            count={tab.count ?? 0}
+            selected={statusGroup === tab.value}
+            onSelect={() => selectStatusGroup?.(tab.value)}
           />
         ))}
       </div>
-      {/* Rendered only where it is a CONTROL. The `/squads` Runs tab pins the
-          kind to `team` and passes no setter, and a dropdown that shows a
-          value it will not let you change is a third kind of lie next to the
-          chips this component just stopped telling. The pinned scope is
-          already named by the page around it. */}
-      {onFilterKind ? (
-        <Select
-          value={filterKind}
-          onValueChange={(value) => onFilterKind(value as ExecutionFilterKind | "all")}
-        >
-          <SelectTrigger size="sm" aria-label={t("filters.kindLabel")} className="w-auto">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">
-              {kindTotal
-                ? t("filters.kindOption", { label: t("filters.allKinds"), count: kindTotal })
-                : t("filters.allKinds")}
-            </SelectItem>
-            {EXECUTION_FILTER_KINDS.map((kind) => {
-              const label = t(`kind.${filterKindLabelKey(kind)}`)
-              return (
-                <SelectItem key={kind} value={kind}>
-                  {kindCounts[kind]
-                    ? t("filters.kindOption", { label, count: kindCounts[kind] })
-                    : label}
-                </SelectItem>
-              )
-            })}
-          </SelectContent>
-        </Select>
-      ) : null}
-      {showOrigin ? (
-        <Select
-          value={origin}
-          onValueChange={(value) => onOrigin?.(value as ExecutionRunOrigin | "all")}
-        >
-          <SelectTrigger
-            size="sm"
-            aria-label={t("filters.originLabel")}
-            className="w-auto"
-            data-testid="agent-runs-origin-filter"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">{t("filters.allOrigins")}</SelectItem>
-            <SelectItem value="local">{t("filters.originLocal")}</SelectItem>
-            <SelectItem value="gateway-api">{t("filters.originGatewayApi")}</SelectItem>
-          </SelectContent>
-        </Select>
-      ) : null}
+      {selects}
     </div>
   )
 
@@ -251,15 +281,16 @@ export function AgentRunsPanel({
     <div className="flex h-full min-h-0 w-full flex-col" data-testid="agent-runs-panel">
       {embedded ? (
         <div className="shrink-0 border-b px-3 py-2" data-testid="agent-runs-embedded-controls">
-          {controls}
+          {embeddedControls}
         </div>
       ) : (
         <FeaturePageHeader
-          variant="compact"
           icon={<ActivityIcon />}
           title={t("title")}
           description={t("description")}
-          controls={controls}
+          tabs={statusTabs}
+          controls={selects ?? undefined}
+          testId="agent-runs-header"
         />
       )}
 

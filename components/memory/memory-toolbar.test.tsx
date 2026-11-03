@@ -84,10 +84,15 @@ describe("MemoryToolbar", () => {
     expect(onViewChange).toHaveBeenCalledWith("conflicts")
   })
 
-  it("reports search input", async () => {
-    const { onFilterChange } = setup()
-    await userEvent.type(screen.getByTestId("memory-search"), "p")
-    expect(onFilterChange).toHaveBeenCalledWith({ query: "p" })
+  // The search field is the page header's own `search`; this band only keeps
+  // the query intact when a facet changes underneath it.
+  it("draws no search field, and keeps the query on a facet change", async () => {
+    const { onFilterChange } = setup({ filter: { query: "p" } })
+    expect(screen.queryByRole("searchbox")).toBeNull()
+    expect(screen.queryByTestId("memory-search")).toBeNull()
+    await userEvent.click(screen.getByTestId("memory-filter-menu"))
+    await userEvent.click(within(screen.getByRole("menu")).getByText("Fact"))
+    expect(onFilterChange).toHaveBeenCalledWith(expect.objectContaining({ query: "p" }))
   })
 
   // Offering a filter that would return nothing is how "where did my memory

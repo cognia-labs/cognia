@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { ArrowLeftIcon, ChevronRightIcon, MonitorIcon, SearchIcon } from "lucide-react"
+import { ChevronRightIcon, MonitorIcon, SearchIcon } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -505,19 +505,11 @@ function SettingsShellInner({ actions }: Props) {
               )}
             </span>
           }
-          breadcrumb={
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 shrink-0"
-                onClick={goHome}
-                aria-label={t("backToChat")}
-              >
-                <ArrowLeftIcon className="size-4" />
-              </Button>
-            </div>
-          }
+          back={{ label: t("backToChat"), onSelect: goHome, testId: "settings-back" }}
+          // The finder trigger is the shell's search launcher, a glyph like the
+          // refresh one rather than a labelled button, and the section reset
+          // and the AI-connections portal are section-owned controls, so all
+          // of them stay free-form.
           actions={
             <>
               {activeSection === "ai-connections" && (

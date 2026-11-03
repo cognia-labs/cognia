@@ -7,9 +7,9 @@
  * return and reuses the shared resizable split.
  */
 
-import { useId, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { LayoutGroup, motion } from "motion/react"
+import { motion } from "motion/react"
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
@@ -43,7 +43,7 @@ import {
 import { useResizableLayout } from "@/hooks/ui/use-resizable-layout"
 import { useDeferredLoading } from "@/hooks/ui/use-deferred-loading"
 import { useElementWidth } from "@/hooks/use-element-width"
-import { MOBILE_SPRING, mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
+import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { cn } from "@/lib/utils"
 import { commitShell } from "@/lib/git/commit-shell"
 import { parseGitTarget } from "@/lib/git/target"
@@ -190,8 +190,6 @@ export function SourceControlPanel() {
   // case: the status-bar controller already loaded this repository) never
   // flashes one. Called before the early returns below, like every hook.
   const skeletonVisible = useDeferredLoading(!status && loadingStatus, { key: rootDir })
-  const tabPillGroup = useId()
-  const tabPill = useReducedMotionTransition(MOBILE_SPRING)
   const fade = useReducedMotionTransition(mobileTransition("fast"))
   const refreshSafely = () => void refresh().catch(() => undefined)
   const selectedRemoteTarget = rootDir ? parseGitTarget(rootDir) : null
@@ -334,99 +332,65 @@ export function SourceControlPanel() {
       data-testid="source-control-panel"
     >
       <FeaturePageHeader
-        variant="compact"
         icon={<GitBranchIcon />}
         title={t("title")}
-        // After the title, not before it: the root reads as "Source Control ·
-        // which repository", a breadcrumb, where in the leading slot it sat in
-        // front of the page's own icon and title in 11px type. A panel that
-        // silently retargets is worse than one that needs a click: the user
-        // reads a diff believing they know which tree it is, so the chip says
-        // which folder, whether it is a worktree alias, and whether it is
-        // following the conversation or pinned.
-        status={
-          <div
-            // Capped against the HEADER's width (it is a size container): the
-            // status slot does not shrink, so an uncapped long folder name
-            // would take its width out of the actions instead of truncating.
-            className="flex min-w-0 max-w-[36cqw] items-center gap-1.5 overflow-hidden border-l border-border/70 pl-2"
-            data-testid="sc-repo-context"
-          >
-            <RootSwitcher
-              remoteWorkspaces={remote ? remoteWorkspaces : undefined}
-              onSelectRemoteWorkspace={selectRemoteWorkspace}
-            />
-            <PanelRootChip
-              panel="sourceControl"
-              target={indicator.target}
-              onTogglePin={indicator.togglePin}
-            />
-          </div>
-        }
-        navigationPlacement="inline"
-        navigation={
-          // The inline slot, which is `min-w-0 shrink overflow-x-auto`, so a
-          // two-tab set can never push the actions past the header's edge.
-          <LayoutGroup id={tabPillGroup}>
-            <div
-              role="tablist"
-              aria-label={t("views.label")}
-              className="flex items-center gap-0.5"
-              data-testid="sc-view-switcher"
-            >
-              {SOURCE_CONTROL_VIEWS.map((candidate) => (
-                <Button
-                  key={candidate}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === candidate}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setView(candidate)}
-                  aria-label={t(`views.${candidate}`)}
-                  className={cn(
-                    // `isolate`: the pill's `-z-10` stays inside the button
-                    // instead of sinking behind the header's background.
-                    "relative isolate h-7 gap-1.5 px-2 text-xs",
-                    view === candidate && "text-foreground"
-                  )}
-                  data-testid={`sc-view-${candidate}`}
-                >
-                  {/* One pill that slides between the tabs (shared layout)
-                      instead of a background that blinks from one to the
-                      other. Behind the content, so the icon and label sit on
-                      it; the group id keeps two mounted panels apart. */}
-                  {view === candidate && (
-                    <motion.span
-                      layoutId="sc-view-pill"
-                      transition={tabPill}
-                      aria-hidden
-                      className="absolute inset-0 -z-10 rounded-md bg-accent"
-                      data-testid="sc-view-pill"
-                    />
-                  )}
-                  {candidate === "changes" ? (
-                    <FileSearchIcon aria-hidden className="size-3.5" />
-                  ) : candidate === "agents" ? (
-                    <BotIcon aria-hidden className="size-3.5" />
-                  ) : (
-                    <GitBranchIcon aria-hidden className="size-3.5" />
-                  )}
-                  {/* `@3xl` (768px of HEADER width), not `@xl`. At `@xl` the
-                      labels still showed on an 820px window where the row had
-                      no room for them, and the slot's own `overflow-x-auto` cut
-                      "Browse" off mid-word. Icon-only is the honest fallback,
-                      and `aria-label` carries the name either way. */}
-                  <span className="hidden @3xl/feature-header:inline">
-                    {t(`views.${candidate}`)}
-                  </span>
-                </Button>
-              ))}
-            </div>
-          </LayoutGroup>
-        }
+        description={t("description")}
+        tabs={{
+          items: SOURCE_CONTROL_VIEWS.map((candidate) => ({
+            value: candidate,
+            label: t(`views.${candidate}`),
+            icon:
+              candidate === "changes"
+                ? FileSearchIcon
+                : candidate === "agents"
+                  ? BotIcon
+                  : GitBranchIcon,
+            testId: `sc-view-${candidate}`,
+          })),
+          value: view,
+          onValueChange: (value) => setView(value as SourceControlView),
+          ariaLabel: t("views.label"),
+          testId: "sc-view-switcher",
+        }}
+        secondaryActions={[
+          /* Not `FileSearchIcon`: that is the Changes tab's glyph, and one
+             icon for two destinations made the review sheet look like a
+             second way into the change list. */
+          {
+            id: "review",
+            label: tReview("open"),
+            icon: ScanSearchIcon,
+            onSelect: () => setReviewOpen(true),
+            testId: "sc-open-review",
+          },
+        ]}
         actions={
           <div className="flex min-w-0 items-center gap-1">
+            {/* Which tree the panel reads, first among the controls and after
+                the title. A panel that silently retargets is worse than one
+                that needs a click: the user reads a diff believing they know
+                which tree it is, so the chip says which folder, whether it is
+                a worktree alias, and whether it is following the conversation
+                or pinned. Both are popovers, so they sit with the actions
+                rather than in the header's (non-interactive) status chip. */}
+            <div
+              // Capped against the HEADER's width (it is a size container):
+              // the actions do not shrink, so an uncapped long folder name
+              // would push the rest of the row past the edge.
+              className="flex min-w-0 max-w-[30cqw] items-center gap-1.5 overflow-hidden"
+              data-testid="sc-repo-context"
+            >
+              <RootSwitcher
+                remoteWorkspaces={remote ? remoteWorkspaces : undefined}
+                onSelectRemoteWorkspace={selectRemoteWorkspace}
+              />
+              <PanelRootChip
+                panel="sourceControl"
+                target={indicator.target}
+                onTogglePin={indicator.togglePin}
+              />
+            </div>
+            <span aria-hidden className="mx-0.5 h-4 w-px bg-border/80" />
             <BranchHeader
               branch={status?.branch ?? null}
               ahead={status?.ahead ?? 0}
@@ -448,28 +412,6 @@ export function SourceControlPanel() {
               onOpenStacks={() => setStacksOpen(true)}
               onRefresh={refreshSafely}
             />
-            <span aria-hidden className="mx-0.5 h-4 w-px bg-border/80" />
-            {/* Not `FileSearchIcon`: that is the Changes tab's glyph two
-                controls to the left, and one icon for two destinations made
-                the review sheet look like a second way into the change list.
-                Labelled where the header has room, because a magnifier over a
-                square names nothing on its own. */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  aria-label={tReview("open")}
-                  onClick={() => setReviewOpen(true)}
-                  data-testid="sc-open-review"
-                >
-                  <ScanSearchIcon className="size-3.5" />
-                  <span className="hidden @4xl/feature-header:inline">{t("review.short")}</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{tReview("open")}</TooltipContent>
-            </Tooltip>
             <Popover>
               <Tooltip>
                 <TooltipTrigger asChild>

@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl"
 import { Bell } from "lucide-react"
+import { FactList, FactRow } from "@/components/surface/fact-list"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import type { TaskNotificationConfig } from "@/types/scheduler"
@@ -77,16 +78,18 @@ export function TaskNotificationDisplay({
       : []),
   ]
 
+  // The same label-over-value record every other section of the detail
+  // uses. It had its own: uppercase tracked labels over monospace values, the
+  // one block in the properties column that looked like a different app.
   const facts = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="task-notification-facts">
-      {items.map((item) => (
-        <div key={item.label} className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {item.label}
-          </span>
-          <span className="text-sm font-mono text-foreground">{item.value}</span>
-        </div>
-      ))}
+    <div data-testid="task-notification-facts">
+      <FactList>
+        {items.map((item) => (
+          <FactRow key={item.label} label={item.label}>
+            {item.value}
+          </FactRow>
+        ))}
+      </FactList>
     </div>
   )
 

@@ -1,5 +1,5 @@
 import { standaloneDevicesRequiresHost } from "@/lib/runtime/surface-contract"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -112,6 +112,17 @@ const LOCAL = row({ ref: "local", kind: "local", label: "This Mac", isSelf: true
  * `TooltipProvider` is mounted once in `app/layout.tsx` in production, so the
  * header's action tooltips have an ancestor there but not here.
  */
+/** Opens the header's ⋯ menu; Radix opens on keyboard in jsdom. */
+async function openHeaderMenu() {
+  const trigger = within(screen.getByTestId("devices-header")).getByRole("button", {
+    name: "More actions",
+  })
+  await act(async () => {
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: "Enter" })
+  })
+}
+
 function renderConsole() {
   return render(
     <TooltipProvider>
@@ -139,9 +150,16 @@ describe("DeviceConsole", () => {
     useDeviceConsoleStore.getState().select("device:a")
     renderConsole()
     const detail = screen.getByTestId("detail")
+    // The header spans the page above the list and the detail, as on every
+    // other feature page; beside a full-height list it put the search box
+    // level with the title.
     const header = screen.getByTestId("feature-shell-devices-header")
-    expect(header.closest('[data-testid="feature-shell-devices-center"]')).not.toBeNull()
+    expect(header.closest('[data-testid="feature-shell-devices-center"]')).toBeNull()
     expect(header).not.toContainElement(screen.getByTestId("device-list-pane"))
+    expect(
+      header.compareDocumentPosition(screen.getByTestId("device-list-pane")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     expect(screen.getByTestId("device-list-pane").closest("aside")).toHaveStyle({
       minWidth: "15rem",
     })
@@ -347,7 +365,8 @@ describe("DeviceConsole", () => {
 
   it("starts a new SSH host in the editor that owns them", async () => {
     renderConsole()
-    await userEvent.click(screen.getByRole("button", { name: "Add SSH host" }))
+    await openHeaderMenu()
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Add SSH host" }))
     expect(push).toHaveBeenCalledWith("/settings?section=terminal&terminalPanel=ssh&sshHost=new")
   })
 
@@ -360,6 +379,17 @@ describe("DeviceConsole", () => {
     expect(screen.getByTestId("devices-refresh")).toHaveAccessibleName("Refreshing…")
     settle()
     await screen.findByRole("button", { name: "Refresh" })
+  })
+
+  // Four outline buttons of one weight crowded the title; the occasional SSH
+  // host waits under ⋯ and refresh is a glyph that spins while it works.
+  it("keeps Add SSH host under the overflow menu and refresh as a glyph", async () => {
+    renderConsole()
+    const header = screen.getByTestId("devices-header")
+    expect(within(header).queryByTestId("devices-add-ssh-host")).not.toBeInTheDocument()
+    expect(screen.getByTestId("devices-refresh")).not.toHaveTextContent("Refresh")
+    await openHeaderMenu()
+    expect(await screen.findByTestId("devices-add-ssh-host")).toBeInTheDocument()
   })
 
   it("opens the sheet from a ?addHost deep link and seeds the base URL", () => {

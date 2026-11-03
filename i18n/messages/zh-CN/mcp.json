@@ -351,6 +351,7 @@
   "tabs": {
     "agents": "Agent 同步",
     "health": "健康与日志",
+    "label": "MCP 分区",
     "myServers": "我的服务器",
     "presets": "预设市场"
   },

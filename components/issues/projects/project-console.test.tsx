@@ -202,10 +202,34 @@ describe("ProjectConsole", () => {
     })
   })
 
+  describe("header", () => {
+    it("draws the tracker's route tabs with projects current", () => {
+      render(<ProjectConsole />)
+      const tabs = headerProps.tabs as {
+        value: string
+        onValueChange?: unknown
+        items: Array<{ value: string; href?: string }>
+      }
+      expect(tabs.value).toBe("projects")
+      expect(tabs.onValueChange).toBeUndefined()
+      expect(tabs.items.map((item) => [item.value, item.href])).toEqual([
+        ["issues", "/issues"],
+        ["projects", "/projects"],
+        ["cycles", "/projects?tab=cycles"],
+      ])
+      expect(headerProps.navigation).toBeUndefined()
+      expect(headerProps.description).toBe("projects.pageDescription")
+    })
+  })
+
   describe("create", () => {
     it("offers create as the header's primary action", () => {
       render(<ProjectConsole />)
-      expect(headerProps.primaryAction).toMatchObject({ id: "create", disabled: false })
+      expect(headerProps.primaryAction).toMatchObject({
+        id: "create",
+        disabled: false,
+        icon: expect.anything(),
+      })
     })
 
     it("disables it without a workspace", () => {

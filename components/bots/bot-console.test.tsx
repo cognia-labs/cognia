@@ -118,7 +118,15 @@ describe("BotConsole", () => {
 
     summary = { total: 1, armed: 0, needsAttention: 2, deadLetters: 1 }
     render(<BotConsole onSelect={jest.fn()} />)
-    expect(screen.getByTestId("bots-attention-count")).toHaveTextContent("2 need attention")
+    const chip = screen.getByTestId("bots-attention-count")
+    expect(chip).toHaveTextContent("2 need attention")
+    // The header's one status chip, in the warning tone.
+    expect(chip).toHaveAttribute("data-tone", "warning")
+  })
+
+  it("draws Install as the header's primary button", () => {
+    render(<BotConsole onSelect={jest.fn()} />)
+    expect(screen.getByTestId("bots-install-open")).toHaveAccessibleName("Install")
   })
 
   it("opens the Bot the deep link names", () => {

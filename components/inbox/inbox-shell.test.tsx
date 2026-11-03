@@ -2,7 +2,13 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react"
+
+import { TooltipProvider } from "@/components/ui/tooltip"
+
+// The app root mounts the provider (`components/runtime/app-runtime.tsx`); the
+// page header's icon buttons need it.
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: TooltipProvider })
 
 beforeAll(() => {
   if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
@@ -435,6 +441,14 @@ describe("InboxShell", () => {
       expect(screen.getByTestId("inbox-conversation-list-pane")).toBeInTheDocument()
       expect(screen.getByTestId("inbox-detail-pane")).toBeInTheDocument()
       expect(screen.getByTestId("inbox-header")).toBeInTheDocument()
+    })
+
+    it("offers connector settings as a secondary link, not the primary button", () => {
+      render(<InboxShell view="all" />)
+      const settings = screen.getByTestId("inbox-open-connector-settings")
+      expect(settings).toHaveAttribute("href", "/me/connectors")
+      expect(settings).toHaveAccessibleName("Connector settings")
+      expect(settings).not.toHaveClass("shadow-primary/15")
     })
 
     it("passes percent-string sizes to every resizable panel", () => {

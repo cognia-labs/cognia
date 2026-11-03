@@ -135,23 +135,15 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 jest.mock("./skill-panel-header", () => ({
+  // The header owns the tab set now (typed `tabs`), so the panel passes counts
+  // and nothing else.
   SkillPanelHeader: ({
     totalCount,
     filteredCount,
-    tabsSlot,
   }: {
     totalCount: number
     filteredCount: number
-    tabsSlot?: React.ReactNode
-  }) => (
-    <div data-testid="header">
-      {`${totalCount}/${filteredCount}`}
-      {tabsSlot}
-    </div>
-  ),
-}))
-jest.mock("./skill-panel-tabs", () => ({
-  SkillPanelTabs: () => <div data-testid="tabs" />,
+  }) => <div data-testid="header">{`${totalCount}/${filteredCount}`}</div>,
 }))
 jest.mock("./skill-list-pane", () => ({
   SkillListPane: ({ onCreate }: { onCreate: () => void }) => (
@@ -305,10 +297,9 @@ describe("SkillPanel — ?skill= deep link", () => {
 })
 
 describe("SkillPanel", () => {
-  it("renders header (with tabs slot), list pane and the empty detail pane for 'my-skills'", () => {
+  it("renders header, list pane and the empty detail pane for 'my-skills'", () => {
     render(<SkillPanel />)
     expect(screen.getByTestId("header")).toBeInTheDocument()
-    expect(screen.getAllByTestId("tabs")).toHaveLength(1)
     expect(screen.getByTestId("list-pane")).toBeInTheDocument()
     expect(screen.getByText("panel.selectSkillTitle")).toBeInTheDocument()
     expect(screen.queryByTestId("marketplace")).not.toBeInTheDocument()

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import type { Character } from "@cognia/agent-config-types"
@@ -151,6 +151,17 @@ describe("<DiscoverDesktopBody />", () => {
     render(<DiscoverDesktopBody />)
     expect(screen.getByTestId("discover-desktop-toolbar")).toBeInTheDocument()
     expect(screen.getByTestId("discover-grid-characters")).toBeInTheDocument()
+  })
+
+  it("searches from the header's view bar", () => {
+    render(<DiscoverDesktopBody />)
+    const search = screen.getByRole("searchbox", { name: "searchAria" })
+    expect(search.closest('[data-slot="feature-header-view-bar"]')).not.toBeNull()
+    expect(search).toHaveAttribute("placeholder", "search")
+    // The landing has nothing to sort or filter, so only the search is there.
+    expect(screen.queryByTestId("discover-desktop-toolbar")).not.toBeInTheDocument()
+    fireEvent.change(search, { target: { value: "alp" } })
+    expect(screen.getByRole("searchbox", { name: "searchAria" })).toHaveValue("alp")
   })
 
   it("renders the aggregated home by default (no ?category=)", () => {

@@ -130,9 +130,21 @@ jest.mock("./mcp-server-editor", () => {
   }
 })
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { McpPanel } from "./mcp-panel"
+
+// The header's secondary buttons carry tooltips, which need the provider the
+// app runtime mounts.
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: TooltipProvider })
 import { useMcpPanelStore } from "@/stores/mcp/mcp-panel-store"
 import {
   createMcpServer,
@@ -163,11 +175,21 @@ beforeEach(() => {
 describe("McpPanel", () => {
   it("renders the four tabs and the My Servers tab by default", () => {
     render(<McpPanel />)
-    expect(screen.getByText("myServers")).toBeInTheDocument()
-    expect(screen.getByText("presets")).toBeInTheDocument()
-    expect(screen.getByText("agents")).toBeInTheDocument()
-    expect(screen.getByText("health")).toBeInTheDocument()
+    const tabs = screen.getAllByRole("tab")
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["myServers", "presets", "agents", "health"])
+    expect(screen.getByRole("tablist", { name: "label" })).toBeInTheDocument()
+    expect(screen.getByTestId("panel-tab-my-servers")).toHaveAttribute("data-state", "active")
     expect(screen.getByTestId("t-servers")).toBeInTheDocument()
+  })
+
+  it("draws Add server as the primary button, last in the header", async () => {
+    render(<McpPanel />)
+    const strip = screen.getByTestId("feature-header-actions")
+    const add = within(strip).getByTestId("mcp-add-server")
+    expect(strip.lastElementChild).toBe(add)
+    expect(add).toHaveTextContent("addServer")
+    fireEvent.click(add)
+    await waitFor(() => expect(useMcpPanelStore.getState().editorTarget).not.toBeNull())
   })
 
   it("swaps the tab body without ever mounting two tabs at once", async () => {

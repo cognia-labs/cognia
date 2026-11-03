@@ -184,7 +184,6 @@ export function AlwaysOnSection({
       icon={ServerIcon}
       meta={work ? t("meta", { count: work.movedHere.length }) : undefined}
       description={t("description", { host })}
-      wide
     >
       <div className="space-y-4" data-testid="always-on-section">
         {error ? (

@@ -71,7 +71,6 @@ export function DispatchSection({ row }: { row: DeviceRow }) {
       id="dispatch"
       title={t("activity.dispatch")}
       icon={InboxIcon}
-      wide
       meta={targetRef && jobs.length > 0 ? String(jobs.length) : undefined}
     >
       <div data-testid="device-dispatch-queue">

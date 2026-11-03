@@ -82,6 +82,7 @@
   },
   "description": "在一个云中立工作区中部署、观测、备份、恢复并保护 Compose 或 Kubernetes 目标。",
   "detail": {
+    "description": "单个部署目标的健康状况、版本、备份与日志。",
     "loading": "正在加载机群…",
     "missingDescription": "当前控制器的机群里没有这个目标。它可能已被移除，或者属于其他租户。",
     "missingTitle": "未找到目标"

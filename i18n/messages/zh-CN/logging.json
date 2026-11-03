@@ -1305,7 +1305,8 @@
       "ios-kscrash": "iOS 崩溃",
       "ios-metrickit": "iOS MetricKit 报告",
       "other": "其他（{source}）"
-    }
+    },
+    "description": "在一处查看本应用的日志、追踪与崩溃报告。"
   },
   "autoSubmit": {
     "sent": "崩溃报告已发送 · 支持代码 {code}",

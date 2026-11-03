@@ -798,7 +798,8 @@
     "annotate": "Trace analysis",
     "calibrate": "Judge calibration",
     "compare": "Runs & compare",
-    "datasets": "Datasets"
+    "datasets": "Datasets",
+    "ariaLabel": "Eval views"
   },
   "title": "Agent Evaluation",
   "versions": {

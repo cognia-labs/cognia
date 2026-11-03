@@ -27,6 +27,13 @@ jest.mock("next/navigation", () => ({
   }),
 }))
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => mockPlatform }))
+// The shell overlays its side panes below `desktop`; the suite runs at
+// `desktop` so the shelves, types and inspector render in place.
+let mockBreakpoint: "mobile" | "tablet" | "desktop" = "desktop"
+jest.mock("@/hooks/ui", () => ({
+  ...jest.requireActual("@/hooks/ui"),
+  useBreakpoint: () => mockBreakpoint,
+}))
 // Ownership decides who lists a definition, and global search ranks on a
 // synchronous snapshot of it, so the Studio retakes that snapshot after any
 // write that moves a template. Real, it reads Dexie.
@@ -84,6 +91,15 @@ function draftDefinition(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** Open the inspector's ⋯ menu, where the editor link and irreversible actions live. */
+async function openInspectorMenu() {
+  const trigger = screen.getByTestId("template-inspector-more")
+  await act(async () => {
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: "Enter" })
+  })
+}
+
 async function openDraftEditor() {
   await act(async () => {
     render(<TemplateStudio />)
@@ -95,6 +111,7 @@ describe("TemplateStudio", () => {
   beforeEach(() => {
     catalogDefinitions = []
     mockPlatform = "mobile"
+    mockBreakpoint = "desktop"
     mockSaveDraft.mockReset()
     mockDeleteDraft.mockReset()
     mockDeprecate.mockReset()
@@ -115,7 +132,7 @@ describe("TemplateStudio", () => {
     expect(screen.getByTestId("feature-shell-templates")).toBeInTheDocument()
     expect(screen.getByText("mobile.title")).toBeInTheDocument()
     expect(screen.queryByText("actions.newDraft")).not.toBeInTheDocument()
-    expect(screen.getByText("tabs.library")).toBeInTheDocument()
+    expect(screen.getByTestId("template-shelf-badge")).toHaveTextContent("tabs.library")
   })
 
   it("lays cards out by pane width, with the domain above the name", async () => {
@@ -145,12 +162,13 @@ describe("TemplateStudio", () => {
     })
     // Viewport breakpoints cut the pane beside the inspector into 170px cards.
     expect(screen.getByTestId("template-studio-grid").className).toContain(
-      "grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]"
+      "grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]"
     )
     const title = screen.getByText("Review Team")
-    const domain = screen.getByText("domains.agentTeam")
-    // Same column, domain first: the name keeps the card's full width.
-    expect(title.parentElement).toBe(domain.parentElement)
+    const domain = within(screen.getByTestId("template-studio-grid")).getByText("domains.agentTeam")
+    // Same card, domain row first: the name keeps the card's full width.
+    const card = title.closest('[data-slot="template-card"]')
+    expect(card).toContainElement(domain)
     expect(domain.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -230,6 +248,7 @@ describe("TemplateStudio", () => {
       render(<TemplateStudio />)
     })
 
+    await openInspectorMenu()
     await act(async () => {
       fireEvent.click(screen.getByTestId("template-delete-draft"))
     })
@@ -249,6 +268,7 @@ describe("TemplateStudio", () => {
       render(<TemplateStudio />)
     })
 
+    await openInspectorMenu()
     await act(async () => {
       fireEvent.click(screen.getByTestId("template-yank"))
     })
@@ -497,21 +517,48 @@ describe("TemplateStudio", () => {
     })
   })
 
-  it("offers every domain in the filter, not only the six with adapters", async () => {
-    // The six catalog-only domains render a domain badge and carry i18n
-    // labels, but were absent from the filter, so half the catalog could be
-    // seen on a card and never filtered to.
+  it("lists every type the catalog holds in the rail, not only the six with adapters", async () => {
+    // The catalog-only types render a type label on their cards and carry
+    // i18n labels; a filter that left them out meant half the catalog could
+    // be seen and never narrowed to.
     mockPlatform = "tauri"
+    catalogDefinitions = ["a2ui", "goal", "scheduler", "prompt", "subscription", "document"].map(
+      (domain) =>
+        draftDefinition({
+          id: `user.${domain}.one`,
+          domain,
+          contentHash: `sha256:${domain}`,
+          metadata: { name: `${domain} one` },
+        })
+    )
     await act(async () => {
       render(<TemplateStudio />)
     })
-    const trigger = screen.getByLabelText("filters.domain")
-    fireEvent.click(trigger)
-    for (const domain of ["a2ui", "goal", "scheduler", "prompt", "subscription"]) {
-      expect(screen.getByText(`domains.${domain}`)).toBeInTheDocument()
+    for (const domain of ["a2ui", "goal", "scheduler", "prompt", "subscription", "document"]) {
+      expect(screen.getByTestId(`template-nav-type-${domain}`)).toHaveTextContent(
+        `domains.${domain}`
+      )
     }
-    // `document` is offered too, but see below.
-    expect(screen.getByTestId("template-domain-document")).toBeInTheDocument()
+  })
+
+  /**
+   * ADR-0223 gave `document` a store and built-ins; it used to be labelled
+   * inert because its reader returned nothing.
+   */
+  it("offers document templates as a plain, selectable type", async () => {
+    mockPlatform = "tauri"
+    catalogDefinitions = [
+      draftDefinition({ id: "user.document.memo", domain: "document", contentHash: "sha256:memo" }),
+    ]
+    await act(async () => {
+      render(<TemplateStudio />)
+    })
+    const row = screen.getByTestId("template-nav-type-document")
+    expect(row).toBeEnabled()
+    await act(async () => {
+      fireEvent.click(row)
+    })
+    expect(new URLSearchParams(window.location.search).get("domain")).toBe("document")
   })
 
   /**
@@ -528,10 +575,8 @@ describe("TemplateStudio", () => {
         render(<TemplateStudio />)
       })
 
-      expect(screen.getByRole("tab", { name: "tabs.instances" })).toHaveAttribute(
-        "aria-selected",
-        "true"
-      )
+      expect(screen.getByTestId("template-nav-instances")).toHaveAttribute("aria-current", "page")
+      expect(screen.getByTestId("template-instances")).toBeInTheDocument()
     })
 
     it("writes the tab a user picks back to the URL", async () => {
@@ -540,10 +585,8 @@ describe("TemplateStudio", () => {
         render(<TemplateStudio />)
       })
 
-      // Radix activates a tab on mousedown, which a synthetic click does not
-      // dispatch.
       await act(async () => {
-        fireEvent.mouseDown(screen.getByRole("tab", { name: "tabs.packages" }))
+        fireEvent.click(screen.getByTestId("template-nav-packages"))
       })
       expect(window.location.search).toContain("tab=packages")
     })
@@ -557,7 +600,7 @@ describe("TemplateStudio", () => {
       })
 
       await act(async () => {
-        fireEvent.mouseDown(screen.getByRole("tab", { name: "tabs.library" }))
+        fireEvent.click(screen.getByTestId("template-nav-library"))
       })
       expect(window.location.search).not.toContain("tab=")
     })
@@ -632,18 +675,248 @@ describe("TemplateStudio", () => {
     })
   })
 
-  /**
-   * ADR-0223 gave `document` a store and built-ins; it used to be labelled
-   * inert because its reader returned nothing.
-   */
-  it("offers document templates as a plain, selectable filter", async () => {
-    mockPlatform = "tauri"
-    await act(async () => {
-      render(<TemplateStudio />)
+  describe("the polished library", () => {
+    function released(overrides: Record<string, unknown> = {}) {
+      return draftDefinition({
+        id: "builtin.skill.cite",
+        version: "1.0.0",
+        status: "published",
+        metadata: { name: "Cite sources", description: "Cite every claim" },
+        provenance: { source: "built-in", trust: "built-in" },
+        contentHash: "sha256:cite",
+        ...overrides,
+      })
+    }
+
+    it("puts both import sources behind one Import menu", async () => {
+      mockPlatform = "desktop"
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      // One header control for the verb, not two outline buttons side by side.
+      expect(screen.queryByTestId("template-import-url")).not.toBeInTheDocument()
+      const trigger = screen.getByTestId("template-import-menu")
+      await act(async () => {
+        trigger.focus()
+        fireEvent.keyDown(trigger, { key: "Enter" })
+      })
+      expect(screen.getByTestId("template-import-file")).toHaveTextContent("actions.importFile")
+      expect(screen.getByTestId("template-import-url")).toHaveTextContent("actions.importUrl")
     })
-    fireEvent.click(screen.getByLabelText("filters.domain"))
-    const item = screen.getByTestId("template-domain-document")
-    expect(item).toHaveTextContent("domains.document")
-    expect(item).not.toHaveAttribute("data-disabled")
+
+    it("draws New draft as the header's primary button, after Import", async () => {
+      mockPlatform = "desktop"
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      const strip = screen.getByTestId("feature-header-actions")
+      const create = screen.getByTestId("template-new-draft")
+      expect(strip.lastElementChild).toBe(create)
+      expect(create).toHaveTextContent("actions.newDraft")
+      expect(screen.getByTestId("template-shelf-badge")).toHaveAttribute(
+        "data-slot",
+        "feature-header-status"
+      )
+      fireEvent.click(create)
+      expect(await screen.findByRole("dialog")).toBeInTheDocument()
+    })
+
+    it("counts each shelf in the rail", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [draftDefinition(), released()]
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      expect(screen.getByTestId("template-nav-count-library")).toHaveTextContent("2")
+      expect(screen.getByTestId("template-nav-count-drafts")).toHaveTextContent("1")
+      expect(screen.getByTestId("template-nav-count-published")).toHaveTextContent("1")
+      expect(screen.getByTestId("template-nav-library")).toHaveAttribute("aria-current", "page")
+    })
+
+    it("hides the type list and the filters on shelves that are not definitions", async () => {
+      mockPlatform = "desktop"
+      window.history.replaceState({}, "", "/templates?tab=packages")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      expect(screen.queryByTestId("template-nav-types")).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText("filters.search")).not.toBeInTheDocument()
+    })
+
+    it("badges only the states worth acting on, and drops a built-in's version", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [draftDefinition(), released()]
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      const draftCard = screen.getByText("Notes").closest('[data-slot="template-card"]')!
+      const releasedCard = screen.getByText("Cite sources").closest('[data-slot="template-card"]')!
+      expect(
+        within(draftCard as HTMLElement).getByTestId("template-card-status")
+      ).toHaveTextContent("status.draft")
+      expect(
+        within(releasedCard as HTMLElement).queryByTestId("template-card-status")
+      ).not.toBeInTheDocument()
+      expect(releasedCard).not.toHaveTextContent("v1.0.0")
+    })
+
+    it("shows a user release's version, which can differ", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [
+        released({ id: "user.skill.cite", provenance: { source: "user", trust: "unsigned" } }),
+      ]
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      const card = screen.getByText("Cite sources").closest('[data-slot="template-card"]')!
+      expect(card).toHaveTextContent("v1.0.0")
+    })
+
+    it("clears every filter and the search at once", async () => {
+      mockPlatform = "desktop"
+      window.history.replaceState({}, "", "/templates?domain=skill&trust=unsigned&q=notes")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("template-clear-filters"))
+      })
+      const params = new URLSearchParams(window.location.search)
+      expect(params.get("domain")).toBeNull()
+      expect(params.get("trust")).toBeNull()
+      expect(params.get("q")).toBeNull()
+    })
+
+    // The Studio's search is the header's, bound straight to `?q=`: it writes
+    // final text and leaves a composing IME alone.
+    it("searches from the header's view bar into the URL, not mid-composition", async () => {
+      mockPlatform = "desktop"
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      const box = screen.getByTestId("template-studio-search")
+      expect(box.closest('[data-slot="feature-header-view-bar"]')).not.toBeNull()
+      await act(async () => {
+        fireEvent.compositionStart(box)
+        fireEvent.input(box, { target: { value: "bi" }, isComposing: true })
+      })
+      expect(new URLSearchParams(window.location.search).get("q")).toBeNull()
+      await act(async () => {
+        fireEvent.input(box, { target: { value: "笔记" }, isComposing: true })
+        fireEvent.compositionEnd(box)
+      })
+      expect(new URLSearchParams(window.location.search).get("q")).toBe("笔记")
+      expect(box).toHaveValue("笔记")
+    })
+
+    it("offers no clear control while nothing narrows the library", async () => {
+      mockPlatform = "desktop"
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      expect(screen.queryByTestId("template-clear-filters")).not.toBeInTheDocument()
+    })
+
+    it("filters by type from the rail, and keeps the other types' counts", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [
+        draftDefinition(),
+        released({ id: "user.workflow.flow", domain: "workflow", contentHash: "sha256:flow" }),
+      ]
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("template-nav-type-skill"))
+      })
+      expect(new URLSearchParams(window.location.search).get("domain")).toBe("skill")
+    })
+
+    it("narrows the grid to the URL's type, and keeps the other types' counts", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [
+        draftDefinition(),
+        released({ id: "user.workflow.flow", domain: "workflow", contentHash: "sha256:flow" }),
+      ]
+      window.history.replaceState({}, "", "/templates?domain=skill")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      // Only the skill is in the grid; the rail still counts the workflow.
+      const grid = screen.getByTestId("template-studio-grid")
+      expect(within(grid).getByText("Notes")).toBeInTheDocument()
+      expect(within(grid).queryByText("Cite sources")).not.toBeInTheDocument()
+      expect(screen.getByTestId("template-nav-type-workflow")).toHaveTextContent("1")
+      expect(screen.getByTestId("template-nav-type-skill")).toHaveAttribute("aria-pressed", "true")
+    })
+
+    it("says a catalog-only template is read-only beside its name, not among the buttons", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [
+        released({
+          id: "catalog.subscription.one",
+          domain: "subscription",
+          contentHash: "sha256:sub",
+          metadata: { name: "One" },
+        }),
+      ]
+      window.history.replaceState({}, "", "/templates?definition=catalog.subscription.one")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      const note = screen.getByTestId("template-read-only")
+      expect(note).toHaveTextContent("inspector.readOnly")
+      expect(note.closest("header")).not.toBeNull()
+      expect(
+        within(screen.getByTestId("template-inspector-actions")).queryByText("actions.preflight")
+      ).toBeNull()
+      // No description: a light placeholder, not text at a real one's weight.
+      expect(screen.getByText("empty.noDescription")).toHaveClass("italic")
+    })
+
+    it("opens the inspector only once something is picked", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [draftDefinition()]
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      expect(screen.queryByTestId("template-inspector")).not.toBeInTheDocument()
+      await act(async () => {
+        fireEvent.click(screen.getByText("Notes"))
+      })
+      expect(screen.getByTestId("template-inspector")).toBeInTheDocument()
+    })
+
+    it("closes the inspector", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [draftDefinition()]
+      window.history.replaceState({}, "", "/templates?definition=user.skill.notes")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      expect(screen.getByTestId("template-inspector")).toBeInTheDocument()
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("template-inspector-close"))
+      })
+      expect(new URLSearchParams(window.location.search).get("definition")).toBeNull()
+    })
+
+    it("keeps the irreversible actions apart from the everyday ones", async () => {
+      mockPlatform = "desktop"
+      catalogDefinitions = [draftDefinition()]
+      window.history.replaceState({}, "", "/templates?definition=user.skill.notes")
+      await act(async () => {
+        render(<TemplateStudio />)
+      })
+      // Fork is an everyday button; delete waits behind ⋯ as a destructive item.
+      expect(screen.getByTestId("template-fork")).toBeInTheDocument()
+      expect(screen.queryByTestId("template-delete-draft")).not.toBeInTheDocument()
+      await openInspectorMenu()
+      expect(screen.getByTestId("template-delete-draft")).toHaveAttribute(
+        "data-variant",
+        "destructive"
+      )
+      expect(screen.getByTestId("template-open-editor")).toHaveAttribute("href", "/skills")
+    })
   })
 })

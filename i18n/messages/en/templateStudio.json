@@ -8,6 +8,7 @@
     "export": "Export",
     "fork": "Fork as draft",
     "import": "Import",
+    "importFile": "From a package file…",
     "importUrl": "Import from URL",
     "instantiate": "Create resources",
     "newDraft": "New draft",
@@ -141,14 +142,19 @@
     "undeclared": "Used in the payload but not declared: {ids}"
   },
   "inspector": {
+    "close": "Close",
+    "details": "Details",
     "empty": "Select a template to inspect its definition and available actions.",
-    "hash": "Content hash: {hash}",
+    "hashLabel": "Content hash",
+    "idLabel": "ID",
+    "inputs": "Inputs",
     "label": "Inspector",
+    "moreActions": "More actions",
     "nodeGroup": "Node group — insert it from the workflow editor",
     "payload": "Portable payload",
     "readOnly": "Catalog only",
     "required": "(required)",
-    "source": "Source: {source}"
+    "sourceLabel": "Source"
   },
   "instances": {
     "detach": "Detach",
@@ -273,6 +279,10 @@
     "description": "Browse and instantiate compatible templates here. Authoring, publishing, import, and export remain available on desktop.",
     "reviewUpdateOnDesktop": "Taking an upstream update happens in the desktop Studio.",
     "title": "Mobile template access"
+  },
+  "nav": {
+    "label": "Template shelves",
+    "byType": "By type"
   },
   "operations": {
     "bind": "Bind an existing resource",

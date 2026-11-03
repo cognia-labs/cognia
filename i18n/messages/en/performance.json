@@ -465,7 +465,8 @@
     "processes": "Processes",
     "resources": "Resources",
     "runtime": "Async runtime",
-    "system": "System"
+    "system": "System",
+    "label": "Performance views"
   },
   "title": "Performance",
   "toolbar": {

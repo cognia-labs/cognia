@@ -156,7 +156,6 @@ function RemoteDesktopSectionForHost({
         remote ? t("section.descriptionRemote", { host: hostName }) : t("section.description")
       }
       meta={targets.length > 0 ? String(targets.length) : undefined}
-      wide
     >
       <div className="flex flex-col gap-3">
         {outdated ? (

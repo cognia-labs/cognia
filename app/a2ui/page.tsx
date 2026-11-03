@@ -32,9 +32,7 @@ import {
 } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useLocale, useTranslations } from "next-intl"
-import Link from "next/link"
 import {
-  ArrowLeft,
   ArrowUp,
   Blocks,
   ChevronDown,
@@ -662,14 +660,7 @@ function A2UIPageContent() {
       <FeaturePageHeader
         variant="management"
         testId="a2ui-hub-header"
-        breadcrumb={
-          <Button variant="ghost" size="icon-sm" asChild aria-label={t("back")}>
-            <Link href="/">
-              <ArrowLeft className="size-4" />
-            </Link>
-          </Button>
-        }
-        icon={<Blocks className="size-4" aria-hidden="true" />}
+        back={{ label: t("back"), href: "/", testId: "a2ui-hub-back" }}
         title={t("pageTitle")}
         description={t("hubSummary")}
         summary={

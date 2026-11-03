@@ -150,7 +150,7 @@ flowchart LR
 flowchart TD
   WL["WorkflowLibrary<br/>workflow-library.tsx:56"] --> SB["LibraryStatBar<br/>library-stat-bar.tsx:16"]
   WL --> BAB["WorkflowBulkActionBar<br/>workflow-bulk-action-bar.tsx"]
-  WL --> TB["WorkflowLibraryToolbar<br/>搜索+过滤+排序+视图"]
+  WL --> TB["页头视图栏<br/>搜索（useWorkflowLibrarySearch）+ WorkflowLibraryControls"]
   WL --> BC["FolderBreadcrumb"]
   WL --> PIN["WorkflowPinnedSection<br/>（仅根）"]
   WL --> DND["DndContext pointerWithin<br/>:165"]
@@ -167,7 +167,7 @@ flowchart TD
 | 列表 | `WorkflowLibraryList` | `workflow-library-list.tsx:29` | 经 `@tanstack/react-virtual` 虚拟化 `:41`，行高 64 `:18`，overscan 8 |
 | 卡片 | `WorkflowCard` | `workflow-card.tsx:189` | 复选框、node/trigger/action/builtin/template/tag 徽标 `:137-168`、pin |
 | 统计条 | `LibraryStatBar` | `library-stat-bar.tsx:16` | 4 卡 runs7d/successRate/active/failedToday；全零时自动隐藏 `:36-43` |
-| 工具条 | toolbar | `workflow-library-toolbar.tsx` | 搜索 200ms 防抖 + filter + sort + view + 新建文件夹/新建 |
+| 工具条 | 页头视图栏 | `workflow-library-toolbar.tsx` | `useWorkflowLibrarySearch`（200ms 防抖，交给页头 `search`）+ `WorkflowLibraryControls`（过滤 + 排序 + 视图，即页头 `controls`）；导入和新建文件夹是页头次要操作 |
 | 过滤 | filter bar | `workflow-filter-bar.tsx` | 类型 all/user/template/builtin + hasTrigger/recentlyFailed |
 | 排序 | sort menu | `workflow-sort-menu.tsx` | nameAsc/nameDesc/updated/created/runCount |
 | 置顶 | `WorkflowPinnedSection` | `workflow-pinned-section.tsx` | 仅根，来自 `settings.pinnedWorkflowIds` |

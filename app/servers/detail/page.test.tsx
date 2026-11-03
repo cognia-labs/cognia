@@ -176,3 +176,24 @@ it("falls back to the connect screen when the controller session is gone", async
   renderPage()
   await waitFor(() => expect(screen.getByText("connect panel")).toBeInTheDocument())
 })
+
+it("leads the header with a way back and the target's health as its one chip", async () => {
+  renderPage()
+  await waitFor(() => expect(screen.getByText("detail view")).toBeInTheDocument())
+  const back = screen.getByTestId("server-detail-back")
+  expect(back).toHaveAccessibleName("All servers")
+  expect(back).toHaveAttribute("href", "/servers")
+  const health = screen.getByTestId("server-detail-health")
+  expect(health).toHaveTextContent("Healthy")
+  expect(health).toHaveAttribute("data-tone", "success")
+  expect(
+    screen.getByText("One deployment target: its health, releases, backups and logs.")
+  ).toBeInTheDocument()
+})
+
+it("refreshes from the header glyph, which waits while a read runs", async () => {
+  mockOps = { ...base(), loading: true }
+  renderPage()
+  await waitFor(() => expect(screen.getByText("detail view")).toBeInTheDocument())
+  expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled()
+})

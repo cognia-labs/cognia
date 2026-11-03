@@ -83,7 +83,7 @@ export function HostUpdatesSection({ row, deps }: { row: DeviceRow; deps?: UseHo
   }
 
   return (
-    <DeviceSection id="host-updates" title={t("title")} icon={ArrowUpCircleIcon} wide>
+    <DeviceSection id="host-updates" title={t("title")} icon={ArrowUpCircleIcon}>
       <div className="space-y-3 text-sm" data-testid="host-updates">
         {unsupported ? (
           <Alert data-testid="host-updates-unsupported">

@@ -3,7 +3,7 @@
  */
 
 import React from "react"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { render, screen, fireEvent, within } from "@testing-library/react"
 
 const usePerfStreamMock = jest.fn()
 jest.mock("@/hooks/perf/use-perf-stream", () => ({
@@ -24,15 +24,23 @@ jest.mock("@/components/ui/tabs", () => {
   const ReactLib = require("react")
   const Ctx = ReactLib.createContext({ value: "", onValueChange: (_v: string) => {} })
   return {
+    // The dashboard's root is also its outer element (class, test id), so the
+    // stub keeps the div and forwards those props.
     Tabs: ({
       children,
       value,
       onValueChange,
+      ...rest
     }: {
       children: React.ReactNode
       value: string
       onValueChange: (v: string) => void
-    }) => ReactLib.createElement(Ctx.Provider, { value: { value, onValueChange } }, children),
+    }) =>
+      ReactLib.createElement(
+        Ctx.Provider,
+        { value: { value, onValueChange } },
+        ReactLib.createElement("div", rest, children)
+      ),
     TabsList: ({
       children,
       variant,
@@ -46,11 +54,22 @@ jest.mock("@/components/ui/tabs", () => {
         {children}
       </div>
     ),
-    TabsTrigger: ({ children, value, ...rest }: { children: React.ReactNode; value: string }) => {
+    TabsTrigger: ({
+      children,
+      value,
+      asChild: _asChild,
+      ...rest
+    }: {
+      children: React.ReactNode
+      value: string
+      asChild?: boolean
+    }) => {
       const ctx = ReactLib.useContext(Ctx)
       return (
         <button
           {...rest}
+          role="tab"
+          aria-controls={`panel-${value}`}
           data-active={ctx.value === value}
           onClick={() => ctx.onValueChange(value)}
         >
@@ -60,7 +79,11 @@ jest.mock("@/components/ui/tabs", () => {
     },
     TabsContent: ({ children, value }: { children: React.ReactNode; value: string }) => {
       const ctx = ReactLib.useContext(Ctx)
-      return ctx.value === value ? <div>{children}</div> : null
+      return ctx.value === value ? (
+        <div role="tabpanel" id={`panel-${value}`}>
+          {children}
+        </div>
+      ) : null
     },
   }
 })
@@ -92,13 +115,6 @@ jest.mock("./perf-toolbar", () => ({
   PerfToolbar: ({ onExport }: { onExport: (f: string) => void }) => (
     <button data-testid="toolbar" onClick={() => onExport("json")} />
   ),
-  PerfLiveStatus: ({
-    recording,
-    onOpenCaptures,
-  }: {
-    recording: boolean
-    onOpenCaptures: () => void
-  }) => <button data-testid="live-status" data-recording={recording} onClick={onOpenCaptures} />,
 }))
 jest.mock("./perf-overview-tab", () => ({
   PerfOverviewTab: ({
@@ -221,18 +237,21 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("rt")).toBeInTheDocument()
   })
 
-  it("names every main tab and keeps the active tab's label at any width", () => {
+  // The main views are the header's view tabs, like every page's, drawn
+  // inside the dashboard's own root so each tab still controls its panel.
+  it("puts the main views in the header's view bar, each tab controlling its panel", () => {
     usePerfStreamMock.mockReturnValue(baseState)
     render(<PerformanceDashboard />)
     expect(screen.getByTestId("performance-dashboard")).toHaveClass("@container/perf")
+    const bar = document.querySelector('[data-slot="feature-header-view-bar"]') as HTMLElement
     for (const tab of ["overview", "diagnose", "resources", "captures"]) {
-      expect(screen.getByTestId(`perf-tab-${tab}`)).toHaveAccessibleName()
-      expect(screen.getByTestId(`perf-tab-${tab}-label`)).toHaveClass(
-        "hidden",
-        "group-data-[state=active]:inline",
-        "@lg/perf:inline"
-      )
+      const trigger = screen.getByTestId(`perf-tab-${tab}`)
+      expect(bar).toContainElement(trigger)
+      expect(trigger).toHaveAttribute("role", "tab")
+      expect(trigger).toHaveAccessibleName()
     }
+    const overview = screen.getByTestId("perf-tab-overview")
+    expect(overview).toHaveAttribute("aria-controls", screen.getByRole("tabpanel").id)
   })
 
   it("draws the Resources sections as an underlined sub-tab row, not a second bar", () => {
@@ -319,9 +338,36 @@ describe("PerformanceDashboard", () => {
     mockCapture = { active: true }
     usePerfStreamMock.mockReturnValue(baseState)
     render(<PerformanceDashboard />)
-    expect(screen.getByTestId("perf-tab-captures-recording")).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId("live-status"))
+    expect(
+      within(screen.getByTestId("perf-tab-captures")).getByTestId("feature-header-tab-badge")
+    ).toHaveTextContent("Recording")
+    const recording = screen.getByTestId("perf-live-status-recording")
+    expect(recording).toHaveTextContent("Recording")
+    // A way to the Captures tab sits with the actions, not in the status chip.
+    expect(recording.closest('[data-testid="feature-header-actions"]')).not.toBeNull()
+    fireEvent.click(recording)
     expect(screen.getByTestId("captures")).toBeInTheDocument()
+  })
+
+  it("hides the recording action when no capture runs", () => {
+    usePerfStreamMock.mockReturnValue(baseState)
+    render(<PerformanceDashboard />)
+    expect(screen.queryByTestId("perf-live-status-recording")).not.toBeInTheDocument()
+  })
+
+  it("says live or paused in the header's one status chip", () => {
+    usePerfStreamMock.mockReturnValue(baseState)
+    const view = render(<PerformanceDashboard />)
+    const live = screen.getByTestId("perf-live-status-view")
+    expect(live).toHaveAttribute("data-slot", "feature-header-status")
+    expect(live).toHaveAttribute("data-tone", "active")
+    expect(live).toHaveTextContent("Live · 1s")
+    expect(document.querySelectorAll('[data-slot="feature-header-status"]')).toHaveLength(1)
+
+    usePerfStreamMock.mockReturnValue({ ...baseState, paused: true })
+    view.rerender(<PerformanceDashboard />)
+    expect(screen.getByTestId("perf-live-status-view")).toHaveAttribute("data-tone", "warning")
+    expect(screen.getByTestId("perf-live-status-view")).toHaveTextContent("Paused")
   })
 
   it("exports a snapshot and toasts the filename", () => {

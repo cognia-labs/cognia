@@ -426,7 +426,7 @@ describe("SourceControlPanel", () => {
       projects: [{ id: "project-1", roots: [] } as never],
     })
     render(<SourceControlPanel />)
-    fireEvent.click(screen.getByTestId("sc-view-agents"))
+    fireEvent.mouseDown(screen.getByTestId("sc-view-agents"))
     expect(screen.getByTestId("sc-view-agents")).toHaveAttribute("aria-selected", "true")
     expect(screen.getByTestId("agent-changes-view-stub")).toHaveAttribute("data-root", "/repo")
     expect(screen.getByTestId("agent-changes-view-stub")).toHaveAttribute(
@@ -440,7 +440,7 @@ describe("SourceControlPanel", () => {
 
   it("passes no project when none is active and hides agents without a Git bridge", () => {
     const { rerender } = render(<SourceControlPanel />)
-    fireEvent.click(screen.getByTestId("sc-view-agents"))
+    fireEvent.mouseDown(screen.getByTestId("sc-view-agents"))
     expect(screen.getByTestId("agent-changes-view-stub")).toHaveAttribute("data-project", "none")
     repoCfg.available = false
     rerender(<SourceControlPanel />)
@@ -632,12 +632,12 @@ describe("SourceControlPanel", () => {
     expect(screen.getByTestId("resizable-group")).toBeInTheDocument()
     expect(screen.queryByTestId("repository-navigator")).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByTestId("sc-view-browse"))
+    fireEvent.mouseDown(screen.getByTestId("sc-view-browse"))
 
     expect(screen.getByTestId("repository-navigator")).toBeInTheDocument()
     expect(screen.queryByTestId("resizable-group")).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByTestId("sc-view-changes"))
+    fireEvent.mouseDown(screen.getByTestId("sc-view-changes"))
     expect(screen.getByTestId("resizable-group")).toBeInTheDocument()
   })
 
@@ -816,16 +816,24 @@ describe("SourceControlPanel", () => {
     expect(screen.getByTestId("sc-right-pane-diff")).toBeInTheDocument()
   })
 
-  it("gives the browse view a bounded body and marks the active tab with one pill", () => {
+  it("gives the browse view a bounded body", () => {
     render(<SourceControlPanel />)
-    expect(screen.getAllByTestId("sc-view-pill")).toHaveLength(1)
-    fireEvent.click(screen.getByTestId("sc-view-browse"))
+    fireEvent.mouseDown(screen.getByTestId("sc-view-browse"))
     const body = screen.getByTestId("sc-view-body-browse")
     expect(body.className).toMatch(/\bmin-h-0\b/)
     expect(body.className).toMatch(/\bflex-1\b/)
-    expect(screen.getByTestId("sc-view-browse")).toContainElement(
-      screen.getByTestId("sc-view-pill")
-    )
+  })
+
+  it("draws the views as the header's tab set in its view bar", () => {
+    render(<SourceControlPanel />)
+    const header = document.querySelector('[data-slot="feature-page-header"]')
+    expect(header).toHaveAttribute("data-variant", "management")
+    const tablist = screen.getByRole("tablist")
+    expect(tablist.closest('[data-slot="feature-header-view-bar"]')).not.toBeNull()
+    expect(screen.getAllByRole("tab")).toHaveLength(3)
+    expect(screen.getByRole("tab", { selected: true })).toBe(screen.getByTestId("sc-view-changes"))
+    // The old sliding pill is gone with the bespoke switcher.
+    expect(screen.queryByTestId("sc-view-pill")).not.toBeInTheDocument()
   })
 
   it("names the repository after the title, not before it", () => {
@@ -845,7 +853,7 @@ describe("SourceControlPanel", () => {
     const user = userEvent.setup()
     render(<SourceControlPanel />)
     const trigger = screen.getByTestId("sc-open-review")
-    expect(trigger).toHaveAccessibleName()
+    expect(trigger).toHaveAccessibleName(/\S/)
     await user.click(trigger)
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
   })

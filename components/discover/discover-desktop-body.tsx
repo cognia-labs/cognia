@@ -25,7 +25,6 @@ import { DiscoverInspector } from "@/components/discover/discover-inspector"
 import { DiscoverItemSheet } from "@/components/discover/discover-item-sheet"
 import { DiscoverViewToggle } from "@/components/discover/discover-view-toggle"
 import { SortFilterSheet } from "@/components/discover/sort-filter-sheet"
-import { DiscoverSearch } from "@/components/mobile/discover/discover-search"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { useDiscoverHome } from "@/hooks/discover/use-discover-home"
@@ -91,6 +90,7 @@ export function DiscoverDesktopBody() {
         <FeaturePageHeader
           icon={<CompassIcon />}
           title={t("title")}
+          description={t("description")}
           summary={
             !isHome && !loading ? (
               <span data-testid="discover-result-count">
@@ -98,32 +98,38 @@ export function DiscoverDesktopBody() {
               </span>
             ) : undefined
           }
+          search={{
+            value: query,
+            onChange: setQuery,
+            placeholder: t("search"),
+            ariaLabel: t("searchAria"),
+            // "/" anywhere on the page focuses it (`useSearchHotkey`).
+            inputRef: searchRef,
+            testId: "discover-search-input",
+          }}
+          // The landing aggregates every category, so it has nothing to
+          // filter, sort or re-lay out.
           controls={
-            <div
-              className="flex min-w-max items-center gap-2"
-              data-testid="discover-desktop-toolbar"
-            >
-              {!isHome ? (
+            isHome ? undefined : (
+              <div
+                className="flex min-w-max items-center gap-2"
+                data-testid="discover-desktop-toolbar"
+              >
                 <ActiveFilterChips
                   sort={sort}
                   filter={filter}
                   onSortChange={setSort}
                   onFilterChange={setFilter}
                 />
-              ) : null}
-              <div className="ml-auto w-72 max-w-[60vw]">
-                <DiscoverSearch value={query} onChange={setQuery} inputRef={searchRef} />
-              </div>
-              {!isHome ? <DiscoverViewToggle category={category} /> : null}
-              {!isHome ? (
+                <DiscoverViewToggle category={category} />
                 <SortFilterSheet
                   sort={sort}
                   filter={filter}
                   onSortChange={setSort}
                   onFilterChange={setFilter}
                 />
-              ) : null}
-            </div>
+              </div>
+            )
           }
         />
       }

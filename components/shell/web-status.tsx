@@ -45,11 +45,29 @@ const SESSION_CLASSES: Record<SessionHost, string> = {
 const COMPOSER_COMPACT =
   "[&_button]:gap-0 [&_button]:px-1.5 [&_button]:text-[0px] [&_a]:gap-0 [&_a]:text-[0px] " +
   "[&_[data-slot=badge]]:text-[9px] [&_[data-testid=account-bar-button]_span]:text-[10px]"
-const RAIL_STACK =
-  "flex flex-col items-center gap-1 pb-1.5 empty:hidden " +
-  "[&_button]:size-9 [&_button]:justify-center [&_button]:gap-0 [&_button]:rounded-panel " +
-  "[&_button]:px-0 [&_button]:text-[0px] [&_button_svg]:size-[18px] " +
-  "[&_[data-slot=badge]]:text-[9px] [&_[data-testid=account-bar-button]_span]:text-[10px]"
+/**
+ * The rail's status stack reads as more rail buttons: every segment is the
+ * nav's 36px target with an 18px glyph. Three segments draw their glyph some
+ * other way and need saying so here, or the stack looks like five styles:
+ *  * the bell's animated icon fixes its box with an inline 12px style, which
+ *    only an important size beats, so it was a squeezed 12×18 sliver;
+ *  * the account initial is text, so it gets a 20px round chip to carry an
+ *    icon's weight instead of a bare 10px letter;
+ *  * the run state is a dot, grown from 6px so it does not read as a stray
+ *    speck under the other glyphs.
+ */
+const RAIL_STACK = [
+  "flex flex-col items-center gap-1 pb-1.5 empty:hidden",
+  "[&_button]:size-9 [&_button]:justify-center [&_button]:gap-0 [&_button]:rounded-panel",
+  "[&_button]:px-0 [&_button]:text-[0px] [&_button_svg]:size-[18px]",
+  "[&_button_[data-slot=animated-action-icon]]:size-[18px]!",
+  "[&_[data-slot=badge]]:text-[9px]",
+  "[&_[data-testid=account-bar-button]>span]:flex [&_[data-testid=account-bar-button]>span]:size-5",
+  "[&_[data-testid=account-bar-button]>span]:items-center [&_[data-testid=account-bar-button]>span]:justify-center",
+  "[&_[data-testid=account-bar-button]>span]:rounded-full [&_[data-testid=account-bar-button]>span]:bg-muted",
+  "[&_[data-testid=account-bar-button]>span]:text-[10px] [&_[data-testid=account-bar-button]>span]:text-foreground/80",
+  "[&_[data-testid=status-status]>span:first-child]:size-2",
+].join(" ")
 const PILL_CLUSTER =
   "flex items-center gap-0.5 [&_button]:h-7 [&_button]:px-1.5 [&_button]:rounded-pill [&_button]:text-[11px] [&_button_svg]:size-3.5"
 

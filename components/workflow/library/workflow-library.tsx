@@ -1,10 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
-import { PlusIcon, WorkflowIcon } from "lucide-react"
+import { FolderPlusIcon, PlusIcon, UploadIcon, WorkflowIcon } from "lucide-react"
 import {
   DndContext,
   DragOverlay,
@@ -44,7 +44,11 @@ import { WorkflowMoveToFolderDialog } from "./workflow-move-to-folder-dialog"
 import { WorkflowDeleteDialog } from "./workflow-delete-dialog"
 import { WorkflowBulkTagDialog } from "./workflow-bulk-tag-dialog"
 import { WorkflowBulkActionBar } from "./workflow-bulk-action-bar"
-import { WorkflowLibraryToolbar } from "./workflow-library-toolbar"
+import {
+  WorkflowImportInput,
+  WorkflowLibraryControls,
+  useWorkflowLibrarySearch,
+} from "./workflow-library-toolbar"
 import { WorkflowFolderBreadcrumb } from "./workflow-folder-breadcrumb"
 import { WorkflowPinnedSection } from "./workflow-pinned-section"
 import { WorkflowLibraryGrid } from "./workflow-library-grid"
@@ -68,6 +72,9 @@ export function WorkflowLibrary() {
   const query = useWorkflowLibraryStore((s) => s.query)
   const goToRoot = useWorkflowLibraryStore((s) => s.goToRoot)
   const clearSearchAndFilters = useWorkflowLibraryStore((s) => s.clearSearchAndFilters)
+  const openCreateFolder = useWorkflowLibraryStore((s) => s.openCreateFolder)
+  const search = useWorkflowLibrarySearch()
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const childFolders = useLiveQuery(() => listChildFolders(currentFolderId), [currentFolderId])
   const folderPath = useLiveQuery(() => getFolderPath(currentFolderId), [currentFolderId])
@@ -218,7 +225,7 @@ export function WorkflowLibrary() {
         <FeaturePageHeader
           icon={<WorkflowIcon />}
           title={t("title")}
-          description={currentFolderId === ROOT_FOLDER_ID ? t("subtitle") : undefined}
+          description={t("subtitle")}
           context={
             currentFolderId !== ROOT_FOLDER_ID ? (
               <WorkflowFolderBreadcrumb path={folderPath ?? []} />
@@ -231,8 +238,31 @@ export function WorkflowLibrary() {
             onSelect: () => setLocalCreateOpen(true),
             testId: "workflow-new",
           }}
-          controls={<WorkflowLibraryToolbar onImportFiles={handleImportFiles} />}
+          secondaryActions={[
+            {
+              id: "import",
+              label: t("import.button"),
+              icon: UploadIcon,
+              onSelect: () => importInputRef.current?.click(),
+              testId: "workflow-import",
+            },
+            {
+              id: "new-folder",
+              label: t("newFolder"),
+              icon: FolderPlusIcon,
+              onSelect: () => openCreateFolder(currentFolderId),
+              testId: "workflow-new-folder",
+            },
+          ]}
+          search={{
+            value: search.value,
+            onChange: search.onChange,
+            placeholder: t("searchPlaceholder"),
+            testId: "workflow-library-search",
+          }}
+          controls={<WorkflowLibraryControls />}
         />
+        <WorkflowImportInput inputRef={importInputRef} onImportFiles={handleImportFiles} />
         <LibraryStatBar />
         <WorkflowBulkActionBar />
         {currentFolderId === ROOT_FOLDER_ID ? (

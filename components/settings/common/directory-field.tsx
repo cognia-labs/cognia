@@ -14,6 +14,9 @@
  *
  * Labels are props rather than a namespace lookup so each caller keeps its own
  * i18n keys. The component never owns user-facing text.
+ *
+ * A FILE path uses the same layout: pass a `pick` that opens a file dialog
+ * (`pickFilePath`). The field is the pairing, not the dialog kind.
  */
 
 import { Button } from "@/components/ui/button"
@@ -21,21 +24,30 @@ import { Input } from "@/components/ui/input"
 import { useDirectoryPicker } from "@/hooks/files/use-directory-picker"
 
 export interface DirectoryFieldProps {
+  /** For a `<label htmlFor>` / `FieldLabel` outside the field. */
+  id?: string
   value: string
   onChange: (next: string) => void
-  /** Persist. Fired on blur, and immediately after a successful pick. */
-  onCommit: (next: string) => void
+  /**
+   * Persist. Fired on blur, and immediately after a successful pick. Optional
+   * for a form that persists on submit and only needs `onChange`.
+   */
+  onCommit?: (next: string) => void
   placeholder?: string
   ariaLabel: string
   browseLabel: string
   disabled?: boolean
-  /** Injected in tests; defaults to the native picker. */
+  /** Defaults to the native directory picker; a file field passes its own. */
   pick?: () => Promise<string | null>
-  /** Injected in tests; defaults to the real shell check. */
+  /**
+   * Defaults to the real shell check. A caller narrows it when a native pick
+   * would name the wrong machine (a Docker daemon on another host).
+   */
   hasPicker?: () => boolean
 }
 
 export function DirectoryField({
+  id,
   value,
   onChange,
   onCommit,
@@ -55,15 +67,16 @@ export function DirectoryField({
     const picked = await picker.browse()
     if (!picked) return // cancelled, or no picker on this shell
     onChange(picked)
-    onCommit(picked)
+    onCommit?.(picked)
   }
 
   return (
     <div className="flex items-center gap-2">
       <Input
+        id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={() => onCommit(value)}
+        onBlur={() => onCommit?.(value)}
         placeholder={placeholder}
         aria-label={ariaLabel}
         disabled={disabled}

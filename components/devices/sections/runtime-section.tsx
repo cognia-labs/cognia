@@ -150,8 +150,8 @@ export function RoutingSection({ row }: { row: DeviceRow }) {
           data-testid="device-timing-authority"
         >
           <div className="min-w-0">
-            <h4 className="text-sm font-medium">{t("runtime.timingAuthority")}</h4>
-            <p className="mt-1 text-xs leading-snug text-muted-foreground">
+            <h4 className="text-xs font-semibold">{t("runtime.timingAuthority")}</h4>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
               {t("runtime.timingAuthorityHint")}
             </p>
           </div>
@@ -205,7 +205,7 @@ export function WorkspacesSection({ row }: { row: DeviceRow }) {
   if (!supported && !inactiveHost) return null
 
   return (
-    <DeviceSection id="workspaces" title={t("runtime.workspaces")} icon={FolderTreeIcon} wide>
+    <DeviceSection id="workspaces" title={t("runtime.workspaces")} icon={FolderTreeIcon}>
       <div data-testid="device-workspaces">
         {supported ? (
           <WorkspaceEnvironmentList presentation="sheet" showPrune />
@@ -465,7 +465,7 @@ export function SandboxSection({ row }: { row: DeviceRow }) {
   if (!managedHost && row.runtime.sandbox.support !== "supported") return null
 
   return (
-    <DeviceSection id="sandbox" title={t("runtime.sandbox")} icon={ContainerIcon} wide>
+    <DeviceSection id="sandbox" title={t("runtime.sandbox")} icon={ContainerIcon}>
       <div className="space-y-4" data-testid="device-sandbox">
         {managedHost ? null : (
           <MachineSummary

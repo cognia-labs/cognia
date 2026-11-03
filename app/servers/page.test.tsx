@@ -119,6 +119,8 @@ it("flags a fleet that came from the offline cache", () => {
   mockOps = { ...base(), offline: true }
   renderPage()
   expect(screen.getByText("Offline cache")).toBeInTheDocument()
+  // The header's one status chip, not a badge inside the context line.
+  expect(screen.getByTestId("servers-offline-status")).toHaveAttribute("data-tone", "warning")
 })
 
 it("opens the deployment wizard from the primary action", async () => {
@@ -157,4 +159,12 @@ it("refreshes on demand and blocks a second refresh while one is running", async
 
   await user.click(screen.getByRole("button", { name: "Refresh" }))
   expect(mockOps.refresh).toHaveBeenCalled()
+})
+
+it("holds the refresh glyph while a read is already running", () => {
+  mockOps = { ...base(), loading: true }
+  renderPage()
+  const refresh = screen.getByRole("button", { name: "Refresh" })
+  expect(refresh).toBeDisabled()
+  expect(refresh).toHaveAttribute("aria-busy", "true")
 })

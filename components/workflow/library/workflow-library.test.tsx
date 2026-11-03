@@ -3,7 +3,15 @@
  */
 
 import "fake-indexeddb/auto"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { WorkflowLibrary } from "./workflow-library"
 import { createFolder } from "@/lib/db/workflow-folders"
 import { createWorkflow, listWorkflows } from "@/lib/db/workflows"
@@ -11,6 +19,9 @@ import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
 import { DEFAULT_WORKFLOW_FILTERS, useWorkflowLibraryStore } from "@/stores/workflow"
 import { useSettingsStore } from "@/stores/settings/settings-store"
+
+// The header's icon buttons carry tooltips, which need the app's provider.
+const render = (ui: React.ReactElement) => rtlRender(<TooltipProvider>{ui}</TooltipProvider>)
 
 beforeEach(async () => {
   await getDb().delete()
@@ -46,8 +57,16 @@ describe("WorkflowLibrary", () => {
     const header = screen.getByRole("banner")
     expect(within(header).getByRole("heading", { name: "Workflows" })).toBeInTheDocument()
     expect(within(header).queryByTestId("workflow-breadcrumb-root")).not.toBeInTheDocument()
-    expect(within(header).getByTestId("workflow-library-search")).toBeInTheDocument()
+    expect(within(header).getByRole("searchbox", { name: "Search workflows…" })).toHaveAttribute(
+      "data-testid",
+      "workflow-library-search"
+    )
     expect(within(header).getByTestId("workflow-new")).toBeInTheDocument()
+    expect(within(header).getByTestId("workflow-import")).toBeInTheDocument()
+    expect(within(header).getByTestId("workflow-new-folder")).toBeInTheDocument()
+    expect(within(header).getByTestId("workflow-filter-trigger")).toBeInTheDocument()
+    expect(within(header).getByTestId("workflow-sort-trigger")).toBeInTheDocument()
+    expect(within(header).getByTestId("workflow-library-view-toggle")).toBeInTheDocument()
     expect(await screen.findByTestId(`workflow-folder-card-${folder.id}`)).toBeInTheDocument()
     expect(await screen.findByTestId(`workflow-card-${wf.id}`)).toBeInTheDocument()
   })
@@ -155,6 +174,42 @@ describe("WorkflowLibrary", () => {
       })
       expect(imported?.published).toBeUndefined()
     })
+  })
+
+  it("narrows the library from the header search after the debounce", async () => {
+    const alpha = await createWorkflow({ name: "Alpha" })
+    const beta = await createWorkflow({ name: "Beta" })
+    render(<WorkflowLibrary />)
+    expect(await screen.findByTestId(`workflow-card-${beta.id}`)).toBeInTheDocument()
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search workflows…" }), {
+      target: { value: "alp" },
+    })
+    await waitFor(() => expect(useWorkflowLibraryStore.getState().query).toBe("alp"))
+    await waitFor(() =>
+      expect(screen.queryByTestId(`workflow-card-${beta.id}`)).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId(`workflow-card-${alpha.id}`)).toBeInTheDocument()
+  })
+
+  it("opens the create-folder dialog under the current folder from the header", async () => {
+    const folder = await createFolder({ name: "Reports" })
+    const inside = await createWorkflow({ name: "Inside", folderId: folder.id })
+    useWorkflowLibraryStore.setState({ currentFolderId: folder.id })
+    render(<WorkflowLibrary />)
+    expect(await screen.findByTestId(`workflow-card-${inside.id}`)).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole("banner")).getByTestId("workflow-new-folder"))
+    expect(useWorkflowLibraryStore.getState().createFolderParentId).toBe(folder.id)
+  })
+
+  it("opens the file picker from the header's Import button", async () => {
+    render(<WorkflowLibrary />)
+    await screen.findByTestId("workflow-empty-root")
+    const input = screen.getByTestId<HTMLInputElement>("workflow-import-input")
+    const click = jest.spyOn(input, "click")
+    act(() => {
+      fireEvent.click(within(screen.getByRole("banner")).getByTestId("workflow-import"))
+    })
+    expect(click).toHaveBeenCalledTimes(1)
   })
 
   it("returns to root when the current folder no longer exists", async () => {

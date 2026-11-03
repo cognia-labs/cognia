@@ -1,5 +1,5 @@
 /**
- * Which cards the device dashboard shows, in what order, and at what width.
+ * Which chapters the device record shows, and in what order.
  *
  * The dashboard used to be one fixed sequence for every kind of machine:
  * identity, presence, capabilities, access, runtime, activity. That order is
@@ -17,8 +17,14 @@
  * Access. They are gathered into one record, {@link DeviceSectionPlan.notApplicable},
  * stated once at the end in the same words the cards would have used.
  *
- * Pure, so the plan the grid lays out and the plan the jump navigation lists
+ * Pure, so the plan the record lays out and the plan the jump navigation lists
  * are the same value: a nav entry can never point at a card that did not render.
+ *
+ * There is no width any more. The record is one column of chapters, as the
+ * scheduler's task detail is: in two columns a short chapter beside a tall one
+ * (routing beside the shell tiers) left a blank as tall as the difference, and
+ * pulling the next half-width chapter forward to fill it bent the task-first
+ * order the list exists to keep.
  */
 
 import type { RemoteDesktopHostRef } from "@/lib/remote-desktop/types"
@@ -54,8 +60,6 @@ export type DeviceSectionId =
 
 export interface DevicePlannedSection {
   id: DeviceSectionId
-  /** Spans both grid columns. Matrices, registries and lists; never fact pairs. */
-  wide: boolean
 }
 
 /** What a card would have said had it rendered, as one row of a shared record. */
@@ -81,12 +85,6 @@ export interface DeviceNotApplicable {
 export interface DeviceSectionPlan {
   sections: DevicePlannedSection[]
   notApplicable: DeviceNotApplicable[]
-  /**
-   * Whether the not-applicable record spans the grid. Two rows or fewer are a
-   * fact pair, and a full-width frame around them is the 90px stub the grid
-   * exists to avoid.
-   */
-  notApplicableWide: boolean
 }
 
 /**
@@ -128,31 +126,6 @@ const MANAGED_HOST_SECTIONS = Object.keys(MANAGED_HOST_SECTION_GRANT) as Managed
 
 /** The anchor the not-applicable record carries, for the jump navigation. */
 export const NOT_APPLICABLE_SECTION_ID = "not-applicable"
-
-const WIDE: Record<DeviceSectionId, boolean> = {
-  "always-on": true,
-  "host-secrets": true,
-  "org-models": true,
-  "host-updates": true,
-  "host-runtimes": true,
-  "host-system": false,
-  "host-install": false,
-  ssh: true,
-  files: true,
-  access: true,
-  wan: false,
-  routing: false,
-  "shell-tiers": false,
-  sandbox: true,
-  workspaces: true,
-  identity: false,
-  presence: false,
-  "event-plane": false,
-  capabilities: true,
-  dispatch: true,
-  placement: false,
-  "remote-desktop": true,
-}
 
 /**
  * Task-first order per kind. A section listed here still only renders when
@@ -441,45 +414,7 @@ function notApplicableFor(row: DeviceRow): DeviceNotApplicable[] {
   return entries
 }
 
-/**
- * Keep half-width cards in pairs without leaving the priority order.
- *
- * The grid is two columns with `items-start`, and a half card followed by a
- * wide one leaves the column beside it empty for the wide card's whole height
- * above. CSS `grid-auto-flow: dense` would fill that hole, but by moving a
- * card visually away from its place in the DOM, which is the reading and tab
- * order. Instead the next half card is pulled forward in the list itself, so
- * what is seen and what is focused next are still the same thing.
- *
- * Only ever pulls a card *up*, and only the nearest one, so the highest
- * priority card of a kind stays first.
- */
-export function packHalfSections(
-  sections: readonly DevicePlannedSection[]
-): DevicePlannedSection[] {
-  const queue = [...sections]
-  const packed: DevicePlannedSection[] = []
-  while (queue.length > 0) {
-    const current = queue.shift()!
-    packed.push(current)
-    if (current.wide) continue
-    const next = queue[0]
-    if (!next) break
-    if (!next.wide) {
-      // Already paired: emit both so the next iteration starts a fresh row.
-      packed.push(queue.shift()!)
-      continue
-    }
-    const partnerIndex = queue.findIndex((candidate) => !candidate.wide)
-    if (partnerIndex > 0) packed.push(...queue.splice(partnerIndex, 1))
-  }
-  return packed
-}
-
 export function planDeviceSections(row: DeviceRow): DeviceSectionPlan {
-  const sections = packHalfSections(
-    ORDER[row.kind].filter((id) => isApplicable(row, id)).map((id) => ({ id, wide: WIDE[id] }))
-  )
-  const notApplicable = notApplicableFor(row)
-  return { sections, notApplicable, notApplicableWide: notApplicable.length > 2 }
+  const sections = ORDER[row.kind].filter((id) => isApplicable(row, id)).map((id) => ({ id }))
+  return { sections, notApplicable: notApplicableFor(row) }
 }

@@ -342,7 +342,7 @@ describe("PetConsole remote care", () => {
       await renderRemote()
       const nav = screen.getByTestId("pet-console-nav")
       for (const tab of ["home", "chat", "shop", "collection", "activity"]) {
-        expect(nav.querySelector(`[data-tab="${tab}"]`)).not.toHaveAttribute("data-desktop-only")
+        expect(nav.querySelector(`[data-tab="${tab}"]`)).not.toHaveAttribute("data-badged")
       }
       const appearance = screen.getByTestId("pet-console-open-appearance")
       expect(appearance).toHaveAttribute("data-desktop-only", "true")

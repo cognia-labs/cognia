@@ -50,4 +50,40 @@ describe("DirectoryField", () => {
     fireEvent.blur(screen.getByLabelText("Projects folder"))
     expect(onCommit).toHaveBeenCalledWith("/typed")
   })
+
+  it("carries an id for a label drawn outside the field", () => {
+    render(
+      <>
+        <label htmlFor="seed-dir">Seed storage</label>
+        <DirectoryField
+          id="seed-dir"
+          value=""
+          onChange={jest.fn()}
+          ariaLabel="Seed storage"
+          browseLabel="Browse"
+          hasPicker={() => false}
+        />
+      </>
+    )
+    expect(screen.getByLabelText("Seed storage")).toHaveAttribute("id", "seed-dir")
+  })
+
+  // A form that persists on submit passes only onChange; a pick still fills
+  // the field.
+  it("fills the field from a pick without an onCommit", async () => {
+    const onChange = jest.fn()
+    render(
+      <DirectoryField
+        value=""
+        onChange={onChange}
+        ariaLabel="Executable"
+        browseLabel="Browse"
+        hasPicker={() => true}
+        pick={async () => "/opt/homebrew/bin/lume"}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("/opt/homebrew/bin/lume"))
+    fireEvent.blur(screen.getByLabelText("Executable"))
+  })
 })

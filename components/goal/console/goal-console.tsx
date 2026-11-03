@@ -25,12 +25,11 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
-import { TargetIcon } from "lucide-react"
+import { PlusIcon, TargetIcon } from "lucide-react"
 
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useBreakpoint } from "@/hooks/ui"
 import { getGoal, listAllGoals, listOpenGoals } from "@/lib/db/goals"
 import { computeGoalAnalytics } from "@/lib/goal/analytics"
@@ -42,6 +41,7 @@ import {
   type GoalConsoleTab,
 } from "@/lib/goal/console-prefs"
 import { useGoalConsolePrefs } from "@/hooks/goal/use-goal-console-prefs"
+import { useGoalCreate } from "@/hooks/goal/use-goal-create"
 import { splitOpenGoals } from "@/lib/goal/overview-filter"
 
 import { GoalAnalyticsPanel } from "../analytics/goal-analytics-panel"
@@ -87,6 +87,12 @@ export function GoalConsole({ location, selectedGoalId, onNavigate }: GoalConsol
   // cell can open History already filtered.
   const [historyStatus, setHistoryStatus] = useState<string>(ALL_GOAL_STATUSES)
 
+  // The header draws "New goal" as its primary button and the dialog opens
+  // from it. Same gate the dialog's own trigger used: a phone without the
+  // remote-control grant gets no button.
+  const goalCreate = useGoalCreate()
+  const [createOpen, setCreateOpen] = useState(false)
+
   const go = useCallback(
     (next: Partial<GoalConsolePlace>, options?: { replace?: boolean }) =>
       onNavigate(
@@ -115,41 +121,48 @@ export function GoalConsole({ location, selectedGoalId, onNavigate }: GoalConsol
       icon={<TargetIcon />}
       title={t("console.title")}
       description={t("console.subtitle")}
-      navigationPlacement="inline"
-      navigation={
-        <Tabs
-          value={tab}
-          onValueChange={(value) => {
-            if (isGoalConsoleTab(value)) go({ tab: value })
-          }}
-        >
-          <TabsList aria-label={t("console.sectionsAria")}>
-            {GOAL_CONSOLE_TABS.map((id) => (
-              <TabsTrigger key={id} value={id} data-testid={`goal-console-tab-${id}`}>
-                {t(`console.tabs.${id}`)}
-                {id === "overview" && awaitingCount > 0 ? (
-                  // Visible from every tab: something is waiting on a verdict.
-                  <span
-                    className="ml-1 rounded-pill bg-warning/15 px-1.5 text-[11px] text-warning tabular-nums"
-                    aria-label={t("console.needsYouCount", { count: awaitingCount })}
-                    data-testid="goal-console-needs-you-badge"
-                  >
-                    {awaitingCount}
-                  </span>
-                ) : null}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+      // Visible from every tab: something is waiting on a verdict. The chip
+      // says it in words; the Overview tab carries the same count.
+      status={
+        awaitingCount > 0
+          ? {
+              label: t("console.needsYouCount", { count: awaitingCount }),
+              tone: "warning",
+              title: t("console.needsYouHint"),
+              testId: "goal-console-needs-you-badge",
+            }
+          : undefined
       }
+      tabs={{
+        ariaLabel: t("console.sectionsAria"),
+        value: tab,
+        onValueChange: (value) => {
+          if (isGoalConsoleTab(value)) go({ tab: value })
+        },
+        items: GOAL_CONSOLE_TABS.map((id) => ({
+          value: id,
+          label: t(`console.tabs.${id}`),
+          count: id === "overview" && awaitingCount > 0 ? awaitingCount : undefined,
+          testId: `goal-console-tab-${id}`,
+        })),
+      }}
+      // Plugin contributions are arbitrary components, not plain buttons.
       actions={
-        <div className="flex items-center gap-2">
-          <PluginExtensionSlot
-            point="goal.toolbar"
-            className="flex items-center gap-2 empty:hidden"
-          />
-          <GoalQuickCreateDialog />
-        </div>
+        <PluginExtensionSlot
+          point="goal.toolbar"
+          className="flex items-center gap-2 empty:hidden"
+        />
+      }
+      primaryAction={
+        goalCreate.allowed
+          ? {
+              id: "new-goal",
+              label: t("quickCreate.trigger"),
+              icon: PlusIcon,
+              onSelect: () => setCreateOpen(true),
+              testId: "goal-quick-create-trigger",
+            }
+          : undefined
       }
       testId="goal-console-header"
     />
@@ -229,6 +242,8 @@ export function GoalConsole({ location, selectedGoalId, onNavigate }: GoalConsol
           </div>
         )}
       </FeaturePageShell>
+
+      <GoalQuickCreateDialog open={createOpen} onOpenChange={setCreateOpen} showTrigger={false} />
 
       {inspectorOpen && overlay ? (
         <OverlayInspector goalId={selectedGoalId} onClose={clearSelection} />

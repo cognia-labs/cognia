@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/utils"
 import {
   managedDesktopClient,
   managedDesktopTargetConfig,
@@ -45,7 +46,17 @@ import type { SandboxConnectionRow } from "@/types/sandbox"
 const LOCAL: ManagedDesktopTarget = { kind: "local" }
 
 /** Safe Host configuration projection. Provider keys are configured on the Host. */
-export function ManagedDesktopSettings({ target = LOCAL }: { target?: ManagedDesktopTarget }) {
+export function ManagedDesktopSettings({
+  target = LOCAL,
+  framed = true,
+}: {
+  target?: ManagedDesktopTarget
+  /**
+   * `false` inside a host that already titles the block (the device console's
+   * Sandbox chapter): the heading steps down below the chapter's own 13px one.
+   */
+  framed?: boolean
+}) {
   const owner = useAccountStore((state) => state.unlockedAccountId)
   const locked = useAccountStore((state) => state.locked)
   const hostConfig = useSyncExternalStore(
@@ -59,10 +70,16 @@ export function ManagedDesktopSettings({ target = LOCAL }: { target?: ManagedDes
     target.kind === "local" ? "local" : target.hostId,
     hostConfig,
   ])
-  return <ManagedDesktopSettingsBody key={identity} target={target} />
+  return <ManagedDesktopSettingsBody key={identity} target={target} framed={framed} />
 }
 
-function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }) {
+function ManagedDesktopSettingsBody({
+  target,
+  framed,
+}: {
+  target: ManagedDesktopTarget
+  framed: boolean
+}) {
   const t = useTranslations("settings.managedDesktops")
   const [configs, setConfigs] = useState<ManagedDesktopConfigSummary[]>([])
   const [resources, setResources] = useState<ManagedDesktopResource[]>([])
@@ -122,25 +139,28 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // In the device sheet every note reads at the sheet's 11px, the same as the
+  // description line under the block's heading.
+  const noteSize = framed ? "text-xs" : "text-[11px] leading-snug"
   return (
     <section className="space-y-3 border-t pt-4" aria-label={t("title")}>
-      <h3 className="text-sm font-medium">{t("title")}</h3>
-      <p className="text-xs text-muted-foreground">{t("description")}</p>
-      <p className="text-xs text-muted-foreground">{t("hostConfig")}</p>
+      <h3 className={framed ? "text-sm font-medium" : "text-xs font-semibold"}>{t("title")}</h3>
+      <p className={cn(noteSize, "text-muted-foreground")}>{t("description")}</p>
+      <p className={cn(noteSize, "text-muted-foreground")}>{t("hostConfig")}</p>
       <ManagedDesktopReleaseStatusLine status={release} />
       <p
-        className="text-xs text-muted-foreground"
+        className={cn(noteSize, "text-muted-foreground")}
         data-dormant="managed-desktop-handoff-and-automation"
       >
         {t("dormant")}
       </p>
-      <p className="text-xs text-muted-foreground">{t("manual")}</p>
+      <p className={cn(noteSize, "text-muted-foreground")}>{t("manual")}</p>
       {error ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className={cn(noteSize, "text-destructive")}>
           {t(`errors.${error}`)}
         </p>
       ) : null}
-      {!busy && !error && configs.length === 0 ? <p className="text-xs">{t("empty")}</p> : null}
+      {!busy && !error && configs.length === 0 ? <p className={noteSize}>{t("empty")}</p> : null}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void reload()}>
           {busy ? t("refreshing") : t("load")}

@@ -215,6 +215,26 @@ describe("PluginPanelToolbar", () => {
     expect(screen.getByTestId("plugin-panel-toolbar")).toHaveAttribute("data-layout", "compact")
   })
 
+  it("header layout leaves the registry sync to the page header and ends with Install", () => {
+    const onCheckUpdates = jest.fn()
+    render(<PluginPanelToolbar layout="header" onCheckUpdates={onCheckUpdates} />)
+    const bar = screen.getByTestId("plugin-panel-toolbar")
+    expect(bar).toHaveAttribute("data-layout", "header")
+    expect(screen.queryByTestId("plugin-toolbar-more")).toBeNull()
+    expect(screen.queryByTestId("plugin-sync-registry")).toBeNull()
+    // Install closes the strip, where the header draws its primary button.
+    // (This suite stubs DropdownMenu as a wrapper div, so the last child holds
+    // the trigger rather than being it.)
+    expect(bar.lastElementChild).toContainElement(screen.getByTestId("plugin-install-trigger"))
+    const check = screen.getByTestId("plugin-check-updates")
+    expect(
+      check.compareDocumentPosition(screen.getByTestId("plugin-install-trigger")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(check)
+    expect(onCheckUpdates).toHaveBeenCalled()
+  })
+
   it("Cogpack menu item opens the cogpack picker", () => {
     render(<PluginPanelToolbar />)
     fireEvent.click(screen.getByTestId("plugin-install-from-cogpack"))

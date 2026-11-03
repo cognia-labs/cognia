@@ -30,6 +30,7 @@ import {
   ActivityIcon,
   BoxesIcon,
   CameraIcon,
+  CircleDotIcon,
   CpuIcon,
   ScrollTextIcon,
   StethoscopeIcon,
@@ -53,7 +54,7 @@ import type { PerfMetricId } from "@/lib/perf/metric-catalog"
 import { getRendererPerformanceCollector } from "@/lib/perf/renderer-collector"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
-import { PerfLiveStatus, PerfToolbar } from "./perf-toolbar"
+import { PerfToolbar } from "./perf-toolbar"
 import { PerfOverviewTab } from "./perf-overview-tab"
 import { PerfProcessTable } from "./perf-process-table"
 import { PerfManagedProcesses } from "./perf-managed-processes"
@@ -74,9 +75,6 @@ import { PerfOperationTimings } from "./perf-operation-timings"
  * past the edge of a scrolling strip; four bare icons left nothing saying
  * which tab this was. The same rule as the `/logs` channel tabs.
  */
-const MAIN_TAB = "group gap-1"
-const MAIN_TAB_LABEL = "hidden group-data-[state=active]:inline @lg/perf:inline"
-
 /** Where the trace dashboard lives (`/logs` → Traces → Dashboard). */
 export const PERF_TRACE_DASHBOARD_HREF = "/logs?channel=traces&tview=dashboard"
 
@@ -190,227 +188,222 @@ export function PerformanceDashboard() {
   )
 
   return (
-    <div
-      className="@container/perf flex h-full min-h-0 flex-col"
+    // One root for the header's view tabs and the panels below, so each tab
+    // controls its panel (`inOuterRoot`).
+    <Tabs
+      value={view.tab}
+      onValueChange={(value) => openTab(value as PerfDashboardTab)}
+      className="@container/perf flex h-full min-h-0 flex-col gap-0"
       data-bg-target="chat"
       data-testid="performance-dashboard"
     >
       <FeaturePageHeader
         icon={<ActivityIcon />}
         title={t("title")}
-        status={
-          <PerfLiveStatus
-            paused={paused}
-            intervalMs={intervalMs}
-            recording={capture.active}
-            onOpenCaptures={() => openTab("captures")}
-          />
-        }
+        description={t("subtitle")}
+        /* Live / paused in the one chip: pausing froze the graphs with nothing
+           but the button label changing, so a frozen chart read as a quiet
+           process. Streaming samples is `active`; a frozen view is `warning`. */
+        status={{
+          label: paused
+            ? t("toolbar.status.paused")
+            : t("toolbar.status.live", { seconds: intervalMs / 1000 }),
+          tone: paused ? "warning" : "active",
+          testId: "perf-live-status-view",
+        }}
+        tabs={{
+          ariaLabel: t("tabs.label"),
+          value: view.tab,
+          inOuterRoot: true,
+          items: [
+            {
+              value: "overview",
+              label: t("tabs.overview"),
+              icon: CpuIcon,
+              testId: "perf-tab-overview",
+            },
+            {
+              value: "diagnose",
+              label: t("tabs.diagnose"),
+              icon: StethoscopeIcon,
+              testId: "perf-tab-diagnose",
+            },
+            {
+              value: "resources",
+              label: t("tabs.resources"),
+              icon: BoxesIcon,
+              testId: "perf-tab-resources",
+            },
+            {
+              value: "captures",
+              label: t("tabs.captures"),
+              icon: CameraIcon,
+              testId: "perf-tab-captures",
+              // A capture keeps recording whichever tab is open: say so on the
+              // tab that holds it, as well as on the header's Recording button.
+              ...(capture.active ? { badge: t("toolbar.status.recording") } : {}),
+            },
+          ],
+        }}
         actions={
-          <PerfToolbar
-            paused={paused}
-            intervalMs={intervalMs}
-            onTogglePause={() => setPaused(!paused)}
-            onIntervalChange={setIntervalMs}
-            onReset={reset}
-            onExport={handleExport}
-          />
+          <>
+            {/* An active capture keeps recording regardless of the live view.
+                It is a way to the Captures tab, so it is a button among the
+                actions rather than a second status chip. */}
+            {capture.active ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1 border-destructive/40 text-destructive"
+                onClick={() => openTab("captures")}
+                data-testid="perf-live-status-recording"
+              >
+                <CircleDotIcon aria-hidden className="size-3 motion-safe:animate-pulse" />
+                {t("toolbar.status.recording")}
+              </Button>
+            ) : null}
+            <PerfToolbar
+              paused={paused}
+              intervalMs={intervalMs}
+              onTogglePause={() => setPaused(!paused)}
+              onIntervalChange={setIntervalMs}
+              onReset={reset}
+              onExport={handleExport}
+            />
+          </>
         }
       />
 
-      <Tabs
-        value={view.tab}
-        onValueChange={(value) => openTab(value as PerfDashboardTab)}
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        <TabsList className="mx-4 mt-3 flex w-auto max-w-[calc(100%-2rem)] justify-start">
-          <TabsTrigger
-            value="overview"
-            data-testid="perf-tab-overview"
-            aria-label={t("tabs.overview")}
-            title={t("tabs.overview")}
-            className={MAIN_TAB}
-          >
-            <CpuIcon className="size-4" aria-hidden />
-            <span className={MAIN_TAB_LABEL} data-testid="perf-tab-overview-label">
-              {t("tabs.overview")}
-            </span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="diagnose"
-            data-testid="perf-tab-diagnose"
-            aria-label={t("tabs.diagnose")}
-            title={t("tabs.diagnose")}
-            className={MAIN_TAB}
-          >
-            <StethoscopeIcon className="size-4" aria-hidden />
-            <span className={MAIN_TAB_LABEL} data-testid="perf-tab-diagnose-label">
-              {t("tabs.diagnose")}
-            </span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="resources"
-            data-testid="perf-tab-resources"
-            aria-label={t("tabs.resources")}
-            title={t("tabs.resources")}
-            className={MAIN_TAB}
-          >
-            <BoxesIcon className="size-4" aria-hidden />
-            <span className={MAIN_TAB_LABEL} data-testid="perf-tab-resources-label">
-              {t("tabs.resources")}
-            </span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="captures"
-            data-testid="perf-tab-captures"
-            aria-label={t("tabs.captures")}
-            title={t("tabs.captures")}
-            className={MAIN_TAB}
-          >
-            <CameraIcon className="size-4" aria-hidden />
-            <span className={MAIN_TAB_LABEL} data-testid="perf-tab-captures-label">
-              {t("tabs.captures")}
-            </span>
-            {capture.active ? (
-              <span
-                aria-hidden
-                className="ml-1 size-1.5 animate-pulse rounded-full bg-destructive"
-                data-testid="perf-tab-captures-recording"
-              />
-            ) : null}
-          </TabsTrigger>
-        </TabsList>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="p-4">
+          <TabsContent value="overview" className="mt-0 space-y-4">
+            <PerfSourceNotice
+              hostState={hostState}
+              issue={hostIssue}
+              gaps={gaps}
+              onOpenDetails={openDiagnose}
+            />
+            <PerfOverviewTab
+              rendererHistory={rendererHistory}
+              hostHistory={hostHistory}
+              sources={sources}
+              hostState={hostState}
+              selectedMetric={view.metric}
+              onSelectMetric={(metric: PerfMetricId) => updateView({ metric })}
+              intervalMs={intervalMs}
+              onOpenDiagnose={openDiagnose}
+            />
+            <PerfWebVitalsPanel />
+            <PerfBrowserDiagnostics />
+            {/* Plugin-contributed performance panels (custom metrics, etc.). */}
+            <PluginExtensionSlot point="perf.panel" className="space-y-4 empty:hidden" />
+          </TabsContent>
 
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="p-4">
-            <TabsContent value="overview" className="mt-0 space-y-4">
-              <PerfSourceNotice
-                hostState={hostState}
-                issue={hostIssue}
-                gaps={gaps}
-                onOpenDetails={openDiagnose}
-              />
-              <PerfOverviewTab
-                rendererHistory={rendererHistory}
-                hostHistory={hostHistory}
-                sources={sources}
-                hostState={hostState}
-                selectedMetric={view.metric}
-                onSelectMetric={(metric: PerfMetricId) => updateView({ metric })}
-                intervalMs={intervalMs}
-                onOpenDiagnose={openDiagnose}
-              />
-              <PerfWebVitalsPanel />
-              <PerfBrowserDiagnostics />
-              {/* Plugin-contributed performance panels (custom metrics, etc.). */}
-              <PluginExtensionSlot point="perf.panel" className="space-y-4 empty:hidden" />
-            </TabsContent>
-
-            <TabsContent value="diagnose" className="mt-0 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="max-w-prose text-sm text-muted-foreground">
-                  {t("diagnose.description")}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button asChild variant="outline" size="sm">
-                    <Link href={PERF_TRACE_DASHBOARD_HREF} data-testid="perf-diagnose-traces">
-                      <WaypointsIcon aria-hidden />
-                      {t("diagnose.observability")}
-                    </Link>
-                  </Button>
-                  <Button asChild variant="outline" size="sm">
-                    <Link href="/logs" data-testid="perf-diagnose-logs">
-                      <ScrollTextIcon aria-hidden />
-                      {t("diagnose.logs")}
-                    </Link>
-                  </Button>
-                </div>
+          <TabsContent value="diagnose" className="mt-0 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="max-w-prose text-sm text-muted-foreground">
+                {t("diagnose.description")}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button asChild variant="outline" size="sm">
+                  <Link href={PERF_TRACE_DASHBOARD_HREF} data-testid="perf-diagnose-traces">
+                    <WaypointsIcon aria-hidden />
+                    {t("diagnose.observability")}
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/logs" data-testid="perf-diagnose-logs">
+                    <ScrollTextIcon aria-hidden />
+                    {t("diagnose.logs")}
+                  </Link>
+                </Button>
               </div>
-              <PerfOperationTimings />
-              {/* What this runtime can measure comes first: with no host, the
+            </div>
+            <PerfOperationTimings />
+            {/* What this runtime can measure comes first: with no host, the
                   hotspot placeholder used to fill the first screen and push the
                   Renderer timings below the fold. */}
-              {hostAvailable ? (
-                <>
-                  {hotspotsSection}
-                  {timingsSection}
-                </>
-              ) : (
-                <>
-                  {timingsSection}
-                  {hotspotsSection}
-                </>
-              )}
-              <PerfSourceHealth
-                sources={sources}
-                hostState={hostState}
-                gaps={gaps}
-                error={error}
-                issue={hostIssue}
-                collectionDurationMs={latest?.collectionDurationMs}
-                actualIntervalMs={latest?.actualIntervalMs}
-              />
-            </TabsContent>
+            {hostAvailable ? (
+              <>
+                {hotspotsSection}
+                {timingsSection}
+              </>
+            ) : (
+              <>
+                {timingsSection}
+                {hotspotsSection}
+              </>
+            )}
+            <PerfSourceHealth
+              sources={sources}
+              hostState={hostState}
+              gaps={gaps}
+              error={error}
+              issue={hostIssue}
+              collectionDurationMs={latest?.collectionDurationMs}
+              actualIntervalMs={latest?.actualIntervalMs}
+            />
+          </TabsContent>
 
-            <TabsContent value="resources" className="mt-0">
-              <Tabs
-                value={view.resource}
-                onValueChange={(value) => updateView({ resource: value as PerfResourceSection })}
-              >
-                {/* Underlined, not a second segmented bar: two identical full-
+          <TabsContent value="resources" className="mt-0">
+            <Tabs
+              value={view.resource}
+              onValueChange={(value) => updateView({ resource: value as PerfResourceSection })}
+            >
+              {/* Underlined, not a second segmented bar: two identical full-
                     width bars stacked read as two peers, not a section inside
                     a tab. */}
-                <TabsList
-                  variant="line"
-                  className="mb-4 flex w-auto max-w-full justify-start overflow-x-auto"
-                  data-testid="perf-resource-tabs"
-                >
-                  <TabsTrigger value="processes" data-testid="perf-resource-processes">
-                    {t("tabs.processes")}
-                  </TabsTrigger>
-                  <TabsTrigger value="runtime" data-testid="perf-resource-runtime">
-                    {t("tabs.runtime")}
-                  </TabsTrigger>
-                  <TabsTrigger value="managed" data-testid="perf-resource-managed">
-                    {t("tabs.managed")}
-                  </TabsTrigger>
-                  <TabsTrigger value="system" data-testid="perf-resource-system">
-                    {t("tabs.system")}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="processes">
-                  {hostSection(
-                    "processes",
-                    hostReports("host.processes"),
-                    <PerfProcessTable history={hostHistory} />
-                  )}
-                </TabsContent>
-                <TabsContent value="runtime">
-                  {hostSection(
-                    "runtime",
-                    hostReports("runtime.tokio"),
-                    <PerfRuntimeTab runtime={latestHost?.runtime ?? null} history={hostHistory} />
-                  )}
-                </TabsContent>
-                <TabsContent value="managed">
-                  {hostSection(
-                    "managed",
-                    hostReports("host.managed-processes") || hostReports("host.managed-workers"),
-                    <PerfManagedProcesses latest={latestHost} />
-                  )}
-                </TabsContent>
-                <TabsContent value="system">
-                  {hostSection("system", rustHost, <PerfSystemTab />)}
-                </TabsContent>
-              </Tabs>
-            </TabsContent>
+              <TabsList
+                variant="line"
+                className="mb-4 flex w-auto max-w-full justify-start overflow-x-auto"
+                data-testid="perf-resource-tabs"
+              >
+                <TabsTrigger value="processes" data-testid="perf-resource-processes">
+                  {t("tabs.processes")}
+                </TabsTrigger>
+                <TabsTrigger value="runtime" data-testid="perf-resource-runtime">
+                  {t("tabs.runtime")}
+                </TabsTrigger>
+                <TabsTrigger value="managed" data-testid="perf-resource-managed">
+                  {t("tabs.managed")}
+                </TabsTrigger>
+                <TabsTrigger value="system" data-testid="perf-resource-system">
+                  {t("tabs.system")}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="processes">
+                {hostSection(
+                  "processes",
+                  hostReports("host.processes"),
+                  <PerfProcessTable history={hostHistory} />
+                )}
+              </TabsContent>
+              <TabsContent value="runtime">
+                {hostSection(
+                  "runtime",
+                  hostReports("runtime.tokio"),
+                  <PerfRuntimeTab runtime={latestHost?.runtime ?? null} history={hostHistory} />
+                )}
+              </TabsContent>
+              <TabsContent value="managed">
+                {hostSection(
+                  "managed",
+                  hostReports("host.managed-processes") || hostReports("host.managed-workers"),
+                  <PerfManagedProcesses latest={latestHost} />
+                )}
+              </TabsContent>
+              <TabsContent value="system">
+                {hostSection("system", rustHost, <PerfSystemTab />)}
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
 
-            <TabsContent value="captures" className="mt-0">
-              <PerfCapturesTab hostAvailable={hostAvailable} />
-            </TabsContent>
-          </div>
-        </ScrollArea>
-      </Tabs>
-    </div>
+          <TabsContent value="captures" className="mt-0">
+            <PerfCapturesTab hostAvailable={hostAvailable} />
+          </TabsContent>
+        </div>
+      </ScrollArea>
+    </Tabs>
   )
 }

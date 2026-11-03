@@ -24,4 +24,8 @@ it("renders the title and the preview pane inside the shell", () => {
   render(<BrowserDesktopBody />)
   expect(screen.getByTestId("header")).toHaveTextContent("Browser")
   expect(screen.getByTestId("pane")).toBeInTheDocument()
+  // The header is the browser chrome's own column title, not a page band.
+  expect(
+    screen.getByTestId("header").querySelector('[data-slot="feature-page-header"]')
+  ).toHaveAttribute("data-variant", "compact")
 })

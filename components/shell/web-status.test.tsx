@@ -81,6 +81,23 @@ it("asks the rail for its compact segment forms and every other host for the bar
   }
 })
 
+it("gives every rail segment the nav's 36px target and 18px glyph", () => {
+  render(<Hosts />)
+  const rail = screen.getByTestId("web-status-rail")
+  for (const token of [
+    "[&_button]:size-9",
+    "[&_button_svg]:size-[18px]",
+    // The bell's animated icon sizes itself inline; only an important size wins.
+    "[&_button_[data-slot=animated-action-icon]]:size-[18px]!",
+    // The account initial is a round chip, not a bare letter.
+    "[&_[data-testid=account-bar-button]>span]:size-5",
+    "[&_[data-testid=account-bar-button]>span]:rounded-full",
+    // The run-state dot is grown so it does not read as a speck.
+    "[&_[data-testid=status-status]>span:first-child]:size-2",
+  ])
+    expect(rail.className.split(" ")).toContain(token)
+})
+
 it("moves session items context → composer → header → nowhere without duplicating global runs", () => {
   const { rerender } = render(
     <StrictMode>

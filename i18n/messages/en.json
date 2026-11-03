@@ -473,7 +473,9 @@
       "fallback": "This widget is using its fallback presentation."
     },
     "workspace": {
-      "headerLoading": "Loading"
+      "headerDescription": "Build this mini app: edit its layout, preview it live, and bind its data.",
+      "headerLoading": "Loading",
+      "modeTabsAria": "Workspace mode"
     },
     "zoomIn": "Zoom In",
     "zoomOut": "Zoom Out"
@@ -5536,6 +5538,7 @@
       "adoptWorkspace": "Approve and adopt reviewed changes",
       "attach": "Adopt from Cognia storage",
       "binary": "Installed Lume executable",
+      "browse": "Browse…",
       "cancelOperation": "Cancel operation",
       "cancellationPending": "Cancellation requested. Waiting for Host confirmation; Stop now remains available.",
       "clone": "Clone a stopped seed",
@@ -5841,6 +5844,7 @@
     },
     "sandboxConnections": {
       "addConnection": "Add connection",
+      "browse": "Browse…",
       "cancel": "Cancel",
       "checkHealth": "Check health",
       "containerId": "Container",
@@ -15317,6 +15321,7 @@
       "addHost": "Add a host",
       "addSshHost": "Add SSH host",
       "grow": "Pair a device or add a host",
+      "more": "More actions",
       "pair": "Pair a device",
       "refresh": "Refresh",
       "refreshFailed": "Could not refresh the device list",
@@ -17068,6 +17073,7 @@
       "title": "Customize categories",
       "trigger": "Customize categories"
     },
+    "description": "Find agents, skills, plugins and templates to add to your workspace.",
     "empty": {
       "noQuery": "Nothing here yet."
     },
@@ -18354,6 +18360,7 @@
     "subtitle": "Datasets, scorers, and pass^k reliability for your built-in agents.",
     "tabs": {
       "annotate": "Trace analysis",
+      "ariaLabel": "Eval views",
       "calibrate": "Judge calibration",
       "compare": "Runs & compare",
       "datasets": "Datasets"
@@ -20144,6 +20151,7 @@
   },
   "featureShell": {
     "closeLeft": "Hide {name}",
+    "moreActions": "More actions",
     "openLeft": "Open {name}",
     "openRight": "Open {name}"
   },
@@ -22132,6 +22140,7 @@
     "page": {
       "backToAgent": "Back to {name}",
       "backToAgents": "Back to agents",
+      "description": "One run, live: its plan and evidence, the budget it spends, and what it selects and learns.",
       "desktopOnlyBody": "Harness Evolution runs on the desktop app, next to the agents it improves. Open this run there.",
       "desktopOnlyTitle": "Runs live on the desktop",
       "noRunBody": "Open a run from an agent's Evolution page.",
@@ -24095,6 +24104,7 @@
       "namePlaceholder": "Sprint 12, v2.0…",
       "noWorkspace": "No workspace selected",
       "noWorkspaceHint": "Cycles and milestones belong to a workspace. Pick one to plan into.",
+      "pageDescription": "Time-boxed cycles and milestones to plan issues into.",
       "progress": "{done}/{total} done · {pointsDone}/{points} pts",
       "progressBar": "Cycle progress",
       "scope": "Scope",
@@ -24284,6 +24294,7 @@
         "title": "{identifier}: a wakeup fired"
       }
     },
+    "pageDescription": "Plan and track this workspace's work across every connected source.",
     "planning": {
       "addBlocker": "Add a blocking issue",
       "addSubIssue": "Add sub-issue",
@@ -24401,6 +24412,7 @@
       "noTables": "This Bitable has no tables.",
       "noTasklists": "This account can see no tasklists.",
       "openIssues": "View these issues",
+      "pageDescription": "Delivery containers that group issues, with owners, dates and linked resources.",
       "progress": "Progress",
       "progressCount": "{completed}/{total}",
       "projectV2Hint": "The number in the project's URL. Its iterations become cycles here.",
@@ -24864,6 +24876,7 @@
       "environments": "Environments",
       "environmentsAddFolder": "Add a folder",
       "environmentsAttention": "The repository's workspace config needs your decision",
+      "environmentsAttentionShort": "Config needs review",
       "environmentsNoFolderBody": "Worktrees, agent branches and environment setup all start from a folder. Add one to set them up here.",
       "environmentsNoFolderTitle": "This workspace has no folder yet",
       "environmentsOpen": "Open the Environments tab",
@@ -24874,6 +24887,7 @@
       "openIssues": "Open issues",
       "openIssuesOpen": "Open the issue board",
       "overview": "Overview",
+      "pageDescription": "Everything this workspace holds: issues, agents, environments and spend.",
       "projectSummary": "Projects",
       "projectsOpen": "Open projects",
       "resources": "Resources",
@@ -26500,6 +26514,7 @@
         "failed": "Could not delete the crash report: {error}",
         "title": "Delete this crash report?"
       },
+      "description": "This app's logs, traces and crash reports, read in one place.",
       "detail": {
         "description": "Review the redacted report, choose what to send, and see its receipt.",
         "loading": "Loading redacted preview…",
@@ -27253,6 +27268,7 @@
     "tabs": {
       "agents": "Agent Sync",
       "health": "Health & Logs",
+      "label": "MCP sections",
       "myServers": "My Servers",
       "presets": "Preset Market"
     },
@@ -32933,6 +32949,7 @@
       "captures": "Captures",
       "diagnose": "Diagnose",
       "hotspots": "Hotspots",
+      "label": "Performance views",
       "managed": "Managed",
       "overview": "Overview",
       "processes": "Processes",
@@ -33423,6 +33440,7 @@
     },
     "console": {
       "appearance": {
+        "back": "Back to {name}",
         "binding": "Character looks",
         "bindingDescription": "Give a character its own species or skin. A conversation with that character shows its look instead of the global one.",
         "description": "How your pet looks and behaves, on screen and on the desktop.",
@@ -44153,6 +44171,7 @@
     },
     "description": "Deploy, observe, back up, restore, and secure Compose or Kubernetes targets from one cloud-neutral workspace.",
     "detail": {
+      "description": "One deployment target: its health, releases, backups and logs.",
       "loading": "Loading the fleet…",
       "missingDescription": "This target is not in the connected controller's fleet. It may have been removed, or it belongs to another tenant.",
       "missingTitle": "Target not found"
@@ -60351,6 +60370,7 @@
       "resources": "Resources",
       "versions": "Versions"
     },
+    "tabsLabel": "Site sections",
     "title": "Sites",
     "versions": {
       "artifact": "{size} · {count, plural, one {# file} other {# files}}",
@@ -60458,6 +60478,8 @@
       "mostUsedTitle": "Most used",
       "neverUsedEmpty": "No data yet — usage will appear here once skills are invoked.",
       "neverUsedTitle": "Never used",
+      "noUsageHint": "A skill is counted each time an agent loads it. Trends and rankings appear after the first one.",
+      "noUsageTitle": "No usage recorded yet",
       "recentUsageTitle": "Recently used",
       "tokensEstimated": "Estimated tokens",
       "totalEnabled": "Enabled",
@@ -60540,6 +60562,7 @@
       "compatibilityExportDescription": "A single SKILL.md cannot contain every bundle file. Review the omitted content before continuing.",
       "compatibilityExportResources": "{count, plural, =1 {1 bundled resource} other {# bundled resources}}",
       "compatibilityExportTitle": "Compatibility export may lose data",
+      "duplicateToEdit": "Duplicate to edit",
       "exportBundle": "Export standard bundle (.zip)",
       "exportMarkdownCompatibility": "Export Markdown (compatibility)",
       "metaAuthor": "Author",
@@ -60552,6 +60575,7 @@
       "metaTools": "Tools",
       "metaUpdated": "Updated",
       "metaUsage": "Used {count} times",
+      "metaUsageLabel": "Usage",
       "metaVersion": "Version",
       "noResources": "No resources bundled.",
       "tabContent": "Content",
@@ -60561,7 +60585,9 @@
       "tabSecurity": "Security",
       "tabValidation": "Validation",
       "update": "Update",
-      "updateAvailable": "Update available"
+      "updateAvailable": "Update available",
+      "usageNever": "Not used yet",
+      "usageSummary": "{count, plural, =1 {Used once} other {Used # times}}"
     },
     "discovery": {
       "errorDesktopOnly": "Discovery requires desktop mode.",
@@ -60603,7 +60629,12 @@
       "creating": "Creating…",
       "description": "Description",
       "descriptionPlaceholder": "What this skill does and when to use it",
-      "emptyPickSkill": "Pick a skill from the list to start editing.",
+      "emptyCreate": "New skill",
+      "emptyGoToList": "Go to My Skills",
+      "emptyHint": "Open one of your skills to edit its SKILL.md and files.",
+      "emptyNone": "You have no skills of your own yet. Create one, or duplicate a built-in from My Skills.",
+      "emptyRecent": "Recently changed",
+      "emptyTitle": "No skill open",
       "errorEmpty": "Skill content cannot be empty.",
       "errorRequired": "This field is required.",
       "errorTooLong": "Too long (max {max}).",
@@ -60777,6 +60808,7 @@
       "emptyAction": "Create a skill",
       "emptyHint": "Create your first skill, import one from disk, or browse the marketplace.",
       "emptyTitle": "No skills yet",
+      "headerDescription": "Reusable instructions the agent loads when a task calls for them.",
       "headerSubtitle": "{count, plural, =1 {1 skill} other {# skills}}",
       "headerTitle": "Skills",
       "listAriaLabel": "Skills list",
@@ -61224,6 +61256,7 @@
       "analytics": "Analytics",
       "browse": "Browse",
       "editor": "Editor",
+      "label": "Skill views",
       "mySkills": "My Skills"
     },
     "templates": {
@@ -61450,6 +61483,7 @@
       "acceptOurs": "Accept Current",
       "acceptTheirs": "Accept Incoming"
     },
+    "description": "Stage, commit and sync the repository this workspace is working in.",
     "desktopOnly": {
       "description": "Source control runs against the local filesystem and is available only in the desktop app.",
       "title": "Desktop only"
@@ -63321,6 +63355,7 @@
       "export": "Export",
       "fork": "Fork as draft",
       "import": "Import",
+      "importFile": "From a package file…",
       "importUrl": "Import from URL",
       "instantiate": "Create resources",
       "newDraft": "New draft",
@@ -63454,14 +63489,19 @@
       "undeclared": "Used in the payload but not declared: {ids}"
     },
     "inspector": {
+      "close": "Close",
+      "details": "Details",
       "empty": "Select a template to inspect its definition and available actions.",
-      "hash": "Content hash: {hash}",
+      "hashLabel": "Content hash",
+      "idLabel": "ID",
+      "inputs": "Inputs",
       "label": "Inspector",
+      "moreActions": "More actions",
       "nodeGroup": "Node group — insert it from the workflow editor",
       "payload": "Portable payload",
       "readOnly": "Catalog only",
       "required": "(required)",
-      "source": "Source: {source}"
+      "sourceLabel": "Source"
     },
     "instances": {
       "detach": "Detach",
@@ -63586,6 +63626,10 @@
       "description": "Browse and instantiate compatible templates here. Authoring, publishing, import, and export remain available on desktop.",
       "reviewUpdateOnDesktop": "Taking an upstream update happens in the desktop Studio.",
       "title": "Mobile template access"
+    },
+    "nav": {
+      "byType": "By type",
+      "label": "Template shelves"
     },
     "operations": {
       "bind": "Bind an existing resource",
@@ -64949,6 +64993,7 @@
     "panel": {
       "activeTwin": "Active twin",
       "createFirst": "Create your first twin",
+      "description": "Teach a twin from your documents, chats and code, then review what it learns before it speaks for you.",
       "loading": "Loading twins…",
       "noTwinHint": "A digital twin learns from the documents, chats, and code you feed it, then speaks in your voice. Create one with the guided setup — you can add sources and bind a character along the way.",
       "noTwinTitle": "No digital twins yet",
@@ -64959,10 +65004,11 @@
         "settings": "Settings",
         "sources": "Sources"
       },
+      "tabsLabel": "Twin views",
       "title": "Digital twin",
       "twinDeleted": "Deleted \"{name}\" and all its data.",
-      "workerActive": "worker ● active",
-      "workerIdle": "worker ○ idle",
+      "workerActive": "Worker active",
+      "workerIdle": "Worker idle",
       "workerStatus": {
         "disabled": "Background worker is disabled in settings",
         "incompleteConfig": "Worker configuration is incomplete",

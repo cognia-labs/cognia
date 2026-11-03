@@ -8,6 +8,7 @@
     "export": "导出",
     "fork": "另存为草稿",
     "import": "导入",
+    "importFile": "从模板包文件…",
     "importUrl": "从链接导入",
     "instantiate": "创建资源",
     "newDraft": "新建草稿",
@@ -141,14 +142,19 @@
     "undeclared": "载荷里用到但没声明：{ids}"
   },
   "inspector": {
+    "close": "关闭",
+    "details": "详情",
     "empty": "请选择一个模板，以检查其定义和可用操作。",
-    "hash": "内容哈希：{hash}",
+    "hashLabel": "内容哈希",
+    "idLabel": "ID",
+    "inputs": "输入",
     "label": "检查器",
+    "moreActions": "更多操作",
     "nodeGroup": "节点组，请在工作流编辑器里插入",
     "payload": "便携载荷",
     "readOnly": "仅目录",
     "required": "（必填）",
-    "source": "来源：{source}"
+    "sourceLabel": "来源"
   },
   "instances": {
     "detach": "脱钩",
@@ -273,6 +279,10 @@
     "description": "可在此浏览并实例化兼容模板。创作、发布、导入和导出仍需在桌面端完成。",
     "reviewUpdateOnDesktop": "合并上游更新需要在桌面端的模板工作台完成。",
     "title": "移动端模板访问"
+  },
+  "nav": {
+    "label": "模板分类",
+    "byType": "按类型"
   },
   "operations": {
     "bind": "绑定现有资源",

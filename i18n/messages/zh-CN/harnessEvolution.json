@@ -465,6 +465,7 @@
   },
   "page": {
     "title": "Harness 演化运行",
+    "description": "实时查看一次运行：计划与证据、预算消耗，以及最终的选择与学到的经验。",
     "backToAgent": "返回 {name}",
     "backToAgents": "返回智能体",
     "noRunTitle": "未选择运行",

@@ -1,7 +1,9 @@
 /**
  * @jest-environment jsdom
  */
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react"
+
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -15,6 +17,13 @@ jest.mock("./calibration-panel", () => ({ CalibrationPanel: () => <div>CALIBRATE
 
 import { EvalWorkspace } from "./eval-workspace"
 import { useEvalRunStore } from "@/stores/eval/eval-run-store"
+
+// The header's icon actions carry tooltips, which need the app's provider.
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: TooltipProvider })
+
+// Radix tabs switch on mousedown, not click.
+const openTab = (name: string) =>
+  fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 })
 
 afterEach(() => useEvalRunStore.setState({ active: null, controller: null }))
 
@@ -35,29 +44,29 @@ describe("EvalWorkspace", () => {
 
   it("switches to the runs & compare panel", () => {
     render(<EvalWorkspace />)
-    fireEvent.click(screen.getByText("tabs.compare"))
+    openTab("tabs.compare")
     expect(screen.getByText("COMPARE")).toBeInTheDocument()
     expect(screen.queryByText("DASHBOARD")).not.toBeInTheDocument()
   })
 
   it("switches to the trace-analysis panel", () => {
     render(<EvalWorkspace />)
-    fireEvent.click(screen.getByText("tabs.annotate"))
+    openTab("tabs.annotate")
     expect(screen.getByText("ANNOTATE")).toBeInTheDocument()
     expect(screen.queryByText("DASHBOARD")).not.toBeInTheDocument()
   })
 
   it("switches to the calibration panel", () => {
     render(<EvalWorkspace />)
-    fireEvent.click(screen.getByText("tabs.calibrate"))
+    openTab("tabs.calibrate")
     expect(screen.getByText("CALIBRATE")).toBeInTheDocument()
     expect(screen.queryByText("DASHBOARD")).not.toBeInTheDocument()
   })
 
   it("switches back to datasets", () => {
     render(<EvalWorkspace />)
-    fireEvent.click(screen.getByText("tabs.annotate"))
-    fireEvent.click(screen.getByText("tabs.datasets"))
+    openTab("tabs.annotate")
+    openTab("tabs.datasets")
     expect(screen.getByText("DASHBOARD")).toBeInTheDocument()
   })
 
@@ -65,7 +74,22 @@ describe("EvalWorkspace", () => {
     render(<EvalWorkspace />)
     const header = screen.getByRole("banner")
     expect(header).toHaveClass("bg-background/88", "backdrop-blur-xl")
-    expect(header).toContainElement(screen.getByText("tabs.datasets"))
+    expect(header).toContainElement(screen.getByRole("tab", { name: "tabs.datasets" }))
+  })
+
+  it("draws the views as one tab list with the current view selected", () => {
+    render(<EvalWorkspace />)
+    const tabs = within(screen.getByRole("tablist", { name: "tabs.ariaLabel" }))
+    expect(tabs.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "tabs.datasets",
+      "tabs.compare",
+      "tabs.annotate",
+      "tabs.calibrate",
+    ])
+    expect(tabs.getByRole("tab", { name: "tabs.datasets" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
   })
 
   describe("run bar", () => {
@@ -80,7 +104,7 @@ describe("EvalWorkspace", () => {
       const controller = new AbortController()
       useEvalRunStore.getState().start({ datasetId: "d1", label: "opus", controller })
       render(<EvalWorkspace />)
-      fireEvent.click(screen.getByText("tabs.calibrate"))
+      openTab("tabs.calibrate")
       const bar = screen.getByTestId("eval-run-bar")
       expect(bar).toHaveTextContent("runBar.label")
       // No progress tick yet — cancel must still be available.

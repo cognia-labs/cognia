@@ -133,6 +133,45 @@ describe("ItemDetail", () => {
     expect(screen.queryByTestId("item-stats")).not.toBeInTheDocument()
   })
 
+  // A two-column card grid left half a row empty whenever a half-width card
+  // had no partner; chapters each take the full width, in reading order.
+  it("lays the sections out as one column of chapters, in reading order", () => {
+    render(<ItemDetail {...props()} />)
+    const chapters = screen.getByTestId("item-detail-chapters")
+    const order = Array.from(
+      chapters.querySelectorAll<HTMLElement>('[data-testid^="console-section-"]')
+    ).map((el) => el.dataset.testid?.replace("console-section-", ""))
+    expect(order).toEqual([
+      "outcomes",
+      "schedule",
+      "payload",
+      "runs",
+      "notifications",
+      "tags",
+      "workspace",
+      "origin",
+    ])
+    for (const id of order) {
+      expect(screen.getByTestId(`console-section-${id}`)).toHaveAttribute("data-variant", "sheet")
+    }
+    // The three short settings share one row where the pane is wide.
+    const settings = screen.getByTestId("item-detail-settings")
+    for (const id of ["notifications", "tags", "workspace"]) {
+      expect(settings).toContainElement(screen.getByTestId(`console-section-${id}`))
+    }
+  })
+
+  it("does not repeat a plugin job's payload as a facts chapter", () => {
+    const plugin = item({ kind: "plugin", unifiedId: "plugin:t1" })
+    const { unmount } = render(<ItemDetail {...props({ item: plugin })} />)
+    expect(screen.getByTestId("console-section-payload")).toBeInTheDocument()
+    expect(screen.queryByTestId("console-section-facts")).not.toBeInTheDocument()
+    unmount()
+    // Without its task row, the facts chapter is what says the job is gone.
+    render(<ItemDetail {...props({ item: plugin, task: undefined })} />)
+    expect(screen.getByTestId("kind-facts")).toHaveTextContent("plugin")
+  })
+
   it("leads the outcomes with the task's own numbers", () => {
     const now = Date.now()
     const runs = [

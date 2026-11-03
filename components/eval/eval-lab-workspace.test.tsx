@@ -1,7 +1,7 @@
 import { selectOption } from "@/lib/testing/select-option"
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 const mockListDatasetSummaries = jest.fn<Promise<unknown>, unknown[]>(
@@ -188,7 +188,11 @@ jest.mock("./trace-annotation-panel", () => ({
 }))
 jest.mock("./calibration-panel", () => ({ CalibrationPanel: () => <div>LEGACY_CALIBRATION</div> }))
 
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { EvalLabWorkspace } from "./eval-lab-workspace"
+
+// The header's icon actions carry tooltips, which need the app's provider.
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: TooltipProvider })
 
 describe("EvalLabWorkspace", () => {
   beforeEach(() => {
@@ -299,6 +303,13 @@ describe("EvalLabWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "lab.legacy.open" }))
     await user.click(screen.getByRole("menuitem", { name: "tabs.calibrate" }))
     expect(screen.getByText("LEGACY_CALIBRATION")).toBeInTheDocument()
+  })
+
+  it("shows the queue state as the header's one status chip", () => {
+    render(<EvalLabWorkspace />)
+    const chip = within(screen.getByRole("banner")).getByTestId("eval-lab-queue-state")
+    expect(chip).toHaveTextContent("lab.run.states.draft")
+    expect(chip).toHaveAttribute("data-tone", "neutral")
   })
 
   it("lets users declare the full attachment and Agent capability contract", async () => {

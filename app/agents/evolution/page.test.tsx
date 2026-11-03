@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
-import { render, screen } from "@testing-library/react"
+import { render as rtlRender, screen } from "@testing-library/react"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import type { HarnessEvolutionRun } from "@/types/harness/evolution"
 import { makeRun } from "@/lib/harness/test-fixtures"
 
@@ -34,6 +35,9 @@ jest.mock("@/components/feature-shell/feature-page-shell", () => ({
 }))
 
 import HarnessRunPage from "./page"
+
+// The header's back button carries a tooltip, which needs the app's provider.
+const render = (ui: React.ReactElement) => rtlRender(<TooltipProvider>{ui}</TooltipProvider>)
 import MobileRouteBody from "./route-body.mobile"
 
 beforeEach(() => {
@@ -47,9 +51,12 @@ describe("/agents/evolution", () => {
   it("shows the run from the query string, with a way back to its agent", () => {
     render(<HarnessRunPage />)
     expect(mockViewerProps?.runId).toBe("run-1")
-    expect(screen.getByText("Back to Analyst").closest("a")).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Back to Analyst" })).toHaveAttribute(
       "href",
       "/agents?id=agent-1&mode=evolve"
+    )
+    expect(screen.getByTestId("harness-run-page-header")).toHaveTextContent(
+      "One run, live: its plan and evidence"
     )
     mockViewerProps?.onOpenExperience("exp-1")
     expect(mockPush).toHaveBeenCalledWith("/agents?id=agent-1&mode=evolve")
@@ -60,7 +67,7 @@ describe("/agents/evolution", () => {
     mockRun = null
     render(<HarnessRunPage />)
     expect(screen.getByText("No run selected")).toBeInTheDocument()
-    expect(screen.getByText("Back to agents").closest("a")).toHaveAttribute("href", "/agents")
+    expect(screen.getByRole("link", { name: "Back to agents" })).toHaveAttribute("href", "/agents")
   })
 
   it("points the phone build at the desktop", () => {

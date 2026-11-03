@@ -5,9 +5,10 @@
  *
  * `FeaturePageHeader` in its management variant, the band every feature
  * route uses. `summary` names the host whose schedule is on screen; `status`
- * says when that schedule is suspended, only ticks while the app is open, or
- * when the app scheduler itself is stopped. The host switch and the timing
- * authority wait in a Popover beside the refresh button. It used to sit in
+ * is the app scheduler's own state, and `context` says when that schedule is
+ * suspended or only ticks while the app is open. "Create task" is the split
+ * primary action whose menu offers every kind. The host switch and the timing
+ * authority wait in a Popover beside the refresh glyph. It used to sit in
  * the header's second (controls) row, which it had to itself: a full band of
  * height spent on one small button, above a pane that is short on height.
  *
@@ -19,35 +20,26 @@ import { useTranslations } from "next-intl"
 import {
   ArchiveIcon,
   CalendarClockIcon,
-  ChevronDownIcon,
   CogIcon,
   DownloadIcon,
   LayoutGridIcon,
   PlugIcon,
   PlusIcon,
-  RefreshCwIcon,
   Trash2Icon,
   UploadIcon,
   WorkflowIcon,
 } from "lucide-react"
 
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  FeaturePageHeader,
+  type FeatureHeaderAction,
+  type FeatureHeaderStatusTone,
+} from "@/components/feature-shell/feature-page-header"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { cn } from "@/lib/utils"
 import type { SchedulerStatus } from "@/stores/scheduler/scheduler-store"
 
 import {
   SchedulerHostPopover,
-  SchedulerHostStatusBadge,
   SchedulerHostSummaryLine,
   useSchedulerHostSummary,
 } from "./scheduler-host-popover"
@@ -69,10 +61,15 @@ export interface SchedulerPageHeaderProps {
   onCleanup: () => void
 }
 
-const STATUS_TONE: Record<SchedulerStatus, string> = {
-  running: "text-emerald-600 dark:text-emerald-400",
-  idle: "text-muted-foreground",
-  stopped: "text-amber-600 dark:text-amber-400",
+/**
+ * The scheduler's own state as the header's one status chip. `running` is the
+ * healthy steady state of a service that is on (not a run in progress), so it
+ * reads as `success`; a stopped scheduler is the thing to notice.
+ */
+const STATUS_TONE: Record<SchedulerStatus, FeatureHeaderStatusTone> = {
+  running: "success",
+  idle: "neutral",
+  stopped: "warning",
 }
 
 const STATUS_KEY: Record<
@@ -102,27 +99,88 @@ export function SchedulerPageHeader({
   const t = useTranslations("scheduler")
   const summary = useSchedulerHostSummary()
 
+  /**
+   * The header carries one chip, the scheduler's state. Whether this device's
+   * schedule is stood down or only ticks while the app is open is the second
+   * fact, so it follows the description as plain text (the popover still
+   * shows it as a badge beside the host switch).
+   */
+  const hostState = summary.suspended ? (
+    <span data-testid="scheduler-host-suspended">{t("hostBar.localSuspended")}</span>
+  ) : summary.onlyWhileOpen ? (
+    <span data-testid="scheduler-host-only-open">{t("hostBar.localOnlyWhileOpen")}</span>
+  ) : undefined
+
+  const createMenu: FeatureHeaderAction[] = [
+    {
+      id: "app",
+      label: t("kindFilter.app"),
+      icon: CalendarClockIcon,
+      onSelect: onCreate,
+      testId: "scheduler-new-app-task",
+    },
+  ]
+  if (onCreateWorkflowTrigger) {
+    createMenu.push({
+      id: "workflow",
+      label: t("kindFilter.workflow"),
+      icon: WorkflowIcon,
+      onSelect: onCreateWorkflowTrigger,
+      testId: "scheduler-new-workflow-trigger",
+    })
+  }
+  if (onOpenBackupSettings) {
+    createMenu.push({
+      id: "backup",
+      label: t("kindFilter.backup"),
+      icon: ArchiveIcon,
+      onSelect: onOpenBackupSettings,
+      testId: "scheduler-open-backup-settings",
+    })
+  }
+  if (onOpenPluginSettings) {
+    createMenu.push({
+      id: "plugin",
+      label: t("kindFilter.plugin"),
+      icon: PlugIcon,
+      onSelect: onOpenPluginSettings,
+      testId: "scheduler-open-plugin-settings",
+    })
+  }
+  if (onCreateSystemTask) {
+    createMenu.push({
+      id: "system",
+      label: t("kindFilter.system"),
+      icon: CogIcon,
+      onSelect: onCreateSystemTask,
+      // System tasks are their own group, below the user-facing kinds.
+      separatorBefore: true,
+      testId: "scheduler-new-system-task",
+    })
+  }
+
   return (
     <FeaturePageHeader
       variant="management"
       icon={<CalendarClockIcon />}
       title={t("title")}
+      description={t("subtitle")}
+      context={hostState}
       breadcrumb={showListTrigger ? <SidebarTrigger className="size-7 shrink-0" /> : undefined}
       summary={<SchedulerHostSummaryLine summary={summary} />}
-      status={
-        <span className="flex items-center gap-1.5">
-          <SchedulerHostStatusBadge summary={summary} />
-          <Badge
-            variant="outline"
-            className={cn("h-5 gap-1 text-[10px] font-normal", STATUS_TONE[schedulerStatus])}
-            data-testid="scheduler-status-badge"
-            data-status={schedulerStatus}
-          >
-            <span aria-hidden className="size-1.5 rounded-full bg-current" />
-            {t(STATUS_KEY[schedulerStatus])}
-          </Badge>
-        </span>
-      }
+      status={{
+        label: t(STATUS_KEY[schedulerStatus]),
+        tone: STATUS_TONE[schedulerStatus],
+        testId: "scheduler-status-badge",
+      }}
+      refresh={{
+        label: t("refresh"),
+        onSelect: onRefresh,
+        busy: isRefreshing,
+        testId: "scheduler-refresh-button",
+      }}
+      // The host switch and timing authority are a popover, not a button.
+      actions={<SchedulerHostPopover />}
       overflowLabel={t("moreOptions")}
       overflowActions={[
         {
@@ -135,91 +193,15 @@ export function SchedulerPageHeader({
         { id: "import", label: t("importTasks"), icon: UploadIcon, onSelect: onImport },
         { id: "cleanup", label: t("cleanupOldExecutions"), icon: Trash2Icon, onSelect: onCleanup },
       ]}
-      actions={
-        <div className="flex shrink-0 items-center gap-2">
-          <SchedulerHostPopover />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            aria-label={t("refresh")}
-            data-testid="scheduler-refresh-button"
-          >
-            <RefreshCwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-          </Button>
-          <div className="inline-flex">
-            <Button
-              size="sm"
-              onClick={onCreate}
-              data-testid="scheduler-new-task-button"
-              className="rounded-r-none"
-            >
-              <PlusIcon className="size-3.5" />
-              <span className="ml-1 hidden sm:inline">{t("createTask")}</span>
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="default"
-                  className="rounded-l-none border-l border-primary-foreground/20 px-1.5"
-                  data-testid="scheduler-new-task-kind-menu"
-                  aria-label={t("createTaskKind")}
-                >
-                  <ChevronDownIcon className="size-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onClick={onCreate} data-testid="scheduler-new-app-task">
-                  <CalendarClockIcon className="mr-2 size-3.5" />
-                  {t("kindFilter.app")}
-                </DropdownMenuItem>
-                {onCreateWorkflowTrigger ? (
-                  <DropdownMenuItem
-                    onClick={onCreateWorkflowTrigger}
-                    data-testid="scheduler-new-workflow-trigger"
-                  >
-                    <WorkflowIcon className="mr-2 size-3.5" />
-                    {t("kindFilter.workflow")}
-                  </DropdownMenuItem>
-                ) : null}
-                {onOpenBackupSettings ? (
-                  <DropdownMenuItem
-                    onClick={onOpenBackupSettings}
-                    data-testid="scheduler-open-backup-settings"
-                  >
-                    <ArchiveIcon className="mr-2 size-3.5" />
-                    {t("kindFilter.backup")}
-                  </DropdownMenuItem>
-                ) : null}
-                {onOpenPluginSettings ? (
-                  <DropdownMenuItem
-                    onClick={onOpenPluginSettings}
-                    data-testid="scheduler-open-plugin-settings"
-                  >
-                    <PlugIcon className="mr-2 size-3.5" />
-                    {t("kindFilter.plugin")}
-                  </DropdownMenuItem>
-                ) : null}
-                {onCreateSystemTask ? (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={onCreateSystemTask}
-                      data-testid="scheduler-new-system-task"
-                    >
-                      <CogIcon className="mr-2 size-3.5" />
-                      {t("kindFilter.system")}
-                    </DropdownMenuItem>
-                  </>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      }
+      primaryAction={{
+        id: "create",
+        label: t("createTask"),
+        icon: PlusIcon,
+        onSelect: onCreate,
+        testId: "scheduler-new-task-button",
+        menu: createMenu,
+        menuLabel: t("createTaskKind"),
+      }}
     />
   )
 }

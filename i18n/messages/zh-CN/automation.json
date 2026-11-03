@@ -80,7 +80,8 @@
       "policy": "此任务要求的策略超出 Lume profile 的保障范围。请检查网络、CPU、内存和路径要求。",
       "recovery": "此操作需要恢复处理。请刷新诊断，确认 VM 已停止，并检查结果后再试；已采纳的更改仍然有效。",
       "observation": "无法确认操作状态，已请求取消。重试前请检查 VM 和源文件；命令未被自动重放。"
-    }
+    },
+    "browse": "浏览…"
   },
   "accessRules": {
     "admit": {
@@ -709,7 +710,8 @@
         "invalidPath": "请输入沙箱内的绝对路径，不可包含上级目录跳转。",
         "invalidPayload": "下载文件的大小或校验和检查失败。"
       }
-    }
+    },
+    "browse": "浏览…"
   },
   "screenOff": {
     "unsupportedNote": "此平台没有熄屏后端，Computer Use 使用物理显示器。",

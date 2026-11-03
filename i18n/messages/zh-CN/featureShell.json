@@ -1,5 +1,6 @@
 {
   "openLeft": "打开{name}",
   "openRight": "打开{name}",
-  "closeLeft": "收起{name}"
+  "closeLeft": "收起{name}",
+  "moreActions": "更多操作"
 }

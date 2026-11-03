@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import type { DeviceRow } from "@/lib/devices/types"
@@ -304,6 +304,15 @@ describe("RuntimeSection — workspaces", () => {
 })
 
 describe("RuntimeSection — timing authority", () => {
+  it("labels the switch below the chapter's own 13px title", () => {
+    render(<RuntimeSection row={row()} />)
+    const label = within(screen.getByTestId("device-timing-authority")).getByRole("heading", {
+      level: 4,
+    })
+    expect(label).toHaveClass("text-xs", "font-semibold")
+    expect(label).not.toHaveClass("text-sm")
+  })
+
   it("names this machine by clearing the configured host", async () => {
     authoritySnapshot = { hostId: "h1", degradeAfterMs: 1 }
     render(<RuntimeSection row={row()} />)

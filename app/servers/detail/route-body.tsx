@@ -2,21 +2,35 @@
 
 import type { ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { LogOutIcon, PlugZapIcon, RefreshCwIcon } from "lucide-react"
+import { LogOutIcon, PlugZapIcon } from "lucide-react"
 import { useServerOps } from "@/components/servers/ops-context"
-import type { Operation } from "@/lib/server-ops/client"
+import type { Operation, ServerHealth } from "@/lib/server-ops/client"
 import type { ServerDetailMobileBodyProps } from "@/components/mobile/servers/server-detail-mobile-body"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { ServerDetailMobileBody } from "@/components/mobile/servers/server-detail-mobile-body"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderStatusTone,
+} from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { ConnectAgentDialog } from "@/components/servers/connect-agent-dialog"
 import { OperationInspector } from "@/components/servers/operation-inspector"
 import { OperationsRail } from "@/components/servers/operations-rail"
 import { ServerDetailView } from "@/components/servers/server-detail"
-import { HealthLabel } from "@/components/servers/server-visuals"
+
+/** A target's health as the header's one status chip. */
+const HEALTH_TONE: Record<ServerHealth, FeatureHeaderStatusTone> = {
+  healthy: "success",
+  degraded: "warning",
+  unavailable: "danger",
+  unknown: "neutral",
+}
 
 export interface RouteBodyProps extends ServerDetailMobileBodyProps {
+  /**
+   * The page's "All servers" link, which its missing-target state draws. The
+   * wide header does not render it: its way back is the header's own `back`.
+   */
   backToFleet: ReactNode
   controllerUrl: string
   enrollOpen: boolean
@@ -36,7 +50,6 @@ function ServerDetailWideBody({
   logs,
   loadingDetail,
   actions,
-  backToFleet,
   controllerUrl,
   enrollOpen,
   setEnrollOpen,
@@ -52,12 +65,20 @@ function ServerDetailWideBody({
         header={
           <FeaturePageHeader
             variant="management"
-            breadcrumb={backToFleet}
+            back={{
+              label: t("actions.backToServers"),
+              href: "/servers",
+              testId: "server-detail-back",
+            }}
             title={server.label || server.id}
+            description={t("detail.description")}
+            status={{
+              label: t(`health.${server.health}`),
+              tone: HEALTH_TONE[server.health],
+              testId: "server-detail-health",
+            }}
             context={
-              <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <HealthLabel health={server.health} />
-                <span aria-hidden="true">·</span>
+              <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate font-mono">{server.id}</span>
                 {server.publicUrl && (
                   <>
@@ -67,19 +88,17 @@ function ServerDetailWideBody({
                 )}
               </span>
             }
+            refresh={{
+              label: t("actions.refresh"),
+              onSelect: () => void ops.refresh(),
+              busy: ops.loading,
+            }}
             secondaryActions={[
               {
                 id: "enroll",
                 label: t("enroll.action"),
                 icon: PlugZapIcon,
                 onSelect: () => setEnrollOpen(true),
-              },
-              {
-                id: "refresh",
-                label: t("actions.refresh"),
-                icon: RefreshCwIcon,
-                onSelect: () => void ops.refresh(),
-                disabled: ops.loading,
               },
             ]}
             overflowActions={[

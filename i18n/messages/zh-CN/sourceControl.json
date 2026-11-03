@@ -553,5 +553,6 @@
   "tools": {
     "commits": "提交",
     "repository": "仓库"
-  }
+  },
+  "description": "暂存、提交并同步当前工作区所在的仓库。"
 }

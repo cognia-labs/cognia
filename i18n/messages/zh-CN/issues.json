@@ -1,6 +1,7 @@
 {
   "title": "议题",
   "summary": "{count, plural, =0 {暂无议题} other {# 个议题}}",
+  "pageDescription": "规划并跟踪这个工作区的工作，汇总所有已连接的来源。",
   "views": {
     "all": "全部",
     "assigned": "指派给我",
@@ -278,6 +279,7 @@
   "projects": {
     "title": "项目",
     "summary": "{count, plural, =0 {暂无项目} other {# 个项目}}",
+    "pageDescription": "把议题归组的交付容器，附带负责人、日期和关联资源。",
     "empty": "还没有项目",
     "emptyHint": "项目用于归集同一交付物的议题，并携带每次 Agent 运行都能看到的上下文。",
     "create": "新建项目",
@@ -386,6 +388,7 @@
   },
   "workspace": {
     "title": "工作区",
+    "pageDescription": "这个工作区的全部内容：议题、智能体、环境和花费。",
     "overview": "总览",
     "environments": "环境",
     "sourceControl": "源代码管理",
@@ -416,6 +419,7 @@
     "projectsOpen": "打开项目",
     "environmentsOpen": "打开环境标签页",
     "environmentsAttention": "仓库的工作区配置需要你确认",
+    "environmentsAttentionShort": "配置待确认",
     "environmentsNoFolderTitle": "这个工作区还没有文件夹",
     "environmentsNoFolderBody": "工作树、智能体分支和环境初始化都基于文件夹。添加一个文件夹后即可在这里设置。",
     "environmentsAddFolder": "添加文件夹"
@@ -771,6 +775,7 @@
     "progressBar": "迭代进度",
     "title": "迭代",
     "summary": "{count, plural, =0 {暂无迭代} other {# 个迭代}}",
+    "pageDescription": "用来排入议题的迭代和里程碑。",
     "viewIssues": "查看事项",
     "noWorkspace": "未选择工作区",
     "noWorkspaceHint": "迭代和里程碑属于工作区，请先选择一个再规划。"

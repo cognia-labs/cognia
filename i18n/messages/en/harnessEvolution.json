@@ -465,6 +465,7 @@
   },
   "page": {
     "title": "Harness Evolution run",
+    "description": "One run, live: its plan and evidence, the budget it spends, and what it selects and learns.",
     "backToAgent": "Back to {name}",
     "backToAgents": "Back to agents",
     "noRunTitle": "No run selected",

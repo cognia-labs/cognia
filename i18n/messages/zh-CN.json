@@ -473,7 +473,9 @@
       "fallback": "此小部件正在使用其后备渲染方式。"
     },
     "workspace": {
-      "headerLoading": "加载中"
+      "headerDescription": "搭建这个小应用：编辑布局、实时预览，并绑定数据。",
+      "headerLoading": "加载中",
+      "modeTabsAria": "工作区模式"
     },
     "zoomIn": "放大",
     "zoomOut": "缩小"
@@ -5536,6 +5538,7 @@
       "adoptWorkspace": "批准并采纳已审阅更改",
       "attach": "领养 Cognia 存储中的 VM",
       "binary": "已安装的 Lume 可执行文件",
+      "browse": "浏览…",
       "cancelOperation": "取消操作",
       "cancellationPending": "已请求取消，正在等待 Host 确认；仍可使用“立即停止”。",
       "clone": "克隆已停止的 seed",
@@ -5841,6 +5844,7 @@
     },
     "sandboxConnections": {
       "addConnection": "添加连接",
+      "browse": "浏览…",
       "cancel": "取消",
       "checkHealth": "检查健康",
       "containerId": "容器",
@@ -15317,6 +15321,7 @@
       "addHost": "添加主机",
       "addSshHost": "添加 SSH 主机",
       "grow": "配对设备或添加主机",
+      "more": "更多操作",
       "pair": "配对设备",
       "refresh": "刷新",
       "refreshFailed": "无法刷新设备列表",
@@ -17068,6 +17073,7 @@
       "title": "自定义分类",
       "trigger": "自定义分类"
     },
+    "description": "发现可以加入工作区的智能体、技能、插件和模板。",
     "empty": {
       "noQuery": "暂无内容。"
     },
@@ -18354,6 +18360,7 @@
     "subtitle": "为内置 Agent 提供评测集、评分器与 pass^k 可靠性。",
     "tabs": {
       "annotate": "轨迹分析",
+      "ariaLabel": "评测视图",
       "calibrate": "评委校准",
       "compare": "运行与对比",
       "datasets": "数据集"
@@ -20144,6 +20151,7 @@
   },
   "featureShell": {
     "closeLeft": "收起{name}",
+    "moreActions": "更多操作",
     "openLeft": "打开{name}",
     "openRight": "打开{name}"
   },
@@ -22132,6 +22140,7 @@
     "page": {
       "backToAgent": "返回 {name}",
       "backToAgents": "返回智能体",
+      "description": "实时查看一次运行：计划与证据、预算消耗，以及最终的选择与学到的经验。",
       "desktopOnlyBody": "Harness 演化在桌面应用中运行，与它所改进的智能体在一起。请在桌面端打开此运行。",
       "desktopOnlyTitle": "运行保存在桌面端",
       "noRunBody": "请从智能体的演化页面打开一个运行。",
@@ -24095,6 +24104,7 @@
       "namePlaceholder": "Sprint 12、v2.0…",
       "noWorkspace": "未选择工作区",
       "noWorkspaceHint": "迭代和里程碑属于工作区，请先选择一个再规划。",
+      "pageDescription": "用来排入议题的迭代和里程碑。",
       "progress": "完成 {done}/{total} · {pointsDone}/{points} 点",
       "progressBar": "迭代进度",
       "scope": "范围",
@@ -24284,6 +24294,7 @@
         "title": "{identifier}：一个唤醒已触发"
       }
     },
+    "pageDescription": "规划并跟踪这个工作区的工作，汇总所有已连接的来源。",
     "planning": {
       "addBlocker": "添加阻塞议题",
       "addSubIssue": "新建子议题",
@@ -24401,6 +24412,7 @@
       "noTables": "该多维表格没有数据表。",
       "noTasklists": "该账号看不到任何任务清单。",
       "openIssues": "查看这些议题",
+      "pageDescription": "把议题归组的交付容器，附带负责人、日期和关联资源。",
       "progress": "进度",
       "progressCount": "{completed}/{total}",
       "projectV2Hint": "项目 URL 中的编号。它的迭代会成为这里的迭代。",
@@ -24864,6 +24876,7 @@
       "environments": "环境",
       "environmentsAddFolder": "添加文件夹",
       "environmentsAttention": "仓库的工作区配置需要你确认",
+      "environmentsAttentionShort": "配置待确认",
       "environmentsNoFolderBody": "工作树、智能体分支和环境初始化都基于文件夹。添加一个文件夹后即可在这里设置。",
       "environmentsNoFolderTitle": "这个工作区还没有文件夹",
       "environmentsOpen": "打开环境标签页",
@@ -24874,6 +24887,7 @@
       "openIssues": "未完成议题",
       "openIssuesOpen": "打开议题看板",
       "overview": "总览",
+      "pageDescription": "这个工作区的全部内容：议题、智能体、环境和花费。",
       "projectSummary": "项目",
       "projectsOpen": "打开项目",
       "resources": "资源",
@@ -26500,6 +26514,7 @@
         "failed": "无法删除崩溃报告：{error}",
         "title": "删除此崩溃报告？"
       },
+      "description": "在一处查看本应用的日志、追踪与崩溃报告。",
       "detail": {
         "description": "检查脱敏后的报告，选择要发送的内容，并查看回执。",
         "loading": "正在加载脱敏预览…",
@@ -27253,6 +27268,7 @@
     "tabs": {
       "agents": "Agent 同步",
       "health": "健康与日志",
+      "label": "MCP 分区",
       "myServers": "我的服务器",
       "presets": "预设市场"
     },
@@ -32933,6 +32949,7 @@
       "captures": "捕获",
       "diagnose": "诊断",
       "hotspots": "热点",
+      "label": "性能视图",
       "managed": "托管进程",
       "overview": "概览",
       "processes": "进程",
@@ -33423,6 +33440,7 @@
     },
     "console": {
       "appearance": {
+        "back": "返回{name}",
         "binding": "角色外观",
         "bindingDescription": "为某个角色指定专属的物种或皮肤。与该角色对话时会显示它的外观，而不是全局外观。",
         "description": "宠物的样子和行为，包括桌面上的表现。",
@@ -44153,6 +44171,7 @@
     },
     "description": "在一个云中立工作区中部署、观测、备份、恢复并保护 Compose 或 Kubernetes 目标。",
     "detail": {
+      "description": "单个部署目标的健康状况、版本、备份与日志。",
       "loading": "正在加载机群…",
       "missingDescription": "当前控制器的机群里没有这个目标。它可能已被移除，或者属于其他租户。",
       "missingTitle": "未找到目标"
@@ -60351,6 +60370,7 @@
       "resources": "资源",
       "versions": "版本"
     },
+    "tabsLabel": "站点分区",
     "title": "站点",
     "versions": {
       "artifact": "{size} · {count} 个文件",
@@ -60458,6 +60478,8 @@
       "mostUsedTitle": "最常使用",
       "neverUsedEmpty": "暂无数据 — 技能被调用后将显示在此。",
       "neverUsedTitle": "从未使用",
+      "noUsageHint": "智能体每加载一次技能就会计数一次。有了第一次使用之后，这里会显示趋势和排行。",
+      "noUsageTitle": "还没有使用记录",
       "recentUsageTitle": "最近使用",
       "tokensEstimated": "预估 Token",
       "totalEnabled": "已启用",
@@ -60540,6 +60562,7 @@
       "compatibilityExportDescription": "单个 SKILL.md 无法容纳 Bundle 中的全部文件，请确认以下省略内容后继续。",
       "compatibilityExportResources": "{count} 个 Bundle 资源",
       "compatibilityExportTitle": "兼容导出可能丢失内容",
+      "duplicateToEdit": "复制后编辑",
       "exportBundle": "导出标准 Bundle（.zip）",
       "exportMarkdownCompatibility": "导出 Markdown（兼容模式）",
       "metaAuthor": "作者",
@@ -60552,6 +60575,7 @@
       "metaTools": "工具",
       "metaUpdated": "更新时间",
       "metaUsage": "已使用 {count} 次",
+      "metaUsageLabel": "使用情况",
       "metaVersion": "版本",
       "noResources": "暂无打包资源。",
       "tabContent": "内容",
@@ -60561,7 +60585,9 @@
       "tabSecurity": "安全",
       "tabValidation": "验证",
       "update": "更新",
-      "updateAvailable": "有更新"
+      "updateAvailable": "有更新",
+      "usageNever": "尚未使用",
+      "usageSummary": "已使用 {count} 次"
     },
     "discovery": {
       "errorDesktopOnly": "发现功能需要桌面端。",
@@ -60603,7 +60629,12 @@
       "creating": "创建中…",
       "description": "描述",
       "descriptionPlaceholder": "说明该技能做什么以及何时使用",
-      "emptyPickSkill": "从左侧选择一个技能开始编辑。",
+      "emptyCreate": "新建技能",
+      "emptyGoToList": "前往我的技能",
+      "emptyHint": "打开一个你自己的技能，编辑它的 SKILL.md 和文件。",
+      "emptyNone": "你还没有自己的技能。新建一个，或在「我的技能」里复制一个内置技能。",
+      "emptyRecent": "最近修改",
+      "emptyTitle": "还没有打开技能",
       "errorEmpty": "技能内容不能为空。",
       "errorRequired": "该字段必填。",
       "errorTooLong": "过长（最大 {max}）。",
@@ -60777,6 +60808,7 @@
       "emptyAction": "创建技能",
       "emptyHint": "创建你的第一个技能，从磁盘导入，或浏览市场。",
       "emptyTitle": "暂无技能",
+      "headerDescription": "智能体在任务需要时加载的可复用指令。",
       "headerSubtitle": "共 {count} 个",
       "headerTitle": "技能",
       "listAriaLabel": "技能列表",
@@ -61224,6 +61256,7 @@
       "analytics": "统计",
       "browse": "浏览",
       "editor": "编辑器",
+      "label": "技能视图",
       "mySkills": "我的技能"
     },
     "templates": {
@@ -61450,6 +61483,7 @@
       "acceptOurs": "采用当前更改",
       "acceptTheirs": "采用传入更改"
     },
+    "description": "暂存、提交并同步当前工作区所在的仓库。",
     "desktopOnly": {
       "description": "源代码管理需要访问本地文件系统，仅在桌面应用中可用。",
       "title": "仅桌面端可用"
@@ -63321,6 +63355,7 @@
       "export": "导出",
       "fork": "另存为草稿",
       "import": "导入",
+      "importFile": "从模板包文件…",
       "importUrl": "从链接导入",
       "instantiate": "创建资源",
       "newDraft": "新建草稿",
@@ -63454,14 +63489,19 @@
       "undeclared": "载荷里用到但没声明：{ids}"
     },
     "inspector": {
+      "close": "关闭",
+      "details": "详情",
       "empty": "请选择一个模板，以检查其定义和可用操作。",
-      "hash": "内容哈希：{hash}",
+      "hashLabel": "内容哈希",
+      "idLabel": "ID",
+      "inputs": "输入",
       "label": "检查器",
+      "moreActions": "更多操作",
       "nodeGroup": "节点组，请在工作流编辑器里插入",
       "payload": "便携载荷",
       "readOnly": "仅目录",
       "required": "（必填）",
-      "source": "来源：{source}"
+      "sourceLabel": "来源"
     },
     "instances": {
       "detach": "脱钩",
@@ -63586,6 +63626,10 @@
       "description": "可在此浏览并实例化兼容模板。创作、发布、导入和导出仍需在桌面端完成。",
       "reviewUpdateOnDesktop": "合并上游更新需要在桌面端的模板工作台完成。",
       "title": "移动端模板访问"
+    },
+    "nav": {
+      "byType": "按类型",
+      "label": "模板分类"
     },
     "operations": {
       "bind": "绑定现有资源",
@@ -64949,6 +64993,7 @@
     "panel": {
       "activeTwin": "当前孪生",
       "createFirst": "创建你的第一个孪生",
+      "description": "用你的文档、对话和代码训练孪生，在它替你发声之前先审阅它学到的内容。",
       "loading": "正在加载孪生…",
       "noTwinHint": "数字孪生会从你投喂的文档、对话和代码中学习，进而用你的口吻表达。用引导式向导创建一个吧——过程中可以添加数据源并绑定角色。",
       "noTwinTitle": "还没有数字孪生",
@@ -64959,10 +65004,11 @@
         "settings": "设置",
         "sources": "数据源"
       },
+      "tabsLabel": "孪生视图",
       "title": "数字孪生",
       "twinDeleted": "已删除「{name}」及其全部数据。",
-      "workerActive": "工作器 ● 运行中",
-      "workerIdle": "工作器 ○ 空闲",
+      "workerActive": "工作器运行中",
+      "workerIdle": "工作器空闲",
       "workerStatus": {
         "disabled": "后台工作器已在设置中禁用",
         "incompleteConfig": "工作器配置不完整",

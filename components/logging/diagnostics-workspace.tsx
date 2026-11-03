@@ -29,13 +29,13 @@
  * stays in Settings → Logs, which already renders the same signals against
  * real data.
  *
- * The header is one row. It used to be two: an identity row and a row holding
- * nothing but three channel tabs and a density select that wrote a store field
- * no stylesheet read — `data-density` only has a reader on `:root`. The tabs
- * moved up (`navigationPlacement="inline"`), and the density control is gone
- * from here because the log panel already owns a working one; the workspace
- * store now feeds that control instead of shadowing it, so the attribute on
- * this element finally matches what the list renders.
+ * The header is the shared management band: identity row, then the channel
+ * tabs in its view bar. The density select that once shared the tabs' row
+ * wrote a store field no stylesheet read — `data-density` only has a reader on
+ * `:root` — and is gone from here because the log panel already owns a
+ * working one; the workspace store now feeds that control instead of
+ * shadowing it, so the attribute on this element finally matches what the
+ * list renders.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -73,14 +73,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-} from "@/components/ui/breadcrumb"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useDiagnosticConnection } from "@/hooks/diagnostic-service/use-diagnostic-connection"
 import {
@@ -440,8 +432,7 @@ export function DiagnosticsWorkspace() {
 
   /** "Reset layout" is a rare, whole-page action that used to sit in the
    * header as a labelled button competing with Configure. It lives in the
-   * overflow menu now — the row it vacated is what let the channel tabs move
-   * up into the identity row. */
+   * overflow menu. */
   const overflowActions = useMemo<FeatureHeaderAction[]>(
     () => [
       {
@@ -477,83 +468,36 @@ export function DiagnosticsWorkspace() {
       data-channel={activeView}
     >
       <FeaturePageHeader
-        variant="compact"
         testId="logs-page-header"
-        icon={<ScrollTextIcon />}
+        back={{ label: t("breadcrumbHome"), href: "/", testId: "logs-back-home" }}
         title={t("title")}
-        breadcrumb={
-          // Just the way back. The trail's last crumb was `t("title")`, and
-          // the header prints `t("title")` as the heading immediately to its
-          // right, so a wide window read "Home > Logs and diagnostics" and
-          // then "Logs and diagnostics" again. A crumb that repeats the
-          // heading beside it is chrome, not orientation.
-          <Breadcrumb className="hidden @3xl/feature-header:block">
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                <BreadcrumbLink asChild>
-                  <Link href="/">{t("breadcrumbHome")}</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
+        description={t("description")}
+        // What the channel on screen holds. It used to be each tab's tooltip,
+        // which only a hover could read.
+        context={
+          <span data-testid="logs-channel-description">{t(`viewDescriptions.${activeView}`)}</span>
         }
-        navigationPlacement="inline"
-        navigation={
-          <Tabs
-            value={activeView}
-            onValueChange={(value) => selectChannel(value as LogWorkspaceView)}
-          >
-            <TabsList aria-label={t("navigation.label")} className="h-8">
-              {LOG_WORKSPACE_VIEWS.map((view) => {
-                const Icon = CHANNEL_ICONS[view]
-                // The incident count used to sit in the header status strip,
-                // one row above the tab it describes. It belongs on the tab:
-                // the number and the thing it counts are now the same target.
-                // Only reports waiting on the user: one with a receipt is the
-                // service's to process, and counting it kept the badge lit
-                // forever after every report had been sent.
-                const count = view === "incidents" ? actionableIncidents : 0
-                return (
-                  <TabsTrigger
-                    key={view}
-                    value={view}
-                    aria-label={t(`views.${view}`)}
-                    // The icon-only width below still needs a way to read
-                    // the tab; the label shows once the header can fit it.
-                    title={`${t(`views.${view}`)} — ${t(`viewDescriptions.${view}`)}`}
-                    data-testid={`logs-channel-${view}`}
-                    className="group gap-1.5"
-                  >
-                    <Icon className="size-4" aria-hidden />
-                    {/* Every label from @5xl, not @xl: with them the tab strip
-                        is ~470px, and at @xl..@5xl it crushed the page title
-                        beside it to a clipped "Logs ar / diagno.". The ACTIVE
-                        tab's label shows at every width: below @5xl the page
-                        title is gone too, and five bare icons (a waveform for
-                        Errors, a stack for Service) left nothing on screen
-                        saying which channel this was. */}
-                    <span
-                      className="hidden group-data-[state=active]:inline @5xl/feature-header:inline"
-                      data-testid={`logs-channel-${view}-label`}
-                    >
-                      {t(`views.${view}`)}
-                    </span>
-                    {count > 0 ? (
-                      <Badge
-                        variant="secondary"
-                        className="h-4 min-w-4 justify-center px-1 font-mono text-[10px] tabular-nums"
-                        data-testid="logs-channel-incidents-count"
-                      >
-                        {count}
-                      </Badge>
-                    ) : null}
-                  </TabsTrigger>
-                )
-              })}
-            </TabsList>
-          </Tabs>
-        }
-        status={
+        tabs={{
+          items: LOG_WORKSPACE_VIEWS.map((view) => ({
+            value: view,
+            label: t(`views.${view}`),
+            icon: CHANNEL_ICONS[view],
+            // The incident count belongs on the tab it describes: the number
+            // and the thing it counts are the same target. Only reports
+            // waiting on the user: one with a receipt is the service's to
+            // process, and counting it kept the badge lit forever after every
+            // report had been sent.
+            count:
+              view === "incidents" && actionableIncidents > 0 ? actionableIncidents : undefined,
+            testId: `logs-channel-${view}`,
+          })),
+          value: activeView,
+          onValueChange: (value) => selectChannel(value as LogWorkspaceView),
+          ariaLabel: t("navigation.label"),
+        }}
+        actions={
+          // A link to the breakdown it summarizes, so it sits with the
+          // actions rather than in the header's (non-interactive) status chip.
           <WorkspaceHealthPill
             healthy={healthSummary.healthy}
             total={healthSummary.total}
@@ -562,14 +506,15 @@ export function DiagnosticsWorkspace() {
             incidentCount={actionableIncidents}
           />
         }
-        actions={
-          <Button asChild variant="ghost" size="sm" className="h-8">
-            <Link href={CONFIGURE_HREF[activeView]} data-testid="logs-configure">
-              <Settings2Icon className="size-4" />
-              <span className="hidden @2xl/feature-header:inline">{t("configure")}</span>
-            </Link>
-          </Button>
-        }
+        secondaryActions={[
+          {
+            id: "configure",
+            label: t("configure"),
+            icon: Settings2Icon,
+            href: CONFIGURE_HREF[activeView],
+            testId: "logs-configure",
+          },
+        ]}
         overflowLabel={t("moreActions")}
         overflowActions={overflowActions}
       />

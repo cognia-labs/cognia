@@ -7,11 +7,12 @@
  *   • the multi-twin path (chooser shown, switching between twins)
  *   • the upload + delete round-trip in the Sources tab
  *   • the draft accept flow in the Drafts tab
+ *   • the page header: description, worker status chip and the view tabs
  */
 
 import "fake-indexeddb/auto"
 import React from "react"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 // Radix Select is tricky in jsdom because of pointer-event/scroll APIs.
@@ -265,6 +266,61 @@ describe("TwinPanel", () => {
     })
   })
 
+  it("shows the description but no view tabs or worker chip in the empty state", async () => {
+    render(<TwinPanel />)
+    await screen.findByTestId("twin-empty-create")
+    const header = screen.getByTestId("twin-toolbar")
+    expect(header).toHaveTextContent(/Teach a twin from your documents/)
+    expect(within(header).queryByRole("tablist")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("twin-worker-status")).not.toBeInTheDocument()
+  })
+
+  it("renders the worker status as a neutral chip with the idle reason on hover", async () => {
+    await createCharacter({
+      name: "Alice",
+      systemPrompt: "you are alice",
+      twinId: "twin_alice",
+    })
+    render(<TwinPanel />)
+    const chip = await screen.findByTestId("twin-worker-status")
+    expect(chip).toHaveTextContent(/^Worker idle$/)
+    expect(chip).toHaveAttribute("data-tone", "neutral")
+    expect(chip.getAttribute("title")).toMatch(/disabled|incomplete/i)
+  })
+
+  it("lists the five views as header tabs and renders only the open one in the body", async () => {
+    await createCharacter({
+      name: "Alice",
+      systemPrompt: "you are alice",
+      twinId: "twin_alice",
+    })
+    render(<TwinPanel />)
+    await screen.findByRole("button", { name: /Active twin/i })
+    const header = screen.getByTestId("twin-toolbar")
+    const tablist = within(header).getByRole("tablist", { name: "Twin views" })
+    const tabs = within(tablist).getAllByRole("tab")
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Sources",
+      "Jobs",
+      "Drafts",
+      "Persona",
+      "Settings",
+    ])
+    expect(within(tablist).getByRole("tab", { name: "Sources" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    expect(screen.getByTestId("twin-tab-sources")).toBeInTheDocument()
+
+    fireEvent.mouseDown(within(tablist).getByTestId("twin-tab-trigger-jobs"))
+    await screen.findByTestId("twin-tab-jobs")
+    expect(screen.queryByTestId("twin-tab-sources")).not.toBeInTheDocument()
+    expect(within(tablist).getByRole("tab", { name: "Jobs" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+  })
+
   it("renders pending draft details and accept / reject buttons", async () => {
     await createCharacter({
       name: "Alice",
@@ -287,9 +343,7 @@ describe("TwinPanel", () => {
       evaluation: { qualityScore: 0.4, concerns: ["thin"], suggestions: ["add examples"] },
     })
     render(<TwinPanel />)
-    // Radix Tabs may render either role="tab" or a plain button — use a
-    // text-based query and click whatever matched.
-    const draftsTrigger = await screen.findByText("Drafts")
+    const draftsTrigger = await screen.findByRole("tab", { name: "Drafts" })
     await userEvent.click(draftsTrigger)
     await screen.findByText("Triage P1")
     expect(screen.getByText(/quality: low/i)).toBeInTheDocument()

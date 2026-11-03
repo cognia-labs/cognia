@@ -465,7 +465,8 @@
     "processes": "进程",
     "resources": "资源",
     "runtime": "异步运行时",
-    "system": "系统"
+    "system": "系统",
+    "label": "性能视图"
   },
   "title": "性能",
   "toolbar": {

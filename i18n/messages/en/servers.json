@@ -82,6 +82,7 @@
   },
   "description": "Deploy, observe, back up, restore, and secure Compose or Kubernetes targets from one cloud-neutral workspace.",
   "detail": {
+    "description": "One deployment target: its health, releases, backups and logs.",
     "loading": "Loading the fleet…",
     "missingDescription": "This target is not in the connected controller's fleet. It may have been removed, or it belongs to another tenant.",
     "missingTitle": "Target not found"

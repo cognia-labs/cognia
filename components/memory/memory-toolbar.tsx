@@ -1,8 +1,10 @@
 "use client"
 
 /**
- * The single control band for `/memory`, rendered into the page header's
- * `controls` slot.
+ * The control band for `/memory`, rendered into the page header's `controls`
+ * slot: quick views, Filter and Display. The search field is the header's own
+ * typed `search` (one search look on every page), so it is not drawn here; the
+ * query still lives on `filter.query`, which this band reads and preserves.
  *
  * It replaces two things the old panel stacked in the page body: a row of five
  * gradient stat tiles (which were filters wearing a dashboard's clothes — the
@@ -17,7 +19,7 @@
  */
 
 import { useTranslations } from "next-intl"
-import { ListFilterIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react"
+import { ListFilterIcon, SlidersHorizontalIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,7 +34,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
 import {
   clearMemoryFacets,
   countActiveMemoryFilters,
@@ -104,21 +105,6 @@ export function MemoryToolbar({
         viewCounts={viewCounts}
         className="min-w-0 flex-1"
       />
-
-      <div className="relative shrink-0">
-        <SearchIcon
-          className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-          aria-hidden="true"
-        />
-        <Input
-          value={filter.query ?? ""}
-          onChange={(event) => onFilterChange({ ...filter, query: event.target.value })}
-          placeholder={t("searchPlaceholder")}
-          aria-label={t("searchLabel")}
-          className="h-8 w-32 pl-8 @xl/feature-header:w-40 @2xl/feature-header:w-56"
-          data-testid="memory-search"
-        />
-      </div>
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

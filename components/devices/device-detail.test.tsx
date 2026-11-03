@@ -140,11 +140,10 @@ describe("DeviceDetail", () => {
       "wan",
       "presence",
       "identity",
-      // Pulled up beside `identity`, which would otherwise sit beside a gap
-      // above the wide dispatch card (`packHalfSections`).
-      "placement",
       "dispatch",
       "capabilities",
+      // Plain priority order: one column has no gap to pull a card up into.
+      "placement",
       "device-section-not-applicable",
     ])
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
@@ -212,7 +211,7 @@ describe("DeviceDetail", () => {
     expect(screen.queryByTestId("card-host-secrets")).not.toBeInTheDocument()
   })
 
-  it("lists every rendered card in the jump strip, in grid order", () => {
+  it("lists every rendered card in the jump strip, in chapter order", () => {
     render(<DeviceDetail row={row()} actions={actions} />)
     const strip = screen.getByTestId("device-section-nav")
     expect(
@@ -224,9 +223,9 @@ describe("DeviceDetail", () => {
       "WAN connection",
       "Presence",
       "Identity",
-      "Placement",
       "Dispatch queue",
       "Capabilities",
+      "Placement",
       "Not applicable",
     ])
   })
@@ -338,22 +337,20 @@ describe("a machine that can only give a shell", () => {
   })
 
   /**
-   * It holds a record, a list of forwarding rules and three controls. In half
-   * a pane that is a ribbon several hundred pixels taller than the identity
-   * card beside it.
+   * One column of chapters under hairlines. In a two-column grid a short
+   * chapter beside a tall one (the SSH record beside identity, routing beside
+   * the shell tiers) left a blank as tall as the difference.
    */
-  it("puts the SSH card across the pane rather than in a column", () => {
+  it("lays every chapter, the not-applicable record too, one per row", () => {
     render(<DeviceDetail row={sshRow} actions={actions} />)
-    expect(screen.getByTestId("device-section-ssh").className).toContain(
-      "@3xl/device-pane:col-span-2"
-    )
-  })
-
-  it("spans the record across the pane when it has more than two rows", () => {
-    render(<DeviceDetail row={sshRow} actions={actions} />)
-    expect(screen.getByTestId("device-section-not-applicable").className).toContain(
-      "@3xl/device-pane:col-span-2"
-    )
+    const chapters = screen.getByTestId("device-detail-chapters")
+    expect(chapters).toHaveClass("flex-col", "divide-y")
+    expect(chapters.className).not.toContain("grid-cols-2")
+    for (const id of ["device-section-ssh", "device-section-not-applicable"]) {
+      const section = screen.getByTestId(id)
+      expect(section.parentElement?.parentElement).toBe(chapters)
+      expect(section.className).not.toContain("col-span-2")
+    }
   })
   /**
    * "Browse files" on a live SSH tab links here with `?deviceSection=files`.

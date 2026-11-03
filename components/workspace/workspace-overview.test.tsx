@@ -34,31 +34,74 @@ jest.mock("@/components/feature-shell/feature-page-shell", () => ({
     </div>
   ),
 }))
+let headerProps: Record<string, unknown> = {}
 jest.mock("@/components/feature-shell/feature-page-header", () => ({
-  // `controls` is rendered because the workspace switcher lives there now, and
-  // the secondary actions because Manage does.
-  FeaturePageHeader: ({
-    title,
-    summary,
-    controls,
-    secondaryActions,
-  }: {
-    title: string
-    summary?: React.ReactNode
-    controls?: React.ReactNode
-    secondaryActions?: Array<{ id: string; label: string; onSelect?: () => void; testId?: string }>
-  }) => (
-    <>
-      <h1>{title}</h1>
-      <p data-testid="header-summary">{summary}</p>
-      {secondaryActions?.map((action) => (
-        <button key={action.id} type="button" onClick={action.onSelect} data-testid={action.testId}>
-          {action.label}
-        </button>
-      ))}
-      {controls}
-    </>
-  ),
+  // A thin stand-in for the typed header: the title (the workspace switcher),
+  // the description, the status chip, the view tabs and the secondary actions
+  // (Manage, and the Source Control link), so the page's wiring is observable.
+  FeaturePageHeader: (props: {
+    title: React.ReactNode
+    description?: React.ReactNode
+    icon?: React.ReactNode
+    status?: { label: string; tone?: string; title?: string; testId?: string }
+    tabs?: {
+      ariaLabel: string
+      value: string
+      onValueChange?: (value: string) => void
+      inOuterRoot?: boolean
+      items: Array<{ value: string; label: string }>
+    }
+    secondaryActions?: Array<{
+      id: string
+      label: string
+      href?: string
+      onSelect?: () => void
+      testId?: string
+    }>
+  }) => {
+    headerProps = props as Record<string, unknown>
+    const { TabsList, TabsTrigger } =
+      jest.requireActual<typeof import("@/components/ui/tabs")>("@/components/ui/tabs")
+    const { title, description, status, tabs, secondaryActions } = props
+    return (
+      <>
+        <h1>{title}</h1>
+        <p data-testid="header-description">{description}</p>
+        {status ? (
+          <span data-testid={status.testId} data-tone={status.tone} title={status.title}>
+            {status.label}
+          </span>
+        ) : null}
+        {tabs ? (
+          // The page owns the Radix root (`inOuterRoot`), so the stand-in
+          // draws the real list inside it, as the header does.
+          <TabsList aria-label={tabs.ariaLabel}>
+            {tabs.items.map((item) => (
+              <TabsTrigger key={item.value} value={item.value}>
+                {item.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        ) : null}
+        {secondaryActions?.map((action) =>
+          action.href ? (
+            <a key={action.id} href={action.href} data-testid={action.testId}>
+              {action.label}
+            </a>
+          ) : (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onSelect}
+              data-testid={action.testId}
+            >
+              {action.label}
+            </button>
+          )
+        )}
+      </>
+    )
+  },
 }))
 jest.mock("@/components/shared/responsive-picker", () => ({
   ResponsivePicker: ({
@@ -196,6 +239,7 @@ function issue(status: string) {
 }
 
 beforeEach(() => {
+  headerProps = {}
   projectsResult = []
   issuesResult = []
   runningResult = []
@@ -458,7 +502,27 @@ describe("WorkspaceOverview", () => {
       projects: [{ id: "w1", name: "Repo", roots: [], description: "Billing API" }],
     }
     render(<WorkspaceOverview />)
-    expect(screen.getByTestId("header-summary")).toHaveTextContent("Billing API")
+    expect(screen.getByTestId("header-description")).toHaveTextContent("Billing API")
+  })
+
+  it("says what the page is for when the workspace has no description", () => {
+    render(<WorkspaceOverview />)
+    expect(screen.getByTestId("header-description")).toHaveTextContent("workspace.pageDescription")
+    expect(headerProps.icon).toBeTruthy()
+  })
+
+  it("draws the views as the header's tabs, controlled by the tab prop", () => {
+    render(<WorkspaceOverview tab="usage" />)
+    expect(headerProps.tabs).toMatchObject({ value: "usage", ariaLabel: "workspace.viewsLabel" })
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "workspace.overview",
+      "workspace.environments",
+      "tab",
+      "tab",
+    ])
+    // Only the header's tab list: the body no longer draws a second strip.
+    expect(screen.getAllByRole("tablist")).toHaveLength(1)
+    expect(screen.getByTestId("workspace-usage")).toHaveAttribute("data-state", "active")
   })
 
   it("carries this workspace's conversations, schedules and context", () => {
@@ -491,7 +555,11 @@ describe("WorkspaceOverview", () => {
   it("flags the Environments tab when the repository config needs a decision", () => {
     repoVerdict = { kind: "unapproved" }
     render(<WorkspaceOverview />)
-    expect(screen.getByTestId("workspace-environments-attention")).toBeInTheDocument()
+    // The header's one status chip, so it shows from every tab.
+    const chip = screen.getByTestId("workspace-environments-attention")
+    expect(chip).toHaveAttribute("data-tone", "warning")
+    expect(chip).toHaveTextContent("workspace.environmentsAttentionShort")
+    expect(chip).toHaveAttribute("title", "workspace.environmentsAttention")
   })
 
   it("keeps the Environments tab quiet when the repository asks for nothing", () => {
@@ -593,6 +661,18 @@ describe("WorkspaceOverview tab addressing", () => {
     expect(screen.getByTestId("workspace-environments-stub")).toBeInTheDocument()
     // Radix keeps the other panel mounted and hidden rather than unmounting it.
     expect(screen.getByTestId("workspace-overview")).toHaveAttribute("data-state", "inactive")
+  })
+
+  // One Radix root for the header's list and the panels, so each tab still
+  // controls its panel rather than pointing across two roots.
+  it("draws the header tabs inside the page's root, each tab controlling its panel", () => {
+    render(<WorkspaceOverview tab="overview" onTabChange={jest.fn()} />)
+    expect((headerProps.tabs as { inOuterRoot?: boolean }).inOuterRoot).toBe(true)
+    const overview = screen.getAllByRole("tab")[0] as HTMLElement
+    expect(overview).toHaveAttribute(
+      "aria-controls",
+      screen.getByTestId("workspace-overview").getAttribute("id")
+    )
   })
 
   it("reports a tab change instead of owning it", async () => {

@@ -842,21 +842,23 @@ describe("WorkspaceEnvironmentList — what this device may not do", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
     // One statement of it, not the list's and the writes' both.
     expect(screen.queryByTestId("workspace-environments-write-unavailable")).not.toBeInTheDocument()
-    // Nothing is loading, so the refresh neither spins nor offers itself.
-    const refresh = screen.getByRole("button", { name: "refresh" })
-    expect(refresh).toBeDisabled()
-    expect(refresh.querySelector("svg")).not.toHaveClass("animate-spin")
+    // A list that cannot exist has no count, no Prune and no reload.
+    expect(screen.queryByRole("button", { name: "refresh" })).not.toBeInTheDocument()
+    expect(screen.queryByTestId("workspace-environments-toolbar")).not.toBeInTheDocument()
   })
 
   /**
-   * In a sheet, or the device record that embeds this list as a chapter, there
-   * is no card around the list, so the empty state is not framed as one.
-   * On the page it sits inside a console card and keeps its hairline.
+   * In a sheet, or the device record that embeds this list as a chapter, the
+   * host's answer is one line among the record's facts, not an icon tile and a
+   * title that outweigh every section around it. On the page it sits inside a
+   * console card as a framed empty state.
    */
-  it("frames the unavailable state only where a card surrounds it", () => {
+  it("says it in one line in a chapter, and as a framed empty state on the page", () => {
     mockDenied = { task_workspace_environment_list: "This host doesn't offer this." }
     const { unmount } = render(<WorkspaceEnvironmentList rootDir="/repo" presentation="sheet" />)
-    expect(screen.getByTestId("workspace-environments-unavailable")).toHaveClass("border-none")
+    const inline = screen.getByTestId("workspace-environments-unavailable")
+    expect(inline.tagName).toBe("P")
+    expect(inline).toHaveAttribute("data-inline", "true")
     unmount()
 
     render(<WorkspaceEnvironmentList rootDir="/repo" presentation="page" />)

@@ -6,7 +6,6 @@ import { useSkillSync } from "@/hooks/skills"
 import { isTauri } from "@/lib/tauri"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import type { Skill } from "@cognia/agent-config-types"
 
 type SyncStatus = "synced" | "outOfSync" | "error" | "never"
@@ -20,11 +19,17 @@ export function SkillSyncSection({ skill }: Props) {
   const { busy, pushOne } = useSkillSync()
   const tauriEnv = isTauri()
 
+  // Off the desktop there is nothing to act on, so it is a footnote under the
+  // skill's details rather than a bordered alert at the top of them.
   if (!tauriEnv) {
     return (
-      <Alert data-testid="skill-sync-section" className="py-2">
-        <AlertDescription className="text-xs">{t("desktopOnly")}</AlertDescription>
-      </Alert>
+      <p
+        data-testid="skill-sync-section"
+        className="flex items-center gap-1.5 border-t pt-3 text-[11px] text-muted-foreground"
+      >
+        <CircleDashedIcon aria-hidden className="size-3" />
+        {t("desktopOnly")}
+      </p>
     )
   }
 

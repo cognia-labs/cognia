@@ -4,7 +4,6 @@ import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { CheckIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -27,6 +26,18 @@ interface Props {
   fileTree?: FileTreeEntry
   onNeedAudit?: (item: MarketplaceItem) => void
   onNeedFileTree?: (item: MarketplaceItem) => void
+}
+
+const FRONTMATTER = /^\uFEFF?\s*---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/
+
+/**
+ * The readme as a reader should see it. A SKILL.md opens with YAML
+ * frontmatter whose name and description the header above already shows;
+ * handed to Markdown as-is, the closing `---` turned the whole block into one
+ * setext heading ("name: ai-elements description: …") above the real title.
+ */
+export function readmeBody(text: string): string {
+  return text.replace(FRONTMATTER, "").trimStart()
 }
 
 /**
@@ -187,8 +198,11 @@ export function SkillMarketplaceDetailContent({
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="px-5 py-4">
+      {/* A plain scroller, not `ScrollArea`: Radix lays its viewport content
+          out as `display: table`, which grows to the widest code span or
+          blockquote and pushed the readme past the pane's right edge. */}
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="skill-marketplace-readme">
+        <div className="max-w-3xl min-w-0 px-5 py-4">
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner className="size-3" /> {tMp("loading")}
@@ -196,10 +210,10 @@ export function SkillMarketplaceDetailContent({
           ) : error ? (
             <p className="text-xs text-destructive">{error}</p>
           ) : readme ? (
-            <MarkdownRenderer content={readme} rhythm="document" />
+            <MarkdownRenderer content={readmeBody(readme)} rhythm="document" />
           ) : null}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   )
 }

@@ -63,6 +63,9 @@ import { PayloadSection } from "./sections/payload-section"
 import { RunsSection } from "./sections/runs-section"
 import { ScheduleSection } from "./sections/schedule-section"
 
+/** A chapter: the air above and below it; the hairline between is the list's. */
+const CHAPTER = "py-5 first:pt-1 last:pb-2"
+
 export interface ItemDetailProps {
   item: UnifiedScheduledItem | null
   /** The app-table row, for `app`, `plugin` and `connector` items. */
@@ -154,6 +157,11 @@ export function ItemDetail({
   }
 
   const busy = runs.some((run) => run.status === "running")
+  // A plugin job's facts are its plugin, handler and args, which "What it
+  // runs" already reads off the same payload; as their own chapter they
+  // printed the same two lines twice. Without a task row the facts chapter is
+  // what says the job is missing, so it stays then.
+  const showKindFacts = kindHasFacts(item) && !(item.kind === "plugin" && task)
   const spawnsProcesses = Boolean(task && taskTypeSpawnsProcesses(task.type))
   const containerClass = `@container/${pane}`
 
@@ -218,13 +226,25 @@ export function ItemDetail({
         <div className="flex flex-col gap-3 p-4">
           <ItemAlerts signals={signals} task={task} systemTask={systemTask} />
 
-          <div className={cn("grid gap-3", `@3xl/${pane}:grid-cols-2`)}>
+          {/* One column of chapters, each the full width of the pane under a
+              hairline, rather than cards in a two-column grid. In the grid a
+              half-width card with no partner (Schedule on an app task) left
+              half its row empty, and a properties column beside the content
+              ran far below it whenever a task had no runs yet. A chapter's
+              facts spread across the width instead, so each one stays short.
+              Order: how it is doing, when it runs, what it runs, what it has
+              done, then how it is set up and where it came from. */}
+          <div
+            className="@container/item-layout flex flex-col divide-y"
+            data-testid="item-detail-chapters"
+          >
             <ConsoleSection
               id="outcomes"
               title={tDetail("outcomesTitle")}
               icon={ActivityIcon}
               pane={pane}
-              wide
+              variant="sheet"
+              className={CHAPTER}
             >
               {item.kind === "system" ? (
                 <p className="text-xs text-muted-foreground">{tDetail("noOsRunHistory")}</p>
@@ -241,33 +261,38 @@ export function ItemDetail({
               )}
             </ConsoleSection>
 
+            <ConsoleSection
+              id="schedule"
+              title={t("schedule")}
+              icon={CalendarClockIcon}
+              pane={pane}
+              variant="sheet"
+              className={CHAPTER}
+            >
+              <ScheduleSection item={item} task={task} />
+            </ConsoleSection>
+
             {task ? (
               <ConsoleSection
                 id="payload"
                 title={tDetail("payloadTitle")}
                 icon={FileCode2Icon}
                 pane={pane}
-                wide
+                variant="sheet"
+                className={CHAPTER}
               >
                 <PayloadSection task={task} />
               </ConsoleSection>
             ) : null}
 
-            <ConsoleSection
-              id="schedule"
-              title={t("schedule")}
-              icon={CalendarClockIcon}
-              pane={pane}
-            >
-              <ScheduleSection item={item} task={task} />
-            </ConsoleSection>
-
-            {kindHasFacts(item) ? (
+            {showKindFacts ? (
               <ConsoleSection
                 id="facts"
                 title={t(`kindFilter.${item.kind}`)}
                 icon={LayersIcon}
                 pane={pane}
+                variant="sheet"
+                className={CHAPTER}
               >
                 <KindFactsSection
                   item={item}
@@ -278,23 +303,13 @@ export function ItemDetail({
               </ConsoleSection>
             ) : null}
 
-            {spawnsProcesses && task ? (
-              <ConsoleSection
-                id="processes"
-                title={t("processes.title")}
-                icon={CpuIcon}
-                pane={pane}
-              >
-                <TaskProcessPanel taskId={task.id} taskType={task.type} />
-              </ConsoleSection>
-            ) : null}
-
             <ConsoleSection
               id="runs"
               title={t("recentRuns")}
               icon={HistoryIcon}
               pane={pane}
-              wide
+              variant="sheet"
+              className={CHAPTER}
               meta={runs.length > 0 ? String(runs.length) : undefined}
             >
               <RunsSection
@@ -309,13 +324,27 @@ export function ItemDetail({
               />
             </ConsoleSection>
 
+            {spawnsProcesses && task ? (
+              <ConsoleSection
+                id="processes"
+                title={t("processes.title")}
+                icon={CpuIcon}
+                pane={pane}
+                variant="sheet"
+                className={CHAPTER}
+              >
+                <TaskProcessPanel taskId={task.id} taskType={task.type} />
+              </ConsoleSection>
+            ) : null}
+
             {task && dependencyGraph ? (
               <ConsoleSection
                 id="dependencies"
                 title={t("dependencyGraph.title")}
                 icon={GitBranchIcon}
                 pane={pane}
-                wide
+                variant="sheet"
+                className={CHAPTER}
                 meta={
                   actions.onOpenDependencyGraph ? (
                     <Button
@@ -341,35 +370,61 @@ export function ItemDetail({
               </ConsoleSection>
             ) : null}
 
+            {/* Notifications, tags and workspace are a few facts each: side by
+                side on one line where the pane is wide, so three short
+                chapters do not each take a full-width band. */}
             {task ? (
-              <ConsoleSection
-                id="notifications"
-                title={t("notifications")}
-                icon={BellIcon}
-                pane={pane}
+              <div
+                className={cn(
+                  CHAPTER,
+                  "grid gap-x-8 gap-y-5 @3xl/item-layout:auto-cols-fr @3xl/item-layout:grid-flow-col"
+                )}
+                data-testid="item-detail-settings"
               >
-                <TaskNotificationDisplay notification={task.notification} variant="bare" />
-              </ConsoleSection>
+                <ConsoleSection
+                  id="notifications"
+                  title={t("notifications")}
+                  icon={BellIcon}
+                  pane={pane}
+                  variant="sheet"
+                >
+                  <TaskNotificationDisplay notification={task.notification} variant="bare" />
+                </ConsoleSection>
+
+                {task.tags && task.tags.length > 0 ? (
+                  <ConsoleSection
+                    id="tags"
+                    title={tDetail("tagsTitle")}
+                    icon={TagIcon}
+                    pane={pane}
+                    variant="sheet"
+                  >
+                    <TaskTagsDisplay tags={task.tags} variant="bare" />
+                  </ConsoleSection>
+                ) : null}
+
+                {item.kind === "app" ? (
+                  <ConsoleSection
+                    id="workspace"
+                    title={tDetail("workspaceTitle")}
+                    icon={LayersIcon}
+                    pane={pane}
+                    variant="sheet"
+                  >
+                    <TaskWorkspaceMove task={task} />
+                  </ConsoleSection>
+                ) : null}
+              </div>
             ) : null}
 
-            {task?.tags && task.tags.length > 0 ? (
-              <ConsoleSection id="tags" title={tDetail("tagsTitle")} icon={TagIcon} pane={pane}>
-                <TaskTagsDisplay tags={task.tags} variant="bare" />
-              </ConsoleSection>
-            ) : null}
-
-            {task && item.kind === "app" ? (
-              <ConsoleSection
-                id="workspace"
-                title={tDetail("workspaceTitle")}
-                icon={LayersIcon}
-                pane={pane}
-              >
-                <TaskWorkspaceMove task={task} />
-              </ConsoleSection>
-            ) : null}
-
-            <ConsoleSection id="origin" title={tDetail("originTitle")} icon={InfoIcon} pane={pane}>
+            <ConsoleSection
+              id="origin"
+              title={tDetail("originTitle")}
+              icon={InfoIcon}
+              pane={pane}
+              variant="sheet"
+              className={CHAPTER}
+            >
               <OriginSection item={item} task={task} />
             </ConsoleSection>
           </div>

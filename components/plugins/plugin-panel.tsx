@@ -35,7 +35,6 @@ import { isTauri } from "@/lib/tauri"
 import { PLUGIN_RAIL_WIDTH } from "./plugin-rail-width"
 import { pluginNavItem } from "./plugin-nav-config"
 import type { PluginNavSection } from "@/stores/plugins"
-import { Badge } from "@/components/ui/badge"
 
 // Dialog hosts — all driven by store targets, mounted once at the panel root.
 import { PluginBatchActionsBar } from "./plugin-batch-actions-bar"
@@ -129,13 +128,13 @@ interface NewShellLayoutProps {
 function NewShellLayout({ onCheckUpdates, onSyncRegistry, syncing }: NewShellLayoutProps) {
   const t = useTranslations("plugins.sections")
   const tPage = useTranslations("plugins")
+  const tToolbar = useTranslations("plugins.toolbar")
   const activeSection = usePluginsStore((s) => s.activeSection)
   const visibleSection = useVisiblePluginSection(activeSection)
-  // The active section rides beside the title as a badge (the `status` slot),
+  // The active section rides beside the title as the header's status chip,
   // not as `context` text after the description — a trailing "· Library" read
-  // as a stray fragment whenever the description truncated. The rail icon is
-  // mirrored so the badge and the selected nav row share one glyph.
-  const SectionIcon = pluginNavItem(visibleSection).icon
+  // as a stray fragment whenever the description truncated.
+  const isLibrary = visibleSection === "library"
 
   // Below `lg` the shell moves the detail pane into a Sheet, and an
   // uncontrolled Sheet only opens from its own 16px panel icon. Clicking a
@@ -205,24 +204,29 @@ function NewShellLayout({ onCheckUpdates, onSyncRegistry, syncing }: NewShellLay
           icon={<PlugIcon />}
           title={tPage("title")}
           description={tPage("description")}
-          status={
-            <Badge
-              variant="secondary"
-              className="h-5 gap-1 px-1.5 text-[10px] font-normal"
-              data-testid="plugin-section-badge"
-            >
-              <SectionIcon aria-hidden />
-              {t(visibleSection)}
-            </Badge>
-          }
+          status={{ label: t(visibleSection), testId: "plugin-section-badge" }}
           controls={controls}
+          // Library-only, as before: the registry sync refreshes the
+          // marketplace catalog and re-checks installed plugins, so it is the
+          // header's refresh glyph (its tooltip carries the full explanation).
+          refresh={
+            isLibrary
+              ? {
+                  label: tToolbar("syncRegistryAria"),
+                  onSelect: () => void onSyncRegistry(),
+                  busy: syncing,
+                  testId: "plugin-sync-registry",
+                }
+              : undefined
+          }
+          // The grouped Install menu (group labels, desktop-only notes) does
+          // not fit `primaryAction.menu`, so Library's actions stay one
+          // free-form strip: cogset, CLI chip, Check for updates, and Install
+          // last, in the slot the header keeps for its primary button. A typed
+          // Check for updates would be drawn after Install.
           actions={
-            visibleSection === "library" ? (
-              <PluginPanelToolbar
-                onCheckUpdates={onCheckUpdates}
-                onSyncRegistry={onSyncRegistry}
-                syncing={syncing}
-              />
+            isLibrary ? (
+              <PluginPanelToolbar layout="header" onCheckUpdates={onCheckUpdates} />
             ) : undefined
           }
         />

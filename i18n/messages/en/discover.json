@@ -97,6 +97,7 @@
     "title": "Customize categories",
     "trigger": "Customize categories"
   },
+  "description": "Find agents, skills, plugins and templates to add to your workspace.",
   "empty": {
     "noQuery": "Nothing here yet."
   },

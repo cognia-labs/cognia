@@ -10,7 +10,7 @@
 import { useState } from "react"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useTranslations } from "next-intl"
-import { LogOutIcon, PlugZapIcon, RefreshCwIcon, RocketIcon, ServerCogIcon } from "lucide-react"
+import { LogOutIcon, PlugZapIcon, RocketIcon, ServerCogIcon } from "lucide-react"
 
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
@@ -21,7 +21,6 @@ import { OperationsRail } from "@/components/servers/operations-rail"
 import { OpsConnectPanel } from "@/components/servers/ops-connect-panel"
 import { useServerOps } from "@/components/servers/ops-context"
 import { ServerFleet, type FleetFilter } from "@/components/servers/server-fleet"
-import { Badge } from "@/components/ui/badge"
 import { ServersMobileBody } from "@/components/mobile/servers/servers-mobile-body"
 import type { Operation } from "@/lib/server-ops/client"
 
@@ -62,13 +61,24 @@ function ServersWideBody() {
             title={t("title")}
             description={t("description")}
             context={
-              <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate font-mono">{ops.connection.controllerUrl}</span>
                 <span aria-hidden="true">·</span>
                 <span className="truncate">{ops.connection.profileId}</span>
-                {ops.offline && <Badge variant="outline">{t("offline")}</Badge>}
               </span>
             }
+            // A fleet read from the offline cache is summaries only; the one
+            // chip says so.
+            status={
+              ops.offline
+                ? { label: t("offline"), tone: "warning", testId: "servers-offline-status" }
+                : undefined
+            }
+            refresh={{
+              label: t("actions.refresh"),
+              onSelect: () => void ops.refresh(),
+              busy: ops.loading,
+            }}
             summary={t("fleet.summary", { count: ops.servers.length })}
             primaryAction={{
               id: "deploy",
@@ -85,13 +95,6 @@ function ServersWideBody() {
                 label: t("enroll.action"),
                 icon: PlugZapIcon,
                 onSelect: () => setEnrollOpen(true),
-              },
-              {
-                id: "refresh",
-                label: t("actions.refresh"),
-                icon: RefreshCwIcon,
-                onSelect: () => void ops.refresh(),
-                disabled: ops.loading,
               },
             ]}
             overflowActions={[

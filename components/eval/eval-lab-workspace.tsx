@@ -17,7 +17,6 @@ import {
   GitCompareIcon,
   ListChecksIcon,
   MicroscopeIcon,
-  MoreHorizontalIcon,
   PanelRightIcon,
   PauseIcon,
   PlayIcon,
@@ -43,17 +42,14 @@ import {
   type EvalProjectDataset,
   type EvalVariant,
 } from "@cognia/eval-core"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderStatusTone,
+} from "@/components/feature-shell/feature-page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ClampedNumberInput } from "@/components/settings/common/clamped-number-input"
 import { Label } from "@/components/ui/label"
@@ -135,6 +131,19 @@ const ATTACHMENT_CAPABILITIES = new Set<EvalCapability>(["image", "audio", "vide
 type EvalLabStep = (typeof STEPS)[number]
 type LegacyTool = "datasets" | "compare" | "annotate" | "calibrate" | null
 type QueueState = EvalExperimentState
+
+/** The header chip's tone for each queue state. */
+const QUEUE_STATE_TONE: Record<QueueState, FeatureHeaderStatusTone> = {
+  draft: "neutral",
+  preflight: "active",
+  queued: "neutral",
+  running: "active",
+  paused: "warning",
+  interrupted: "warning",
+  completed: "success",
+  failed: "danger",
+  cancelled: "neutral",
+}
 
 /**
  * Bounds for the decision-policy number fields.
@@ -2407,54 +2416,60 @@ function EvalLabWorkspaceContent({
         icon={<ScaleIcon />}
         title={t("lab.title")}
         description={t("lab.subtitle")}
-        status={<Badge variant="outline">{t(`lab.run.states.${queueState}`)}</Badge>}
+        status={{
+          label: t(`lab.run.states.${queueState}`),
+          tone: QUEUE_STATE_TONE[queueState],
+          testId: "eval-lab-queue-state",
+        }}
         actions={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setEvidenceOpen(true)}
-              aria-label={t("lab.evidence.open")}
-              className="lg:hidden"
-            >
-              <PanelRightIcon />
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" aria-label={t("lab.legacy.open")}>
-                  <MoreHorizontalIcon />
-                  <span className="hidden sm:inline">{t("lab.legacy.open")}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setLegacyTool("datasets")}>
-                  <DatabaseIcon />
-                  {t("tabs.datasets")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setLegacyTool("compare")}>
-                  <GitCompareIcon />
-                  {t("tabs.compare")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setLegacyTool("annotate")}>
-                  <MicroscopeIcon />
-                  {t("tabs.annotate")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setLegacyTool("calibrate")}>
-                  <ScaleIcon />
-                  {t("tabs.calibrate")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={t("settings.title")}
-              onClick={() => router.push("/settings?section=eval")}
-            >
-              <SettingsIcon />
-            </Button>
-          </>
+          // Opens the evidence drawer only below `lg`, where the evidence
+          // column is hidden; a viewport-bound toggle, not a typed action.
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEvidenceOpen(true)}
+            aria-label={t("lab.evidence.open")}
+            className="lg:hidden"
+          >
+            <PanelRightIcon />
+          </Button>
         }
+        secondaryActions={[
+          {
+            id: "settings",
+            label: t("settings.title"),
+            icon: SettingsIcon,
+            onSelect: () => router.push("/settings?section=eval"),
+          },
+        ]}
+        // The pre-lab tools are rarely used, so they live behind "⋯".
+        overflowLabel={t("lab.legacy.open")}
+        overflowActions={[
+          {
+            id: "legacy-datasets",
+            label: t("tabs.datasets"),
+            icon: DatabaseIcon,
+            onSelect: () => setLegacyTool("datasets"),
+          },
+          {
+            id: "legacy-compare",
+            label: t("tabs.compare"),
+            icon: GitCompareIcon,
+            onSelect: () => setLegacyTool("compare"),
+          },
+          {
+            id: "legacy-annotate",
+            label: t("tabs.annotate"),
+            icon: MicroscopeIcon,
+            onSelect: () => setLegacyTool("annotate"),
+          },
+          {
+            id: "legacy-calibrate",
+            label: t("tabs.calibrate"),
+            icon: ScaleIcon,
+            onSelect: () => setLegacyTool("calibrate"),
+          },
+        ]}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1">

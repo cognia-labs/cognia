@@ -67,7 +67,7 @@ jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }))
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { toast } from "sonner"
 import { useSkillsStore } from "@/stores/skills"
@@ -78,7 +78,31 @@ import {
   setRecorderAvailability,
 } from "@/lib/skills/recording/recorder-availability"
 import { useRecorderStore } from "@/stores/skills/recorder-store"
-import { SkillPanelToolbar } from "./skill-panel-toolbar"
+import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { useSkillPanelToolbar } from "./skill-panel-toolbar"
+
+/** The hook only means something inside the header that draws it. */
+function ToolbarInHeader() {
+  const toolbar = useSkillPanelToolbar()
+  return (
+    <FeaturePageHeader
+      title="skills"
+      actions={toolbar.importMenu}
+      secondaryActions={toolbar.secondaryActions}
+      overflowActions={toolbar.overflowActions}
+      primaryAction={toolbar.primaryAction}
+    />
+  )
+}
+
+function SkillPanelToolbar() {
+  return (
+    <TooltipProvider>
+      <ToolbarInHeader />
+    </TooltipProvider>
+  )
+}
 
 const mockPickAndReadBinaryFiles = pickAndReadBinaryFiles as jest.MockedFunction<
   typeof pickAndReadBinaryFiles
@@ -92,59 +116,88 @@ beforeEach(() => {
   hostSkillsRef.write = false
 })
 
-describe("SkillPanelToolbar", () => {
+describe("useSkillPanelToolbar", () => {
   it("renders the 'New' and 'Import' triggers with localized labels", () => {
     render(<SkillPanelToolbar />)
     expect(screen.getByText("new")).toBeInTheDocument()
     expect(screen.getByText("import")).toBeInTheDocument()
   })
 
-  it("offers native sync to a client whose host serves its skills directory", () => {
+  it("makes New the header's primary button, drawn last", async () => {
+    const user = userEvent.setup()
+    render(<SkillPanelToolbar />)
+    const strip = screen.getByTestId("feature-header-actions")
+    expect(strip.lastElementChild).toHaveAttribute("data-testid", "skill-panel-toolbar-new")
+    await user.click(screen.getByTestId("skill-panel-toolbar-new"))
+    expect(useSkillsStore.getState().editorTarget).toEqual({ mode: "create" })
+    useSkillsStore.setState({ editorTarget: null })
+  })
+
+  it("offers native push and pull to a client whose host serves its skills directory", async () => {
     hostSkillsRef.read = true
     hostSkillsRef.write = true
+    const user = userEvent.setup()
     render(<SkillPanelToolbar />)
+    await user.click(screen.getByLabelText("moreActions"))
 
-    const sync = screen.getByTitle("syncNative")
-    expect(sync).toBeEnabled()
+    expect(await screen.findByTestId("skill-panel-toolbar-sync-push")).not.toHaveAttribute(
+      "data-disabled"
+    )
+    expect(screen.getByTestId("skill-panel-toolbar-sync-pull")).not.toHaveAttribute("data-disabled")
   })
 
-  it("says the host cannot serve skills, not that this is not a desktop", () => {
+  it("greys out push and pull when the host cannot serve skills", async () => {
+    // The reason is spelled out in the preferences popover's sync note
+    // (`SkillSyncTargets`), next to the mirror targets.
+    const user = userEvent.setup()
     render(<SkillPanelToolbar />)
+    await user.click(screen.getByLabelText("moreActions"))
 
-    // `unavailableRead` is the sentence `useSkillSync` has always shown when it
-    // actually refuses. The old title claimed "requires desktop mode", which is
-    // wrong for a phone paired to a Host that can serve them.
-    const sync = screen.getByTitle("unavailableRead")
-    expect(sync).toBeDisabled()
-    expect(screen.queryByTitle("syncNativeDesktopOnly")).not.toBeInTheDocument()
+    expect(await screen.findByTestId("skill-panel-toolbar-sync-push")).toHaveAttribute(
+      "data-disabled"
+    )
+    expect(screen.getByTestId("skill-panel-toolbar-sync-pull")).toHaveAttribute("data-disabled")
+    expect(screen.queryByTestId("skill-panel-toolbar-mirror-claude")).not.toBeInTheDocument()
   })
 
-  it("collapses export + sync into a More-actions menu trigger at narrow widths", () => {
+  it("keeps the occasional actions in the header's overflow menu at every width", async () => {
+    const user = userEvent.setup()
     render(<SkillPanelToolbar />)
-    // The aria-labeled overflow trigger is mounted alongside the inline buttons; both share
-    // the underlying actions so we just confirm the trigger exists and uses the localized label.
-    expect(screen.getByLabelText("moreActions")).toBeInTheDocument()
+    // Nothing but New and Import (and the recorder, when present) stays inline.
+    expect(screen.queryByTestId("skill-panel-toolbar-export-all")).not.toBeInTheDocument()
+    const more = screen.getByLabelText("moreActions")
+    expect(more).not.toHaveClass("md:hidden")
+    await user.click(more)
+    expect(await screen.findByTestId("skill-panel-toolbar-export-all")).toBeInTheDocument()
+    expect(screen.getByTestId("skill-panel-toolbar-check-updates")).toBeInTheDocument()
+    expect(screen.getByTestId("skill-panel-toolbar-empty-trash")).toBeInTheDocument()
+    // Outside Tauri there is no trash to empty.
+    expect(screen.getByTestId("skill-panel-toolbar-empty-trash")).toHaveAttribute("data-disabled")
   })
+
+  async function checkUpdates() {
+    const user = userEvent.setup()
+    render(<SkillPanelToolbar />)
+    await user.click(screen.getByLabelText("moreActions"))
+    await user.click(await screen.findByTestId("skill-panel-toolbar-check-updates"))
+  }
 
   it("'Check for updates' runs the scan and reports the up-to-date toast", async () => {
     checkAllMock.mockResolvedValueOnce(0)
-    render(<SkillPanelToolbar />)
-    fireEvent.click(screen.getByTestId("skill-panel-toolbar-check-updates"))
+    await checkUpdates()
     await waitFor(() => expect(checkAllMock).toHaveBeenCalled())
     expect(toast.info).toHaveBeenCalledWith("updatesNone")
   })
 
   it("'Check for updates' reports the found-count toast when updates exist", async () => {
     checkAllMock.mockResolvedValueOnce(3)
-    render(<SkillPanelToolbar />)
-    fireEvent.click(screen.getByTestId("skill-panel-toolbar-check-updates"))
+    await checkUpdates()
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('updatesFound:{"count":3}'))
   })
 
   it("'Check for updates' surfaces scan failures as an error toast", async () => {
     checkAllMock.mockRejectedValueOnce(new Error("offline"))
-    render(<SkillPanelToolbar />)
-    fireEvent.click(screen.getByTestId("skill-panel-toolbar-check-updates"))
+    await checkUpdates()
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('updatesError:{"error":"offline"}')
     )

@@ -11,7 +11,7 @@
 // link lands is `lib/pet/console-tabs.ts`.
 //
 // This file composes; the pieces live beside it: `PetConsoleHeader`,
-// `PetConsoleNav`, `HomeTab`, `PetConsoleSegments`, `AppearanceView`,
+// `usePetConsoleTabs`, `HomeTab`, `PetConsoleSegments`, `AppearanceView`,
 // `HatchPanel`, `PetConsoleSkeleton`, and for remote care the status band and
 // the desktop-only notice.
 //
@@ -79,7 +79,7 @@ import { InsightsTab } from "./insights-tab"
 import { AppearanceView } from "./appearance-view"
 import { PetConsoleSegments } from "./pet-console-segments"
 import { PetConsoleHeader } from "./pet-console-header"
-import { PetConsoleNav } from "./pet-console-nav"
+import { usePetConsoleTabs } from "./pet-console-nav"
 import { HatchPanel } from "./hatch-panel"
 import { PetConsoleSkeleton } from "./pet-console-skeleton"
 import { PetConsoleActionsProvider } from "./pet-console-actions-provider"
@@ -304,6 +304,14 @@ function PetConsoleBody({
     : PET_CONSOLE_SECTIONS.filter((id) => id !== "plugins")
   const desktopOnly = petConsoleDesktopOnlyTabs(actions.mode, [...sections, "insights"] as const)
   const desktopOnlySections = new Set(sections.filter((id) => desktopOnly.has(id)))
+  // A `?tab=plugins` deep link can arrive before (or after the last of) the
+  // plugins that fill it; the pane falls back to Home until one registers,
+  // without forgetting that plugins is what was asked for.
+  const activeSection: PetConsoleSection =
+    target.view === "main" && !(target.section === "plugins" && !hasPluginTabs)
+      ? target.section
+      : "home"
+  const placeTabs = usePetConsoleTabs({ sections, desktopOnlySections, value: activeSection })
   const statusBand = remote ? <PetRemoteStatusBand remote={remote} /> : null
 
   if (!profile || !view) {
@@ -337,14 +345,6 @@ function PetConsoleBody({
 
   const can = (id: Parameters<typeof actions.capability>[0]) =>
     actions.capability(id) === "available"
-
-  // A `?tab=plugins` deep link can arrive before (or after the last of) the
-  // plugins that fill it; the pane falls back to Home until one registers,
-  // without forgetting that plugins is what was asked for.
-  const activeSection: PetConsoleSection =
-    target.view === "main" && !(target.section === "plugins" && !hasPluginTabs)
-      ? target.section
-      : "home"
 
   const openSection = (section: PetConsoleSection) => setTarget({ view: "main", section })
   const openAppearance = () => {
@@ -460,9 +460,7 @@ function PetConsoleBody({
           <PetConsoleHeader
             mode="main"
             {...headerProps}
-            navigation={
-              <PetConsoleNav sections={sections} desktopOnlySections={desktopOnlySections} />
-            }
+            tabs={placeTabs}
             onOpenAppearance={openAppearance}
             appearanceDesktopOnly={!can("appearance.customize")}
           />

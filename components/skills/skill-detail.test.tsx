@@ -5,6 +5,15 @@
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${JSON.stringify(vars)}` : key,
+  useFormatter: () => ({ dateTime: (date: Date) => `date:${date.getTime()}` }),
+}))
+
+const mockDuplicateSkill = jest.fn(async () => ({ id: "s2", name: "Cite sources (copy)" }))
+const mockSetSkillStatus = jest.fn(async () => undefined)
+jest.mock("@/lib/db/skills", () => ({
+  ...jest.requireActual("@/lib/db/skills"),
+  duplicateSkill: (...args: unknown[]) => mockDuplicateSkill(...(args as [])),
+  setSkillStatus: (...args: unknown[]) => mockSetSkillStatus(...(args as [])),
 }))
 
 const mockResourcesRef: { current: import("@cognia/agent-config-types").SkillResource[] } = {
@@ -20,13 +29,22 @@ jest.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuSeparator: () => <hr />,
   DropdownMenuItem: ({
     children,
     onSelect,
+    variant,
+    "data-testid": testId,
   }: {
     children: React.ReactNode
     onSelect?: () => void
-  }) => <button onClick={onSelect}>{children}</button>,
+    variant?: string
+    "data-testid"?: string
+  }) => (
+    <button onClick={onSelect} data-variant={variant} data-testid={testId}>
+      {children}
+    </button>
+  ),
 }))
 
 const serializeSkillBundleMock: jest.Mock = jest.fn(async () => ({
@@ -103,6 +121,8 @@ const skill = {
 describe("SkillDetail", () => {
   beforeEach(() => {
     mockResourcesRef.current = []
+    mockDuplicateSkill.mockClear()
+    mockSetSkillStatus.mockClear()
     serializeSkillBundleMock.mockClear()
     saveBinaryFileAsMock.mockClear()
     saveFileAsMock.mockClear()
@@ -121,9 +141,32 @@ describe("SkillDetail", () => {
     expect(state.editorWorkspace.openFiles[0]?.draftContent).toBe("...")
   })
 
-  it("disables the Edit button for built-in skills", () => {
+  // A built-in cannot be edited, only copied; a disabled Edit said neither.
+  it("offers a built-in as a copy to edit, and no delete", async () => {
     render(<SkillDetail skill={{ ...skill, isBuiltIn: true } as Skill} />)
-    expect(screen.getByTestId("skill-open-in-editor")).toBeDisabled()
+    expect(screen.queryByTestId("skill-open-in-editor")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("skill-detail-delete")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("skill-duplicate-to-edit"))
+    await waitFor(() => expect(mockDuplicateSkill).toHaveBeenCalledWith("s1"))
+  })
+
+  it("says which way the skill is, and flips it from the switch", async () => {
+    render(<SkillDetail skill={skill} />)
+    const toggle = screen.getByTestId("skill-status-switch")
+    expect(toggle).toHaveAttribute("aria-checked", "true")
+    fireEvent.click(toggle)
+    await waitFor(() => expect(mockSetSkillStatus).toHaveBeenCalledWith("s1", "disabled"))
+  })
+
+  it("keeps delete behind the overflow menu as a destructive item", () => {
+    render(<SkillDetail skill={skill} />)
+    expect(screen.getByLabelText("toolbar.moreActions")).toBeInTheDocument()
+    expect(screen.getByTestId("skill-detail-delete")).toHaveAttribute("data-variant", "destructive")
+  })
+
+  it("summarises usage in the overview", () => {
+    render(<SkillDetail skill={{ ...skill, usageCount: 0 } as Skill} />)
+    expect(screen.getByText("usageNever")).toBeInTheDocument()
   })
 
   it("renders the skill name and description in the header", () => {

@@ -17,7 +17,6 @@ import { useSettingsStore } from "@/stores/settings/settings-store"
 import { useChatStore } from "@/stores/chat"
 import { MOBILE_DURATION, MOBILE_EASE } from "@/lib/ui/motion"
 import { SkillPanelHeader } from "./skill-panel-header"
-import { SkillPanelTabs } from "./skill-panel-tabs"
 import { SkillListPane } from "./skill-list-pane"
 import { SkillDetail } from "./skill-detail"
 import { SkillCategorySheet } from "./skill-category-sheet"
@@ -112,7 +111,6 @@ export function SkillPanel({ className, embedded }: Props) {
         <SkillPanelHeader
           totalCount={view.all.length}
           filteredCount={view.filtered.length}
-          tabsSlot={<SkillPanelTabs className="border-0" />}
           embedded={embedded}
         />
 

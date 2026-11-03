@@ -269,7 +269,8 @@
     "refreshing": "正在刷新…",
     "refreshFailed": "无法刷新设备列表",
     "grow": "配对设备或添加主机",
-    "addSshHost": "添加 SSH 主机"
+    "addSshHost": "添加 SSH 主机",
+    "more": "更多操作"
   },
   "detail": {
     "noSelectionTitle": "未选择设备",

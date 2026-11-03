@@ -16,7 +16,7 @@
 
 import { useCallback } from "react"
 import { useTranslations } from "next-intl"
-import { RefreshCwIcon, ServerIcon, SmartphoneIcon, WaypointsIcon } from "lucide-react"
+import { ServerIcon, SmartphoneIcon, WaypointsIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
@@ -113,7 +113,6 @@ export function DeviceConsole() {
     <FeaturePageShell
       storageId="devices"
       collapsibleLeftPane
-      headerPlacement="center"
       header={
         <FeaturePageHeader
           variant="management"
@@ -140,17 +139,40 @@ export function DeviceConsole() {
               <ExecutionHostChip onAddHost={() => addHost.setOpen(true)} />
             )
           }
-          status={
+          primaryAction={{
+            id: "pair",
+            label: t("actions.pair"),
+            icon: SmartphoneIcon,
+            onSelect: () => router.push(pairHref),
+          }}
+          /* Four outline buttons of one weight (add host, add SSH host,
+             refresh, pair) crowded the title off its own row. Refresh is a
+             glyph that spins while it works, the occasional SSH host waits
+             under ⋯, and the two ways to grow the fleet stay labelled. */
+          refresh={{
+            label: refreshing ? t("actions.refreshing") : t("actions.refresh"),
+            busy: refreshing,
+            onSelect: () =>
+              void runRefresh().catch((error: unknown) =>
+                toast.error(t("actions.refreshFailed"), {
+                  description: error instanceof Error ? error.message : String(error),
+                })
+              ),
+            testId: "devices-refresh",
+          }}
+          actions={
             /**
              * The one number a fleet is actually scanned for, and now the way
              * to the rows behind it. A revoked phone or a host stuck in
              * `versionMismatch` used to be findable only by opening every row.
+             * It is a filter toggle, not a status, so it sits with the actions
+             * rather than in the header's status chip.
              */
             summary.needsAttention > 0 ? (
               <Button
                 variant="outline"
                 size="sm"
-                className="h-6 gap-1.5 px-2 text-xs font-normal text-amber-600 dark:text-amber-400"
+                className="h-7 gap-1.5 px-2 text-xs font-normal text-amber-600 dark:text-amber-400"
                 onClick={showAttention}
                 aria-pressed={attentionOnly}
                 data-testid="devices-attention-count"
@@ -163,12 +185,6 @@ export function DeviceConsole() {
               </Button>
             ) : null
           }
-          primaryAction={{
-            id: "pair",
-            label: t("actions.pair"),
-            icon: SmartphoneIcon,
-            onSelect: () => router.push(pairHref),
-          }}
           secondaryActions={[
             {
               id: "add-host",
@@ -176,6 +192,9 @@ export function DeviceConsole() {
               icon: ServerIcon,
               onSelect: () => addHost.setOpen(true),
             },
+          ]}
+          overflowLabel={t("actions.more")}
+          overflowActions={[
             /**
              * SSH targets are rows here like every other machine, but the only
              * way to add one was a Settings page nothing on this screen named.
@@ -187,19 +206,6 @@ export function DeviceConsole() {
               icon: WaypointsIcon,
               onSelect: () => router.push(newSshHostSettingsHref()),
               testId: "devices-add-ssh-host",
-            },
-            {
-              id: "refresh",
-              label: refreshing ? t("actions.refreshing") : t("actions.refresh"),
-              icon: RefreshCwIcon,
-              disabled: refreshing,
-              onSelect: () =>
-                void runRefresh().catch((error: unknown) =>
-                  toast.error(t("actions.refreshFailed"), {
-                    description: error instanceof Error ? error.message : String(error),
-                  })
-                ),
-              testId: "devices-refresh",
             },
           ]}
           testId="devices-header"

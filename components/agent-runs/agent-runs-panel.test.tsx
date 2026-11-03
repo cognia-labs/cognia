@@ -173,6 +173,28 @@ describe("AgentRunsPanel", () => {
     expect(failedTab).toHaveTextContent("3")
   })
 
+  it("puts the status axis in the page header's view tabs", () => {
+    const onStatusGroup = jest.fn()
+    render(<AgentRunsPanel onSelect={jest.fn()} onStatusGroup={onStatusGroup} />)
+    const header = screen.getByTestId("agent-runs-header")
+    expect(header).toHaveAttribute("data-variant", "management")
+    const tabs = within(header).getByRole("tablist", { name: "filters.statusLabel" })
+    expect(within(tabs).getByRole("tab", { name: /^filters\.all/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    // Radix tabs activate on mouse-down, not click.
+    fireEvent.mouseDown(within(tabs).getByRole("tab", { name: /filters\.failed/ }))
+    expect(onStatusGroup).toHaveBeenCalledWith("failed")
+  })
+
+  it("keeps the kind select in the header's view bar", () => {
+    render(<AgentRunsPanel onSelect={jest.fn()} onFilterKind={jest.fn()} />)
+    expect(
+      within(screen.getByTestId("agent-runs-header")).getByLabelText("filters.kindLabel")
+    ).toBeInTheDocument()
+  })
+
   it("selects by RUN id so an IM card's deep link resolves", () => {
     const onSelect = jest.fn()
     render(<AgentRunsPanel onSelect={onSelect} />)

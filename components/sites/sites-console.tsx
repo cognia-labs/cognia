@@ -33,7 +33,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useSiteActionGate, type SiteGate } from "@/hooks/sites/use-site-action-gate"
 import { useSiteActions } from "@/hooks/sites/use-site-actions"
 import { useSiteBuildInputs } from "@/hooks/sites/use-site-build-inputs"
@@ -246,12 +245,9 @@ export function SitesConsole() {
   }
 
   return (
-    <Tabs
-      value={tab}
-      onValueChange={(value) => setTab(value as SiteConsoleTab)}
-      className="contents"
-      data-testid="sites-console"
-    >
+    // The header draws the tab list (its own `Tabs` root), so the panes
+    // below render by the same store value rather than through `TabsContent`.
+    <div className="contents" data-testid="sites-console">
       <FeaturePageShell
         storageId="sites"
         header={
@@ -262,21 +258,17 @@ export function SitesConsole() {
             description={t("subtitle")}
             context={t("provider.title")}
             summary={t("summary.sites", { count: live.sites.length })}
-            navigation={
-              <TabsList variant="line" className="h-8 gap-1 bg-transparent p-0">
-                {SITE_CONSOLE_TABS.map((key) => (
-                  <TabsTrigger
-                    key={key}
-                    value={key}
-                    disabled={!site}
-                    className="h-8 px-2.5 text-xs"
-                    data-testid={`sites-tab-${key}`}
-                  >
-                    {t(`tabs.${key}`)}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            }
+            tabs={{
+              items: SITE_CONSOLE_TABS.map((key) => ({
+                value: key,
+                label: t(`tabs.${key}`),
+                disabled: !site,
+                testId: `sites-tab-${key}`,
+              })),
+              value: tab,
+              onValueChange: (value) => setTab(value as SiteConsoleTab),
+              ariaLabel: t("tabsLabel"),
+            }}
             secondaryActions={[
               {
                 id: "reconcile",
@@ -351,132 +343,174 @@ export function SitesConsole() {
               onDeleteMetadata={() => setConfirmation("delete-metadata")}
             />
 
-            <TabsContent value="publish" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-4xl p-4">
-                <SitePublishTab
-                  site={site}
-                  stepStates={publish.stepStates}
-                  operations={live.operations}
-                  readyVersions={publish.readyVersions}
-                  manifest={manifest}
-                  wrangler={publish.wrangler}
-                  previewUrl={preview.url}
-                  isBusy={isBusy}
-                  providerGate={providerGate}
-                  buildGate={buildGate}
-                  previewGate={previewGate}
-                  deployGate={deployGate}
-                  filesystemGate={filesystemGate}
-                  onSaveToken={publish.saveToken}
-                  onSaveManifest={publish.saveManifest}
-                  onProvision={publish.provision}
-                  onBuild={publish.build}
-                  onStartPreview={publish.startPreview}
-                  onStopPreview={publish.stopPreview}
-                  onRedetectWrangler={publish.redetectWrangler}
-                  buildInputs={buildInputs.inputs}
-                  buildInputsSource={buildInputs.source}
-                  setBuildInputs={buildInputs.setInputs}
-                  onGoToVersions={() => setTab("versions")}
-                  onGoToEnvironment={() => setTab("environment")}
-                />
+            {tab === "publish" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.publish")}
+                className="min-h-0 flex-1 outline-none overflow-y-auto"
+              >
+                <div className="mx-auto max-w-4xl p-4">
+                  <SitePublishTab
+                    site={site}
+                    stepStates={publish.stepStates}
+                    operations={live.operations}
+                    readyVersions={publish.readyVersions}
+                    manifest={manifest}
+                    wrangler={publish.wrangler}
+                    previewUrl={preview.url}
+                    isBusy={isBusy}
+                    providerGate={providerGate}
+                    buildGate={buildGate}
+                    previewGate={previewGate}
+                    deployGate={deployGate}
+                    filesystemGate={filesystemGate}
+                    onSaveToken={publish.saveToken}
+                    onSaveManifest={publish.saveManifest}
+                    onProvision={publish.provision}
+                    onBuild={publish.build}
+                    onStartPreview={publish.startPreview}
+                    onStopPreview={publish.stopPreview}
+                    onRedetectWrangler={publish.redetectWrangler}
+                    buildInputs={buildInputs.inputs}
+                    buildInputsSource={buildInputs.source}
+                    setBuildInputs={buildInputs.setInputs}
+                    onGoToVersions={() => setTab("versions")}
+                    onGoToEnvironment={() => setTab("environment")}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
             {/* The versions list virtualizes, so it owns its own scroll
                 container: this pane must not scroll on its behalf. */}
-            <TabsContent value="versions" className="min-h-0 flex-1 overflow-hidden">
-              <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col p-4">
-                <SiteVersionsTab
-                  versions={live.versions}
-                  deployments={live.deployments}
-                  resources={live.resources}
-                  uploadGate={uploadGate}
-                  deployGate={deployGate}
-                  isBusy={isBusy}
-                  onUpload={publish.upload}
-                  onDeploy={publish.deploy}
-                />
+            {tab === "versions" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.versions")}
+                className="min-h-0 flex-1 outline-none overflow-hidden"
+              >
+                <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col p-4">
+                  <SiteVersionsTab
+                    versions={live.versions}
+                    deployments={live.deployments}
+                    resources={live.resources}
+                    uploadGate={uploadGate}
+                    deployGate={deployGate}
+                    isBusy={isBusy}
+                    onUpload={publish.upload}
+                    onDeploy={publish.deploy}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
-            <TabsContent value="environment" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-4xl p-4">
-                <SiteEnvironmentTab
-                  environments={live.environments}
-                  gate={buildGate}
-                  isBusy={isBusy}
-                  onSave={publish.saveEnvironment}
-                />
+            {tab === "environment" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.environment")}
+                className="min-h-0 flex-1 outline-none overflow-y-auto"
+              >
+                <div className="mx-auto max-w-4xl p-4">
+                  <SiteEnvironmentTab
+                    environments={live.environments}
+                    gate={buildGate}
+                    isBusy={isBusy}
+                    onSave={publish.saveEnvironment}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
-            <TabsContent value="domains" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-5xl p-4">
-                <SiteDomainsTab
-                  site={site}
-                  resources={live.resources}
-                  gate={providerGate}
-                  isBusy={isBusy}
-                  onAddDomain={publish.addDomain}
-                  onRemoveDomain={publish.removeDomain}
-                  onSaveProviderConfig={(patch) =>
-                    void run("provider-config", () =>
-                      updateSiteProviderConfig(site.id, actorAccountId, patch)
-                    )
-                  }
-                  onApplyAccess={publish.applyAccess}
-                />
+            {tab === "domains" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.domains")}
+                className="min-h-0 flex-1 outline-none overflow-y-auto"
+              >
+                <div className="mx-auto max-w-5xl p-4">
+                  <SiteDomainsTab
+                    site={site}
+                    resources={live.resources}
+                    gate={providerGate}
+                    isBusy={isBusy}
+                    onAddDomain={publish.addDomain}
+                    onRemoveDomain={publish.removeDomain}
+                    onSaveProviderConfig={(patch) =>
+                      void run("provider-config", () =>
+                        updateSiteProviderConfig(site.id, actorAccountId, patch)
+                      )
+                    }
+                    onApplyAccess={publish.applyAccess}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
-            <TabsContent value="access" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-4xl p-4">
-                <SiteAccessTab
-                  site={site}
-                  actorAccountId={actorAccountId}
-                  gate={metadataGate}
-                  isBusy={isBusy}
-                  onSave={(policy) =>
-                    void run("authoring", () =>
-                      updateSiteAuthoringPolicy(site.id, actorAccountId, policy)
-                    )
-                  }
-                />
+            {tab === "access" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.access")}
+                className="min-h-0 flex-1 outline-none overflow-y-auto"
+              >
+                <div className="mx-auto max-w-4xl p-4">
+                  <SiteAccessTab
+                    site={site}
+                    actorAccountId={actorAccountId}
+                    gate={metadataGate}
+                    isBusy={isBusy}
+                    onSave={(policy) =>
+                      void run("authoring", () =>
+                        updateSiteAuthoringPolicy(site.id, actorAccountId, policy)
+                      )
+                    }
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
-            <TabsContent value="resources" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-5xl p-4">
-                <SiteResourcesTab
-                  resources={live.resources}
-                  versions={live.versions}
-                  gate={providerGate}
-                  isBusy={isBusy}
-                  onReconcile={() => publish.reconcile(showReconcileResult)}
-                  onReclaim={publish.reclaimArtifacts}
-                />
+            {tab === "resources" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.resources")}
+                className="min-h-0 flex-1 outline-none overflow-y-auto"
+              >
+                <div className="mx-auto max-w-5xl p-4">
+                  <SiteResourcesTab
+                    resources={live.resources}
+                    versions={live.versions}
+                    gate={providerGate}
+                    isBusy={isBusy}
+                    onReconcile={() => publish.reconcile(showReconcileResult)}
+                    onReclaim={publish.reclaimArtifacts}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
 
             {/* Same as versions: the operation journal owns its scroll. */}
-            <TabsContent value="operations" className="min-h-0 flex-1 overflow-hidden">
-              <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col p-4">
-                <SiteOperationsTab
-                  site={site}
-                  operations={live.operations}
-                  resources={live.resources}
-                  deployments={live.deployments}
-                  gate={providerGate}
-                  isBusy={isBusy}
-                  result={observabilityResult}
-                  onQuery={runObservability}
-                  onClearResult={() => setObservabilityResult(null)}
-                  onRefreshOperation={publish.refreshOperation}
-                  onCancelOperation={publish.cancelOperation}
-                />
+            {tab === "operations" ? (
+              <div
+                role="tabpanel"
+                aria-label={t("tabs.operations")}
+                className="min-h-0 flex-1 outline-none overflow-hidden"
+              >
+                <div className="mx-auto flex h-full min-h-0 max-w-5xl flex-col p-4">
+                  <SiteOperationsTab
+                    site={site}
+                    operations={live.operations}
+                    resources={live.resources}
+                    deployments={live.deployments}
+                    gate={providerGate}
+                    isBusy={isBusy}
+                    result={observabilityResult}
+                    onQuery={runObservability}
+                    onClearResult={() => setObservabilityResult(null)}
+                    onRefreshOperation={publish.refreshOperation}
+                    onCancelOperation={publish.cancelOperation}
+                  />
+                </div>
               </div>
-            </TabsContent>
+            ) : null}
           </div>
         ) : live.loading ? (
           // "Still reading" must not paint the same thing as "you have no
@@ -544,6 +578,6 @@ export function SitesConsole() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Tabs>
+    </div>
   )
 }

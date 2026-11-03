@@ -22,8 +22,6 @@ import { BotMessageSquareIcon, PlusIcon, TriangleAlertIcon } from "lucide-react"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { useBotInstallations } from "@/hooks/bots/use-bot-installations"
 import type { BotStatusFilter } from "@/lib/bot/console/bot-rows"
 
@@ -130,32 +128,27 @@ export function BotConsole({
               ? t("summary", { armed: summary.armed, total: summary.total })
               : undefined
           }
-          actions={
-            <Button size="sm" onClick={() => setInstallOpen(true)} data-testid="bots-install-open">
-              <PlusIcon className="size-3.5" aria-hidden />
-              {t("install.action")}
-            </Button>
-          }
           status={
             /**
              * The one number this page is actually scanned for. An unbound
              * credential and a dead-lettered delivery are the two states that
              * need a person, and both are invisible from the rail alone.
              */
-            summary.needsAttention > 0 ? (
-              <Badge
-                variant="outline"
-                className="gap-1.5 font-normal text-amber-600 dark:text-amber-400"
-                data-testid="bots-attention-count"
-              >
-                <span
-                  aria-hidden="true"
-                  className="inline-block size-1.5 rounded-full bg-current"
-                />
-                {t("attentionCount", { count: summary.needsAttention })}
-              </Badge>
-            ) : null
+            summary.needsAttention > 0
+              ? {
+                  label: t("attentionCount", { count: summary.needsAttention }),
+                  tone: "warning",
+                  testId: "bots-attention-count",
+                }
+              : undefined
           }
+          primaryAction={{
+            id: "install",
+            label: t("install.action"),
+            icon: PlusIcon,
+            onSelect: () => setInstallOpen(true),
+            testId: "bots-install-open",
+          }}
           testId="bots-header"
         />
       }

@@ -38,7 +38,8 @@ import { useFilesPage } from "@/hooks/files-library/use-files-page"
 import { useRemoteFilesBackend } from "@/hooks/files-library/use-remote-files-backend"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
-import type { FilesEntry } from "@/lib/files-library/types"
+import { isFilesLens } from "@/lib/files-library/deep-link"
+import { FILES_LENSES, type FilesEntry } from "@/lib/files-library/types"
 import {
   FILES_SIDEBAR_MAX_PX,
   FILES_SIDEBAR_MIN_PX,
@@ -53,7 +54,6 @@ import { FilesDndProvider } from "./files-dnd"
 import { FilesDropZone } from "./files-drop-zone"
 import { FilesEmpty } from "./files-empty"
 import { FilesFolderTile } from "./files-folder-item"
-import { FilesLensTabs } from "./files-lens-tabs"
 import { FilesListTable } from "./files-list-table"
 import { FilesNewMenu } from "./files-new-menu"
 import { FilesPreviewPane } from "./files-preview-pane"
@@ -118,6 +118,9 @@ function FilesLibraryBody() {
   const sidebarWidthPx = useFilesLibraryStore((s) => s.sidebarWidthPx)
   const setSidebarWidth = useFilesLibraryStore((s) => s.setSidebarWidth)
   const setEmptyTrashOpen = useFilesLibraryStore((s) => s.setEmptyTrashOpen)
+  const search = useFilesLibraryStore((s) => s.search)
+  const setSearch = useFilesLibraryStore((s) => s.setSearch)
+  const setLens = useFilesLibraryStore((s) => s.setLens)
   const placeTitle = useFilesPlaceTitle(folders)
 
   const onKeyDown = useFilesKeyboard({ entries, selection, trash, actions })
@@ -139,27 +142,53 @@ function FilesLibraryBody() {
         )
       }
       title={placeTitle}
+      description={t("description")}
       breadcrumb={<FilesBreadcrumb folders={folders} actions={actions} />}
       summary={visible ? t("itemCount", { count: visible.length }) : undefined}
-      navigation={trash ? undefined : <FilesLensTabs />}
-      controls={<FilesToolbar />}
-      actions={
-        trash ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            disabled={view.trashCount === 0}
-            onClick={() => setEmptyTrashOpen(true)}
-            data-testid="files-empty-trash"
-          >
-            <Trash2Icon aria-hidden />
-            {t("trash.empty")}
-          </Button>
-        ) : (
-          <FilesNewMenu actions={actions} />
-        )
+      // The Trash has no lenses, so it draws no tab row.
+      tabs={
+        trash
+          ? undefined
+          : {
+              items: FILES_LENSES.map((id) => ({
+                value: id,
+                label: t(`lenses.${id}`),
+                testId: `files-lens-${id}`,
+              })),
+              value: lens,
+              onValueChange: (value) => {
+                if (isFilesLens(value)) setLens(value)
+              },
+              ariaLabel: t("lenses.aria"),
+            }
       }
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: t("search.placeholder"),
+        ariaLabel: t("search.aria"),
+        testId: "files-search",
+      }}
+      controls={<FilesToolbar />}
+      secondaryActions={
+        trash
+          ? [
+              {
+                id: "empty-trash",
+                label: t("trash.empty"),
+                icon: Trash2Icon,
+                destructive: true,
+                disabled: view.trashCount === 0,
+                onSelect: () => setEmptyTrashOpen(true),
+                testId: "files-empty-trash",
+              },
+            ]
+          : undefined
+      }
+      // "New" is a menu with a hidden upload input and a template submenu,
+      // which the typed `primaryAction.menu` cannot carry, so it stays a
+      // custom control.
+      actions={trash ? undefined : <FilesNewMenu actions={actions} />}
       testId="files-header"
     />
   )

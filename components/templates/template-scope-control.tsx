@@ -25,6 +25,8 @@
 import { useTranslations } from "next-intl"
 import { Building2Icon } from "lucide-react"
 
+import type { ReactNode } from "react"
+
 import { Surface } from "@/components/surface/surface"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { TemplateScopeTier } from "@/lib/templates/scope"
@@ -73,9 +75,39 @@ export interface TemplateScopeControlProps {
    * shape `TemplateService.setDefinitionWorkspace` takes.
    */
   onChange: (workspaceId: string | null) => void
+  /**
+   * `"card"` (default): a raised card of its own, as the phone sheet lays it
+   * out. `"section"`: a plain section under a rule, for the desktop
+   * inspector, whose sections all share one heading style.
+   */
+  variant?: "card" | "section"
+}
+
+/**
+ * The frame both variants share: the raised card, or a plain ruled section
+ * whose heading matches its neighbours in the Studio inspector.
+ */
+export function SectionFrame({
+  section,
+  children,
+  ...rest
+}: { section: boolean; children: ReactNode } & Record<`data-${string}`, string | undefined>) {
+  if (section) {
+    return (
+      <section className="space-y-3 border-t pt-4" data-variant="section" {...rest}>
+        {children}
+      </section>
+    )
+  }
+  return (
+    <Surface layer="raised" radius="control" className="space-y-2 p-3" {...rest}>
+      {children}
+    </Surface>
+  )
 }
 
 export function TemplateScopeControl({
+  variant = "card",
   tier,
   ownerWorkspaceId,
   activeWorkspaceId,
@@ -83,23 +115,26 @@ export function TemplateScopeControl({
   onChange,
 }: TemplateScopeControlProps) {
   const t = useTranslations("templateStudio.scopeControl")
+  const section = variant === "section"
   const blocker = templateScopeBlocker(tier, activeWorkspaceId)
   const value: TemplateOwnershipChoice = ownerWorkspaceId === undefined ? "shared" : "workspace"
 
   return (
-    <Surface
-      layer="raised"
-      radius="control"
-      className="space-y-2 p-3"
+    <SectionFrame
+      section={section}
       data-testid="template-scope-control"
       data-blocked={blocker ?? ""}
     >
-      <div className="flex items-center gap-2">
-        <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("title")}
-        </h3>
-      </div>
+      {section ? (
+        <h3 className="text-xs font-medium text-muted-foreground">{t("title")}</h3>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("title")}
+          </h3>
+        </div>
+      )}
       <ToggleGroup
         type="single"
         size="sm"
@@ -123,6 +158,6 @@ export function TemplateScopeControl({
       <p className="text-xs text-muted-foreground" data-testid="template-scope-reason">
         {blocker ? t(`blocked.${blocker}`) : t(`explain.${value}`)}
       </p>
-    </Surface>
+    </SectionFrame>
   )
 }

@@ -5,10 +5,18 @@ import { useTranslations } from "next-intl"
 import { useSearchParams } from "next/navigation"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useLiveQuery } from "dexie-react-hooks"
-import { ClipboardPasteIcon, PlusIcon, ServerIcon, ShareIcon } from "lucide-react"
+import {
+  ActivityIcon,
+  ClipboardPasteIcon,
+  PlugZapIcon,
+  PlusIcon,
+  ServerIcon,
+  ShareIcon,
+  ShoppingBagIcon,
+  type LucideIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
 import {
   Sheet,
   SheetContent,
@@ -38,7 +46,7 @@ import {
   updateMcpServer,
 } from "@/lib/db/mcp-servers"
 import { applyPresetFields, type McpPreset } from "@/lib/claude/mcp-presets"
-import { useMcpPanelStore } from "@/stores/mcp/mcp-panel-store"
+import { useMcpPanelStore, type McpPanelTab } from "@/stores/mcp/mcp-panel-store"
 import { blankServerSeed } from "./server-seed"
 import {
   CLAUDE_CODE_RELATED,
@@ -50,7 +58,6 @@ import { McpImportDialog } from "../mcp-import-dialog"
 import { refreshAgentAvailability } from "../mcp-agent-chip-group"
 import { McpExportDialog } from "./mcp-export-dialog"
 import { McpMyServersTab } from "./mcp-my-servers-tab"
-import { McpPanelTabs } from "./mcp-panel-tabs"
 import { McpPresetGrid } from "./mcp-preset-grid"
 import { McpHealthTab } from "./mcp-health-tab"
 import { McpServerEditor } from "./mcp-server-editor"
@@ -58,6 +65,13 @@ import { McpTransferDialog } from "./mcp-transfer-dialog"
 import type { McpEditorInitial } from "./mcp-server-utils"
 
 const BLANK_CONFIG = { command: "", args: [] as string[] }
+
+const MCP_TAB_DEFS: { id: McpPanelTab; labelKey: string; icon: LucideIcon }[] = [
+  { id: "my-servers", labelKey: "myServers", icon: ServerIcon },
+  { id: "presets", labelKey: "presets", icon: ShoppingBagIcon },
+  { id: "agents", labelKey: "agents", icon: PlugZapIcon },
+  { id: "health", labelKey: "health", icon: ActivityIcon },
+]
 
 /**
  * The MCP servers management panel — four tabs over one fixed-height frame.
@@ -76,6 +90,7 @@ const BLANK_CONFIG = { command: "", args: [] as string[] }
 export function McpPanel({ className }: { className?: string }) {
   const t = useTranslations("mcp")
   const tGallery = useTranslations("mcp.gallery")
+  const tTabs = useTranslations("mcp.tabs")
   const activeTab = useMcpPanelStore((s) => s.activeTab)
   const setActiveTab = useMcpPanelStore((s) => s.setActiveTab)
   const openDetail = useMcpPanelStore((s) => s.openDetail)
@@ -158,35 +173,44 @@ export function McpPanel({ className }: { className?: string }) {
             {t("panel.counts", { enabled: enabledCount, total: servers.length })}
           </span>
         }
-        navigation={<McpPanelTabs />}
-        actions={
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setTransferOpen(true)}
-              data-testid="mcp-open-transfer"
-            >
-              <ClipboardPasteIcon className="size-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">{t("panel.paste")}</span>
-            </Button>
-            <McpImportDialog onImported={refreshAgentAvailability} />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => openExport([])}
-              disabled={servers.length === 0}
-              data-testid="mcp-open-export"
-            >
-              <ShareIcon className="size-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">{t("panel.exportAll")}</span>
-            </Button>
-            <Button size="sm" onClick={() => void blankServerSeed().then(openCreate)}>
-              <PlusIcon className="size-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">{t("addServer")}</span>
-            </Button>
-          </>
-        }
+        tabs={{
+          items: MCP_TAB_DEFS.map((tab) => ({
+            value: tab.id,
+            label: tTabs(tab.labelKey),
+            icon: tab.icon,
+            testId: `panel-tab-${tab.id}`,
+          })),
+          value: activeTab,
+          onValueChange: (next) => setActiveTab(next as McpPanelTab),
+          ariaLabel: tTabs("label"),
+        }}
+        // The agent import dialog owns its trigger and open state, so it stays
+        // a free-form control; the rest are plain buttons.
+        actions={<McpImportDialog onImported={refreshAgentAvailability} />}
+        secondaryActions={[
+          {
+            id: "paste",
+            label: t("panel.paste"),
+            icon: ClipboardPasteIcon,
+            onSelect: () => setTransferOpen(true),
+            testId: "mcp-open-transfer",
+          },
+          {
+            id: "export-all",
+            label: t("panel.exportAll"),
+            icon: ShareIcon,
+            onSelect: () => openExport([]),
+            disabled: servers.length === 0,
+            testId: "mcp-open-export",
+          },
+        ]}
+        primaryAction={{
+          id: "add-server",
+          label: t("addServer"),
+          icon: PlusIcon,
+          onSelect: () => void blankServerSeed().then(openCreate),
+          testId: "mcp-add-server",
+        }}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">

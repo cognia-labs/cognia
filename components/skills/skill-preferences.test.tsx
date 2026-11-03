@@ -14,16 +14,42 @@ jest.mock("@/hooks/skills", () => ({
 jest.mock("@/stores/settings", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { create } = require("zustand")
-  const useSettingsStore = create(() => ({ setSkillPanelPrefs: jest.fn() }))
+  const useSettingsStore = create(() => ({
+    settings: null,
+    setSkillPanelPrefs: jest.fn(),
+    setSkillBundleMirrors: jest.fn(),
+  }))
   return { __esModule: true, useSettingsStore }
 })
+
+// The real module drags the whole settings store in; the resolver is two `??`.
+jest.mock("@/stores/settings/settings-store", () => ({
+  resolveSkillBundleMirrors: (
+    settings: { skillBundleMirrors?: { claude?: boolean; codex?: boolean } } | null
+  ) => ({
+    claude: settings?.skillBundleMirrors?.claude ?? true,
+    codex: settings?.skillBundleMirrors?.codex ?? true,
+  }),
+}))
+
+// The host-skills predicates, not `isTauri()`, decide whether the mirror
+// targets are live: a browser or phone driving a paired Host can sync.
+const hostSkillsRef = { read: false, write: false }
+jest.mock("@/lib/skills/sync", () => ({
+  canReadHostSkills: () => hostSkillsRef.read,
+  canWriteHostSkills: () => hostSkillsRef.write,
+}))
 
 import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { DEFAULT_SKILL_PANEL_PREFS, SKILL_ENABLED_WARN_MAX } from "@/lib/skills/preferences"
 import { useSkillPanelPrefs } from "@/hooks/skills"
 import { useSettingsStore } from "@/stores/settings"
-import { SkillPreferencesForm, SkillPreferencesPopover } from "./skill-preferences"
+import {
+  SkillPreferencesForm,
+  SkillPreferencesPopover,
+  SkillSyncTargets,
+} from "./skill-preferences"
 
 const mockUsePrefs = useSkillPanelPrefs as jest.Mock
 
@@ -33,7 +59,13 @@ function setPrefsSpy() {
 
 beforeEach(() => {
   mockUsePrefs.mockReturnValue({ ...DEFAULT_SKILL_PANEL_PREFS })
-  ;(useSettingsStore.setState as (p: unknown) => void)({ setSkillPanelPrefs: jest.fn() })
+  ;(useSettingsStore.setState as (p: unknown) => void)({
+    settings: null,
+    setSkillPanelPrefs: jest.fn(),
+    setSkillBundleMirrors: jest.fn(),
+  })
+  hostSkillsRef.read = false
+  hostSkillsRef.write = false
 })
 
 describe("SkillPreferencesForm", () => {
@@ -150,5 +182,58 @@ describe("SkillPreferencesPopover", () => {
     render(<SkillPreferencesPopover />)
     expect(screen.getByTestId("skill-preferences-trigger")).toBeInTheDocument()
     expect(screen.getByLabelText("prefs.openAria")).toBeInTheDocument()
+  })
+})
+
+describe("SkillSyncTargets", () => {
+  function setMirrorSpy() {
+    return (useSettingsStore.getState() as unknown as { setSkillBundleMirrors: jest.Mock })
+      .setSkillBundleMirrors
+  }
+
+  it("lets a client whose host serves its skills directory pick mirror targets", () => {
+    hostSkillsRef.read = true
+    hostSkillsRef.write = true
+    render(<SkillSyncTargets />)
+    expect(screen.getByTestId("skill-panel-toolbar-sync-hint")).toHaveTextContent(
+      "toolbar.syncNative"
+    )
+    const codex = screen.getByTestId("skill-panel-toolbar-mirror-codex")
+    expect(codex).not.toBeDisabled()
+    expect(codex).toHaveAttribute("aria-checked", "true")
+    fireEvent.click(codex)
+    expect(setMirrorSpy()).toHaveBeenCalledWith({ codex: false })
+  })
+
+  it("reflects a stored mirror choice", () => {
+    hostSkillsRef.read = true
+    ;(useSettingsStore.setState as (p: unknown) => void)({
+      settings: { skillBundleMirrors: { claude: false } },
+    })
+    render(<SkillSyncTargets />)
+    expect(screen.getByTestId("skill-panel-toolbar-mirror-claude")).toHaveAttribute(
+      "aria-checked",
+      "false"
+    )
+  })
+
+  it("says the host cannot serve skills, not that this is not a desktop", () => {
+    // `unavailableRead` is the sentence `useSkillSync` has always shown when it
+    // actually refuses. The old title claimed "requires desktop mode", which is
+    // wrong for a phone paired to a Host that can serve them.
+    render(<SkillSyncTargets />)
+    expect(screen.getByTestId("skill-panel-toolbar-sync-hint")).toHaveTextContent(
+      "sync.unavailableRead"
+    )
+    expect(screen.getByTestId("skill-panel-toolbar-mirror-claude")).toHaveAttribute("data-disabled")
+    expect(screen.queryByText("syncNativeDesktopOnly")).not.toBeInTheDocument()
+  })
+
+  it("sits in the preferences popover under the form", async () => {
+    const user = userEvent.setup()
+    render(<SkillPreferencesPopover />)
+    await user.click(screen.getByTestId("skill-preferences-trigger"))
+    expect(await screen.findByTestId("skill-preferences-form")).toBeInTheDocument()
+    expect(screen.getByTestId("skill-panel-toolbar-sync")).toBeInTheDocument()
   })
 })

@@ -10,23 +10,22 @@ import {
   ExternalLinkIcon,
   FileArchiveIcon,
   PlusIcon,
-  SearchIcon,
   Trash2Icon,
   UploadIcon,
   ChevronDownIcon,
   LinkIcon,
   GitFork as GitForkIcon,
+  XIcon,
+  MoreHorizontalIcon,
+  ArchiveIcon,
+  BanIcon,
+  LockIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { usePlatform } from "@/hooks/use-platform"
-import { useUrlSearchDraft } from "@/hooks/ui/use-url-search-draft"
 import { refreshTemplateOwners } from "@/lib/global-search/providers/library"
 import { useScopedTemplateCatalog } from "@/hooks/templates/use-scoped-template-catalog"
-import {
-  TEMPLATE_TABS,
-  useTemplateRouteState,
-  type TemplateTab,
-} from "@/hooks/templates/use-template-route-state"
+import { useTemplateRouteState, type TemplateTab } from "@/hooks/templates/use-template-route-state"
 import {
   TEMPLATE_SCOPE_TIERS,
   trustRestatesScope,
@@ -42,7 +41,6 @@ import type {
   TemplateVersionBump,
 } from "@/lib/templates/contracts"
 import {
-  TEMPLATE_CATALOG_ONLY_DOMAINS,
   TEMPLATE_FULL_DOMAINS,
   isTemplateInputId,
   listTemplateTokens,
@@ -65,7 +63,7 @@ import { TemplateDefinitionShareButton } from "@/components/share/template-defin
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -75,6 +73,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Label } from "@/components/ui/label"
@@ -85,11 +90,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { isWorkflowNodeGroupDefinition } from "@/lib/workflow/node-groups/materialize"
+import { cn } from "@/lib/utils"
 
 import { TemplateBindingField } from "./template-binding-field"
 import { TemplateExportDialog, type TemplateExportRequest } from "./template-export-dialog"
@@ -103,22 +108,25 @@ import { TemplateOriginCard } from "./template-origin-card"
 import { TemplateScopeControl } from "./template-scope-control"
 import { TemplateUpdateDialog } from "./template-update-dialog"
 import { TemplateUrlImportDialog } from "./template-url-import-dialog"
+import { DEFINITION_SHELVES, TemplateDomainIcon, TemplateNavSidebar } from "./template-nav-sidebar"
 
 /** Domains with a real adapter: these can be authored, published, instantiated. */
 const FULL_DOMAINS: TemplateDomain[] = [...TEMPLATE_FULL_DOMAINS]
 
-/**
- * Every domain the filter offers.
- *
- * The six catalog-only domains are searchable projections with no adapter, so
- * they are read-only here, but they render a domain badge and carry i18n
- * labels. Leaving them out of the filter meant half the catalog could be seen
- * on a card and never filtered to.
- */
-const FILTERABLE_DOMAINS: TemplateDomain[] = [
-  ...TEMPLATE_FULL_DOMAINS,
-  ...TEMPLATE_CATALOG_ONLY_DOMAINS,
-]
+type DefinitionShelf = "library" | "drafts" | "published"
+
+/** The rows a definition shelf lists: drafts (and conflicts), releases, or both. */
+function rowsForTab(
+  definitions: readonly TemplateDefinitionEnvelope[],
+  tab: DefinitionShelf
+): TemplateDefinitionEnvelope[] {
+  if (tab === "drafts")
+    return definitions.filter(
+      (definition) => definition.status === "draft" || definition.status === "conflict"
+    )
+  if (tab === "published") return definitions.filter((definition) => definition.version !== null)
+  return [...definitions]
+}
 
 /**
  * Where a domain's real editor lives.
@@ -187,20 +195,32 @@ export function TemplateStudio() {
   const route = useTemplateRouteState()
   const { query, domain, trust, scope: tier } = route
   const { setQuery, setDomain, setTrust, setScope: setTier } = route
-  // A draft of its own, so typing (and an IME above all) is not reset by the
-  // URL round trip. See the hook.
-  const search = useUrlSearchDraft(query, setQuery)
   // Scoped, not raw: a definition confined to another workspace is not this
   // workspace's to list, and one this workspace hid should not come back
   // because the Studio asked a different question than the phone did.
-  const { definitions, revision, tierOf, owners, hiddenCount } = useScopedTemplateCatalog(
+  //
+  // Queried without the type: the rail counts every type the other filters
+  // leave, and the type is applied here, on the same rows.
+  const {
+    definitions: catalogRows,
+    revision,
+    tierOf,
+    owners,
+    hiddenCount,
+  } = useScopedTemplateCatalog(
     {
       text: query,
       platform: templatePlatform,
-      ...(domain === "all" ? {} : { domain }),
       ...(trust === "all" ? {} : { trust }),
     },
     { tier }
+  )
+  const definitions = useMemo(
+    () =>
+      domain === "all"
+        ? catalogRows
+        : catalogRows.filter((definition) => definition.domain === domain),
+    [catalogRows, domain]
   )
   const activeWorkspaceId = useProjectStore((state) => state.activeProjectId)
   const [allWorkspaceInstances, setAllWorkspaceInstances] = useState(false)
@@ -766,12 +786,88 @@ export function TemplateStudio() {
     setTrustLedgerNonce((value) => value + 1)
   }
 
+  const shelf = route.tab
+  const shelfCounts: Partial<Record<TemplateTab, number>> = {
+    library: definitions.length,
+    drafts: rowsForTab(definitions, "drafts").length,
+    published: rowsForTab(definitions, "published").length,
+    packages: packages.length,
+    instances: instances.length,
+  }
+  const definitionShelf = DEFINITION_SHELVES.includes(shelf)
+  const filtersActive = route.activeFilterCount > 0 || query.length > 0
+  const clearFilters = () => route.clearFilters({ includeQuery: true })
+
+  // The search, scope and trust narrow a shelf of definitions; the type is the
+  // rail's facet list. Packages and instances have none of these.
+  //
+  // The query lives in the URL; the header's search keeps its own draft and
+  // waits out an IME, so it is bound straight to the route.
+  const controls = definitionShelf ? (
+    <div className="flex items-center gap-2">
+      <Select value={tier} onValueChange={(value) => setTier(value as typeof tier)}>
+        <SelectTrigger size="sm" aria-label={t("filters.scope")} className="w-auto min-w-32">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t("filters.allScopes")}</SelectItem>
+          {TEMPLATE_SCOPE_TIERS.map((item) => (
+            <SelectItem key={item} value={item}>
+              {t(`scopes.${item}`)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select value={trust} onValueChange={(value) => setTrust(value as typeof trust)}>
+        <SelectTrigger size="sm" aria-label={t("filters.trust")} className="w-auto min-w-32">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t("filters.allTrust")}</SelectItem>
+          {(["built-in", "verified-publisher", "signed-unknown", "unsigned"] as const).map(
+            (item) => (
+              <SelectItem key={item} value={item}>
+                {t(`trust.${item}`)}
+              </SelectItem>
+            )
+          )}
+        </SelectContent>
+      </Select>
+      {filtersActive ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={clearFilters}
+          className="text-muted-foreground"
+          data-testid="template-clear-filters"
+        >
+          <XIcon className="size-3.5" />
+          {t("filters.clear")}
+        </Button>
+      ) : null}
+    </div>
+  ) : undefined
+
+  // Laid out like /plugins: a plain header naming the shelf you are on, its
+  // filters in the second row, and the shelves themselves in the left rail.
+  // The floating header card sat over a band of empty page before the tabs.
   const header = (
     <FeaturePageHeader
       icon={<FileArchiveIcon />}
       title={t("title")}
       description={t("description")}
-      variant="card"
+      status={{ label: t(`tabs.${shelf}`), testId: "template-shelf-badge" }}
+      search={
+        definitionShelf
+          ? {
+              value: query,
+              onChange: setQuery,
+              placeholder: t("filters.search"),
+              testId: "template-studio-search",
+            }
+          : undefined
+      }
+      controls={controls}
       actions={
         platform === "mobile" ? null : (
           <div className="flex items-center gap-2">
@@ -782,37 +878,74 @@ export function TemplateStudio() {
               className="hidden"
               onChange={(event) => guard(() => inspectImport(event.target.files?.[0]))()}
             />
-            <Button variant="outline" onClick={() => importRef.current?.click()}>
-              <UploadIcon className="size-4" />
-              {t("actions.import")}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setUrlImportOpen(true)}
-              data-testid="template-import-url"
-            >
-              <LinkIcon className="size-4" />
-              {t("actions.importUrl")}
-            </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <PlusIcon className="size-4" />
-              {t("actions.newDraft")}
-            </Button>
+            {/* One Import, two sources: a package file or a link. Two
+                side-by-side outline buttons for the same verb read as two
+                different features. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" data-testid="template-import-menu">
+                  <UploadIcon className="size-4" />
+                  {t("actions.import")}
+                  <ChevronDownIcon className="size-3.5 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem
+                  onSelect={() => importRef.current?.click()}
+                  data-testid="template-import-file"
+                >
+                  <UploadIcon className="size-4" />
+                  {t("actions.importFile")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setUrlImportOpen(true)}
+                  data-testid="template-import-url"
+                >
+                  <LinkIcon className="size-4" />
+                  {t("actions.importUrl")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )
+      }
+      // Authoring is desktop-only; the phone body hands it off instead.
+      primaryAction={
+        platform === "mobile"
+          ? undefined
+          : {
+              id: "new-draft",
+              label: t("actions.newDraft"),
+              icon: PlusIcon,
+              onSelect: () => setCreateOpen(true),
+              testId: "template-new-draft",
+            }
       }
     />
   )
 
+  const nav = (
+    <TemplateNavSidebar
+      shelf={shelf}
+      // Controlled by `?tab=`. `useTemplateRouteState` has owned `tab` and
+      // `setTab` since the phone body landed: the shelf a user is on is
+      // something they can send, and `FeaturePageShell` REMOUNTS its subtree
+      // at the breakpoint, so this cannot be component state either.
+      onSelectShelf={route.setTab}
+      counts={shelfCounts}
+      facetDefinitions={definitionShelf ? rowsForTab(catalogRows, shelf as DefinitionShelf) : []}
+      domain={domain}
+      onSelectDomain={setDomain}
+    />
+  )
+
   /**
-   * The inspector is the shell's right rail rather than a 360px column inside
-   * every tab. It was declared three times, once per definition tab, and the
-   * page owned no `data-bg-target` at all, so an enabled wallpaper simply did
-   * not reach /templates. `FeaturePageShell` owns both, plus panel-size
-   * persistence and the below-`md` Sheet fallback, which is why twelve other
-   * feature routes are already on it.
+   * The inspector is the shell's right rail rather than a column inside the
+   * centre, and it exists only while a template is picked, like the plugin
+   * detail: a quarter of the window reserved for "select a template" is a
+   * quarter the grid could use. It closes from its own close button.
    */
-  const inspector = (
+  const inspector = selected ? (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <TemplateInspector
         definition={selected}
@@ -820,10 +953,8 @@ export function TemplateStudio() {
         setBindings={setBindings}
         plan={plan}
         mobile={platform === "mobile"}
-        tier={selected ? tierOf(selected) : undefined}
-        {...(selected && owners[selected.id] !== undefined
-          ? { ownerWorkspaceId: owners[selected.id] }
-          : {})}
+        tier={tierOf(selected)}
+        {...(owners[selected.id] !== undefined ? { ownerWorkspaceId: owners[selected.id] } : {})}
         activeWorkspaceId={activeWorkspaceId}
         onSetWorkspace={(workspaceId) => guard(() => setDefinitionWorkspace(workspaceId))()}
         onPreflight={guard(runPreflight)}
@@ -839,32 +970,46 @@ export function TemplateStudio() {
         onDeprecate={guard(() => deprecateSelected("deprecated"))}
         onYank={guard(() => deprecateSelected("yanked"))}
         onDeleteDraft={guard(deleteSelectedDraft)}
+        onClose={platform === "mobile" ? undefined : () => route.setDefinitionId(undefined)}
         t={t}
       />
     </div>
-  )
+  ) : null
+
+  const rows = definitionShelf ? rowsForTab(definitions, shelf as DefinitionShelf) : []
 
   return (
     <>
       <FeaturePageShell
         storageId="templates"
         header={header}
-        centerClassName="gap-4 p-4"
-        rightPane={{
-          label: t("inspector.label"),
-          content: inspector,
-          defaultSize: 28,
-          minSize: 20,
-          maxSize: 44,
-          // Controlled, because the centre pane is what selects the row the
-          // rail shows. Left uncontrolled, a tap on a phone-width viewport set
-          // the selection in a Sheet nobody had opened, so the card read as a
-          // dead end.
-          open: inspectorOpen,
-          onOpenChange: setInspectorOpen,
+        centerClassName="gap-4 overflow-y-auto p-4"
+        leftPane={{
+          label: t("nav.label"),
+          content: nav,
+          defaultSize: "13rem",
+          minSize: "10rem",
+          maxSize: "20rem",
         }}
+        rightPane={
+          inspector
+            ? {
+                label: t("inspector.label"),
+                content: inspector,
+                defaultSize: 32,
+                minSize: 24,
+                maxSize: 48,
+                // Controlled, because the centre pane is what selects the row
+                // the rail shows. Left uncontrolled, a tap on a phone-width
+                // viewport set the selection in a Sheet nobody had opened, so
+                // the card read as a dead end.
+                open: inspectorOpen,
+                onOpenChange: setInspectorOpen,
+              }
+            : undefined
+        }
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-4" data-testid="template-studio">
+        <div className="flex flex-col gap-4" data-testid="template-studio">
           {platform === "mobile" ? (
             <Alert>
               <ExternalLinkIcon />
@@ -879,199 +1024,133 @@ export function TemplateStudio() {
             </Alert>
           ) : null}
 
-          {/* Controlled by `?tab=`. `useTemplateRouteState` has owned `tab` and
-              `setTab` since the phone body landed and nothing read them: the
-              Studio was `defaultValue="library"`, so `/templates?tab=instances`
-              opened the Library and the tab a user was on could not be sent to
-              anyone. `FeaturePageShell` also renders its children through two
-              different trees and REMOUNTS the subtree at the breakpoint, which
-              is the second reason this cannot be component state. */}
-          <Tabs
-            value={route.tab}
-            onValueChange={(value) => {
-              if ((TEMPLATE_TABS as readonly string[]).includes(value)) {
-                route.setTab(value as TemplateTab)
-              }
-            }}
-            className="min-h-0 flex-1"
-          >
-            <TabsList className="flex w-full justify-start overflow-x-auto">
-              {/* Rendered from the contract rather than hand-listed, so a tab
-                  added to `TEMPLATE_TABS` cannot ship without a trigger. */}
-              {TEMPLATE_TABS.map((tab) => (
-                <TabsTrigger key={tab} value={tab}>
-                  {t(`tabs.${tab}`)}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {(["library", "drafts", "published"] as const).map((tab) => {
-              const rows = definitions.filter((definition) => {
-                if (tab === "drafts")
-                  return definition.status === "draft" || definition.status === "conflict"
-                if (tab === "published") return definition.version !== null
-                return true
-              })
-              return (
-                <TabsContent key={tab} value={tab} className="min-h-0">
-                  <div className="mb-3 grid gap-2 md:grid-cols-[1fr_180px_180px]">
-                    <div className="relative">
-                      <SearchIcon className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
-                      <Input {...search} placeholder={t("filters.search")} className="pl-9" />
-                    </div>
-                    <Select
-                      value={domain}
-                      onValueChange={(value) => setDomain(value as typeof domain)}
+          {definitionShelf ? (
+            <>
+              {/* Columns follow the pane, not the viewport: beside the
+                inspector, `xl:grid-cols-3` cut a 530px column into three
+                170px cards and wrapped names over three lines. */}
+              <div
+                className="grid content-start gap-3 grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]"
+                data-testid="template-studio-grid"
+              >
+                {rows.map((definition) => {
+                  const isSelected = selected?.contentHash === definition.contentHash
+                  const scopeTier = tierOf(definition)
+                  return (
+                    <div
+                      key={`${definition.id}@${definition.version ?? definition.revision}`}
+                      role="button"
+                      tabIndex={0}
+                      // Selection was conveyed by a border alone, and Space did
+                      // nothing: a `role="button"` that only answers Enter is
+                      // half a button to anyone not using a mouse.
+                      aria-pressed={isSelected}
+                      data-slot="template-card"
+                      className={cn(
+                        "group flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/20 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                        isSelected &&
+                          "border-primary/60 bg-primary/[0.04] ring-1 ring-primary/40 hover:border-primary/60 hover:bg-primary/[0.06]"
+                      )}
+                      onClick={() => selectDefinition(definition)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return
+                        event.preventDefault()
+                        selectDefinition(definition)
+                      }}
                     >
-                      <SelectTrigger aria-label={t("filters.domain")}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">{t("filters.allDomains")}</SelectItem>
-                        {FILTERABLE_DOMAINS.map((item) => (
-                          <SelectItem
-                            key={item}
-                            value={item}
-                            data-testid={`template-domain-${item}`}
+                      {/* Type above the name, not beside it: a "Subscription
+                        preset" badge took half the card and wrapped names
+                        like "Baichuan AI (百川智能)" over three lines. */}
+                      <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                        <TemplateDomainIcon domain={definition.domain} />
+                        <span className="min-w-0 flex-1 truncate">
+                          {t(`domains.${definition.domain}`)}
+                        </span>
+                        {/* Published is what a library row normally is; only
+                          a state worth acting on earns a badge. It read
+                          "Published" on every card in the Library. */}
+                        {definition.status === "published" ? null : (
+                          <Badge
+                            variant={
+                              definition.status === "conflict" || definition.status === "yanked"
+                                ? "destructive"
+                                : "secondary"
+                            }
+                            className="shrink-0"
+                            data-testid="template-card-status"
                           >
-                            {t(`domains.${item}`)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={tier} onValueChange={(value) => setTier(value as typeof tier)}>
-                      <SelectTrigger aria-label={t("filters.scope")}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">{t("filters.allScopes")}</SelectItem>
-                        {TEMPLATE_SCOPE_TIERS.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {t(`scopes.${item}`)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      value={trust}
-                      onValueChange={(value) => setTrust(value as typeof trust)}
-                    >
-                      <SelectTrigger aria-label={t("filters.trust")}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">{t("filters.allTrust")}</SelectItem>
-                        {(
-                          ["built-in", "verified-publisher", "signed-unknown", "unsigned"] as const
-                        ).map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {t(`trust.${item}`)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {/* Columns follow the pane, not the viewport: beside the
-                      inspector, `xl:grid-cols-3` cut a 530px column into three
-                      170px cards and wrapped names over three lines. */}
-                  <div
-                    className="grid content-start gap-3 grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]"
-                    data-testid="template-studio-grid"
-                  >
-                    {rows.map((definition) => (
-                      <Card
-                        key={`${definition.id}@${definition.version ?? definition.revision}`}
-                        role="button"
-                        tabIndex={0}
-                        // Selection was conveyed by a border alone, and Space did
-                        // nothing: a `role="button"` that only answers Enter is
-                        // half a button to anyone not using a mouse.
-                        aria-pressed={selected?.contentHash === definition.contentHash}
-                        className={
-                          selected?.contentHash === definition.contentHash ? "border-primary" : ""
-                        }
-                        onClick={() => selectDefinition(definition)}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return
-                          event.preventDefault()
-                          selectDefinition(definition)
-                        }}
-                      >
-                        <CardHeader className="pb-2">
-                          {/* Domain above the name, not beside it: a "Subscription
-                              preset" badge took half the card and wrapped
-                              names like "Baichuan AI (百川智能)" over three lines. */}
-                          <div className="flex min-w-0 flex-col items-start gap-1.5">
-                            <Badge variant="outline">{t(`domains.${definition.domain}`)}</Badge>
-                            <CardTitle className="min-w-0 text-base break-words">
-                              {definition.metadata.name}
-                            </CardTitle>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-2 text-sm">
-                          {/* Omitted rather than "No description": the
-                              subscription presets have none, and the same
-                              placeholder on every one of them is noise. The
-                              inspector still says it. */}
-                          {definition.metadata.description ? (
-                            <p className="line-clamp-2 text-muted-foreground">
-                              {definition.metadata.description}
-                            </p>
-                          ) : null}
-                          <div className="flex flex-wrap gap-1">
-                            {/* Which shelf this came from. Ownership beats
-                                provenance, so a built-in you forked into one
-                                workspace reads as that workspace's. */}
-                            <Badge variant="outline" data-testid="template-card-scope">
-                              {t(`scopes.${tierOf(definition)}`)}
-                            </Badge>
-                            <Badge variant="secondary">{t(`status.${definition.status}`)}</Badge>
-                            {/* Dropped when it would only restate the scope
-                                badge beside it: a built-in is trusted because
-                                it is a built-in, so the row read "Built-in
-                                Published Built in". */}
-                            {trustRestatesScope(
-                              definition.provenance.trust,
-                              tierOf(definition)
-                            ) ? null : (
-                              <Badge variant="secondary">
-                                {t(`trust.${definition.provenance.trust}`)}
-                              </Badge>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                    {rows.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">{t("empty.noResults")}</p>
-                    ) : null}
-                    {/* Say what the workspace is holding back. A library that
-                        quietly omits rows reads as one that lost them. */}
-                    {hiddenCount > 0 ? (
-                      <p
-                        className="text-xs text-muted-foreground"
-                        data-testid="template-hidden-count"
-                      >
-                        {t("filters.hiddenHere", { count: hiddenCount })}
+                            {t(`status.${definition.status}`)}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="min-w-0 text-sm font-medium leading-snug break-words">
+                        {definition.metadata.name}
                       </p>
-                    ) : null}
-                  </div>
-                </TabsContent>
-              )
-            })}
-            <TabsContent value="packages" className="min-h-0 overflow-y-auto">
-              <TemplatePackagesTab
-                packages={packages}
-                reports={packageReports}
-                onVerify={(key) => guard(() => verifyPackage(key))()}
-                onYank={(key, yanked) => guard(() => yankPackage(key, yanked))()}
-                onRemove={(key) => guard(() => removePackage(key))()}
-                onReexport={(key) => guard(() => reexportPackage(key))()}
-                onRollbackMigration={(domain) => guard(() => rollbackMigration(domain))()}
-                publisherRefreshToken={publisherKeyNonce}
-                trustRefreshToken={trustLedgerNonce}
-              />
-            </TabsContent>
-            <TabsContent value="instances" className="space-y-3">
+                      {/* Omitted rather than "No description": the
+                        subscription presets have none, and the same
+                        placeholder on every one of them is noise. The
+                        inspector still says it. */}
+                      {definition.metadata.description ? (
+                        <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                          {definition.metadata.description}
+                        </p>
+                      ) : null}
+                      <div className="mt-auto flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 pt-1 text-[11px] text-muted-foreground">
+                        {/* Which shelf this came from. Ownership beats
+                          provenance, so a built-in you forked into one
+                          workspace reads as that workspace's. */}
+                        <span data-testid="template-card-scope">{t(`scopes.${scopeTier}`)}</span>
+                        {/* Dropped when it would only restate the scope
+                          beside it: a built-in is trusted because it is
+                          a built-in, so the row read "Built-in Built in". */}
+                        {trustRestatesScope(definition.provenance.trust, scopeTier) ? null : (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span data-testid="template-card-trust">
+                              {t(`trust.${definition.provenance.trust}`)}
+                            </span>
+                          </>
+                        )}
+                        {/* The release only matters once it can differ:
+                          every built-in is v1.0.0, and the same string on
+                          174 cards said nothing. */}
+                        {definition.version && scopeTier !== "builtin" ? (
+                          <span className="ms-auto font-mono tabular-nums">
+                            v{definition.version}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })}
+                {rows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("empty.noResults")}</p>
+                ) : null}
+                {/* Say what the workspace is holding back. A library that
+                  quietly omits rows reads as one that lost them. */}
+                {hiddenCount > 0 ? (
+                  <p className="text-xs text-muted-foreground" data-testid="template-hidden-count">
+                    {t("filters.hiddenHere", { count: hiddenCount })}
+                  </p>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {shelf === "packages" ? (
+            <TemplatePackagesTab
+              packages={packages}
+              reports={packageReports}
+              onVerify={(key) => guard(() => verifyPackage(key))()}
+              onYank={(key, yanked) => guard(() => yankPackage(key, yanked))()}
+              onRemove={(key) => guard(() => removePackage(key))()}
+              onReexport={(key) => guard(() => reexportPackage(key))()}
+              onRollbackMigration={(domain) => guard(() => rollbackMigration(domain))()}
+              publisherRefreshToken={publisherKeyNonce}
+              trustRefreshToken={trustLedgerNonce}
+            />
+          ) : null}
+          {shelf === "instances" ? (
+            <div className="space-y-3" data-testid="template-instances">
               {/* An instance records that a template was used in a particular
                   workspace, so the default view is this one. The toggle exists
                   because "where did I instantiate that" is a real question, and
@@ -1108,8 +1187,8 @@ export function TemplateStudio() {
                   />
                 ))}
               </div>
-            </TabsContent>
-          </Tabs>
+            </div>
+          ) : null}
         </div>
       </FeaturePageShell>
 
@@ -1316,6 +1395,7 @@ function TemplateInspector({
   onDeprecate,
   onYank,
   onDeleteDraft,
+  onClose,
   t,
 }: {
   definition?: TemplateDefinitionEnvelope
@@ -1348,6 +1428,8 @@ function TemplateInspector({
   onDeprecate(): void
   onYank(): void
   onDeleteDraft(): void
+  /** Deselect, which puts the library summary back in the rail. */
+  onClose?(): void
   t: ReturnType<typeof useTranslations<"templateStudio">>
 }) {
   if (!definition) {
@@ -1377,186 +1459,285 @@ function TemplateInspector({
   // conflict drafts a clashing save produces, which are otherwise unreachable.
   const editable =
     !mobile && !readOnly && (definition.status === "draft" || definition.status === "conflict")
+  const releasedRelease = Boolean(definition.version && definition.status === "published")
+  const draftLike = definition.status === "draft" || definition.status === "conflict"
+  const editorRoute = EDITOR_ROUTES[definition.domain]
+  // Everything that is not the next step goes behind ⋯: where its editor
+  // lives, and the irreversible ones (deprecate, yank, delete), which used to
+  // sit in the open as red text beside the everyday buttons.
+  const overflow = !mobile && (Boolean(editorRoute) || releasedRelease || draftLike)
   return (
-    <Card className="h-fit">
-      <CardHeader>
-        <CardTitle>{definition.metadata.name}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        <div className="space-y-1">
-          <p>{definition.metadata.description || t("empty.noDescription")}</p>
-          <p className="font-mono text-xs text-muted-foreground">
-            {definition.id}
-            {definition.version ? `@${definition.version}` : ""}
-          </p>
-          <p>{t("inspector.source", { source: definition.provenance.source })}</p>
-          {/* Where a link- or URL-sourced release actually came from.
-              `TemplateProvenance.sourceUrl` has been on the type since the
-              platform landed and nothing wrote it, so "source: link" could not
-              say WHICH link. Now that the import records it, the inspector is
-              where it gets read back. */}
-          {definition.provenance.sourceUrl ? (
-            <p className="break-all font-mono text-xs text-muted-foreground">
-              {definition.provenance.sourceUrl}
-            </p>
+    <div className="flex flex-col gap-5" data-testid="template-inspector">
+      <header className="flex flex-col gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <TemplateDomainIcon domain={definition.domain} />
+          <span className="min-w-0 truncate">{t(`domains.${definition.domain}`)}</span>
+          {definition.status === "published" ? null : (
+            <Badge variant="secondary" className="shrink-0">
+              {t(`status.${definition.status}`)}
+            </Badge>
+          )}
+          {onClose ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="ms-auto size-7 shrink-0 text-muted-foreground"
+              onClick={onClose}
+              aria-label={t("inspector.close")}
+              data-testid="template-inspector-close"
+            >
+              <XIcon className="size-4" />
+            </Button>
           ) : null}
-          <p>{t("inspector.hash", { hash: definition.contentHash })}</p>
         </div>
-        <TemplateOriginCard
-          derivation={derivation}
-          upstream={upstream}
-          onReviewUpdate={onReviewUpdate}
-          onDetach={onDetach}
-          readOnly={mobile || readOnly}
-        />
-        {/* Ownership, which is a different question from the fork lineage above
+        <h2 className="text-base font-semibold leading-snug break-words">
+          {definition.metadata.name}
+        </h2>
+        {definition.metadata.description ? (
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {definition.metadata.description}
+          </p>
+        ) : (
+          // A placeholder, so it should not read at the weight of a real one.
+          <p className="text-xs text-muted-foreground/70 italic">{t("empty.noDescription")}</p>
+        )}
+        {/* Why there is no "Check plan": a note on the template, not a badge
+            in the button row, where it read as one more button. */}
+        {readOnly ? (
+          <p
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            data-testid="template-read-only"
+          >
+            <LockIcon className="size-3.5 shrink-0" />
+            {nodeGroup ? t("inspector.nodeGroup") : t("inspector.readOnly")}
+          </p>
+        ) : null}
+      </header>
+
+      {/* One row, one size: the next step filled, the rest outlined, the
+          rest of the verbs in ⋯. Before, a filled pill, ghost text buttons, a
+          tinted share button and a lone link wrapped over three rows. */}
+      <div className="flex flex-wrap items-center gap-2" data-testid="template-inspector-actions">
+        {readOnly ? null : (
+          <Button size="sm" variant={plan ? "outline" : "default"} onClick={onPreflight}>
+            {t("actions.preflight")}
+          </Button>
+        )}
+        {plan && plan.status !== "blocked" ? (
+          <Button size="sm" onClick={onInstantiate}>
+            {t("actions.instantiate")}
+          </Button>
+        ) : null}
+        {!mobile && definition.status === "draft" ? (
+          <Button size="sm" variant="outline" onClick={onPublish}>
+            {t("actions.publish")}
+          </Button>
+        ) : null}
+        {/* `fork` and `deprecate` shipped with no caller anywhere in the app,
+            so the only way to base a template on an existing one was to
+            create a blank draft and retype it, and a published release could
+            never be withdrawn. */}
+        {!mobile && !readOnly ? (
+          <Button size="sm" variant="outline" onClick={onFork} data-testid="template-fork">
+            <GitForkIcon className="size-4" />
+            {t("actions.fork")}
+          </Button>
+        ) : null}
+        {!mobile && definition.version ? (
+          <Button size="sm" variant="outline" onClick={onExport}>
+            <DownloadIcon className="size-4" />
+            {t("actions.export")}
+          </Button>
+        ) : null}
+        {/* Published releases only. A draft has no version, so there is
+            nothing stable for a recipient to install or cite, and the share
+            builder refuses one for exactly that reason. */}
+        {!mobile && releasedRelease ? (
+          <TemplateDefinitionShareButton definition={definition} size="sm" />
+        ) : null}
+        {overflow ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="outline"
+                className="size-8"
+                aria-label={t("inspector.moreActions")}
+                data-testid="template-inspector-more"
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              {editorRoute ? (
+                <DropdownMenuItem asChild>
+                  <Link href={editorRoute} data-testid="template-open-editor">
+                    <ExternalLinkIcon className="size-4" />
+                    {t("actions.openEditor")}
+                  </Link>
+                </DropdownMenuItem>
+              ) : null}
+              {editorRoute && (releasedRelease || draftLike) ? <DropdownMenuSeparator /> : null}
+              {releasedRelease ? (
+                <>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={onDeprecate}
+                    data-testid="template-deprecate"
+                  >
+                    <ArchiveIcon className="size-4" />
+                    {t("actions.deprecate")}
+                  </DropdownMenuItem>
+                  {/* Deprecate and yank are the two halves of
+                      `setReleaseStatus`, and only the first had a caller: a
+                      release that should never be installed again could only
+                      be marked superseded. */}
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={onYank}
+                    data-testid="template-yank"
+                  >
+                    <BanIcon className="size-4" />
+                    {t("actions.yank")}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+              {/* `repository.deleteDraft` was reachable only from the migration
+                  rollback path, so a draft made by mistake, or the conflict
+                  draft a clashing save forks off, could be edited forever but
+                  never removed. */}
+              {draftLike ? (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={onDeleteDraft}
+                  data-testid="template-delete-draft"
+                >
+                  <Trash2Icon className="size-4" />
+                  {t("actions.deleteDraft")}
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+      {plan ? (
+        <Alert variant={plan.status === "blocked" ? "destructive" : "default"}>
+          {plan.status === "blocked" ? <AlertTriangleIcon /> : <CheckCircle2Icon />}
+          <AlertTitle>{t(`preflight.${plan.status}`)}</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-4">
+              {plan.issues.map((issue) => (
+                <li key={`${issue.code}:${issue.path ?? ""}`}>{t(`issues.${issue.code}`)}</li>
+              ))}
+              {plan.operations.map((operation) => (
+                <li key={operation.id}>{t(`operations.${operation.kind}`)}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {/* The rest is reference, in sections that share one heading style
+          and one rule between them, instead of a raised card, a bordered
+          box and a text button each drawn their own way. */}
+      {definition.inputs.length > 0 ? (
+        <InspectorSection title={t("inspector.inputs")}>
+          {definition.inputs.map((input) => (
+            <TemplateBindingField
+              key={input.id}
+              input={input}
+              value={bindings[input.id] ?? ""}
+              onChange={(next) => setBindings({ ...bindings, [input.id]: next })}
+            />
+          ))}
+        </InspectorSection>
+      ) : null}
+      <TemplateOriginCard
+        variant="section"
+        derivation={derivation}
+        upstream={upstream}
+        onReviewUpdate={onReviewUpdate}
+        onDetach={onDetach}
+        readOnly={mobile || readOnly}
+      />
+      {/* Ownership, which is a different question from the fork lineage above
             it: where this definition is LISTED, not where it came from.
             Authoring is desktop-only, and so is this. */}
-        {!mobile && tier ? (
-          <TemplateScopeControl
-            tier={tier}
-            {...(ownerWorkspaceId !== undefined ? { ownerWorkspaceId } : {})}
-            activeWorkspaceId={activeWorkspaceId}
-            onChange={onSetWorkspace}
-          />
-        ) : null}
-        {definition.inputs.map((input) => (
-          <TemplateBindingField
-            key={input.id}
-            input={input}
-            value={bindings[input.id] ?? ""}
-            onChange={(next) => setBindings({ ...bindings, [input.id]: next })}
-          />
-        ))}
-        {plan ? (
-          <Alert variant={plan.status === "blocked" ? "destructive" : "default"}>
-            {plan.status === "blocked" ? <AlertTriangleIcon /> : <CheckCircle2Icon />}
-            <AlertTitle>{t(`preflight.${plan.status}`)}</AlertTitle>
-            <AlertDescription>
-              <ul className="list-disc space-y-1 pl-4">
-                {plan.issues.map((issue) => (
-                  <li key={`${issue.code}:${issue.path ?? ""}`}>{t(`issues.${issue.code}`)}</li>
-                ))}
-                {plan.operations.map((operation) => (
-                  <li key={operation.id}>{t(`operations.${operation.kind}`)}</li>
-                ))}
-              </ul>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {readOnly ? (
-            <Badge variant="outline" data-testid="template-read-only">
-              {nodeGroup ? t("inspector.nodeGroup") : t("inspector.readOnly")}
-            </Badge>
+      {!mobile && tier ? (
+        <TemplateScopeControl
+          variant="section"
+          tier={tier}
+          {...(ownerWorkspaceId !== undefined ? { ownerWorkspaceId } : {})}
+          activeWorkspaceId={activeWorkspaceId}
+          onChange={onSetWorkspace}
+        />
+      ) : null}
+      <InspectorSection title={t("inspector.details")}>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-xs">
+          <dt className="text-muted-foreground">{t("inspector.sourceLabel")}</dt>
+          <dd className="min-w-0">
+            {definition.provenance.source}
+            {/* Where a link- or URL-sourced release actually came from.
+                `TemplateProvenance.sourceUrl` has been on the type since the
+                platform landed and nothing wrote it, so "source: link" could
+                not say WHICH link. Now that the import records it, the
+                inspector is where it gets read back. */}
+            {definition.provenance.sourceUrl ? (
+              <span className="mt-0.5 block break-all font-mono text-[11px] text-muted-foreground">
+                {definition.provenance.sourceUrl}
+              </span>
+            ) : null}
+          </dd>
+          <dt className="text-muted-foreground">{t("inspector.idLabel")}</dt>
+          <dd className="min-w-0 break-all font-mono text-[11px]">
+            {definition.id}
+            {definition.version ? `@${definition.version}` : ""}
+          </dd>
+          <dt className="text-muted-foreground">{t("inspector.hashLabel")}</dt>
+          <dd className="min-w-0 truncate font-mono text-[11px]" title={definition.contentHash}>
+            {definition.contentHash}
+          </dd>
+        </dl>
+      </InspectorSection>
+      <Collapsible className="group/collapsible border-t pt-4">
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            {editable ? t("draftEditor.title") : t("inspector.payload")}
+            <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          {editable ? (
+            // Keyed on the content hash so selecting another row — or a save
+            // landing a new revision — re-seeds the fields instead of leaving
+            // the previous draft's text in the box.
+            <TemplateDraftEditor
+              key={definition.contentHash}
+              definition={definition}
+              onSave={onSaveDraft}
+              t={t}
+            />
           ) : (
-            <Button variant="outline" onClick={onPreflight}>
-              {t("actions.preflight")}
-            </Button>
+            <pre className="mt-3 max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
+              {JSON.stringify(definition.payload, null, 2)}
+            </pre>
           )}
-          {plan && plan.status !== "blocked" ? (
-            <Button onClick={onInstantiate}>{t("actions.instantiate")}</Button>
-          ) : null}
-          {!mobile && definition.status === "draft" ? (
-            <Button variant="secondary" onClick={onPublish}>
-              {t("actions.publish")}
-            </Button>
-          ) : null}
-          {!mobile && definition.version ? (
-            <Button variant="outline" onClick={onExport}>
-              <DownloadIcon className="size-4" />
-              {t("actions.export")}
-            </Button>
-          ) : null}
-          {/* Published releases only. A draft has no version, so there is
-              nothing stable for a recipient to install or cite, and the share
-              builder refuses one for exactly that reason. */}
-          {!mobile && definition.version && definition.status === "published" ? (
-            <TemplateDefinitionShareButton definition={definition} />
-          ) : null}
-          {/* `fork` and `deprecate` shipped with no caller anywhere in the app,
-              so the only way to base a template on an existing one was to
-              create a blank draft and retype it, and a published release could
-              never be withdrawn. */}
-          {!mobile && !readOnly ? (
-            <Button variant="outline" onClick={onFork} data-testid="template-fork">
-              <GitForkIcon className="size-4" />
-              {t("actions.fork")}
-            </Button>
-          ) : null}
-          {!mobile && definition.version && definition.status === "published" ? (
-            <>
-              <Button
-                variant="ghost"
-                className="text-destructive"
-                onClick={onDeprecate}
-                data-testid="template-deprecate"
-              >
-                {t("actions.deprecate")}
-              </Button>
-              {/* Deprecate and yank are the two halves of `setReleaseStatus`,
-                  and only the first had a caller: a release that should never
-                  be installed again could only be marked superseded. */}
-              <Button
-                variant="ghost"
-                className="text-destructive"
-                onClick={onYank}
-                data-testid="template-yank"
-              >
-                {t("actions.yank")}
-              </Button>
-            </>
-          ) : null}
-          {/* `repository.deleteDraft` was reachable only from the migration
-              rollback path, so a draft made by mistake, or the conflict draft a
-              clashing save forks off, could be edited forever but never removed. */}
-          {!mobile && (definition.status === "draft" || definition.status === "conflict") ? (
-            <Button
-              variant="ghost"
-              className="text-destructive"
-              onClick={onDeleteDraft}
-              data-testid="template-delete-draft"
-            >
-              <Trash2Icon className="size-4" />
-              {t("actions.deleteDraft")}
-            </Button>
-          ) : null}
-          {!mobile && EDITOR_ROUTES[definition.domain] ? (
-            <Button asChild variant="ghost">
-              <Link href={EDITOR_ROUTES[definition.domain]}>
-                {t("actions.openEditor")}
-                <ExternalLinkIcon className="size-4" />
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-        <Collapsible className="group/collapsible">
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" className="h-auto w-full justify-between px-0 py-1">
-              {editable ? t("draftEditor.title") : t("inspector.payload")}
-              <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            {editable ? (
-              // Keyed on the content hash so selecting another row — or a save
-              // landing a new revision — re-seeds the fields instead of leaving
-              // the previous draft's text in the box.
-              <TemplateDraftEditor
-                key={definition.contentHash}
-                definition={definition}
-                onSave={onSaveDraft}
-                t={t}
-              />
-            ) : (
-              <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
-                {JSON.stringify(definition.payload, null, 2)}
-              </pre>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-      </CardContent>
-    </Card>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  )
+}
+
+/** One inspector section: a rule, a small heading, the content. */
+function InspectorSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 border-t pt-4">
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      {children}
+    </section>
   )
 }
 

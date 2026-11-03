@@ -20,6 +20,12 @@ jest.mock("@/lib/db/sandbox-connections", () => ({
   putSandboxConnection: jest.fn(),
 }))
 jest.mock("./sandbox-desktop-viewer", () => ({ SandboxDesktopViewer: () => null }))
+const mockPickFilePath = jest.fn()
+const mockPickDirectory = jest.fn()
+jest.mock("@/lib/files/file-bridge", () => ({
+  pickFilePath: (...args: unknown[]) => mockPickFilePath(...args),
+  pickDirectory: (...args: unknown[]) => mockPickDirectory(...args),
+}))
 const resource: LumeResource = {
   resourceId: "r",
   generation: 1,
@@ -62,6 +68,75 @@ test("native preparation is explicit and stop remains available during a pending
     })
   )
   view.unmount()
+})
+
+test("drops the Card inside a host that already titles it", async () => {
+  const client = {
+    diagnose: jest.fn().mockResolvedValue({
+      contractVersion: 1,
+      platformSupported: true,
+      enabled: true,
+      resources: [],
+    }),
+  } as unknown as LumeClient
+  const { unmount } = render(<LumeSettings client={client} framed={false} />)
+  const block = screen.getByTestId("lume-settings")
+  expect(block.tagName).toBe("SECTION")
+  expect(block).toHaveAttribute("data-framed", "false")
+  expect(document.querySelector('[data-slot="card"]')).toBeNull()
+  expect(document.querySelector('[data-slot="card-content"]')).toBeNull()
+  expect(screen.getByRole("heading", { name: "title" })).toHaveClass("text-xs", "font-semibold")
+  // The sheet's controls sit at the managed desktop block's size, and the
+  // provision button keeps its own width instead of spanning the column.
+  for (const name of ["enable", "disable", "refresh", "provision"])
+    expect(screen.getByRole("button", { name })).toHaveAttribute("data-size", "sm")
+  expect(screen.getByRole("button", { name: "provision" })).toHaveClass("self-start")
+  expect(screen.getByText("binary")).toHaveClass("text-xs")
+  expect(screen.getByText("binary").closest('[data-slot="field-group"]')).toHaveClass("max-w-md")
+  await waitFor(() => expect(client.diagnose).toHaveBeenCalled())
+  unmount()
+  render(<LumeSettings client={client} />)
+  expect(screen.getByTestId("lume-settings")).toHaveAttribute("data-slot", "card")
+  expect(screen.getByRole("button", { name: "provision" })).toHaveAttribute("data-size", "default")
+  await waitFor(() => expect(client.diagnose).toHaveBeenCalledTimes(2))
+})
+
+// Every path here is this Mac's, so each takes the same native picker the
+// workspace flow uses instead of making the user type it. The executable and
+// IPSW are files; the seed storage is a folder; a VM name is not a path.
+test("picks paths natively: the executable, an IPSW and the seed folder", async () => {
+  const client = {
+    diagnose: jest.fn().mockResolvedValue({
+      contractVersion: 1,
+      platformSupported: true,
+      enabled: true,
+      resources: [],
+    }),
+  } as unknown as LumeClient
+  render(<LumeSettings client={client} />)
+  await waitFor(() => expect(client.diagnose).toHaveBeenCalled())
+  const browse = () => screen.getAllByRole("button", { name: "browse" })
+  // Executable + seed storage (clone mode); the VM name has none.
+  expect(browse()).toHaveLength(2)
+  mockPickFilePath.mockResolvedValueOnce("/opt/homebrew/bin/lume")
+  fireEvent.click(browse()[0]!)
+  await waitFor(() => expect(screen.getByLabelText("binary")).toHaveValue("/opt/homebrew/bin/lume"))
+  expect(mockPickFilePath).toHaveBeenLastCalledWith()
+  mockPickDirectory.mockResolvedValueOnce("/Volumes/seeds")
+  fireEvent.click(browse()[1]!)
+  await waitFor(() => expect(screen.getByLabelText("seedStorage")).toHaveValue("/Volumes/seeds"))
+  // NativeSelect draws a Radix trigger; its hidden native mirror owns change.
+  const modeSelect = screen
+    .getByLabelText("sourceMode")
+    .closest('[data-slot="field"]')!
+    .querySelector('select[data-slot="native-select"]')!
+  fireEvent.change(modeSelect, { target: { value: "create" } })
+  mockPickFilePath.mockResolvedValueOnce("/Downloads/macos.ipsw")
+  fireEvent.click(browse()[1]!)
+  await waitFor(() => expect(screen.getByLabelText("ipsw")).toHaveValue("/Downloads/macos.ipsw"))
+  expect(mockPickFilePath).toHaveBeenLastCalledWith({
+    filters: [{ name: "IPSW", extensions: ["ipsw"] }],
+  })
 })
 
 test("unknown Host contract is refused before publishing VM projections", async () => {

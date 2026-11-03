@@ -265,7 +265,6 @@ export function AccessSection({ row, actions }: { row: DeviceRow; actions: Devic
       id="access"
       title={t("access.title")}
       icon={KeyRoundIcon}
-      wide
       meta={t("access.heldCount", {
         held,
         total: row.grants.filter((grant) => grant.available).length,

@@ -14,17 +14,21 @@
  *
  * On a paired client the store shown is the host's, synced; the header says so
  * in place of the recall chip (recall settings are the host's), and the corpus
- * readout leaves out vector coverage, which a mirror never has.
+ * readout leaves out vector coverage, which a mirror never has. Both chips open
+ * a popover, so they ride in the header's `actions`, not its status slot.
+ *
+ * The section tabs are the header's typed `tabs`; the body renders the active
+ * section directly. The search is the header's `search`; quick views, Filter
+ * and Display stay in `MemoryToolbar` as the view bar's `controls`.
  */
 
 import { useCallback, useEffect } from "react"
 import { useTranslations } from "next-intl"
 import { BrainIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
+import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { MemoryBulkToolbar } from "@/components/memory/memory-bulk-toolbar"
 import { MemoryConsoleDialogs } from "@/components/memory/memory-console-dialogs"
 import { MemoryInspector } from "@/components/memory/memory-inspector"
@@ -42,7 +46,6 @@ import {
 } from "@/hooks/memory/use-memory-console"
 import { isEditableTarget } from "@/lib/shortcuts/dom"
 import { useGitStore } from "@/stores/git/git-store"
-import { cn } from "@/lib/utils"
 
 export interface MemoryConsoleProps {
   /** Preselect this memory's inspector (`/memory?id=` deep link from chat chips). */
@@ -114,37 +117,23 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
       icon={<BrainIcon />}
       title={t("title")}
       description={t("subtitle")}
-      navigationPlacement="inline"
-      navigation={
-        <TabsList
-          className="h-auto gap-1 rounded-none bg-transparent p-0"
-          aria-label={t("tabsLabel")}
-        >
-          {MEMORY_CONSOLE_TABS.map((candidate) => (
-            <TabsTrigger
-              key={candidate}
-              value={candidate}
-              data-testid={`memory-tab-${candidate}`}
-              className={cn(
-                "h-auto flex-none gap-1.5 rounded-md border-0 px-2.5 py-1 text-sm whitespace-nowrap",
-                "motion-safe:transition-colors motion-safe:duration-150",
-                "data-[state=active]:bg-muted data-[state=active]:shadow-none dark:data-[state=active]:bg-muted",
-                tab === candidate
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-              )}
-            >
-              {t(`tabs.${candidate}`)}
-              {candidate === "app" ? (
-                <Badge variant="secondary" className="h-4 px-1 text-[10px] tabular-nums">
-                  {state.viewCounts.all}
-                </Badge>
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      }
-      status={onHost ? <MemoryHostChip /> : <MemoryRetrievalChip />}
+      tabs={{
+        ariaLabel: t("tabsLabel"),
+        value: tab,
+        // The console's root (below) owns the panels, so each tab keeps
+        // pointing at its panel through `aria-controls`.
+        inOuterRoot: true,
+        onValueChange: (value) => setTab(value as MemoryConsoleTab),
+        items: MEMORY_CONSOLE_TABS.map((candidate) => ({
+          value: candidate,
+          label: t(`tabs.${candidate}`),
+          count: candidate === "app" ? state.viewCounts.all : undefined,
+          testId: `memory-tab-${candidate}`,
+        })),
+      }}
+      // Each chip opens a popover (recall controls, host details): interactive,
+      // so not the header's status chip.
+      actions={onHost ? <MemoryHostChip /> : <MemoryRetrievalChip />}
       summary={
         isAppTab ? (
           // Shown only with real room: at `@3xl` the identity row has nothing
@@ -198,6 +187,17 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
             ]
           : []
       }
+      search={
+        isAppTab
+          ? {
+              value: state.filter.query ?? "",
+              onChange: (query) => state.setFilter({ ...state.filter, query }),
+              placeholder: t("searchPlaceholder"),
+              ariaLabel: t("searchLabel"),
+              testId: "memory-search",
+            }
+          : undefined
+      }
       controls={
         isAppTab ? (
           <MemoryToolbar
@@ -222,7 +222,8 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
     <Tabs
       value={tab}
       onValueChange={(value) => setTab(value as MemoryConsoleTab)}
-      className="h-full min-h-0 gap-0"
+      className="flex h-full min-h-0 flex-col gap-0"
+      data-testid="memory-console"
     >
       <FeaturePageShell
         storageId="memory"
@@ -279,63 +280,65 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
             : undefined
         }
       >
-        <TabsContent value="app" className="h-full min-h-0">
-          <div className="flex h-full min-h-0 flex-col">
-            {state.selectedIds.size > 0 ? (
-              <MemoryBulkToolbar
-                selectedCount={state.selectedIds.size}
-                visibleCount={state.visibleIds.length}
-                allSelected={state.allVisibleSelected}
-                busy={state.bulkBusy}
-                archivedView={state.archivedView}
-                onToggleSelectAll={state.selectAllVisible}
-                onPin={() => state.pin([...state.selectedIds], true)}
-                onUnpin={() => state.pin([...state.selectedIds], false)}
-                onArchive={() => void state.archive([...state.selectedIds])}
-                onRestore={() => void state.restore([...state.selectedIds])}
-                onDelete={() => state.requestDelete([...state.selectedIds])}
-                onClear={state.clearSelection}
-              />
-            ) : null}
-            <div className="min-h-0 flex-1">
-              <MemoryList
-                rows={rows}
-                isLoading={state.isLoading}
-                hasAnyMemories={state.all.length > 0}
-                density={state.density}
-                selectedId={selectedId ?? undefined}
-                selectedIds={state.selectedIds}
-                selectionActive
-                activeTags={state.activeTags}
-                onOpenDetail={state.open}
-                onSelectToggle={state.toggleSelect}
-                onPinToggle={(id, pinned) => state.pin([id], pinned)}
-                onSave={state.saveText}
-                onArchive={(id) => void state.archive([id])}
-                onRestore={(id) => void state.restore([id])}
-                onMove={state.setMoveId}
-                onCopy={state.copyText}
-                onDelete={(id) => state.requestDelete([id])}
-                onTagClick={state.toggleTag}
-                onClearFilters={state.clearFilters}
-                onAddFirst={() => state.setAddOpen(true)}
-                scrollToId={initialSelectedId}
-              />
+        {/* One panel for the current tab under the console's root, so the
+            header's tab (drawn inside the same root) labels and controls it. */}
+        <TabsContent value={tab} className="h-full min-h-0" data-testid={`memory-section-${tab}`}>
+          {tab === "app" ? (
+            <div className="flex h-full min-h-0 flex-col">
+              {state.selectedIds.size > 0 ? (
+                <MemoryBulkToolbar
+                  selectedCount={state.selectedIds.size}
+                  visibleCount={state.visibleIds.length}
+                  allSelected={state.allVisibleSelected}
+                  busy={state.bulkBusy}
+                  archivedView={state.archivedView}
+                  onToggleSelectAll={state.selectAllVisible}
+                  onPin={() => state.pin([...state.selectedIds], true)}
+                  onUnpin={() => state.pin([...state.selectedIds], false)}
+                  onArchive={() => void state.archive([...state.selectedIds])}
+                  onRestore={() => void state.restore([...state.selectedIds])}
+                  onDelete={() => state.requestDelete([...state.selectedIds])}
+                  onClear={state.clearSelection}
+                />
+              ) : null}
+              <div className="min-h-0 flex-1">
+                <MemoryList
+                  rows={rows}
+                  isLoading={state.isLoading}
+                  hasAnyMemories={state.all.length > 0}
+                  density={state.density}
+                  selectedId={selectedId ?? undefined}
+                  selectedIds={state.selectedIds}
+                  selectionActive
+                  activeTags={state.activeTags}
+                  onOpenDetail={state.open}
+                  onSelectToggle={state.toggleSelect}
+                  onPinToggle={(id, pinned) => state.pin([id], pinned)}
+                  onSave={state.saveText}
+                  onArchive={(id) => void state.archive([id])}
+                  onRestore={(id) => void state.restore([id])}
+                  onMove={state.setMoveId}
+                  onCopy={state.copyText}
+                  onDelete={(id) => state.requestDelete([id])}
+                  onTagClick={state.toggleTag}
+                  onClearFilters={state.clearFilters}
+                  onAddFirst={() => state.setAddOpen(true)}
+                  scrollToId={initialSelectedId}
+                />
+              </div>
             </div>
-          </div>
-        </TabsContent>
-        <TabsContent value="health" className="h-full min-h-0">
-          <MemoryHealthPanel
-            report={lint.report}
-            loading={lint.loading}
-            onRefresh={lint.refresh}
-            resolveMemory={state.resolveMemory}
-            onOpenMemory={state.openFromHealth}
-            mirror={onHost}
-          />
-        </TabsContent>
-        <TabsContent value="external" className="h-full min-h-0">
-          <ExternalMemoryTab onHost={onHost} />
+          ) : tab === "health" ? (
+            <MemoryHealthPanel
+              report={lint.report}
+              loading={lint.loading}
+              onRefresh={lint.refresh}
+              resolveMemory={state.resolveMemory}
+              onOpenMemory={state.openFromHealth}
+              mirror={onHost}
+            />
+          ) : (
+            <ExternalMemoryTab onHost={onHost} />
+          )}
         </TabsContent>
       </FeaturePageShell>
 

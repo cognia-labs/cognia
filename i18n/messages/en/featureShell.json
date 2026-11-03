@@ -1,5 +1,6 @@
 {
   "openLeft": "Open {name}",
   "openRight": "Open {name}",
-  "closeLeft": "Hide {name}"
+  "closeLeft": "Hide {name}",
+  "moreActions": "More actions"
 }

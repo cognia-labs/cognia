@@ -5,9 +5,10 @@
  *
  * There are no tabs. Five of them meant every question cost a click and hid
  * that most answers are two lines long. As one scroll the sections are
- * chapters laid out in a grid, so the short ones sit beside each other and the
- * wide ones (matrices, registries) take the full width, and nothing is behind
- * a click.
+ * chapters, one column of them under hairlines, and nothing is behind a click.
+ * They used to share a two-column grid, which left a blank beside every short
+ * chapter paired with a tall one (routing beside the shell tiers); a chapter's
+ * facts spread across the width instead, so each stays short.
  *
  * They are chapters, not cards (`DeviceSection` is the frameless `sheet`
  * variant): every section describes the same machine, so the masthead is the
@@ -15,12 +16,12 @@
  * eleven framed, raised panels put more border and fill on screen than data,
  * and read as eleven objects rather than one.
  *
- * What goes in the grid, and in what order, is `planDeviceSections`: per kind,
- * task-first, with half-width sections kept in pairs and every section that
- * would only have said "not here" folded into one record at the end. This file
+ * What goes in the record, and in what order, is `planDeviceSections`: per
+ * kind, task-first, with every section that would only have said "not here"
+ * folded into one record at the end. This file
  * maps the plan's ids to components and nothing else, so the order is decided
  * in one pure, tested place, and the jump strip in the masthead lists exactly
- * the sections the grid rendered.
+ * the sections the record rendered.
  *
  * Layout rules carried over from `components/settings/mcp/mcp-panel.tsx` and
  * `@container/memory-pane`:
@@ -79,6 +80,9 @@ import {
   WorkspacesSection,
 } from "./sections/runtime-section"
 import { WanSection } from "./sections/wan-section"
+
+/** A chapter's air above and below; the hairline between is the list's. */
+const CHAPTER = "py-6 first:pt-0 last:pb-0 empty:hidden"
 
 /** The DOM id every section carries, from `DeviceSection` (`idPrefix`). */
 export function deviceSectionAnchor(id: string): string {
@@ -162,7 +166,7 @@ function PlannedSection({
       // forwarding rules and three controls. In half a pane that is a 700px
       // ribbon beside a 90px stub.
       return (
-        <DeviceSection id="ssh" title={t("ssh.title")} icon={TerminalIcon} wide>
+        <DeviceSection id="ssh" title={t("ssh.title")} icon={TerminalIcon}>
           <SshHostControls row={row} />
         </DeviceSection>
       )
@@ -288,7 +292,7 @@ export function DeviceDetail({
       </DeviceHero>
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 pt-3.5 pb-8">
-        {/* Device-wide alerts sit above the grid, not inside a section: they are
+        {/* Device-wide alerts sit above the chapters, not inside one: they are
             about the machine, not about one of the questions asked below. The
             connection error is said here once; the masthead states the
             handshake, and repeating the verbatim error there was the same
@@ -308,22 +312,18 @@ export function DeviceDetail({
 
         <DeviceStatSummary row={row} className="mb-6" />
 
-        {/* `items-start` so a short chapter keeps its own height instead of
-            being stretched to match the tall one beside it. Pairing the
-            half-width chapters is the plan's job (`packHalfSections`), which
-            keeps reading order and visual order the same. Without frames the
-            gutters are what separate sections, so they are wider than a card
-            grid's: a column gap the eye reads as a boundary, and a row gap
-            that gives each heading rule room above it. */}
-        <div className="grid items-start gap-x-8 gap-y-7 @3xl/device-pane:grid-cols-2">
+        {/* One chapter per row, a hairline between. A section that has
+            nothing to render leaves an empty slot, which `empty:hidden` drops
+            so it draws no rule of its own. */}
+        <div className="flex flex-col divide-y" data-testid="device-detail-chapters">
           {plan.sections.map((section) => (
-            <PlannedSection key={section.id} id={section.id} row={row} actions={actions} />
+            <div key={section.id} className={CHAPTER}>
+              <PlannedSection id={section.id} row={row} actions={actions} />
+            </div>
           ))}
-          <NotApplicableSection
-            kind={row.kind}
-            entries={plan.notApplicable}
-            wide={plan.notApplicableWide}
-          />
+          <div className={CHAPTER}>
+            <NotApplicableSection kind={row.kind} entries={plan.notApplicable} />
+          </div>
         </div>
       </div>
       {repairInPlace && installBinding ? (

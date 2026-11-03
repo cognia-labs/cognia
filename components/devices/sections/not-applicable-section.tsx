@@ -32,10 +32,9 @@ import { DeviceFactList, DeviceFactRow } from "../device-visuals"
 export interface NotApplicableSectionProps {
   kind: DeviceKind
   entries: readonly DeviceNotApplicable[]
-  wide: boolean
 }
 
-export function NotApplicableSection({ kind, entries, wide }: NotApplicableSectionProps) {
+export function NotApplicableSection({ kind, entries }: NotApplicableSectionProps) {
   const t = useTranslations("devices")
   if (entries.length === 0) return null
   return (
@@ -44,7 +43,6 @@ export function NotApplicableSection({ kind, entries, wide }: NotApplicableSecti
       title={t("notApplicable.title")}
       icon={CircleSlashIcon}
       description={t(`notApplicable.description.${kind}`)}
-      wide={wide}
     >
       <DeviceFactList>
         {entries.map((entry) => (

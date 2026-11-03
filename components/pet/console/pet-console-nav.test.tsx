@@ -1,9 +1,23 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { PET_CONSOLE_SECTIONS, type PetConsoleSection } from "@/lib/pet/console-tabs"
-import { PET_CONSOLE_SECTION_ICONS, PetConsoleNav } from "./pet-console-nav"
+import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import { PET_CONSOLE_SECTION_ICONS, usePetConsoleTabs } from "./pet-console-nav"
 
 const WITHOUT_PLUGINS = PET_CONSOLE_SECTIONS.filter((id) => id !== "plugins")
+
+function Places({
+  sections,
+  desktopOnlySections,
+  value,
+}: {
+  sections: readonly PetConsoleSection[]
+  desktopOnlySections?: ReadonlySet<PetConsoleSection>
+  value: PetConsoleSection
+}) {
+  const tabs = usePetConsoleTabs({ sections, desktopOnlySections, value })
+  return <FeaturePageHeader title="Boba" description="A pet" icon={<span />} tabs={tabs} />
+}
 
 function Harness({
   sections = WITHOUT_PLUGINS,
@@ -14,9 +28,10 @@ function Harness({
   desktopOnlySections?: ReadonlySet<PetConsoleSection>
   onValueChange?: (value: string) => void
 }) {
+  // The console owns the root and the panels; the header draws the list.
   return (
     <Tabs defaultValue="home" onValueChange={onValueChange}>
-      <PetConsoleNav sections={sections} desktopOnlySections={desktopOnlySections} />
+      <Places sections={sections} desktopOnlySections={desktopOnlySections} value="home" />
       {sections.map((id) => (
         <TabsContent key={id} value={id}>
           {id}
@@ -26,11 +41,12 @@ function Harness({
   )
 }
 
-describe("PetConsoleNav", () => {
-  it("lists the five places in order, as one tablist", () => {
+describe("usePetConsoleTabs", () => {
+  it("lists the five places in order, as the header's one underline tablist", () => {
     render(<Harness />)
     const nav = screen.getByTestId("pet-console-nav")
     expect(nav).toHaveAttribute("role", "tablist")
+    expect(nav).toHaveAttribute("data-variant", "line")
     const tabs = within(nav).getAllByRole("tab")
     expect(tabs.map((tab) => tab.getAttribute("data-tab"))).toEqual([
       "home",
@@ -75,9 +91,9 @@ describe("PetConsoleNav", () => {
       />
     )
     const plugins = document.querySelector('[data-tab="plugins"]') as HTMLElement
-    expect(plugins).toHaveAttribute("data-desktop-only", "true")
-    expect(within(plugins).getByTestId("pet-console-desktop-badge")).toHaveTextContent("Desktop")
+    expect(plugins).toHaveAttribute("data-badged", "true")
+    expect(within(plugins).getByTestId("feature-header-tab-badge")).toHaveTextContent("Desktop")
     expect(plugins).not.toBeDisabled()
-    expect(screen.getAllByTestId("pet-console-desktop-badge")).toHaveLength(1)
+    expect(screen.getAllByTestId("feature-header-tab-badge")).toHaveLength(1)
   })
 })

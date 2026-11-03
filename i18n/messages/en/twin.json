@@ -205,6 +205,7 @@
     "loading": "Loading twins…",
     "noTwinHint": "A digital twin learns from the documents, chats, and code you feed it, then speaks in your voice. Create one with the guided setup — you can add sources and bind a character along the way.",
     "noTwinTitle": "No digital twins yet",
+    "tabsLabel": "Twin views",
     "tabs": {
       "drafts": "Drafts",
       "jobs": "Jobs",
@@ -213,9 +214,10 @@
       "sources": "Sources"
     },
     "title": "Digital twin",
+    "description": "Teach a twin from your documents, chats and code, then review what it learns before it speaks for you.",
     "twinDeleted": "Deleted \"{name}\" and all its data.",
-    "workerActive": "worker ● active",
-    "workerIdle": "worker ○ idle",
+    "workerActive": "Worker active",
+    "workerIdle": "Worker idle",
     "workerStatus": {
       "disabled": "Background worker is disabled in settings",
       "incompleteConfig": "Worker configuration is incomplete",

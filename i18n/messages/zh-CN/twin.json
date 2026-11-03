@@ -205,6 +205,7 @@
     "loading": "正在加载孪生…",
     "noTwinHint": "数字孪生会从你投喂的文档、对话和代码中学习，进而用你的口吻表达。用引导式向导创建一个吧——过程中可以添加数据源并绑定角色。",
     "noTwinTitle": "还没有数字孪生",
+    "tabsLabel": "孪生视图",
     "tabs": {
       "drafts": "草稿",
       "jobs": "任务",
@@ -213,9 +214,10 @@
       "sources": "数据源"
     },
     "title": "数字孪生",
+    "description": "用你的文档、对话和代码训练孪生，在它替你发声之前先审阅它学到的内容。",
     "twinDeleted": "已删除「{name}」及其全部数据。",
-    "workerActive": "工作器 ● 运行中",
-    "workerIdle": "工作器 ○ 空闲",
+    "workerActive": "工作器运行中",
+    "workerIdle": "工作器空闲",
     "workerStatus": {
       "disabled": "后台工作器已在设置中禁用",
       "incompleteConfig": "工作器配置不完整",

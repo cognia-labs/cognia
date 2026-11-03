@@ -176,6 +176,30 @@ export async function pickDirectory(title?: string): Promise<string | null> {
 }
 
 /**
+ * Pick ONE host file and return its absolute path (Tauri only; null on cancel
+ * or off-desktop).
+ *
+ * For a path that is handed to a native process and never read by the
+ * renderer: an executable to run, an installer image to boot. Unlike
+ * {@link pickFilePaths} it does not register the file's folder for raw reads,
+ * because nothing here reads the bytes and widening the renderer's read scope
+ * to, say, `/opt/homebrew/bin` would buy nothing.
+ */
+export async function pickFilePath(
+  opts: Pick<PickFilesOptions, "filters"> & { title?: string } = {}
+): Promise<string | null> {
+  if (!isTauri()) return null
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    ...(opts.filters ? { filters: opts.filters } : {}),
+    ...(opts.title ? { title: opts.title } : {}),
+  })
+  if (!picked) return null
+  return Array.isArray(picked) ? (picked[0] ?? null) : picked
+}
+
+/**
  * Pick host files and return their absolute paths without reading them
  * (Tauri only; `[]` on cancel or off-desktop). Each pick registers the
  * file's folder for raw reads, as every dialog pick does, for callers that

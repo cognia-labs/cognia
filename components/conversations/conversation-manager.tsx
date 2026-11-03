@@ -237,8 +237,9 @@ export function ConversationManager() {
     return next
   }, [searchContent, otherTabHasRows, otherTab, t])
 
+  // The phone's search row. A desktop uses the header's own `search`.
   const searchField = (
-    <InputGroup className={cn("h-8 min-w-0 flex-1", compact ? "h-10" : "max-w-md")}>
+    <InputGroup className="h-10 min-w-0 flex-1">
       <InputGroupAddon>
         <SearchIcon className="size-4" aria-hidden />
       </InputGroupAddon>
@@ -297,19 +298,35 @@ export function ConversationManager() {
   )
 
   // Tabs already carry both counts; the header no longer repeats them. A
-  // desktop keeps them beside the search in the header; a phone gives them a
-  // full-width row of their own above it (the header's navigation slot sizes
-  // to its content, so it cannot stretch two tabs across a phone).
-  const tabs = (
+  // desktop draws them as the header's typed tabs, beside its search; a phone
+  // gives them a full-width row of their own above the search (the header's
+  // view bar sizes tabs to their content, so it cannot stretch two across a
+  // phone).
+  const headerTabs = {
+    ariaLabel: t("tabsAria"),
+    value: tab,
+    onValueChange: (value: string) => {
+      if (isConversationManagerTab(value)) chooseTab(value)
+    },
+    testId: "conversation-manager-tabs",
+    items: CONVERSATION_MANAGER_TABS.map((id) => ({
+      value: id,
+      label: t(`tabs.${id}`),
+      icon: id === "archived" ? ArchiveIcon : undefined,
+      count: counts[id],
+      testId: `conversation-manager-tab-${id}`,
+    })),
+  }
+  const compactTabs = (
     <Tabs
       value={tab}
       onValueChange={(value) => {
         if (isConversationManagerTab(value)) chooseTab(value)
       }}
-      className={compact ? "w-full" : undefined}
+      className="w-full"
       data-testid="conversation-manager-tabs"
     >
-      <TabsList aria-label={t("tabsAria")} className={compact ? "h-10 w-full" : undefined}>
+      <TabsList aria-label={t("tabsAria")} className="h-10 w-full">
         {CONVERSATION_MANAGER_TABS.map((id) => (
           <TabsTrigger key={id} value={id} data-testid={`conversation-manager-tab-${id}`}>
             {id === "archived" ? <ArchiveIcon className="size-3.5" aria-hidden /> : null}
@@ -330,15 +347,26 @@ export function ConversationManager() {
       icon={<HistoryIcon className="size-5" aria-hidden />}
       title={t("title")}
       description={t("description")}
-      navigation={compact ? undefined : tabs}
-      controls={
-        compact ? undefined : (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            {searchField}
-            {searchTools}
-          </div>
-        )
+      tabs={compact ? undefined : headerTabs}
+      // The phone draws its own search row in the body (below).
+      search={
+        compact
+          ? undefined
+          : {
+              value: field,
+              onChange: updateField,
+              onKeyDown: (event) => {
+                if (event.key === "Escape" && field) {
+                  event.preventDefault()
+                  clearSearch()
+                }
+              },
+              placeholder: t("searchPlaceholder"),
+              ariaLabel: t("searchAria"),
+              testId: "conversation-manager-search",
+            }
       }
+      controls={compact ? undefined : searchTools}
       primaryAction={
         tab === "active"
           ? {
@@ -348,15 +376,23 @@ export function ConversationManager() {
               onSelect: startConversation,
               testId: "conversation-manager-new-chat",
             }
-          : {
-              id: "empty-archive",
-              label: t("emptyArchive"),
-              icon: Trash2Icon,
-              destructive: true,
-              disabled: archivedSessions.length === 0,
-              onSelect: () => setEmptyArchiveOpen(true),
-              testId: "conversation-manager-empty-archive",
-            }
+          : undefined
+      }
+      // Destructive, so behind "⋯" rather than drawn as the page's main button.
+      overflowActions={
+        tab === "archived"
+          ? [
+              {
+                id: "empty-archive",
+                label: t("emptyArchive"),
+                icon: Trash2Icon,
+                destructive: true,
+                disabled: archivedSessions.length === 0,
+                onSelect: () => setEmptyArchiveOpen(true),
+                testId: "conversation-manager-empty-archive",
+              },
+            ]
+          : undefined
       }
       testId="conversation-manager-header"
     />
@@ -459,7 +495,7 @@ export function ConversationManager() {
             // On a phone the search gets a row of its own under the tabs, and
             // Select turns the list into a selection.
             <div className="space-y-2 px-3 pt-3" data-testid="conversation-manager-compact-tools">
-              {tabs}
+              {compactTabs}
               <div className="flex items-center gap-1.5">
                 {searchField}
                 {searchTools}

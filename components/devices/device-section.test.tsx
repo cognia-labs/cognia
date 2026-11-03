@@ -47,23 +47,7 @@ describe("DeviceSection", () => {
     expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true")
   })
 
-  /**
-   * `wide` is a layout hint the grid interprets, not a span number the caller
-   * picks — callers choosing their own `col-span-*` is how a grid ends up
-   * with one card that never lines up with the rest.
-   */
-  it("opts a wide card out of the column split", () => {
-    render(
-      <DeviceSection id="caps" title="Capabilities" wide>
-        <p>body</p>
-      </DeviceSection>
-    )
-    expect(screen.getByTestId("device-section-caps").className).toContain(
-      "@3xl/device-pane:col-span-2"
-    )
-  })
-
-  it("leaves a normal card in a single column", () => {
+  it("never spans columns: the record is one column of chapters", () => {
     render(
       <DeviceSection id="identity" title="Identity">
         <p>body</p>

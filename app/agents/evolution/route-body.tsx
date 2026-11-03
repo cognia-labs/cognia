@@ -1,9 +1,7 @@
 "use client"
 
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { ArrowLeftIcon, DnaIcon } from "lucide-react"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { HarnessRunViewer } from "@/components/harness/harness-run-viewer"
@@ -26,17 +24,13 @@ export default function RouteBody({ runId }: RouteBodyProps) {
       header={
         <FeaturePageHeader
           variant="management"
-          icon={<DnaIcon />}
-          breadcrumb={
-            <Link
-              href={back}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeftIcon className="size-3.5" aria-hidden />
-              {run ? t("backToAgent", { name: run.characterName }) : t("backToAgents")}
-            </Link>
-          }
+          back={{
+            label: run ? t("backToAgent", { name: run.characterName }) : t("backToAgents"),
+            href: back,
+            testId: "harness-run-back",
+          }}
           title={t("title")}
+          description={t("description")}
           testId="harness-run-page-header"
         />
       }

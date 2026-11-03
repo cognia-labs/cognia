@@ -2,9 +2,9 @@
 
 /**
  * Eval workspace shell — toggles between the datasets pane, the runs &
- * comparison pane, the trace-analysis panel, and judge calibration. Plain
- * segmented buttons (not Radix Tabs) to stay jsdom-friendly, matching the
- * MCP/Skills panels. A settings gear deep-links to the eval defaults section.
+ * comparison pane, the trace-analysis panel, and judge calibration, through
+ * the shared header's view tabs. A settings action deep-links to the eval
+ * defaults section.
  *
  * Hosts the persistent run bar. Run progress used to live inside the run
  * dialog, so switching to Compare or Calibrate hid a run that was still
@@ -12,7 +12,7 @@
  * uncancellable while it kept writing results.
  */
 
-import { useState, type ComponentType } from "react"
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import {
@@ -22,6 +22,7 @@ import {
   RouteIcon,
   ScaleIcon,
   SettingsIcon,
+  type LucideIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -37,6 +38,12 @@ import { CalibrationPanel } from "./calibration-panel"
 
 type EvalView = "datasets" | "compare" | "annotate" | "calibrate" | "routing"
 
+const EVAL_VIEWS: readonly EvalView[] = ["datasets", "compare", "annotate", "calibrate", "routing"]
+
+function isEvalView(value: string): value is EvalView {
+  return (EVAL_VIEWS as readonly string[]).includes(value)
+}
+
 export function EvalWorkspace({ initialDatasetId }: { initialDatasetId?: string } = {}) {
   const t = useTranslations("eval")
   const tRouting = useTranslations("routerFusionEval")
@@ -48,7 +55,7 @@ export function EvalWorkspace({ initialDatasetId }: { initialDatasetId?: string 
   // Router + Fusion routes at least one surface, so the tab appears with it.
   const routingAvailable = useSettingsStore((s) => routingExperimentAvailable(s.settings))
 
-  const TABS: { key: EvalView; label: string; icon: ComponentType<{ className?: string }> }[] = [
+  const TABS: { key: EvalView; label: string; icon: LucideIcon }[] = [
     { key: "datasets", label: t("tabs.datasets"), icon: DatabaseIcon },
     { key: "compare", label: t("tabs.compare"), icon: GitCompareIcon },
     { key: "annotate", label: t("tabs.annotate"), icon: MicroscopeIcon },
@@ -64,35 +71,22 @@ export function EvalWorkspace({ initialDatasetId }: { initialDatasetId?: string 
         icon={<ScaleIcon />}
         title={t("title")}
         description={t("subtitle")}
-        navigation={
-          <div className="flex items-center gap-1">
-            {TABS.map((tab) => {
-              const Icon = tab.icon
-              return (
-                <Button
-                  key={tab.key}
-                  size="sm"
-                  variant={view === tab.key ? "secondary" : "ghost"}
-                  aria-pressed={view === tab.key}
-                  onClick={() => setView(tab.key)}
-                >
-                  <Icon className="size-4" />
-                  {tab.label}
-                </Button>
-              )
-            })}
-          </div>
-        }
-        actions={
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label={t("settings.title")}
-            onClick={() => router.push("/settings?section=eval")}
-          >
-            <SettingsIcon className="size-4" />
-          </Button>
-        }
+        tabs={{
+          items: TABS.map((tab) => ({ value: tab.key, label: tab.label, icon: tab.icon })),
+          value: view,
+          onValueChange: (value) => {
+            if (isEvalView(value)) setView(value)
+          },
+          ariaLabel: t("tabs.ariaLabel"),
+        }}
+        secondaryActions={[
+          {
+            id: "settings",
+            label: t("settings.title"),
+            icon: SettingsIcon,
+            onSelect: () => router.push("/settings?section=eval"),
+          },
+        ]}
       />
       {activeRun && (
         <div

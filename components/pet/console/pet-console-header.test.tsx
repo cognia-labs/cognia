@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
+import { Tabs } from "@/components/ui/tabs"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 const rendererProps = jest.fn()
@@ -78,10 +79,26 @@ describe("PetConsoleHeader", () => {
     expect(screen.queryByLabelText(/rename/i)).toBeNull()
   })
 
-  it("renders the navigation in the header's second row", () => {
-    renderHeader(props({ navigation: <nav data-testid="nav-stub" /> }))
-    const row = document.querySelector('[data-slot="feature-header-secondary-navigation"]')
-    expect(row).toContainElement(screen.getByTestId("nav-stub"))
+  it("renders the places as the header's view tabs in its second row", () => {
+    render(
+      <TooltipProvider>
+        <Tabs value="home">
+          <PetConsoleHeader
+            {...props({
+              tabs: {
+                ariaLabel: "Places",
+                value: "home",
+                inOuterRoot: true,
+                testId: "places",
+                items: [{ value: "home", label: "Home" }],
+              },
+            })}
+          />
+        </Tabs>
+      </TooltipProvider>
+    )
+    const row = document.querySelector('[data-slot="feature-header-view-navigation"]')
+    expect(row).toContainElement(screen.getByTestId("places"))
   })
 
   it("opens Appearance & settings from the header", () => {
@@ -127,13 +144,25 @@ describe("PetConsoleHeader", () => {
   describe("on the appearance sub-page", () => {
     it("titles the sub-page and leads back to the pet", () => {
       const onBack = jest.fn()
-      renderHeader(props({ mode: "appearance", onBack, navigation: <nav data-testid="nav" /> }))
+      renderHeader(
+        props({
+          mode: "appearance",
+          onBack,
+          tabs: {
+            ariaLabel: "Places",
+            value: "home",
+            testId: "nav",
+            items: [{ value: "home", label: "Home" }],
+          },
+        })
+      )
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Appearance & settings")
       // No navigation row and no second appearance entry on the sub-page.
       expect(screen.queryByTestId("nav")).toBeNull()
       expect(screen.queryByTestId("pet-console-open-appearance")).toBeNull()
       const back = screen.getByTestId("pet-console-back")
-      expect(back).toHaveTextContent("Boba")
+      expect(back).toHaveAccessibleName("Back to Boba")
+      expect(back).toHaveAttribute("data-slot", "feature-header-back")
       fireEvent.click(back)
       expect(onBack).toHaveBeenCalledTimes(1)
     })
@@ -145,13 +174,22 @@ describe("PetConsoleHeader", () => {
       renderHeader(props({ desktopStatus: { visible: true } }))
       const chip = screen.getByTestId("pet-console-desktop-status")
       expect(chip).toHaveTextContent("On your desktop")
+      expect(chip).toHaveAttribute("data-slot", "feature-header-status")
+      expect(chip).toHaveAttribute("data-tone", "success")
       expect(chip.tagName).not.toBe("BUTTON")
       expect(screen.queryByTestId("pet-console-desktop-toggle")).toBeNull()
     })
 
     it("says hidden when the pet is not out", () => {
       renderHeader(props({ desktopStatus: { visible: false } }))
-      expect(screen.getByTestId("pet-console-desktop-status")).toHaveTextContent("Hidden")
+      const chip = screen.getByTestId("pet-console-desktop-status")
+      expect(chip).toHaveTextContent("Hidden")
+      expect(chip).toHaveAttribute("data-tone", "neutral")
+    })
+
+    it("keeps the chip on the appearance sub-page", () => {
+      renderHeader(props({ mode: "appearance", desktopStatus: { visible: true } }))
+      expect(screen.getByTestId("pet-console-desktop-status")).toHaveTextContent("On your desktop")
     })
   })
 })

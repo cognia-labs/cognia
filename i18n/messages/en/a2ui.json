@@ -472,7 +472,9 @@
     "fallback": "This widget is using its fallback presentation."
   },
   "workspace": {
-    "headerLoading": "Loading"
+    "headerLoading": "Loading",
+    "headerDescription": "Build this mini app: edit its layout, preview it live, and bind its data.",
+    "modeTabsAria": "Workspace mode"
   },
   "zoomIn": "Zoom In",
   "zoomOut": "Zoom Out"

@@ -22,11 +22,16 @@ import { cn } from "@/lib/utils"
  * Spelled out per pane rather than interpolated: Tailwind's scanner reads
  * source text, so `@sm/${name}-card:grid-cols-2` emits nothing.
  */
+/**
+ * Two columns from 20rem: a phone's content column is about 22rem, and at the
+ * old 24rem a schedule's nine short facts ("5m", "3", "Skip") each took a full
+ * line. Two values of a dozen characters sit side by side at 20rem.
+ */
 const FACT_COLUMNS: Record<ConsolePaneName, string> = {
-  "console-pane": "@sm/console-card:grid-cols-2 @3xl/console-card:grid-cols-3",
-  "device-pane": "@sm/device-card:grid-cols-2 @3xl/device-card:grid-cols-3",
-  "workspace-pane": "@sm/workspace-card:grid-cols-2 @3xl/workspace-card:grid-cols-3",
-  "environment-pane": "@sm/environment-card:grid-cols-2 @3xl/environment-card:grid-cols-3",
+  "console-pane": "@xs/console-card:grid-cols-2 @3xl/console-card:grid-cols-3",
+  "device-pane": "@xs/device-card:grid-cols-2 @3xl/device-card:grid-cols-3",
+  "workspace-pane": "@xs/workspace-card:grid-cols-2 @3xl/workspace-card:grid-cols-3",
+  "environment-pane": "@xs/environment-card:grid-cols-2 @3xl/environment-card:grid-cols-3",
 }
 
 /**

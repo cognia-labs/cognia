@@ -372,13 +372,17 @@ function DesktopInboxShell({
         icon={<InboxIcon />}
         title={t("pageTitle")}
         description={t("pageDescription")}
-        primaryAction={{
-          id: "connector-settings",
-          label: t("openSettings"),
-          icon: Settings2Icon,
-          href: "/me/connectors",
-          testId: "inbox-open-connector-settings",
-        }}
+        // A way to settings, not a create: a secondary button, so the header
+        // keeps its primary slot for creation like every other page.
+        secondaryActions={[
+          {
+            id: "connector-settings",
+            label: t("openSettings"),
+            icon: Settings2Icon,
+            href: "/me/connectors",
+            testId: "inbox-open-connector-settings",
+          },
+        ]}
       />
       <ResizablePanelGroup
         orientation="horizontal"

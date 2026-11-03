@@ -133,6 +133,13 @@ describe("A2UIPage", () => {
     expect(zhMessages.a2ui.moreActions).toBe("更多操作")
   })
 
+  it("leads the header with a way back home", () => {
+    render(<A2UIPage />)
+    const header = within(screen.getByTestId("a2ui-hub-header"))
+    expect(header.getByRole("link", { name: enMessages.a2ui.back })).toHaveAttribute("href", "/")
+    expect(header.getByRole("heading", { level: 1 })).toHaveTextContent(enMessages.a2ui.pageTitle)
+  })
+
   it("keeps the generate button as the only enabled primary until a prompt is typed", () => {
     render(<A2UIPage />)
     const generate = screen.getByRole("button", { name: enMessages.a2ui.aiGenerate })

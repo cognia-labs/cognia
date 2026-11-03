@@ -163,13 +163,16 @@ const currentProof = {
   workloadIsolationRevision: 1,
   egressEnforcement: "provider-and-guest-kernel" as const,
 }
-function settings() {
+function settings(framed?: boolean) {
   return (
     <NextIntlClientProvider
       locale="en"
       messages={{ settings: { managedDesktops: messages }, managedAcceptance }}
     >
-      <ManagedDesktopSettings target={{ kind: "remote", hostId: "chosen-host" }} />
+      <ManagedDesktopSettings
+        target={{ kind: "remote", hostId: "chosen-host" }}
+        {...(framed === undefined ? {} : { framed })}
+      />
     </NextIntlClientProvider>
   )
 }
@@ -208,6 +211,26 @@ beforeEach(() => {
     configRevision: 1,
   })
   api.authorize.mockResolvedValue({ id: "auth", expiresAt: Date.now() + 60000 })
+})
+
+/**
+ * Inside the device console's Sandbox chapter the block is a sub-block: its
+ * heading must read below the chapter's 13px title, not above it.
+ */
+test("steps its heading below the host's chapter title when unframed", async () => {
+  const { unmount } = render(settings(false))
+  const heading = await screen.findByRole("heading", { name: messages.title })
+  expect(heading).toHaveClass("text-xs", "font-semibold")
+  expect(heading).not.toHaveClass("text-sm")
+  // Every note under it, not just the description, reads at the sheet's 11px.
+  for (const key of ["description", "hostConfig", "manual"] as const)
+    expect(screen.getByText(messages[key])).toHaveClass("text-[11px]")
+  unmount()
+  render(settings())
+  expect(await screen.findByRole("heading", { name: messages.title })).toHaveClass(
+    "text-sm",
+    "font-medium"
+  )
 })
 
 test("mounts the billing monitor and refreshes templates on every reload", async () => {

@@ -553,5 +553,6 @@
   "tools": {
     "commits": "Commits",
     "repository": "Repository"
-  }
+  },
+  "description": "Stage, commit and sync the repository this workspace is working in."
 }

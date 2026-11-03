@@ -43,10 +43,16 @@ let headerProps: Record<string, unknown> = {}
 jest.mock("@/components/feature-shell/feature-page-header", () => ({
   FeaturePageHeader: (props: Record<string, unknown>) => {
     headerProps = props
-    const { status, actions, controls } = props as Record<string, React.ReactNode>
+    const { actions, controls, context } = props as Record<string, React.ReactNode>
+    const status = props.status as { label: string; tone?: string; testId?: string } | undefined
     return (
       <div data-testid="header-stub">
-        {status}
+        {status ? (
+          <span data-testid={status.testId} data-tone={status.tone} data-slot="status">
+            {status.label}
+          </span>
+        ) : null}
+        {context}
         {actions}
         {controls}
       </div>
@@ -118,8 +124,9 @@ jest.mock("./create-issue-page", () => ({
   CreateIssuePage: (props: Record<string, unknown>) =>
     props.open ? <div data-testid="create-dialog-stub" /> : null,
 }))
+let collabStaleForTest = false
 jest.mock("./collab-refresh-stale-badge", () => ({
-  CollabRefreshStaleBadge: () => <div data-testid="collab-refresh-stale-stub" />,
+  useCollabRefreshStale: () => collabStaleForTest,
 }))
 jest.mock("@/hooks/issues/use-assignee-options", () => ({
   useAssigneeOptions: () => [],
@@ -310,6 +317,7 @@ beforeEach(() => {
   projectsForTest = EMPTY_ROWS
   labelsForTest = EMPTY_ROWS
   runningIdsForTest = new Set()
+  collabStaleForTest = false
   squadRunsForTest = new Map()
   viewerForTest = { selfKey: "human:self", agentKeys: [] }
   mockListAll.mockResolvedValue({ items: [], errors: [] })
@@ -371,7 +379,20 @@ describe("IssueConsole", () => {
     it("offers create as the header's primary action", async () => {
       render(<IssueConsole />)
       await screen.findByTestId("board-stub")
-      expect(headerProps.primaryAction).toMatchObject({ id: "create", disabled: false })
+      expect(headerProps.primaryAction).toMatchObject({
+        id: "create",
+        disabled: false,
+        icon: expect.anything(),
+      })
+    })
+
+    it("draws the tracker's route tabs with issues current, and a description", async () => {
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      expect(headerProps.tabs).toMatchObject({ value: "issues", ariaLabel: "rail.trackerNav" })
+      expect((headerProps.tabs as { onValueChange?: unknown }).onValueChange).toBeUndefined()
+      expect(headerProps.navigation).toBeUndefined()
+      expect(headerProps.description).toBe("pageDescription")
     })
 
     it("disables create without a workspace, rather than hiding it", async () => {
@@ -575,6 +596,44 @@ describe("IssueConsole", () => {
       mockListAll.mockResolvedValue({ items: [], errors: [new Error("boom")] })
       render(<IssueConsole />)
       expect(await screen.findByTestId("issue-source-errors")).toBeInTheDocument()
+    })
+
+    it("draws one status chip, ranked, and moves the other states after the description", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [new Error("boom")] })
+      runningIdsForTest = new Set(["i1"])
+      collabStaleForTest = true
+      render(<IssueConsole />)
+      await waitFor(() =>
+        expect(headerProps.status).toMatchObject({
+          tone: "danger",
+          testId: "issue-source-errors",
+        })
+      )
+      const context = await screen.findByTestId("issue-header-context")
+      expect(context).toContainElement(screen.getByTestId("collab-refresh-stale"))
+      expect(context).toContainElement(screen.getByTestId("issue-agents-working"))
+    })
+
+    it("shows a stale mirror as a warning chip", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [] })
+      collabStaleForTest = true
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      expect(headerProps.status).toMatchObject({
+        label: "freshness.stale",
+        tone: "warning",
+        testId: "collab-refresh-stale",
+      })
+      expect(headerProps.context).toBeUndefined()
+    })
+
+    it("shows agents at work as the active chip when nothing is wrong", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [] })
+      runningIdsForTest = new Set(["i1"])
+      render(<IssueConsole />)
+      await waitFor(() =>
+        expect(headerProps.status).toMatchObject({ tone: "active", testId: "issue-agents-working" })
+      )
     })
   })
 

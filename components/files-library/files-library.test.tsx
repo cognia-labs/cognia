@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 const entriesState: { entries: unknown; imagesTruncated: boolean; loadMoreImages: jest.Mock } = {
@@ -75,7 +75,11 @@ jest.mock("next/navigation", () => ({
 import type { FilesEntry } from "@/lib/files-library/types"
 import { DEFAULT_FILES_VIEW_FILTERS, useFilesLibraryStore } from "@/stores/files-library"
 import { useProjectStore } from "@/stores/project/project-store"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { FILES_PAGE_SIZE, FilesLibrary } from "./files-library"
+
+// The header's icon buttons carry tooltips, which need the app's provider.
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: TooltipProvider })
 
 function entry(key: string, overrides: Partial<FilesEntry> = {}): FilesEntry {
   return {
@@ -179,6 +183,18 @@ it("narrows by lens", () => {
   fireEvent.mouseDown(screen.getByRole("tab", { name: "AI-generated" }), { button: 0 })
   expect(grid().getByRole("button", { name: "Open by-ai" })).toBeInTheDocument()
   expect(grid().queryByRole("button", { name: "Open by-me" })).toBeNull()
+})
+
+it("searches from the header's search field", () => {
+  entriesState.entries = [entry("alpha"), entry("beta")]
+  render(<FilesLibrary />)
+  const header = within(screen.getByTestId("files-header"))
+  fireEvent.change(header.getByRole("searchbox", { name: "Search files by name or content" }), {
+    target: { value: "beta" },
+  })
+  expect(useFilesLibraryStore.getState().search).toBe("beta")
+  expect(header.getByTestId("files-toolbar")).toBeInTheDocument()
+  expect(header.getByRole("tab", { name: "Suggested" })).toHaveAttribute("aria-selected", "true")
 })
 
 it("shows the Trash with Empty Trash and no lenses", async () => {

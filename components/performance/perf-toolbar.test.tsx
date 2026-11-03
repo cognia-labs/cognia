@@ -27,7 +27,7 @@ jest.mock("@/components/ui/dropdown-menu", () => ({
 }))
 
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { PerfLiveStatus, PerfToolbar } from "./perf-toolbar"
+import { PerfToolbar } from "./perf-toolbar"
 
 function setup(overrides: Partial<React.ComponentProps<typeof PerfToolbar>> = {}) {
   const props = {
@@ -110,27 +110,5 @@ describe("PerfToolbar", () => {
     expect(props.onExport).toHaveBeenCalledWith("csv-processes")
     fireEvent.click(screen.getByTestId("perf-export-hotspots"))
     expect(props.onExport).toHaveBeenCalledWith("csv-hotspots")
-  })
-})
-
-describe("PerfLiveStatus", () => {
-  it("reads live with the cadence, or paused", () => {
-    const { rerender } = render(
-      <PerfLiveStatus paused={false} intervalMs={2000} recording={false} />
-    )
-    expect(screen.getByTestId("perf-live-status-view")).toHaveTextContent("Live · 2s")
-    expect(screen.getByTestId("perf-live-status-view")).toHaveAttribute("data-state", "live")
-    rerender(<PerfLiveStatus paused intervalMs={2000} recording={false} />)
-    expect(screen.getByTestId("perf-live-status-view")).toHaveTextContent("Paused")
-    expect(screen.queryByTestId("perf-live-status-recording")).not.toBeInTheDocument()
-  })
-
-  it("shows an active capture and jumps to Captures", () => {
-    const onOpenCaptures = jest.fn()
-    render(
-      <PerfLiveStatus paused={false} intervalMs={1000} recording onOpenCaptures={onOpenCaptures} />
-    )
-    fireEvent.click(screen.getByTestId("perf-live-status-recording"))
-    expect(onOpenCaptures).toHaveBeenCalledTimes(1)
   })
 })

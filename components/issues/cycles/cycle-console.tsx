@@ -17,7 +17,7 @@ import { useTranslations } from "next-intl"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { CycleEditorList } from "@/components/issues/cycles/cycle-editor-list"
-import { TrackerTabs } from "@/components/issues/tracker-tabs"
+import { useTrackerHeaderTabs } from "@/components/issues/tracker-tabs"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { useClientLiveQuery } from "@/hooks/data"
 import { listIssueCycles } from "@/lib/db/issue-cycles"
@@ -30,6 +30,7 @@ import type { IssueCycle, IssueProject } from "@/types/issues"
 export function CycleConsole() {
   const t = useTranslations("issues")
   const workspaceId = useProjectStore((s) => s.activeProjectId)
+  const trackerTabs = useTrackerHeaderTabs("cycles")
 
   const cycles = useClientLiveQuery(
     () => (workspaceId ? listIssueCycles({ projectId: workspaceId }) : Promise.resolve([])),
@@ -63,9 +64,9 @@ export function CycleConsole() {
           variant="management"
           icon={<RotateCwIcon />}
           title={t("cycles.title")}
+          description={t("cycles.pageDescription")}
           summary={t("cycles.summary", { count: (cycles ?? []).length })}
-          navigation={<TrackerTabs active="cycles" />}
-          navigationPlacement="inline"
+          tabs={trackerTabs}
         />
       }
       centerClassName="overflow-y-auto"

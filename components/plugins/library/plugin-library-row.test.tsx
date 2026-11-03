@@ -373,6 +373,17 @@ describe("PluginLibraryRow", () => {
     expect(strip.className).toContain("min-w-0")
   })
 
+  // The strip sits above the row's stretched open button so its chips keep
+  // their popovers. Spanning the rest of line two, it swallowed every click on
+  // the row's lower half; sized to its chips, the gap beside them opens.
+  it("keeps the strip to its chips so the rest of line two still opens the row", () => {
+    const h = handlers()
+    render(<PluginLibraryRow plugin={baseRow} selected={false} active={false} {...h} />)
+    const strip = screen.getByTestId("plugin-library-row-capabilities")
+    expect(strip.className).toContain("z-10")
+    expect(strip.className.split(/\s+/)).not.toContain("flex-1")
+  })
+
   it("is a list item of the library list", () => {
     render(<PluginLibraryRow plugin={baseRow} selected={false} active={false} {...handlers()} />)
     expect(screen.getByRole("listitem")).toBeInTheDocument()

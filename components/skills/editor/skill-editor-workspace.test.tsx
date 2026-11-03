@@ -37,6 +37,12 @@ jest.mock("dexie-react-hooks", () => ({
   },
 }))
 
+// The empty picker reads its own live query; stubbed so the alternating
+// skill/resources queries above keep their order.
+jest.mock("./skill-editor-empty", () => ({
+  SkillEditorEmpty: () => <div data-testid="skill-editor-empty" />,
+}))
+
 jest.mock("@/lib/db/skills", () => ({
   getSkill: async () => skillRef.current,
   updateSkill: jest.fn(),
@@ -134,7 +140,7 @@ beforeEach(() => {
 describe("SkillEditorWorkspace", () => {
   it("renders the empty state when no skill is open", () => {
     render(<SkillEditorWorkspace />)
-    expect(screen.getByText("emptyPickSkill")).toBeInTheDocument()
+    expect(screen.getByTestId("skill-editor-empty")).toBeInTheDocument()
   })
 
   it("renders the file tree + editor when a skill is loaded", () => {

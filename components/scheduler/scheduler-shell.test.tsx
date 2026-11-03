@@ -201,6 +201,19 @@ describe("SchedulerShell", () => {
       expect(screen.queryByTestId("sidebar-chrome")).not.toBeInTheDocument()
     })
 
+    // Every other feature page puts its header over the whole page. Inside the
+    // detail panel it left the list's search and filters beside the title.
+    it("draws the header above both panes, not inside the detail", () => {
+      renderShell()
+      const header = screen.getByTestId("shell-header")
+      expect(screen.getByTestId("scheduler-detail-pane")).not.toContainElement(header)
+      expect(screen.getByTestId("scheduler-list-pane")).not.toContainElement(header)
+      expect(
+        header.compareDocumentPosition(screen.getByTestId("resizable-group")) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    })
+
     // react-resizable-panels v4 interprets bare numbers as PIXELS; sizes must
     // carry an explicit unit or the panes collapse to px-wide slivers.
     it("passes unit-bearing sizes to every resizable panel", () => {
@@ -358,6 +371,18 @@ describe("SchedulerShell", () => {
       expect(screen.queryByTestId("resizable-group")).not.toBeInTheDocument()
       expect(screen.getByTestId("sidebar-chrome")).toBeInTheDocument()
       expect(screen.getByTestId("scheduler-inset")).toBeInTheDocument()
+    })
+
+    it("keeps the header above the list, and the list inside the row below it", () => {
+      renderShell()
+      const header = screen.getByTestId("shell-header")
+      const chrome = screen.getByTestId("sidebar-chrome")
+      expect(screen.getByTestId("scheduler-inset")).not.toContainElement(header)
+      // The sidebar container is `absolute inset-y-0`: its positioned ancestor
+      // must be the row under the header, or an open list covers the header.
+      const row = chrome.parentElement as HTMLElement
+      expect(row).toHaveClass("relative")
+      expect(row).not.toContainElement(header)
     })
 
     it("does not render the rail (fixes the tablet crowding issue)", () => {

@@ -194,28 +194,39 @@ describe("DiagnosticsWorkspace", () => {
     expect(screen.queryByText("logging.workspace.views.advanced")).not.toBeInTheDocument()
   })
 
-  it("keeps channel labels for headers wide enough to hold them beside the title", () => {
+  it("draws the channels as the header's tab set in its view bar", () => {
     render(<DiagnosticsWorkspace />)
-    const tab = screen.getByTestId("logs-channel-logs")
-    // Icon-only below the breakpoint, so the name must not depend on the label;
-    // the tooltip adds what the channel holds.
-    expect(tab.getAttribute("title")).toBe(
-      `${tab.getAttribute("aria-label")} — logging.workspace.viewDescriptions.logs`
-    )
-    const label = screen.getByTestId("logs-channel-logs-label")
-    expect(label).toHaveClass("hidden", "@5xl/feature-header:inline")
+    const tablist = screen.getByRole("tablist", { name: "logging.workspace.navigation.label" })
+    expect(tablist.closest('[data-slot="feature-header-view-bar"]')).not.toBeNull()
+    const logs = screen.getByRole("tab", { name: "logging.workspace.views.logs" })
+    expect(logs).toHaveAttribute("data-testid", "logs-channel-logs")
+    expect(logs).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByTestId("logs-channel-traces")).toHaveAttribute("data-state", "inactive")
   })
 
-  it("names the active channel at every header width", () => {
+  it("says what the channel on screen holds after the description", async () => {
+    const user = userEvent.setup()
     render(<DiagnosticsWorkspace />)
-    // The active tab's label is unhidden by its own state, so a phone header —
-    // title gone, icons only — still says which channel is on screen.
-    expect(screen.getByTestId("logs-channel-logs")).toHaveClass("group")
-    expect(screen.getByTestId("logs-channel-logs-label")).toHaveClass(
-      "group-data-[state=active]:inline"
+    expect(screen.getByText("logging.workspace.description")).toBeInTheDocument()
+    expect(screen.getByTestId("logs-channel-description")).toHaveTextContent(
+      "logging.workspace.viewDescriptions.logs"
     )
-    expect(screen.getByTestId("logs-channel-logs")).toHaveAttribute("data-state", "active")
-    expect(screen.getByTestId("logs-channel-traces")).toHaveAttribute("data-state", "inactive")
+    await user.click(screen.getByTestId("logs-channel-traces"))
+    expect(screen.getByTestId("logs-channel-description")).toHaveTextContent(
+      "logging.workspace.viewDescriptions.traces"
+    )
+  })
+
+  it("leads with a way home rather than a breadcrumb trail", () => {
+    render(<DiagnosticsWorkspace />)
+    const back = screen.getByTestId("logs-back-home")
+    expect(back).toHaveAttribute("href", "/")
+    expect(back).toHaveAccessibleName("logging.workspace.breadcrumbHome")
+    expect(
+      screen
+        .getByTestId("logs-page-header")
+        .querySelector('[data-slot="feature-header-breadcrumb"]')
+    ).toBeNull()
   })
 
   it("aggregates live transport health into a single header chip", () => {
@@ -237,7 +248,12 @@ describe("DiagnosticsWorkspace", () => {
   it("badges only the crash reports still waiting on the user", () => {
     render(<DiagnosticsWorkspace />)
     // The receipt-carrying report is the service's to process.
-    expect(screen.getByTestId("logs-channel-incidents-count")).toHaveTextContent("1")
+    expect(screen.getByTestId("logs-channel-incidents")).toHaveTextContent(
+      "logging.workspace.views.incidents1"
+    )
+    expect(screen.getByTestId("logs-channel-logs")).toHaveTextContent(
+      /^logging\.workspace\.views\.logs$/
+    )
   })
 
   it("points Configure at the settings for the channel on screen", async () => {
@@ -296,11 +312,11 @@ describe("DiagnosticsWorkspace", () => {
     )
   })
 
-  it("keeps the header to a single row — the channel tabs moved into it", () => {
+  it("draws the shared management band with the tabs in its view bar", () => {
     render(<DiagnosticsWorkspace />)
     const header = screen.getByTestId("logs-page-header")
-    expect(header).toHaveAttribute("data-navigation-placement", "inline")
-    expect(header).toHaveAttribute("data-has-secondary", "false")
+    expect(header).toHaveAttribute("data-variant", "management")
+    expect(header).toHaveAttribute("data-has-secondary", "true")
   })
 
   it("switches to the traces channel and mirrors it into the URL", async () => {

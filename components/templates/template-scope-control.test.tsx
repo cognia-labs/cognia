@@ -89,6 +89,27 @@ describe("<TemplateScopeControl />", () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  // The inspector stacks its parts as ruled sections; a card inside it was the
+  // one block drawn in a different style from its neighbours.
+  it("draws as a ruled section inside the inspector, and as a card elsewhere", () => {
+    const { unmount } = render(
+      <TemplateScopeControl
+        tier="mine"
+        activeWorkspaceId="ws_1"
+        variant="section"
+        onChange={jest.fn()}
+      />
+    )
+    const section = screen.getByTestId("template-scope-control")
+    expect(section.tagName).toBe("SECTION")
+    expect(section).toHaveAttribute("data-variant", "section")
+    expect(section).toHaveClass("border-t")
+    unmount()
+
+    render(<TemplateScopeControl tier="mine" activeWorkspaceId="ws_1" onChange={jest.fn()} />)
+    expect(screen.getByTestId("template-scope-control")).not.toHaveAttribute("data-variant")
+  })
+
   it("stops taking taps while a write is in flight", () => {
     const onChange = jest.fn()
     render(<TemplateScopeControl tier="mine" activeWorkspaceId="ws_1" busy onChange={onChange} />)

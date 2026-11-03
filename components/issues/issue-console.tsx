@@ -40,12 +40,14 @@ import {
   subscribeIssueSyncProviders,
 } from "@/lib/issues/sync/registry"
 import { useTranslations } from "next-intl"
-import { CircleDotIcon, PanelLeftIcon, RefreshCwIcon, UploadIcon } from "lucide-react"
+import { CircleDotIcon, PanelLeftIcon, PlusIcon, RefreshCwIcon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderStatus,
+} from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useClientLiveQuery } from "@/hooks/data"
 import { useIssueSyncAvailability } from "./kept-copy-source-state"
@@ -108,14 +110,14 @@ import { IssueBulkToolbar } from "./list/issue-bulk-toolbar"
 import { IssueList } from "./list/issue-list"
 import { ManageLabelsDialog } from "./rail/manage-labels-dialog"
 import { ManageCyclesDialog } from "./rail/manage-cycles-dialog"
-import { TrackerTabs } from "./tracker-tabs"
+import { useTrackerHeaderTabs } from "./tracker-tabs"
 import { IssueRail } from "./rail/issue-rail"
 import { IssueDetailPanel } from "./issue-detail-panel"
 import { CreateIssuePage } from "./create-issue-page"
 import { CollabConflictsPanel } from "./collab-conflicts-panel"
 import { SyncConflictsPanel } from "./sync-conflicts-panel"
 import { ImportIssuesDialog } from "./import/import-issues-dialog"
-import { CollabRefreshStaleBadge } from "./collab-refresh-stale-badge"
+import { useCollabRefreshStale } from "./collab-refresh-stale-badge"
 
 /** Stable empty reference, so the no-workspace path cannot churn memos. */
 const EMPTY_ITEMS: UnifiedIssueItem[] = []
@@ -359,6 +361,49 @@ export function IssueConsole({
       ),
     [sorted, runningIds]
   )
+
+  const trackerTabs = useTrackerHeaderTabs("issues")
+  const collabStale = useCollabRefreshStale()
+  /**
+   * The header draws one status chip, so the board's states are ranked: a
+   * source that failed to load outranks a stale mirror, which outranks agents
+   * at work. Whatever is left follows the description, so nothing goes unsaid.
+   */
+  const headerFacts: FeatureHeaderStatus[] = [
+    ...(sourceErrors > 0
+      ? [
+          {
+            label: t("source.degraded", { count: sourceErrors }),
+            tone: "danger" as const,
+            testId: "issue-source-errors",
+          },
+        ]
+      : []),
+    ...(collabStale
+      ? [{ label: t("freshness.stale"), tone: "warning" as const, testId: "collab-refresh-stale" }]
+      : []),
+    ...(runHint.running > 0
+      ? [
+          {
+            label: t("board.agentsWorking", { count: runHint.running }),
+            tone: "active" as const,
+            testId: "issue-agents-working",
+          },
+        ]
+      : []),
+  ]
+  const [headerStatus, ...headerContextFacts] = headerFacts
+  const headerContext =
+    headerContextFacts.length > 0 ? (
+      <span className="inline-flex items-center gap-1.5" data-testid="issue-header-context">
+        {headerContextFacts.map((fact, index) => (
+          <span key={fact.testId} className="inline-flex items-center gap-1.5">
+            {index > 0 ? <span aria-hidden="true">·</span> : null}
+            <span data-testid={fact.testId}>{fact.label}</span>
+          </span>
+        ))}
+      </span>
+    ) : undefined
   /** The board and the list both speak `unifiedId`; the run index does not. */
   const runningUnifiedIds = useMemo(
     () => new Set([...(runningIds ?? [])].map((id) => makeUnifiedIssueId("local", id))),
@@ -681,24 +726,12 @@ export function IssueConsole({
           variant="management"
           icon={<CircleDotIcon />}
           title={t("title")}
+          description={t("pageDescription")}
+          context={headerContext}
           summary={t("summary", { count: sorted.length })}
-          navigation={<TrackerTabs active="issues" />}
-          navigationPlacement="inline"
-          status={
-            <div className="flex items-center gap-1.5">
-              <CollabRefreshStaleBadge />
-              {runHint.running > 0 ? (
-                <Badge variant="outline" className="font-normal" data-testid="issue-agents-working">
-                  {t("board.agentsWorking", { count: runHint.running })}
-                </Badge>
-              ) : null}
-              {sourceErrors > 0 ? (
-                <Badge variant="destructive" data-testid="issue-source-errors">
-                  {t("source.degraded", { count: sourceErrors })}
-                </Badge>
-              ) : null}
-            </div>
-          }
+          tabs={trackerTabs}
+          status={headerStatus}
+          // A pressed-state toggle, not a plain button: it stays in `actions`.
           actions={
             <Button
               size="icon-sm"
@@ -715,6 +748,7 @@ export function IssueConsole({
           primaryAction={{
             id: "create",
             label: t("create.trigger"),
+            icon: PlusIcon,
             onSelect: () => openCreate(),
             disabled: !projectId,
             testId: "issue-create-trigger",

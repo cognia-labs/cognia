@@ -392,6 +392,7 @@
     },
     "appearance": {
       "title": "外观与设置",
+      "back": "返回{name}",
       "description": "宠物的样子和行为，包括桌面上的表现。",
       "index": "外观与设置分区",
       "binding": "角色外观",

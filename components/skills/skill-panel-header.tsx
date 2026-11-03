@@ -1,20 +1,35 @@
 "use client"
 
-import type { ReactNode } from "react"
+import { useMemo } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowLeftIcon, FilterIcon, LayersIcon, LayoutListIcon } from "lucide-react"
-import Link from "next/link"
+import {
+  BarChart3Icon,
+  LayersIcon,
+  LayoutListIcon,
+  PencilIcon,
+  ShoppingBagIcon,
+  SparklesIcon,
+  type LucideIcon,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
-import { useSkillsStore } from "@/stores/skills"
-import { SkillPanelToolbar } from "./skill-panel-toolbar"
+import {
+  FeaturePageHeader,
+  type FeatureHeaderTab,
+} from "@/components/feature-shell/feature-page-header"
+import { useSkillsStore, type SkillPanelTab } from "@/stores/skills"
+import { useSkillPanelToolbar } from "./skill-panel-toolbar"
 import { SkillPreferencesPopover } from "./skill-preferences"
+
+const TAB_DEFS: { id: SkillPanelTab; labelKey: string; icon: LucideIcon }[] = [
+  { id: "my-skills", labelKey: "mySkills", icon: SparklesIcon },
+  { id: "browse", labelKey: "browse", icon: ShoppingBagIcon },
+  { id: "editor", labelKey: "editor", icon: PencilIcon },
+  { id: "analytics", labelKey: "analytics", icon: BarChart3Icon },
+]
 
 interface Props {
   totalCount: number
   filteredCount: number
-  /** Tabs rendered inline in the header row at lg+ (second row below lg). */
-  tabsSlot?: ReactNode
   /**
    * The panel is inside a host that already owns the page's identity and its
    * way back: the Settings shell, or `/me/skills` under `SubPageShell`.
@@ -28,16 +43,36 @@ interface Props {
   embedded?: boolean
 }
 
-export function SkillPanelHeader({ totalCount, filteredCount, tabsSlot, embedded }: Props) {
+export function SkillPanelHeader({ totalCount, filteredCount, embedded }: Props) {
   const t = useTranslations("skills")
-  const setFilterSheetOpen = useSkillsStore((s) => s.setFilterSheetOpen)
+  const tTabs = useTranslations("skills.tabs")
   const setCategorySheetOpen = useSkillsStore((s) => s.setCategorySheetOpen)
   const activeTab = useSkillsStore((s) => s.activeTab)
+  const setActiveTab = useSkillsStore((s) => s.setActiveTab)
+  const dirtyCount = useSkillsStore(
+    (s) => s.editorWorkspace.openFiles.filter((f) => f.draftContent !== f.savedContent).length
+  )
+  const toolbar = useSkillPanelToolbar()
+
+  const tabItems = useMemo<FeatureHeaderTab[]>(
+    () =>
+      TAB_DEFS.map((tab) => ({
+        value: tab.id,
+        label: tTabs(tab.labelKey),
+        icon: tab.icon,
+        // Unsaved editor files, so leaving the editor tab does not hide them.
+        count: tab.id === "editor" && dirtyCount > 0 ? dirtyCount : undefined,
+        testId: `panel-tab-${tab.id}`,
+      })),
+    [tTabs, dirtyCount]
+  )
 
   return (
     <FeaturePageHeader
       icon={<LayersIcon />}
+      back={embedded ? undefined : { label: t("back"), href: "/" }}
       title={t("panel.headerTitle")}
+      description={t("panel.headerDescription")}
       summary={
         <span className="tabular-nums">
           {filteredCount === totalCount
@@ -46,51 +81,40 @@ export function SkillPanelHeader({ totalCount, filteredCount, tabsSlot, embedded
         </span>
       }
       headingLevel={embedded ? 2 : 1}
+      // A leading pane toggle, not a way back: below lg the category rail is a
+      // sheet, and this is the only way to open it.
       breadcrumb={
-        <div className="flex items-center gap-1">
-          {!embedded && (
-            <Button asChild variant="ghost" size="icon" className="size-8 shrink-0">
-              <Link href="/" aria-label={t("back")}>
-                <ArrowLeftIcon className="size-4" />
-              </Link>
-            </Button>
-          )}
-          {activeTab === "my-skills" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 lg:hidden"
-              onClick={() => setCategorySheetOpen(true)}
-              aria-label={t("panel.openCategoriesAria")}
-              data-testid="skill-panel-open-categories"
-            >
-              {/* Not `LayersIcon`: that is the page's own identity glyph one
-                  slot to the right, and two of it side by side read as a
-                  rendering glitch. Same glyph as the plugin category sheet. */}
-              <LayoutListIcon className="size-4" />
-            </Button>
-          )}
-        </div>
+        activeTab === "my-skills" ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 lg:hidden"
+            onClick={() => setCategorySheetOpen(true)}
+            aria-label={t("panel.openCategoriesAria")}
+            data-testid="skill-panel-open-categories"
+          >
+            {/* Not `LayersIcon`: that is the page's own identity glyph, and
+                two of it side by side read as a rendering glitch. Same glyph
+                as the plugin category sheet. */}
+            <LayoutListIcon className="size-4" />
+          </Button>
+        ) : undefined
       }
-      navigation={tabsSlot}
+      tabs={{
+        items: tabItems,
+        value: activeTab,
+        onValueChange: (next) => setActiveTab(next as SkillPanelTab),
+        ariaLabel: tTabs("label"),
+      }}
       actions={
         <>
-          {activeTab === "my-skills" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setFilterSheetOpen(true)}
-              className="shrink-0"
-              aria-label={t("filters")}
-            >
-              <FilterIcon className="size-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">{t("filters")}</span>
-            </Button>
-          )}
+          {toolbar.importMenu}
           <SkillPreferencesPopover />
-          <SkillPanelToolbar />
         </>
       }
+      secondaryActions={toolbar.secondaryActions}
+      overflowActions={toolbar.overflowActions}
+      primaryAction={toolbar.primaryAction}
     />
   )
 }

@@ -22,6 +22,7 @@ const storeState = {
   setFilters: jest.fn(),
   toggleSelection: jest.fn(),
   openDetail: jest.fn(),
+  setFilterSheetOpen: jest.fn(),
 }
 
 jest.mock("@/stores/skills", () => ({
@@ -43,13 +44,20 @@ jest.mock("./skill-list-item", () => ({
   SkillListItem: ({
     skill,
     active,
+    selecting,
     onOpen,
   }: {
     skill: { id: string; name: string }
     active: boolean
+    selecting?: boolean
     onOpen: (id: string) => void
   }) => (
-    <div data-testid="skill-list-item" data-active={active} onClick={() => onOpen(skill.id)}>
+    <div
+      data-testid="skill-list-item"
+      data-active={active}
+      data-selecting={selecting}
+      onClick={() => onOpen(skill.id)}
+    >
       {skill.name}
     </div>
   ),
@@ -78,7 +86,15 @@ const baseProps = {
 beforeEach(() => {
   jest.clearAllMocks()
   storeState.detailSkillId = null
-  storeState.filters = { ...storeState.filters, query: "", category: "all", source: "all" }
+  storeState.selection = new Set<string>()
+  storeState.filters = {
+    ...storeState.filters,
+    query: "",
+    category: "all",
+    source: "all",
+    status: "all",
+    tag: null,
+  }
   mockUsePrefs.mockReturnValue({ ...DEFAULT_SKILL_PANEL_PREFS })
 })
 
@@ -89,6 +105,30 @@ describe("SkillListPane", () => {
     expect(input).toBeInTheDocument()
     fireEvent.change(input, { target: { value: "alp" } })
     expect(storeState.setQuery).toHaveBeenCalledWith("alp")
+  })
+
+  it("opens the filter sheet from beside the sort, and counts what only the sheet sets", () => {
+    render(<SkillListPane {...baseProps} />)
+    expect(screen.queryByTestId("skill-list-filters-count")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("skill-list-filters"))
+    expect(storeState.setFilterSheetOpen).toHaveBeenCalledWith(true)
+  })
+
+  it("badges the filter entry with the status and tag filters in force", () => {
+    storeState.filters = { ...storeState.filters, status: "disabled", tag: "writing" } as never
+    render(<SkillListPane {...baseProps} />)
+    expect(screen.getByTestId("skill-list-filters-count")).toHaveTextContent("2")
+  })
+
+  it("tells every row a batch is being built once anything is selected", () => {
+    const { unmount } = render(<SkillListPane {...baseProps} />)
+    expect(screen.getAllByTestId("skill-list-item")[0]).toHaveAttribute("data-selecting", "false")
+    unmount()
+    storeState.selection = new Set(["s1"])
+    render(<SkillListPane {...baseProps} />)
+    for (const row of screen.getAllByTestId("skill-list-item")) {
+      expect(row).toHaveAttribute("data-selecting", "true")
+    }
   })
 
   it("renders one list item per skill and marks the detail row active", () => {

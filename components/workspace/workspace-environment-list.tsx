@@ -1094,7 +1094,26 @@ export function WorkspaceEnvironmentList({
   const emptyFrame =
     presentation === "page" && sectionVariant === "card" ? "border" : "border-none p-4 md:p-6"
 
-  const content = !canList ? (
+  // Embedded as a chapter of a larger record (the device page), a host that
+  // cannot list environments is one fact about that host, said in one line.
+  // The full empty state there, an icon tile and a 20px title, outweighed
+  // every real section around it, and the toolbar under it offered a count
+  // of zero, Prune and reload for a list that cannot exist.
+  const unavailableInline = !canList && presentation === "sheet"
+
+  const content = unavailableInline ? (
+    <p
+      className="flex items-start gap-1.5 text-xs text-muted-foreground"
+      data-testid="workspace-environments-unavailable"
+      data-inline="true"
+    >
+      <LockIcon aria-hidden className="mt-0.5 size-3 shrink-0" />
+      <span className="min-w-0">
+        <span className="font-medium text-foreground">{t("unavailableTitle")}</span>
+        {listVerdict.reason ? <> · {listVerdict.reason}</> : null}
+      </span>
+    </p>
+  ) : !canList ? (
     <Empty className={emptyFrame} data-testid="workspace-environments-unavailable">
       <EmptyHeader>
         <EmptyMedia variant="icon">
@@ -1281,7 +1300,7 @@ export function WorkspaceEnvironmentList({
       data-density={compact ? "compact" : "full"}
       data-presentation={presentation}
     >
-      {toolbar}
+      {unavailableInline ? null : toolbar}
 
       {showCreate && rootDir && createOpen ? (
         <Surface radius="panel" className="border p-3" data-testid="workspace-environments-create">

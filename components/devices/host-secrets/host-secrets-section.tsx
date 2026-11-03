@@ -211,7 +211,6 @@ export function HostSecretsSection({
       icon={KeyRoundIcon}
       meta={entries ? t("meta", { count: entries.length }) : undefined}
       description={t("description", { host })}
-      wide
     >
       <div className="space-y-4" data-testid="host-secrets-section">
         {!supported ? (

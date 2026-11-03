@@ -2,7 +2,14 @@
 
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
-import { AlertTriangleIcon, LayoutGridIcon, ListIcon, SearchIcon, SparklesIcon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  LayoutGridIcon,
+  ListFilterIcon,
+  ListIcon,
+  SearchIcon,
+  SparklesIcon,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import { Input } from "@/components/ui/input"
@@ -66,6 +73,7 @@ export function SkillListPane({
   const toggleSelection = useSkillsStore((s) => s.toggleSelection)
   const detailSkillId = useSkillsStore((s) => s.detailSkillId)
   const openDetail = useSkillsStore((s) => s.openDetail)
+  const setFilterSheetOpen = useSkillsStore((s) => s.setFilterSheetOpen)
   const prefs = useSkillPanelPrefs()
   const setPrefs = useSettingsStore((s) => s.setSkillPanelPrefs)
 
@@ -87,6 +95,11 @@ export function SkillListPane({
       prefs.showUsage,
     ]
   )
+
+  // Source and category have their own selects above; the sheet is where
+  // status and tag live, so its trigger counts those.
+  const sheetFilterCount = (filters.status !== "all" ? 1 : 0) + (filters.tag ? 1 : 0)
+  const selecting = selection.size > 0
 
   const overBudget = prefs.enabledWarnThreshold > 0 && enabledCount > prefs.enabledWarnThreshold
 
@@ -179,6 +192,25 @@ export function SkillListPane({
             </SelectGroup>
           </SelectContent>
         </Select>
+        <Button
+          type="button"
+          size="icon"
+          variant={sheetFilterCount > 0 ? "secondary" : "ghost"}
+          className="relative size-7 shrink-0"
+          aria-label={t("filters")}
+          onClick={() => setFilterSheetOpen(true)}
+          data-testid="skill-list-filters"
+        >
+          <ListFilterIcon className="size-3.5" />
+          {sheetFilterCount > 0 ? (
+            <span
+              className="absolute -right-1 -top-1 grid size-3.5 place-items-center rounded-full bg-primary text-[9px] font-medium tabular-nums text-primary-foreground"
+              data-testid="skill-list-filters-count"
+            >
+              {sheetFilterCount}
+            </span>
+          ) : null}
+        </Button>
         <ButtonGroup className="shrink-0">
           <Button
             type="button"
@@ -228,7 +260,7 @@ export function SkillListPane({
           "flex-1 overflow-y-auto",
           prefs.viewMode === "grid"
             ? "grid auto-rows-max grid-cols-1 gap-1.5 px-2 pb-2 sm:grid-cols-2"
-            : "flex flex-col gap-px pe-1.5 pb-1.5"
+            : "flex flex-col gap-px px-1.5 pb-1.5"
         )}
         aria-label={t("panel.listAriaLabel")}
         data-testid="skill-list"
@@ -261,6 +293,7 @@ export function SkillListPane({
               display={display}
               selected={selection.has(sk.id)}
               active={detailSkillId === sk.id}
+              selecting={selecting}
               onToggleSelect={toggleSelection}
               onOpen={openDetail}
             />

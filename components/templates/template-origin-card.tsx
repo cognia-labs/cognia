@@ -17,9 +17,10 @@ import { GitForkIcon, RefreshCwIcon, UnlinkIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Surface } from "@/components/surface/surface"
 import type { TemplateDefinitionEnvelope } from "@/lib/templates/contracts"
 import type { TemplateDerivation } from "@/lib/templates/repository"
+
+import { SectionFrame } from "./template-scope-control"
 
 export interface TemplateOriginCardProps {
   derivation: TemplateDerivation | undefined
@@ -30,9 +31,12 @@ export interface TemplateOriginCardProps {
   busy?: boolean
   /** Authoring is desktop-only, so the phone shows the origin without actions. */
   readOnly?: boolean
+  /** See `TemplateScopeControl`'s `variant`. */
+  variant?: "card" | "section"
 }
 
 export function TemplateOriginCard({
+  variant = "card",
   derivation,
   upstream,
   onReviewUpdate,
@@ -42,20 +46,20 @@ export function TemplateOriginCard({
 }: TemplateOriginCardProps) {
   const t = useTranslations("templateStudio.origin")
   if (!derivation) return null
+  const section = variant === "section"
 
   return (
-    <Surface
-      layer="raised"
-      radius="control"
-      className="space-y-2 p-3"
-      data-testid="template-origin"
-    >
-      <div className="flex items-center gap-2">
-        <GitForkIcon className="size-4 shrink-0 text-muted-foreground" />
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("title")}
-        </h3>
-      </div>
+    <SectionFrame section={section} data-testid="template-origin">
+      {section ? (
+        <h3 className="text-xs font-medium text-muted-foreground">{t("title")}</h3>
+      ) : (
+        <div className="flex items-center gap-2">
+          <GitForkIcon className="size-4 shrink-0 text-muted-foreground" />
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("title")}
+          </h3>
+        </div>
+      )}
       <p className="break-all font-mono text-xs" data-testid="template-origin-source">
         {derivation.definitionId}
         {derivation.version ? `@${derivation.version}` : ""}
@@ -98,6 +102,6 @@ export function TemplateOriginCard({
           </Button>
         </div>
       )}
-    </Surface>
+    </SectionFrame>
   )
 }
