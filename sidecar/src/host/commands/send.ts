@@ -1,7 +1,32 @@
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import {
+  assertSafeModelInput,
+  assertSafeModelHistory,
+  assertSafeExternalContent,
+  ContentSafetyBlockedError,
+} from "@cognia/content-safety"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
 import type { HostSession } from "../sessions/types.ts"
 import { restartReason } from "../sessions/lifecycle.ts"
+
+/** Backstop for headless and restored sends that never pass renderer preparation. */
+export function assertProviderVisibleContentSafety({
+  prompt,
+  options,
+}: {
+  prompt?: unknown
+  options?: SendOptions
+}): void {
+  if (options?.contentSafety?.injectionProtection !== true) return
+  const adapter =
+    options.execution?.runtimeAdapter ??
+    ((options.provider ?? "anthropic") === "anthropic" ? "claude-agent-sdk" : "ai-sdk")
+  if (adapter === "claude-agent-sdk" && (options.resumeSessionId || options.forkFromSessionId))
+    throw new ContentSafetyBlockedError(["unverified_native_resume"])
+  assertSafeModelInput(prompt)
+  if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
+  if (options.pluginTools) assertSafeExternalContent(options.pluginTools)
+}
 
 /** A retained-context probe is only a hint until admission checks its identity. */
 export function retainedRuntimeSendIsSafe(

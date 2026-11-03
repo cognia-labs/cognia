@@ -22,11 +22,13 @@ export type RelayConfig = {
   headers?: Record<string, string>
   allowPrivateNetwork?: boolean
   permissionToolName?: string
+  injectionProtection?: boolean
 }
 import { permissionDecisionHasUnprovenRewrite } from "../../policy/permission/delegated-approval.ts"
 import { createInterface } from "node:readline"
 
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { assertSafeExternalContent, ContentSafetyBlockedError } from "@cognia/content-safety"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -43,6 +45,8 @@ export function decodeRelayConfig(value = process.env[CONFIG_ENV]) {
   } catch {
     throw new Error("invalid MCP relay configuration")
   }
+  if (config.injectionProtection !== undefined && typeof config.injectionProtection !== "boolean")
+    throw new Error("invalid MCP relay protection policy")
   if (config.transport === "stdio") {
     if (
       typeof config.command !== "string" ||
@@ -188,6 +192,18 @@ export async function runMcpStdioRelay({
         error: { code: -32000, message: "MCP response blocked by the PII gate" },
       }
     }
+    if (method && !request?.permission) {
+      try {
+        assertSafeExternalContent(message.result ?? message.error, config.injectionProtection)
+      } catch (error) {
+        if (!(error instanceof ContentSafetyBlockedError)) throw error
+        message = {
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32000, message: error.message },
+        }
+      }
+    }
     output.write(`${JSON.stringify(message)}\n`)
   }
   remote.onerror = (error) => {
@@ -241,7 +257,10 @@ export async function runMcpStdioRelay({
         pendingMethods.set(message.id, {
           method: message.method,
           permission:
-            message.method === "tools/call" && config.permissionToolName === message.params?.name,
+            message.method === "tools/call" &&
+            typeof config.permissionToolName === "string" &&
+            config.permissionToolName.length > 0 &&
+            config.permissionToolName === message.params?.name,
           originalInput: message.params?.arguments?.input,
         })
       await remote.send(message as JSONRPCMessage)

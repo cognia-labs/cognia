@@ -26,6 +26,7 @@ import type {
   SessionApiMethod,
   SessionControlMethod,
   StoredMessage,
+  RuntimeSessionStatus,
 } from "@cognia/agent-config-types"
 import {
   isControlResponseEvent,
@@ -42,6 +43,12 @@ import type {
   ActionReviewGrant,
 } from "@cognia/agent-config-types/action-review"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { connectorSessionInjectionProtection } from "@/lib/connectors/content-safety"
+import {
+  assertSafeModelInput,
+  assertSafeModelHistory,
+  ContentSafetyBlockedError,
+} from "@cognia/content-safety"
 import {
   authorizeOutboundToolCall,
   forgetPlannedOutboundToolCall,
@@ -315,6 +322,12 @@ async function sendPromptToTransport(
   ) {
     throw new Error("prompt rejected by the renderer PII gate")
   }
+  // Recheck after request middleware without changing the PII or text contract.
+  // System instructions are Host-authored and are not inbound user content.
+  if (options?.contentSafety?.injectionProtection === true) {
+    assertSafeModelInput(prompt)
+    if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
+  }
   // Sends carrying a frozen execution spec use the canonical command (same
   // impl body Rust-side; the alias split feeds the Phase 9 telemetry).
   const messageId = route.pairedHost ? delivery?.messageId : undefined
@@ -377,6 +390,10 @@ export async function compactSession(
   options?: { commandId?: string }
 ): Promise<void> {
   const command = options?.commandId ? "agent_compact" : "claude_compact"
+  if (!hasNoLeakingPiiDeep(focus)) throw new Error("compact rejected by the renderer PII gate")
+  const protection = await connectorSessionInjectionProtection(sessionId)
+  assertSafeModelInput(focus, protection === true)
+  await assertCurrentControlContentPolicy(sessionId, protection)
   await transport.call(command, {
     sessionId,
     focus,
@@ -395,7 +412,21 @@ export async function restoreSession(sessionId: string, messages: unknown[]): Pr
   if (!hasNoLeakingPiiDeep(messages)) {
     throw new Error("session restore rejected by the renderer PII gate")
   }
+  const protection = await connectorSessionInjectionProtection(sessionId)
+  assertSafeModelHistory(messages, protection === true)
+  await assertCurrentControlContentPolicy(sessionId, protection)
   await transport.call("claude_restore", { sessionId, messages })
+}
+
+/** A control cannot keep an older tool/history policy after the Host setting changes. */
+async function assertCurrentControlContentPolicy(
+  sessionId: string,
+  current: boolean | undefined
+): Promise<void> {
+  if (current === undefined) return
+  const runtime = await sessionControl<RuntimeSessionStatus>(sessionId, "runtimeStatus")
+  if (runtime?.contentSafety?.injectionProtection !== current)
+    throw new ContentSafetyBlockedError(["runtime_content_safety_changed"])
 }
 
 /**
@@ -608,12 +639,15 @@ export async function steerSession(
   if (!hasNoLeakingPiiDeep(prompt)) {
     throw new Error("live-steer prompt rejected by the renderer PII gate")
   }
+  const protection = await connectorSessionInjectionProtection(sessionId)
+  assertSafeModelInput(prompt, protection === true)
   return sessionControlRequest<{ accepted: true }>(
     sessionId,
     "steer",
     {
       prompt,
       priority: options?.priority ?? "now",
+      ...(protection !== undefined ? { contentSafety: { injectionProtection: protection } } : {}),
       ...(sourceMessageId ? { sourceMessageId } : {}),
     },
     options

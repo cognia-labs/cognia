@@ -62,6 +62,7 @@ export const PORTABLE_ADAPTER_FIELDS = [
   "muted",
   "outboundTuning",
   "replyQuoting",
+  "promptInjectionProtection",
   "a2uiEnabled",
   "failoverAdapterIds",
   "balanceAdapterIds",

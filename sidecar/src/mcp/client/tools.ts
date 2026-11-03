@@ -28,6 +28,9 @@ import type {
 // honours the allow/deny tool filters. Connections are opened once per session
 // and closed via the returned `close()`.
 
+import { prepareModelToolOutput } from "../../policy/content-safety.ts"
+import { assertSafeExternalContent, ContentSafetyBlockedError } from "@cognia/content-safety"
+import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { PassThrough, type Readable } from "node:stream"
 
 import { createMCPClient } from "@ai-sdk/mcp"
@@ -200,6 +203,7 @@ function isMcpToolPermitted(
  * @returns {Promise<{ tools: Record<string, any>, close: () => Promise<void> }>}
  */
 export async function buildAiSdkMcpTools({
+  contentSafety,
   mcpServers,
   gate,
   reviewToolOutput,
@@ -431,7 +435,29 @@ export async function buildAiSdkMcpTools({
       const namespaced = `mcp__${server}__${toolName}`
       if (!isMcpToolPermitted(namespaced, server, allowSet, disallowedSet, mcpToolAllowlist))
         continue
-      collected[namespaced] = wrapMcpToolWithGate(toolDef, namespaced, gate, reviewToolOutput)
+      const metadata = {
+        name: namespaced,
+        description: toolDef.description,
+        inputSchema: toolDef.inputSchema,
+      }
+      if (!hasNoLeakingPiiDeep(metadata)) {
+        diag(server, "warn", "tool metadata withheld by the PII gate")
+        continue
+      }
+      try {
+        assertSafeExternalContent(metadata, contentSafety?.injectionProtection)
+      } catch (error) {
+        if (!(error instanceof ContentSafetyBlockedError)) throw error
+        diag(server, "warn", error.message)
+        continue
+      }
+      collected[namespaced] = wrapMcpToolWithGate(
+        toolDef,
+        namespaced,
+        gate,
+        reviewToolOutput,
+        contentSafety?.injectionProtection
+      )
     }
     diag(server, "info", `connected · ${Object.keys(collected).length} tool(s) exposed`)
     return { client, tools: collected, capture, egress }
@@ -458,15 +484,16 @@ export async function buildAiSdkMcpTools({
  * Wrap an AI SDK MCP tool so its `execute` first passes the permission gate
  * (mirroring the built-in / plugin tool gating). The gate throws on deny and
  * may rewrite the input; all other tool fields (description / inputSchema) are
- * preserved. When no gate is supplied the tool is returned unchanged.
+ * preserved. Final privacy and injection checks also run without a permission hook.
  */
 export function wrapMcpToolWithGate(
   toolDef: McpTool,
   namespaced: string,
   gate?: McpPermissionGate,
-  reviewToolOutput?: McpOutputReviewer
+  reviewToolOutput?: McpOutputReviewer,
+  injectionProtection = true
 ): McpTool {
-  if ((!gate && !reviewToolOutput) || !toolDef || typeof toolDef.execute !== "function") {
+  if (!toolDef || typeof toolDef.execute !== "function") {
     return toolDef
   }
   const originalExecute = toolDef.execute.bind(toolDef)
@@ -490,12 +517,18 @@ export function wrapMcpToolWithGate(
         out = await originalExecute(effective, options)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        const reviewed = await review(options?.toolCallId, msg, true)
+        const reviewed = prepareModelToolOutput(
+          await review(options?.toolCallId, msg, true),
+          injectionProtection
+        )
         throw reviewed === msg ? err : new Error(String(reviewed))
       }
       // Rewrite at the EXECUTE layer so the model actually sees the reviewed
       // output (a fullStream-level rewrite is display-only).
-      return review(options?.toolCallId, out, false)
+      return prepareModelToolOutput(
+        await review(options?.toolCallId, out, false),
+        injectionProtection
+      )
     },
   }
 }

@@ -303,6 +303,9 @@ importers:
       '@cognia/rag':
         specifier: workspace:*
         version: link:packages/rag
+      '@cognia/content-safety':
+        specifier: workspace:*
+        version: link:packages/content-safety
       '@cognia/redact':
         specifier: workspace:*
         version: link:packages/redact
@@ -1497,6 +1500,9 @@ importers:
       '@cognia/provider-types':
         specifier: workspace:*
         version: link:../packages/provider-types
+      '@cognia/content-safety':
+        specifier: workspace:*
+        version: link:../packages/content-safety
       '@cognia/redact':
         specifier: workspace:*
         version: link:../packages/redact
@@ -1956,6 +1962,12 @@ importers:
 
   packages/companion-client: {}
 
+  packages/content-safety:
+    dependencies:
+      '@cognia/redact':
+        specifier: workspace:*
+        version: link:../redact
+
   packages/diagnostics:
     dependencies:
       '@cognia/provider-types':
@@ -2323,6 +2335,9 @@ importers:
       '@cognia/provider-embedding':
         specifier: workspace:*
         version: link:../provider-embedding
+      '@cognia/content-safety':
+        specifier: workspace:*
+        version: link:../content-safety
       '@cognia/redact':
         specifier: workspace:*
         version: link:../redact

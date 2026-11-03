@@ -130,6 +130,7 @@ export function buildToolSurface({
 
   const builtinServer = buildCogniaToolsServer({
     enabled: builtinEnabled,
+    contentSafety: sendOptions.contentSafety,
     builtinProcessSandbox: sendOptions.builtinProcessSandbox,
     alwaysLoad: serverAlwaysLoad(BUILTIN_SERVER_NAME),
     alwaysLoadTools: alwaysLoadToolNames,
@@ -159,7 +160,10 @@ export function buildToolSurface({
     stampUserServersAlwaysLoad(sendOptions.mcpServers, serverAlwaysLoad) as Parameters<
       typeof guardAnthropicRemoteMcpServers
     >[0],
-    { permissionPromptToolName: sendOptions.claudeAgentSdk?.permissionPromptToolName }
+    {
+      permissionPromptToolName: sendOptions.claudeAgentSdk?.permissionPromptToolName,
+      injectionProtection: sendOptions.contentSafety?.injectionProtection,
+    }
   )
   const withBuiltins = builtinServer
     ? Object.prototype.hasOwnProperty.call(baseUserServers, BUILTIN_SERVER_NAME)
@@ -206,6 +210,7 @@ export function buildToolSurface({
     const pluginToolsServer = buildPluginToolsServer(
       anthropicPluginToolBridgeOptions({
         tools: sendOptions.pluginTools,
+        contentSafety: sendOptions.contentSafety,
         emit,
         sessionId,
         sandboxRuntimeRef: sendOptions.sandboxRuntimeRef,

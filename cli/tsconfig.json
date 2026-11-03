@@ -136,6 +136,7 @@
       "@cognia/plugin-contract/*": ["../packages/plugin-contract/src/*"],
       "@cognia/companion-client": ["../packages/companion-client/src/index.ts"],
       "@cognia/companion-client/*": ["../packages/companion-client/src/*"],
+      "@cognia/content-safety": ["../packages/content-safety/src/index.ts"],
       "@cognia/redact": ["../packages/redact/src/index.ts"],
       "@cognia/redact/*": ["../packages/redact/src/*"],
       "@cognia/web-search": ["../packages/web-search/src/index.ts"],

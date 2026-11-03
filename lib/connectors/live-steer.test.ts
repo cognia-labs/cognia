@@ -26,6 +26,27 @@ function event(messageId = "m-steer"): NormalizedInboundEvent {
 }
 
 describe("connector live-steer coordinator", () => {
+  it("declines live steering when the active turn has an older protection policy", async () => {
+    let enabled = false
+    const steer = jest.fn(async () => ({ accepted: true as const }))
+    const coordinator = createConnectorLiveSteerCoordinator({
+      storeInbound: jest.fn(),
+      admit: jest.fn(async () => true),
+      steer,
+      currentInjectionProtection: async () => enabled,
+    })
+    coordinator.activate({
+      conversationKey: event().conversationKey,
+      sessionId: "session-1",
+      executionRunId: "run-1",
+      provider: "anthropic",
+      injectionProtection: false,
+    })
+    expect((await coordinator.handle(event())).accepted).toBe(true)
+    enabled = true
+    expect((await coordinator.handle(event())).accepted).toBe(false)
+    expect(steer).toHaveBeenCalledTimes(1)
+  })
   it("stores the real sender message before acknowledging live sidecar input", async () => {
     const order: string[] = []
     const storeInbound = jest.fn(async () => {

@@ -102,6 +102,7 @@ import {
   discloseReplyStreamText,
   discloseReplyStreamSegments,
 } from "./reply-stream"
+import { connectorInjectionProtection, inspectConnectorText } from "./content-safety"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { appendAudit } from "./audit"
 import { getBus } from "./bus"
@@ -827,7 +828,9 @@ export async function recentGroupContextBlock(input: {
   const tail = candidates.slice(-GROUP_CONTEXT_MAX_MESSAGES)
   const lines: string[] = []
   let budget = GROUP_CONTEXT_BUDGET_CHARS
+  const protection = await connectorInjectionProtection(input.event.adapterId)
   for (const candidate of tail) {
+    if (inspectConnectorText(candidate.text, protection, "external").action !== "allow") continue
     const flat = redactText(candidate.text.replace(/\s+/g, " ").trim()).redacted
     if (!flat || !hasNoLeakingPii(flat)) continue
     const clipped = flat.slice(0, GROUP_CONTEXT_LINE_CHARS)
@@ -860,7 +863,12 @@ export async function withConversationContext(
   const headers: string[] = []
   const replyMeta = input.stored.metadata?.replyTo as { preview?: string } | undefined
   const preview = replyMeta?.preview
-  if (typeof preview === "string" && preview.trim()) {
+  const protection = await connectorInjectionProtection(input.event.adapterId)
+  if (
+    typeof preview === "string" &&
+    preview.trim() &&
+    inspectConnectorText(preview, protection, "external").action === "allow"
+  ) {
     const flat = redactText(
       stripInboundDisplayMarkers(preview).replace(/\s+/g, " ").trim()
     ).redacted
@@ -2284,6 +2292,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           sessionId: session.id,
           executionRunId,
           provider: sendOptions.provider ?? "anthropic",
+          injectionProtection: sendOptions.contentSafety?.injectionProtection !== false,
         })
         const captureSignal = adapterSignal
           ? AbortSignal.any([adapterSignal, runController.signal])

@@ -15,7 +15,7 @@ import { newestMtimeMs } from "./newest-mtime.mjs"
 
 // tsup inlines these workspace sources rather than leaving runtime imports.
 // Keep the edge explicit so a warm build observes changes in the brand catalog.
-const BUNDLED_PACKAGE_INPUTS = new Map([["provider-types", ["brand-assets"]]])
+const BUNDLED_PACKAGE_INPUTS = new Map([["provider-types", ["brand-assets"]], ["content-safety", ["redact"]]])
 
 /**
  * Is the package's `dist/` newer than every build input?

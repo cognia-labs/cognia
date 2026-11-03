@@ -48,6 +48,32 @@ function baseInput() {
 }
 
 describe("adapter-instances", () => {
+  it("persists explicit injection opt-out through the audited section writer and can restore protection", async () => {
+    const row = await createAdapterInstance(baseInput())
+    expect((await getAdapterInstance(row.id))?.promptInjectionProtection).toBeUndefined()
+    await updateAdapterConfigSection(
+      row.id,
+      "permissions",
+      { promptInjectionProtection: false },
+      "settings.adapter.permissions"
+    )
+    expect((await getAdapterInstance(row.id))?.promptInjectionProtection).toBe(false)
+    const audit = await getDb().connectorAudit.where("adapterId").equals(row.id).toArray()
+    expect(
+      audit.some(
+        (entry) =>
+          Array.isArray(entry.fields?.changedKeys) &&
+          entry.fields.changedKeys.includes("promptInjectionProtection")
+      )
+    ).toBe(true)
+    await updateAdapterConfigSection(
+      row.id,
+      "permissions",
+      { promptInjectionProtection: true },
+      "settings.adapter.permissions"
+    )
+    expect((await getAdapterInstance(row.id))?.promptInjectionProtection).toBe(true)
+  })
   it("creates an instance with generated id and timestamps", async () => {
     const row = await createAdapterInstance(baseInput())
     expect(row.id).toMatch(/^cai_/)

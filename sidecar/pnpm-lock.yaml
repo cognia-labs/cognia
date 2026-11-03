@@ -66,6 +66,9 @@ importers:
       '@cognia/agent-contracts':
         specifier: link:../packages/agent-contracts
         version: link:../packages/agent-contracts
+      '@cognia/content-safety':
+        specifier: link:../packages/content-safety
+        version: link:../packages/content-safety
       '@cognia/provider-routing':
         specifier: link:../packages/provider-routing
         version: link:../packages/provider-routing

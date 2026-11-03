@@ -22,9 +22,10 @@ import {
   BUILTIN_SERVER_VERSION,
   READ_ONLY_TOOL_NAMES,
 } from "../../policy/tool-catalog/catalog.ts"
-import { assertModelSafeToolOutput } from "../../policy/pii/tool-output.ts"
+import { prepareModelToolOutput as assertModelSafeToolOutput } from "../../policy/content-safety.ts"
 
 export interface BuildToolsServerOptions extends CollectToolDefsOptions {
+  contentSafety?: { injectionProtection: boolean }
   /**
    * When true, every tool from this server is kept resident in the prompt and
    * never deferred behind tool search (claude-agent-sdk
@@ -66,13 +67,14 @@ export function buildCogniaToolsServer(options: BuildToolsServerOptions) {
   return createSdkMcpServer({
     name: BUILTIN_SERVER_NAME,
     version: BUILTIN_SERVER_VERSION,
-    tools: wrapNativeToolResults(capped).map((definition) =>
-      toSdkMcpToolDefinition(
-        options.alwaysLoadTools?.has(definition.name) ||
-          options.alwaysLoadTools?.has(`mcp__${BUILTIN_SERVER_NAME}__${definition.name}`)
-          ? { ...definition, alwaysLoad: true }
-          : definition
-      )
+    tools: wrapNativeToolResults(capped, options.contentSafety?.injectionProtection).map(
+      (definition) =>
+        toSdkMcpToolDefinition(
+          options.alwaysLoadTools?.has(definition.name) ||
+            options.alwaysLoadTools?.has(`mcp__${BUILTIN_SERVER_NAME}__${definition.name}`)
+            ? { ...definition, alwaysLoad: true }
+            : definition
+        )
     ),
     ...(alwaysLoad ? { alwaysLoad: true } : {}),
   })
@@ -103,11 +105,12 @@ export function toSdkMcpToolDefinition(definition: ToolDefinition): SdkMcpToolDe
 
 /** Native MCP results cross the same PII gate as AI SDK results. */
 export function wrapNativeToolResults<D extends ToolDefinition>(
-  definitions: readonly D[]
+  definitions: readonly D[],
+  injectionProtection = true
 ): WrappedToolDefinition<D>[] {
   return definitions.map((definition) => ({
     ...definition,
     handler: async (args: unknown, extra?: ToolHandlerExtra) =>
-      assertModelSafeToolOutput(await definition.handler(args, extra)),
+      assertModelSafeToolOutput(await definition.handler(args, extra), injectionProtection),
   }))
 }

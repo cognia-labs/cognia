@@ -31,7 +31,8 @@ import { awaitPluginToolResponse } from "../plugin/proxy.ts"
 import { createToolPermissionGate } from "../../policy/permission/ai-sdk-gate.ts"
 import { createPreMutationReporter } from "../middleware/file-checkpoint.ts"
 import { createDoomLoopGuard } from "../../policy/doom-loop.ts"
-import { assertModelSafeToolOutput } from "../../policy/pii/tool-output.ts"
+import { prepareModelToolOutput as assertModelSafeToolOutput } from "../../policy/content-safety.ts"
+import { assertSafeExternalContent } from "@cognia/content-safety"
 import { markAiSdkToolSource } from "./ai-sdk-tool-search.ts"
 import { builtinToModelOutput, callToolResultToText, hasRichContentBlock } from "./ai-sdk-output.ts"
 import { CLAUDE_TOOL_NAME_BY_COGNIA_BARE, passesAllowList } from "./allow-list.ts"
@@ -62,6 +63,7 @@ export type ToolOutputReview = (
 
 /** The send-spec fields the adapter reads, beyond what the permission gate reads. */
 export interface AiSdkToolSendOptions extends PermissionSendOptions {
+  contentSafety?: { injectionProtection: boolean }
   toolSurface?: unknown
   allowedTools?: unknown
   disallowedTools?: unknown
@@ -165,7 +167,8 @@ function builtinDefToAiSdkTool(
   def: ToolDefinition,
   gate: ToolPermissionGate | null | undefined,
   timeoutMs: number,
-  reviewToolOutput?: ToolOutputReview
+  reviewToolOutput?: ToolOutputReview,
+  injectionProtection = true
 ): AiSdkTool {
   const namespaced = `mcp__${SERVER_NAME}__${def.name}`
   return tool({
@@ -187,7 +190,7 @@ function builtinDefToAiSdkTool(
           msg,
           true
         )
-        const safe = String(assertModelSafeToolOutput(reviewed))
+        const safe = String(assertModelSafeToolOutput(reviewed, injectionProtection))
         throw reviewed === msg && safe === msg ? err : new Error(safe)
       }
       if (result && (result as { isError?: unknown }).isError) {
@@ -199,7 +202,7 @@ function builtinDefToAiSdkTool(
           msg,
           true
         )
-        const safe = assertModelSafeToolOutput(reviewed)
+        const safe = assertModelSafeToolOutput(reviewed, injectionProtection)
         throw new Error(String(safe))
       }
       // Structured content passes through as the raw MCP object for
@@ -212,7 +215,7 @@ function builtinDefToAiSdkTool(
         out,
         false
       )
-      return assertModelSafeToolOutput(reviewed)
+      return assertModelSafeToolOutput(reviewed, injectionProtection)
     },
     toModelOutput: builtinToModelOutput,
   })
@@ -232,6 +235,7 @@ function pluginToolToAiSdkTool(
     pendingPluginToolCalls: PendingPluginToolCalls
     gate: ToolPermissionGate | null | undefined
     reviewToolOutput?: ToolOutputReview | undefined
+    injectionProtection?: boolean
     remoteExecutionContext?: unknown
     sandboxRuntimeRef?: unknown
     turnId?: string | undefined
@@ -247,8 +251,10 @@ function pluginToolToAiSdkTool(
     sandboxRuntimeRef,
     turnId,
     attemptId,
+    injectionProtection = true,
   } = context
   const namespaced = `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`
+  assertSafeExternalContent(manifest, injectionProtection)
   return tool({
     description: manifest.description ?? "",
     inputSchema: jsonSchema(
@@ -294,7 +300,7 @@ function pluginToolToAiSdkTool(
           msg,
           true
         )
-        const safe = assertModelSafeToolOutput(reviewed)
+        const safe = assertModelSafeToolOutput(reviewed, injectionProtection)
         throw new Error(String(safe))
       }
       const payload = response ? response.result : null
@@ -314,7 +320,7 @@ function pluginToolToAiSdkTool(
         out,
         false
       )
-      return assertModelSafeToolOutput(reviewed)
+      return assertModelSafeToolOutput(reviewed, injectionProtection)
     },
     toModelOutput: builtinToModelOutput,
   })
@@ -475,7 +481,13 @@ export function buildAiSdkTools({
     if (alias) candidates.push(alias)
     if (!passesAllowList(allowSet, candidates)) continue
     tools[def.name] = markAiSdkToolSource(
-      builtinDefToAiSdkTool(def, gate, builtinToolTimeoutMs, reviewToolOutput),
+      builtinDefToAiSdkTool(
+        def,
+        gate,
+        builtinToolTimeoutMs,
+        reviewToolOutput,
+        sendOptions.contentSafety?.injectionProtection
+      ),
       {
         serverName: SERVER_NAME,
         alwaysLoad: def.alwaysLoad === true,
@@ -507,6 +519,7 @@ export function buildAiSdkTools({
           pendingPluginToolCalls,
           gate,
           reviewToolOutput,
+          injectionProtection: sendOptions.contentSafety?.injectionProtection,
           get remoteExecutionContext() {
             return sendOptions.remoteExecutionContext
           },

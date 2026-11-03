@@ -1,4 +1,6 @@
 import { runtimeFeaturePolicyKey } from "@cognia/agent-contracts/session-operations"
+import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { assertSafeModelHistory } from "@cognia/content-safety"
 import type { SendOptions, Prompt } from "../../shared/wire/inbound.ts"
 import type { HostSession, Emit, Frame, Log } from "./types.ts"
 import { errorMessage } from "../../shared/errors.ts"
@@ -281,6 +283,11 @@ export function routeRestore(
   }
   if (typeof s.restoreConversation !== "function") return false
   try {
+    if (!hasNoLeakingPiiDeep(messages)) throw new Error("restore rejected by the PII gate")
+    if (s.sendOptions?.contentSafety?.injectionProtection === true) {
+      if (!Array.isArray(messages)) throw new Error("invalid_restore_messages")
+      assertSafeModelHistory(messages)
+    }
     return s.restoreConversation(messages) !== false
   } catch (err) {
     logFn("error", `restore failed: ${errorMessage(err)}`)

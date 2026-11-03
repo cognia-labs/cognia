@@ -30,6 +30,7 @@ import type {
 } from "@cognia/agent-config-types/agent-execution"
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { assertExternalAgentContentSafety } from "@/lib/ai/agent/external/policy/outbound-prompt-pii"
 
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
 
@@ -737,6 +738,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
   }
   const restoredImageDirectories = new Set<string>()
   let activeTurnOptions: SendTurnOptions | undefined
+  let activeContentSafety: { injectionProtection: boolean } | undefined
   let autonomousGate: PermissionResponder | undefined
   let autonomousOptions: SendTurnOptions | undefined
   let backgroundTurnsSupported = false
@@ -1718,6 +1720,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
         let result: ExternalAgentResult
         try {
           const executionOptions: ExternalAgentExecutionOptions = {
+            contentSafety: session.sendOptions.contentSafety,
             ...(externalSessionId ? { sessionId: externalSessionId } : {}),
             // External model memory is keyed by backend/preset. The top-level
             // `config.model` is a legacy built-in-provider pin and may name a
@@ -1869,6 +1872,8 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
             )
           }
           publishMcp(session, cogniaServers)
+          assertExternalAgentContentSafety(flattened.text, executionOptions)
+          activeContentSafety = executionOptions.contentSafety
           const execution = manager.execute(agentId, flattened.text, executionOptions)
           // Fold rejection into the value so the losing race branch can never
           // surface as an unhandled rejection.
@@ -2160,6 +2165,7 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
           "session_error"
         )
       }
+      assertExternalAgentContentSafety(text, { contentSafety: activeContentSafety })
       await manager.steerSession(agentId, externalSessionId, text)
     },
     isLive() {

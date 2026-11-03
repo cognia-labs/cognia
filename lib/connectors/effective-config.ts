@@ -314,6 +314,13 @@ export function resolveImEffectiveConfig(input: {
   }
 
   return {
+    contentSafety: {
+      injectionProtection: {
+        effective: adapter.promptInjectionProtection !== false,
+        source:
+          adapter.promptInjectionProtection === undefined ? "system-default" : "adapter-default",
+      },
+    },
     routing,
     target,
     character,

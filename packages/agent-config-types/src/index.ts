@@ -283,6 +283,8 @@ import type { VerificationBudgetStamp } from "./execution-budget"
 export type { VerificationBudgetStamp, VerificationRuntimeConfig } from "./execution-budget"
 
 export type SendOptions = {
+  /** Host-resolved policy. PII gates remain independent and mandatory. */
+  contentSafety?: { injectionProtection: boolean }
   /** Host-stamped active semantic seams for this turn; never forwarded to a model. */
   semanticInterceptors?: Array<"model.stream.transform" | "agent.turn.decide">
   verificationBudget?: VerificationBudgetStamp
@@ -1654,9 +1656,10 @@ export interface ToolResultReviewEvent {
 
 /** Identity of a live AI-SDK loop, read through the existing control channel. */
 export type RuntimeSessionStatus =
-  | { retained: false }
+  | { retained: false; contentSafety?: SendOptions["contentSafety"] }
   | {
       retained: true
+      contentSafety?: SendOptions["contentSafety"]
       runtimeAdapter: "ai-sdk"
       sdkSessionId: string
       provider: string

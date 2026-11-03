@@ -14,7 +14,13 @@ import {
   routeRestore,
   routeClose,
 } from "./sessions/lifecycle.ts"
-import { providerVisibleSendPayloadIsSafe, retainedRuntimeSendIsSafe } from "./commands/send.ts"
+import {
+  assertProviderVisibleContentSafety,
+  providerVisibleSendPayloadIsSafe,
+  retainedRuntimeSendIsSafe,
+} from "./commands/send.ts"
+import { assertSafeModelInput } from "@cognia/content-safety"
+import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import {
   routeSetMode,
   runControlWithTimeout,
@@ -243,6 +249,7 @@ export function createAgentHost({
       return
     }
     try {
+      assertProviderVisibleContentSafety({ prompt, options })
       validateRuntimeFeatures({ sessionId: sessionId!, sendOptions: options ?? {}, emit })
     } catch (error) {
       emit({
@@ -335,6 +342,8 @@ export function createAgentHost({
     }
     if (typeof s.requestCompact !== "function") return
     try {
+      if (!hasNoLeakingPiiDeep(focus)) throw new Error("compact rejected by the PII gate")
+      assertSafeModelInput(focus, s.sendOptions?.contentSafety?.injectionProtection === true)
       await s.requestCompact(focus)
     } catch (err) {
       log("error", `compact failed: ${errorMessage(err)}`)

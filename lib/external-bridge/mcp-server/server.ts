@@ -21,6 +21,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { completable } from "@modelcontextprotocol/sdk/server/completable.js"
 import { z } from "zod"
+import { assertSafeExternalContent, ContentSafetyBlockedError } from "@cognia/content-safety"
 import type { BridgeScope, ExternalBridgeSettings } from "@/types/wiki"
 import { ALL_BRIDGE_SCOPES, SELF_CORPUS_ID, WORKFLOW_MCP_LIFECYCLE_TOOL_NAMES } from "@/types/wiki"
 import { listAllWikiArticles, getWikiArticleBySlug } from "@/lib/db/wiki-articles"
@@ -2096,6 +2097,15 @@ function registerWikiResource(server: McpServer, settingsGetter: SettingsGetter)
           description: a.summary,
           mimeType: "text/markdown" as const,
         }))
+        .filter((resource) => {
+          try {
+            assertSafeExternalContent(resource)
+            return true
+          } catch (error) {
+            if (!(error instanceof ContentSafetyBlockedError)) throw error
+            return false
+          }
+        })
       await recordCall({
         tool: "resources/list:wiki",
         scope: "wiki:cognia",
@@ -2157,6 +2167,7 @@ function registerWikiResource(server: McpServer, settingsGetter: SettingsGetter)
       })
       // ADR-0008 R7: fence generated wiki prose as untrusted so a coding agent
       // that feeds the body back into a model never treats it as instructions.
+      assertSafeExternalContent(article.contentMd)
       return {
         contents: [
           { uri: uri.href, mimeType: "text/markdown", text: wrapUntrusted(article.contentMd) },
@@ -2540,6 +2551,17 @@ interface ToolEnvelope {
  * with a human-readable message; handler exceptions get the same treatment
  * after being logged.
  */
+function safeToolErrorMessage(value: unknown): string {
+  const message = value instanceof Error ? value.message : String(value)
+  try {
+    assertSafeExternalContent(message)
+    return message
+  } catch (error) {
+    if (!(error instanceof ContentSafetyBlockedError)) throw error
+    return error.message
+  }
+}
+
 async function runWithGate<T>(input: RunWithGateInput<T>): Promise<ToolEnvelope> {
   const start = Date.now()
   const projection = auditProjection(input.audit)
@@ -2552,13 +2574,16 @@ async function runWithGate<T>(input: RunWithGateInput<T>): Promise<ToolEnvelope>
       ...(projection ? { projection } : {}),
     })
     return {
-      content: [{ type: "text", text: input.check.reason }],
-      structuredContent: { ...scopeDenied(input.check.reason) },
+      content: [{ type: "text", text: safeToolErrorMessage(input.check.reason) }],
+      structuredContent: { ...scopeDenied(safeToolErrorMessage(input.check.reason)) },
       isError: true,
     }
   }
   try {
     const result = await input.body()
+    assertSafeExternalContent(result)
+    const presented = input.present?.(result)
+    if (presented) assertSafeExternalContent(presented)
     await recordCall({
       tool: input.tool,
       scope: input.scope,
@@ -2569,7 +2594,6 @@ async function runWithGate<T>(input: RunWithGateInput<T>): Promise<ToolEnvelope>
     // MCP requires `structuredContent` to be a JSON object (Record). Arrays
     // and primitives are wrapped under `{ value: ... }` so they survive
     // round-trip without violating the schema.
-    const presented = input.present?.(result)
     if (presented) {
       return presented
     }
@@ -2577,12 +2601,14 @@ async function runWithGate<T>(input: RunWithGateInput<T>): Promise<ToolEnvelope>
       result !== null && typeof result === "object" && !Array.isArray(result)
         ? (result as Record<string, unknown>)
         : { value: result }
-    return {
+    const envelope: ToolEnvelope = {
       content: [{ type: "text", text: JSON.stringify(result) }],
       structuredContent: structured,
     }
+    assertSafeExternalContent(envelope)
+    return envelope
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = safeToolErrorMessage(err)
     await recordCall({
       tool: input.tool,
       scope: input.scope,

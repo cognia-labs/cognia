@@ -6,6 +6,7 @@ import { connectBroker } from "../client/broker.ts"
 import { createMcpStdioServer } from "../stdio-server.ts"
 export { connectBroker, createMcpStdioServer }
 export interface BridgeSession {
+  contentSafety?: { injectionProtection: boolean }
   sessionId?: string
   cwd?: string
   model?: string
@@ -47,7 +48,8 @@ import { createToolSessionContext } from "../../tools/session.ts"
 // definitions and handlers already are. Reimplementing them CLI-side would have
 // meant a second schema source and a second set of handlers.
 
-import { assertModelSafeToolOutput } from "../../policy/pii/tool-output.ts"
+import { prepareModelToolOutput as assertModelSafeToolOutput } from "../../policy/content-safety.ts"
+import { assertSafeExternalContent } from "@cognia/content-safety"
 
 import { collectCogniaToolDefs } from "../../tools/builtin/registry.ts"
 import { READ_ONLY_TOOL_NAMES } from "../../policy/tool-catalog/catalog.ts"
@@ -104,6 +106,7 @@ export function buildToolSurface(
   broker: Pick<BrokerConnection, "call">
 ): BridgeTool[] {
   if (serverName === COGNIA_PLUGIN_TOOLS_SERVER) {
+    assertSafeExternalContent(session.hostTools, session.contentSafety?.injectionProtection)
     return session.hostTools!.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -117,13 +120,21 @@ export function buildToolSurface(
         const outcome = await broker.call("exec", { name: tool.name, args })
         if (outcome && outcome.error) {
           return toMcpContent(
-            assertModelSafeToolOutput({
-              content: [{ type: "text", text: `Error: ${outcome.error}` }],
-              isError: true,
-            })
+            assertModelSafeToolOutput(
+              {
+                content: [{ type: "text", text: `Error: ${outcome.error}` }],
+                isError: true,
+              },
+              session.contentSafety?.injectionProtection
+            )
           )
         }
-        return toMcpContent(assertModelSafeToolOutput(outcome?.result ?? null))
+        return toMcpContent(
+          assertModelSafeToolOutput(
+            outcome?.result ?? null,
+            session.contentSafety?.injectionProtection
+          )
+        )
       },
     }))
   }
@@ -224,7 +235,9 @@ export function buildToolSurface(
             args: effectiveArgs,
             result,
           })
-          result = toMcpContent(assertModelSafeToolOutput(reviewed.result))
+          result = toMcpContent(
+            assertModelSafeToolOutput(reviewed.result, session.contentSafety?.injectionProtection)
+          )
           // Report so the call renders in the TUI and lands in the audit trail
           // exactly like a built-in one. Best-effort: a failed report must not
           // turn a successful tool call into an error.

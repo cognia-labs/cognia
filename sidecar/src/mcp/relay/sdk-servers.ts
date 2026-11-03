@@ -10,10 +10,15 @@ function relayScriptPath() {
   return fileURLToPath(new URL("./mcp-stdio-relay.mjs", import.meta.url))
 }
 
-function encodeRelayConfig(entry: McpServerEntry, permissionToolName?: string) {
+function encodeRelayConfig(
+  entry: McpServerEntry,
+  permissionToolName?: string,
+  injectionProtection = true
+) {
   return Buffer.from(
     JSON.stringify({
       permissionToolName,
+      injectionProtection,
       transport: entry.type ?? "stdio",
       command: entry.command,
       args: entry.args,
@@ -51,11 +56,13 @@ export function guardAnthropicRemoteMcpServers(
     scriptPath = relayScriptPath(),
     packaged = isPackagedRuntime(),
     permissionPromptToolName,
+    injectionProtection = true,
   }: {
     nodeExecutable?: string
     scriptPath?: string
     packaged?: boolean
     permissionPromptToolName?: string
+    injectionProtection?: boolean
   } = {}
 ): Record<string, McpServerEntry> {
   if (!servers || typeof servers !== "object") return {}
@@ -77,7 +84,8 @@ export function guardAnthropicRemoteMcpServers(
               entry,
               permissionPromptToolName?.startsWith(`mcp__${name}__`)
                 ? permissionPromptToolName.slice(`mcp__${name}__`.length)
-                : undefined
+                : undefined,
+              injectionProtection
             ),
             ...(packaged ? { COGNIA_ROLE: "mcp-relay", COGNIA_MCP_RELAY_SCRIPT: scriptPath } : {}),
           },

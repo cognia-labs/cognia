@@ -57,6 +57,7 @@ export interface HostToolDescriptor {
  * is given the minimum that lets it construct schemas and run handlers.
  */
 export interface ToolHostSessionDescriptor {
+  contentSafety?: { injectionProtection: boolean }
   /** Cognia chat session id — used only to reject a stale bridge. */
   sessionId: string
   /** Bumped on every connect attempt so a superseded bridge is refused. */

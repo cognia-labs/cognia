@@ -210,6 +210,7 @@ const projectCommon: Config = {
     "^@cognia/security-findings(.*)$": "<rootDir>/packages/security-findings/src$1",
     "^@cognia/plugin-contract(.*)$": "<rootDir>/packages/plugin-contract/src$1",
     "^@cognia/companion-client(.*)$": "<rootDir>/packages/companion-client/src$1",
+    "^@cognia/content-safety$": "<rootDir>/packages/content-safety/src/index.ts",
     "^@cognia/redact(.*)$": "<rootDir>/packages/redact/src$1",
     "^@cognia/web-search(.*)$": "<rootDir>/packages/web-search/src$1",
     "^@cognia/tts(.*)$": "<rootDir>/packages/tts/src$1",

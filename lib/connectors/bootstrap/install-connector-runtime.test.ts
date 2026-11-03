@@ -505,6 +505,12 @@ describe("installConnectorRuntime", () => {
         fields: { sourceMessageId: "om-blocked" },
       })
     )
+    mockIsPiiSafeSendContent.mockReturnValue(true)
+    mockGetAdapterInstance.mockResolvedValue({ promptInjectionProtection: false })
+    await expect(
+      options.liveSteerCoordinator.handle({ ...event, messageId: "policy-changed" })
+    ).resolves.toMatchObject({ accepted: false })
+    expect(mockSteerSession).toHaveBeenCalledTimes(1)
   })
 
   it("does not start a second runtime when the singleton lock is already held", async () => {

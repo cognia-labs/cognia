@@ -1,3 +1,5 @@
+import { frameExternalContent } from "@cognia/content-safety"
+
 /**
  * External Bridge — untrusted-content fencing (ADR-0008 R7).
  *
@@ -45,5 +47,5 @@ export function neutralizeUntrustedFences(text: string): string {
  * external content") and keeps the wrapping unconditional at the call sites.
  */
 export function wrapUntrusted(text: string): string {
-  return `${UNTRUSTED_OPEN}\n${neutralizeUntrustedFences(text)}\n${UNTRUSTED_CLOSE}`
+  return frameExternalContent(text)
 }

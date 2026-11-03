@@ -33,6 +33,18 @@ test("a dist newer than every source is fresh", () => {
   assert.equal(isPackageBuildFresh(fakePackage("fresh", { srcAt: 1_000, distAt: 2_000 })), true)
 })
 
+test("a redact source change invalidates the content-safety bundled privacy implementation", () => {
+  const pkg = fakePackage("content-safety", { srcAt: 1_000, distAt: 2_000 })
+  const redact = join(dirname(pkg), "redact", "src")
+  mkdirSync(redact, { recursive: true })
+  const source = join(redact, "index.ts")
+  writeFileSync(source, "export const redactText = () => ''\n")
+  utimesSync(source, 1_000, 1_000)
+  assert.equal(isPackageBuildFresh(pkg), true)
+  utimesSync(source, 3_000, 3_000)
+  assert.equal(isPackageBuildFresh(pkg), false)
+})
+
 test("a dist older than a source, or no dist at all, is stale", () => {
   assert.equal(isPackageBuildFresh(fakePackage("older", { srcAt: 2_000, distAt: 1_000 })), false)
   assert.equal(isPackageBuildFresh(fakePackage("missing", { srcAt: 1_000 })), false)

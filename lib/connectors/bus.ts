@@ -103,6 +103,7 @@ import {
 import { parseControlCommand } from "./commands/parse"
 import { parseConversationKey } from "@/types/connectors/event"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
+import { inspectConnectorEvent, inspectConnectorText } from "./content-safety"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { segmentsToPlainText, type MessageSegment } from "@/types/connectors/segment"
 import {
@@ -1319,6 +1320,24 @@ export class ConnectorBus {
       }
     }
 
+    // Host safety runs after plugin transforms, before model-producing commands, before
+    // every execution consumer (including live steering and automation fan-out).
+    if (decision !== "drop" && !evalResult.blocked) {
+      const safety = inspectConnectorEvent(event, axes.contentSafety.injectionProtection.effective)
+      if (safety.action !== "allow") {
+        await markConnectorInboundJobHistoryOnly(inboundJob.id, "content_safety_blocked", { now })
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: "inbound.policy_blocked",
+          at: now,
+          conversationKey: event.conversationKey,
+          reason: "content_safety_blocked",
+          fields: { sourceMessageId: event.messageId, reasonCodes: safety.reasonCodes },
+        })
+        return
+      }
+    }
+
     // ── Step 9.5: help / welcome short-circuit (cross-provider) ──────────────
     // A help-trigger message serves a help card and skips the AI turn +
     // workflow fan-out entirely. Otherwise, the first inbound on a fresh
@@ -1497,6 +1516,7 @@ export class ConnectorBus {
     const step: Promise<void> = queue.tail
       .then(async () => {
         while (await waitForConversationAutomation(event.conversationKey, acceptedAt)) {
+          if (!(await this.executionContentAllowed(event))) break
           const [workflows, bots] = await Promise.allSettled([
             this.fanOutWorkflowTriggers(event, acceptedAt),
             this.dispatchBotFanOut(event, acceptedAt),
@@ -1720,6 +1740,7 @@ export class ConnectorBus {
         })
         return
       }
+      if (!(await this.executionContentAllowed(event, currentAdapter, inboundJobId))) return
       const currentOverride = (await readForResolution(event.conversationKey)) ?? null
       const character = resolved.characterId
         ? ((await getCharacter(resolved.characterId)) ?? null)
@@ -1815,6 +1836,32 @@ export class ConnectorBus {
       acceptedPolicy
     )
     await completion
+  }
+
+  /** Deferred work must use current Host policy, never the admission snapshot. */
+  private async executionContentAllowed(
+    event: NormalizedInboundEvent,
+    adapter?: AdapterInstanceRow,
+    jobId?: string
+  ): Promise<boolean> {
+    const current = adapter ?? (await getAdapterInstance(event.adapterId))
+    const safety = inspectConnectorEvent(event, current?.promptInjectionProtection !== false)
+    if (safety.action === "allow") return true
+    if (jobId)
+      await markConnectorInboundJobHistoryOnly(jobId, "content_safety_blocked", { now: Date.now() })
+    await appendAudit({
+      adapterId: event.adapterId,
+      kind: "inbound.policy_blocked",
+      at: Date.now(),
+      conversationKey: event.conversationKey,
+      reason: "content_safety_blocked",
+      fields: {
+        sourceMessageId: event.messageId,
+        reasonCodes: safety.reasonCodes,
+        stage: "deferred-execution",
+      },
+    })
+    return false
   }
 
   private async handleRouteHandlerFailure(
@@ -3322,6 +3369,29 @@ export class ConnectorBus {
     }
 
     if (isRunControl) {
+      if (typeof event.payload?.steerMessage === "string") {
+        const currentAdapter = await getAdapterInstance(event.adapterId)
+        const safety = inspectConnectorText(
+          event.payload.steerMessage,
+          currentAdapter?.promptInjectionProtection !== false
+        )
+        if (safety.action !== "allow") {
+          decide({ status: "denied", reason: "content_safety_blocked" })
+          await appendAudit({
+            adapterId: event.adapterId,
+            kind: "inbound.policy_blocked",
+            at: Date.now(),
+            conversationKey: resolvedConversationKey ?? undefined,
+            reason: "content_safety_blocked",
+            fields: {
+              triggerId: event.triggerId,
+              reasonCodes: safety.reasonCodes,
+              stage: "callback-steer",
+            },
+          })
+          return false
+        }
+      }
       decide({ status: "accepted", kind: "run_control", action: runAction })
       // Return to the transport immediately so CardKit can ACK well inside
       // its three-second deadline. Durable execution and card refresh happen

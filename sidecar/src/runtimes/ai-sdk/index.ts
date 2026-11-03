@@ -1015,6 +1015,7 @@ export function dispatchAiSdk({
                 doomGuard: mcpDoomGuard,
               })
               const mcp = await buildAiSdkMcpTools({
+                contentSafety: sendOptions.contentSafety,
                 mcpServers: sendOptions.mcpServers,
                 gate: async (...args) => record(await mcpGate(...args)),
                 ...(toolResultReviewEnabled ? { reviewToolOutput } : {}),

@@ -218,6 +218,8 @@ export interface AdapterInstanceRow {
    * `components/settings/connections/forms/reply-quoting-default.tsx`.
    * Non-indexed additive.
    */
+  /** Host-owned prompt-injection protection. Absent/true enables; false persists opt-out. */
+  promptInjectionProtection?: boolean
   replyQuoting?: boolean
   /**
    * Whether this bot's replies may paint interactive A2UI surfaces.

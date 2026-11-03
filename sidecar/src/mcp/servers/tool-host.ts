@@ -32,6 +32,7 @@ export interface ToolHostEvent {
   event: HostFrame
 }
 interface Lease {
+  contentSafety?: { injectionProtection: boolean }
   remoteExecutionContext?: Record<string, unknown>
   id: string
   owner: string
@@ -103,7 +104,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv"
 import { buildAiSdkTools } from "../../tools/adapters/ai-sdk.ts"
-import { assertModelSafeToolOutput } from "../../policy/pii/tool-output.ts"
+import { prepareModelToolOutput as assertModelSafeToolOutput } from "../../policy/content-safety.ts"
 import { awaitPluginToolResponse } from "../../tools/plugin/proxy.ts"
 
 const SERVERS = ["cognia-tools", "cognia-plugin-tools"] as const
@@ -115,8 +116,8 @@ function authorize(header: string | string[] | undefined, token: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
-function toolResult(value: unknown): CallToolResult {
-  const safe = assertModelSafeToolOutput(value)
+function toolResult(value: unknown, injectionProtection = true): CallToolResult {
+  const safe = assertModelSafeToolOutput(value, injectionProtection)
   return safe && typeof safe === "object" && Array.isArray((safe as { content?: unknown }).content)
     ? (safe as CallToolResult)
     : {
@@ -361,11 +362,15 @@ export function createToolHostManager({
               })
             }),
             aborted,
-          ])
+          ]),
+          lease.contentSafety?.injectionProtection
         )
       } catch (error) {
         return {
-          ...toolResult(error instanceof Error ? error.message : String(error)),
+          ...toolResult(
+            error instanceof Error ? error.message : String(error),
+            lease.contentSafety?.injectionProtection
+          ),
           isError: true,
         }
       } finally {
@@ -470,6 +475,7 @@ export function createToolHostManager({
       await active.ready
       if (active.closing) throw new Error("Cognia tool host was closed during startup")
       const sendOptions = input.sendOptions
+      active.contentSafety = sendOptions.contentSafety
       if (active.sandboxAgentId && active.sandboxAgentId !== input.sandboxAgentId)
         throw new Error("Cognia tool host belongs to another sandbox agent")
       if (active.sandboxAgentId && active.deferSandbox !== Boolean(input.deferSandbox))

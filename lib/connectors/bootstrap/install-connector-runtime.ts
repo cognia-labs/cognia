@@ -46,6 +46,7 @@ import {
   installRuntime,
 } from "@/lib/connectors/runtime"
 import { createConnectorLiveSteerCoordinator } from "@/lib/connectors/live-steer"
+import { connectorInjectionProtection } from "@/lib/connectors/content-safety"
 import { steerSession } from "@/lib/claude/ipc"
 import { startOutboundRunner } from "@/lib/connectors/outbound-runner"
 import { installScheduledOutboundHandlers } from "@/lib/connectors/scheduled-outbound"
@@ -655,6 +656,7 @@ export function installConnectorRuntime(
 
     const bus = getBus()
     const liveSteerCoordinator = createConnectorLiveSteerCoordinator({
+      currentInjectionProtection: connectorInjectionProtection,
       storeInbound: insertInboundMessage,
       admit: async (event) => {
         const prompt = inboundEventToSendContent(event)

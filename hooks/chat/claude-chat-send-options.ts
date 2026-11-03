@@ -52,7 +52,8 @@ import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/sessi
 /** Rehydrate a replaced AI-SDK session from surviving canonical message parts. */
 export async function buildAiSdkInitialConversation(
   messages: UIMessage[],
-  currentMessageId: string | null
+  currentMessageId: string | null,
+  contentSafety?: SendOptions["contentSafety"]
 ): Promise<NonNullable<SendOptions["initialConversation"]>> {
   const currentIndex = messages.findIndex((message) => message.id === currentMessageId)
   const history = currentIndex < 0 ? messages : messages.slice(0, currentIndex)
@@ -62,7 +63,7 @@ export async function buildAiSdkInitialConversation(
   const gated = gateWorkbenchProviderPayload({
     content: "",
     messages: materialized,
-    sendOptions: {},
+    sendOptions: { contentSafety },
   })
   return await convertToModelMessages(gated.messages, { ignoreIncompleteToolCalls: true })
 }
@@ -91,14 +92,22 @@ export async function prepareTranscriptRuntimeSend(
       "ai-sdk"
   let prepared = options
   let lostRetainedContext = false
-  if (!usesAiSdk && !preparation.skipHydration && session?.runtimeTranscriptInvalidated) {
+  const protectedNativeResume =
+    !isExternalAgentProviderId(options.provider) &&
+    options.contentSafety?.injectionProtection === true &&
+    Boolean(session?.sdkSessionId || options.resumeSessionId || options.forkFromSessionId)
+  if (
+    !usesAiSdk &&
+    !preparation.skipHydration &&
+    (session?.runtimeTranscriptInvalidated || protectedNativeResume)
+  ) {
     // Native SDK resume identities retain opaque pre-edit history. Start a
     // fresh query with the surviving, gated text transcript instead.
     const canonical = await listMessages(sessionId)
     assertDatabaseCurrent()
     const visible = selectVisibleMessages(
       canonical,
-      preparation.activeBranchByGroup ?? session.activeBranchByGroup ?? {}
+      preparation.activeBranchByGroup ?? session?.activeBranchByGroup ?? {}
     )
     const currentId =
       preparation.currentMessageId === undefined ? options.turnId : preparation.currentMessageId
@@ -112,7 +121,11 @@ export async function prepareTranscriptRuntimeSend(
     }
     const currentIndex = visible.findIndex((message) => message.id === currentId)
     const history = currentIndex < 0 ? visible : visible.slice(0, currentIndex)
-    const gated = gateWorkbenchProviderPayload({ content: "", messages: history, sendOptions: {} })
+    const gated = gateWorkbenchProviderPayload({
+      content: "",
+      messages: history,
+      sendOptions: options,
+    })
     const seed = renderBranchSeed(gated.messages).content
     await updateSession(sessionId, { sdkSessionId: undefined, forkedFromSdkSessionId: undefined })
     assertDatabaseCurrent()
@@ -203,7 +216,8 @@ export async function prepareTranscriptRuntimeSend(
           visible,
           preparation.currentMessageId === undefined
             ? (options.turnId ?? null)
-            : preparation.currentMessageId
+            : preparation.currentMessageId,
+          options.contentSafety
         ),
       }
     }

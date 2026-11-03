@@ -79,6 +79,7 @@ export type AdapterInstancePatch = Partial<
     | "outboundTuning"
     // ADR-0009 §3A.3 — bot-wide reply-quoting default (settings
     // ReplyQuotingDefault card).
+    | "promptInjectionProtection"
     | "replyQuoting"
     // Bot-wide A2UI switch (tri-state — see the row's docblock).
     | "a2uiEnabled"

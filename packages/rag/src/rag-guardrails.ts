@@ -12,6 +12,7 @@
  * - Low-confidence detection
  */
 
+import { assessContentSafety, decideContentSafety } from "@cognia/content-safety"
 import type { RerankResult } from "./reranker"
 import { getRAGLogger } from "./runtime-adapters"
 
@@ -68,7 +69,14 @@ export interface RetrievedContentTrustAssessment {
 
 /** Detect high-risk instructions without modifying or silently sanitizing evidence. */
 export function assessRetrievedContentTrust(content: string): RetrievedContentTrustAssessment {
-  const reasonCodes: string[] = []
+  const assessment = assessContentSafety({
+    text: content,
+    source: "external",
+    stage: "retrieval",
+    inspectPrivacy: false,
+  })
+  const decision = decideContentSafety(assessment, { injectionProtection: true })
+  const reasonCodes: string[] = decision.action === "allow" ? [] : ["instruction_override"]
   for (const pattern of INJECTION_PATTERNS) {
     pattern.lastIndex = 0
     if (pattern.test(content)) reasonCodes.push("instruction_override")

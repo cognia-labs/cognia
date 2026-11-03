@@ -22,6 +22,7 @@
  */
 
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { assertExternalAgentContentSafety } from "../../policy/outbound-prompt-pii"
 import {
   assertCodeAdoptionDatabaseScope,
   captureCodeAdoptionDatabaseScope,
@@ -67,6 +68,8 @@ import {
 } from "../../session/session-models"
 
 export interface RemoteExecuteOptions {
+  /** Caller-side content admission before the paired-host handover. */
+  contentSafety?: { injectionProtection: boolean }
   systemPrompt?: string
   allowedTools?: string[]
   /** Caller-local MCP servers require a reverse tool transport the paired host does not expose. */
@@ -259,6 +262,10 @@ export async function executeOnRemoteHostAgent(
   prompt: string,
   options: RemoteExecuteOptions
 ): Promise<RemoteExternalAgentResult | null> {
+  assertExternalAgentContentSafety(prompt, {
+    contentSafety: options.contentSafety,
+    attachments: options.attachments,
+  })
   // This run plane targets the selected Host. Freeze its identity before any
   // attachment/approval wait, and refuse a route change before dispatch.
   const workspaceOrigin = options.workspaceCapture?.origin ?? captureTaskWorkspaceOrigin()

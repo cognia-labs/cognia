@@ -62,6 +62,12 @@ function localRow(overrides: Partial<AdapterInstanceRow> = {}): AdapterInstanceR
 }
 
 describe("portableAdapterInstance", () => {
+  it("keeps explicit protection opt-out when moving the bot to another execution host", () => {
+    expect(
+      portableAdapterInstance({ ...localRow(), promptInjectionProtection: false })
+        .promptInjectionProtection
+    ).toBe(false)
+  })
   it("sends configuration and leaves this machine's address and runtime state behind", () => {
     const portable = portableAdapterInstance(localRow())
     expect(portable).toMatchObject({

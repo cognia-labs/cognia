@@ -7,6 +7,7 @@
 
 import { resolvePiSubagents } from "./config/pi-subagents"
 import { gooseSessionExtension } from "@cognia/agent-acp/goose-session"
+import { assertExternalAgentContentSafety } from "./policy/outbound-prompt-pii"
 import type {
   ExternalAgentConfig,
   ExternalAgentSession,
@@ -486,6 +487,10 @@ export class ExternalAgentManager {
 
   private config: Required<ExternalAgentManagerConfig>
   private instances: Map<string, ExternalAgentInstance> = new Map()
+  private sessionContentPolicies = new WeakMap<
+    ProtocolAdapter,
+    Map<string, { enabled: boolean; chatSessionId?: string }>
+  >()
   private adapters: Map<string, ProtocolAdapter> = new Map()
   private nesSessions = new Map<string, Set<string>>()
   private kimiDeletedSessions = new Map<string, Map<string, { cwd?: string; expiresAt: number }>>()
@@ -1247,6 +1252,7 @@ export class ExternalAgentManager {
     const target = this.sessionOperationTarget(agentId, sessionId)
     if (!target.adapter.executeSessionCommand)
       throw new Error("Agent does not support live commands")
+    await this.enforceSessionContentPolicy(target.adapter, target.sessionId, command)
     return target.adapter.executeSessionCommand(target.sessionId, command)
   }
 
@@ -1258,6 +1264,7 @@ export class ExternalAgentManager {
   ): Promise<ExternalAgentSessionInputAcceptance> {
     const target = this.sessionOperationTarget(agentId, sessionId)
     if (!target.adapter.enqueueSessionInput) throw new Error("Agent does not support queued input")
+    await this.enforceSessionContentPolicy(target.adapter, target.sessionId, input)
     return target.adapter.enqueueSessionInput(target.sessionId, input, mode)
   }
 
@@ -1547,7 +1554,46 @@ export class ExternalAgentManager {
     }
     if (!sessionId) throw new Error("A native session id is required for steering")
     if (!adapter.getSession(sessionId)) throw new Error("Session not found for this agent")
+    await this.enforceSessionContentPolicy(adapter, sessionId, text)
     await adapter.steerTurn(sessionId, text)
+  }
+
+  private gateExecutionContent(
+    adapter: ProtocolAdapter,
+    sessionId: string,
+    message: ExternalAgentMessage,
+    options?: ExternalAgentExecutionOptions
+  ): void {
+    assertExternalAgentContentSafety(message.content, options)
+    let policies = this.sessionContentPolicies.get(adapter)
+    if (!policies) {
+      policies = new Map()
+      this.sessionContentPolicies.set(adapter, policies)
+    }
+    policies.set(sessionId, {
+      enabled: options?.contentSafety?.injectionProtection === true,
+      ...(typeof options?.context?.custom?.chatSessionId === "string"
+        ? { chatSessionId: options.context.custom.chatSessionId }
+        : {}),
+    })
+  }
+
+  private async enforceSessionContentPolicy(
+    adapter: ProtocolAdapter,
+    sessionId: string,
+    input: unknown
+  ): Promise<void> {
+    const policy = this.sessionContentPolicies.get(adapter)?.get(sessionId)
+    const current = policy?.chatSessionId
+      ? await (
+          await import("@/lib/connectors/content-safety")
+        ).connectorSessionInjectionProtection(policy.chatSessionId)
+      : undefined
+    if (current !== undefined && current !== policy?.enabled)
+      throw new Error("runtime_content_safety_changed")
+    assertExternalAgentContentSafety(input, {
+      contentSafety: { injectionProtection: current ?? policy?.enabled ?? false },
+    })
   }
 
   /** Whether the agent's adapter can steer an in-flight turn. */
@@ -1577,6 +1623,7 @@ export class ExternalAgentManager {
     if (!adapter?.compactSession) {
       throw new Error("Agent does not support context compaction")
     }
+    await this.enforceSessionContentPolicy(adapter, sessionId, options?.focus)
     await adapter.compactSession(sessionId, options)
   }
 
@@ -4348,6 +4395,7 @@ export class ExternalAgentManager {
     prompt: string,
     options?: PermissionBoundExternalExecutionOptions
   ): AsyncIterable<ExternalAgentEvent> {
+    assertExternalAgentContentSafety(prompt, options)
     const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
     if (gateway) {
       try {
@@ -4471,6 +4519,7 @@ export class ExternalAgentManager {
     let streamError: string | undefined
 
     try {
+      this.gateExecutionContent(adapter, session.id, message, options)
       const streamIterator = adapter
         .prompt(
           session.id,
@@ -4752,6 +4801,7 @@ export class ExternalAgentManager {
     prompt: string,
     options?: PermissionBoundExternalExecutionOptions
   ): Promise<ExternalAgentResult> {
+    assertExternalAgentContentSafety(prompt, options)
     const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
     if (gateway) {
       try {
@@ -4959,6 +5009,7 @@ export class ExternalAgentManager {
           const abortSignal = options?.signal
           if (abortSignal?.aborted) void stopAgent()
           abortSignal?.addEventListener("abort", stopAgent, { once: true })
+          this.gateExecutionContent(adapter, session.id, message, wrappedOptions)
           const attemptResult = await this.withTimeout(
             adapter.execute(session.id, message, wrappedOptions),
             executionTimeoutMs,

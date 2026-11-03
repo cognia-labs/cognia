@@ -3329,6 +3329,53 @@ describe("resolveSendOptions — model precedence", () => {
 
   // ── W1 multi-bot — instance-level binding defaults ─────────────────────────
 
+  it.each([undefined, true, false])(
+    "applies bot protection to authority-only sessions without adopting connector routing (%s)",
+    async (promptInjectionProtection) => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const instances = require("@/lib/db/adapter-instances")
+      const getAdapter = instances.getAdapterInstance as jest.Mock
+      getAdapter.mockResolvedValueOnce({ id: "authority-bot", promptInjectionProtection })
+      const session = {
+        ...makeSession({
+          id: "bot-topic",
+          model: "session-model",
+          agentTurnOwner: { kind: "bot", id: "lecturer" },
+        }),
+        imAuthorityBinding: {
+          platform: "telegram" as const,
+          adapterId: "authority-bot",
+          conversationKey: "opaque-topic",
+        },
+      }
+      const options = await resolveSendOptions({ session, character: makeChar({ id: "c1" }) })
+      expect(getAdapter).toHaveBeenCalledWith("authority-bot")
+      expect(options.contentSafety).toEqual({
+        injectionProtection: promptInjectionProtection !== false,
+      })
+      expect(options.model).toBe("session-model")
+      expect(session.platformBinding).toBeUndefined()
+    }
+  )
+
+  it.each([undefined, true, false])(
+    "resolves the Host bot protection into the send spec (%s)",
+    async (promptInjectionProtection) => {
+      const options = await resolveSendOptions({
+        session: makeSession({
+          id: "s1",
+          platformBinding: { adapterId: "tg-1", conversationKey: "telegram:tg-1:9" },
+        } as ChatSession),
+        character: makeChar({ id: "c1" }),
+        imOverrideRow: null,
+        imAdapterRow: { id: "tg-1", promptInjectionProtection } as AdapterInstanceRow,
+      })
+      expect(options.contentSafety).toEqual({
+        injectionProtection: promptInjectionProtection !== false,
+      })
+    }
+  )
+
   it("bot defaultModel/defaultProvider apply when session/override/character are silent", async () => {
     const opts = await resolveSendOptions({
       session: makeSession({

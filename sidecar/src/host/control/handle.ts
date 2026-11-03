@@ -8,6 +8,7 @@ import { capabilitySupported } from "../../runtimes/registry.ts"
 import { isControlMethod, controlMethodCapability, controlParamError } from "./control.ts"
 import { guardAnthropicRemoteMcpServers } from "../../mcp/relay/sdk-servers.ts"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { assertSafeModelInput } from "@cognia/content-safety"
 import type {
   AgentExtensionReloadOptions,
   AgentExtensionReloadResult,
@@ -88,11 +89,15 @@ export async function routeReloadExtensions(
 
 /** A live-loop read, independent of the persisted native session catalog. */
 export function runtimeStatus(session: HostSession | undefined) {
+  const policy = session?.sendOptions?.contentSafety
+    ? { contentSafety: { ...session.sendOptions.contentSafety } }
+    : {}
   if (!session?.sdkSessionId || session.multiTurn !== true || session.q?.closed === true) {
-    return { retained: false as const }
+    return { retained: false as const, ...policy }
   }
   return {
     retained: true as const,
+    ...policy,
     runtimeAdapter: "ai-sdk" as const,
     sdkSessionId: session.sdkSessionId,
     provider: session.sendOptions?.provider ?? "anthropic",
@@ -221,7 +226,13 @@ export async function runControlWithTimeout<T, A extends unknown[]>(
  */
 export function routeSteer(
   sessionsMap: Map<string, HostSession>,
-  msg: { sessionId?: string; prompt?: unknown; priority?: unknown; sourceMessageId?: unknown }
+  msg: {
+    sessionId?: string
+    prompt?: unknown
+    priority?: unknown
+    sourceMessageId?: unknown
+    contentSafety?: unknown
+  }
 ): Outcome {
   const { sessionId, prompt, priority, sourceMessageId } = msg
   const session = sessionsMap.get(sessionId!)
@@ -242,6 +253,15 @@ export function routeSteer(
     return { ok: false, error: "unsupported_provider" }
   }
   try {
+    if (!hasNoLeakingPiiDeep(prompt)) return { ok: false, error: "steer rejected by the PII gate" }
+    if (msg.contentSafety !== undefined) {
+      const policy = msg.contentSafety as { injectionProtection?: unknown } | null
+      if (!policy || typeof policy.injectionProtection !== "boolean")
+        return { ok: false, error: "invalid_content_safety_policy" }
+      if (policy.injectionProtection !== session.sendOptions?.contentSafety?.injectionProtection)
+        return { ok: false, error: "runtime_content_safety_changed" }
+    }
+    assertSafeModelInput(prompt, session.sendOptions?.contentSafety?.injectionProtection === true)
     const accepted = session.pushUserMessage(prompt as Prompt, priority as string | undefined)
     if (accepted === false) return { ok: false, error: "input_closed" }
     session.scheduleSteerInputClose?.()
@@ -327,6 +347,7 @@ export function guardedControlParams(
       ...params,
       servers: guardAnthropicRemoteMcpServers(params.servers as Record<string, McpServerEntry>, {
         permissionPromptToolName: sendOptions.claudeAgentSdk?.permissionPromptToolName,
+        injectionProtection: sendOptions.contentSafety?.injectionProtection,
       }),
     }
   }

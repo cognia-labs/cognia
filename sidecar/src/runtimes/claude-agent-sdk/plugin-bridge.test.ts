@@ -13,11 +13,13 @@ test("plugin tool bridge preserves the immutable sandbox runtime reference", () 
     pendingPluginToolCalls: new Map(),
     alwaysLoad: true,
     alwaysLoadToolNames: new Set(),
+    contentSafety: { injectionProtection: false },
   })
 
   assert.equal(options.sandboxRuntimeRef, "sandbox-runtime:anthropic")
   assert.equal(options.turnId, "turn-1")
   assert.equal(options.attemptId, "attempt-2")
+  assert.deepEqual(options.contentSafety, { injectionProtection: false })
 })
 
 test("plugin tool bridge forwards the alias table the dispatcher translates with", () => {

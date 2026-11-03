@@ -2875,6 +2875,8 @@ export interface ExternalAgentResult {
  * Execution options
  */
 export interface ExternalAgentExecutionOptions {
+  /** Host-resolved prompt/context protection; independent of the outbound PII gate. */
+  contentSafety?: { injectionProtection: boolean }
   /** Task-specific Cognia model binding. Omit to inherit the configured binding. */
   cogniaModel?: ExternalAgentCogniaModelBinding | null
   /**

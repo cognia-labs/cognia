@@ -1553,6 +1553,64 @@ describe("useClaudeChat — actions", () => {
     })
   })
 
+  it.each([
+    ["local", true],
+    ["local", false],
+    ["host", true],
+    ["host", false],
+  ] as const)(
+    "gates the assembled %s external prompt and forwards injection protection %s",
+    async (lane, injectionProtection) => {
+      useAgentRuntimeStore.setState({
+        runtimeRef:
+          lane === "local"
+            ? { kind: "external", agentId: "ext-1" }
+            : {
+                kind: "host",
+                configId: "eac_1",
+                revision: "eacr_1",
+                lifecycleGeneration: 2,
+                name: "Pi",
+              },
+      })
+      resolveSendOptionsMock.mockResolvedValue({
+        model: "sonnet",
+        systemPrompt: "sys",
+        contentSafety: { injectionProtection },
+      })
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      gateWorkbenchProviderPayloadMock.mockImplementationOnce((payload) => ({
+        ...(payload as object),
+        content: "gated external request",
+      }))
+      await act(async () => {
+        await result.current.send("original external request")
+      })
+      expect(gateWorkbenchProviderPayloadMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "original external request",
+          sendOptions: expect.objectContaining({ contentSafety: { injectionProtection } }),
+        })
+      )
+      const executor = lane === "local" ? executeOnExternalAgentMock : executeOnRemoteHostAgentMock
+      expect(executor).toHaveBeenCalledWith(
+        "gated external request",
+        expect.objectContaining({ contentSafety: { injectionProtection } })
+      )
+      expect(chatState.sessions["sess-1"].messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            parts: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "original external request" }),
+            ]),
+          }),
+        ])
+      )
+    }
+  )
+
   // The host lane answered `null` to "which agent is this turn on", because that
   // read the LOCAL agent field and a host selection leaves it empty. The turn
   // was therefore recorded as an in-app turn under the agent id "built-in", and

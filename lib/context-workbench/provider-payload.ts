@@ -1,6 +1,44 @@
 import { attachResourceContext } from "./provider-context"
 import { hasNoLeakingPiiDeep, redactText } from "@cognia/redact"
 import type { SendContent, SendOptions } from "@cognia/agent-config-types"
+import {
+  assertSafeModelInput,
+  assertSafeExternalContent,
+  ContentSafetyBlockedError,
+} from "@cognia/content-safety"
+
+const WITHHELD = "[External content withheld by content safety.]"
+
+/** Reassess current canonical text, including edits; never mutate stored UI rows. */
+function safeHistoryMessage<T>(message: T, enabled: boolean): T {
+  if (!enabled || !message || typeof message !== "object") return message
+  const record = message as Record<string, unknown>
+  if (record.role === "system" || record.role === "developer") return message
+  const parts = record.parts ?? record.content
+  try {
+    if (record.role === "user") {
+      assertSafeModelInput(parts)
+      // UI message tool-result parts may coexist with text, so inspect those
+      // explicitly instead of treating their metadata as authored instructions.
+      if (Array.isArray(parts))
+        for (const part of parts) {
+          if (part && typeof part === "object" && "output" in part)
+            assertSafeExternalContent(part.output)
+        }
+    } else {
+      assertSafeExternalContent(parts)
+    }
+    return message
+  } catch (error) {
+    if (!(error instanceof ContentSafetyBlockedError)) throw error
+    return {
+      ...record,
+      ...(record.parts !== undefined
+        ? { parts: [{ type: "text", text: WITHHELD }] }
+        : { content: WITHHELD }),
+    } as T
+  }
+}
 
 export interface WorkbenchProviderPayload<TMessage = unknown> {
   content: SendContent
@@ -48,11 +86,25 @@ export function gateWorkbenchProviderPayload<TMessage>(
   resourceContext = "",
   header = "Current resource context"
 ): WorkbenchProviderPayload<TMessage> {
+  const enabled = payload.sendOptions.contentSafety?.injectionProtection === true
+  assertSafeModelInput(payload.content, enabled)
+  let safeResource = resourceContext
+  if (enabled && resourceContext) {
+    try {
+      assertSafeExternalContent(resourceContext)
+    } catch (error) {
+      if (!(error instanceof ContentSafetyBlockedError)) throw error
+      safeResource = WITHHELD
+    }
+  }
   const content = redactValue(
-    attachResourceContext(payload.content, resourceContext, header),
+    attachResourceContext(payload.content, safeResource, header),
     new WeakMap()
   ) as SendContent
-  const messages = redactValue(payload.messages, new WeakMap()) as TMessage[]
+  const messages = redactValue(
+    payload.messages.map((m) => safeHistoryMessage(m, enabled)),
+    new WeakMap()
+  ) as TMessage[]
   const sendOptions: SendOptions = {
     ...payload.sendOptions,
     ...(payload.sendOptions.systemPrompt

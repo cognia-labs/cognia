@@ -45,6 +45,7 @@ export interface AgentExtensionReloadResult {
 }
 
 export interface AgentRuntimeFeatureRequest {
+  contentSafety?: { injectionProtection: boolean }
   toolSearchEnabled?: boolean
   alwaysLoadServers?: readonly string[]
   alwaysLoadTools?: readonly string[]
@@ -90,10 +91,12 @@ export function runtimeFeaturePolicyKey(request: AgentRuntimeFeatureRequest): st
     !agents.length &&
     !rules.length &&
     !request.runtimeExtensions?.length &&
-    request.toolSearchEnabled !== true
+    request.toolSearchEnabled !== true &&
+    request.contentSafety?.injectionProtection !== false
   )
     return undefined
   return JSON.stringify({
+    ...(request.contentSafety?.injectionProtection === false ? { injectionProtection: false } : {}),
     contextMode: request.subagentRuntime?.contextMode ?? "isolated",
     agents,
     rules,
@@ -110,6 +113,13 @@ export function runtimeFeaturePolicyKey(request: AgentRuntimeFeatureRequest): st
 }
 
 export function runtimeFeatureValidationError(request: AgentRuntimeFeatureRequest): string | null {
+  if (
+    request.contentSafety !== undefined &&
+    (!request.contentSafety ||
+      typeof request.contentSafety !== "object" ||
+      typeof request.contentSafety.injectionProtection !== "boolean")
+  )
+    return "invalid_content_safety_policy"
   if (request.toolSearchEnabled !== undefined && typeof request.toolSearchEnabled !== "boolean")
     return "invalid_tool_search_policy"
   for (const names of [request.alwaysLoadServers, request.alwaysLoadTools]) {

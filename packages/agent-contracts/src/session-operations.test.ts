@@ -233,3 +233,14 @@ it("requires explicit background turn support as well as a native event subscrip
     resolveSessionOperationCapabilities({}, { backgroundTurns: "supported" }).backgroundTurns
   ).toBe("unsupported")
 })
+it("invalidates retained tools when content protection changes and validates wire policy", () => {
+  expect(runtimeFeaturePolicyKey({ contentSafety: { injectionProtection: true } })).toBe(
+    runtimeFeaturePolicyKey({})
+  )
+  expect(runtimeFeaturePolicyKey({ contentSafety: { injectionProtection: false } })).not.toBe(
+    runtimeFeaturePolicyKey({})
+  )
+  expect(
+    runtimeFeatureValidationError({ contentSafety: { injectionProtection: "false" } } as never)
+  ).toBe("invalid_content_safety_policy")
+})

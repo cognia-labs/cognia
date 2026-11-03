@@ -6,6 +6,7 @@ export interface ActiveConnectorRun {
   sessionId: string
   executionRunId: string
   provider: string
+  injectionProtection?: boolean
 }
 
 export interface ConnectorLiveSteerCoordinator {
@@ -17,6 +18,7 @@ export interface ConnectorLiveSteerDependencies {
   admit(event: NormalizedInboundEvent): Promise<boolean>
   steer(sessionId: string, event: NormalizedInboundEvent): Promise<{ accepted: true }>
   storeInbound(event: NormalizedInboundEvent, sessionId: string): Promise<unknown>
+  currentInjectionProtection?(adapterId: string): Promise<boolean>
 }
 
 /**
@@ -41,6 +43,8 @@ export function createConnectorLiveSteerCoordinator(
     if (run.provider !== "anthropic") return unavailable
 
     try {
+      const current = (await deps.currentInjectionProtection?.(event.adapterId)) ?? true
+      if (current !== (run.injectionProtection !== false)) return unavailable
       await deps.storeInbound(event, run.sessionId)
       if (!(await deps.admit(event))) return unavailable
       const result = await deps.steer(run.sessionId, event)

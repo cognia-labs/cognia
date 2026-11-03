@@ -41,6 +41,7 @@ export type McpOutputReviewer = (
   isError: boolean
 ) => Promise<unknown>
 export interface McpToolsOptions {
+  contentSafety?: { injectionProtection: boolean }
   mcpServers?: Record<string, McpServerEntry> | undefined
   gate?: McpPermissionGate
   reviewToolOutput?: McpOutputReviewer

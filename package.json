@@ -512,6 +512,7 @@
     "@cognia/brand-assets": "workspace:*",
     "@cognia/provider-types": "workspace:*",
     "@cognia/rag": "workspace:*",
+    "@cognia/content-safety": "workspace:*",
     "@cognia/redact": "workspace:*",
     "@cognia/router-fusion": "workspace:*",
     "@cognia/status-contract": "git+https://github.com/cognia-labs/cognia-services.git#487e9f2d617c9d1b9b648ec510cafcf53b962c2c&path:/packages/status-contract",

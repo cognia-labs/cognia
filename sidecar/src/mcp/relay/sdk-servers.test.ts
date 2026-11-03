@@ -37,6 +37,7 @@ test("routes remote Anthropic MCP through a guarded stdio relay without argv sec
     url: "https://mcp.example/rpc",
     headers: { authorization: "Bearer secret" },
     allowPrivateNetwork: false,
+    injectionProtection: true,
   })
 })
 

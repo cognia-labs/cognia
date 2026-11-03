@@ -5,6 +5,7 @@ import type { PluginToolsServerOptions } from "../../tools/plugin/proxy.ts"
  * dropped before the renderer receives `plugin_tool_exec`.
  */
 export function anthropicPluginToolBridgeOptions({
+  contentSafety,
   tools,
   emit,
   sessionId,
@@ -19,6 +20,7 @@ export function anthropicPluginToolBridgeOptions({
   permissionPromptToolName,
 }: PluginToolsServerOptions): PluginToolsServerOptions {
   return {
+    contentSafety,
     tools,
     emit,
     sessionId,

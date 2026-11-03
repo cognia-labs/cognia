@@ -142,6 +142,7 @@ import type {
   TeamMember,
 } from "@cognia/agent-config-types"
 import type { AgentExecutionIdentity } from "@cognia/agent-config-types/agent-execution"
+import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import type { Project } from "@/types"
 import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
 import { resolveMemoryConfig } from "@/types/memory/memory"
@@ -3763,6 +3764,21 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // read. The first read is best-effort, so `imOverrideRow` may still be
   // undefined here; the fallback is the safe `false` default.
   const imSession = Boolean(session?.platformBinding?.adapterId)
+  const safetyBinding =
+    (session as (ChatSession & SessionImAuthority) | null | undefined)?.imAuthorityBinding ??
+    session?.platformBinding
+  if (safetyBinding?.adapterId) {
+    // Bot-owned topics carry IM authority without connector routing/history.
+    // Resolve their protection from the bound Host row without adopting the
+    // connector's model, mode or delivery defaults.
+    const safetyAdapter =
+      safetyBinding.adapterId === session?.platformBinding?.adapterId
+        ? imAdapterRow
+        : await (
+            await import("@/lib/db/adapter-instances")
+          ).getAdapterInstance(safetyBinding.adapterId)
+    opts.contentSafety = { injectionProtection: safetyAdapter?.promptInjectionProtection !== false }
+  }
   const imHostCapabilities = resolveImHostCapabilities({
     adapter: imAdapterRow,
     override: imOverrideRow,

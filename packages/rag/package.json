@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@cognia/provider-embedding": "workspace:*",
+    "@cognia/content-safety": "workspace:*",
     "@cognia/redact": "workspace:*",
     "@cognia/vector": "workspace:*"
   },

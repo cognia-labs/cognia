@@ -5477,13 +5477,11 @@ export function useClaudeChat() {
           const assembledExternalPrompt = externalContinuationContext
             ? `${externalContinuationContext}\n\nCurrent user request:\n${externalSendText}`
             : externalSendText
-          const externalExecutionPrompt = isSessionAside
-            ? (gateWorkbenchProviderPayload({
-                content: assembledExternalPrompt,
-                messages: [],
-                sendOptions,
-              }).content as string)
-            : assembledExternalPrompt
+          const externalExecutionPrompt = gateWorkbenchProviderPayload({
+            content: assembledExternalPrompt,
+            messages: [],
+            sendOptions,
+          }).content as string
           // The turn's images (attached, or sampled from a video), in a format
           // agents read. The local lane asks this agent and its model what they
           // can see before sending; a Host lane hands them to the Host, which
@@ -5548,6 +5546,7 @@ export function useClaudeChat() {
           const result =
             hostSelection && executeOnRemoteHostAgent && remoteRunId
               ? await executeOnRemoteHostAgent(externalExecutionPrompt, {
+                  contentSafety: sendOptions.contentSafety,
                   // The host's closed turn protocol has no permission override.
                   // Read-only asides fall back before here; unlocked asides use
                   // the same config stamp/default authority as their main chat.
@@ -5585,6 +5584,7 @@ export function useClaudeChat() {
                   onEvent: handleExternalEvent,
                 })
               : await executeOnExternalAgent(externalExecutionPrompt, {
+                  contentSafety: sendOptions.contentSafety,
                   agentId: extAgentId,
                   ...asideExternalPermission,
                   ...(gatewayController ? { signal: gatewayController.signal } : {}),

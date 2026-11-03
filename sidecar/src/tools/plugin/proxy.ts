@@ -18,6 +18,7 @@
 import { randomUUID } from "node:crypto"
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import { assertSafeExternalContent } from "@cognia/content-safety"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 
 import { permissionDecisionHasUnprovenRewrite } from "../../policy/permission/delegated-approval.ts"
@@ -113,6 +114,7 @@ export function awaitPluginToolResponse(
 }
 
 export interface PluginToolsServerOptions {
+  contentSafety?: { injectionProtection: boolean }
   /**
    * Plugin tool manifest forwarded from the renderer. The `execute` function
    * is intentionally absent — functions don't cross the stdio boundary, so we
@@ -161,6 +163,7 @@ export interface PluginToolsServerOptions {
  * per-tool allowlist.
  */
 export function buildPluginToolDefinitions({
+  contentSafety,
   tools,
   emit,
   sessionId,
@@ -176,6 +179,7 @@ export function buildPluginToolDefinitions({
 }: PluginToolsServerOptions): ToolDefinition[] | null {
   if (!Array.isArray(tools) || tools.length === 0) return null
   if (!hasNoLeakingPiiDeep(tools)) throw new Error("Plugin tool metadata blocked by the PII gate")
+  assertSafeExternalContent(tools, contentSafety?.injectionProtection)
 
   const perToolAlways: ReadonlySet<string> =
     alwaysLoadToolNames instanceof Set ? alwaysLoadToolNames : new Set(alwaysLoadToolNames ?? [])
@@ -217,7 +221,9 @@ export function buildPluginToolDefinitions({
         })
         const response = await pending
         if (response && response.error) {
-          return toolError(response.error, "plugin tool")
+          const error = toolError(response.error, "plugin tool")
+          assertSafeExternalContent(error, contentSafety?.injectionProtection)
+          return error
         }
         const result = response?.result ?? null
         if (
@@ -233,6 +239,7 @@ export function buildPluginToolDefinitions({
           return toolError("Plugin tool result blocked by the PII gate", "plugin tool")
         // A plugin that already speaks MCP (image / audio / resource blocks)
         // passes through untouched; everything else keeps the JSON-text shape.
+        assertSafeExternalContent(result, contentSafety?.injectionProtection)
         return isCallToolResult(result) ? result : toolText(result)
       },
       { alwaysLoad: alwaysLoad === true || perToolAlways.has(t.name) }

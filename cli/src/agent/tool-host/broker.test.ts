@@ -515,6 +515,13 @@ describe("startToolHostBroker — lifecycle", () => {
 })
 
 describe("startToolHostBroker — descriptor fidelity", () => {
+  it("forwards explicit content protection opt-out without losing false", async () => {
+    const broker = await start({
+      session: sessionContext({ contentSafety: { injectionProtection: false } }),
+    })
+    const { hello } = await connected(broker)
+    expect(hello.session.contentSafety).toEqual({ injectionProtection: false })
+  })
   it("forwards the resolver-bound config so lsp / code-graph tools can be built", async () => {
     const broker = await start({
       session: sessionContext({

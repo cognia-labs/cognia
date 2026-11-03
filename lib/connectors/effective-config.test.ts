@@ -17,6 +17,21 @@ const adapter: AdapterInstanceRow = {
 }
 
 describe("resolveImEffectiveConfig", () => {
+  it.each([undefined, true, false])(
+    "resolves injection protection from the bot row (%s)",
+    (value) => {
+      const effective = resolveImEffectiveConfig({
+        adapter: { ...adapter, promptInjectionProtection: value },
+        override: null,
+        rule: null,
+        system: { mode: "auto" },
+      })
+      expect(effective.contentSafety.injectionProtection).toEqual({
+        effective: value !== false,
+        source: value === undefined ? "system-default" : "adapter-default",
+      })
+    }
+  )
   it("reports requested, effective, and source for shared behavior fields", () => {
     const configuredAdapter: AdapterInstanceRow = {
       ...adapter,

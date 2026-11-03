@@ -175,6 +175,7 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
   )
 
   const descriptor: ToolHostSessionDescriptor = {
+    contentSafety: session.sendOptions.contentSafety,
     sessionId: session.sessionId,
     attempt,
     contextVersion: session.contextVersion,
