@@ -59,16 +59,16 @@ describe("Feishu plugin distribution", () => {
       await readFile("lib/plugin/distribution/browser-builtins.json", "utf8")
     )
     expect(curated).toEqual(expect.arrayContaining(["feishu-auth", "feishu-calendar"]))
-    const assets = JSON.parse(
-      await readFile("lib/plugin/core/browser-builtin-assets.generated.json", "utf8")
-    )
+    const auth = JSON.parse(await readFile("plugins/feishu-auth/plugin.json", "utf8"))
     const calendar = JSON.parse(await readFile("plugins/feishu-calendar/plugin.json", "utf8"))
     expect(calendar.requiresServices).toEqual({ "auth.feishu": "^1.0.0" })
     expect(calendar.dependencies).toBeUndefined()
-    expect(assets.entries["feishu-auth"].manifest.authProviders).toContainEqual({
-      id: "feishu-user-oauth",
-      label: "Feishu user OAuth",
-    })
+    expect(auth.providesServices).toEqual({ "auth.feishu": "1.0.0" })
+    expect(auth.authProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "feishu-user-oauth", label: "Feishu user OAuth" }),
+      ])
+    )
   })
 
   it("requires public sync permission in source and standalone calendar manifests", async () => {

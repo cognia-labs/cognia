@@ -1270,7 +1270,20 @@ export class PluginManager {
     for (const plugin of plugins) {
       const lifecycle = await this.getPluginLifecycleState(plugin.manifest.id)
       if (lifecycle.actual !== "waiting" || lifecycle.intent === "disabled") continue
-      if (this.evaluatePluginServices(plugin).required.length > 0) continue
+      const evaluation = this.evaluatePluginServices(plugin)
+      if (evaluation.required.length > 0) {
+        // A drain parks consumers without a reason because the provider is
+        // expected back. When it is gone for good (uninstall), say what the
+        // consumer now waits for, exactly as an enable with a missing service does.
+        const reason = JSON.stringify(evaluation.required).slice(0, 512)
+        if (lifecycle.lastError !== reason)
+          await this.withLifecycleLock(plugin.manifest.id, async () => {
+            const current = await this.getPluginLifecycleState(plugin.manifest.id)
+            if (current.actual === "waiting" && current.intent !== "disabled")
+              await this.setActualState(plugin.manifest.id, "waiting", { lastError: reason })
+          })
+        continue
+      }
       await this.withLifecycleLock(plugin.manifest.id, () =>
         this.enablePluginInner(plugin.manifest.id, "service-available")
       )
@@ -4956,6 +4969,9 @@ export class PluginManager {
       await this.withLifecycleLock(pluginId, () => this.uninstallPluginInner(pluginId, options))
     } finally {
       await this.flushOptionalServiceConsumers(pluginId)
+      // Consumers parked by the provider's drain either resume on another
+      // compatible provider or record the service they now wait for.
+      if (this.runtimeServicesEnabled()) await this.resumeWaitingServiceConsumers()
     }
   }
 
