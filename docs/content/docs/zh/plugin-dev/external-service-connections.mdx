@@ -1,0 +1,393 @@
+---
+title: 外部服务连接
+description: 声明认证服务、选择 Host 连接、申请消费者授权，并提供由 Host 管理的认证提供者。
+---
+
+# 外部服务连接
+
+基础插件适配某个厂商的登录流程，并提供带版本的服务，例如
+`auth.example-tracker`。业务插件声明该服务、选择 Host
+连接，再申请自己的消费者授权。业务插件发起受治理的集成请求时，
+由 Host 注入凭据。
+
+本页介绍认证与访问。基于这些连接实现文档、Issue、备份和同步，参见
+[领域贡献](./domain-contributions)。两页均以
+[ADR-0246](/zh/docs/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection)
+的当前实现为准。
+
+## 模型
+
+授权分为三层：
+
+| 层级 | 所有者 | 含义 |
+| --- | --- | --- |
+| 远程授权 | 厂商 | 远程凭据实际获准使用的 scopes。 |
+| 连接 | Host | 保存的凭据、远程身份、生命周期和刷新谱系。 |
+| 消费者授权 | Host，按业务插件隔离 | 某个消费者在某个连接修订版本上获准执行的操作。 |
+
+连接身份由以下部分组成：
+
+- `provider`：`providerId`、`ownerPluginId`、`publisher` 和 `contractMajor`；
+- `issuer`：厂商部署；
+- `clientId`：持有远程授权的客户端；
+- 可选的 `tenantId`；
+- `principal`：远程主体的 `id` 和 `kind`，后者为 `user`、`bot` 或 `service`。
+
+`ownerPluginId: null` 表示 Host 提供者。消费者拿到的是不透明的
+`AuthConnectionRef`，不得自行构造或解析。不能仅凭提供者标签相同，
+就认为两个账号、租户或客户端可以互换。
+
+公开的 `revision` 用于隔离访问。它与 Host 内部用于刷新 CAS 的凭据修订版本
+不同。消费者授权记录 `consumerPluginId` 和 `connectionRevision`；
+增加远程 scopes 不会扩大已有授权。连接修订版本变化后，
+应重新请求批准。
+
+## 声明服务
+
+基础插件声明**精确**的服务版本：
+
+```json
+{
+  "providesServices": {
+    "auth.example-tracker": "1.0.0"
+  }
+}
+```
+
+业务插件声明 semver 范围：必需服务使用 `requiresServices`，
+可选服务使用 `optionalServices`：
+
+```json
+{
+  "requiresServices": {
+    "auth.example-tracker": "^1.0.0"
+  }
+}
+```
+
+这些只是 manifest 片段；仍须保留插件身份、入口、capabilities、
+permissions 和运行时声明。提供的版本不能是范围。
+必需和可选范围应使用完整版本号，例如 `^1.0.0`、`~1.0.0` 或 `>=1.0.0`。
+manifest 校验器还接受精确版本、单个比较表达式、完整版本的连字符范围、
+`*` 和 `latest`；即使解析器使用 semver，也不接受简写 `^1` 或复合/OR 表达式。
+
+必需服务缺失或版本不兼容时，消费者进入等待状态并记录原因。
+提供者的 `2.0.0` 不满足 `^1.0.0`。卸载提供者也会使其消费者失去访问权。
+可选服务缺失不会使激活等待。
+
+`requiresServices` **不会**阻止卸载提供者；提供这种删除保护的是包级
+`dependencies`。提供者升级会先暂停必需消费者，再恢复它们原有的启用意图；
+消费者仍须满足升级后的服务版本要求。
+
+## 消费者 API：`ctx.auth.connections`
+
+声明 `auth:consume`。连接仅对所有者或声明了兼容必需/可选服务的消费者
+可见；知道另一个插件的引用不会获得访问权。API 只暴露元数据，不暴露凭据：
+
+| 方法 | 契约 |
+| --- | --- |
+| `get(request)` | `service` 和 `providerId` 必须且只能提供一个；可选 `scopes`、`interactive`；返回元数据或 `undefined`。 |
+| `list(filter?)` | 可选的 `service` 或 `providerId` 过滤器；返回可见连接的元数据，包括生命周期状态。 |
+| `requestGrant(ref, request)` | 非空 `operations`、可选 `scopes`；请求 Host 授权当前消费者。 |
+| `onDidChange(listener, filter?)` | 仅含元数据的 `added`、`removed`、`changed` 数组；可选 `providerId` 过滤器；返回 disposer。 |
+
+元数据包含 `ref`、`providerId`、`accountLabel`、`principalKind`、`issuer`、
+可选 `tenantLabel`、`scopes`、`status` 和 `revision`，不包含
+`clientId`、access token 或 refresh token。状态为 `connected`、`needs-reauth`、
+`provider-unavailable`、`revoked` 或 `tombstoned`。
+
+### 选择与持久绑定
+
+`get()` 优先复用当前插件与提供者之间有效的持久绑定。
+没有可用绑定时，如果只有一个已连接且满足 scopes 的候选，就自动选择并绑定。
+多个候选需要设置 `interactive: true`，让用户进行一次选择；
+静默查询遇到歧义时返回 `undefined`。
+
+没有匹配连接时，交互请求可以提示登录。
+若服务存在多个可能的提供者，必须通过指定提供者消除歧义。
+取消选择不会返回连接。插件的 UI、工具和工作流共享保存的绑定；
+不要改为取 `list()` 的第一项。
+
+将登录和授权请求放在明确的连接操作中。后台读取应使用静默查找，
+缺少访问权时报告该状态，而不是再次弹窗。
+
+### 申请并使用消费者授权
+
+以下片段采用 `plugins/example-docs-provider/src/index.ts` 的模式：
+
+```ts
+const connection = await ctx.auth.connections.get({
+  service: "auth.example-tracker",
+  scopes: ["docs.read"],
+  interactive: true,
+})
+if (connection) {
+  const decision = await ctx.auth.connections.requestGrant(connection.ref, {
+    operations: ["docs.request.GET"],
+    scopes: ["docs.read"],
+  })
+  if (!decision.granted) return false
+}
+```
+
+成功结果包含 `ref`、`connectionRevision`、`operations` 和 `scopes`。
+拒绝原因包括 `denied`、`dismissed`、`connection-unavailable` 或
+`scopes-unavailable`。补充缺失的远程 scopes 可能需要重新连接，
+随后在新的修订版本上批准消费者授权。
+
+此流程会检查请求的 OAuth scopes 是否可用，但不会把它们保存为独立的、
+按消费者隔离的 OAuth scopes 白名单。持久授权约束消费者、修订版本、
+操作和资源范围。Host 不会将厂商 token 缩减为消费者专用的 token。
+这比 ADR §1 中同时包含操作与 scopes 的授权描述更有限。
+
+操作必须精确匹配已注册的集成。原始请求使用
+`<integrationId>.request.<UPPERCASE_METHOD>`；action 使用自己的 `operationId`，
+未指定时默认为 `<integrationId>.<actionId>`。通配符、未知操作和存在歧义的
+操作身份会以 `unknown-operation` 拒绝。
+
+授权流程会创建基于连接的集成账号投影。使用 `integrations:read`
+找到当前连接的账号，再使用 `integrations:execute` 通过 Host 发起请求：
+
+```ts
+const account = (await ctx.integrations.listAccounts("docs")).find(
+  (item) => item.connectionId === connection.ref,
+)
+if (!account) throw new Error("Connect and grant document access first")
+const response = await ctx.integrations.authenticatedRequest(
+  account.id,
+  "https://api.example-tracker.test/documents/guide",
+  { connectionRef: connection.ref, signal },
+)
+```
+
+此请求片段假设已选定 `connection`，且调用方提供了 `signal`。
+按示例 manifest 声明集成的 `authStrategies`、`allowedOrigins` 和服务投影。
+`connectionRef` 使账号绑定变化时请求以关闭方式失败。
+集成 action handler 的上下文同样提供连接元数据和 `authenticatedRequest`
+传输接口；请求必须绑定到所选连接时，也应传入预期引用。
+
+Host 在解析凭据和派发时检查消费者授权，`GET`、`HEAD` 和 `OPTIONS`
+读取也包括在内。保留账号 id 不能绕过撤销。缺少批准时会抛出
+`ConsumerGrantRequired`，并将账号状态标为 `consumer-grant-required`。
+
+Host 还会在收到响应头和读取响应体后检查。连接修订版本变化后才到达的结果
+会被丢弃。向请求传递 `AbortSignal`：在 Host realm 内，它既取消结果，
+也取消传输。进程外插件传输不能携带该 signal。
+
+## Token 读取：过渡策略
+
+`ctx.auth.getSession` 和 `getSessions` 需要 `auth:consume`。非所有者读取时，
+当前 `DEFAULT_CONSUMER_TOKEN_READ_POLICY = "allow-with-audit"`
+保留返回凭据的行为、记录权限使用情况，并对每个消费者/提供者组合警告一次。
+session 变更事件始终只包含元数据。
+
+**下个版本会将此默认值切换为 `deny`。** 在 `deny` 下，非所有者读取抛出
+`ConsumerTokenReadDenied`；消费者不能通过 session options 覆盖 Host 策略。
+新的业务插件必须使用授权连接。这是向 ADR-0246 §3
+仅所有者可读 token 规则过渡的行为，ADR 的已知限制中也有记录。
+
+## 编写认证提供者
+
+声明 capability `auth-provider`、权限 `auth:provide`、提供的服务，以及匹配的
+`authProviders[]` 项。通过
+`ctx.auth.registerProvider(defineAuthProvider(provider))` 注册运行时实现；
+注册返回 disposer。使用 `management: "host"` 启用协同凭据管理。
+
+### Manifest 声明与配置
+
+`authProviders[]` 声明 `id`、`label`，以及以下提供者字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `authorization` | 公开的 `issuer`，以及二选一的 `clientId` 或 `clientIdFrom: { configuration: "clientId" }`；可选 `redirectUri`。 |
+| `configurationSchema` | Host 设置表单：包含字符串属性的对象，可选 `required`、`enum`、`minLength` 和 `format`。 |
+| `methods` | 支持的认证方式，见下文。 |
+| `principals` | 支持的 `user`、`bot` 或 `service` 身份。 |
+| `tokenEndpoints` | 声明的 token URL、secret 放置方式和可选凭据字段映射。 |
+| `revocationEndpoints` | 声明的撤销 URL；实际厂商撤销使用 `revoke(lineage)`，没有自动 endpoint 派发器。 |
+| `issuers` | 允许的 HTTPS issuer origins。 |
+
+需要配置客户端凭据时，声明可以包含以下片段：
+
+```json
+{
+  "authorization": {
+    "issuer": "https://api.example-tracker.test",
+    "clientIdFrom": { "configuration": "clientId" }
+  },
+  "configurationSchema": {
+    "type": "object",
+    "properties": {
+      "clientId": { "type": "string", "minLength": 1 },
+      "clientSecret": { "type": "string", "format": "secret" }
+    },
+    "required": ["clientId", "clientSecret"]
+  }
+}
+```
+
+属性必须命名为 `clientSecret` 并设置 `format: "secret"`；当前连接流程
+将该字段以只写方式持久化到 Host secret store。
+`clientIdFrom.configuration` 指定的字段必须是必填、非 secret 的字段。
+设置值通过认证 session 配置传入，不会进入 `ctx.config`。
+不得把 client secret 放进 manifest JSON 或普通插件存储。
+
+每个 `tokenEndpoints` 项具有 `url`、可选的 `clientSecret` 放置方式
+（`none`、`form`、`json` 或 `basic`），以及包含 `clientId` 和 `clientSecret`
+参数名的可选 `credentialFields`。默认参数名为 `client_id` 和 `client_secret`。
+自定义名称在应用默认值后必须不同，且满足 `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`。
+`basic` 不能使用这些映射。
+
+### 协同回调
+
+`defineAuthProvider` 保留提供者的类型，不会自动注册。
+Host 管理的提供者提供 `describe` 和 `refresh`，以及支持的流程所需的回调：
+
+| 回调 | 职责 |
+| --- | --- |
+| `authorize(attempt)` | 使用 Host 绑定的客户端、issuer、redirect、state，以及适用时的 PKCE challenge，返回 HTTPS 授权 URL。 |
+| `exchange(attempt, callback)` | 从 Host 绑定的 attempt 返回 `AuthCredentialSet`：OAuth 收到已接受的 redirect，client credentials 收到仅含 state 的回调。 |
+| `describe(credentials)` | 返回 issuer、客户端、主体、账号标签、scopes 和可选租户身份。 |
+| `refresh(lineage)` | 在 Host 锁内刷新，遵守 signal，并返回更新后的凭据。 |
+| `revoke(lineage)` | 可选；Host 写入撤销屏障后执行厂商撤销。 |
+
+使用 `attempt.attemptId` 作为 OAuth state，PKCE 使用 `attempt.codeChallenge`
+与 `S256`。轮换后的 refresh token 应与更新后的 access token 一起返回。
+永久刷新拒绝应抛出 `AuthRefreshRejected`，或带 `invalid_grant` 的结构化
+`code`/`error`；其他失败仍可重试。不要在插件中自行安排刷新。
+
+### 机密客户端交换
+
+`ctx.auth.exchangeConfidential` 同时要求 `auth:provide`、`network:fetch`
+和可信 Host。token endpoint 必须在 `authProviders[]` 声明，
+并由 `networkAccess` 允许；Host 在派发前校验提供者所有权、issuer、
+客户端和 secret 放置方式。
+
+示例使用以下公开客户端交换片段：
+
+```ts
+const { status, body } = await ctx.auth.exchangeConfidential({
+  providerId: "example-tracker",
+  tokenUrl: "https://api.example-tracker.test/oauth/token",
+  clientId: client.clientId,
+  issuer: client.issuer,
+  placement: "none",
+  params,
+})
+```
+
+这里的 `client` 和 `params` 来自协同 attempt 或 lineage。
+凭据字段名由已安装的 endpoint 声明决定；调用方不能覆盖，
+也不能在 `params` 放入冲突字段。机密放置方式下，Host 注入保存的
+client secret。即使是 `placement: "none"`，仍然调用可信交换 API，
+独立 browser/mobile Host 不可用。
+
+### Host 保证
+
+Host 按 lineage 串行刷新、使用修订版本 CAS 提交凭据，
+并在厂商撤销前写入撤销屏障。迟到的刷新不能恢复已经断开的连接。
+回调 attempt 绑定提供者、客户端、issuer、state，以及适用时的 verifier，
+十分钟后过期，且只能消费一次。取消或重放不能创建连接。
+
+对于同一个 issuer、客户端、主体 kind/id，Host 只允许一条活动 token 谱系；
+提供者和租户不在该唯一键中。不同的提供者所有者或租户不能接管该谱系。
+与 ADR §2 中可按用途另建连接的描述不同，不能仅为了另一个用途复制同一谱系。
+提供者注册所有权和连接的 provider 元组也会阻止另一个插件继承现有引用。
+
+## 认证方式与运行时支持
+
+- `oauth-pkce`：授权码流程，verifier/challenge 由 Host 创建。
+- `oauth-confidential`：不使用 PKCE 的授权码流程，通过可信交换获取凭据。
+- `client-credentials`：在可信 Host 上非交互地获取凭据。
+- `api-key`：用户输入保存在持久化 Host 连接存储；不创建 refresh token，
+  也不会调用刷新。注入凭据的请求返回 `401` 时，连接被标为 `needs-reauth`。
+- `device-code`：插件提供者可以声明，但当前保持休眠，以
+  `device-code-deferred` 拒绝。
+
+各运行时的可用性、拒绝原因和恢复操作参见现有
+[运行时支持表](./author-sdk#运行环境支持)。浏览器 API key 需要解锁 vault。
+配对网关只处理转发给它的能力；本地回调、secrets 和后台同步仍遵循本地运行时规则。
+
+## 断开连接后
+
+请求或同步进行中，访问权也可能消失：
+
+| 范围 | 当前行为 |
+| --- | --- |
+| 进行中的读取 | Host 文档读取在失效时中止；修订版本已过期的结果被丢弃。 |
+| 后台工作 | 绑定连接的同步租约被隔离；订阅、排队 action 和已注册的 external-sync 工作停止或排空。 |
+| 派生数据 | Host 清理调用派生数据注册表；失败项继续排队，在本地重试。 |
+| 保留副本 | 附件和快照保留，显示“来源已断开”等来源状态；在线重开需要恢复访问。 |
+
+文档提供者包装层在连接变化时主动中止读取。原始集成 HTTP 请求会拒绝过期结果，
+但不会在每次连接变化时自动中止传输；需要时应传递调用方 signal。
+公开的 Issue Sync 提供者在注册时带上 `connectionRef`，断开连接时就会停止，参见
+[其生命周期边界](./domain-contributions#issue-sync-提供者)。
+
+派生数据注册表清理集成事件、ingress、事件审计、external-sync 状态，
+以及 GitHub issue 镜像（可重建的缓存，记录每个仓库是经哪个连接镜像的）。
+action、授权、安全和迁移审计记录会特意保留。
+远端文档读取结果、文档搜索结果和链接预览不做持久化，因此无需清理。
+
+从连接导入 Twin 的文档、由 Issue Sync 导入的事项属于用户保留副本：是用户选择导入的。
+它们会保留，基于本地副本构建的 Twin 分块和向量也一并保留。
+它们像保留的文档副本一样记录来源连接，显示“来源已断开”或“来源已删除”，
+在同一身份重新连接之前拒绝远端刷新、重新同步和发布。
+在此来源信息出现之前导入的条目不显示来源状态。
+
+保留的文档副本携带可移植 provenance 和随机 capture id。
+连接身份保存在设备本地侧表。同一身份重新连接后可以恢复在线重开，
+但不会恢复已清理的派生数据。资源级 `notFound` 或 `noPermission`
+会将保留副本的来源标为已删除或不可访问；网络和认证故障不能证明删除。
+
+撤销单个消费者只移除其访问权，不会断开其他消费者共享的远程授权。
+卸载消费者不会撤销提供者凭据。可选的存储数据删除针对该插件数据；
+用户保留副本仍由用户控制。
+
+禁用提供者使其连接变为 `provider-unavailable`。卸载则是终态操作：
+Host 尝试厂商撤销、断开提供者连接，并且即使厂商撤销失败也删除凭据。
+这与 ADR §4 将卸载描述为 `provider-unavailable` 不同。
+
+## 完整示例
+
+从 `plugins/example-auth-provider/plugin.json` 和 `src/index.ts` 开始：
+
+1. manifest 提供 `auth.example-tracker: "1.0.0"`，声明
+   `example-tracker`、`oauth-pkce`、`user` 主体、issuer 和 token endpoint。
+2. `createProvider(ctx)` 使用 `defineAuthProvider` 和 `management: "host"`。
+   `authorize` 构建 URL，`exchange` 和 `refresh` 使用可信交换，
+   `describe` 在返回身份前校验 `/me`。
+3. 激活时注册提供者，并将 disposer 用于禁用和卸载。
+   token 返回给 Host 协同回调，不由示例插件持久化。
+
+再查看三个业务示例：
+
+| 示例 | 连接 scopes | 消费者操作 |
+| --- | --- | --- |
+| `plugins/example-docs-provider` | `docs.read` | `docs.request.GET` |
+| `plugins/example-issue-sync` | `issues.read` | `issues.request.GET` |
+| `plugins/example-backup-destination` | `backups.read`、`backups.write` | `backups.request.GET`、`backups.request.PUT` |
+
+它们都要求 `auth.example-tracker: "^1.0.0"`，仅在明确的连接命令中提示用户，
+随后静默请求时查找基于连接的集成账号。它们的运行时 manifest 反映了
+示例提供者对可信交换的要求，即使 PKCE 本身一般可以在浏览器运行。
+注册 API 参见[领域贡献](./domain-contributions)。
+
+## 源码对照
+
+路径相对于仓库根目录；以实现为准。
+
+| 章节 | 核对的源码 |
+| --- | --- |
+| 模型 | `packages/plugin-contract/src/types/plugin/plugin-auth.ts`；`packages/plugin-contract/src/types/external-service.ts` |
+| 声明服务 | `lib/plugin/core/service-registry.ts`；`lib/plugin/core/load-order.ts`；`lib/plugin/core/manager.ts`；`packages/plugin-contract/src/lib/plugin/core/validation.ts` |
+| 消费者 API、选择、授权 | `packages/plugin-contract/src/lib/plugin/api/auth-api.ts`；`lib/plugin/auth/connections-api.ts`；`lib/plugin/auth/connection-access.ts` |
+| 受治理请求与修订版本隔离 | `packages/plugin-contract/src/types/plugin/plugin-integration.ts`；`lib/integrations/action-runner.ts` |
+| Token 读取 | `lib/plugin/api/auth-api.ts`；`lib/plugin/auth/consumer-token-read-policy.ts` |
+| 提供者声明与回调 | `packages/plugin-contract/src/types/plugin/plugin-auth.ts`；`packages/plugin-contract/src/lib/plugin/api/auth-api.ts`；`packages/plugin-sdk/src/define/define-auth-provider.ts`；`lib/plugin/auth/connect.ts` |
+| 机密客户端交换 | `lib/plugin/api/auth-api.ts`；`lib/plugin/auth/client-secrets.ts`；`crates/cognia-plugin-runtime/src/api_bridge.rs` |
+| Host 保证 | `lib/plugin/auth/connection-manager.ts`；`lib/plugin/auth/callback-acceptor.ts`；`lib/db/auth-connections.ts` |
+| 认证方式与运行时支持 | `lib/plugin/auth/connect.ts`；`lib/external-services/runtime-support.ts`；`author-sdk.mdx` |
+| 断开连接后 | `lib/external-services/access-teardown.ts`；`lib/external-services/derived-data-registry.ts`；`lib/docs-providers/kept-copy-source.ts`；`lib/plugin/auth/connection-manager.ts` |
+| 完整示例 | `plugins/example-auth-provider/`；`plugins/example-docs-provider/`；`plugins/example-issue-sync/`；`plugins/example-backup-destination/`（`plugin.json` 与 `src/index.ts`） |
+| ADR 对照 | `docs/content/docs/en/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection.md`；`lib/external-services/grants.ts` |

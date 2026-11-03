@@ -1,0 +1,357 @@
+---
+title: "Domain contributions: docs, issues, backup, sync"
+description: Register document providers, schema-versioned Issue Sync providers, encrypted backup destinations, and Host-owned synchronization drivers.
+---
+
+# Domain contributions: docs, issues, backup, sync
+
+Business plugins contribute domain callbacks while the Host owns the surrounding
+workflow. Obtain a connection and consumer grant as described in
+[External-service connections](./external-service-connections); registering a
+domain provider does not grant remote access.
+
+| Domain | Capability | Manifest field | Registration permission | Example |
+| --- | --- | --- | --- | --- |
+| Documents | `docs-provider` | `docsProviders` | `docs:provide` | `plugins/example-docs-provider` |
+| Issues | `issue-sync-provider` | `issueSyncProviders` | `issue:write` | `plugins/example-issue-sync` |
+| Backup | `backup-destination` | `backupDestinations` | `backup:destination` | `plugins/example-backup-destination` |
+| Synchronization | `sync` | `capabilities` includes `sync`; no separate driver declaration | `sync:run` | `plugins/example-sync` |
+
+The authenticated domain examples also declare `auth:consume`,
+`integrations:read`, `integrations:execute`, and
+`requiresServices: { "auth.example-tracker": "^1.0.0" }`. Their integration
+definitions and service projections let the Host check each network operation.
+The standalone sync example uses fictional local data and has no auth service.
+
+## Document providers
+
+Declare `docsProviders[]`, then register the live object with
+`ctx.docsProviders.register(defineDocsProvider(provider))`.
+The returned handle contains `providerId` and `unregister()`.
+
+The example's manifest descriptor is:
+
+```json
+{
+  "docsProviders": [
+    {
+      "id": "docs",
+      "label": "Example Tracker Documents",
+      "mentionPrefix": "cognia-example-docs-provider.docs:",
+      "kinds": ["doc"],
+      "urlOrigins": ["https://docs.example-tracker.test"]
+    }
+  ]
+}
+```
+
+This is a fragment of `plugins/example-docs-provider/plugin.json`, not a complete
+manifest. `mentionPrefix` must start with the plugin id followed by `.` and end
+in `:`. Origins must be exact HTTPS origins, without a path, credentials, query,
+or fragment. The Host checks that the implementation matches the descriptor.
+
+### Namespaced refs and account revisions
+
+The local id `docs` becomes
+`plugin:cognia-example-docs-provider/docs`. Use the returned namespaced
+`providerId` in resource refs; the Host normalizes provider ids on fetched and
+searched resources. Do not claim a built-in provider's namespace.
+
+Implement `listAccounts`, pure `matchRef`, and `fetch`; `search` and
+`subscribeAccounts` are optional. Supported kinds are `doc`, `wiki`, `sheet`,
+`bitable`, and `resource`. A fetched body has `ref`, `title`, `text`, and
+`format` (`markdown`, `text`, or `csv`), with optional completeness/truncation
+metadata. Return text, never HTML.
+
+Plugin account ids are Host connection refs. The required `authorizationEpoch`
+is `String(connection.revision)`. The example uses this pattern:
+
+```ts
+async listAccounts() {
+  const connection = await ctx.auth.connections.get({
+    service: "auth.example-tracker",
+    scopes: ["docs.read"],
+  })
+  return connection
+    ? [{ id: connection.ref, label: connection.accountLabel,
+        authorizationEpoch: String(connection.revision) }]
+    : []
+}
+```
+
+Alongside `docs:provide`, this requires `auth:consume`. The Host filters accounts
+against live connected references and revisions and uses the Host account label.
+It will not accept an arbitrary account id or a stale epoch supplied by a plugin.
+
+### Changes, cancellation, and disposal
+
+`fetch(ref, options)` and `search(query, options)` receive `accountId`, optional
+`expectedAuthorizationEpoch`, and `signal`; search additionally receives `limit`.
+The Host supplies the current epoch; direct callers must pass it for plugin
+accounts. Omitting it fails the plugin wrapper's account/epoch verification.
+Check the selected account and pass the signal into governed integration reads.
+The example maps `404` to `DocsProviderError("notFound")`, `401` to
+`notAuthorized`, and `403` to `noPermission`.
+
+The Host validates access before invocation and before returning the result.
+Connection change events abort active reads. A provider that ignores abort still
+cannot publish a late result after its binding or registration is invalidated.
+
+If the vendor's account list can change independently, implement
+`subscribeAccounts(listener)` and return its disposer. The wrapper combines
+these notifications with Host connection changes. The document registry also
+tracks registration revisions and notifies Host subscribers when providers
+register or unregister; a plugin does not manage that registry itself.
+
+Call `registration.unregister()` on disable/unload. It is idempotent, aborts
+active reads, removes subscriptions, and removes the provider. Losing
+`docs:provide` or `auth:consume` also unregisters it.
+
+### What the Host owns
+
+The provider recognizes addresses and retrieves content. The Host owns the
+picker, dock, attachment intake, citation, untrusted-content wrapping, and kept
+copy provenance. It converts returned content into `.md`, `.txt`, or `.csv`
+attachments through the existing staging flow.
+
+Portable provenance records provider/resource identity, URL, title, capture time,
+completeness, and a random `captureId`. It contains no connection id, account id,
+authorization epoch, or token. The actual connection reference and identity key
+live in the device-local `remoteDocumentConnections` table.
+
+This lets a kept attachment show “source disconnected”, “source deleted”, or
+“not on this device” without exporting account identity. A same-identity
+reconnection can restore live reopen. A shared copy without the local binding
+does not authorize a read on another device.
+
+In `plugins/example-docs-provider/src/index.ts`, the explicit connect command
+requests `docs.request.GET` and `docs.read`. Later `fetch` calls silently find
+the selected connection-backed integration account, forward cancellation, and
+return validated markdown. It does not create another document dock or attach
+tokens to its own persisted records.
+
+## Issue Sync providers
+
+Declare `issueSyncProviders[]`, capability `issue-sync-provider`, and permission
+`issue:write`. Register with
+`ctx.issues.registerSyncProvider(defineIssueSyncProvider(provider))`; the return
+value is a disposer. The Host namespaces the local id as
+`plugin:<pluginId>/<providerId>`.
+
+```json
+{
+  "issueSyncProviders": [
+    { "id": "issues", "label": "Example Tracker Issues", "schemaVersion": 2 }
+  ]
+}
+```
+
+### Schema-versioned configuration and generated UI
+
+The live provider's `resource` descriptor supplies `label`, `schemaVersion`,
+`schema`, and `describe(config)`, with optional `validate(config)` and
+`migrate(fromVersion, config)`. Its label and schema version must match the
+manifest; the version is a positive safe integer.
+
+`describe` returns a stable, deterministic resource `key` and display `label`.
+Keep that key stable through migrations. The Host generates the resource form
+from the object schema and its properties. An optional `schema.mapping` builds
+a mapping form stored as `config.mapping`.
+
+The portable resource stores `kind: "plugin"`, `providerId`, `schemaVersion`,
+`config`, and optional `name`. Configuration must be JSON data. Credential and
+device-local identity fields, including connection references, are forbidden
+recursively; resolve access locally instead of embedding it in the resource.
+
+Missing providers make resources unavailable. A newer schema, invalid config,
+or an unavailable/failed migration requires attention. Migration operates on a
+working copy and is persisted only when the user saves.
+
+`plugins/example-issue-sync` uses schema version `2`, a `projectKey` field, and
+mapping defaults `open: "todo"`, `closed: "done"`. Its migration from version
+`1` adds the mapping while preserving the project key. Its `pushFields: []`
+makes the provider read-only.
+
+### Paging and complete full scans
+
+`pullFields` and `pushFields` declare field ownership/direction. The required
+`pull(binding, options)` remains part of the contract even for a paged provider.
+Legacy `pull` receives `since`, `full`, and `signal` and returns `items`,
+`notModified`, and optional `cycles`, `links`, or `truncated`. A truncated result
+does not advance the prior cursor/watermark.
+
+For large sources, additionally implement `pullPage`:
+
+| Member | Contract |
+| --- | --- |
+| Input | `binding` plus `mode`, optional committed `cursor`, optional `page`, and `signal`. |
+| Output | `items`, optional `cycles`, `links`, `deleted`, `nextPage`, and `cursor`. |
+| Continuation | Return `nextPage` while another page remains. |
+| Terminal page | Omit `nextPage` and return a nonempty durable `cursor`. |
+| `completeFullScan` | Set only when full pages enumerate every live item, including done/closed items. Requires `pullPage`. |
+| `fullScanOnly` | Forces every pass to use full mode instead of incremental mode. |
+
+Both paging flags must be booleans. `defineIssueSyncProvider` and Host
+registration reject invalid flag/callback combinations. A full scan can receive
+the previous committed cursor as its floor; it does not imply an empty cursor.
+
+The Host applies each page before checkpointing it. Repeated continuation tokens
+fail with `page-cursor-repeated`; a terminal page without a cursor fails with
+`terminal-cursor-missing`.
+
+Only `pullPage` plus `completeFullScan: true` enables Host reconciliation of
+unseen ids. Commit of the terminal cursor follows the terminal sweep and
+completion. Do not advertise complete scans when an API silently excludes
+closed issues, filters invisible pages, or truncates responses.
+
+The example implements the smaller legacy `pull` contract. It rejects a remote
+`nextCursor` as incomplete; it is not a `pullPage` example and does not certify
+a complete full scan. Its explicit connect action requests `issues.request.GET`
+and `issues.read` before subsequent silent reads.
+
+### Departed items
+
+Departure means removed, moved out of the source, or no longer accessible;
+closed/done items can still be live. Paged results may declare `deleted` ids.
+A certified full scan can also identify previously known ids that are absent.
+
+Implement optional `confirmDeparted(binding, ids, options)` when a second remote
+check is needed. Return only ids whose departure was verified; reject the call
+when uncertain. The Host shares a confirmation budget of `50` across explicit
+deletions and the end-of-scan sweep. Failed or unchecked ids remain linked, and
+unrequested ids returned by the callback are ignored.
+
+Without confirmation, the provider's explicit deletions or certified full-scan
+absence are trusted. Tombstoning records `departedAt` on the external reference;
+it keeps the local issue and history. Push skips departed refs. A reappearing
+item can restore its link, subject to a stored remote departure timestamp.
+
+### Lifecycle boundary
+
+The wrapper checks permissions and cancellation around provider calls. Disposal
+or replacement aborts the registration. The Host supplies binding resolution
+and strips the internal `prepare` hook from public plugin registrations.
+
+A provider may pass `connectionRef` to `registerSyncProvider`. The Host checks
+the consumer grant, keeps the reference immutable for that registration, and
+binds the resulting sync targets to it, so disconnect or grant revocation stops
+them and purges their sync state, as with `ctx.sync`. The reference is never
+stored in portable resource config. To bind another connection, dispose and
+register again (`plugins/example-issue-sync` re-registers when its connection
+changes). A provider registered without `connectionRef` keeps working, but only
+its requests are guarded by the consumer grant; its runs are not stopped on
+disconnect. Imported issues are user-kept copies: they stay, show the source
+state, and refuse sync while the source is disconnected.
+
+## Backup destinations
+
+Declare `backupDestinations[]`, capability `backup-destination`, and permission
+`backup:destination`. This registration permission is separate from
+`backup:read` and `backup:write`, which guard other backup APIs.
+
+```json
+{
+  "backupDestinations": [
+    { "id": "archive", "label": "Example Tracker Backup" }
+  ]
+}
+```
+
+Register with `ctx.backup.registerDestination(defineBackupDestination(destination))`.
+The handle exposes `destinationId` and `unregister()`. The local id becomes
+`plugin:<pluginId>/<id>` and must match `^[a-z][a-z0-9-]*$`. Host names `local`,
+`webdav`, `github`, `googledrive`, `convex`, and `all` are reserved.
+
+### Readiness, connection, and upload
+
+Required callbacks are `readiness(signal)` and `upload(input, signal)`:
+
+| Member | Contract |
+| --- | --- |
+| Readiness | `state`: `ready`, `needs-setup`, `needs-auth`, or `unavailable`; optional contributor translation `reasonKey`. |
+| Upload input | `body` is ciphertext as `Uint8Array` or `ReadableStream<Uint8Array>`; `meta` describes it. |
+| Metadata | `snapshotId`, `createdAt`, `bytes`, `contentType`, and `encryption` (`passphrase` or `device-key`). |
+| Upload result | Nonempty `remoteId`, nonnegative finite `bytes`, optional string `locationLabel`. |
+| Optional callbacks | `list(signal)`, `download(remoteId, signal)`, `delete(remoteId, signal)`. |
+
+Resolve a connection through `ctx.auth.connections` and upload through
+`ctx.integrations.authenticatedRequest` under this destination plugin's grant.
+The Host does not pass account identity, credentials, or plaintext packages to
+the upload callback. Never put connection references in readiness messages.
+
+The current remote dispatcher sends an encoded encrypted envelope with
+`contentType: "application/octet-stream"` and `encryption: "passphrase"`.
+The broader metadata type also permits `device-key`; that does not mean the
+current remote dispatcher produces it.
+
+The example destination's readiness and result checks are deliberately small:
+
+```ts
+async readiness(signal) {
+  signal.throwIfAborted()
+  return (await account())
+    ? { state: "ready" }
+    : { state: "needs-auth", reasonKey: "access.denied" }
+}
+```
+
+In `plugins/example-backup-destination/src/index.ts`, `account()` silently
+resolves the selected connection-backed account. Upload base64-encodes opaque
+ciphertext for the fictional vendor's JSON protocol and checks the returned byte
+count against `meta.bytes`. Its connect command requests `backups.request.GET`
+and `backups.request.PUT`, with `backups.read` and `backups.write` scopes.
+The example implements listing and download, but not deletion.
+
+### Cancellation, results, and Host ownership
+
+Forward the callback signal through stream reads and network calls. Unregistering
+aborts active calls; the registry races cancellation so an uncooperative late
+result cannot commit. Dispose the handle on disable/unload; losing the
+registration permission also unregisters it.
+
+The Host checks encryption-key readiness before calling destination readiness.
+It owns packaging, encryption, scheduling, progress, and backup history, including
+cancelled, skipped, and failed attempts. Plugin callbacks do not receive control
+of the Host's interval hooks. A successful remote response still has to pass
+Host result validation before it can be recorded as success.
+
+Optional listing returns snapshots with `remoteId`, `label`, and optional
+`createdAt` and `bytes`. Restore requires listing and download; the Host decrypts,
+validates, and applies the returned ciphertext. Retention requires listing and
+deletion; the Host's default retained count is `5`.
+
+## Host-owned synchronization
+
+Declare capability `sync` and permission `sync:run`. There is no separate manifest
+driver list: register with `ctx.sync.register` and `defineSyncDriver`.
+For real authenticated sources, pass `connectionRef` in registration options
+and declare `auth:consume` so the Host can validate the binding.
+
+Use the existing [Host-owned synchronization guide](./author-sdk#host-owned-synchronization)
+for driver callbacks, durable cursors, leases, cancellation, retries, and disposal,
+and the [Runtime support table](./author-sdk#runtime-support) for background
+execution. `plugins/example-sync` demonstrates a fictional two-page source and
+tombstones; it does not connect to the Example Tracker auth provider.
+
+## Implementation notes and source map
+
+These pages follow the code where older ADRs differ. ADR-0134 describes separate
+Google Docs/backup connections and ephemeral attachment handling. The current
+connection model shares one same-client lineage through separate consumer grants,
+and document staging retains portable provenance plus a device-local connection
+binding. The public Issue Sync cancellation boundary is described above; see
+[After disconnect](./external-service-connections#after-disconnect) for the other
+ADR-0246 lifecycle limits.
+
+| Section | Checked sources, relative to the repository root |
+| --- | --- |
+| Permissions and declarations | `packages/plugin-contract/contract/catalog.json`; `packages/plugin-contract/src/types/plugin/plugin.ts` |
+| Document registration, refs, revisions, cancellation | `packages/plugin-contract/src/types/plugin/plugin-docs-providers.ts`; `packages/plugin-sdk/src/define/define-docs-provider.ts`; `lib/plugin/api/docs-providers-api.ts`; `lib/docs-providers/registry.ts` |
+| Document Host ownership and kept copies | `hooks/chat/use-remote-doc-staging.ts`; `lib/docs-providers/document-provenance.ts`; `lib/docs-providers/kept-copy-source.ts`; `lib/artifacts/dock-documents.ts`; `components/artifacts/dock-document/use-document-snapshot.ts` |
+| Issue registration and configuration | `packages/plugin-contract/src/lib/issues/sync/types.ts`; `packages/plugin-contract/src/lib/issues/sync/resources.ts`; `lib/plugin/api/issues-api.ts`; `lib/issues/sync/plugin-resources.ts`; `components/issues/project-resource-dialog.tsx` |
+| Issue paging, departure, lifecycle | `packages/plugin-sdk/src/define/define-issue-sync-provider.ts`; `lib/issues/sync/engine.ts`; `lib/issues/sync/registry.ts`; `lib/external-services/sync/core.ts` |
+| Backup registration and callbacks | `packages/plugin-contract/src/types/plugin/plugin-backup-destinations.ts`; `packages/plugin-sdk/src/define/define-backup-destination.ts`; `lib/plugin/api/backup-api.ts`; `lib/data/destinations/registry.ts` |
+| Backup Host ownership | `lib/data/destinations/index.ts`; `lib/data/destinations/sync-now.ts`; `lib/data/destinations/restore.ts` |
+| Host-owned synchronization | `packages/plugin-sdk/src/define/define-sync-driver.ts`; `lib/plugin/api/sync-api.ts`; `author-sdk.mdx` |
+| Examples | `plugins/example-docs-provider/`; `plugins/example-issue-sync/`; `plugins/example-backup-destination/`; `plugins/example-sync/` (`plugin.json` and `src/index.ts`) |
+| Implementation notes | `docs/content/docs/en/adr/0134-remote-document-providers.md`; `docs/content/docs/en/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection.md`; `lib/db/auth-connections.ts`; `lib/plugin/auth/connection-manager.ts` |

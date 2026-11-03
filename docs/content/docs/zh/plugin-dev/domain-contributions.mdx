@@ -1,0 +1,336 @@
+---
+title: 领域贡献：文档、Issue、备份与同步
+description: 注册文档提供者、带配置版本的 Issue Sync 提供者、加密备份目标，以及由 Host 管理的同步驱动。
+---
+
+# 领域贡献：文档、Issue、备份与同步
+
+业务插件贡献领域回调，周边工作流由 Host 管理。
+按[外部服务连接](./external-service-connections)所述获取连接和消费者授权；
+注册领域提供者本身不会授予远程访问权。
+
+| 领域 | Capability | Manifest 字段 | 注册权限 | 示例 |
+| --- | --- | --- | --- | --- |
+| 文档 | `docs-provider` | `docsProviders` | `docs:provide` | `plugins/example-docs-provider` |
+| Issue | `issue-sync-provider` | `issueSyncProviders` | `issue:write` | `plugins/example-issue-sync` |
+| 备份 | `backup-destination` | `backupDestinations` | `backup:destination` | `plugins/example-backup-destination` |
+| 同步 | `sync` | `capabilities` 包含 `sync`；没有独立驱动声明 | `sync:run` | `plugins/example-sync` |
+
+需要认证的领域示例还声明 `auth:consume`、`integrations:read`、
+`integrations:execute`，以及
+`requiresServices: { "auth.example-tracker": "^1.0.0" }`。
+它们的集成定义和服务投影让 Host 可以检查每次网络操作。
+独立同步示例使用虚构的本地数据，没有认证服务。
+
+## 文档提供者
+
+声明 `docsProviders[]`，再通过
+`ctx.docsProviders.register(defineDocsProvider(provider))` 注册运行时对象。
+返回的 handle 包含 `providerId` 和 `unregister()`。
+
+示例的 manifest 描述符如下：
+
+```json
+{
+  "docsProviders": [
+    {
+      "id": "docs",
+      "label": "Example Tracker Documents",
+      "mentionPrefix": "cognia-example-docs-provider.docs:",
+      "kinds": ["doc"],
+      "urlOrigins": ["https://docs.example-tracker.test"]
+    }
+  ]
+}
+```
+
+这只是 `plugins/example-docs-provider/plugin.json` 的片段，不是完整 manifest。
+`mentionPrefix` 必须以插件 id 加 `.` 开头，并以 `:` 结尾。
+origin 必须是精确的 HTTPS origin，不能包含路径、凭据、query 或 fragment。
+Host 会检查实现与描述符是否匹配。
+
+### 带命名空间的引用与账号修订版本
+
+本地 id `docs` 会变为 `plugin:cognia-example-docs-provider/docs`。
+资源引用使用返回的、带命名空间的 `providerId`；Host 会规范化
+获取和搜索结果中的提供者 id。不要占用内置提供者的命名空间。
+
+实现 `listAccounts`、纯函数 `matchRef` 和 `fetch`；`search` 与
+`subscribeAccounts` 可选。支持的资源 kind 为 `doc`、`wiki`、`sheet`、
+`bitable` 和 `resource`。获取的正文包含 `ref`、`title`、`text` 和
+`format`（`markdown`、`text` 或 `csv`），以及可选的完整性/截断元数据。
+返回文本，不能返回 HTML。
+
+插件账号 id 是 Host 连接引用，必填的 `authorizationEpoch` 为
+`String(connection.revision)`。示例采用以下模式：
+
+```ts
+async listAccounts() {
+  const connection = await ctx.auth.connections.get({
+    service: "auth.example-tracker",
+    scopes: ["docs.read"],
+  })
+  return connection
+    ? [{ id: connection.ref, label: connection.accountLabel,
+        authorizationEpoch: String(connection.revision) }]
+    : []
+}
+```
+
+除 `docs:provide` 外，这还需要 `auth:consume`。
+Host 按当前已连接的引用与修订版本过滤账号，并使用 Host 账号标签。
+插件随意提供的账号 id 或过期 epoch 不会被接受。
+
+### 变更、取消与释放
+
+`fetch(ref, options)` 和 `search(query, options)` 接收 `accountId`、
+可选的 `expectedAuthorizationEpoch` 和 `signal`；搜索还接收 `limit`。
+Host 会提供当前 epoch；直接调用插件账号读取时也必须传入。
+省略该值会使插件包装层的账号/epoch 校验失败。
+检查所选账号，并将 signal 传递到受治理的集成读取。
+示例将 `404` 映射为 `DocsProviderError("notFound")`，`401` 映射为
+`notAuthorized`，`403` 映射为 `noPermission`。
+
+Host 在调用前和返回结果前校验访问权。连接变更事件会中止正在进行的读取。
+即使提供者忽略 abort，也不能在绑定或注册失效后发布迟到结果。
+
+如果厂商账号列表可以独立变化，实现 `subscribeAccounts(listener)` 并返回
+disposer。包装层将其通知与 Host 连接变更合并。
+文档注册表还跟踪注册修订版本，在提供者注册或注销时通知 Host 订阅者；
+插件不自行管理该注册表。
+
+禁用/卸载时调用 `registration.unregister()`。该操作幂等，会中止读取、
+移除订阅并移除提供者。失去 `docs:provide` 或 `auth:consume`
+也会自动注销。
+
+### Host 负责的部分
+
+提供者识别地址并获取内容；Host 管理选择器、dock、附件接入、citation、
+不可信内容包装和保留副本 provenance。现有暂存流程将返回内容转换为
+`.md`、`.txt` 或 `.csv` 附件。
+
+可移植 provenance 记录提供者/资源身份、URL、标题、捕获时间、完整性和
+随机 `captureId`，不包含连接 id、账号 id、authorization epoch 或 token。
+实际连接引用和身份 key 保存在设备本地的 `remoteDocumentConnections` 表。
+
+因此，保留的附件可以显示“来源已断开”“来源已删除”或“不在此设备上”，
+同时不导出账号身份。同一身份重新连接后可以恢复在线重开。
+没有本地绑定的共享副本不会授权另一台设备读取。
+
+`plugins/example-docs-provider/src/index.ts` 中，明确的连接命令申请
+`docs.request.GET` 和 `docs.read`。之后 `fetch` 静默查找所选连接对应的
+集成账号、传递取消信号，并返回已校验的 markdown。
+它不会另建一个文档 dock，也不会把 token 放入持久记录。
+
+## Issue Sync 提供者
+
+声明 `issueSyncProviders[]`、capability `issue-sync-provider` 和权限
+`issue:write`。通过
+`ctx.issues.registerSyncProvider(defineIssueSyncProvider(provider))` 注册，
+返回值是 disposer。Host 将本地 id 加上命名空间，成为
+`plugin:<pluginId>/<providerId>`。
+
+```json
+{
+  "issueSyncProviders": [
+    { "id": "issues", "label": "Example Tracker Issues", "schemaVersion": 2 }
+  ]
+}
+```
+
+### 带 Schema 版本的配置与生成式 UI
+
+运行时提供者的 `resource` 描述符提供 `label`、`schemaVersion`、`schema`
+和 `describe(config)`，以及可选的 `validate(config)` 与
+`migrate(fromVersion, config)`。label 和 schema version 必须匹配 manifest；
+版本必须为正的安全整数。
+
+`describe` 返回稳定、确定性的资源 `key` 和显示 `label`。
+迁移时保持 key 不变。Host 根据 object schema 及其 properties 生成资源表单。
+可选的 `schema.mapping` 生成映射表单，结果保存在 `config.mapping`。
+
+可移植资源保存 `kind: "plugin"`、`providerId`、`schemaVersion`、`config`
+和可选 `name`。配置必须是 JSON 数据。凭据与设备本地身份字段，
+包括连接引用，都会被递归禁止；应在本地解析访问权，而不是写入资源。
+
+提供者缺失时资源不可用。schema 过新、配置无效、无法迁移或迁移失败时，
+需要用户处理。迁移只修改工作副本，用户保存后才持久化。
+
+`plugins/example-issue-sync` 使用 schema version `2`、`projectKey` 字段，
+以及 `open: "todo"`、`closed: "done"` 的默认映射。
+从版本 `1` 迁移时保留项目 key 并添加映射。
+`pushFields: []` 使该提供者只读。
+
+### 分页与完整全量扫描
+
+`pullFields` 和 `pushFields` 声明字段的所有权/方向。
+即使是分页提供者，契约仍要求实现 `pull(binding, options)`。
+旧式 `pull` 接收 `since`、`full` 和 `signal`，返回 `items`、`notModified`
+以及可选 `cycles`、`links` 或 `truncated`。
+截断结果不会推进先前的 cursor/watermark。
+
+大型来源还应实现 `pullPage`：
+
+| 成员 | 契约 |
+| --- | --- |
+| 输入 | `binding`，以及 `mode`、可选的已提交 `cursor`、可选 `page` 和 `signal`。 |
+| 输出 | `items`，以及可选 `cycles`、`links`、`deleted`、`nextPage` 和 `cursor`。 |
+| 继续分页 | 还有下一页时返回 `nextPage`。 |
+| 最后一页 | 省略 `nextPage`，并返回非空的持久 `cursor`。 |
+| `completeFullScan` | 仅当全量分页枚举所有仍存在的项，包括 done/closed 项时设置。要求实现 `pullPage`。 |
+| `fullScanOnly` | 强制每次使用全量模式，而不是增量模式。 |
+
+两个分页标记都必须是 boolean。`defineIssueSyncProvider` 和 Host 注册过程
+会拒绝无效的标记/回调组合。全量扫描可以收到上一次已提交 cursor 作为下界，
+并不意味着 cursor 为空。
+
+Host 先应用每页再写入 checkpoint。重复的续页 token 会以
+`page-cursor-repeated` 失败；最后一页缺少 cursor 会以
+`terminal-cursor-missing` 失败。
+
+只有 `pullPage` 加 `completeFullScan: true` 才会启用 Host 对未出现 id 的对账。
+最后一轮清扫和完成步骤结束后才提交终态 cursor。
+如果 API 静默排除已关闭 Issue、过滤不可见页面或截断响应，
+就不能声称提供完整扫描。
+
+示例实现较小的旧式 `pull` 契约。远程返回 `nextCursor` 时，它将结果视为不完整
+并拒绝；它不是 `pullPage` 示例，也不保证完整全量扫描。
+明确的连接操作先申请 `issues.request.GET` 和 `issues.read`，
+后续才进行静默读取。
+
+### 已离开的条目
+
+离开表示已删除、移出来源或无法再访问；closed/done 项仍可能存在。
+分页结果可以声明 `deleted` id。
+保证完整的全量扫描也可以识别先前已知、现在缺失的 id。
+
+需要再次向远程核实时，实现可选的 `confirmDeparted(binding, ids, options)`。
+只返回已核实离开的 id；不确定时应拒绝调用。
+Host 在显式删除和扫描结束清扫之间共享 `50` 个确认预算。
+失败或未检查的 id 保持关联，回调返回的未请求 id 会被忽略。
+
+没有确认回调时，Host 信任提供者显式报告的删除或保证完整的全量扫描缺失。
+tombstone 在外部引用记录 `departedAt`，保留本地 Issue 和历史。
+push 跳过已离开的引用。重新出现的项可以恢复关联，
+但须满足已保存的远程离开时间戳约束。
+
+### 生命周期边界
+
+包装层在提供者调用前后检查权限与取消。释放或替换注册会中止该注册。
+Host 提供绑定解析，并从公开插件注册中移除内部 `prepare` hook。
+
+提供者可以向 `registerSyncProvider` 传入 `connectionRef`。Host 检查消费者授权，
+在该次注册内保持引用不可变，并把由此产生的同步目标绑定到它；
+因此与 `ctx.sync` 一样，断开连接或撤销授权会停止这些目标并清理其同步状态。
+该引用从不写入可移植的资源配置。要绑定其他连接，需释放后重新注册
+（`plugins/example-issue-sync` 会在连接变化时重新注册）。
+不带 `connectionRef` 注册的提供者仍可工作，但只有其请求受消费者授权约束，
+断开连接时不会停止其运行。导入的事项属于用户保留副本：会保留、显示来源状态，
+并在来源断开期间拒绝同步。
+
+## 备份目标
+
+声明 `backupDestinations[]`、capability `backup-destination` 和权限
+`backup:destination`。该注册权限与其他备份 API 使用的
+`backup:read`、`backup:write` 不同。
+
+```json
+{
+  "backupDestinations": [
+    { "id": "archive", "label": "Example Tracker Backup" }
+  ]
+}
+```
+
+通过 `ctx.backup.registerDestination(defineBackupDestination(destination))` 注册。
+handle 提供 `destinationId` 和 `unregister()`。
+本地 id 会变为 `plugin:<pluginId>/<id>`，且必须满足 `^[a-z][a-z0-9-]*$`。
+Host 保留名称 `local`、`webdav`、`github`、`googledrive`、`convex` 和 `all`。
+
+### 就绪状态、连接与上传
+
+必需回调是 `readiness(signal)` 和 `upload(input, signal)`：
+
+| 成员 | 契约 |
+| --- | --- |
+| 就绪状态 | `state` 为 `ready`、`needs-setup`、`needs-auth` 或 `unavailable`；可选贡献者翻译 `reasonKey`。 |
+| 上传输入 | `body` 是 `Uint8Array` 或 `ReadableStream<Uint8Array>` 密文；`meta` 描述该密文。 |
+| 元数据 | `snapshotId`、`createdAt`、`bytes`、`contentType` 和 `encryption`（`passphrase` 或 `device-key`）。 |
+| 上传结果 | 非空 `remoteId`、非负有限数 `bytes`、可选字符串 `locationLabel`。 |
+| 可选回调 | `list(signal)`、`download(remoteId, signal)`、`delete(remoteId, signal)`。 |
+
+通过 `ctx.auth.connections` 解析连接，并在当前备份目标插件的授权下，
+使用 `ctx.integrations.authenticatedRequest` 上传。
+Host 不会把账号身份、凭据或明文包传给上传回调。
+就绪状态消息不能包含连接引用。
+
+当前远程派发器发送编码后的加密 envelope，使用
+`contentType: "application/octet-stream"` 和 `encryption: "passphrase"`。
+元数据类型也允许 `device-key`，但不代表当前远程派发器会产生该格式。
+
+示例目标的就绪状态与结果检查很小：
+
+```ts
+async readiness(signal) {
+  signal.throwIfAborted()
+  return (await account())
+    ? { state: "ready" }
+    : { state: "needs-auth", reasonKey: "access.denied" }
+}
+```
+
+`plugins/example-backup-destination/src/index.ts` 中的 `account()`
+静默解析所选连接对应的集成账号。上传将不透明密文编码为 base64，
+适配虚构厂商的 JSON 协议，并核对返回字节数是否等于 `meta.bytes`。
+连接命令申请 `backups.request.GET` 和 `backups.request.PUT`，
+以及 `backups.read`、`backups.write` scopes。
+示例实现了列表与下载，没有实现删除。
+
+### 取消、结果与 Host 职责
+
+将回调 signal 传递给流读取和网络调用。注销会中止进行中的调用；
+注册表通过取消竞态确保不配合取消的迟到结果也不能提交。
+禁用/卸载时释放 handle；失去注册权限也会注销。
+
+Host 先检查加密密钥是否就绪，再调用目标就绪检查。
+Host 管理打包、加密、调度、进度和备份历史，包括取消、跳过和失败的尝试。
+插件回调不能控制 Host 的 interval hooks。
+远程响应成功后，仍须通过 Host 结果校验，才能记录为成功。
+
+可选列表返回带 `remoteId`、`label` 及可选 `createdAt`、`bytes` 的快照。
+恢复需要列表与下载；Host 负责解密、校验并应用返回的密文。
+保留策略需要列表与删除；Host 默认保留数量为 `5`。
+
+## Host 管理的同步
+
+声明 capability `sync` 和权限 `sync:run`。没有独立的 manifest 驱动列表：
+通过 `ctx.sync.register` 与 `defineSyncDriver` 注册。
+真实认证来源应在注册 options 传入 `connectionRef`，
+并声明 `auth:consume`，让 Host 校验绑定。
+
+驱动回调、持久 cursor、租约、取消、重试和释放参见现有
+[Host 管理的同步指南](./author-sdk#host-管理的同步)，
+后台执行参见[运行时支持表](./author-sdk#运行环境支持)。
+`plugins/example-sync` 演示虚构的两页来源和 tombstone，
+并未连接 Example Tracker 认证提供者。
+
+## 实现说明与源码对照
+
+旧 ADR 与代码不同时，本系列以代码为准。ADR-0134 描述 Google Docs/备份
+连接分离，以及临时附件处理。当前连接模型通过不同的消费者授权共享
+同一客户端谱系，文档暂存会保留可移植 provenance 和设备本地连接绑定。
+公开 Issue Sync 的取消边界见上文；其他 ADR-0246 生命周期限制参见
+[断开连接后](./external-service-connections#断开连接后)。
+
+| 章节 | 核对的源码，路径相对于仓库根目录 |
+| --- | --- |
+| 权限与声明 | `packages/plugin-contract/contract/catalog.json`；`packages/plugin-contract/src/types/plugin/plugin.ts` |
+| 文档注册、引用、修订版本、取消 | `packages/plugin-contract/src/types/plugin/plugin-docs-providers.ts`；`packages/plugin-sdk/src/define/define-docs-provider.ts`；`lib/plugin/api/docs-providers-api.ts`；`lib/docs-providers/registry.ts` |
+| 文档 Host 职责与保留副本 | `hooks/chat/use-remote-doc-staging.ts`；`lib/docs-providers/document-provenance.ts`；`lib/docs-providers/kept-copy-source.ts`；`lib/artifacts/dock-documents.ts`；`components/artifacts/dock-document/use-document-snapshot.ts` |
+| Issue 注册与配置 | `packages/plugin-contract/src/lib/issues/sync/types.ts`；`packages/plugin-contract/src/lib/issues/sync/resources.ts`；`lib/plugin/api/issues-api.ts`；`lib/issues/sync/plugin-resources.ts`；`components/issues/project-resource-dialog.tsx` |
+| Issue 分页、离开、生命周期 | `packages/plugin-sdk/src/define/define-issue-sync-provider.ts`；`lib/issues/sync/engine.ts`；`lib/issues/sync/registry.ts`；`lib/external-services/sync/core.ts` |
+| 备份注册与回调 | `packages/plugin-contract/src/types/plugin/plugin-backup-destinations.ts`；`packages/plugin-sdk/src/define/define-backup-destination.ts`；`lib/plugin/api/backup-api.ts`；`lib/data/destinations/registry.ts` |
+| 备份 Host 职责 | `lib/data/destinations/index.ts`；`lib/data/destinations/sync-now.ts`；`lib/data/destinations/restore.ts` |
+| Host 管理的同步 | `packages/plugin-sdk/src/define/define-sync-driver.ts`；`lib/plugin/api/sync-api.ts`；`author-sdk.mdx` |
+| 示例 | `plugins/example-docs-provider/`；`plugins/example-issue-sync/`；`plugins/example-backup-destination/`；`plugins/example-sync/`（`plugin.json` 与 `src/index.ts`） |
+| 实现说明 | `docs/content/docs/en/adr/0134-remote-document-providers.md`；`docs/content/docs/en/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection.md`；`lib/db/auth-connections.ts`；`lib/plugin/auth/connection-manager.ts` |

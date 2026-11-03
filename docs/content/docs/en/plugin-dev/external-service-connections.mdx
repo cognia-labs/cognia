@@ -1,0 +1,424 @@
+---
+title: External-service connections
+description: Declare an auth service, select a Host connection, request a consumer grant, and contribute a Host-managed authentication provider.
+---
+
+# External-service connections
+
+A base plugin adapts a vendor's sign-in and provides a versioned service such as
+`auth.example-tracker`. A business plugin declares that service, selects a Host
+connection, and requests its own consumer grant. The Host injects credentials
+when the business plugin makes a governed integration request.
+
+Use this page for authentication and access. See
+[Domain contributions](./domain-contributions) for documents, issues, backup,
+and synchronization built on those connections. Both pages describe the current
+implementation of [ADR-0246](/en/docs/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection).
+
+## Model
+
+Authorization has three layers:
+
+| Layer | Owner | Meaning |
+| --- | --- | --- |
+| Remote grant | Vendor | Scopes the remote credentials actually authorize. |
+| Connection | Host | Stored credentials, remote identity, lifecycle, and refresh lineage. |
+| Consumer grant | Host, per business plugin | Operations one consumer may perform at one connection revision. |
+
+A connection's identity comprises:
+
+- `provider`: `providerId`, `ownerPluginId`, `publisher`, and `contractMajor`;
+- `issuer`: the vendor deployment;
+- `clientId`: the client that holds the remote grant;
+- optional `tenantId`;
+- `principal`: its remote `id` and `kind`, one of `user`, `bot`, or `service`.
+
+`ownerPluginId: null` identifies a Host provider. A consumer receives an opaque
+`AuthConnectionRef`; never construct or parse it. Two accounts, tenants, or
+clients must not be treated as interchangeable merely because their provider
+labels match.
+
+The public `revision` fences access. It is distinct from the Host's internal
+credential revision used for refresh CAS. A consumer grant records
+`consumerPluginId` and `connectionRevision`; increasing remote scopes does not
+widen an existing grant. Ask for approval again when the connection revision
+changes.
+
+## Declaring services
+
+The base plugin declares an **exact** provided version:
+
+```json
+{
+  "providesServices": {
+    "auth.example-tracker": "1.0.0"
+  }
+}
+```
+
+Business plugins declare semver ranges, using `requiresServices` for required
+services or `optionalServices` for optional ones:
+
+```json
+{
+  "requiresServices": {
+    "auth.example-tracker": "^1.0.0"
+  }
+}
+```
+
+These are manifest fragments; retain the plugin's identity, entries, capabilities,
+permissions, and runtime declarations. Provided versions are not ranges.
+Use full version numbers in required and optional ranges, such as `^1.0.0`,
+`~1.0.0`, or `>=1.0.0`. The manifest validator also accepts exact versions,
+single comparisons, full-version hyphen ranges, `*`, and `latest`; it rejects
+shorthand `^1` and compound/OR expressions even though the resolver uses semver.
+
+A consumer of a missing or incompatible required service waits with a recorded
+reason. A provider supplying `2.0.0` does not satisfy `^1.0.0`. Removing the
+provider also removes access for its consumers. Optional services do not make
+activation wait when absent.
+
+`requiresServices` does **not** protect a provider from uninstall. Package
+`dependencies` provide that deletion protection. Provider upgrades quiesce
+required consumers and restore their prior enable intent afterward; consumers
+still have to satisfy the new service version.
+
+## Consumer API: `ctx.auth.connections`
+
+Declare `auth:consume`. Visibility requires ownership or a compatible required
+or optional service declaration; knowing another plugin's reference grants no
+access. The API exposes metadata, never credentials:
+
+| Method | Contract |
+| --- | --- |
+| `get(request)` | Exactly one of `service` or `providerId`; optional `scopes` and `interactive`; returns metadata or `undefined`. |
+| `list(filter?)` | Optional `service` or `providerId` filter; returns visible connection metadata, including lifecycle status. |
+| `requestGrant(ref, request)` | Nonempty `operations`, optional `scopes`; asks the Host to authorize this consumer. |
+| `onDidChange(listener, filter?)` | Metadata-only `added`, `removed`, and `changed` arrays; optional `providerId` filter; returns a disposer. |
+
+Metadata contains `ref`, `providerId`, `accountLabel`, `principalKind`, `issuer`,
+optional `tenantLabel`, `scopes`, `status`, and `revision`. It contains no
+`clientId`, access token, or refresh token. Status is `connected`, `needs-reauth`,
+`provider-unavailable`, `revoked`, or `tombstoned`.
+
+### Selection and persistent bindings
+
+`get()` reuses a valid persisted binding for this plugin and provider. With no
+usable binding, a single connected scope-matching candidate is selected and
+bound automatically. Multiple candidates require `interactive: true` for a
+one-time picker; a silent ambiguous lookup returns `undefined`.
+
+With no matching connection, an interactive request may prompt for sign-in.
+An ambiguous service with multiple possible providers must be narrowed to a
+provider. Cancelling selection returns no connection. The stored binding is
+shared by that plugin's UI, tools, and workflows; do not select the first result
+of `list()` as a substitute.
+
+Keep sign-in and grant requests in an explicit connect action. Background reads
+should use silent lookup and report missing access instead of prompting again.
+
+### Requesting and using a consumer grant
+
+This excerpt follows `plugins/example-docs-provider/src/index.ts`:
+
+```ts
+const connection = await ctx.auth.connections.get({
+  service: "auth.example-tracker",
+  scopes: ["docs.read"],
+  interactive: true,
+})
+if (connection) {
+  const decision = await ctx.auth.connections.requestGrant(connection.ref, {
+    operations: ["docs.request.GET"],
+    scopes: ["docs.read"],
+  })
+  if (!decision.granted) return false
+}
+```
+
+A successful decision includes `ref`, `connectionRevision`, `operations`, and
+`scopes`. Denial reasons are `denied`, `dismissed`, `connection-unavailable`, or
+`scopes-unavailable`. Adding missing remote scopes can require reconnection,
+followed by consumer approval at the new revision.
+
+Requested OAuth scopes are checked for availability during this flow. They are
+not persisted as an independent per-consumer OAuth-scope allowlist: the stored
+grant constrains consumer, revision, operations, and resource scope. The Host
+does not attenuate the vendor token into a consumer-specific token. This is
+less specific than ADR §1's operation-and-scope grant description.
+
+Operations must match a registered integration exactly. Raw requests use
+`<integrationId>.request.<UPPERCASE_METHOD>`; actions use their `operationId`,
+or default to `<integrationId>.<actionId>`. Wildcards, unknown operations, and
+ambiguous operation identities are rejected as `unknown-operation`.
+
+The grant flow creates connection-backed integration account projections. With
+`integrations:read`, find the account for this connection; with
+`integrations:execute`, dispatch through the Host:
+
+```ts
+const account = (await ctx.integrations.listAccounts("docs")).find(
+  (item) => item.connectionId === connection.ref,
+)
+if (!account) throw new Error("Connect and grant document access first")
+const response = await ctx.integrations.authenticatedRequest(
+  account.id,
+  "https://api.example-tracker.test/documents/guide",
+  { connectionRef: connection.ref, signal },
+)
+```
+
+This request fragment assumes a selected `connection` and caller-owned `signal`.
+Declare the integration's `authStrategies`, `allowedOrigins`, and service
+projection as in the example manifest. `connectionRef` makes a changed account
+binding fail closed. Integration action handler contexts also expose connection
+metadata and an `authenticatedRequest` transport; pass the expected reference
+there when binding a request to a selected connection.
+
+The Host checks the consumer grant at credential resolution and dispatch,
+including `GET`, `HEAD`, and `OPTIONS` reads. Revocation cannot be bypassed by
+retaining an account id. Missing approval produces `ConsumerGrantRequired` and
+account status `consumer-grant-required`.
+
+The Host also checks after response headers and after the body is read. A result
+that arrives after the connection revision moves is dropped. Forward
+`AbortSignal` to requests: in the Host realm it cancels the transport as well as
+the result. Out-of-process plugin transports cannot carry that signal.
+
+## Token reads: transition policy
+
+`ctx.auth.getSession` and `getSessions` require `auth:consume`. For non-owner
+reads, `DEFAULT_CONSUMER_TOKEN_READ_POLICY = "allow-with-audit"` currently
+preserves credential-returning behavior, records permission usage, and warns
+once per consumer/provider pair. Session change events remain metadata-only.
+
+**This default flips to `deny` in the next release.** Under `deny`, a non-owner
+read throws `ConsumerTokenReadDenied`; a consumer cannot override the Host
+policy through session options. New business plugins must use granted
+connections. This is a transition toward ADR-0246 §3's owner-only token-read
+rule, and is also recorded in the ADR's known limits.
+
+## Writing an auth provider
+
+Declare capability `auth-provider`, permission `auth:provide`, the provided
+service, and a matching `authProviders[]` entry. Register the live implementation
+with `ctx.auth.registerProvider(defineAuthProvider(provider))`; registration
+returns a disposer. Use `management: "host"` for coordinated credentials.
+
+### Manifest declaration and configuration
+
+`authProviders[]` declares `id`, `label`, and these provider-specific fields:
+
+| Field | Meaning |
+| --- | --- |
+| `authorization` | Public `issuer` and either `clientId` or `clientIdFrom: { configuration: "clientId" }`; optional `redirectUri`. |
+| `configurationSchema` | Host setup form: an object of string properties, optional `required`, `enum`, `minLength`, and `format`. |
+| `methods` | Supported auth methods, described below. |
+| `principals` | Supported `user`, `bot`, or `service` identities. |
+| `tokenEndpoints` | Declared token URLs, secret placement, and optional credential field mapping. |
+| `revocationEndpoints` | Declared revocation URLs; actual vendor revocation uses `revoke(lineage)`, with no automatic endpoint dispatcher. |
+| `issuers` | Allowed HTTPS issuer origins. |
+
+For configurable client credentials, a declaration can include this fragment:
+
+```json
+{
+  "authorization": {
+    "issuer": "https://api.example-tracker.test",
+    "clientIdFrom": { "configuration": "clientId" }
+  },
+  "configurationSchema": {
+    "type": "object",
+    "properties": {
+      "clientId": { "type": "string", "minLength": 1 },
+      "clientSecret": { "type": "string", "format": "secret" }
+    },
+    "required": ["clientId", "clientSecret"]
+  }
+}
+```
+
+Use the literal `clientSecret` property with `format: "secret"`: the current
+connect flow persists that field write-only in the Host secret store. A
+`clientIdFrom.configuration` field must be required and non-secret. Setup
+values are supplied through auth session configuration, never `ctx.config`.
+Do not put a client secret in manifest JSON or ordinary plugin storage.
+
+Each `tokenEndpoints` entry has `url`, optional `clientSecret` placement
+(`none`, `form`, `json`, or `basic`), and optional `credentialFields` containing
+`clientId` and `clientSecret` parameter names. The default names are `client_id`
+and `client_secret`. Custom names must be distinct after defaults and match
+`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`. They cannot be used with `basic`.
+
+### Coordinated callbacks
+
+`defineAuthProvider` preserves the provider's types; it does not register it.
+A Host-managed provider supplies `describe` and `refresh`, and the callbacks
+needed for its supported flows:
+
+| Callback | Responsibility |
+| --- | --- |
+| `authorize(attempt)` | Return an HTTPS authorization URL using Host-bound client, issuer, redirect, state, and PKCE challenge when applicable. |
+| `exchange(attempt, callback)` | Return `AuthCredentialSet` from a Host-bound attempt: an accepted OAuth redirect, or a state-only callback for client credentials. |
+| `describe(credentials)` | Return issuer, client, principal, account label, scopes, and optional tenant identity. |
+| `refresh(lineage)` | Refresh under the Host lock, honor its signal, and return updated credentials. |
+| `revoke(lineage)` | Optional vendor revocation after the Host has written its barrier. |
+
+Use `attempt.attemptId` as OAuth state and `attempt.codeChallenge` with `S256`
+for PKCE. Return rotated refresh tokens with the updated access token. Throw
+`AuthRefreshRejected` or a structured `code`/`error` of `invalid_grant` for a
+permanent refresh rejection; other failures remain retryable. Do not schedule
+refresh in the plugin.
+
+### Confidential exchange
+
+`ctx.auth.exchangeConfidential` requires both `auth:provide` and `network:fetch`
+and a trusted Host. The token endpoint must be declared in `authProviders[]`
+and allowed by `networkAccess`; the Host validates provider ownership, issuer,
+client, and secret placement before dispatch.
+
+The example uses this public-client exchange fragment:
+
+```ts
+const { status, body } = await ctx.auth.exchangeConfidential({
+  providerId: "example-tracker",
+  tokenUrl: "https://api.example-tracker.test/oauth/token",
+  clientId: client.clientId,
+  issuer: client.issuer,
+  placement: "none",
+  params,
+})
+```
+
+Here `client` and `params` come from the coordinated attempt or lineage.
+The installed endpoint chooses credential field names; callers cannot override
+them or place colliding fields in `params`. The Host injects a stored client
+secret for confidential placements. Even `placement: "none"` uses this trusted
+exchange API and is unavailable on a standalone browser/mobile Host.
+
+### Host guarantees
+
+The Host serializes refresh by lineage, commits credentials with revision CAS,
+and writes a revocation barrier before vendor revoke. A late refresh cannot
+restore a disconnected connection. Callback attempts are bound to provider,
+client, issuer, state, and verifier where applicable, expire after ten minutes,
+and are consumed once. Cancellation and replay cannot create a connection.
+
+The Host permits only one live token lineage for an issuer, client, and
+principal kind/id; provider and tenant are not part of this uniqueness key.
+Another provider owner or tenant cannot take over that lineage. Unlike ADR §2's
+optional separate connection per purpose, the same lineage cannot be duplicated
+just to assign another purpose. Provider
+registration ownership and the connection's provider tuple also prevent another
+plugin from inheriting an existing provider's references.
+
+## Methods and runtime support
+
+- `oauth-pkce`: authorization code with a Host-created PKCE verifier/challenge.
+- `oauth-confidential`: authorization code without PKCE, using trusted exchange.
+- `client-credentials`: noninteractive credentials acquired on a trusted Host.
+- `api-key`: user input kept in persistent Host connection storage; no refresh
+  token is created and refresh is never called. A credential-injected request
+  returning `401` marks the connection `needs-reauth`.
+- `device-code`: declared but dormant for plugin providers; refused with
+  `device-code-deferred`.
+
+Use the existing [Runtime support table](./author-sdk#runtime-support) for
+per-runtime availability, refusal reasons, and recovery actions. Browser API
+keys need an unlocked vault. A paired gateway serves only the facets forwarded
+to it; local callbacks, secrets, and background sync keep local runtime rules.
+
+## After disconnect
+
+Expect access to disappear while a request or sync is running:
+
+| Surface | Current behavior |
+| --- | --- |
+| In-flight reads | Host document reads abort on invalidation; stale revision results are discarded. |
+| Background work | Connection-bound sync leases are fenced; subscriptions, queued actions, and registered external-sync work are stopped or drained. |
+| Derived data | Host cleanup invokes the derived-data registry; failures remain queued for local retry. |
+| Kept copies | Attachments and snapshots remain, with source state such as “source disconnected”; live reopen requires restored access. |
+
+The document-provider wrapper actively aborts reads on connection changes. Raw
+integration HTTP requests reject stale results but do not automatically abort
+the transport on every connection change; forward a caller signal when needed.
+A public Issue Sync provider stops on disconnect when it registers with a
+`connectionRef`; see [its lifecycle boundary](./domain-contributions#issue-sync-providers).
+
+The derived-data registry purges integration events, ingress, event audit,
+external-sync state, and the GitHub issue mirror (a rebuildable cache that
+records the connection each repository was mirrored through). Action,
+authorization, security, and migration audit records are deliberately retained.
+Remote document reads, document search results, and link previews are not
+persisted, so there is nothing to purge for them.
+
+Twin documents imported from a connection and issues imported by Issue Sync are
+user-kept copies: the user chose to import them. They stay, together with the
+Twin chunks and vectors built from the local copy. They record their source
+connection like kept document copies, show "source disconnected" or "source
+deleted", and refuse remote refresh, re-sync, and publishing until the same
+identity reconnects. Rows imported before this provenance existed show no
+source state.
+
+Kept document copies carry portable provenance and a random capture id. Their
+connection identity stays in a device-local side table. Reconnecting the same
+identity can restore live reopen; it does not restore purged derived data.
+Resource-level `notFound` or `noPermission` marks a kept source deleted or
+inaccessible; network and auth outages do not prove deletion.
+
+Revoking one consumer removes its access without disconnecting the shared
+remote grant for other consumers. Uninstalling a consumer does not revoke its
+provider's credentials. Optional stored-data removal targets that plugin's data;
+user-kept copies remain under user control.
+
+Disabling a provider makes its connections `provider-unavailable`. Uninstall is
+terminal: the Host attempts vendor revocation, disconnects the provider's
+connections, and deletes their credentials even if vendor revocation fails.
+This differs from ADR §4's description of uninstall as `provider-unavailable`.
+
+## Worked example
+
+Start with `plugins/example-auth-provider/plugin.json` and `src/index.ts`:
+
+1. The manifest provides `auth.example-tracker: "1.0.0"`, declares
+   `example-tracker`, `oauth-pkce`, a `user` principal, issuer, and token endpoint.
+2. `createProvider(ctx)` uses `defineAuthProvider` with `management: "host"`.
+   `authorize` builds the URL, `exchange` and `refresh` use trusted exchange,
+   and `describe` validates `/me` before returning identity.
+3. Activation registers the provider and returns its disposer for disable and
+   unload. Tokens are returned to coordinated Host callbacks, not persisted by
+   the example plugin.
+
+Then follow the three business examples:
+
+| Example | Connection scopes | Consumer operations |
+| --- | --- | --- |
+| `plugins/example-docs-provider` | `docs.read` | `docs.request.GET` |
+| `plugins/example-issue-sync` | `issues.read` | `issues.request.GET` |
+| `plugins/example-backup-destination` | `backups.read`, `backups.write` | `backups.request.GET`, `backups.request.PUT` |
+
+All require `auth.example-tracker: "^1.0.0"`, prompt only from an explicit
+connect command, and find a connection-backed integration account for later
+silent requests. Their runtime manifests reflect the example provider's trusted
+exchange requirement, even though PKCE in general can work in a browser.
+See [Domain contributions](./domain-contributions) for their registration APIs.
+
+## Source map
+
+Paths are relative to the repository root; the implementation is authoritative.
+
+| Section | Checked sources |
+| --- | --- |
+| Model | `packages/plugin-contract/src/types/plugin/plugin-auth.ts`; `packages/plugin-contract/src/types/external-service.ts` |
+| Declaring services | `lib/plugin/core/service-registry.ts`; `lib/plugin/core/load-order.ts`; `lib/plugin/core/manager.ts`; `packages/plugin-contract/src/lib/plugin/core/validation.ts` |
+| Consumer API, selection, grants | `packages/plugin-contract/src/lib/plugin/api/auth-api.ts`; `lib/plugin/auth/connections-api.ts`; `lib/plugin/auth/connection-access.ts` |
+| Governed requests and revision fence | `packages/plugin-contract/src/types/plugin/plugin-integration.ts`; `lib/integrations/action-runner.ts` |
+| Token reads | `lib/plugin/api/auth-api.ts`; `lib/plugin/auth/consumer-token-read-policy.ts` |
+| Provider declaration and callbacks | `packages/plugin-contract/src/types/plugin/plugin-auth.ts`; `packages/plugin-contract/src/lib/plugin/api/auth-api.ts`; `packages/plugin-sdk/src/define/define-auth-provider.ts`; `lib/plugin/auth/connect.ts` |
+| Confidential exchange | `lib/plugin/api/auth-api.ts`; `lib/plugin/auth/client-secrets.ts`; `crates/cognia-plugin-runtime/src/api_bridge.rs` |
+| Host guarantees | `lib/plugin/auth/connection-manager.ts`; `lib/plugin/auth/callback-acceptor.ts`; `lib/db/auth-connections.ts` |
+| Methods and runtime support | `lib/plugin/auth/connect.ts`; `lib/external-services/runtime-support.ts`; `author-sdk.mdx` |
+| After disconnect | `lib/external-services/access-teardown.ts`; `lib/external-services/derived-data-registry.ts`; `lib/docs-providers/kept-copy-source.ts`; `lib/plugin/auth/connection-manager.ts` |
+| Worked example | `plugins/example-auth-provider/`; `plugins/example-docs-provider/`; `plugins/example-issue-sync/`; `plugins/example-backup-destination/` (`plugin.json` and `src/index.ts`) |
+| ADR comparisons | `docs/content/docs/en/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection.md`; `lib/external-services/grants.ts` |
