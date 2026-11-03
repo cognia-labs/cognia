@@ -33,6 +33,18 @@ const SESSION_CLASSES: Record<SessionHost, string> = {
   header:
     "flex items-center gap-0.5 border-l border-border/50 ps-1.5 ms-1 empty:hidden [&_button]:h-7 [&_button]:rounded-md [&_button]:px-1.5 [&_button]:text-[11px] [&_svg]:size-3.5",
 }
+/**
+ * The composer host once its row has folded to glyphs: the same items, icons
+ * only. The toolbar's status cluster stays `shrink-0` on the promise that it
+ * holds bounded glyphs, and the global scope's labels ("Jobs", the next run's
+ * task name, "Idle") broke it — wide enough, with a wider UI font, to push "⋯"
+ * under the send button while the run-config chips were crushed into each
+ * other. `text-[0px]` drops every label the way the rail stack does, keeping
+ * icons, counts and the account initial; names and tooltips are untouched.
+ */
+const COMPOSER_COMPACT =
+  "[&_button]:gap-0 [&_button]:px-1.5 [&_button]:text-[0px] [&_a]:gap-0 [&_a]:text-[0px] " +
+  "[&_[data-slot=badge]]:text-[9px] [&_[data-testid=account-bar-button]_span]:text-[10px]"
 const RAIL_STACK =
   "flex flex-col items-center gap-1 pb-1.5 empty:hidden " +
   "[&_button]:size-9 [&_button]:justify-center [&_button]:gap-0 [&_button]:rounded-panel " +
@@ -170,7 +182,14 @@ function useGlobalScopeUnhoused(): boolean {
  * items into its own row and the pill stands down while it is mounted — same
  * items, same condition, one place.
  */
-export function WebGlobalStatusInline({ className }: { className?: string }) {
+export function WebGlobalStatusInline({
+  className,
+  compact = false,
+}: {
+  className?: string
+  /** Icon-only form, for a host row that has folded to glyphs. */
+  compact?: boolean
+}) {
   const context = useContext(WebStatusContext)
   const registerGlobal = context?.registerGlobal
   const id = useId()
@@ -178,7 +197,11 @@ export function WebGlobalStatusInline({ className }: { className?: string }) {
   useIsomorphicLayoutEffect(() => registerGlobal?.(id), [registerGlobal, id])
   if (!context || context.globalOwner !== id || !unhoused) return null
   return (
-    <div className={cn(SESSION_CLASSES.composer, className)} data-testid="web-status-global-inline">
+    <div
+      className={cn(SESSION_CLASSES.composer, compact && COMPOSER_COMPACT, className)}
+      data-testid="web-status-global-inline"
+      data-compact={compact || undefined}
+    >
       <StatusBarZone items={context.scopes.global} />
     </div>
   )

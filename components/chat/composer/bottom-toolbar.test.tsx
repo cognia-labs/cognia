@@ -61,6 +61,20 @@ jest.mock("./use-fitted-fold-tier", () => {
   }
 })
 
+// Record how the toolbar asks the global status cluster to spell itself; the
+// cluster's own compact rendering is pinned in `web-status.test.tsx`.
+const globalStatusCompact: (boolean | undefined)[] = []
+jest.mock("@/components/shell/web-status", () => {
+  const actual = jest.requireActual("@/components/shell/web-status")
+  return {
+    ...actual,
+    WebGlobalStatusInline: (props: { compact?: boolean }) => {
+      globalStatusCompact.push(props.compact)
+      return actual.WebGlobalStatusInline(props)
+    },
+  }
+})
+
 // Capture router.push calls.
 const pushSpy = jest.fn()
 jest.mock("next/navigation", () => ({
@@ -896,6 +910,22 @@ describe("BottomToolbar — the fold ladder", () => {
     expect(screen.queryByTestId("composition-chip")).toBeNull()
     fireEvent.click(screen.getByTestId("composer-toolbar-more"))
     expect(screen.getByTestId("composition-chip")).toHaveAttribute("data-layout", "combined")
+  })
+
+  it("spells the global status cluster out until the glyph rung, then compacts it", () => {
+    // Its labels ("Disconnected", the account name) were the one part of the
+    // status cluster that never folded, and pushed the send button off the row.
+    mockToolbarWidth = 900
+    globalStatusCompact.length = 0
+    const { unmount } = render(<BottomToolbar session={session} />)
+    expect(globalStatusCompact.at(-1)).toBe(false)
+    unmount()
+
+    mockToolbarWidth = 450
+    globalStatusCompact.length = 0
+    render(<BottomToolbar session={session} />)
+    expect(screen.getByTestId("composer-footer")).toHaveAttribute("data-toolbar-tier", "2")
+    expect(globalStatusCompact.at(-1)).toBe(true)
   })
 
   it("keeps the model chip's full label and chevron while the row has room", () => {

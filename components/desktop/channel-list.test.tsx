@@ -4039,15 +4039,18 @@ describe("title-bar projection", () => {
   })
 
   it("sizes the search row like the navigation rows above it", () => {
-    // The rail reads as one list: the field and the controls beside it take
-    // the same 32px `rounded-md` box as a `SidebarRow`, not the taller pill a
-    // form input defaults to. Kept as an assertion because the drift back to
+    // The rail reads as one list: the search shell takes a 32px `rounded-md`
+    // box on the rows' inset, not the taller pill a form input defaults to,
+    // and the scope and filter controls inside it are small field glyphs, not
+    // row-sized buttons. Kept as an assertion because the drift back to
     // `h-9 rounded-lg` is invisible in every behavioural test.
     renderProjected()
+    expect(screen.getByTestId("channel-list-search-shell")).toHaveClass("h-8", "rounded-md")
+    expect(screen.getByTestId("channel-list-search-row")).toHaveClass("px-2")
     const field = screen.getByTestId("channel-list-search").querySelector("[data-slot=input-group]")
-    expect(field).toHaveClass("h-8", "rounded-md")
+    expect(field).toHaveClass("h-8")
     for (const testId of ["channel-list-search-scope", "channel-list-filter-trigger"]) {
-      expect(screen.getByTestId(testId)).toHaveClass("size-8", "rounded-md")
+      expect(screen.getByTestId(testId)).toHaveClass("size-6")
     }
   })
 
@@ -4312,18 +4315,34 @@ describe("web shell without the title bar", () => {
     expect(screen.getByTestId("sidebar-footer")).toHaveAttribute("data-collapse-toggle", "true")
   })
 
-  it("draws the workspace header inline — the switcher, nothing else", () => {
+  it("draws no header row — the home composer carries the workspace switcher", () => {
     renderBarlessWeb()
-    const header = screen.getByTestId("channel-list-header")
-    // In the rail's own row — no outlet was ever mounted to portal into.
-    expect(header.closest("aside")).not.toBeNull()
-    expect(within(header).getByTestId("workspace-switcher")).toBeInTheDocument()
-    // Search and the list's ⋯ actions head the conversation list itself,
-    // inside the rail — the header keeps to the workspace bar.
-    expect(within(header).queryByTestId("channel-list-search")).toBeNull()
-    expect(within(header).queryByTestId("channel-list-actions-menu")).toBeNull()
-    expect(header).not.toHaveTextContent("directMessages")
+    // The composer's context bar leads with the same switcher; a second copy
+    // heading the rail was one control drawn twice.
+    expect(screen.queryByTestId("channel-list-header")).toBeNull()
+    expect(screen.queryByTestId("workspace-switcher")).toBeNull()
+    // New chat is the rail's first control, and the strip keeps a little air
+    // from the window's top edge now that nothing sits above it.
+    const strip = screen.getByTestId("channel-list-pinned-strip")
+    expect(strip).toHaveClass("pt-1.5")
+    expect(within(strip).getByTestId("sidebar-new-conversation")).toBeInTheDocument()
     expect(screen.getByTestId("channel-list-search-row")).toBeInTheDocument()
+  })
+
+  it("draws search as one rail row: the field and its scope and filter controls in one shell", () => {
+    renderBarlessWeb()
+    const shell = screen.getByTestId("channel-list-search-shell")
+    expect(shell).toContainElement(screen.getByLabelText("searchAria"))
+    expect(shell).toContainElement(screen.getByTestId("channel-list-search-scope"))
+    expect(shell).toContainElement(screen.getByTestId("channel-list-filter-trigger"))
+    // The list's ⋯ menu stays outside it, at the row's end.
+    expect(shell).not.toContainElement(screen.getByTestId("channel-list-actions-menu"))
+    expect(screen.getByTestId("channel-list-search-row")).toContainElement(
+      screen.getByTestId("channel-list-actions-menu")
+    )
+    // The field itself is bare: the shell owns fill, hover and focus.
+    const group = screen.getByLabelText("searchAria").closest("[data-slot=input-group]")
+    expect(group).toHaveClass("border-0", "bg-transparent")
   })
 
   it("keeps the compact reading outside the projection scope", () => {

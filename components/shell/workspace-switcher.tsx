@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ChevronDownIcon, FolderIcon } from "lucide-react"
+import { ChevronDownIcon, FolderIcon, LayersIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -28,7 +28,8 @@ import { useSidebarRowRoving } from "./sidebar-row-roving"
  * On the rail the trigger is one of the column's buttons, so it takes its
  * place in the rail's roving order (`sidebar-row-roving.tsx`): no tab stop of
  * its own, reached with the arrow keys like its neighbours. The wide trigger
- * sits in the title bar, outside any roving scope, and keeps its tab stop.
+ * sits in the title bar, outside any roving scope, and keeps its tab stop, as
+ * does the composer trigger.
  */
 interface WorkspaceSwitcherProps {
   /**
@@ -39,8 +40,14 @@ interface WorkspaceSwitcherProps {
    * trigger for the title bar's start zone above the expanded sidebar:
    * folder, name, chevron, with the popover opening downward under it. Same
    * list, same actions.
+   *
+   * `composer` is the first token of the welcome composer's context bar
+   * ("workspace › folder · worktree"): a borderless chip sized like the
+   * strip's other tokens, so on the web — where the rail trigger is only an
+   * initial — the workspace a new chat lands in is named where it is typed.
+   * It is a second door onto the same store, never a copy of it.
    */
-  variant?: "rail" | "wide"
+  variant?: "rail" | "wide" | "composer"
   className?: string
 }
 
@@ -61,15 +68,39 @@ export function WorkspaceSwitcher({ variant = "rail", className }: WorkspaceSwit
   const triggerLabel = active ? t("active", { name: active.name }) : t("none")
   const initial = active?.name.trim().charAt(0).toUpperCase()
   const wide = variant === "wide"
+  const composer = variant === "composer"
   const overlaySide = useOverlaySide()
   // Never the selected destination, so it holds the tab stop only when the
   // scope hands it one (nothing else claimed it, or the user arrowed here).
-  const roving = useSidebarRowRoving(wide ? undefined : "workspace-switcher", false)
+  const roving = useSidebarRowRoving(variant === "rail" ? "workspace-switcher" : undefined, false)
 
   return (
     <>
       <Popover open={open} onOpenChange={setOpen}>
-        {wide ? (
+        {composer ? (
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={triggerLabel}
+              title={active?.name ?? t("none")}
+              data-testid="workspace-switcher"
+              data-variant="composer"
+              className={cn(
+                "group inline-flex h-7 max-w-[11rem] min-w-0 shrink items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none data-[state=open]:bg-muted/70 data-[state=open]:text-foreground",
+                className
+              )}
+            >
+              {/* A plain glyph like the strip's other tokens (folder, branch),
+                  and a different one from the folder token right after it. */}
+              <LayersIcon aria-hidden className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate font-medium">{active?.name ?? t("none")}</span>
+              <ChevronDownIcon
+                aria-hidden
+                className="size-3 shrink-0 opacity-60 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+              />
+            </button>
+          </PopoverTrigger>
+        ) : wide ? (
           <PopoverTrigger asChild>
             <Button
               variant="ghost"
@@ -129,14 +160,14 @@ export function WorkspaceSwitcher({ variant = "rail", className }: WorkspaceSwit
         )}
 
         <PopoverContent
-          side={wide ? "bottom" : overlaySide}
+          side={variant === "rail" ? overlaySide : "bottom"}
           align="start"
-          sideOffset={wide ? 8 : 4}
+          sideOffset={variant === "rail" ? 4 : wide ? 8 : 6}
           collisionPadding={8}
           aria-label={t("switchTitle")}
           className={cn(
             "flex max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border-border/70 p-1.5 shadow-lg",
-            wide ? "w-80" : "w-72"
+            variant === "rail" ? "w-72" : "w-80"
           )}
         >
           <WorkspacePickerList

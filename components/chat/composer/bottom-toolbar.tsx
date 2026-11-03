@@ -622,7 +622,7 @@ function GenericBottomToolbar({
         />
         {bestOfNChip}
         <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-          <WebGlobalStatusInline />
+          <WebGlobalStatusInline compact />
           {foldedMenu}
         </span>
       </div>
@@ -673,7 +673,7 @@ function GenericBottomToolbar({
           className={cn("ms-auto flex shrink-0 items-center gap-0.5 ps-2", ZONE_RULE)}
           data-testid="composer-status-cluster"
         >
-          <WebGlobalStatusInline />
+          <WebGlobalStatusInline compact={glyphChips} />
           {!costFolded && costBadge(costShort, true)}
           {credentialBadge(glyphChips)}
           {contextChip(ringOnly)}
@@ -747,7 +747,7 @@ function GenericBottomToolbar({
         <WebSessionStatus host="composer" />
         {/* The shell's global status, taken off the corner pill that would
             otherwise sit on top of this row's "⋯" (see the component). */}
-        <WebGlobalStatusInline />
+        <WebGlobalStatusInline compact={glyphChips} />
         {!shapeInline && runtimeChip(true)}
         {!ambientOnRail && !costFolded && costBadge(costShort, true)}
         {!ambientOnRail && credentialBadge(glyphChips)}

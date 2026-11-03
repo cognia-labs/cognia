@@ -39,6 +39,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
@@ -210,6 +211,10 @@ import {
   type SlashStagedFiles,
 } from "@/lib/slash-commands/builtin"
 import { loadCustomSlashCommands } from "@/lib/slash-commands/custom"
+import {
+  getActiveRemoteTransport,
+  subscribeActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
 import { mergeSlashCommands } from "@/lib/slash-commands/merge"
 import {
   DIAGNOSTICS_PART_TYPE,
@@ -469,6 +474,8 @@ export interface ComposerHandle {
 // px form assumes the app's default 16px root (the JS path only runs on old
 // WebViews lacking `field-sizing`).
 const COMPOSER_MAX_HEIGHT_REM = 12
+/** Stable empty list, so a pending custom-command scan does not re-derive the picker. */
+const NO_CUSTOM_COMMANDS: SlashCommand[] = []
 const COMPOSER_MAX_HEIGHT_PX = COMPOSER_MAX_HEIGHT_REM * 16
 
 // --- Helpers ---------------------------------------------------------------
@@ -795,7 +802,13 @@ function ComposerInner(props: InnerProps) {
     tokenStart: number
     kind: string
   } | null>(null)
-  const [customCommands, setCustomCommands] = useState<SlashCommand[]>([])
+  // Keyed by the scan they answer (workspace + Host), so a list never outlives
+  // the workspace it was read from: until the next scan lands the picker shows
+  // no custom commands rather than the previous project's.
+  const [customCommandScan, setCustomCommandScan] = useState<{
+    key: unknown
+    list: SlashCommand[]
+  } | null>(null)
   // When a picked command declares `params`, we open a guided form instead of
   // inserting raw text. The captured token range tells us where to splice the
   // built `/command <args>` chip back in.
@@ -963,15 +976,28 @@ function ComposerInner(props: InnerProps) {
   const applyPreset = useApplyPreset()
 
   // --- Per-cwd custom slash commands ------------------------------------
+  // Re-read when the desktop switches which Host it drives, not only when the
+  // path changes: two Hosts can share a path and hold different commands.
+  const activeRemoteHost = useSyncExternalStore(
+    subscribeActiveRemoteTransport,
+    getActiveRemoteTransport,
+    () => null
+  )
+  const customCommandKey = useMemo(() => ({ cwd, host: activeRemoteHost }), [cwd, activeRemoteHost])
   useEffect(() => {
     let cancelled = false
-    loadCustomSlashCommands(cwd).then((list) => {
-      if (!cancelled) setCustomCommands(list)
+    void loadCustomSlashCommands(customCommandKey.cwd).then((list) => {
+      if (!cancelled) setCustomCommandScan({ key: customCommandKey, list })
     })
     return () => {
       cancelled = true
     }
-  }, [cwd])
+  }, [customCommandKey])
+  const customCommands = useMemo(
+    () =>
+      customCommandScan?.key === customCommandKey ? customCommandScan.list : NO_CUSTOM_COMMANDS,
+    [customCommandScan, customCommandKey]
+  )
 
   // --- Hydrate chat-store from session row on first session change -------
   // `hydratedFor` flips to the session id once the hydration write has

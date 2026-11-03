@@ -1588,3 +1588,95 @@ it("Preview preserves the trigger and pick behavior; Enter/Tab confirmation stil
   expect(onPick).toHaveBeenCalledTimes(1)
   expect(onPick).toHaveBeenCalledWith({ kind: "doc", providerId: "google", accountId: "a", doc })
 })
+
+// ── Many commands ───────────────────────────────────────────────────────────
+//
+// Past a few dozen rows the list is windowed: only the rows in view are
+// mounted. jsdom has no layout, so these tests give the scroll box and each
+// row an `offsetHeight` (what the virtualizer reads without a ResizeObserver
+// entry); without it the list renders whole, which every other suite relies on.
+describe("ComposerPopover — a large command list", () => {
+  const many = Array.from({ length: 200 }, (_, index) => ({
+    name: `cmd-${String(index).padStart(3, "0")}`,
+    description: `Command ${index}`,
+    // Alternating categories give the empty-query view several sections.
+    category: index < 100 ? "chat" : "system",
+  })) as SlashCommand[]
+
+  let heightSpy: jest.SpyInstance | null = null
+  function giveLayout() {
+    heightSpy = jest
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("max-h-80")) return 320
+        if (this.hasAttribute("data-row")) return this.hasAttribute("data-index") ? 52 : 31
+        return 0
+      })
+  }
+  afterEach(() => {
+    heightSpy?.mockRestore()
+    heightSpy = null
+  })
+
+  function mountMany(query = "") {
+    const anchor = document.createElement("div")
+    document.body.appendChild(anchor)
+    const ref = createRef<ComposerPopoverHandle>()
+    const onPick = jest.fn()
+    render(
+      <ComposerPopover
+        ref={ref}
+        trigger={slashTrigger(query)}
+        cwd={null}
+        slashCommands={many}
+        anchor={anchor}
+        onPick={onPick}
+        onDismiss={jest.fn()}
+      />
+    )
+    return { ref, onPick }
+  }
+
+  it("mounts only the rows in view, however many commands there are", () => {
+    giveLayout()
+    mountMany()
+    const list = document.querySelector('[data-windowed="true"]')
+    expect(list).not.toBeNull()
+    const mounted = document.querySelectorAll("[data-index]").length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThan(30)
+    // The section header of the rows in view is mounted with them.
+    expect(list!.querySelector("li[aria-hidden]")).not.toBeNull()
+  })
+
+  it("keeps keyboard selection on every command, mounting the one it reaches", () => {
+    giveLayout()
+    const { ref, onPick } = mountMany()
+    // ↑ from the top wraps to the last command, far outside the first window.
+    act(() => ref.current!.navigate(-1))
+    act(() => {
+      ref.current!.confirm()
+    })
+    expect(onPick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "slash",
+        command: expect.objectContaining({ name: "cmd-199" }),
+      })
+    )
+  })
+
+  it("renders a short filtered result whole", () => {
+    giveLayout()
+    mountMany("cmd-199")
+    expect(document.querySelector('[data-windowed="true"]')).toBeNull()
+    const rows = document.querySelectorAll("[data-index]")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveTextContent("/cmd-199")
+  })
+
+  it("renders every row when there is no layout to window against", () => {
+    mountMany()
+    expect(document.querySelector('[data-windowed="true"]')).toBeNull()
+    expect(document.querySelectorAll("[data-index]")).toHaveLength(200)
+  })
+})

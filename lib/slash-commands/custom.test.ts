@@ -32,6 +32,12 @@ jest.mock("./custom-workspace", () => ({
   deleteWorkspaceCustomCommand: jest.fn(async () => undefined),
 }))
 
+// Which host the desktop is driving. Only the routing flag matters here.
+const mockRemoteHostActive = jest.fn(() => false)
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  isRemoteHostActive: () => mockRemoteHostActive(),
+}))
+
 import {
   GlobalScopeUnavailableError,
   applyTemplate,
@@ -59,6 +65,7 @@ const NO_HOST = () => new Error("Cannot read properties of undefined (reading 'i
 const mockedInvoke = invoke as unknown as jest.Mock
 
 beforeEach(() => {
+  mockRemoteHostActive.mockReset().mockReturnValue(false)
   mockedInvoke.mockReset()
   mockMkdir.mockReset().mockResolvedValue(undefined)
   mockWriteTextFile.mockReset().mockResolvedValue(undefined)
@@ -199,6 +206,73 @@ describe("loadCustomSlashCommands", () => {
     ])
     const out = await loadCustomSlashCommands(null)
     expect(out[0].hiddenFromPicker).toBe(true)
+  })
+})
+
+describe("loadCustomSlashCommands while driving a remote Host", () => {
+  function raw(name: string, scope: string) {
+    return {
+      name,
+      scope,
+      path: `/x/${name}.md`,
+      description: `${scope} ${name}`,
+      argumentHint: null,
+      allowedTools: null,
+      model: null,
+      paths: null,
+      disableModelInvocation: null,
+      userInvocable: null,
+      body: name,
+    }
+  }
+
+  it("reads project commands from the Host and user commands from this machine", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockResolvedValue([raw("mine", "user"), raw("local-project", "project")])
+    mockedListWorkspace.mockResolvedValue([
+      { name: "deploy", description: "Host deploy", scope: "project", template: "deploy" },
+    ])
+
+    const out = await loadCustomSlashCommands("/srv/workspaces/api")
+
+    // The local scanner is kept to the user-global directory: handed the Host's
+    // path it would read this disk at a path that only exists over there.
+    expect(mockedInvoke).toHaveBeenCalledWith("slash_commands_scan", { cwd: null })
+    expect(mockedListWorkspace).toHaveBeenCalledWith("/srv/workspaces/api")
+    expect(out.map((command) => command.name)).toEqual(["deploy", "mine"])
+  })
+
+  it("lets the Host's project command win a name clash, as the scanner does", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockResolvedValue([raw("review", "user")])
+    mockedListWorkspace.mockResolvedValue([
+      { name: "review", description: "Host review", scope: "project", template: "r" },
+    ])
+
+    const out = await loadCustomSlashCommands("/srv/workspaces/api")
+
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ name: "review", scope: "project", description: "Host review" })
+  })
+
+  it("keeps whichever side answered when the other fails", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockRejectedValue(new Error("scanner gone"))
+    mockedListWorkspace.mockResolvedValue([
+      { name: "deploy", description: "d", scope: "project", template: "d" },
+    ])
+    expect((await loadCustomSlashCommands("/srv/a")).map((c) => c.name)).toEqual(["deploy"])
+
+    mockedInvoke.mockResolvedValue([raw("mine", "user")])
+    mockedListWorkspace.mockRejectedValue(new Error("Host offline"))
+    expect((await loadCustomSlashCommands("/srv/a")).map((c) => c.name)).toEqual(["mine"])
+  })
+
+  it("asks the Host for nothing without a workspace", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockResolvedValue([raw("mine", "user")])
+    expect((await loadCustomSlashCommands(null)).map((c) => c.name)).toEqual(["mine"])
+    expect(mockedListWorkspace).not.toHaveBeenCalled()
   })
 })
 

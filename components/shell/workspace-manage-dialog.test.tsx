@@ -9,6 +9,30 @@ jest.mock("next-intl", () => ({
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn() }))
 
+// The server folder picker windows its rows; jsdom has no layout, so the real
+// virtualizer would render none. Render them all.
+jest.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({
+    count,
+    getItemKey,
+  }: {
+    count: number
+    getItemKey: (i: number) => string
+  }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: getItemKey(index),
+        start: index * 34,
+        size: 34,
+        end: (index + 1) * 34,
+        lane: 0,
+      })),
+    getTotalSize: () => count * 34,
+    scrollToIndex: jest.fn(),
+  }),
+}))
+
 /**
  * "Browse server" walks the paired host, so the button is gated on that host
  * publishing `fs_list_workspace_dir`. The gate reads a runtime snapshot the
@@ -404,10 +428,9 @@ describe("WorkspaceManageDialog", () => {
     await waitFor(() => expect(listWorkspaceDirMock).toHaveBeenCalledWith("/srv", undefined))
     // The picker asks the host for its roots before it lists anything, so the
     // first entry appears a tick after the listing call resolves. `find*`
-    // rather than `get*`, which raced that render. A folder row is named by
-    // its own path segment and expands under the same root, the way the
-    // picker's own suite drives it.
-    fireEvent.click(await screen.findByRole("button", { name: "projects" }))
+    // rather than `get*`, which raced that render. A click enters the folder,
+    // and Choose takes the folder the picker is in.
+    fireEvent.click(await screen.findByTitle("/srv/projects"))
     await waitFor(() => expect(listWorkspaceDirMock).toHaveBeenCalledWith("/srv", "projects"))
     fireEvent.click(screen.getByRole("button", { name: "chooseCurrent" }))
 

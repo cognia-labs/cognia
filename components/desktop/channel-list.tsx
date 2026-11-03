@@ -2483,34 +2483,49 @@ function ChannelListBodyImpl({
   // directions — nothing pops, nothing reflows — and the ⋯ menu keeps the
   // end slot throughout.
   const railSearchRow = merged ? (
-    <div className="flex items-center gap-0.5 px-1 pb-1" data-testid="channel-list-search-row">
-      {searchField}
+    <div className="flex items-center gap-1 px-2 pt-1 pb-1" data-testid="channel-list-search-row">
+      {/* One shell for the field and the controls that tune it, drawn as one
+          more row of the rail: the nav rows' 8px inset and icon column, no
+          border, only a faint fill to say "type here". A boxed field with
+          three loose buttons beside it read as a form dropped into the list.
+          The shell, not the input, owns hover and focus, so the controls
+          inside light up with it. */}
       <div
-        data-testid="channel-list-search-controls"
+        data-testid="channel-list-search-shell"
         className={cn(
-          "flex items-center gap-1.5 overflow-hidden",
-          `transition-[max-width,opacity] ${SHELL_DOCK_TIMING_CLASS}`,
-          searchControlsFolded ? "max-w-0 opacity-0" : "max-w-[4.5rem] opacity-100"
+          "flex h-8 min-w-0 flex-1 items-center rounded-md bg-foreground/[0.045] transition-[background-color,box-shadow] duration-150",
+          "hover:bg-foreground/[0.07]",
+          "has-[input:focus-visible]:bg-background has-[input:focus-visible]:shadow-[inset_0_0_0_1px_var(--border)]"
         )}
-        inert={searchControlsFolded || undefined}
-        aria-hidden={searchControlsFolded || undefined}
       >
-        {/* Beside the field it governs: how far a query looks is not a
-            display preference and does not belong in a settings page.
-            `right` because there is a whole chat pane to open into. */}
-        <ConversationSearchScopeControl
-          model={filterController}
-          side="right"
-          triggerClassName="size-8 rounded-md"
-          testId="channel-list-search-scope"
-          view={view}
-        />
-        <ConversationFilterMenu
-          model={filterController}
-          side="right"
-          triggerClassName="size-8 rounded-md"
-          testId="channel-list-filter-trigger"
-        />
+        {searchField}
+        <div
+          data-testid="channel-list-search-controls"
+          className={cn(
+            "flex shrink-0 items-center gap-px overflow-hidden",
+            `transition-[max-width,opacity,padding] ${SHELL_DOCK_TIMING_CLASS}`,
+            searchControlsFolded ? "max-w-0 pr-0 opacity-0" : "max-w-[3.5rem] pr-1 opacity-100"
+          )}
+          inert={searchControlsFolded || undefined}
+          aria-hidden={searchControlsFolded || undefined}
+        >
+          {/* Inside the field they govern: how far a query looks is not a
+              display preference and does not belong in a settings page.
+              `right` because there is a whole chat pane to open into. */}
+          <ConversationSearchScopeControl
+            model={filterController}
+            side="right"
+            triggerClassName={SEARCH_SHELL_CONTROL_CLASS}
+            testId="channel-list-search-scope"
+            view={view}
+          />
+          <ConversationFilterMenu
+            model={filterController}
+            side="right"
+            triggerClassName={SEARCH_SHELL_CONTROL_CLASS}
+            testId="channel-list-filter-trigger"
+          />
+        </div>
       </div>
       {/* The list's own actions sit at the row's end whatever state the field
           is in — reachable while it is awake and while it rests. */}
@@ -2675,8 +2690,7 @@ function ChannelListBodyImpl({
         <Header
           outlet={headerOutlet}
           // No bar above (the web shell's default) but this rail is still the
-          // expanded workspace sidebar — draw the projected header's content
-          // in the rail's own top row instead of the guild title.
+          // expanded workspace sidebar — no guild title row either.
           workspaceChrome={merged}
           {...headerActionProps}
         />
@@ -2688,6 +2702,9 @@ function ChannelListBodyImpl({
           <div
             className={cn(
               "shrink-0 transition-shadow duration-150",
+              // With no header row above (the bar-less web shell) the strip
+              // is the rail's top edge, so it keeps a little air from it.
+              !headerOutlet && "pt-1.5",
               listScrolled && "shadow-[0_1px_0_0_var(--border)]"
             )}
             data-testid="channel-list-pinned-strip"
@@ -3029,31 +3046,29 @@ function ChannelListSearch({
       data-expanded={expanded || undefined}
     >
       <InputGroup
-        // Compact: sized and cornered like the navigation rows right above it
-        // (32px, `rounded-md`, and the same 8px/16px/10px icon-to-label rhythm
-        // the `SidebarRow` builds — see the paddings below), so the field is
-        // one more line of the same rail rather than a form control dropped
-        // into it. Only the muted fill and hairline separate it, which is what
-        // says "type here".
+        // Compact: the merged rail's search shell (`railSearchRow`) draws the
+        // fill, hover and focus around the field AND the controls inside it,
+        // so the group itself is bare — no border, no fill, no halo of its
+        // own. The Sheet's field keeps the muted fill and hairline that say
+        // "type here" on their own.
         className={cn(
-          compact ? "h-8 rounded-md" : "h-9 rounded-lg",
-          "border-border/40 bg-muted/40 shadow-none transition-colors",
-          "hover:bg-muted/60",
-          // Softer focus treatment than the form default — this sits in a rail,
-          // not a form, so a 3px halo reads as an alarm rather than a caret.
-          "has-[[data-slot=input-group-control]:focus-visible]:border-ring/50 has-[[data-slot=input-group-control]:focus-visible]:bg-background/60 has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/25"
+          compact
+            ? "h-8 rounded-md border-0 bg-transparent shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-0"
+            : cn(
+                "h-9 rounded-lg border-border/40 bg-muted/40 shadow-none transition-colors hover:bg-muted/60",
+                // Softer focus treatment than the form default — this sits in
+                // a rail, not a form, so a 3px halo reads as an alarm rather
+                // than a caret.
+                "has-[[data-slot=input-group-control]:focus-visible]:border-ring/50 has-[[data-slot=input-group-control]:focus-visible]:bg-background/60 has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/25"
+              )
         )}
       >
-        {/* Compact: 7px in, not 8 — the field has a 1px border and the rows do
-            not, so the glyph lands on their icon column only after paying for
-            it. Then 16px of icon and 10px to the text, which puts the
-            placeholder on the rows' label column; two of those ten are the
-            addon's own `pr-0.5`, because the group's `[&>input]:pl-2` outranks
-            any padding set on the input itself. */}
-        <InputGroupAddon
-          align="inline-start"
-          className={cn("pr-0.5", compact ? "pl-[7px]" : "pl-2.5")}
-        >
+        {/* Compact: 8px in, then 16px of icon and 10px to the text — the
+            `SidebarRow` rhythm, which puts the glyph on the nav rows' icon
+            column and the placeholder on their label column. Two of those ten
+            are the addon's own `pr-0.5`, because the group's
+            `[&>input]:pl-2` outranks any padding set on the input itself. */}
+        <InputGroupAddon align="inline-start" className={cn("pr-0.5", compact ? "pl-2" : "pl-2.5")}>
           <SearchIcon
             className={cn(
               compact ? "size-4" : "size-3.5",
@@ -3144,6 +3159,14 @@ function ChannelListSearch({
     </div>
   )
 }
+
+/**
+ * The scope and filter triggers inside the merged rail's search shell: small,
+ * muted glyphs at the field's end, the size of its own clear button, so they
+ * read as part of the field rather than as buttons parked beside it.
+ */
+const SEARCH_SHELL_CONTROL_CLASS =
+  "size-6 rounded-[5px] text-muted-foreground/80 hover:bg-foreground/[0.06] hover:text-foreground [&_svg]:size-3.5"
 
 /**
  * The sidebar's keycap hint: an outline keycap, so a chord never reads as a
@@ -3246,9 +3269,9 @@ function Header({
 }: {
   outlet: HTMLElement | null
   /**
-   * Draw the workspace header's content inline. Set when the expanded rail is
-   * the workspace sidebar but there is no title bar to project into — the web
-   * shell's default (`webTitleBarEnabled` off).
+   * The expanded rail is the workspace sidebar but there is no title bar to
+   * project into — the web shell's default (`webTitleBarEnabled` off). The
+   * header then draws nothing: the workspace is chosen in the home composer.
    */
   workspaceChrome: boolean
 } & HeaderActionsProps) {
@@ -3285,10 +3308,9 @@ function Header({
   // identity, not the guild title: the workspace switcher (initial · name ·
   // chevron), the way a Slack/Claude sidebar is headed by its workspace, plus
   // the branch chip the workspace is on. The guild accordion inside the rail
-  // already names the open section. On the bar-less web shell the same row
-  // draws inline, so the rail keeps the same head either way. Search and the
-  // list's ⋯ actions are not here — they head the conversation list itself,
-  // next to the rows they act on.
+  // already names the open section. Search and the list's ⋯ actions are not
+  // here — they head the conversation list itself, next to the rows they act
+  // on.
   const workspaceRow = (
     <div
       data-testid="channel-list-workspace-chrome"
@@ -3298,11 +3320,17 @@ function Header({
     </div>
   )
   // Projected: the bar's start outlet is already sized to this rail, so the
-  // row only lays its content out. Inline: `h-[var(--chrome-h)]` + `border-b`,
-  // the same 40px and bottom rule the chat and workbench headers draw, so the
-  // columns still read as one header line. The compact rail (mobile Sheet, a
+  // row only lays its content out. The compact rail (mobile Sheet, a
   // right-edge or collapsed rail — never the workspace sidebar) keeps the
-  // plain guild title with its actions beside it.
+  // plain guild title with its actions beside it, 40px tall with the bottom
+  // rule the chat and workbench headers draw.
+  //
+  // No bar above (the web shell): no header row at all. The home composer's
+  // context bar leads with the same workspace switcher ("workspace › folder ·
+  // worktree", `components/chat/composer/context-bar.tsx`), which is where a
+  // new conversation's workspace is chosen, so a second copy heading the rail
+  // was one control drawn twice. The rail starts at New chat instead.
+  if (!outlet && workspaceChrome) return null
   return outlet ? (
     createPortal(
       <div
@@ -3313,13 +3341,6 @@ function Header({
       </div>,
       outlet
     )
-  ) : workspaceChrome ? (
-    <div
-      data-testid="channel-list-header"
-      className="flex h-[var(--chrome-h)] shrink-0 items-center gap-2 border-b px-2"
-    >
-      {workspaceRow}
-    </div>
   ) : (
     <div
       data-testid="channel-list-header"

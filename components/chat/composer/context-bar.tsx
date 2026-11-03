@@ -7,13 +7,17 @@
  * no expand step. The sentence reads left to right as the execution context
  * a new conversation gets:
  *
+ *   workspace     the active workspace                 (left, then "›")
  *   environment   ProjectEnvironment definition       (left)
  *   repository    workspace root + local checkout      (left)
  *   worktree      off | auto-named | manually named    (left)
  *   IM notify     bell toggle + "…" form panel         (right)
  *
- * No project picker: the sidebar's top-left workspace switcher already owns
- * that — a chat belongs to the workspace it was opened in.
+ * The workspace token is the SAME `WorkspaceSwitcher` the rail opens (its
+ * `composer` trigger), not a picker of its own: a chat belongs to the active
+ * workspace, and switching here or in the sidebar moves one store. It leads
+ * because everything after the "›" lives inside it — on the web the rail
+ * shows only an initial, so this is where the name is read.
  *
  * Wiring, all real:
  *   • env/root/location/base/name feed `useNewChatExecution` → session
@@ -26,12 +30,14 @@
 
 import { Surface } from "@/components/surface/surface"
 import { WebSessionStatus } from "@/components/shell/web-status"
+import { WorkspaceSwitcher } from "@/components/shell/workspace-switcher"
 import { useEffect, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   BellIcon,
   BellOffIcon,
   CheckIcon,
+  ChevronRightIcon,
   EllipsisIcon,
   FolderIcon,
   GitBranchIcon,
@@ -779,6 +785,8 @@ export function ContextBar({ execution, onExecutionChange, project }: ContextBar
         data-tonality="translucent"
         className="relative z-10 -mb-px flex h-9 items-center gap-0.5 rounded-t-2xl bg-card/80 px-1.5 transition-[box-shadow] duration-200 ease-[cubic-bezier(.215,.61,.355,1)]"
       >
+        <WorkspaceSwitcher variant="composer" />
+        <ChevronRightIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/40" />
         {/* A rootless workspace has no checkout for the pickers to act on —
             offer the door to open one rather than dead controls. */}
         {shared ? (
@@ -804,6 +812,22 @@ export function ContextBar({ execution, onExecutionChange, project }: ContextBar
           </>
         ) : (
           <>
+            {/* Folder first, worktree second — the same order as the
+                repository · worktree sentence once a checkout exists: the
+                worktree is cut FROM the folder, so it reads after it. The
+                pickers need a checkout, so the folder token is the door. */}
+            <button
+              type="button"
+              onClick={() => requestWorkspaceDialog("openFolder")}
+              data-testid="ctxbar-open-folder"
+              className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+            >
+              <FolderIcon aria-hidden className="size-3.5 shrink-0" />
+              {tWorkspace("switcher.openFolder")}
+            </button>
+            <span aria-hidden className="shrink-0 text-muted-foreground/40">
+              ·
+            </span>
             <span
               className="flex h-7 items-center gap-1.5 px-2 text-xs text-muted-foreground/70"
               data-testid="ctxbar-managed-hint"
@@ -811,18 +835,6 @@ export function ContextBar({ execution, onExecutionChange, project }: ContextBar
               <GitBranchIcon aria-hidden className="size-3.5 shrink-0" />
               {tExec("worktree")}
             </span>
-            <span aria-hidden className="shrink-0 text-muted-foreground/40">
-              ·
-            </span>
-            {/* The pickers need a checkout — offer the door to open one. */}
-            <button
-              type="button"
-              onClick={() => requestWorkspaceDialog("openFolder")}
-              data-testid="ctxbar-open-folder"
-              className="flex h-7 items-center rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-            >
-              {tWorkspace("switcher.openFolder")}
-            </button>
           </>
         )}
         {/* The sentence tokens are the execution context; notify is a flag, so

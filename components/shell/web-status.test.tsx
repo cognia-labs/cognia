@@ -284,6 +284,29 @@ describe("an inline host for the global scope", () => {
     expect(screen.queryByTestId("web-status-corner-pill")).toBeNull()
   })
 
+  it("drops to glyph-only chips when the composer asks for the compact form", () => {
+    useShellColumnsStore.setState({ sidebarHostsNav: true })
+    const { rerender } = render(
+      <WebStatusProvider enabled>
+        <WebGlobalStatusInline />
+      </WebStatusProvider>
+    )
+    const host = screen.getByTestId("web-status-global-inline")
+    expect(host).not.toHaveAttribute("data-compact")
+    expect(host.className).not.toContain("[&_button]:text-[0px]")
+
+    rerender(
+      <WebStatusProvider enabled>
+        <WebGlobalStatusInline compact />
+      </WebStatusProvider>
+    )
+    const compact = screen.getByTestId("web-status-global-inline")
+    expect(compact).toHaveAttribute("data-compact", "true")
+    // Labels collapse to zero size; the accessible name stays on the button.
+    expect(compact.className).toContain("[&_button]:text-[0px]")
+    expect(within(compact).getByRole("button", { name: "runStatus" })).toBeInTheDocument()
+  })
+
   it("renders nothing outside the web provider", () => {
     render(<WebGlobalStatusInline />)
     expect(screen.queryByTestId("web-status-global-inline")).toBeNull()

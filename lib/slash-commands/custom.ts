@@ -19,6 +19,7 @@
 // why instead of hiding the control.
 
 import { invoke } from "@tauri-apps/api/core"
+import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import type { SlashCommand, SlashScope } from "./builtin"
 import { applyTemplate } from "./builtin"
 import {
@@ -84,10 +85,20 @@ export function projectCommandDirOf(originDir: string | null | undefined): Proje
  * `target: "client"` and simply does not exist) the project scope is read over
  * the workspace filesystem instead, which crosses the pairing. A broken
  * command file never breaks the picker.
+ *
+ * A desktop driving a remote Host is neither case. The scanner is a `client`
+ * command that never crosses to the Host, so handed the Host's `cwd` it read
+ * this machine's disk at a path that only exists over there, "answered", and
+ * the Host's project commands were never looked for. There the two scopes come
+ * from where they live: project commands from the Host's workspace, user
+ * commands from this machine's `~/.claude/commands` (a command is a prompt
+ * template expanded here before sending, so the user's own library still
+ * applies). Project wins a name clash, as it does in the scanner.
  */
 export async function loadCustomSlashCommands(
   cwd: string | null | undefined
 ): Promise<CustomSlashCommand[]> {
+  if (isRemoteHostActive()) return loadForRemoteHost(cwd)
   try {
     const raw = await invoke<RawCommand[]>("slash_commands_scan", {
       cwd: cwd ?? null,
@@ -110,6 +121,34 @@ export async function loadCustomSlashCommands(
     }
     return []
   }
+}
+
+async function loadForRemoteHost(cwd: string | null | undefined): Promise<CustomSlashCommand[]> {
+  const [userScope, projectScope] = await Promise.all([
+    // `cwd: null` keeps the local scanner to the user-global directory.
+    invoke<RawCommand[]>("slash_commands_scan", { cwd: null }).then(
+      (raw) => raw.map(toSlashCommand).filter((command) => command.scope === "user"),
+      (err: unknown) => {
+        if (typeof window !== "undefined") {
+          console.debug("loadCustomSlashCommands local user scan skipped:", err)
+        }
+        return [] as CustomSlashCommand[]
+      }
+    ),
+    cwd
+      ? listWorkspaceCustomCommands(cwd).catch((err: unknown) => {
+          if (typeof window !== "undefined") {
+            console.debug("loadCustomSlashCommands Host workspace scan skipped:", err)
+          }
+          return [] as CustomSlashCommand[]
+        })
+      : Promise.resolve([] as CustomSlashCommand[]),
+  ])
+  const byName = new Map<string, CustomSlashCommand>()
+  for (const command of [...projectScope, ...userScope]) {
+    if (!byName.has(command.name)) byName.set(command.name, command)
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
 function toSlashCommand(raw: RawCommand): CustomSlashCommand {

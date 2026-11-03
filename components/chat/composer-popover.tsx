@@ -16,14 +16,15 @@ import {
   useCallback,
   useDeferredValue,
   forwardRef,
-  Fragment,
   memo,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from "react"
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual"
 import { useTranslations } from "next-intl"
 import {
   ActivityIcon,
@@ -404,7 +405,6 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
   const isDesktop = usePlatform() === "tauri"
   const [highlight, setHighlight] = useState(0)
   const [slashSearch, setSlashSearch] = useState<string | null>(null)
-  const listRef = useRef<HTMLUListElement>(null)
   // The async file-search produces an `ItemList` over time; for slash, memory
   // and bash kinds we derive the list synchronously below. The combined view
   // is `displayList`.
@@ -840,16 +840,6 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
     )
   }, [displayList.items.length])
 
-  // Keep the highlighted row in view while navigating with the keyboard —
-  // the list caps at max-h-72 and long result sets would otherwise scroll
-  // the selection out of sight.
-  useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${highlight}"]`)
-    // `scrollIntoView` is unimplemented in jsdom and absent on very old
-    // engines — guard the method, not just the element.
-    el?.scrollIntoView?.({ block: "nearest" })
-  }, [highlight, displayList.items.length])
-
   // Surface the highlighted workflow element to the composer so it can pulse
   // the matching node on the canvas. Fires with `null` when the highlight is on
   // a non-workflow row or the popover closes (the list empties → item is
@@ -1036,61 +1026,18 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
             <span>{displayList.loading ? t("searching") : displayList.emptyMessage}</span>
           </div>
         ) : (
-          <ul
-            ref={listRef}
-            // The list is the row that gives way when the panel is capped to
-            // the space above the composer (a scroll container's automatic
-            // minimum is 0), but never below one row.
-            className="max-h-80 min-h-14 scroll-py-2 overflow-y-auto overscroll-contain p-1.5"
-          >
-            {displayList.items.map((item, idx) => {
-              // Section headers are non-selectable (no `data-index`, absent from
-              // the flat item array) so keyboard nav still walks every real row.
-              // Two sources: combined `@` mode (subagents/files by kind change),
-              // and the empty-query slash view (Pinned/Recent/category groups).
-              const prev = idx === 0 ? undefined : displayList.items[idx - 1]
-              const header = sectionHeader(item, prev, hasMentionSections, t)
-              return (
-                <Fragment key={itemKey(item, idx)}>
-                  {header ? (
-                    <li
-                      aria-hidden
-                      // Opaque bg + bottom rule: rows slide under a readable bar,
-                      // not a translucent band that lets a half-covered row bleed
-                      // through (and avoids a backdrop-filter composite layer).
-                      className="sticky top-0 z-10 mt-2 border-b border-border/60 bg-popover px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
-                    >
-                      {header}
-                    </li>
-                  ) : null}
-                  <li
-                    data-index={idx}
-                    data-active={idx === highlight ? "true" : undefined}
-                    className={cn(
-                      // scroll-mt-10 clears the ~35px stuck header, so keyboard
-                      // navigation never parks a row's name line underneath it.
-                      "group/row flex scroll-mt-10 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150 motion-reduce:transition-none",
-                      idx === highlight ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
-                    )}
-                    onMouseEnter={() => setHighlight(idx)}
-                    onMouseDown={(e) => {
-                      // Prevent the textarea blur that would otherwise fire.
-                      e.preventDefault()
-                      onPick(item)
-                    }}
-                  >
-                    <ItemRow
-                      item={item}
-                      pinned={item.kind === "slash" ? pinnedSet.has(item.command.name) : false}
-                      onTogglePin={onTogglePin}
-                      onPickAsText={pickAsText}
-                      sessionId={entityContext?.sessionId ?? undefined}
-                    />
-                  </li>
-                </Fragment>
-              )
-            })}
-          </ul>
+          <PopoverRows
+            items={displayList.items}
+            highlight={highlight}
+            setHighlight={setHighlight}
+            hasMentionSections={hasMentionSections}
+            t={t}
+            pinnedSet={pinnedSet}
+            onPick={onPick}
+            onTogglePin={onTogglePin}
+            onPickAsText={pickAsText}
+            sessionId={entityContext?.sessionId ?? undefined}
+          />
         )}
         {trigger?.kind === "bash" ? <BashHint query={trigger.query} /> : null}
         {trigger?.kind === "entity" && entitySearch.reach === "device-copy" ? (
@@ -1352,6 +1299,261 @@ function itemKey(item: PopoverItem, idx: number): string {
     return `shell-${item.completion.from}-${item.completion.to}-${item.completion.insertText}`
   }
   return `idx-${idx}`
+}
+
+/** Row count above which the list is windowed rather than mounted whole. */
+const WINDOW_ROWS_FROM = 40
+/** Height the first windowed frame assumes, before the list is measured (`max-h-80`). */
+const ASSUMED_LIST_HEIGHT = 320
+/** Padding inside the list, top and bottom (`p-1.5`). */
+const LIST_PADDING = 6
+
+type Translate = (key: string, params?: Record<string, string | number | Date>) => string
+
+/** One rendered row: a section header, or a pickable item at `index`. */
+type PopoverRow =
+  | { kind: "header"; key: string; label: string }
+  | { kind: "item"; key: string; item: PopoverItem; index: number }
+
+interface PopoverRowsProps {
+  items: PopoverItem[]
+  highlight: number
+  setHighlight: (index: number) => void
+  hasMentionSections: boolean
+  t: Translate
+  pinnedSet: ReadonlySet<string>
+  onPick: (item: PopoverItem) => void
+  onTogglePin?: (name: string) => void
+  onPickAsText: (item: PopoverItem) => void
+  sessionId?: string
+}
+
+/**
+ * The popover's rows, with their section headers.
+ *
+ * Every row used to be mounted, and every highlight move or keystroke rebuilt
+ * all of them: the empty `/` view (some sixty commands under seven headers)
+ * cost ~80 ms per frame in a profile, and the list only grows as plugins,
+ * skills and a Host's custom commands add theirs. Past `WINDOW_ROWS_FROM` rows
+ * only the ones in view (plus an overscan) are mounted, so the cost stays flat
+ * however many commands there are. A short list (any filtered result, an `@`
+ * search) renders whole, which keeps its native sticky headers.
+ */
+function PopoverRows(props: PopoverRowsProps) {
+  const { items, hasMentionSections, t } = props
+  const rows = useMemo(() => {
+    const out: PopoverRow[] = []
+    items.forEach((item, index) => {
+      // Section headers are non-selectable (no `data-index`, absent from the
+      // flat item array) so keyboard nav still walks every real row. Two
+      // sources: combined `@` mode (subagents/files by kind change), and the
+      // empty-query slash view (Pinned/Recent/category groups).
+      const header = sectionHeader(item, items[index - 1], hasMentionSections, t)
+      if (header) out.push({ kind: "header", key: `header-${index}`, label: header })
+      out.push({ kind: "item", key: itemKey(item, index), item, index })
+    })
+    return out
+  }, [hasMentionSections, items, t])
+
+  return rows.length > WINDOW_ROWS_FROM ? (
+    <WindowedRows rows={rows} {...props} />
+  ) : (
+    <WholeRows rows={rows} {...props} />
+  )
+}
+
+// The list is the row that gives way when the panel is capped to the space
+// above the composer (a scroll container's automatic minimum is 0), but never
+// below one row.
+const LIST_CLASS = "max-h-80 min-h-14 overflow-y-auto overscroll-contain"
+
+const HEADER_CLASS =
+  // Opaque bg + bottom rule: rows slide under a readable bar, not a translucent
+  // band that lets a half-covered row bleed through (and avoids a
+  // backdrop-filter composite layer).
+  "z-10 border-b border-border/60 bg-popover px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+
+function itemRowProps(row: Extract<PopoverRow, { kind: "item" }>, props: PopoverRowsProps) {
+  const { item, index } = row
+  const active = index === props.highlight
+  return {
+    "data-index": index,
+    "data-active": active ? "true" : undefined,
+    className: cn(
+      // scroll-mt-10 clears the ~35px stuck header, so keyboard navigation
+      // never parks a row's name line underneath it.
+      "group/row flex scroll-mt-10 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors duration-150 motion-reduce:transition-none",
+      active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+    ),
+    onMouseEnter: () => props.setHighlight(index),
+    onMouseDown: (event: ReactMouseEvent) => {
+      // Prevent the textarea blur that would otherwise fire.
+      event.preventDefault()
+      props.onPick(item)
+    },
+    children: (
+      <ItemRow
+        item={item}
+        pinned={item.kind === "slash" ? props.pinnedSet.has(item.command.name) : false}
+        onTogglePin={props.onTogglePin}
+        onPickAsText={props.onPickAsText}
+        sessionId={props.sessionId}
+      />
+    ),
+  }
+}
+
+function WholeRows(props: PopoverRowsProps & { rows: PopoverRow[] }) {
+  const { rows, highlight } = props
+  const listRef = useRef<HTMLUListElement>(null)
+  // Keep the highlighted row in view while navigating with the keyboard — the
+  // list is capped and long result sets would otherwise scroll the selection
+  // out of sight.
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${highlight}"]`)
+    // `scrollIntoView` is unimplemented in jsdom and absent on very old
+    // engines — guard the method, not just the element.
+    el?.scrollIntoView?.({ block: "nearest" })
+  }, [highlight, rows.length])
+
+  return (
+    <ul ref={listRef} className={cn(LIST_CLASS, "scroll-py-2 p-1.5")}>
+      {rows.map((row) =>
+        row.kind === "header" ? (
+          <li key={row.key} aria-hidden className={cn(HEADER_CLASS, "sticky top-0 mt-2")}>
+            {row.label}
+          </li>
+        ) : (
+          <li key={row.key} {...itemRowProps(row, props)} />
+        )
+      )}
+    </ul>
+  )
+}
+
+/**
+ * The windowed form. Its own component because `useVirtualizer` opts whatever
+ * calls it out of React Compiler memoization.
+ *
+ * Headers stay sticky the way TanStack's sticky example does it: the header of
+ * the section at the top of the view is always kept in the rendered range and
+ * drawn `position: sticky`, every other row absolutely at its offset.
+ *
+ * With no layout (jsdom, or a container that is not displayed) the list
+ * measures 0 tall and a window would hold nothing, so it renders every row
+ * instead; windowing has nothing to save there anyway.
+ */
+function WindowedRows(props: PopoverRowsProps & { rows: PopoverRow[] }) {
+  const { rows, highlight } = props
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const headerIndexes = useMemo(
+    () => rows.flatMap((row, index) => (row.kind === "header" ? [index] : [])),
+    [rows]
+  )
+  const rowOfItem = useMemo(() => {
+    const map = new Map<number, number>()
+    rows.forEach((row, index) => {
+      if (row.kind === "item") map.set(row.index, index)
+    })
+    return map
+  }, [rows])
+  const stickyAt = useCallback(
+    (startIndex: number) => headerIndexes.findLast((index) => index <= startIndex),
+    [headerIndexes]
+  )
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual returns non-memoizable functions by design; isolated in this component
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => (rows[index]?.kind === "header" ? 31 : 52),
+    getItemKey: (index) => rows[index]?.key ?? index,
+    overscan: 6,
+    paddingStart: LIST_PADDING,
+    paddingEnd: LIST_PADDING,
+    initialRect: { width: 0, height: ASSUMED_LIST_HEIGHT },
+    // `data-index` already names the ITEM a row shows (keyboard selection
+    // reads it); the virtualizer counts rows, headers included.
+    indexAttribute: "data-row",
+    rangeExtractor: (range) => {
+      const sticky = stickyAt(range.startIndex)
+      const indexes = defaultRangeExtractor(range)
+      return sticky === undefined || indexes.includes(sticky)
+        ? indexes
+        : [sticky, ...indexes].sort((a, b) => a - b)
+    },
+  })
+  // `scrollRect` is null until the list is first measured (that frame windows
+  // against `ASSUMED_LIST_HEIGHT`), then the measured box.
+  const laidOut = (virtualizer.scrollRect?.height ?? ASSUMED_LIST_HEIGHT) > 0
+
+  useEffect(() => {
+    const row = rowOfItem.get(highlight)
+    if (row === undefined || !laidOut) return
+    virtualizer.scrollToIndex(row, { align: "auto" })
+  }, [highlight, laidOut, rowOfItem, virtualizer])
+
+  if (!laidOut) {
+    return (
+      <div ref={scrollRef} className={LIST_CLASS}>
+        <ul className="p-1.5">
+          {rows.map((row) =>
+            row.kind === "header" ? (
+              <li key={row.key} aria-hidden className={cn(HEADER_CLASS, "sticky top-0 mt-2")}>
+                {row.label}
+              </li>
+            ) : (
+              <li key={row.key} {...itemRowProps(row, props)} />
+            )
+          )}
+        </ul>
+      </div>
+    )
+  }
+
+  const activeSticky = stickyAt(virtualizer.range?.startIndex ?? 0)
+  return (
+    <div ref={scrollRef} className={LIST_CLASS} data-windowed="true">
+      <ul className="relative mx-1.5" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const row = rows[virtualRow.index]
+          if (!row) return null
+          const sticky = virtualRow.index === activeSticky
+          const placement = sticky
+            ? { position: "sticky" as const, top: 0 }
+            : {
+                position: "absolute" as const,
+                top: 0,
+                left: 0,
+                right: 0,
+                transform: `translateY(${virtualRow.start}px)`,
+              }
+          return row.kind === "header" ? (
+            <li
+              key={row.key}
+              ref={virtualizer.measureElement}
+              data-row={virtualRow.index}
+              aria-hidden
+              // A header's top margin sits inside its measured box (pt), so the
+              // offsets the virtualizer computes include it.
+              className={cn(HEADER_CLASS, "pt-3.5")}
+              style={placement}
+            >
+              {row.label}
+            </li>
+          ) : (
+            <li
+              key={row.key}
+              ref={virtualizer.measureElement}
+              data-row={virtualRow.index}
+              {...itemRowProps(row, props)}
+              style={placement}
+            />
+          )
+        })}
+      </ul>
+    </div>
+  )
 }
 
 // Memoised so navigating the highlight (a parent-level class change) only

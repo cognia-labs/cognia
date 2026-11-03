@@ -16,6 +16,13 @@ jest.mock("@/components/desktop/status-bar-zone", () => ({
   StatusBarZone: ({ items }: { items: { id: string }[] }) =>
     items.map(({ id }) => <span key={id} data-testid={`segment-${id}`} />),
 }))
+// The workspace token is the shared switcher; its list, dialogs and store are
+// that component's suite. Here only its place in the sentence matters.
+jest.mock("@/components/shell/workspace-switcher", () => ({
+  WorkspaceSwitcher: ({ variant }: { variant?: string }) => (
+    <button type="button" data-testid="workspace-switcher" data-variant={variant} />
+  ),
+}))
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import { useState } from "react"
 
@@ -147,6 +154,28 @@ describe("ContextBar", () => {
     const repo = within(bar).getByTestId("ctxbar-repo")
     const worktree = within(bar).getByTestId("ctxbar-worktree")
     expect(repo.compareDocumentPosition(worktree) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it("leads with the shared workspace switcher, ahead of every execution token", async () => {
+    await renderBar()
+    const bar = screen.getByTestId("context-bar")
+    const workspace = within(bar).getByTestId("workspace-switcher")
+    expect(workspace).toHaveAttribute("data-variant", "composer")
+    expect(bar.querySelector("button, [data-testid]")).toBe(workspace)
+    expect(
+      workspace.compareDocumentPosition(within(bar).getByTestId("ctxbar-repo")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("keeps the workspace switcher when the workspace has no folder yet", async () => {
+    await renderBar({ project: { id: "p1", roots: [] } as unknown as Project })
+    expect(
+      screen
+        .getByTestId("workspace-switcher")
+        .compareDocumentPosition(screen.getByTestId("ctxbar-open-folder")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
   })
 
   it("hides the environment token when the workspace defines none", async () => {
@@ -300,6 +329,14 @@ describe("ContextBar", () => {
     await renderBar({ project: { id: "p1", roots: [] } as unknown as Project })
     expect(screen.queryByTestId("ctxbar-repo")).not.toBeInTheDocument()
     expect(screen.getByTestId("ctxbar-managed-hint")).toHaveTextContent("Worktree")
+    // Folder first, worktree after: the worktree is cut from the folder, the
+    // same order as the repository · worktree sentence once a root exists.
+    expect(
+      screen
+        .getByTestId("ctxbar-open-folder")
+        .compareDocumentPosition(screen.getByTestId("ctxbar-managed-hint")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     const seen: string[] = []
     const onReq = (e: Event) => seen.push((e as CustomEvent<{ kind: string }>).detail.kind)
     window.addEventListener("cognia:workspace-dialog:request", onReq)

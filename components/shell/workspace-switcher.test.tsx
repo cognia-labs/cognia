@@ -212,6 +212,37 @@ describe("WorkspaceSwitcher", () => {
     expect(screen.getByRole("button", { name: "active" })).toHaveAttribute("title", name)
   })
 
+  it("composer variant names the workspace in the context bar and switches the same store", () => {
+    act(() => {
+      useProjectStore.setState({
+        projects: [
+          makeProject("p1", { name: "Backend", rootDir: "/srv" }),
+          makeProject("p2", { name: "Web", rootDir: "/web" }),
+        ],
+        activeProjectId: "p1",
+      })
+    })
+    render(
+      <TooltipProvider>
+        <WorkspaceSwitcher variant="composer" />
+      </TooltipProvider>
+    )
+    const trigger = screen.getByTestId("workspace-switcher")
+    expect(trigger).toHaveAttribute("data-variant", "composer")
+    expect(trigger).toHaveAttribute("title", "Backend")
+    expect(trigger).toHaveTextContent("Backend")
+    // Outside the rail's roving order: a plain tab stop in the composer strip.
+    expect(trigger).not.toHaveAttribute("tabindex", "-1")
+    fireEvent.click(trigger)
+    expect(screen.getByRole("dialog", { name: "switchTitle" })).toHaveAttribute(
+      "data-side",
+      "bottom"
+    )
+    fireEvent.click(screen.getByTestId("workspace-switch-p2"))
+    expect(useProjectStore.getState().activeProjectId).toBe("p2")
+    expect(trigger).toHaveTextContent("Web")
+  })
+
   it("wide variant falls back to the 'none' label with a folder glyph", () => {
     render(
       <TooltipProvider>
