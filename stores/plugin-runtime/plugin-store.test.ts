@@ -14,10 +14,13 @@ jest.mock("@/lib/plugin/core/policy-runtime", () => ({
 import {
   activatePluginAccountStorage,
   clearPluginAccountStorage,
+  flushPluginPersistence,
   normalizePersistedPluginStatus,
   pluginAccountStorageKey,
+  purgePluginAccountStorage,
   usePluginStore,
 } from "./plugin-store"
+import { PERSIST_COALESCE_MAX_WAIT_MS } from "@/stores/persist-storage"
 import * as barrel from "./"
 import type { PluginStatus } from "@/types/plugin/plugin"
 
@@ -103,6 +106,9 @@ describe("persist migration (v1 -> v2)", () => {
 describe("LocalProfile persistence", () => {
   afterEach(() => {
     clearPluginAccountStorage()
+    // Land the clear's coalesced write before wiping, as the old synchronous
+    // write did; otherwise it lands on the next test's planted snapshot.
+    flushPluginPersistence()
     window.localStorage.clear()
   })
 
@@ -143,6 +149,76 @@ describe("LocalProfile persistence", () => {
     expect(usePluginStore.getState().plugins.builtin.status).toBe("installed")
     expect(usePluginStore.getState().plugins.demo.status).toBe("disabled")
     expect(window.localStorage.getItem("cognia-plugins")).toBeNull()
+  })
+})
+
+describe("coalesced persistence", () => {
+  const writesTo = (spy: jest.SpyInstance, key: string) =>
+    spy.mock.calls.filter(([name]) => name === key).length
+  const persistedPolicy = (key: string) =>
+    JSON.parse(window.localStorage.getItem(key) ?? "null")?.state?.globalPermissionPolicy
+  let setItem: jest.SpyInstance
+
+  beforeEach(() => {
+    jest.useFakeTimers()
+    window.localStorage.clear()
+    setItem = jest.spyOn(Storage.prototype, "setItem")
+  })
+
+  afterEach(() => {
+    clearPluginAccountStorage()
+    flushPluginPersistence()
+    setItem.mockRestore()
+    jest.useRealTimers()
+    window.localStorage.clear()
+  })
+
+  it("writes a burst of store changes as one snapshot", () => {
+    activatePluginAccountStorage("acct_burst")
+    const key = pluginAccountStorageKey("acct_burst")
+    jest.advanceTimersByTime(PERSIST_COALESCE_MAX_WAIT_MS)
+    setItem.mockClear()
+
+    for (const policy of ["allow", "deny", "ask", "allow", "deny"] as const) {
+      usePluginStore.setState({ globalPermissionPolicy: policy })
+    }
+    expect(writesTo(setItem, key)).toBe(0)
+
+    jest.advanceTimersByTime(PERSIST_COALESCE_MAX_WAIT_MS)
+    expect(writesTo(setItem, key)).toBe(1)
+    expect(persistedPolicy(key)).toBe("deny")
+  })
+
+  it("lands the outgoing account's pending change under its own key when switching", () => {
+    activatePluginAccountStorage("acct_from")
+    usePluginStore.setState({ globalPermissionPolicy: "deny" })
+
+    activatePluginAccountStorage("acct_to")
+
+    expect(persistedPolicy(pluginAccountStorageKey("acct_from"))).toBe("deny")
+    // The incoming account starts from its own (empty) snapshot, not the
+    // outgoing account's pending state.
+    expect(usePluginStore.getState().globalPermissionPolicy).toBe("ask")
+  })
+
+  it("keeps the signed-out account's latest change on disk when clearing", () => {
+    activatePluginAccountStorage("acct_out")
+    usePluginStore.setState({ globalPermissionPolicy: "allow" })
+
+    clearPluginAccountStorage()
+
+    expect(persistedPolicy(pluginAccountStorageKey("acct_out"))).toBe("allow")
+  })
+
+  it("does not resurrect a purged account's key from a pending write", () => {
+    activatePluginAccountStorage("acct_purge")
+    const key = pluginAccountStorageKey("acct_purge")
+    usePluginStore.setState({ globalPermissionPolicy: "deny" })
+
+    purgePluginAccountStorage("acct_purge")
+    jest.advanceTimersByTime(PERSIST_COALESCE_MAX_WAIT_MS)
+
+    expect(window.localStorage.getItem(key)).toBeNull()
   })
 })
 
@@ -238,9 +314,13 @@ describe("independent plugin identity", () => {
     await store.uninstallPlugin(manifest.id, { viaManager: false, skipFileRemoval: true })
     const key = usePluginStore.persist.getOptions().name
     if (!key) throw new Error("Plugin persistence must have a storage key")
+    // Writes are coalesced; read the key straight from disk only after a flush.
+    flushPluginPersistence()
     const saved = window.localStorage.getItem(key)
     expect(saved).toContain('"removedPlugins":{"independent-demo":true}')
     usePluginStore.setState({ removedPlugins: {} })
+    // Land that write first, then put the saved snapshot back on disk.
+    flushPluginPersistence()
     window.localStorage.setItem(key, saved!)
     await usePluginStore.persist.rehydrate()
     store.discoverPlugin(manifest, "builtin", "builtin://independent-demo")

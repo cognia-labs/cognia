@@ -4,7 +4,7 @@
 
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
-import { persistLocalStorage } from "@/stores/persist-storage"
+import { persistCoalescedLocalStorage } from "@/stores/persist-storage"
 import { invoke } from "@tauri-apps/api/core"
 import type {
   ExtensionCompatibilityDiagnostic,
@@ -211,6 +211,22 @@ const initialState: PluginStoreState & {
 }
 
 const LEGACY_PLUGIN_STORAGE_KEY = "cognia-plugins"
+
+/**
+ * The plugin snapshot carries every plugin's full manifest (~0.5 MB with the
+ * built-ins), and the store changes dozens of times while plugins discover,
+ * load, enable and register tools. Persisting each change re-serialized and
+ * re-wrote the whole snapshot on the main thread (468 writes, ~227 MB, in the
+ * first seconds of opening /plugins), which is what made the page stutter.
+ * Writes are coalesced instead; the account functions below flush or cancel
+ * the pending write wherever they read or delete the key directly.
+ */
+const pluginPersistStorage = persistCoalescedLocalStorage<Partial<PluginState>>()
+
+/** Write the pending plugin snapshot now (tests, and direct readers of the key). */
+export function flushPluginPersistence(): void {
+  pluginPersistStorage.flush()
+}
 
 export function pluginAccountStorageKey(localAccountId: string): string {
   if (!localAccountId.trim()) throw new Error("Plugin account storage requires an account id.")
@@ -1142,7 +1158,7 @@ export const usePluginStore = create<PluginState>()(
     {
       name: LEGACY_PLUGIN_STORAGE_KEY,
       version: 2,
-      storage: persistLocalStorage(),
+      storage: pluginPersistStorage,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Record<string, unknown>
         if (version === 0) {
@@ -1253,6 +1269,9 @@ installHostPluginDispatch()
  */
 export function activatePluginAccountStorage(localAccountId: string): void {
   if (typeof window === "undefined") return
+  // Land the outgoing key's pending snapshot under ITS name before the store
+  // is pointed elsewhere, and before the localStorage reads below.
+  pluginPersistStorage.flush()
   const storageKey = pluginAccountStorageKey(localAccountId)
   if (window.localStorage.getItem(storageKey) === null) {
     const legacy = window.localStorage.getItem(LEGACY_PLUGIN_STORAGE_KEY)
@@ -1266,13 +1285,18 @@ export function activatePluginAccountStorage(localAccountId: string): void {
 }
 
 export function clearPluginAccountStorage(): void {
+  // The signed-out account keeps its latest snapshot on disk.
+  pluginPersistStorage.flush()
   usePluginStore.persist.setOptions({ name: LEGACY_PLUGIN_STORAGE_KEY })
   usePluginStore.setState({ ...initialState, eventListeners: new Map() })
 }
 
 export function purgePluginAccountStorage(localAccountId: string): void {
   if (typeof window === "undefined") return
-  window.localStorage.removeItem(pluginAccountStorageKey(localAccountId))
+  const storageKey = pluginAccountStorageKey(localAccountId)
+  // A pending write would otherwise land after the removal and resurrect it.
+  pluginPersistStorage.cancel(storageKey)
+  window.localStorage.removeItem(storageKey)
 }
 
 function readPluginAccountState(storageKey: string): Partial<PluginState> {

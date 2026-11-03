@@ -2,7 +2,11 @@
 // regressed on Node 26 is the one with NO `window`, and only the node env has
 // that natively — under jsdom, `window` is non-configurable and cannot be
 // removed or redefined at all.
-import { resolvePersistStorage, persistLocalStorage } from "./persist-storage"
+import {
+  persistCoalescedLocalStorage,
+  persistLocalStorage,
+  resolvePersistStorage,
+} from "./persist-storage"
 
 type WindowHost = { window?: { localStorage?: unknown } }
 
@@ -79,5 +83,21 @@ describe("resolvePersistStorage", () => {
     const storage = persistLocalStorage()
     expect(() => storage?.setItem("k", { state: {}, version: 0 })).not.toThrow()
     expect(storage?.getItem("k")).toBeNull()
+  })
+})
+
+describe("persistCoalescedLocalStorage without a browser", () => {
+  it("passes writes straight through to the inert storage and holds nothing", () => {
+    jest.useFakeTimers()
+    try {
+      const storage = persistCoalescedLocalStorage<{ a: number }>()
+      expect(() => storage.setItem("k", { state: { a: 1 }, version: 0 })).not.toThrow()
+      // No pending entry means no timer left running in a CLI/sidecar process.
+      expect(storage.hasPending()).toBe(false)
+      expect(jest.getTimerCount()).toBe(0)
+      expect(storage.getItem("k")).toBeNull()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })
