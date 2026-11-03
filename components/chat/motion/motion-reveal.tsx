@@ -18,7 +18,14 @@
  */
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { createContext, useContext, useState, type CSSProperties, type ReactNode } from "react"
+import {
+  createContext,
+  memo,
+  useContext,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react"
 
 import { useSettingsStore } from "@/stores/settings"
 import { speedToDurationScale } from "@/lib/appearance/motion-applier"
@@ -294,8 +301,15 @@ export interface MotionSelectionIndicatorProps {
  *
  * The caller positions it — this renders an absolutely-filled layer, so the
  * item needs `relative` and its content needs to sit above it.
+ *
+ * Memoized: every render of a mounted `layoutId` element makes motion snapshot
+ * it (`getSnapshotBeforeUpdate` → `willUpdate`), and each snapshot forces a
+ * full-page layout mid-commit. Hosts like the rail re-render with every plugin
+ * registry or context-key change, which cost ~470 ms of forced layout while
+ * /plugins loaded. With unchanged props there is nothing to animate, so the
+ * indicator skips those renders; a selection change still re-renders it.
  */
-export function MotionSelectionIndicator({
+export const MotionSelectionIndicator = memo(function MotionSelectionIndicator({
   groupId,
   active,
   className,
@@ -309,7 +323,7 @@ export function MotionSelectionIndicator({
   return (
     <motion.span aria-hidden layoutId={groupId} className={className} transition={MOBILE_SPRING} />
   )
-}
+})
 
 export interface MotionStatusSwapProps {
   /** Changing this key crossfades the old glyph out and the new one in. */
