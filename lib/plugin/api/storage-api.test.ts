@@ -69,6 +69,7 @@ Object.defineProperty(global, "localStorage", { value: localStorageMock })
 
 describe("PluginStorageAPI", () => {
   beforeEach(() => {
+    jest.restoreAllMocks()
     localStorageMock.clear()
     headless = false
   })
@@ -133,6 +134,49 @@ describe("PluginStorageAPI", () => {
       expect(await api.keys()).toHaveLength(0)
       expect(await api.get("a")).toBeUndefined()
     })
+  })
+
+  describe("browser storage failures", () => {
+    it.each([
+      new DOMException("Browser storage is full", "QuotaExceededError"),
+      new DOMException("Browser storage is blocked", "SecurityError"),
+      new Error("Browser write failed"),
+    ])("rejects set with the original %s from setItem", async (error) => {
+      const api = createStorageAPI("test-plugin")
+      await api.set("checkpoint", { cursor: "previous" })
+      jest.spyOn(localStorageMock, "setItem").mockImplementationOnce(() => {
+        throw error
+      })
+
+      await expect(api.set("checkpoint", { cursor: "next" })).rejects.toBe(error)
+      expect(await api.get("checkpoint")).toEqual({ cursor: "previous" })
+    })
+
+    it("rejects setSecure when the browser refuses the encrypted write", async () => {
+      const api = createStorageAPI("test-plugin")
+      const error = new DOMException("Browser storage is full", "QuotaExceededError")
+      jest.spyOn(localStorageMock, "setItem").mockImplementationOnce(() => {
+        throw error
+      })
+
+      await expect(api.setSecure("secret", "value")).rejects.toBe(error)
+      expect(await api.has("secret")).toBe(false)
+    })
+
+    it.each(["remove", "delete"] as const)(
+      "rejects %s with the original removeItem failure and retains the value",
+      async (method) => {
+        const api = createStorageAPI("test-plugin")
+        await api.set("checkpoint", "previous")
+        const error = new DOMException("Browser storage is blocked", "SecurityError")
+        jest.spyOn(localStorageMock, "removeItem").mockImplementationOnce(() => {
+          throw error
+        })
+
+        await expect(api[method]("checkpoint")).rejects.toBe(error)
+        expect(await api.get("checkpoint")).toBe("previous")
+      }
+    )
   })
 
   describe("namespace isolation", () => {

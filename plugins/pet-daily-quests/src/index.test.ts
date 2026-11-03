@@ -80,6 +80,29 @@ afterEach(async () => {
 })
 
 describe("pet-daily-quests activation", () => {
+  it("keeps activation and quest progress working when persistence fails", async () => {
+    const harness = makeCtx()
+    const error = new DOMException("Browser storage is full", "QuotaExceededError")
+    jest.spyOn(harness.ctx.storage, "set").mockRejectedValue(error)
+    const warn = jest.spyOn(harness.ctx.logger, "warn")
+
+    await activate(harness)
+    expect(harness.registerExtension).toHaveBeenCalledWith("pet.console.tab", expect.any(Function))
+    expect(warn).toHaveBeenCalledWith("Quest state could not be saved", error)
+
+    warn.mockClear()
+    completeInteractionQuests(harness.deliver)
+    // Flush the detached persistence attempts started by the event callbacks.
+    await Promise.resolve()
+    expect(warn).toHaveBeenCalledWith("Quest state could not be saved", error)
+    expect(getQuestState()!.quests.some((quest) => quest.done)).toBe(true)
+
+    const doneQuest = getQuestState()!.quests.find((quest) => quest.done)!
+    await expect(claimQuestReward(doneQuest.id)).resolves.not.toBeNull()
+    expect(getQuestState()!.quests.find((quest) => quest.id === doneQuest.id)?.claimed).toBe(true)
+    expect(await harness.ctx.storage.get("quests")).toBeUndefined()
+  })
+
   it("rolls today's quests, persists them, and registers the console tab", async () => {
     const harness = makeCtx()
     await activate(harness)

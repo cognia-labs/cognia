@@ -79,7 +79,14 @@ export default definePlugin({
   manifest,
   activate: async (ctx) => {
     configureQuestStore(await ctx.storage.get<QuestState>(STORAGE_KEY), {
-      persist: (state) => ctx.storage.set(STORAGE_KEY, state),
+      persist: async (state) => {
+        try {
+          await ctx.storage.set(STORAGE_KEY, state)
+        } catch (error) {
+          // Persistence is optional: activation and quest updates keep working in memory.
+          ctx.logger.warn("Quest state could not be saved", error)
+        }
+      },
       reward: async (reward) => {
         const availability = await ctx.pet.getAvailability()
         if (!availability.available) throw new PetCannotReceiveRewardError(availability.reason)

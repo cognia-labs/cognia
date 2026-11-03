@@ -140,10 +140,10 @@ export function createStorageAPI(pluginId: string): PluginStorageAPI {
 
         localStorage.setItem(getStorageKey(pluginId, key), serialized)
       } catch (err) {
-        if (durable || (err instanceof Error && err.message.includes("storage limit"))) {
-          throw err
+        if (!durable && !(err instanceof Error && err.message.includes("storage limit"))) {
+          logger.error(`Failed to write storage key: ${key}`, err)
         }
-        logger.error(`Failed to write storage key: ${key}`, err)
+        throw err
       }
     },
 
