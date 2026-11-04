@@ -1,13 +1,13 @@
 ---
 title: "0250 — The runtime is a headless kernel the desktop embeds"
-description: "Every long-running behaviour lives in one kernel, designed for an always-on host with no UI. Each host has one kernel and one data authority. On the desktop the kernel runs in the WebView, with one owner per process. A one-week spike measured the alternative, a local brain process, and rejected it for now on startup time and memory. Paired devices are clients. The standalone browser and mobile path stays a lightweight BYOK path outside the kernel. Clients queue intents while disconnected, and no host writes to a fallback authority. The kernel shares four primitives and gives execution engines explicit owners. Contracts are checked across languages. Plugins move to a new host/UI contract in one cutover. Migration is strangler-style, measured against reproducible inventories, and guarded by a dual-host test lane."
+description: "Every long-running behaviour lives in one kernel, designed for an always-on host with no UI. Each host has one kernel and one data authority. On the desktop the kernel runs in the WebView, with one owner per process. A one-week spike measured the alternative, a local brain process, and rejected it for now on startup time and memory. Paired devices are clients. The standalone browser and mobile path stays a lightweight BYOK path outside the kernel. Clients queue intents while disconnected, and no host writes to a fallback authority. The kernel shares four primitives and gives execution engines explicit owners. Contracts are checked across languages. Plugins move to a new host/UI contract in one cutover. Migration is strangler-style, measured against reproducible inventories, and guarded by a dual-host test lane. Outside the kernel, every feature is a module declared in data-only manifests, central registries are generated per host, vendors split into protocol, auth and business layers, and gates hold the direction of every dependency."
 ---
 
 # ADR 0250 — The runtime is a headless kernel the desktop embeds
 
 **Status:** Proposed
 **Date:** 2026-11-01
-**Revised:** 2026-11-01, after an adversarial review and an independent audit (see the audit's §10). §2 was decided on 2026-11-01 from spike S1.
+**Revised:** 2026-11-01, after an adversarial review and an independent audit (see the audit's §10). §2 was decided on 2026-11-01 from spike S1. §14 was added and §9 and §13 amended on 2026-11-04, from the feature-module analysis.
 
 **Related:**
 - [ADR-0059](./0059-cloud-deployment-headless-brain): headless brain, registry rule
@@ -17,8 +17,13 @@ description: "Every long-running behaviour lives in one kernel, designed for an 
 - [ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request): outbound authorization
 - [ADR-0243](./0243-a-run-acts-for-someone-and-says-who): acting identity
 - [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads), [ADR-0248](./0248-a-person-is-never-queued-behind-automated-work), [ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent)
+- [ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched): capability grants, the only shape a module adds to a run (§14)
+- [ADR-0246](./0246-a-business-plugin-reaches-a-service-through-a-granted-connection): granted connections, the model for capability ports and the vendor layers (§14)
+- [ADR-0209](./0209-a-cogpack-pins-plugins-and-a-cogset-owns-what-runs): cogsets, how a vendor's pieces ship together (§14)
+- [ADR-0068](./0068-frontend-package-extraction-and-compile-speed): its S5 store slicing follows §14's settings-key ownership
+- [ADR-0196](./0196-a-library-crate-links-tauri-only-when-asked): Rust crate layering, which §14 leaves alone
 
-**Evidence:** `docs/research/architecture-convergence-audit-2026-11-01.md`. **Plan:** `docs/plans/2026-11-01-convergence-phase-0.md`.
+**Evidence:** `docs/research/architecture-convergence-audit-2026-11-01.md`; for §14, `docs/research/feature-module-analysis-2026-11-04.md` (counter: `scripts/gates/convergence/subsystem-deps.mjs`). **Plan:** `docs/plans/2026-11-01-convergence-phase-0.md`.
 
 ## Context
 
@@ -147,6 +152,13 @@ The declaration is an engine/host port contract, checked by a test per path. Mer
 - **Whom it affects.** Only first-party plugins are migrated; there are no external authors to support.
 - **When.** The cutover happens with phase 2, when the kernel moves.
 - **Host-side UI calls.** A plugin running on the host that asks for UI work, such as a dialog or a selection change, is routed to an online client. With no client online, the call fails with a named error.
+- **One schema with modules.** A plugin's host layer and UI layer are the two data-only manifests a module declares (§14). The plugin contract extends that schema with what only a plugin needs: packaging, signature, permissions and versioning. It does not define a second shape.
+- **The host API follows its owners.** The 52 feature namespaces of today's plugin host API move to the modules that own them, each contributed through the module's `pluginApi` field, in the same cutover. The plugin host itself (dispatch, permission gate, bridges, lifecycle) stays in the kernel.
+- **A module becomes a plugin only when it can.** After the cutover, a module moves out as a plugin (§14, M4) only when all three hold:
+  - every host dependency it has is within the surface the plugin contract exposes;
+  - no other module imports it;
+  - its tables are settled. Plugin tables are namespaced `${pluginId}:${tableName}` (`lib/plugin/dexie/namespace.ts`), so turning a core table into a plugin table renames it, which is a data migration. Each such module gets its own decision: drop the old data, migrate it explicitly, or keep the core table and grant the plugin access.
+  - A module that needs Rust windows or host commands of its own stays a module, because a plugin cannot carry that code.
 - **The contract itself** is its own ADR, written during phases 0a and 1 from the plugin API matrix (§13).
 
 ### 10. Chokepoints a gate can enumerate
@@ -191,10 +203,106 @@ Each phase has its own worktree branch and evidence ledger. Codex does the mecha
 | 0a. Truth and safety net | Gate health on a clean worktree; reproducible inventories and counter; baseline-growth check; dual-host harness and PR lane; host adapter matrix; plugin API matrix | Inventories committed; baselines exact; harness drives one behaviour on both hosts in CI |
 | S1. Local-brain spike (parallel to 0a, one week) | Five measured questions: storage, startup, migration, one turn across two windows, crash and restart | Done: 2a rejected for now; §2 decided as 2b |
 | 0b. Fixes (parallel, not waiting for S1) | Router-fusion outbox with row upgrade and due wake; cron divergence and swallowed failures; no fallback writes; persisted outbound authorization provenance; the 26 new host-parity findings; headless-registry gate widened | All gates green on `dev`; each fix has its test |
+| M0. Module inventory (parallel to 0b, about a week) | Manifest types `defineHostModule` and `defineUiModule`; transitional ownership table; G1, G6, G7 and G8 as ratchets, G2 reporting only; `lib/sync/tombstones.ts` moved into `lib/db` | Baselines committed and compared against the merge base |
 | 1. Primitives | Durable queue and limiter; every queue and business cap migrated; native backpressure inventoried | Queue and business-cap inventories empty; ADR-0248 on the limiter |
-| 2. Kernel out of the UI | Single-owner WebView kernel booted from the registry, with the adapter matrix and the heavy-account storage budget; chat engine extracted; every runtime initializer moved or excluded with a physical reason; plugin contract cutover | Undocumented gaps 0; kernel UI-store reads 0; `lib`→`hooks`/`components` 0; host-parity only physical; first-party plugins on the new contract |
+| M1. First registries and pilots (with phase 1) | Generator for settings sections, search providers and slash commands; pilots `squads`, `eval`, then Feishu's three layers; G2, G3 and G4 blocking | A pilot adds a settings section, search provider or slash command without editing a hand-written central file; `packages/feishu-protocol` exists and no framework directory imports the Feishu adapter |
+| 2. Kernel out of the UI | Single-owner WebView kernel booted from the registry, with the adapter matrix and the heavy-account storage budget; chat engine extracted; every runtime initializer moved or excluded with a physical reason; plugin contract cutover, with the host API moved to its modules. Module track M2 in the same phase: `runtimes.adapters` and `effects` replace the initializer-plus-headless pair, table ownership is read from manifests, single-user data modules move with their owner; pilot `pet` | Undocumented gaps 0; kernel UI-store reads 0; `lib`→`hooks`/`components` 0; host-parity only physical; first-party plugins on the new contract; `runtime-initializers` inventory empty; foundation→module edges 0 |
+| M3. Kernel sinks (with phase 3) | Settings-key ownership; capability ports, starting with `ocr`, `speech` (pilot) and `docs-provider`; capability-grant contributions (ADR-0198 first); prompt contributions | Settings-store importers and the subsystems `build-options` reaches both falling |
 | 3. Work spine | Run tables reference the ledger; one status vocabulary; ADR-0247 commitments | Every run in the ledger |
 | 4. Chokepoints, then enforce | Caller-enumerating gates; per-category enforce | Full coverage shown; enforce on for passing categories |
+| M4. Extract plugins (after the cutover) | Modules whose extraction checks (§9) reach zero move out as plugins; each table-owning one has its own data decision | Extracted plugins live in the plugins repository |
+
+The M rows are the module track of §14. They run beside the kernel phases, under the same rules for moving a piece (§12) and the same ratchets (§11). M2 is part of phase 2, not a separate phase.
+
+### 14. Feature modules and generated registries
+
+§5 says what the kernel must not import. This section says how everything outside the kernel is cut, so that adding a feature stops meaning editing shared files.
+
+**Why.** The feature-module analysis measured this at 2026-11-04:
+- **The coupling is a mesh, not a few hubs.** 150 of the 176 `lib/` subsystems sit in one strongly connected component. Removing the 15 subsystems that shrink it most still leaves 86. Splitting god files does not fix this; a direction rule with a gate does.
+- **Features edit shared files.** 37% of the feat commits in the last 60 days touched at least one central registry, 32% without the companion catalog. Adding one settings section edits five places.
+- **Three sinks act as a bus.** The settings store has 530 direct importers and `SettingsState` has 151 members. 88 of the 210 data modules in `lib/db` have a single user. The plugin host API reaches 82 subsystems.
+- **The plugin boundary held.** No first-party plugin imports `@/`. What is missing is a module boundary inside the app.
+
+**Five classes.** Each subsystem is in exactly one:
+- **Foundation:** plumbing with no business meaning: UI primitives, utilities, the database instance, platform and transport bridges, logging, errors.
+- **Kernel:** §1's kernel and what every feature depends on: sessions and messages, the send pipeline, model gateway and credentials, agent execution, the run ledger, identity and accounts, workspaces, sync, storage, queue and scheduling primitives, authorization, the plugin host, settings infrastructure. The kernel is a closed list. The per-subsystem record is in the analysis (§11 there), and adding a member amends this ADR.
+- **Shell:** aggregation and navigation that nothing depends on: the settings UI, initializers, `app/me`, the desktop and mobile shells, global search, slash commands, headless assembly.
+- **Module:** every other feature, compiled in and running in the same process. A subsystem the kernel list does not name is a module.
+- **Plugin candidate:** a module that implements a capability port or is an optional app. It stays a module until §9's extraction rule lets it out.
+
+Dependencies point one way. Foundation depends on nothing above it; the kernel depends on no module, plugin candidate or shell; a module depends on no shell.
+
+**Two data-only manifests per module.**
+- **Host layer:** `lib/<id>/module.ts`, through `defineHostModule`. **UI layer:** `components/<id>/module.ui.ts`, through `defineUiModule`. They are the same two layers as §9's plugin contract.
+- **Data only.** A manifest imports only its `define*` helper. Its top level holds literals and lazy entries `() => import("…")`, never a schema, defaults or a side effect. Every host imports the generated registries statically, and S1 already showed that the eager module graph is a budget (§2).
+- **Identity and lifecycle:** `id`, `kind`, `stage` (`kernel`, `stable`, `beta`, `experimental`, `deprecated`), `owner` (a team in `.github/CODEOWNERS`), `acceptance.realSmoke` (`pending` or `passed:<date>`).
+- **Boundary:** `owns` (paths beyond the default `{lib,components,hooks,stores,types,app}/<id>/**`), `dependsOn`, `api`, `provides` and `requires` (capability ports).
+- **Host contributions:** `runtimes`, `settings.keys`, `tables`, `tools`, `capabilityContributions`, `taskExecutors`, `builtinSkills`, `pluginApi`, `workflowNodes`, `searchProviders`, `slashCommands`, `prompts`, `flags`, `messages`.
+- **UI contributions:** `slots` (named from `CANONICAL_EXTENSION_POINTS`), `settingsSections`, `nav`, `effects`.
+
+Where an existing rule already owns a field, the field follows that rule:
+- **`runtimes`** declare a runtime's identity and criticality, plus one adapter per host: §2's adapter matrix, written as data. The brain adapter keeps `HeadlessRuntime.start`'s signature. `HeadlessHost` (`brain`, `person-brain`) is not widened to make the desktop look like a brain.
+- **`effects`** hold side effects that need React context, the router, i18n or toasts. They are not runtimes. The `runtime-initializers` inventory decides which an initializer is.
+- **`settings.keys`** declare which flat `AppSettings` keys a module owns. The wire does not change, and `packages/agent-config-types/src/settings-sync.ts` stays the sync source. A module reads its own keys through a view. ADR-0068's S5 store slicing cuts along this ownership.
+- **`capabilityContributions`** produce `AgentCapabilityGrantV1` only, applied stage by stage by the existing resolver chain (ADR-0198). There is no ordering number and no patching of `SendOptions`. A contribution that needs a new stage amends ADR-0198 first.
+- **`tables`** declare ownership only. The schema stays in `CURRENT_SCHEMA`, so adding a table still edits `lib/db/schema.ts` and the governance catalog. That is the accepted cost of one Dexie version.
+- **`tools`** carry their permission rules. **`taskExecutors`** declare an executor together with its task source.
+- **Dormancy on three axes (Rule 7).** `stage`, the inert label the UI shows for a disabled module, and a test over the generated registry. An `experimental` module is off the navigation and starts no runtime. A disabled module starts no runtime, is hidden from navigation, shows "disabled" on its routes and keeps its tables.
+
+**Generated registries, never committed.**
+- `scripts/build/gen-module-registry.mjs` generates one registry per host: `lib/modules/generated/{brain,desktop,mobile}.ts` and `components/modules/generated/ui.ts`. They hold lazy entries only. Per host, so the brain never sees a desktop-only entry.
+- They are gitignored and generated by `postinstall`, `predev`, `prebuild`, `scripts/test/jest.mjs` and `typecheck-root.mjs`, and by CI and the brain's Docker build. A committed aggregate would conflict, as the committed companion catalog does today. In a shared working tree, regenerating it would also write other sessions' uncommitted manifests into the commit.
+- Registries move in order. Settings sections, search providers and slash commands in M1. Slots, navigation, runtimes with effects, and table ownership in M2. Prompts, capability contributions and settings keys in M3. The plugin host API with §9.
+- Once a registry is generated, a hand-written entry in it fails G5.
+
+**How modules talk.**
+- **Public API files.** A module imports another module only through the concrete files listed in its `api`, plus `types/<id>/**`. There are no barrels, as `check-root-loading-boundaries` already requires. The target must be in `dependsOn`, and the `dependsOn` graph has no cycle.
+- **Capability ports.** The kernel defines a port, a module or plugin `provides` an implementation and a consumer `requires` it. Ports so far: `ocr`, `speech`, `web-reader`, `web-search`, `docs-provider`, `forge`, `remote-desktop`, sandbox backends, IM adapters, and subscription, balance and model-catalog. A port follows the shape of ADR-0246's granted connections.
+- **Typed events.** For an inverted dependency, the kernel's event bus carries events the publisher declares in `types/<id>/events.ts`.
+- **Contribution points.** The shell and the kernel collect from modules only through manifest fields.
+
+**Ownership before moves.** Every non-test source file has exactly one owner: a module, a kernel member, the foundation or the shell. A transitional ownership table covers what no manifest claims yet, and its row count is a ratchet. Files move only when their module is next changed, so the shared tree never takes a mass rename.
+
+**Vendors in three layers.** A vendor is never one unit. It is split by what each piece is:
+
+| Layer | Holds | Form | May depend on |
+| --- | --- | --- | --- |
+| 1. Protocol library | API client, signing and verification, paging, error mapping, data types. No business logic, no credentials, no state | A package with no `@/` imports, such as `packages/feishu-protocol`. Rust parts stay in their crate | Foundation only |
+| 2. Auth provider | Sign-in, account, refresh, rotation, sign-out, callback, such as `auth.feishu` | A base plugin (`feishu-auth`) or a built-in Rust provider (`auth.google`) | Its protocol library |
+| 3. Business implementations | One per capability port: IM adapter, cloud documents, issue sync, calendar, backup, OCR | Owned by the module of its port, or a plugin | Credentials only through an ADR-0246 granted connection; imports only the protocol library; never another business implementation |
+
+- The protocol library is a package rather than a library plugin because ADR-0246 has not defined how a library plugin serves business plugins (interface version, account scope). Holding no credentials and no state keeps it safe to share.
+- **Frameworks are vendor-neutral.** The IM, cloud-document, issue-sync, backup and scheduling frameworks name no vendor and import no vendor implementation. Vendor-specific behaviour, such as Feishu's run-presentation driver, is a contribution the business implementation makes. G8 holds this.
+- **Shipping a vendor's set.** One-click "everything for vendor X" is a cogset (ADR-0209): a distribution bundle, not a code dependency.
+- The same split applies to Google (protocol, `auth.google`, Drive backup and Docs), GitHub (protocol from `octokit-factory` and `auth-app`, the GitHub connection, `forge` implementations, `backup-github`, the runner) and each subscription vendor (protocol, sign-in, then subscription, balance and model-catalog implementations).
+
+**Gates.** All are registered in `scripts/gates/check-all.mjs`. Counting gates are new inventories of `scripts/gates/convergence/counter.mjs`, baselined in `scripts/gates/baseline-growth.json` and compared against the merge base (§11).
+
+| Gate | Checks | Measure | From |
+| --- | --- | --- | --- |
+| G1 Ownership | Every non-test source file has exactly one owner; `owner` matches `.github/CODEOWNERS` | Transitional ownership rows, falling only | M0, blocking |
+| G2 Direction | Foundation→above, kernel→module, plugin candidate or shell, and module→shell edges. Extends `check-package-boundaries.mjs` | Violating edges fingerprinted as file→subsystem, falling only | M0 reporting, M1 blocking |
+| G3 Public API | Cross-module imports reach only listed `api` files of a `dependsOn` target; no new barrel | Violating imports, falling only | M1 |
+| G4 Declared equals actual | `dependsOn`, `tables` and `settings.keys` match real imports, table access and key reads; a brain adapter is called in the brain's module graph (`check-headless-registry`'s rule: called, not reachable); every `runtime-initializers` entry is moved or classified as an effect | 0 mismatches | M1 |
+| G5 Generation | Manifests are data only; the generator runs clean; no hand-written entry in a generated registry | 0 | Per registry, as it moves |
+| G6 Cycles | The `dependsOn` graph is acyclic; size of the largest `lib/` strongly connected component (150) | Falling only | M0 |
+| G7 Size and load | Module count, `experimental` count, table count, `SettingsState` members, settings-store importers (530), eager module graph each host's registry brings in | Falling only; exceptions recorded | M0 |
+| G8 Vendor-neutral frameworks | No vendor name branch and no vendor-implementation import in a framework directory. Extends `check-provider-name-branches.mjs` (ADR-0090) | Violations (for example about 20 connector-framework files importing the Feishu adapter), falling only | M0 |
+
+G2 and G6 reuse `counter.mjs`'s source reader and `check-headless-registry.mjs`'s `resolveSpecifier`, not the analysis script's simplified resolver.
+
+**Migration.** The module track is M0–M4 in §13. Pilots run in this order: `squads` (the three M1 registries), `eval` (the ownership table), Feishu's three layers (G8 and the protocol package), `speech` (the first port, M3), `pet` (dependency inversion, M2).
+
+**Recorded with the classification.**
+- `lib/claude` is dissolved: its contents stopped being Claude-specific. Kernel parts are renamed by role (for example under `lib/runtime/`), feature tools go to their modules through `tools`, and `build-options` becomes capability contributions in M3.
+- Deletion candidates, each verified before removal: `lib/scheduler/legacy-db-migration.ts` (no user left on the old database version) and the A2UI academic templates in `types/academic` and `components/a2ui/academic` (no model still emits them).
+- `creator` merges into the developer-tools module as `experimental`.
+
+**Not decided here.**
+- When M0 starts and how capacity is split with the kernel phases.
+- Model-routing convergence: `provider-routing`'s `planRoute`, `router-fusion`, the Rust gateway planner, `lib/routing` and the budget part of `lib/usage`. It gets its own analysis.
+- `sites` gets a short ADR of its own: position, boundary, Cloudflare dependency and its path to a plugin.
 
 ## Consequences
 

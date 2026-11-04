@@ -1,13 +1,13 @@
 ---
 title: "0250 — 运行时是桌面内嵌的无头内核"
-description: "所有长期运行的行为都在同一个内核里，内核按无 UI 的常驻 Host 来设计。每个宿主只有一个内核、一个数据权威。桌面上的内核运行在 WebView 里，每个进程只有一个属主。另一种形态是桌面运行一个本地 brain 进程。一周的 spike 测量了这种形态，因启动和内存不达标，暂时否决。配对设备是客户端。独立运行的浏览器和移动端保留为内核之外的轻量 BYOK 路径。客户端断线时把操作存成意图排队，宿主不再写入任何后备权威。内核共用四个原语，执行引擎有明确的归属方。契约跨语言校验。插件在一次切换中迁到新的宿主层与 UI 层契约。迁移采用绞杀者模式，按可复现的清单度量，并由双宿主测试通道把关。"
+description: "所有长期运行的行为都在同一个内核里，内核按无 UI 的常驻 Host 来设计。每个宿主只有一个内核、一个数据权威。桌面上的内核运行在 WebView 里，每个进程只有一个属主。另一种形态是桌面运行一个本地 brain 进程。一周的 spike 测量了这种形态，因启动和内存不达标，暂时否决。配对设备是客户端。独立运行的浏览器和移动端保留为内核之外的轻量 BYOK 路径。客户端断线时把操作存成意图排队，宿主不再写入任何后备权威。内核共用四个原语，执行引擎有明确的归属方。契约跨语言校验。插件在一次切换中迁到新的宿主层与 UI 层契约。迁移采用绞杀者模式，按可复现的清单度量，并由双宿主测试通道把关。内核之外，每个功能都是一个用只含数据的清单声明的模块；中央注册表按宿主生成；厂商拆成协议、认证、业务三层；每条依赖的方向都由门禁把守。"
 ---
 
 # ADR 0250 — 运行时是桌面内嵌的无头内核
 
 **状态：** 提议中
 **日期：** 2026-11-01
-**修订：** 2026-11-01，对抗性审查和一次独立审计之后（见审计 §10）；§2 于 2026-11-01 依据 spike S1 做出决定
+**修订：** 2026-11-01，对抗性审查和一次独立审计之后（见审计 §10）；§2 于 2026-11-01 依据 spike S1 做出决定；2026-11-04 依据功能模块分析新增 §14，并修订 §9、§13
 
 **相关：**
 - [ADR-0059](./0059-cloud-deployment-headless-brain)：无头 brain 与注册表规则
@@ -17,8 +17,13 @@ description: "所有长期运行的行为都在同一个内核里，内核按无
 - [ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request)：外发授权
 - [ADR-0243](./0243-a-run-acts-for-someone-and-says-who)：执行身份
 - [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads)、[ADR-0248](./0248-a-person-is-never-queued-behind-automated-work)、[ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent)
+- [ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched)：能力授予，模块向一次运行添加能力的唯一形态（§14）
+- [ADR-0246](./0246-a-business-plugin-reaches-a-service-through-a-granted-connection)：授权连接，能力端口和厂商分层的样板（§14）
+- [ADR-0209](./0209-a-cogpack-pins-plugins-and-a-cogset-owns-what-runs)：cogset，一个厂商的各部分如何一起分发（§14）
+- [ADR-0068](./0068-frontend-package-extraction-and-compile-speed)：其中 S5 的 store 切分按 §14 的设置键归属来切
+- [ADR-0196](./0196-a-library-crate-links-tauri-only-when-asked)：Rust crate 分层，§14 不涉及
 
-**证据：** `docs/research/architecture-convergence-audit-2026-11-01.md`。**计划：** `docs/plans/2026-11-01-convergence-phase-0.md`。
+**证据：** `docs/research/architecture-convergence-audit-2026-11-01.md`；§14 的证据是 `docs/research/feature-module-analysis-2026-11-04.md`（计数脚本 `scripts/gates/convergence/subsystem-deps.mjs`）。**计划：** `docs/plans/2026-11-01-convergence-phase-0.md`。
 
 ## 背景
 
@@ -147,6 +152,13 @@ description: "所有长期运行的行为都在同一个内核里，内核按无
 - **影响谁。** 只迁移第一方插件；没有外部作者需要支持。
 - **什么时候。** 切换与阶段 2 同时进行，也就是内核迁移的时候。
 - **宿主侧的 UI 调用。** 在宿主上运行的插件请求 UI 操作时，比如弹对话框或改变选区，会转给一个在线客户端。没有客户端在线时，调用以一个具名错误失败。
+- **与模块共用一份 schema。** 插件的宿主层和 UI 层，就是模块声明的那两份只含数据的清单（§14）。插件契约在这份 schema 上只补充插件才需要的东西：打包、签名、权限和版本，不另定义第二种形状。
+- **宿主 API 跟着属主走。** 现有插件宿主 API 中的 52 个功能命名空间，迁到各自所属的模块，由模块通过 `pluginApi` 字段贡献，与契约切换同时完成。插件宿主本身（分发、权限闸门、bridge、生命周期）留在内核。
+- **模块满足条件才能变成插件。** 契约切换之后，一个模块只有同时满足以下三点，才能迁出为插件（§14 的 M4）：
+  - 它对宿主的每一项依赖，都在插件契约暴露的范围之内；
+  - 没有其他模块 import 它；
+  - 它的表已有定论。插件表的名字带命名空间，格式是 `${pluginId}:${tableName}`（`lib/plugin/dexie/namespace.ts`），所以把核心表改成插件表就是改表名，也就是一次数据迁移。每个这样的模块单独决定：放弃旧数据、做显式迁移，还是保留核心表、只给插件授予访问权。
+  - 需要自己的 Rust 窗口或宿主命令的模块，继续作为模块，因为插件带不了这部分代码。
 - **契约本身**另写一份 ADR，在阶段 0a 和阶段 1 期间依据插件 API 矩阵（§13）编写。
 
 ### 10. 门禁能枚举的关口
@@ -191,10 +203,106 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0a. 摸清事实、搭安全网 | 在干净 worktree 上确认门禁状态；可复现清单和计数器；基线增长检查；双宿主测试框架和 PR 通道；宿主适配器矩阵；插件 API 矩阵 | 清单已提交；基线准确；测试框架在 CI 中驱动一个行为跑通两个宿主 |
 | S1. 本地 brain spike（与 0a 并行，一周） | 五个测量问题：存储、启动、迁移、双窗口下的一个轮次、崩溃与重启 | 已完成：2a 暂时否决，§2 决定为 2b |
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
+| M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
-| 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换 | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约 |
+| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器 |
+| 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
+| M3. 内核汇点（与阶段 3 同期） | 设置键归属；能力端口，先做 `ocr`、`speech`（试点）和 `docs-provider`；能力授予贡献（先过 ADR-0198）；提示词贡献 | 设置 store 的引用文件数、`build-options` 触达的子系统数都在下降 |
 | 3. 工作主干 | 运行表引用台账；统一状态词表；ADR-0247 的承诺 | 所有运行都在台账里 |
 | 4. 先覆盖关口，再 enforce | 能枚举调用方的门禁；按类别 enforce | 证明全覆盖；通过的类别开启 enforce |
+| M4. 抽出插件（契约切换之后） | 可抽出检查（§9）清零的模块迁出为插件；拥有表的模块各自做数据决策 | 迁出的插件进入插件仓库 |
+
+M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循同样的迁移方式（§12）和同样的棘轮（§11）。M2 属于阶段 2，不单独成为一个阶段。
+
+### 14. 功能模块与生成的注册表
+
+§5 规定内核不能 import 什么。本节规定内核之外的一切怎么切分，让加一个功能不再意味着改公共文件。
+
+**为什么。** 功能模块分析在 2026-11-04 测得：
+- **耦合是网状的，不是几个枢纽。** `lib/` 层 176 个子系统中，有 150 个处在同一个强连通分量里。拆掉最能缩小它的 15 个子系统，仍剩 86 个。拆上帝文件解决不了这个问题，要靠一条方向规则加门禁。
+- **加功能就要改公共文件。** 近 60 天的 feat 提交中，37% 改了至少一个中央注册表，剔除 companion 命令目录后是 32%。加一个设置分区要改五处。
+- **三个汇点充当了总线。** 设置 store 有 530 个直接引用文件，`SettingsState` 有 151 个成员。`lib/db` 的 210 个数据模块中，88 个只有一个使用者。插件宿主 API 触达 82 个子系统。
+- **插件边界守住了。** 没有一个第一方插件 import `@/`。缺的是应用内部的模块边界。
+
+**五类。** 每个子系统恰好属于一类：
+- **基础层：** 没有业务含义的管道：UI 原件、工具函数、数据库实例、平台与传输桥、日志、错误。
+- **内核：** §1 的内核，以及所有功能都依赖的部分：会话与消息、发送管线、模型网关与凭据、agent 执行、运行台账、身份与账号、工作区、同步、存储、队列与调度原语、授权、插件宿主、设置基础设施。内核是一份封闭清单，逐个子系统的记录在分析文档（其中 §11）里，增加成员要修订本 ADR。
+- **外壳：** 只做汇总和导航，不被任何人依赖：设置界面、初始化器、`app/me`、桌面与移动外壳、全局搜索、slash 命令、无头装配。
+- **模块：** 其余所有功能，编译期链接，在同一进程内运行。内核清单没有点名的子系统都是模块。
+- **插件候选：** 实现某个能力端口、或者属于可选应用的模块。在 §9 的抽出规则放行之前，它仍是模块。
+
+依赖只朝一个方向：基础层不依赖它之上的任何一层；内核不依赖模块、插件候选或外壳；模块不依赖外壳。
+
+**每个模块两份只含数据的清单。**
+- **宿主层：** `lib/<id>/module.ts`，用 `defineHostModule`。**UI 层：** `components/<id>/module.ui.ts`，用 `defineUiModule`。它们和 §9 插件契约的两层一一对应。
+- **只含数据。** 清单只 import 自己的 `define*` 辅助函数，顶层只能是字面量和懒加载入口 `() => import("…")`，不能有 schema、默认值或副作用。每个宿主都会静态 import 生成的注册表，而 S1 已经说明急加载模块图是一项预算（§2）。
+- **身份与生命周期：** `id`、`kind`、`stage`（`kernel`、`stable`、`beta`、`experimental`、`deprecated`）、`owner`（`.github/CODEOWNERS` 中的团队）、`acceptance.realSmoke`（`pending` 或 `passed:<日期>`）。
+- **边界：** `owns`（默认 `{lib,components,hooks,stores,types,app}/<id>/**` 之外的路径）、`dependsOn`、`api`、`provides` 和 `requires`（能力端口）。
+- **宿主层贡献：** `runtimes`、`settings.keys`、`tables`、`tools`、`capabilityContributions`、`taskExecutors`、`builtinSkills`、`pluginApi`、`workflowNodes`、`searchProviders`、`slashCommands`、`prompts`、`flags`、`messages`。
+- **UI 层贡献：** `slots`（插槽名取自 `CANONICAL_EXTENSION_POINTS`）、`settingsSections`、`nav`、`effects`。
+
+已有规则管着的字段，按已有规则来：
+- **`runtimes`** 声明运行时的身份和重要性，外加每个宿主一个适配器，也就是把 §2 的适配矩阵写成数据。brain 适配器沿用 `HeadlessRuntime.start` 的签名。`HeadlessHost`（`brain`、`person-brain`）不扩充，不让桌面冒充 brain。
+- **`effects`** 放需要 React 上下文、路由、i18n 或 toast 的副作用，它们不是运行时。一个初始化器属于哪种，以 `runtime-initializers` 清单为准。
+- **`settings.keys`** 声明模块拥有哪些扁平 `AppSettings` 键。线上格式不变，`packages/agent-config-types/src/settings-sync.ts` 仍是同步来源。模块通过一个视图读自己的键。ADR-0068 S5 的 store 切分按这份归属来切。
+- **`capabilityContributions`** 只产出 `AgentCapabilityGrantV1`，由现有的解析链按阶段施加（ADR-0198）。没有排序数字，也不修改 `SendOptions`。需要新阶段的贡献，先修订 ADR-0198。
+- **`tables`** 只声明归属。schema 仍集中在 `CURRENT_SCHEMA`，所以加表仍要改 `lib/db/schema.ts` 和治理目录。这是 Dexie 单一版本号的代价，接受它。
+- **`tools`** 带上各自的权限规则。**`taskExecutors`** 把执行器和它的任务来源一起声明。
+- **三处标注休眠（Rule 7）。** `stage`、模块停用时 UI 上的停用标注、对生成注册表的测试。`experimental` 模块不进导航，也不启动运行时。停用的模块不启动运行时，导航里隐藏，访问它的路由时显示"已停用"，表保留。
+
+**生成注册表，永不进仓。**
+- `scripts/build/gen-module-registry.mjs` 为每个宿主生成一份注册表：`lib/modules/generated/{brain,desktop,mobile}.ts` 和 `components/modules/generated/ui.ts`，里面只有懒加载入口。按宿主拆开，brain 就看不到任何桌面专用的入口。
+- 这些文件加入 `.gitignore`，由 `postinstall`、`predev`、`prebuild`、`scripts/test/jest.mjs`、`typecheck-root.mjs` 以及 CI 和 brain 的 Docker 构建生成。提交进仓的聚合文件会冲突，现在提交进仓的 companion 命令目录就是这样。在共享工作区里重新生成，还会把其他会话尚未提交的 manifest 一起写进提交。
+- 注册表按顺序迁移：M1 迁设置分区、搜索 provider 和 slash 命令；M2 迁插槽、导航、运行时与副作用、表归属；M3 迁提示词、能力授予贡献和设置键；插件宿主 API 随 §9 迁移。
+- 一份注册表改为生成之后，再往里手写条目，G5 就会失败。
+
+**模块之间怎么通信。**
+- **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
+- **能力端口。** 内核定义端口，模块或插件通过 `provides` 提供实现，使用方通过 `requires` 声明需要。目前的端口有：`ocr`、`speech`、`web-reader`、`web-search`、`docs-provider`、`forge`、`remote-desktop`、沙箱后端、IM 适配器，以及订阅、余额、模型目录。端口的形状参照 ADR-0246 的授权连接。
+- **类型化事件。** 需要反转依赖时，用内核的事件总线，事件类型由发布方在 `types/<id>/events.ts` 中声明。
+- **贡献点。** 外壳和内核只通过 manifest 字段收集各模块的东西。
+
+**先定归属，后搬家。** 每个非测试源文件恰好有一个所有者：某个模块、某个内核成员、基础层或外壳。还没有 manifest 认领的文件由一份过渡归属表兜底，它的行数是一个棘轮。文件只在所属模块下次被修改时才搬，这样共享工作区不会遭遇大规模改路径。
+
+**厂商分三层。** 一个厂商从来不是一个单元，按每部分的性质拆开：
+
+| 层 | 内容 | 形态 | 可以依赖 |
+| --- | --- | --- | --- |
+| 1. 协议库 | API 客户端、签名与验签、分页、错误映射、数据类型。不含业务，不持有凭据，没有状态 | 不 import `@/` 的包，例如 `packages/feishu-protocol`。Rust 部分留在各自的 crate | 只依赖基础层 |
+| 2. 认证提供方 | 登录、账号、刷新、轮换、登出、回调，例如 `auth.feishu` | 基础插件（`feishu-auth`），或内置的 Rust provider（`auth.google`） | 自己的协议库 |
+| 3. 业务实现 | 每个能力端口一个：IM 适配器、云文档、issue 同步、日历、备份、OCR | 归端口所在的模块，或者做成插件 | 凭据只经 ADR-0246 的授权连接获取；只 import 协议库；业务实现之间互不 import |
+
+- 协议库做成包而不是库插件，是因为 ADR-0246 还没有定义库插件怎样服务业务插件（接口版本、账号范围）。它不持有凭据、没有状态，所以可以放心共用。
+- **框架与厂商无关。** IM、云文档、issue 同步、备份、调度这些框架里，不出现厂商名，也不 import 厂商实现。厂商专用的行为，比如飞书的运行展示驱动，由业务实现以贡献的形式提供。由 G8 把守。
+- **一个厂商的全套一起分发。** "一键安装某厂商全套"用 cogset（ADR-0209）组合，这是分发层的打包，不是代码依赖。
+- 同样的拆法适用于 Google（协议库、`auth.google`、Drive 备份和 Docs）、GitHub（由 `octokit-factory` 和 `auth-app` 组成的协议库、GitHub 连接、`forge` 实现、`backup-github`、runner），以及各家订阅（协议库、账号登录，再加订阅、余额、模型目录三个端口的实现）。
+
+**门禁。** 全部注册进 `scripts/gates/check-all.mjs`。计数类门禁作为 `scripts/gates/convergence/counter.mjs` 的新清单实现，基线登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。
+
+| 门禁 | 检查什么 | 度量 | 起始 |
+| --- | --- | --- | --- |
+| G1 归属 | 每个非测试源文件恰好有一个所有者；`owner` 与 `.github/CODEOWNERS` 一致 | 过渡归属表的行数，只降不升 | M0，阻断 |
+| G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的边。扩展 `check-package-boundaries.mjs` | 违规边按"文件 → 子系统"取指纹，只降不升 | M0 只报告，M1 阻断 |
+| G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件；不新增 barrel | 违规 import，只降不升 | M1 |
+| G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用 | 不一致为 0 | M1 |
+| G5 生成 | manifest 只含数据；生成器无报错跑完；生成的注册表里没有手写条目 | 0 | 每迁一份注册表启用一份 |
+| G6 环 | `dependsOn` 图无环；`lib/` 层最大强连通分量的大小（150） | 只降不升 | M0 |
+| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（530）、每个宿主的注册表带来的急加载模块图 | 只降不升；例外要有记录 | M0 |
+| G8 框架与厂商无关 | 框架目录里没有按厂商名分支，也不 import 厂商实现。扩展 `check-provider-name-branches.mjs`（ADR-0090） | 违规项（例如 connectors 框架里约 20 个文件 import 飞书适配器），只降不升 | M0 |
+
+G2 和 G6 复用 `counter.mjs` 的源码读取器和 `check-headless-registry.mjs` 的 `resolveSpecifier`，不沿用分析脚本里简化的解析器。
+
+**迁移。** 模块线就是 §13 里的 M0–M4。试点顺序：`squads`（M1 的三类注册表）、`eval`（归属表）、飞书三层（G8 和协议包）、`speech`（第一个端口，M3）、`pet`（依赖反转，M2）。
+
+**随归类一起记录的决定。**
+- 解散 `lib/claude`：它的内容早已不只针对 Claude。内核部分按职责改名（例如放到 `lib/runtime/` 下），功能工具通过 `tools` 归各自模块，`build-options` 在 M3 改为能力授予贡献。
+- 删除候选，删除前各自核实：`lib/scheduler/legacy-db-migration.ts`（没有用户还停在旧库版本）、A2UI 的 academic 模板 `types/academic` 和 `components/a2ui/academic`（没有模型还会产出它们）。
+- `creator` 并入开发者工具模块，标为 `experimental`。
+
+**本节不决定的事。**
+- M0 何时开始，以及产能怎样与内核各阶段分配。
+- 模型路由收敛：`provider-routing` 的 `planRoute`、`router-fusion`、Rust 网关的 planner、`lib/routing` 和 `lib/usage` 的预算部分。另做专项分析。
+- `sites` 另写一份简短的 ADR：定位、边界、对 Cloudflare 的依赖和插件化路径。
 
 ## 后果
 
