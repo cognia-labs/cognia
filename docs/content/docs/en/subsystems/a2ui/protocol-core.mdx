@@ -354,14 +354,12 @@ Three dependency-light helpers round out the core.
 | --- | --- | --- | --- |
 | `format.ts` | 33 | `formatRelativeTime` (9), `formatAbsoluteTime` (25) | `"just now"` / `"Nm/h/d ago"` else locale date; thresholds `60000` / `3600000` / `86400000` / `604800000` (`:14-17`); no imports |
 | `list-utils.ts` | 27 | `getItemKey` (9), `getItemDisplayText` (19) | key = `item.id` else index; display = string/number/bool passthrough, object → `label`\|`text`\|`name`\|`title` else `JSON.stringify`; no imports |
-| `constants.ts` | 93 | `CATEGORY_KEYS` (12), `surfaceStyles` (29), `ANALYSIS_TYPE_VALUES` (80) | pure data |
+| `constants.ts` | 45 | `CATEGORY_KEYS` (10), `surfaceStyles` (27), `contentStyles` (39) | pure data; no imports |
 
-`constants.ts` carries the shared UI data: `CATEGORY_KEYS` (`:12`,
-`["productivity","data","form","utility","social"]`), `CATEGORY_I18N_MAP` (`:14`), per-`surfaceType`
-container CSS in `surfaceStyles` (`:29`, inline / dialog / panel / fullscreen) and `contentStyles`
-(`:39`), `ANALYSIS_TYPE_ICONS` (`:50`), `ANALYSIS_TYPE_I18N_KEYS` (`:65`), and `ANALYSIS_TYPE_VALUES`
-(`:80`, 12 entries). Its only dependency is a `type` import of `PaperAnalysisType` from
-`@/types/academic` (`:6`).
+`constants.ts` carries the shared UI data: `CATEGORY_KEYS` (`:10`,
+`["productivity","data","form","utility","social"]`), `CATEGORY_I18N_MAP` (`:12`), and per-`surfaceType`
+container CSS in `surfaceStyles` (`:27`, inline / dialog / panel / fullscreen) and `contentStyles`
+(`:39`). It imports nothing.
 
 ## The Barrel
 
@@ -370,7 +368,7 @@ core modules surface at: `parser` (`:7`), `data-model` (`:27`), `events` (`:74`)
 `constants` (`:156`), `list-utils` (`:167`). The remaining re-exports cover the rendering and
 projection layers documented elsewhere: `catalog` (`:53`), `templates` (`:93`), `app-generator`
 (`:118`), `thumbnail` (`:131`), `animation` (`:150`), `chart-constants` (`:153`),
-`academic-templates` (`:170`), `output-profiles` (`:181`), `rich-output-fixtures` (`:198`).
+`output-profiles` (`:181`), `rich-output-fixtures` (`:198`).
 
 ## Cluster Files
 

@@ -6410,16 +6410,6 @@ export interface AppSettings {
   schedulerPermissionPolicy?: import("@cognia/plugin-contract/types/scheduler").SchedulerPermissionPolicy
 
   /**
-   * Set once the pre-v219 machine-wide `CogniaSchedulerDB` has been drained
-   * into THIS account's database (`lib/scheduler/legacy-db-migration.ts`).
-   *
-   * Account-scoped on purpose: the flag records what happened to this account,
-   * not to the machine. It exists so a delete that failed after a successful
-   * drain cannot make the next boot adopt the same schedules twice.
-   */
-  schedulerLegacyDrainCompleted?: boolean
-
-  /**
    * Per-action biometric guard policy (Wave 1.5). Each flag, when true,
    * requires a successful biometric verification before the named action
    * runs. Devices with no biometric enrollment fall through unless the

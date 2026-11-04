@@ -103,6 +103,11 @@ belongs elsewhere. Guessing per row would be worse.
 A legacy database that cannot be read is left in place and not marked done. The
 rows inside are the user's only copy, so a fixed build has to be able to retry.
 
+> **Removed 2026-11-04.** The adoption step and its `schedulerLegacyDrainCompleted`
+> marker were deleted (ADR-0250 §14). No build was ever released, and no install
+> checked still held a legacy `CogniaSchedulerDB` with rows. A machine that skipped
+> every build from 2026-09-04 on keeps the old database on disk, unread.
+
 ### 3. The policy is enforced on every non-user write
 
 `lib/scheduler/write-authority.ts` is the one gate, and the store, the built-in

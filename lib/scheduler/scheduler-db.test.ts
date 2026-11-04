@@ -6,11 +6,7 @@
 // Mock IndexedDB for tests
 import "fake-indexeddb/auto"
 import { getDb } from "@/lib/db/schema"
-import {
-  LEGACY_SCHEDULER_DB_NAME,
-  SCHEDULER_SNAPSHOT_EXCLUDED_TABLES,
-  schedulerDb,
-} from "./scheduler-db"
+import { SCHEDULER_SNAPSHOT_EXCLUDED_TABLES, schedulerDb } from "./scheduler-db"
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 
 describe("SchedulerDatabase", () => {
@@ -989,14 +985,6 @@ describe("SchedulerDatabase", () => {
       for (const excluded of SCHEDULER_SNAPSHOT_EXCLUDED_TABLES) {
         expect(declared).toContain(excluded)
       }
-    })
-
-    it("keeps the legacy database name, and only as a migration target", () => {
-      // The constant survives so `legacy-db-migration.ts` can recognise a
-      // pre-v219 install. Nothing may write to a database under this name
-      // again, which is what the second assertion is for.
-      expect(LEGACY_SCHEDULER_DB_NAME).toBe("CogniaSchedulerDB")
-      expect(getDb().name).not.toBe(LEGACY_SCHEDULER_DB_NAME)
     })
   })
 })

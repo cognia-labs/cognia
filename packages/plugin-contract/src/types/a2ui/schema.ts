@@ -62,8 +62,6 @@ export type A2UIComponentType =
   | "Accordion"
   | "Toggle"
   | "FormGroup"
-  | "AcademicAnalysis"
-  | "AcademicSearchResults"
   | string
   | "Switch"
   | "Loading"

@@ -63,15 +63,6 @@ const log = loggers.app
 export const SCHEDULER_SNAPSHOT_EXCLUDED_TABLES: readonly string[] = ["scheduledTaskRuns"]
 
 /**
- * Name of the LEGACY standalone scheduler database.
- *
- * Nothing writes it any more. It survives so `legacy-db-migration.ts` can
- * recognise a pre-v219 install, drain it into the account database, and delete
- * it. Do not reintroduce it as a storage target.
- */
-export const LEGACY_SCHEDULER_DB_NAME = "CogniaSchedulerDB"
-
-/**
  * Facade over the account database's two scheduler stores.
  *
  * Not a Dexie subclass. `tasks` / `executions` are getters that resolve
@@ -709,42 +700,6 @@ function deserializeProvenance(serialized: string): ScheduledTask["provenance"] 
     }
   } catch {
     return undefined
-  }
-}
-
-/**
- * Recover the event discriminator from a stored trigger blob.
- *
- * Exported for `legacy-db-migration.ts`: rows drained out of the pre-v219
- * standalone database carry `eventType` already, but a row written by a very
- * old build may not, and a missing discriminator silently drops the task out
- * of every `[status+eventType]` lookup rather than erroring.
- */
-export function eventTypeFromSerializedTrigger(serialized: string): string {
-  try {
-    const trigger = JSON.parse(serialized) as { type?: unknown; eventType?: unknown }
-    return trigger.type === "event" && typeof trigger.eventType === "string"
-      ? trigger.eventType
-      : ""
-  } catch {
-    return ""
-  }
-}
-
-/**
- * Recover the creator discriminator from a stored `createdBy` blob.
- *
- * Mirrors the default in `serializeTask`: a row with no creator record predates
- * the column and is necessarily user-authored, because no agent or plugin
- * creation surface existed before it.
- */
-export function createdBySourceFromSerializedCreator(serialized: string | undefined): string {
-  if (!serialized) return "user"
-  try {
-    const raw = JSON.parse(serialized) as { kind?: unknown }
-    return typeof raw.kind === "string" ? raw.kind : "user"
-  } catch {
-    return "user"
   }
 }
 

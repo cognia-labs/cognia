@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/surface-baseline.json",
+  "measure": "violations:components/a2ui/academic/academic-paper-card.tsx",
+  "allowRemoval": true,
+  "owner": "components/a2ui",
+  "repaymentPhase": "1",
+  "reason": "The A2UI academic components were deleted (ADR-0250 §14 deletion candidate, verified to have no data source or caller), so the file this leaf counted no longer exists. Removing the leaf retires a violation; it admits none."
+}

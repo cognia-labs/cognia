@@ -4455,12 +4455,10 @@
       "signals": [
         "due-time"
       ],
-      "reason": "migrateLegacySchedulerDatabase at lib/scheduler/legacy-db-migration.ts:105 copies historical attempt outcomes into scheduledTaskRuns; live task execution is started by the scheduler definition/trigger, not by draining these run records.",
-      "writerFunctions": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
+      "reason": "Scheduled attempt history, written through the SchedulerDatabase facade (lib/scheduler/scheduler-db.ts), whose private table getters the detector cannot follow; live task execution is started by the scheduler definition/trigger, not by draining these run records.",
+      "writerFunctions": [],
       "consumerFunctions": [],
-      "evidence": "b3d22899bee2f317"
+      "evidence": "637c4f17f1a39f67"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/scheduledTasks",
@@ -4507,17 +4505,15 @@
       "signals": [
         "retry-count"
       ],
-      "reason": "migrateLegacySchedulerDatabase at lib/scheduler/legacy-db-migration.ts:105 copies recurring task definitions with trigger/config/nextRunAt; the scheduler interprets those definitions and records attempts in scheduledTaskRuns, rather than treating them as one-shot queue rows.",
-      "writerFunctions": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
+      "reason": "Recurring task definitions behind the SchedulerDatabase facade (lib/scheduler/scheduler-db.ts); the scheduler interprets trigger/config/nextRunAt and records attempts in scheduledTaskRuns, rather than treating them as one-shot queue rows.",
+      "writerFunctions": [],
       "consumerFunctions": [
         "lib/boot/startup-probe.ts#defaultDependencies::listScheduledTasks",
         "lib/data/apply-package.ts#applyBackupPackage::restoreTransaction",
         "lib/data/domain/index.ts#DOMAIN_TRANSFERS",
         "lib/scheduler/write-authority.ts#countTasksBySourceFromDb"
       ],
-      "evidence": "da37d14c48fd53c4"
+      "evidence": "6be81d6abc915309"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/serviceConnections",
@@ -5617,74 +5613,6 @@
         "lib/router-fusion/live/live-smoke-runner.ts#spentInDatabase"
       ],
       "evidence": "6fbda5da20542711"
-    },
-    {
-      "key": "dexie:legacy@lib/scheduler/legacy-db-migration.ts/executions",
-      "owner": "lib/scheduler",
-      "database": "legacy@lib/scheduler/legacy-db-migration.ts",
-      "file": "lib/scheduler/legacy-db-migration.ts",
-      "table": "executions",
-      "rowType": null,
-      "rowFields": null,
-      "rowStatuses": [],
-      "signals": [
-        "unresolved-row-type"
-      ],
-      "writerFunctions": [],
-      "consumerFunctions": [
-        "components/scheduler/task-workspace-move.tsx#TaskWorkspaceMove::running",
-        "lib/scheduler/legacy-db-migration.ts#readLegacyStores"
-      ],
-      "evidence": "b2dee4bf471e1de6",
-      "reason": "lib/scheduler/legacy-db-migration.ts: Read-only legacy scheduler migration source in lib/scheduler/legacy-db-migration.ts; current executions live in scheduledTaskRuns."
-    },
-    {
-      "key": "dexie:legacy@lib/scheduler/legacy-db-migration.ts/tasks",
-      "owner": "lib/scheduler",
-      "database": "legacy@lib/scheduler/legacy-db-migration.ts",
-      "file": "lib/scheduler/legacy-db-migration.ts",
-      "table": "tasks",
-      "rowType": null,
-      "rowFields": null,
-      "rowStatuses": [],
-      "signals": [
-        "unresolved-row-type"
-      ],
-      "writerFunctions": [],
-      "consumerFunctions": [
-        "cli/src/agent/subagent-live-output.ts#applyCanonicalTaskEnvelope",
-        "lib/agents/agent-activity.ts#deriveAgentActivity",
-        "lib/ai/agent/team/auto/materialize.ts#materializeProposal",
-        "lib/ai/agent/team/synthesize-workflow.ts#synthesizeTeamWorkflow",
-        "lib/ai/eval/team-execution.ts#runIsolatedTeamEval",
-        "lib/db/agent-team-definitions.ts#writeAgentTeamDefinitions",
-        "lib/issues/sync/providers/lark-task.ts#createLarkTaskSyncProvider::pull",
-        "lib/mcp/tasks.ts#listMcpTasks",
-        "lib/notifications/recurring-compaction.ts#planRecurringCompaction",
-        "lib/remote-host/migration/candidates.ts#buildAlwaysOnWork",
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase",
-        "lib/scheduler/legacy-db-migration.ts#readLegacyStores",
-        "lib/scheduler/scheduled-task-rpc.ts#dispatchScheduledTaskRpc",
-        "lib/scheduler/scheduler-data-source.ts#RemoteSchedulerDataSource::exportTasks",
-        "lib/session-import/adapters/claude-code.ts#addTeamMembers",
-        "lib/session-import/index.ts#parseRefConversations",
-        "lib/workflow/nodes/scheduling/index.ts#execute",
-        "packages/agent-omp/src/history.ts#buildSession::setTodos",
-        "packages/eval-core/src/candidate-evidence.ts#projectEvalTaskEvidence",
-        "plugins/cognia-work-mode/src/runtime.ts#createWorkRuntime::runParallel",
-        "stores/agent/agent-team-store/dexie-bridge.ts#withAgentTeamDefinitionRestore",
-        "stores/scheduler/scheduler-store.ts#selectSelectedTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::deleteTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::loadMoreExecutions",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::loadTaskExecutions",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::pauseTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::refreshAll",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::resumeTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::runTaskNow",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::updateTask"
-      ],
-      "evidence": "40228666d097d04d",
-      "reason": "lib/scheduler/legacy-db-migration.ts: Read-only legacy scheduled-task definitions copied to scheduledTasks, not individual executions."
     },
     {
       "key": "sqlite:cognia-file-share/file_auth_failures",

@@ -94,8 +94,6 @@ const standardCatalogDefinition: Omit<A2UIComponentCatalog, "components"> & {
     "Accordion",
     "Toggle",
     "FormGroup",
-    "AcademicAnalysis",
-    "AcademicSearchResults",
     "Markdown",
     "Tree",
   ],
@@ -374,13 +372,7 @@ export const componentCategories = {
     "Accordion",
     "FormGroup",
   ] as A2UIComponentType[],
-  data: [
-    "Chart",
-    "Table",
-    "Pagination",
-    "AcademicAnalysis",
-    "AcademicSearchResults",
-  ] as A2UIComponentType[],
+  data: ["Chart", "Table", "Pagination"] as A2UIComponentType[],
   overlay: [
     "Tooltip",
     "Popover",

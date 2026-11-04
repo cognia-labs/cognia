@@ -76,7 +76,7 @@ describe("buildA2UIRows", () => {
     ).not.toBe("")
   })
 
-  it.each(["Animation", "InteractiveGuide", "RichOutput", "AcademicAnalysis", "CustomWidget"])(
+  it.each(["Animation", "InteractiveGuide", "RichOutput", "CustomWidget"])(
     "renders explicit fallback for unsupported %s",
     (component) => {
       const surface: TuiA2UISurface = {

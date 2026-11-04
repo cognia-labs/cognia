@@ -7,51 +7,6 @@
       "text": "output"
     },
     {
-      "file": "components/a2ui/academic/academic-paper-card.tsx",
-      "context": "jsx-text",
-      "text": "Open Access"
-    },
-    {
-      "file": "components/a2ui/academic/academic-paper-card.tsx",
-      "context": "jsx-text",
-      "text": "Details"
-    },
-    {
-      "file": "components/a2ui/academic/academic-paper-card.tsx",
-      "context": "jsx-text",
-      "text": "Add"
-    },
-    {
-      "file": "components/a2ui/academic/academic-paper-card.tsx",
-      "context": "jsx-text",
-      "text": "PDF"
-    },
-    {
-      "file": "components/a2ui/academic/academic-paper-card.tsx",
-      "context": "jsx-text",
-      "text": "Analyze"
-    },
-    {
-      "file": "components/a2ui/academic/academic-search-results.tsx",
-      "context": "jsx-text",
-      "text": "arXiv"
-    },
-    {
-      "file": "components/a2ui/academic/academic-search-results.tsx",
-      "context": "jsx-text",
-      "text": "Semantic Scholar"
-    },
-    {
-      "file": "components/a2ui/academic/academic-search-results.tsx",
-      "context": "jsx-text",
-      "text": "OpenAlex"
-    },
-    {
-      "file": "components/a2ui/academic/academic-search-results.tsx",
-      "context": "jsx-text",
-      "text": "HuggingFace"
-    },
-    {
       "file": "components/a2ui/app-detail-dialog.tsx",
       "context": "placeholder",
       "text": "email@example.com"

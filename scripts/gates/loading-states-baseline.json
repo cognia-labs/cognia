@@ -6,7 +6,6 @@
     "app/lark/shortcut/page.tsx",
     "app/me/computer-use/page.tsx",
     "components/a2ui/a2ui-surface.tsx",
-    "components/a2ui/academic/academic-search-results.tsx",
     "components/a2ui/app-detail-dialog.tsx",
     "components/a2ui/app-gallery.tsx",
     "components/a2ui/delete-confirm-dialog.tsx",

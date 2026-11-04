@@ -9,7 +9,6 @@
   "components/a2ui/a2ui-app-card.tsx": 3,
   "components/a2ui/a2ui-error-boundary.tsx": 1,
   "components/a2ui/a2ui-widget-shell.tsx": 2,
-  "components/a2ui/academic/academic-paper-card.tsx": 1,
   "components/a2ui/display/a2ui-comparison-cards.tsx": 2,
   "components/a2ui/display/a2ui-rich-output.tsx": 3,
   "components/a2ui/from-execution/interactive-page-dialog.tsx": 1,

@@ -43,6 +43,8 @@ Schema v219 在 `CURRENT_SCHEMA` 中声明 `scheduledTasks` 和 `scheduledTaskRu
 
 读不出来的旧库会被原样保留、且不标记完成。里面的行是用户唯一的副本，修好的版本必须还能再试一次。
 
+> **2026-11-04 移除。** 收编步骤及其 `schedulerLegacyDrainCompleted` 标记已删除（ADR-0250 §14）。从未发布过任何版本，核查过的安装中也没有仍含数据的旧 `CogniaSchedulerDB`。跳过了 2026-09-04 之后所有版本的机器，旧库会留在磁盘上，不再被读取。
+
 ### 3. 每一条非用户写入都过策略
 
 `lib/scheduler/write-authority.ts` 是唯一的闸门，store、内置技能、MCP 工具和插件 API 全部调用它。它在检查时读 `AppSettings` 而不是 store 快照，这样长时间打开的标签页不会执行一条用户后来收紧过的策略，也让它在没有挂载 store 的无头宿主上照样工作。按来源计数走 `[createdBySource+status]` 索引。

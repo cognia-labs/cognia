@@ -3,8 +3,6 @@
  * Shared constants used across A2UI components
  */
 
-import type { PaperAnalysisType } from "@/types/academic"
-
 // =============================================================================
 // Category Constants (moved from hooks/a2ui/use-app-gallery-filter.ts)
 // =============================================================================
@@ -45,52 +43,3 @@ export const contentStyles = {
   panel: "h-full overflow-auto p-4",
   fullscreen: "h-full overflow-auto p-4",
 }
-
-// =============================================================================
-// Academic Analysis Constants (moved from components/a2ui/academic/academic-analysis-panel.tsx)
-// =============================================================================
-
-export const ANALYSIS_TYPE_ICONS: Record<PaperAnalysisType, string> = {
-  summary: "📝",
-  "key-insights": "💡",
-  methodology: "🔬",
-  findings: "📊",
-  limitations: "⚠️",
-  "future-work": "🚀",
-  "related-work": "🔗",
-  "technical-details": "⚙️",
-  critique: "🎯",
-  eli5: "👶",
-  comparison: "⚖️",
-  custom: "✏️",
-}
-
-export const ANALYSIS_TYPE_I18N_KEYS: Record<PaperAnalysisType, string> = {
-  summary: "analysisSummary",
-  "key-insights": "analysisKeyInsights",
-  methodology: "analysisMethodology",
-  findings: "analysisFindings",
-  limitations: "analysisLimitations",
-  "future-work": "analysisFutureWork",
-  "related-work": "analysisRelatedWork",
-  "technical-details": "analysisTechnicalDetails",
-  critique: "analysisCritique",
-  eli5: "analysisEli5",
-  comparison: "analysisComparison",
-  custom: "analysisCustom",
-}
-
-export const ANALYSIS_TYPE_VALUES: PaperAnalysisType[] = [
-  "summary",
-  "key-insights",
-  "methodology",
-  "findings",
-  "limitations",
-  "future-work",
-  "related-work",
-  "technical-details",
-  "comparison",
-  "critique",
-  "eli5",
-  "custom",
-]

@@ -1,6 +1,6 @@
 ---
 title: Catalog & Rendering
-description: The two-layer component registry (61-type catalog + 70-type dispatch map), the surface-container render pipeline, the actions/data context split, error isolation, and the component families that back every A2UI panel.
+description: The two-layer component registry (66-type catalog + 66-entry dispatch map), the surface-container render pipeline, the actions/data context split, error isolation, and the component families that back every A2UI panel.
 ---
 
 # Catalog & Rendering
@@ -10,18 +10,18 @@ description: The two-layer component registry (61-type catalog + 70-type dispatc
 <TLDR>
   A2UI turns a `component` **type string** (`"Button"`, `"Chart"`, …) into a real React node through
   **two stacked registries**. The lightweight `lib/a2ui/catalog.ts` holds the declarative list of
-  **61** standard types plus metadata and validation. The heavyweight
-  `components/a2ui/a2ui-renderer.tsx` holds the **70-entry** `builtInComponents` dispatch map that is
+  **66** standard types plus metadata and validation. The heavyweight
+  `components/a2ui/a2ui-renderer.tsx` holds the **66-entry** `builtInComponents` dispatch map that is
   the *real* runtime registry. A container (`a2ui-surface.tsx`) selects an inline / dialog / panel /
   fullscreen shell, an `A2UIProvider` splits actions from data, and `A2UIRenderer` resolves the type,
   calls `React.createElement`, and wraps every node in its own error boundary.
 </TLDR>
 
 <StatGrid>
-  <Stat label="Catalog types" value="61" hint="catalog.ts standardCatalogDefinition.componentTypes (L32-91)" />
-  <Stat label="Dispatch entries" value="70" hint="a2ui-renderer.tsx builtInComponents (L114-190)" />
-  <Stat label="Renderer-only extras" value="5" hint="Tabs · Accordion · Toggle · FormGroup · AcademicAnalysis" />
-  <Stat label="Component families" value="7" hint="layout · display · form · data · navigation · overlay · academic" />
+  <Stat label="Catalog types" value="66" hint="catalog.ts standardCatalogDefinition.componentTypes (L33-98)" />
+  <Stat label="Dispatch entries" value="66" hint="a2ui-renderer.tsx builtInComponents (L126-203)" />
+  <Stat label="Renderer-only extras" value="0" hint="both layers name the same 66 types" />
+  <Stat label="Component families" value="6" hint="layout · display · form · data · navigation · overlay" />
 </StatGrid>
 
 ## Two-Layer Registry Model
@@ -34,7 +34,7 @@ flowchart LR
 
   subgraph L1["Layer 1 — declarative catalog (lib/a2ui/catalog.ts)"]
     direction TB
-    DEF["standardCatalogDefinition:25<br/>componentTypes[] = 61"]
+    DEF["standardCatalogDefinition:25<br/>componentTypes[] = 66"]
     REG["componentRegistry:98<br/>Map &quot;catalogId:type&quot;"]
     GET["getComponent:147<br/>exact → DEFAULT fallback → undefined"]
     META["resolveWidgetMetadata:359<br/>validateComponent:403"]
@@ -42,7 +42,7 @@ flowchart LR
 
   subgraph L2["Layer 2 — runtime dispatch (components/a2ui/a2ui-renderer.tsx)"]
     direction TB
-    BIC["builtInComponents:112<br/>Map type→ComponentType = 70"]
+    BIC["builtInComponents:112<br/>Map type→ComponentType = 66"]
     RES["resolveA2UIComponent:197<br/>builtIn → getComponent → A2UIFallback"]
     CE["React.createElement:260"]
   end
@@ -72,7 +72,7 @@ renderer does not depend on it for the common path.
 | symbol | line | role |
 | --- | --- | --- |
 | `DEFAULT_CATALOG_ID` | 19 | `"cognia-standard-v1"` — the fallback catalog id |
-| `standardCatalogDefinition` | 25 | `componentTypes[]` = **61** type strings (L32-91) |
+| `standardCatalogDefinition` | 25 | `componentTypes[]` = **66** type strings (L33-98) |
 | `componentRegistry` | 98 | flat `Map<"catalogId:type", A2UICatalogEntry>` |
 | `catalogRegistry` | 103 | `Map<catalogId, A2UIComponentCatalog>` |
 | `registerComponent` | 108 | sets `componentRegistry["${catalogId}:${type}"]` (key L118) |
@@ -83,7 +83,7 @@ renderer does not depend on it for the common path.
 | `createCatalog` | 196 | merges default when id differs (L208-218) |
 | `registerCatalog` / `getCatalog` | 232 / 244 | catalog-level register / lookup |
 | `unregisterComponent` / `clearRegistry` | 265 / 276 | teardown |
-| `getStandardComponentTypes` | 284 | the 61-type list |
+| `getStandardComponentTypes` | 284 | the 66-type list |
 | `componentCategories` | 291 | 7 buckets: display / input / action / layout / data / overlay / navigation |
 | `DEFAULT_WIDGET_METADATA` | 349 | `{ hostStrategy:"native", sizing:"auto", theme:"inherit", status:"ready", showChrome:true }` |
 | `resolveWidgetMetadata` | 359 | merges `DEFAULT_WIDGET_METADATA` + RichOutput profile routing (L367) + `component.widget` |
@@ -91,13 +91,14 @@ renderer does not depend on it for the common path.
 | `validateComponent` | 403 | returns `{ valid, errors }` |
 | `FALLBACK_COMPONENT_TYPE` | 435 | `"Text"` — **NOTE: unused by the renderer** |
 
-The **61** standard `componentTypes` (L32-91): `Text, Button, TextField, TextArea, Select, Checkbox,
+The **66** standard `componentTypes` (L33-98): `Text, Button, TextField, TextArea, Select, Checkbox,
 Radio, RadioGroup, Slider, DatePicker, TimePicker, DateTimePicker, Card, Row, Column, List, Image,
 Chart, Table, Dialog, Divider, Spacer, Progress, Badge, Alert, Link, Icon, RichOutput,
 ComparisonCards, StepperShell, MockupFrame, WidgetStatus, Switch, Loading, Error, Empty, Animation,
 InteractiveGuide, Avatar, Tooltip, Skeleton, Spinner, Toast, Combobox, DropdownMenu, ContextMenu,
 Popover, HoverCard, Breadcrumb, Carousel, Drawer, Sheet, ScrollArea, Pagination, Sidebar, InputOTP,
-ToggleGroup, ButtonGroup, InputGroup, Collapsible`.
+ToggleGroup, ButtonGroup, InputGroup, Collapsible, Tabs, Accordion, Toggle, FormGroup, Markdown,
+Tree`.
 
 `resolveWidgetMetadata` (L359) is where the RichOutput profile router (`routeRichOutputProfile`,
 imported L14) feeds host-strategy hints back into a component's widget metadata — see
@@ -105,29 +106,29 @@ imported L14) feeds host-strategy hints back into a component's widget metadata 
 
 ### Layer 2 — `components/a2ui/a2ui-renderer.tsx` dispatch map
 
-The renderer keeps its own `builtInComponents` `Map<typeString, ComponentType>` (L112) with **70**
-entries (L114-190). This is the registry the render path checks first. The renderer consults the catalog only
+The renderer keeps its own `builtInComponents` `Map<typeString, ComponentType>` (L125) with **66**
+entries (L126-203). This is the registry the render path checks first. The renderer consults the catalog only
 when that lookup fails.
 
 | symbol | line | role |
 | --- | --- | --- |
-| `builtInComponents` | 112 | `Map<type, ComponentType>` — **70 entries** (L114-190), the real registry |
+| `builtInComponents` | 112 | `Map<type, ComponentType>` — **66 entries** (L126-203), the real registry |
 | `resolveA2UIComponent` | 197 | `builtInComponents.get(type)` → `getComponent(type, catalogId)?.component` → `A2UIFallback` (L198-202) |
 | `A2UIRenderer` | 209 | memoized main dispatch component |
 | `withA2UIContext` | 278 | HOC that mounts a provider around a subtree |
 | `registerBuiltInComponent` | 311 | sets a new dispatch entry (L315) |
 | `isComponentRegistered` | 321 | membership test |
-| `getRegisteredComponentTypes` | 328 | enumerate the 70 types |
+| `getRegisteredComponentTypes` | 328 | enumerate the 66 types |
 
 Three heavy components are **lazily** imported (L99-105) so they don't bloat the first paint:
 `A2UIChart` (L99, recharts ≈ 200 KB), `A2UIAnimation` (L100), and `A2UIInteractiveGuide` (L103) —
 each via `lazy(() => import(...))` and wrapped in `<Suspense>` at render time.
 
 <Callout type="warn">
-  **70 vs 61 is intentional, not a bug.** The renderer's dispatch map (70) is a strict superset of
-  the catalog's declarative list (61). The **5 renderer-only extras** — `Tabs`, `Accordion`,
-  `Toggle`, `FormGroup`, `AcademicAnalysis` — are rendered directly by `builtInComponents` but are
-  **not** in `standardCatalogDefinition`, so `validateComponent` would not list them. Separately,
+  **The two layers now name the same 66 types.** `Tabs`, `Accordion`, `Toggle` and `FormGroup`,
+  once renderer-only, are in `standardCatalogDefinition`, and the academic components were removed
+  from both layers on 2026-11-04. A surface that still names `AcademicAnalysis` or
+  `AcademicSearchResults` renders through `A2UIFallback` as an unknown component. Separately,
   `DataExplorer` is migrated to `Table` at store ingestion (renderer comment L157-158). The catalog's
   `FALLBACK_COMPONENT_TYPE = "Text"` (L435) is **unused** — the renderer falls back to `A2UIFallback`
   (L197), never to `Text`. Older docs quoting "50+ components" undercount both layers.
@@ -257,7 +258,7 @@ chrome. `showFallback = status === "fallback" || "error"` (L33); chrome badges a
 
 ## Component Families
 
-The dispatch map's 70 entries are sourced from family barrels. The renderer pulls ≈60 family imports
+The dispatch map's 66 entries are sourced from family barrels. The renderer pulls ≈60 family imports
 (L16-96); the barrel counts below are authoritative.
 
 | family | barrel | count | members (selected) |
@@ -268,11 +269,10 @@ The dispatch map's 70 entries are sourced from family barrels. The renderer pull
 | data | `data/index.ts` | 3 | Chart, Table, List |
 | navigation | `navigation/index.ts` | 7 | Breadcrumb, Carousel, Drawer, Sheet, Pagination, Sidebar, ScrollArea |
 | overlay | `overlay/index.ts` | 5 | Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu |
-| academic | `academic/index.ts` | 3 | AcademicPaperCard, AcademicSearchResults, AcademicAnalysisPanel |
 | rich-output | `rich-output/` | 6 | ChartJs, CanvasSimulation, ThreeScene, ToneSynth, D3ForceGraph, SvgPlotter (RichOutput **profile** renderers, not catalog types) |
 
-The dispatch map (L114-190) groups its 70 entries as: Layout (10), Display (13), Form (15), Data (3),
-Anim (2), Academic (1), P0-display (4: Avatar, Skeleton, Spinner, Toast), P0-overlay (5: Tooltip,
+The dispatch map (L126-203) groups its 66 entries as: Layout (10), Display (13), Form (15), Data (3),
+Anim (2), P0-display (4: Avatar, Skeleton, Spinner, Toast), P0-overlay (5: Tooltip,
 Popover, HoverCard, DropdownMenu, ContextMenu), P1-form (5: Combobox, InputOTP, ToggleGroup,
 ButtonGroup, InputGroup), P1-nav (7: Breadcrumb, Carousel, Drawer, Sheet, ScrollArea, Pagination,
 Sidebar), and P1-layout (1: Collapsible).
@@ -356,13 +356,13 @@ Three behaviors make a chat surface usable before and after the turn seals
 
 <Files>
   <Folder name="lib/a2ui/" defaultOpen>
-    <File name="catalog.ts — type-string → component registry, 61 standard types, metadata + validation (435)" />
+    <File name="catalog.ts — type-string → component registry, 66 standard types, metadata + validation (435)" />
     <File name="resolve-icon.ts — resolveIcon(name): icons[name] ?? null (15)" />
     <File name="animation.ts — ANIMATION_VARIANTS (10 presets), getAnimationVariants, getTransitionConfig (144)" />
     <File name="chart-constants.ts — DEFAULT_CHART_COLORS, CHART_TOOLTIP_STYLE (18)" />
   </Folder>
   <Folder name="components/a2ui/" defaultOpen>
-    <File name="a2ui-renderer.tsx — builtInComponents (70), resolveA2UIComponent, A2UIRenderer dispatch" />
+    <File name="a2ui-renderer.tsx — builtInComponents (66), resolveA2UIComponent, A2UIRenderer dispatch" />
     <File name="a2ui-child-renderer.tsx — A2UIChildRenderer (breaks renderer⇄layout cycle)" />
     <File name="a2ui-surface.tsx — A2UISurface container + Inline/Dialog wrappers, 5 state gates" />
     <File name="a2ui-context.tsx — A2UIProvider, actions/data context split, binding resolvers" />
@@ -387,9 +387,6 @@ Three behaviors make a chat surface usable before and after the turn seals
     </Folder>
     <Folder name="overlay/">
       <File name="index.ts — 5: Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu" />
-    </Folder>
-    <Folder name="academic/">
-      <File name="index.ts — 3: AcademicPaperCard, AcademicSearchResults, AcademicAnalysisPanel" />
     </Folder>
     <Folder name="rich-output/">
       <File name="(6 profile renderers) — ChartJs, CanvasSimulation, ThreeScene, ToneSynth, D3ForceGraph, SvgPlotter" />

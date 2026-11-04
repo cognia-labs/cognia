@@ -744,8 +744,8 @@ G2 和 G6 转成门禁时，复用 `counter.mjs` 的源码读取器和 `check-he
 
 **删除和清理候选**（都需要先核实）：
 
-- `lib/scheduler/legacy-db-migration.ts`
-- A2UI 的 academic 模板
+- `lib/scheduler/legacy-db-migration.ts`：已核实并于 2026-11-05 删除
+- A2UI 的 academic 模板：已核实并于 2026-11-05 删除
 
 **冻结**：`creator` 并入开发者工具，标为 experimental。
 

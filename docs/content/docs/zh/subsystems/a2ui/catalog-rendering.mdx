@@ -1,6 +1,6 @@
 ---
 title: 目录与渲染
-description: 两层组件注册表（61 类型目录 + 70 类型分发表）、surface 容器渲染管线、操作与数据上下文的拆分、错误隔离，以及支撑每个 A2UI 面板的组件家族。
+description: 两层组件注册表（66 类型目录 + 66 条目分发表）、surface 容器渲染管线、操作与数据上下文的拆分、错误隔离，以及支撑每个 A2UI 面板的组件家族。
 ---
 
 # 目录与渲染
@@ -9,18 +9,18 @@ description: 两层组件注册表（61 类型目录 + 70 类型分发表）、s
 
 <TLDR>
   A2UI 通过**两层叠加的注册表**把 `component` **类型字符串**（`"Button"`、`"Chart"` 等）变成真实的
-  React 节点。轻量的 `lib/a2ui/catalog.ts` 保存 **61** 个标准类型的声明式清单以及元数据与校验。重量级的
-  `components/a2ui/a2ui-renderer.tsx` 保存 **70** 条目的 `builtInComponents` 分发表，它才是*真正的*运行时
+  React 节点。轻量的 `lib/a2ui/catalog.ts` 保存 **66** 个标准类型的声明式清单以及元数据与校验。重量级的
+  `components/a2ui/a2ui-renderer.tsx` 保存 **66** 条目的 `builtInComponents` 分发表，它才是*真正的*运行时
   注册表。容器（`a2ui-surface.tsx`）选择 inline / dialog / panel / fullscreen 外壳，`A2UIProvider` 把
   actions 与 data 拆分，`A2UIRenderer` 解析类型、调用 `React.createElement`，并为每个节点设置独立的错误
   边界。
 </TLDR>
 
 <StatGrid>
-  <Stat label="目录类型" value="61" hint="catalog.ts standardCatalogDefinition.componentTypes (L32-91)" />
-  <Stat label="分发条目" value="70" hint="a2ui-renderer.tsx builtInComponents (L114-190)" />
-  <Stat label="仅渲染器独有" value="5" hint="Tabs · Accordion · Toggle · FormGroup · AcademicAnalysis" />
-  <Stat label="组件家族" value="7" hint="layout · display · form · data · navigation · overlay · academic" />
+  <Stat label="目录类型" value="66" hint="catalog.ts standardCatalogDefinition.componentTypes (L33-98)" />
+  <Stat label="分发条目" value="66" hint="a2ui-renderer.tsx builtInComponents (L126-203)" />
+  <Stat label="仅渲染器独有" value="0" hint="两层列出同样的 66 个类型" />
+  <Stat label="组件家族" value="6" hint="layout · display · form · data · navigation · overlay" />
 </StatGrid>
 
 ## 两层注册表模型
@@ -33,7 +33,7 @@ flowchart LR
 
   subgraph L1["第一层 — 声明式目录 (lib/a2ui/catalog.ts)"]
     direction TB
-    DEF["standardCatalogDefinition:25<br/>componentTypes[] = 61"]
+    DEF["standardCatalogDefinition:25<br/>componentTypes[] = 66"]
     REG["componentRegistry:98<br/>Map &quot;catalogId:type&quot;"]
     GET["getComponent:147<br/>精确 → DEFAULT 回退 → undefined"]
     META["resolveWidgetMetadata:359<br/>validateComponent:403"]
@@ -41,7 +41,7 @@ flowchart LR
 
   subgraph L2["第二层 — 运行时分发 (components/a2ui/a2ui-renderer.tsx)"]
     direction TB
-    BIC["builtInComponents:112<br/>Map type→ComponentType = 70"]
+    BIC["builtInComponents:112<br/>Map type→ComponentType = 66"]
     RES["resolveA2UIComponent:197<br/>builtIn → getComponent → A2UIFallback"]
     CE["React.createElement:260"]
   end
@@ -68,7 +68,7 @@ flowchart LR
 | 符号 | 行 | 角色 |
 | --- | --- | --- |
 | `DEFAULT_CATALOG_ID` | 19 | `"cognia-standard-v1"`——回退目录 id |
-| `standardCatalogDefinition` | 25 | `componentTypes[]` = **61** 个类型字符串（L32-91） |
+| `standardCatalogDefinition` | 25 | `componentTypes[]` = **66** 个类型字符串（L33-98） |
 | `componentRegistry` | 98 | 扁平 `Map<"catalogId:type", A2UICatalogEntry>` |
 | `catalogRegistry` | 103 | `Map<catalogId, A2UIComponentCatalog>` |
 | `registerComponent` | 108 | 设置 `componentRegistry["${catalogId}:${type}"]`（键 L118） |
@@ -79,7 +79,7 @@ flowchart LR
 | `createCatalog` | 196 | id 不同时合并默认目录（L208-218） |
 | `registerCatalog` / `getCatalog` | 232 / 244 | 目录级注册 / 查询 |
 | `unregisterComponent` / `clearRegistry` | 265 / 276 | 拆除 |
-| `getStandardComponentTypes` | 284 | 61 类型清单 |
+| `getStandardComponentTypes` | 284 | 66 类型清单 |
 | `componentCategories` | 291 | 7 个桶：display / input / action / layout / data / overlay / navigation |
 | `DEFAULT_WIDGET_METADATA` | 349 | `{ hostStrategy:"native", sizing:"auto", theme:"inherit", status:"ready", showChrome:true }` |
 | `resolveWidgetMetadata` | 359 | 合并 `DEFAULT_WIDGET_METADATA` + RichOutput profile 路由（L367）+ `component.widget` |
@@ -87,37 +87,34 @@ flowchart LR
 | `validateComponent` | 403 | 返回 `{ valid, errors }` |
 | `FALLBACK_COMPONENT_TYPE` | 435 | `"Text"`——**注意：渲染器未使用** |
 
-**61** 个标准 `componentTypes`（L32-91）：`Text, Button, TextField, TextArea, Select, Checkbox, Radio,
+**66** 个标准 `componentTypes`（L33-98）：`Text, Button, TextField, TextArea, Select, Checkbox, Radio,
 RadioGroup, Slider, DatePicker, TimePicker, DateTimePicker, Card, Row, Column, List, Image, Chart,
 Table, Dialog, Divider, Spacer, Progress, Badge, Alert, Link, Icon, RichOutput, ComparisonCards,
 StepperShell, MockupFrame, WidgetStatus, Switch, Loading, Error, Empty, Animation, InteractiveGuide,
 Avatar, Tooltip, Skeleton, Spinner, Toast, Combobox, DropdownMenu, ContextMenu, Popover, HoverCard,
 Breadcrumb, Carousel, Drawer, Sheet, ScrollArea, Pagination, Sidebar, InputOTP, ToggleGroup,
-ButtonGroup, InputGroup, Collapsible`。
+ButtonGroup, InputGroup, Collapsible, Tabs, Accordion, Toggle, FormGroup, Markdown, Tree`。
 
 `resolveWidgetMetadata`（L359）是 RichOutput profile 路由器（`routeRichOutputProfile`，于 L14 导入）把 host-strategy 提示回灌进组件 widget 元数据的地方——参见 [output profiles](./output-profiles)。
 
 ### 第二层 — `components/a2ui/a2ui-renderer.tsx` 分发表
 
-渲染器自带一张 `builtInComponents` `Map<typeString, ComponentType>`（L112），含 **70** 条目（L114-190）。渲染路径实际首先命中的就是这张注册表；只有未命中时才查目录。
+渲染器自带一张 `builtInComponents` `Map<typeString, ComponentType>`（L125），含 **66** 条目（L126-203）。渲染路径实际首先命中的就是这张注册表；只有未命中时才查目录。
 
 | 符号 | 行 | 角色 |
 | --- | --- | --- |
-| `builtInComponents` | 112 | `Map<type, ComponentType>`——**70 条目**（L114-190），真正的注册表 |
+| `builtInComponents` | 112 | `Map<type, ComponentType>`——**66 条目**（L126-203），真正的注册表 |
 | `resolveA2UIComponent` | 197 | `builtInComponents.get(type)` → `getComponent(type, catalogId)?.component` → `A2UIFallback`（L198-202） |
 | `A2UIRenderer` | 209 | memo 化的主分发组件 |
 | `withA2UIContext` | 278 | 在子树外挂载 provider 的 HOC |
 | `registerBuiltInComponent` | 311 | 设置新分发条目（L315） |
 | `isComponentRegistered` | 321 | 成员判断 |
-| `getRegisteredComponentTypes` | 328 | 枚举 70 类型 |
+| `getRegisteredComponentTypes` | 328 | 枚举 66 类型 |
 
 三个重量级组件被**惰性**导入（L99-105），以免拖累首屏：`A2UIChart`（L99，recharts ≈ 200 KB）、`A2UIAnimation`（L100）、`A2UIInteractiveGuide`（L103）——各自经由 `lazy(() => import(...))` 导入，并在渲染时包进 `<Suspense>`。
 
 <Callout type="warn">
-  **70 vs 61 是有意为之，不是 bug。** 渲染器的分发表（70）是目录声明式清单（61）的严格超集。**5 个仅
-  渲染器独有的额外类型**——`Tabs`、`Accordion`、`Toggle`、`FormGroup`、`AcademicAnalysis`——由
-  `builtInComponents` 直接渲染，但**不在** `standardCatalogDefinition` 中，因此 `validateComponent`
-  不会列出它们。另外，`DataExplorer` 在 store 摄入阶段被迁移为 `Table`（渲染器注释 L157-158）。目录的
+  **两层现在列出同样的 66 个类型。** `Tabs`、`Accordion`、`Toggle`、`FormGroup` 过去只在渲染器里，现在已进入 `standardCatalogDefinition`；academic 组件于 2026-11-04 从两层一并移除，仍写着 `AcademicAnalysis` 或 `AcademicSearchResults` 的 surface 会经 `A2UIFallback` 显示为未知组件。另外，`DataExplorer` 在 store 摄入阶段被迁移为 `Table`（渲染器注释 L157-158）。目录的
   `FALLBACK_COMPONENT_TYPE = "Text"`（L435）**未被使用**——渲染器回退到 `A2UIFallback`（L197），从不回退
   到 `Text`。旧文档所说的「50+ 组件」对两层都低估了。
 </Callout>
@@ -224,7 +221,7 @@ surface 还订阅 `globalEventEmitter.onAction` / `onDataChange`（L50、L58）�
 
 ## 组件家族
 
-分发表的 70 条目源自各家族 barrel。渲染器拉入约 60 个家族 import（L16-96）；下表的 barrel 计数为权威。
+分发表的 66 条目源自各家族 barrel。渲染器拉入约 60 个家族 import（L16-96）；下表的 barrel 计数为权威。
 
 | 家族 | barrel | 数量 | 成员（节选） |
 | --- | --- | --- | --- |
@@ -234,10 +231,9 @@ surface 还订阅 `globalEventEmitter.onAction` / `onDataChange`（L50、L58）�
 | data | `data/index.ts` | 3 | Chart, Table, List |
 | navigation | `navigation/index.ts` | 7 | Breadcrumb, Carousel, Drawer, Sheet, Pagination, Sidebar, ScrollArea |
 | overlay | `overlay/index.ts` | 5 | Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu |
-| academic | `academic/index.ts` | 3 | AcademicPaperCard, AcademicSearchResults, AcademicAnalysisPanel |
 | rich-output | `rich-output/` | 6 | ChartJs, CanvasSimulation, ThreeScene, ToneSynth, D3ForceGraph, SvgPlotter（RichOutput **profile** 渲染器，非目录类型） |
 
-分发表（L114-190）把 70 条目分组为：Layout（10）、Display（13）、Form（15）、Data（3）、Anim（2）、Academic（1）、P0-display（4：Avatar, Skeleton, Spinner, Toast）、P0-overlay（5：Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu）、P1-form（5：Combobox, InputOTP, ToggleGroup, ButtonGroup, InputGroup）、P1-nav（7：Breadcrumb, Carousel, Drawer, Sheet, ScrollArea, Pagination, Sidebar）、P1-layout（1：Collapsible）。
+分发表（L126-203）把 66 条目分组为：Layout（10）、Display（13）、Form（15）、Data（3）、Anim（2）、P0-display（4：Avatar, Skeleton, Spinner, Toast）、P0-overlay（5：Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu）、P1-form（5：Combobox, InputOTP, ToggleGroup, ButtonGroup, InputGroup）、P1-nav（7：Breadcrumb, Carousel, Drawer, Sheet, ScrollArea, Pagination, Sidebar）、P1-layout（1：Collapsible）。
 
 ### 共享渲染辅助
 
@@ -291,13 +287,13 @@ flowchart LR
 
 <Files>
   <Folder name="lib/a2ui/" defaultOpen>
-    <File name="catalog.ts — 类型字符串 → 组件注册表，61 标准类型，元数据 + 校验 (435)" />
+    <File name="catalog.ts — 类型字符串 → 组件注册表，66 标准类型，元数据 + 校验 (435)" />
     <File name="resolve-icon.ts — resolveIcon(name): icons[name] ?? null (15)" />
     <File name="animation.ts — ANIMATION_VARIANTS（10 预设）, getAnimationVariants, getTransitionConfig (144)" />
     <File name="chart-constants.ts — DEFAULT_CHART_COLORS, CHART_TOOLTIP_STYLE (18)" />
   </Folder>
   <Folder name="components/a2ui/" defaultOpen>
-    <File name="a2ui-renderer.tsx — builtInComponents (70), resolveA2UIComponent, A2UIRenderer 分发" />
+    <File name="a2ui-renderer.tsx — builtInComponents (66), resolveA2UIComponent, A2UIRenderer 分发" />
     <File name="a2ui-child-renderer.tsx — A2UIChildRenderer（打破 渲染器⇄布局 循环）" />
     <File name="a2ui-surface.tsx — A2UISurface 容器 + Inline/Dialog 封装，5 道状态门控" />
     <File name="a2ui-context.tsx — A2UIProvider，actions/data context 拆分，绑定解析器" />
@@ -322,9 +318,6 @@ flowchart LR
     </Folder>
     <Folder name="overlay/">
       <File name="index.ts — 5: Tooltip, Popover, HoverCard, DropdownMenu, ContextMenu" />
-    </Folder>
-    <Folder name="academic/">
-      <File name="index.ts — 3: AcademicPaperCard, AcademicSearchResults, AcademicAnalysisPanel" />
     </Folder>
     <Folder name="rich-output/">
       <File name="(6 个 profile 渲染器) — ChartJs, CanvasSimulation, ThreeScene, ToneSynth, D3ForceGraph, SvgPlotter" />

@@ -7,7 +7,6 @@ import type { A2UIComponent, A2UIComponentProps, A2UISurfaceState } from "@/type
 import type { A2UIHistoryEntry } from "@/stores/a2ui/a2ui-store"
 import type { A2UIAppInstance } from "@/hooks/a2ui/app-builder/types"
 import type { A2UIAppTemplate } from "@/lib/a2ui/templates"
-import type { Paper } from "@/types/academic"
 
 export function makeA2UIProps<T extends A2UIComponent>(
   component: T,
@@ -108,29 +107,6 @@ export function makeAppTemplate(over: Partial<A2UIAppTemplate> = {}): A2UIAppTem
     components: [{ id: "root", component: "Column", children: [] }],
     dataModel: {},
     tags: ["math", "tools"],
-    ...over,
-  }
-}
-
-export function makePaper(over: Partial<Paper> = {}): Paper {
-  return {
-    id: "paper-1",
-    providerId: "arxiv",
-    externalId: "2301.00001",
-    title: "Attention Is All You Need: A Storybook Fixture",
-    abstract:
-      "We introduce a sample paper used to render the academic A2UI components in isolation.",
-    authors: [{ name: "Jane Researcher" }, { name: "John Scholar" }, { name: "Sam Scientist" }],
-    year: 2023,
-    venue: "NeurIPS",
-    citationCount: 1240,
-    isOpenAccess: true,
-    pdfUrl: "https://example.com/paper.pdf",
-    urls: [{ url: "https://example.com/paper.pdf", type: "pdf", source: "arxiv" }],
-    metadata: { arxivId: "2301.00001" },
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-    fetchedAt: new Date(0),
     ...over,
   }
 }

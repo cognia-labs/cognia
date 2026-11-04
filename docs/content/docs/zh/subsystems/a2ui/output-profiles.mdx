@@ -1,6 +1,6 @@
 ---
 title: 输出 Profile 与富输出
-description: 智能体渲染意图到具体渲染策略的映射 —— 22 条 intent→profile 路由、富输出渲染器的策略分派、host 策略、advanced 层特性开关、html2canvas 缩略图，以及纯函数的学术 surface 构造器。
+description: 智能体渲染意图到具体渲染策略的映射 —— 22 条 intent→profile 路由、富输出渲染器的策略分派、host 策略、advanced 层特性开关，以及 html2canvas 缩略图。
 ---
 
 # 输出 Profile 与富输出
@@ -272,22 +272,6 @@ flowchart LR
 
 其他缓存方法：`loadThumbnailCache`（224）、`getThumbnail`（290）、`deleteThumbnail`（298）、`isThumbnailStale`（307）、`getAllThumbnails`（320）、`clearAllThumbnails`（327）。依赖：`html2canvas`（L6）、来自 `@/lib/logging` 的 logger（L7）。
 
-## 学术 Surface
-
-`lib/a2ui/academic-templates.ts`（798）是一组用于研究 surface 的 **纯函数** A2UI server-message 构造器 —— 不渲染、无副作用。每个构造器组装组件 + 一个数据模型，然后发出 **4** 条 `A2UIServerMessage`（`createSurface` → `updateComponents` → `dataModelUpdate` → `surfaceReady`），返回 `{ surfaceId, messages }`。
-
-| 构造器 | 行 | Surface |
-| --- | --- | --- |
-| `createPaperCardSurface` | 41 | 单论文卡片（在 194-197 发出消息） |
-| `createSearchResultsSurface` | 206 | 搜索结果列表 |
-| `createAnalysisPanelSurface` | 365 | 分析面板 |
-| `createPaperComparisonSurface` | 529 | 论文并排比较 |
-| `createReadingListSurface` | 649 | 阅读列表 |
-
-`AcademicTemplateType`（L16）枚举 7 种 surface 类型。i18n 通过双语 bundle 流转（`academicTemplateMessages` L25、`getAcademicTemplateMessages` L30、带 `{key}` 插值的 `formatTemplateMessage` L34）；id 来自 `generateTemplateId`（如 L46）。`academicTemplates` 对象（L790）是默认导出（L798）。依赖：来自 `@/types/a2ui/schema` 的 `A2UIComponent` / `A2UIServerMessage`（L6）、来自 `@/types/academic` 的 `Paper` / `LibraryPaper` / `PaperAnalysisType`（L7）、来自 `@/i18n/config` 的 `defaultLocale` / `Locale`（L8）、捆绑的 `a2ui.json` 消息集（L9-10），以及来自 `./templates` 的 `generateTemplateId`（L11）。
-
-对应的 React 组件位于 `components/a2ui/academic/` —— barrel `index.ts` 重新导出 `AcademicPaperCard`（L6）、`AcademicSearchResults`（L7）和 `AcademicAnalysisPanel`（L8）。`A2UIAnalysisAdapter`（`a2ui-analysis-adapter.tsx:17`）**不在** barrel 中；它在渲染器加载时以 `"AcademicAnalysis"` 名义桥接进 catalog。
-
 ## Fixture
 
 `lib/a2ui/rich-output-fixtures.ts`（42）提供 4 个用于测试与预览的示例 fixture（`richOutputFixtures`，L8）—— 每个代表一种典型策略：
@@ -308,17 +292,12 @@ flowchart LR
     <File name="output-profiles.ts" annotation="370 —— 注册表 + 路由器（22 个 profile）" />
     <File name="rich-output-fixtures.ts" annotation="42 —— 4 个示例 fixture" />
     <File name="thumbnail.ts" annotation="350 —— html2canvas + localStorage 缓存" />
-    <File name="academic-templates.ts" annotation="798 —— 纯函数 4-消息学术构造器" />
   </Folder>
   <Folder name="components/a2ui/display">
     <File name="a2ui-rich-output.tsx" annotation="124 —— 策略分派渲染器" />
     <File name="a2ui-comparison-cards.tsx" annotation="13 —— 响应式 2 列网格" />
     <File name="a2ui-widget-status.tsx" annotation="24 —— ready/loading/fallback/error 图标" />
     <File name="a2ui-interactive-guide.tsx" annotation="79 —— 步进引导（≤8 个圆点）" />
-  </Folder>
-  <Folder name="components/a2ui/academic">
-    <File name="index.ts" annotation="barrel —— PaperCard / SearchResults / AnalysisPanel" />
-    <File name="a2ui-analysis-adapter.tsx" annotation="17 —— 以 AcademicAnalysis 桥接（不在 barrel）" />
   </Folder>
 </Files>
 

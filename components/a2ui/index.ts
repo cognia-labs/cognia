@@ -97,9 +97,6 @@ export {
 
 export { A2UIToolOutput, A2UIStructuredOutput, hasA2UIToolOutput } from "./a2ui-tool-output"
 
-// Academic components
-export { AcademicPaperCard, AcademicSearchResults, AcademicAnalysisPanel } from "./academic"
-
 // App Builder components
 export { QuickAppBuilder } from "./quick-app-builder"
 export { AppGallery } from "./app-gallery"

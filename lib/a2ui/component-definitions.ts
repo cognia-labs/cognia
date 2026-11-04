@@ -148,8 +148,6 @@ export function createA2UIComponentBundle(type: string, id: string): A2UICompone
     case "Avatar":
     case "Skeleton":
     case "Spinner":
-    case "AcademicAnalysis":
-    case "AcademicSearchResults":
       root = descriptor(id, type)
       break
     case "Progress":

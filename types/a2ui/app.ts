@@ -1,12 +1,11 @@
 /**
  * A2UI App Builder Type Definitions
- * Props for app card, detail dialog, gallery, quick builder, and academic components
+ * Props for app card, detail dialog, gallery and quick builder components
  */
 
 import type { A2UIUserAction, A2UIDataModelChange } from "@/types/artifact/a2ui"
 import type { A2UIAppInstance } from "@/hooks/a2ui/app-builder/types"
 import type { A2UIAppTemplate } from "@/lib/a2ui/templates"
-import type { PaperAnalysisType } from "@/types/academic"
 import type { ViewMode } from "@/hooks/a2ui/use-app-gallery-filter"
 
 /**
@@ -114,22 +113,4 @@ export interface QuickAppCardProps {
  */
 export interface FlashAppTabProps {
   onGenerate: (prompt: string) => Promise<void>
-}
-
-/**
- * Props for the AcademicAnalysisPanel component
- */
-export interface AcademicAnalysisPanelProps {
-  paperTitle: string
-  paperAbstract?: string
-  analysisType: PaperAnalysisType
-  analysisContent: string
-  suggestedQuestions?: string[]
-  relatedTopics?: string[]
-  isLoading?: boolean
-  onAnalysisTypeChange?: (type: PaperAnalysisType) => void
-  onRegenerate?: () => void
-  onAskFollowUp?: (question: string) => void
-  onCopy?: (content: string) => void
-  className?: string
 }

@@ -3,7 +3,6 @@ import {
   makeAppInstance,
   makeAppTemplate,
   makeHistoryEntry,
-  makePaper,
   makeSimplifiedSpec,
   makeSurfaceState,
 } from "./a2ui"
@@ -23,7 +22,6 @@ describe("A2UI Storybook fixtures", () => {
     expect(makeHistoryEntry({ id: "history-x" }).id).toBe("history-x")
     expect(makeAppInstance({ name: "App X" }).name).toBe("App X")
     expect(makeAppTemplate({ category: "social" }).category).toBe("social")
-    expect(makePaper({ title: "Paper X" }).title).toBe("Paper X")
   })
 
   it("provides inert A2UI callbacks while allowing explicit overrides", () => {

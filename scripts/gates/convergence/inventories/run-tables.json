@@ -2079,7 +2079,7 @@
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/scheduledTaskRuns",
       "owner": "lib/db",
-      "note": "migrateLegacySchedulerDatabase bulkPuts old execution outcomes at lib/scheduler/legacy-db-migration.ts:146; these are individual scheduled attempts, unlike scheduledTasks definitions. The migration writer has no canonical executionRuns link or ledger call, so the retained attempt history is none-linked.",
+      "note": "Individual scheduled attempts, unlike scheduledTasks definitions, written through the SchedulerDatabase facade (lib/scheduler/scheduler-db.ts), whose private table getters the detector cannot follow. No writer carries a canonical executionRuns link or ledger call, so the attempt history is none-linked.",
       "database": "CogniaDB@lib/db/schema.ts",
       "file": "lib/db/schema.ts",
       "table": "scheduledTaskRuns",
@@ -2107,18 +2107,12 @@
       "rowStatuses": [],
       "reference": "none",
       "referenceField": null,
-      "writers": [
-        "lib/scheduler/legacy-db-migration.ts"
-      ],
+      "writers": [],
       "ledgerWriters": [],
-      "writerFunctions": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
+      "writerFunctions": [],
       "consumerFunctions": [],
-      "unlinkedWriters": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
-      "evidence": "b3d22899bee2f317"
+      "unlinkedWriters": [],
+      "evidence": "637c4f17f1a39f67"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/siteOperations",
@@ -4391,24 +4385,18 @@
       "rowStatuses": [],
       "reference": "none",
       "referenceField": null,
-      "writers": [
-        "lib/scheduler/legacy-db-migration.ts"
-      ],
+      "writers": [],
       "ledgerWriters": [],
-      "reason": "migrateLegacySchedulerDatabase at lib/scheduler/legacy-db-migration.ts:105 copies recurring trigger/config definitions; one task can fire repeatedly, and scheduledTaskRuns stores the execution attempts counted by this inventory.",
-      "writerFunctions": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
+      "reason": "Recurring trigger/config definitions behind the SchedulerDatabase facade (lib/scheduler/scheduler-db.ts); one task can fire repeatedly, and scheduledTaskRuns stores the execution attempts counted by this inventory.",
+      "writerFunctions": [],
       "consumerFunctions": [
         "lib/boot/startup-probe.ts#defaultDependencies::listScheduledTasks",
         "lib/data/apply-package.ts#applyBackupPackage::restoreTransaction",
         "lib/data/domain/index.ts#DOMAIN_TRANSFERS",
         "lib/scheduler/write-authority.ts#countTasksBySourceFromDb"
       ],
-      "unlinkedWriters": [
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase"
-      ],
-      "evidence": "da37d14c48fd53c4"
+      "unlinkedWriters": [],
+      "evidence": "6be81d6abc915309"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/siteVersions",
@@ -4783,78 +4771,6 @@
         "lib/router-fusion/db/ledger-store.ts#FusionLedgerStore::settleOrphanedAttempts"
       ],
       "evidence": "8145e0b6122d7da4"
-    },
-    {
-      "key": "dexie:legacy@lib/scheduler/legacy-db-migration.ts/executions",
-      "owner": "lib/scheduler",
-      "database": "legacy@lib/scheduler/legacy-db-migration.ts",
-      "file": "lib/scheduler/legacy-db-migration.ts",
-      "table": "executions",
-      "rowType": null,
-      "rowFields": null,
-      "rowStatuses": [],
-      "reference": "none",
-      "referenceField": null,
-      "writers": [],
-      "ledgerWriters": [],
-      "reason": "migrateLegacySchedulerDatabase at lib/scheduler/legacy-db-migration.ts:105 opens the old scheduler database only to copy historical executions into scheduledTaskRuns; this read-only migration source is not a current additional runtime execution owner.",
-      "writerFunctions": [],
-      "consumerFunctions": [
-        "components/scheduler/task-workspace-move.tsx#TaskWorkspaceMove::running",
-        "lib/scheduler/legacy-db-migration.ts#readLegacyStores"
-      ],
-      "unlinkedWriters": [],
-      "evidence": "b2dee4bf471e1de6"
-    },
-    {
-      "key": "dexie:legacy@lib/scheduler/legacy-db-migration.ts/tasks",
-      "owner": "lib/scheduler",
-      "database": "legacy@lib/scheduler/legacy-db-migration.ts",
-      "file": "lib/scheduler/legacy-db-migration.ts",
-      "table": "tasks",
-      "rowType": null,
-      "rowFields": null,
-      "rowStatuses": [],
-      "reference": "none",
-      "referenceField": null,
-      "writers": [],
-      "ledgerWriters": [],
-      "reason": "migrateLegacySchedulerDatabase at lib/scheduler/legacy-db-migration.ts:105 copies legacy scheduled-task definitions into scheduledTasks; they describe reusable triggers rather than individual executions, and the old source database is migration-only.",
-      "writerFunctions": [],
-      "consumerFunctions": [
-        "cli/src/agent/subagent-live-output.ts#applyCanonicalTaskEnvelope",
-        "lib/agents/agent-activity.ts#deriveAgentActivity",
-        "lib/ai/agent/team/auto/materialize.ts#materializeProposal",
-        "lib/ai/agent/team/synthesize-workflow.ts#synthesizeTeamWorkflow",
-        "lib/ai/eval/team-execution.ts#runIsolatedTeamEval",
-        "lib/db/agent-team-definitions.ts#writeAgentTeamDefinitions",
-        "lib/issues/sync/providers/lark-task.ts#createLarkTaskSyncProvider::pull",
-        "lib/mcp/tasks.ts#listMcpTasks",
-        "lib/notifications/recurring-compaction.ts#planRecurringCompaction",
-        "lib/remote-host/migration/candidates.ts#buildAlwaysOnWork",
-        "lib/scheduler/legacy-db-migration.ts#migrateLegacySchedulerDatabase",
-        "lib/scheduler/legacy-db-migration.ts#readLegacyStores",
-        "lib/scheduler/scheduled-task-rpc.ts#dispatchScheduledTaskRpc",
-        "lib/scheduler/scheduler-data-source.ts#RemoteSchedulerDataSource::exportTasks",
-        "lib/session-import/adapters/claude-code.ts#addTeamMembers",
-        "lib/session-import/index.ts#parseRefConversations",
-        "lib/workflow/nodes/scheduling/index.ts#execute",
-        "packages/agent-omp/src/history.ts#buildSession::setTodos",
-        "packages/eval-core/src/candidate-evidence.ts#projectEvalTaskEvidence",
-        "plugins/cognia-work-mode/src/runtime.ts#createWorkRuntime::runParallel",
-        "stores/agent/agent-team-store/dexie-bridge.ts#withAgentTeamDefinitionRestore",
-        "stores/scheduler/scheduler-store.ts#selectSelectedTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::deleteTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::loadMoreExecutions",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::loadTaskExecutions",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::pauseTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::refreshAll",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::resumeTask",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::runTaskNow",
-        "stores/scheduler/scheduler-store.ts#useSchedulerStore::updateTask"
-      ],
-      "unlinkedWriters": [],
-      "evidence": "40228666d097d04d"
     }
   ]
 }

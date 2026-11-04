@@ -297,13 +297,13 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | `format.ts` | 33 | `formatRelativeTime` (9), `formatAbsoluteTime` (25) | `"just now"` / `"Nm/h/d ago"` 否则用 locale 日期；阈值 `60000` / `3600000` / `86400000` / `604800000`（`:14-17`）；无导入 |
 | `list-utils.ts` | 27 | `getItemKey` (9), `getItemDisplayText` (19) | key = `item.id` 否则索引；display = string/number/bool 直通，object → `label`\|`text`\|`name`\|`title` 否则 `JSON.stringify`；无导入 |
-| `constants.ts` | 93 | `CATEGORY_KEYS` (12), `surfaceStyles` (29), `ANALYSIS_TYPE_VALUES` (80) | 纯数据 |
+| `constants.ts` | 45 | `CATEGORY_KEYS` (10), `surfaceStyles` (27), `contentStyles` (39) | 纯数据；无导入 |
 
-`constants.ts` 承载共享 UI 数据：`CATEGORY_KEYS`（`:12`，`["productivity","data","form","utility","social"]`）、`CATEGORY_I18N_MAP`（`:14`）、按 `surfaceType` 划分的容器 CSS `surfaceStyles`（`:29`，inline / dialog / panel / fullscreen）与 `contentStyles`（`:39`）、`ANALYSIS_TYPE_ICONS`（`:50`）、`ANALYSIS_TYPE_I18N_KEYS`（`:65`）以及 `ANALYSIS_TYPE_VALUES`（`:80`，12 条）。它唯一的依赖是从 `@/types/academic`（`:6`）`type` 导入的 `PaperAnalysisType`。
+`constants.ts` 承载共享 UI 数据：`CATEGORY_KEYS`（`:10`，`["productivity","data","form","utility","social"]`）、`CATEGORY_I18N_MAP`（`:12`），以及按 `surfaceType` 划分的容器 CSS `surfaceStyles`（`:27`，inline / dialog / panel / fullscreen）与 `contentStyles`（`:39`）。它不导入任何模块。
 
 ## Barrel
 
-`index.ts`（203 行）重新导出整个 `lib/a2ui`，让消费者从一处导入。核心模块出现在：`parser`（`:7`）、`data-model`（`:27`）、`events`（`:74`）、`format`（`:147`）、`constants`（`:156`）、`list-utils`（`:167`）。其余重导出覆盖在别处记录的渲染与投影层：`catalog`（`:53`）、`templates`（`:93`）、`app-generator`（`:118`）、`thumbnail`（`:131`）、`animation`（`:150`）、`chart-constants`（`:153`）、`academic-templates`（`:170`）、`output-profiles`（`:181`）、`rich-output-fixtures`（`:198`）。
+`index.ts`（203 行）重新导出整个 `lib/a2ui`，让消费者从一处导入。核心模块出现在：`parser`（`:7`）、`data-model`（`:27`）、`events`（`:74`）、`format`（`:147`）、`constants`（`:156`）、`list-utils`（`:167`）。其余重导出覆盖在别处记录的渲染与投影层：`catalog`（`:53`）、`templates`（`:93`）、`app-generator`（`:118`）、`thumbnail`（`:131`）、`animation`（`:150`）、`chart-constants`（`:153`）、`output-profiles`（`:181`）、`rich-output-fixtures`（`:198`）。
 
 ## 集群文件
 

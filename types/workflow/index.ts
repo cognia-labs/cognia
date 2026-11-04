@@ -4,8 +4,7 @@
  * Two type families live here, each addressing a different concern:
  *
  *   • `./workflow` — the legacy higher-level WorkflowType / WorkflowDefinition
- *     used by PPT/report/document generation pipelines (consumed by
- *     `types/academic/ppt.ts`).
+ *     of the PPT/report/document generation pipelines.
  *   • `./visual`   — the n8n-style visual graph editor + execution engine
  *     (consumed by `lib/workflow/`, `components/workflow/`, the new Settings
  *     section, and the Tauri-side trigger daemons).

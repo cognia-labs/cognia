@@ -1,6 +1,6 @@
 ---
 title: Output Profiles & Rich Output
-description: The bridge between an agent's rendering intent and the concrete render strategy — 22 intent→profile routes, the rich-output renderer's strategy dispatch, host strategies, the advanced-tier feature flag, html2canvas thumbnails, and pure academic-surface builders.
+description: The bridge between an agent's rendering intent and the concrete render strategy — 22 intent→profile routes, the rich-output renderer's strategy dispatch, host strategies, the advanced-tier feature flag, and html2canvas thumbnails.
 ---
 
 # Output Profiles & Rich Output
@@ -314,34 +314,6 @@ Other cache methods: `loadThumbnailCache` (224), `getThumbnail` (290), `deleteTh
 `isThumbnailStale` (307), `getAllThumbnails` (320), `clearAllThumbnails` (327). Deps: `html2canvas`
 (L6), loggers from `@/lib/logging` (L7).
 
-## Academic Surfaces
-
-`lib/a2ui/academic-templates.ts` (798) is a set of **pure** A2UI server-message builders for
-research surfaces — no rendering, no side effects. Each builder assembles components + a data model,
-then emits **4** `A2UIServerMessage`s (`createSurface` → `updateComponents` → `dataModelUpdate` →
-`surfaceReady`) and returns `{ surfaceId, messages }`.
-
-| Builder | line | Surface |
-| --- | --- | --- |
-| `createPaperCardSurface` | 41 | Single-paper card (emits messages at 194-197) |
-| `createSearchResultsSurface` | 206 | Search-results list |
-| `createAnalysisPanelSurface` | 365 | Analysis panel |
-| `createPaperComparisonSurface` | 529 | Side-by-side paper comparison |
-| `createReadingListSurface` | 649 | Reading list |
-
-`AcademicTemplateType` (L16) enumerates 7 surface kinds. i18n flows through bilingual bundles
-(`academicTemplateMessages` L25, `getAcademicTemplateMessages` L30, `formatTemplateMessage` L34 with
-`{key}` interpolation); ids come from `generateTemplateId` (e.g. L46). The `academicTemplates` object
-(L790) is the default export (L798). Deps: `A2UIComponent` / `A2UIServerMessage` from
-`@/types/a2ui/schema` (L6), `Paper` / `LibraryPaper` / `PaperAnalysisType` from `@/types/academic`
-(L7), `defaultLocale` / `Locale` from `@/i18n/config` (L8), the bundled `a2ui.json` message sets
-(L9-10), and `generateTemplateId` from `./templates` (L11).
-
-The matching React components live under `components/a2ui/academic/` — the barrel `index.ts`
-re-exports `AcademicPaperCard` (L6), `AcademicSearchResults` (L7), and `AcademicAnalysisPanel` (L8).
-`A2UIAnalysisAdapter` (`a2ui-analysis-adapter.tsx:17`) is **not** in the barrel; it is bridged into
-the catalog at renderer load as `"AcademicAnalysis"`.
-
 ## Fixtures
 
 `lib/a2ui/rich-output-fixtures.ts` (42) ships 4 sample fixtures (`richOutputFixtures`, L8) for tests
@@ -364,17 +336,12 @@ imports.
     <File name="output-profiles.ts" annotation="370 — registry + router (22 profiles)" />
     <File name="rich-output-fixtures.ts" annotation="42 — 4 sample fixtures" />
     <File name="thumbnail.ts" annotation="350 — html2canvas + localStorage cache" />
-    <File name="academic-templates.ts" annotation="798 — pure 4-message academic builders" />
   </Folder>
   <Folder name="components/a2ui/display">
     <File name="a2ui-rich-output.tsx" annotation="124 — strategy-dispatch renderer" />
     <File name="a2ui-comparison-cards.tsx" annotation="13 — responsive 2-col grid" />
     <File name="a2ui-widget-status.tsx" annotation="24 — ready/loading/fallback/error icon" />
     <File name="a2ui-interactive-guide.tsx" annotation="79 — stepper guide (≤8 dots)" />
-  </Folder>
-  <Folder name="components/a2ui/academic">
-    <File name="index.ts" annotation="barrel — PaperCard / SearchResults / AnalysisPanel" />
-    <File name="a2ui-analysis-adapter.tsx" annotation="17 — bridged as AcademicAnalysis (not in barrel)" />
   </Folder>
 </Files>
 

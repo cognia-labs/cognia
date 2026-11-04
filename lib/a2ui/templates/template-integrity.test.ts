@@ -68,7 +68,6 @@ const registeredTypes = new Set([
   "List",
   "Animation",
   "InteractiveGuide",
-  "AcademicAnalysis",
 ])
 
 // --- Handled actions (from action-handlers.ts switch cases) ---
