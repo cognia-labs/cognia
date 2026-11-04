@@ -12,20 +12,9 @@ let mockRunActive = false
 jest.mock("@/lib/devices/execution-host-guard", () => ({
   anyRunActive: () => Promise.resolve(mockRunActive),
 }))
-let mockNativeMobile = false
-jest.mock("@/lib/platform/detect", () => ({
-  ...jest.requireActual("@/lib/platform/detect"),
-  isTauri: () => false,
-  isNativeMobile: () => mockNativeMobile,
-}))
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
     values?.label ? `${key}:${String(values.label)}` : values?.url ? `${key}:${values.url}` : key,
-}))
-jest.mock("@/components/settings/remote-hosts/loopback-discovery-panel", () => ({
-  LoopbackDiscoveryPanel: (props: Record<string, unknown>) => (
-    <div data-testid="loopback-panel" data-props={Object.keys(props).join(",")} />
-  ),
 }))
 jest.mock("@/components/settings/remote-hosts/tabs/lan-discovery-panel", () => ({
   LanDiscoveryPanel: ({
@@ -96,7 +85,6 @@ const addHost = jest.fn(({ label }: { label?: string }) => {
 
 beforeEach(() => {
   mockRunActive = false
-  mockNativeMobile = false
   persist = undefined
   activateHost.mockClear()
   addHost.mockClear()
@@ -201,22 +189,11 @@ describe("AddHostForm", () => {
   })
 
   it("offers discovery before the invitation it informs", () => {
-    render(<AddHostForm discoveryLane="loopback" />)
+    render(<AddHostForm />)
     expect(
-      screen
-        .getByTestId("loopback-panel")
-        .compareDocumentPosition(screen.getByTestId("pair-payload")) &
+      screen.getByTestId("lan-panel").compareDocumentPosition(screen.getByTestId("pair-payload")) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-  })
-
-  /**
-   * A bare URL is not an invitation: the loopback panel used to hand one to
-   * the field, and every submit then failed as `wrong_format`.
-   */
-  it("gives the loopback panel no way to write an address into the invitation", () => {
-    render(<AddHostForm discoveryLane="loopback" />)
-    expect(screen.getByTestId("loopback-panel")).toHaveAttribute("data-props", "")
   })
 
   it("names a seeded host without putting its URL in the invitation field", () => {
@@ -229,7 +206,7 @@ describe("AddHostForm", () => {
 
   describe("the LAN cross-check sees the real field", () => {
     it("receives what the user typed", async () => {
-      render(<AddHostForm discoveryLane="mdns" />)
+      render(<AddHostForm />)
       fireEvent.change(screen.getByTestId("pair-payload"), { target: { value: "cgnp3|typed" } })
       await waitFor(() =>
         expect(screen.getByTestId("lan-panel")).toHaveAttribute("data-payload", "cgnp3|typed")
@@ -238,7 +215,7 @@ describe("AddHostForm", () => {
 
     /** The old `key={payload}` remounted the step on changes it made itself. */
     it("keeps the typed invitation across the form's own re-renders", async () => {
-      render(<AddHostForm discoveryLane="mdns" />)
+      render(<AddHostForm />)
       fireEvent.change(screen.getByTestId("pair-payload"), { target: { value: "cgnp3|typed" } })
       fireEvent.change(screen.getByLabelText("add.labelLabel"), { target: { value: "box" } })
       await waitFor(() =>
@@ -248,7 +225,7 @@ describe("AddHostForm", () => {
     })
 
     it("rewrites the field only when the user takes the live address", async () => {
-      render(<AddHostForm discoveryLane="mdns" />)
+      render(<AddHostForm />)
       fireEvent.change(screen.getByTestId("pair-payload"), { target: { value: "cgnp3|typed" } })
       await waitFor(() =>
         expect(screen.getByTestId("lan-panel")).toHaveAttribute("data-payload", "cgnp3|typed")
@@ -262,16 +239,11 @@ describe("AddHostForm", () => {
   })
 
   /**
-   * The scanner is the Capacitor ML Kit plugin: offered in the native mobile
-   * shell, where it works, and nowhere else, where it would only answer
-   * "unsupported".
+   * The form is desktop-only: a phone scans on `/pair`, so the camera action
+   * the Capacitor plugin answers `unsupported` for everywhere else never shows.
    */
-  it("offers the camera scan only where the scanner exists", () => {
-    const { unmount } = render(<AddHostForm />)
-    expect(screen.queryByTestId("pair-scan-qr")).not.toBeInTheDocument()
-    unmount()
-    mockNativeMobile = true
+  it("never offers the camera scan", () => {
     render(<AddHostForm />)
-    expect(screen.getByTestId("pair-scan-qr")).toBeInTheDocument()
+    expect(screen.queryByTestId("pair-scan-qr")).not.toBeInTheDocument()
   })
 })

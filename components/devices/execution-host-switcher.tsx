@@ -39,6 +39,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SITE_TONE_DOT, SITE_TONE_TEXT, type SiteTone } from "@/components/sites/site-status"
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 import { cn } from "@/lib/utils"
+import { addsHostsToRegistry, COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
 
 /**
  * Connection state to tone.
@@ -290,7 +291,7 @@ export function StatusBarExecutionHost() {
 }
 
 /**
- * The device console with its add-host sheet open.
+ * The device console with its add-host sheet open, on the desktop.
  *
  * The value is a fresh nonce rather than `1` because the sheet latches only a
  * *changed* param (`useAddHostSheetState`): after the user closes the sheet
@@ -298,6 +299,9 @@ export function StatusBarExecutionHost() {
  * change nothing and the second click would silently do nothing.
  */
 export function addHostHref(): string {
+  // Off the desktop there is no registry sheet: "Add host" pairs this client
+  // with one more Host (`lib/devices/pair-entry.ts`).
+  if (!addsHostsToRegistry()) return COMPANION_ADD_HOST_HREF
   return `/devices?addHost=${nanoid(6)}`
 }
 

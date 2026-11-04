@@ -125,14 +125,6 @@ export interface PairStepProps {
    */
   onPayloadChange?: (payload: string) => void
   /**
-   * Offer the camera scan button. Defaults to `!webMode`, which is where the
-   * scanner has always been offered: `scan()` is the Capacitor ML Kit plugin,
-   * so it only works in the native mobile shell. A caller that runs in web
-   * mode for the paste affordances but may also be mounted in that shell (the
-   * add-host form, inside the phone's device console) enables it explicitly.
-   */
-  allowScan?: boolean
-  /**
    * Caller fields rendered inside the form, between the invitation and the
    * submit button, so options the pairing applies (a registry label, "connect
    * after") come before the action that applies them, and Enter in them
@@ -198,7 +190,6 @@ export function PairStep({
   onBack,
   onActivityChange,
   onPayloadChange,
-  allowScan,
   extraFields,
 }: PairStepProps) {
   const t = useTranslations("mobile.pair")
@@ -501,7 +492,10 @@ export function PairStep({
     onPayloadChange?.(payload)
   }, [payload, onPayloadChange])
 
-  const scanOffered = allowScan ?? !webMode
+  // `scan()` is the Capacitor ML Kit plugin, so the camera is offered exactly
+  // where the step runs as the native flow. The add-host form that used to
+  // switch it on separately is desktop-only now.
+  const scanOffered = !webMode
 
   const rawField = (
     <Textarea

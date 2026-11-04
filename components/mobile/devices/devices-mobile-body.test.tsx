@@ -13,6 +13,13 @@ let hostUnreachable = false
 const refresh = jest.fn(async () => {})
 const push = jest.fn()
 let searchParams = new URLSearchParams()
+// `var`, not `let`: `isTauri()` runs at module load, before a `let` exists.
+// eslint-disable-next-line no-var -- hoisting is the point.
+var mockTauri: boolean | undefined
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isTauri: () => mockTauri ?? false,
+}))
 const replace = jest.fn((href: string, _options?: unknown) => {
   searchParams = new URLSearchParams(href.split("?")[1] ?? "")
 })
@@ -158,32 +165,63 @@ it("does not reopen the page from a persisted selection", () => {
   expect(screen.queryByTestId("mobile-detail")).toBeNull()
 })
 
-it("adds a host in place from the header's grow menu", async () => {
+/**
+ * Off the desktop, pairing with a Host IS adding one. The grow menu used to
+ * offer both: "Pair" filed the Host in the credential book, "Add host" in the
+ * desktop's registry, so one act landed in one of two stores.
+ */
+it("offers one Add host that pairs on /pair, not a Pair beside it", async () => {
   const user = userEvent.setup()
   render(<DevicesMobileBody />)
   await user.click(screen.getByTestId("mobile-devices-add"))
+  expect(screen.queryByTestId("mobile-devices-pair")).not.toBeInTheDocument()
   await user.click(screen.getByTestId("mobile-devices-add-host"))
-  expect(screen.getByTestId("mobile-add-host")).toBeInTheDocument()
-  expect(push).not.toHaveBeenCalled()
+  expect(push).toHaveBeenCalledWith("/pair?mode=add")
+  expect(screen.queryByTestId("mobile-add-host")).not.toBeInTheDocument()
 })
 
-it("honours the ?addHost deep link", () => {
+it("sends a ?addHost hand-off to /pair rather than the registry sheet", () => {
   searchParams = new URLSearchParams("addHost=1")
   render(<DevicesMobileBody />)
-  expect(screen.getByTestId("mobile-add-host")).toBeInTheDocument()
+  expect(screen.queryByTestId("mobile-add-host")).not.toBeInTheDocument()
+  expect(replace).toHaveBeenCalledWith("/pair?mode=add", undefined)
 })
 
-/**
- * Pairing used to vanish from this screen once a second device existed, so a
- * phone with one pairing could not start another from the device console.
- */
-it("keeps pairing reachable however large the fleet is", async () => {
-  const user = userEvent.setup()
-  rows = [...rows, row({ ref: "device:b", label: "Tablet" })]
-  render(<DevicesMobileBody />)
-  await user.click(screen.getByTestId("mobile-devices-add"))
-  await user.click(screen.getByTestId("mobile-devices-pair"))
-  expect(push).toHaveBeenCalledWith("/pair")
+describe("on the desktop", () => {
+  beforeEach(() => {
+    mockTauri = true
+  })
+  afterEach(() => {
+    mockTauri = false
+  })
+
+  it("adds a host in place from the header's grow menu", async () => {
+    const user = userEvent.setup()
+    render(<DevicesMobileBody />)
+    await user.click(screen.getByTestId("mobile-devices-add"))
+    await user.click(screen.getByTestId("mobile-devices-add-host"))
+    expect(screen.getByTestId("mobile-add-host")).toBeInTheDocument()
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it("honours the ?addHost deep link", () => {
+    searchParams = new URLSearchParams("addHost=1")
+    render(<DevicesMobileBody />)
+    expect(screen.getByTestId("mobile-add-host")).toBeInTheDocument()
+  })
+
+  /**
+   * Pairing used to vanish from this screen once a second device existed, so a
+   * desktop with one pairing could not start another from the device console.
+   */
+  it("keeps pairing a phone reachable however large the fleet is", async () => {
+    const user = userEvent.setup()
+    rows = [...rows, row({ ref: "device:b", label: "Tablet" })]
+    render(<DevicesMobileBody />)
+    await user.click(screen.getByTestId("mobile-devices-add"))
+    await user.click(screen.getByTestId("mobile-devices-pair"))
+    expect(push).toHaveBeenCalledWith("/settings?section=companion")
+  })
 })
 
 /** The desktop offers SSH hosts from its header; the phone's grow menu does too. */

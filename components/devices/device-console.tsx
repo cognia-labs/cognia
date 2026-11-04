@@ -160,7 +160,7 @@ export function DeviceConsole() {
                   <span className="max-w-40 truncate">{companionHost.label}</span>
                 </Button>
               ) : (
-                <ExecutionHostChip onAddHost={() => addHost.setOpen(true)} />
+                <ExecutionHostChip onAddHost={addHost.request} />
               )}
               {
                 /**
@@ -194,7 +194,7 @@ export function DeviceConsole() {
               id: "add-host",
               label: t("actions.addHost"),
               icon: ServerIcon,
-              onSelect: () => addHost.setOpen(true),
+              onSelect: addHost.request,
             },
           ]}
           overflowLabel={t("actions.more")}
@@ -244,7 +244,7 @@ export function DeviceConsole() {
         <DeviceDetail
           row={selected}
           actions={actions}
-          onRepairHost={() => addHost.setOpen(true)}
+          onRepairHost={addHost.request}
           initialSection={
             selected && selected.ref === sectionLink.deviceRef ? sectionLink.section : null
           }

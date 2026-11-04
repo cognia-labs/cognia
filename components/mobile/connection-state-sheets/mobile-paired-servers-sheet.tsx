@@ -33,6 +33,7 @@ import { removeCompanionHost } from "@/lib/companion/host-removal"
 import { switchCompanionHost } from "@/lib/companion/host-orchestration"
 import { DEFAULT_BIOMETRIC_GUARD } from "@cognia/agent-config-types"
 import { useSettingsStore } from "@/stores/settings"
+import { COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
 
 export interface MobilePairedServersSheetProps {
   open: boolean
@@ -188,7 +189,7 @@ export function MobilePairedServersSheet({ open, onOpenChange }: MobilePairedSer
             </SheetTitle>
           </SheetHeader>
           <div className="flex items-center justify-end px-4 py-2">
-            <Button size="sm" variant="outline" onClick={() => router.push("/pair?mode=add")}>
+            <Button size="sm" variant="outline" onClick={() => router.push(COMPANION_ADD_HOST_HREF)}>
               <PlusIcon className="size-4" aria-hidden="true" />
               {t("addHost")}
             </Button>

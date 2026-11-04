@@ -12,6 +12,13 @@ jest.mock("next-intl", () => ({
 const mockPush = jest.fn()
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }))
 
+// `var`, not `let`: `isTauri()` runs at module load, before a `let` exists.
+// eslint-disable-next-line no-var -- hoisting is the point.
+var mockTauri: boolean | undefined
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isTauri: () => mockTauri ?? true,
+}))
 let anyActive = false
 jest.mock("@/lib/devices/execution-host-guard", () => ({
   anyRunActive: () => Promise.resolve(anyActive),
@@ -135,6 +142,23 @@ it("offers to add a host from the status bar, opening the console's add-host she
   await userEvent.click(screen.getByTestId("status-execution-host"))
   await userEvent.click(await screen.findByText("devices.executionHost.addHost"))
   expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/^\/devices\?addHost=.+/))
+})
+
+/**
+ * Off the desktop there is no registry sheet: adding a Host is pairing this
+ * client with one more on `/pair`, as the rest of the browser's chrome does.
+ */
+it("hands Add host to /pair off the desktop", async () => {
+  mockTauri = false
+  try {
+    seed([host()], null)
+    render(<StatusBarExecutionHost />)
+    await userEvent.click(screen.getByTestId("status-execution-host"))
+    await userEvent.click(await screen.findByText("devices.executionHost.addHost"))
+    expect(mockPush).toHaveBeenCalledWith("/pair?mode=add")
+  } finally {
+    mockTauri = true
+  }
 })
 
 /**

@@ -78,7 +78,7 @@ import { useBackDismiss } from "@/hooks/ui/use-back-dismiss"
 import { useRefreshing } from "@/hooks/ui/use-refreshing"
 import { accountSyncEnabled } from "@/lib/account-sync/feature-flag"
 import { remoteHostRef } from "@/lib/devices/build-device-rows"
-import { devicePairHref } from "@/lib/devices/pair-entry"
+import { addsHostsToRegistry, devicePairHref } from "@/lib/devices/pair-entry"
 import { hasHostRuntime } from "@/lib/platform/capabilities"
 import { newSshHostSettingsHref } from "@/lib/terminal/terminal-settings-link"
 import { cn } from "@/lib/utils"
@@ -204,10 +204,13 @@ export function DevicesMobileBody() {
             <RefreshCwIcon className={cn("size-4", refreshing && "motion-safe:animate-spin")} />
           </Button>
           {/*
-            Every way to grow the fleet behind one control, the same three the
-            desktop header offers. Pairing is a route (`/pair` owns the camera
-            and the one-shot invitation), adding a host is the sheet below, and
-            an SSH host is the SSH editor with a new host already started.
+            Every way to grow the fleet behind one control. Off the desktop,
+            pairing with a Host IS adding one: both are `/pair` (it owns the
+            camera and the one-shot invitation), so they are one item rather
+            than a "Pair" that wrote the credential book beside an "Add host"
+            that wrote the desktop's registry. Only a desktop keeps both — it
+            pairs phones to itself and drives other machines. An SSH host is
+            the SSH editor with a new host already started.
           */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -222,17 +225,16 @@ export function DevicesMobileBody() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={() => router.push(pairHref)}
-                data-testid="mobile-devices-pair"
-              >
-                <QrCodeIcon className="size-4" />
-                {t("actions.pair")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => addHost.setOpen(true)}
-                data-testid="mobile-devices-add-host"
-              >
+              {addsHostsToRegistry() ? (
+                <DropdownMenuItem
+                  onSelect={() => router.push(pairHref)}
+                  data-testid="mobile-devices-pair"
+                >
+                  <QrCodeIcon className="size-4" />
+                  {t("actions.pair")}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onSelect={addHost.request} data-testid="mobile-devices-add-host">
                 <ServerIcon className="size-4" />
                 {t("actions.addHost")}
               </DropdownMenuItem>
@@ -317,7 +319,7 @@ export function DevicesMobileBody() {
               actions={actions}
               onRepairHost={() => {
                 setDetailOpen(false)
-                addHost.setOpen(true)
+                addHost.request()
               }}
             />
           </div>

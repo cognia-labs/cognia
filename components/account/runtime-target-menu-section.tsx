@@ -21,6 +21,7 @@ import { switchCompanionHost } from "@/lib/companion/host-orchestration"
 import { RuntimeTargetRegistry, type RuntimeTargetRecord } from "@/lib/runtime/target-registry"
 import { cn } from "@/lib/utils"
 import { useAccountStore } from "@/stores/account/account-store"
+import { COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
 
 interface RuntimeTargetMenuSectionProps {
   accountIdOverride?: string
@@ -186,7 +187,7 @@ export function RuntimeTargetMenuSection({
       {showAddHost ? (
         <button
           type="button"
-          onClick={() => router.push("/pair?mode=add")}
+          onClick={() => router.push(COMPANION_ADD_HOST_HREF)}
           className="mx-2 mb-1 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"
         >
           <PlusIcon aria-hidden className="size-4" />

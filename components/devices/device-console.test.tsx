@@ -374,6 +374,19 @@ describe("DeviceConsole", () => {
     expect(push).not.toHaveBeenCalled()
   })
 
+  /**
+   * Off the desktop there is no registry to file a Host in: the browser pairs
+   * with one more Host on `/pair`, where its status bar and runtime menu
+   * already send "Add host". The sheet here used to write a second store.
+   */
+  it("pairs on /pair instead of opening the registry sheet in a browser", async () => {
+    platform = { tauri: false, capacitor: false, webCompanion: true }
+    renderConsole()
+    await userEvent.click(screen.getByRole("button", { name: "Add a host" }))
+    expect(push).toHaveBeenCalledWith("/pair?mode=add")
+    expect(screen.queryByTestId("add-host-sheet")).not.toBeInTheDocument()
+  })
+
   it("starts a new SSH host in the editor that owns them", async () => {
     renderConsole()
     await openHeaderMenu()

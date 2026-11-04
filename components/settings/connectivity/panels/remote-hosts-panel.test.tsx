@@ -16,10 +16,15 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
     values?.count !== undefined ? `${key}:${String(values.count)}` : key,
 }))
-let mockScanAvailable = false
+// `var`, not `let`: `isTauri()` runs at module load, before a `let` exists.
+// eslint-disable-next-line no-var -- hoisting is the point.
+var mockTauri: boolean | undefined
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isTauri: () => mockTauri ?? true,
+}))
 jest.mock("@/components/connectivity/pair/add-host-form", () => ({
   AddHostForm: () => <div data-testid="add-host-form" />,
-  useScanAvailable: () => mockScanAvailable,
 }))
 jest.mock("@/components/settings/connectivity/github-runner-panel", () => ({
   GitHubRunnerPanel: () => <div data-testid="github-runner-panel" />,
@@ -68,7 +73,7 @@ function seed(hosts: RemoteHost[], activeHostId: string | null = "h1") {
 beforeEach(() => {
   jest.clearAllMocks()
   mockRunActive = false
-  mockScanAvailable = false
+  mockTauri = true
   seed([])
 })
 
@@ -192,16 +197,21 @@ describe("RemoteHostsPanel", () => {
   })
 
   /**
-   * The scan button exists only where the pair step can scan (the native
-   * mobile shell), so the description promises scanning only there.
+   * Only the desktop files Hosts in this registry. A browser or a phone pairs
+   * on `/pair`, which records the Host as its runtime; offering the form there
+   * filed it in a second store the rest of the client did not read.
    */
-  it("promises scanning only where the scanner exists", () => {
+  it("adds through the registry form on the desktop and links to /pair elsewhere", () => {
     const { unmount } = render(<RemoteHostsPanel />)
     expect(screen.getByText("addDescription")).toBeInTheDocument()
+    expect(screen.getByTestId("add-host-form")).toBeInTheDocument()
+    expect(screen.queryByTestId("remote-hosts-add-pair")).not.toBeInTheDocument()
     unmount()
-    mockScanAvailable = true
+    mockTauri = false
     render(<RemoteHostsPanel />)
-    expect(screen.getByText("addDescriptionScan")).toBeInTheDocument()
+    expect(screen.getByText("addDescriptionCompanion")).toBeInTheDocument()
+    expect(screen.queryByTestId("add-host-form")).not.toBeInTheDocument()
+    expect(screen.getByTestId("remote-hosts-add-pair")).toHaveAttribute("href", "/pair?mode=add")
   })
 
   it("follows the store when the active host changes elsewhere", async () => {

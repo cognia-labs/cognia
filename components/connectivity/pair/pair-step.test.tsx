@@ -361,19 +361,17 @@ it("marks the invitation spent rather than leaving a 'ready' summary beside the 
 
 /**
  * The scanner is the Capacitor ML Kit plugin, which only the native mobile
- * shell has. A web-mode caller that may also be mounted there (the add-host
- * form inside the phone's device console) turns it on explicitly.
+ * shell has, so the camera is offered exactly in the native flow. The add-host
+ * form that switched it on in web mode is desktop-only now.
  */
-it("offers the camera action in web mode when the caller says the scanner exists", () => {
-  render(<PairStep isCredentialStoreReady={readyStore} webMode allowScan onPaired={jest.fn()} />)
-  expect(screen.getByTestId("pair-scan-qr")).toBeInTheDocument()
-  // The web affordances stay: scanning is added, not swapped in.
-  expect(screen.getByTestId("pair-paste-clipboard")).toBeInTheDocument()
-})
-
-it("hides the camera action on native when the caller says there is no scanner", () => {
-  render(<PairStep isCredentialStoreReady={readyStore} allowScan={false} onPaired={jest.fn()} />)
+it("offers the camera action in the native flow and never in web mode", () => {
+  const { unmount } = render(
+    <PairStep isCredentialStoreReady={readyStore} webMode onPaired={jest.fn()} />
+  )
   expect(screen.queryByTestId("pair-scan-qr")).not.toBeInTheDocument()
+  unmount()
+  render(<PairStep isCredentialStoreReady={readyStore} onPaired={jest.fn()} />)
+  expect(screen.getByTestId("pair-scan-qr")).toBeInTheDocument()
 })
 
 /**

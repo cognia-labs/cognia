@@ -1,19 +1,22 @@
 "use client"
 
 /**
- * Pair a remote host into this device's registry, on any shell.
+ * Pair a remote host into the desktop's registry.
  *
- * The form every "Add host" entry point mounts: Settings → Connectivity →
- * Remote hosts, and the `/devices` console's sheet. It is the same `PairStep`
- * the phone and the browser `/pair` route use, so an invitation is redeemed
- * one way everywhere, relay fallback included (ADR-0170). What this form adds
- * is what a registry entry needs and a companion pairing does not: a label,
- * whether to drive the host straight away, and a discovery panel that fills
- * the invitation with a live address.
+ * The form the desktop's "Add host" entry points mount: Settings →
+ * Connectivity → Remote hosts, and the `/devices` console's sheet. It is the
+ * same `PairStep` the phone and the browser `/pair` route use, so an
+ * invitation is redeemed one way everywhere, relay fallback included
+ * (ADR-0170). What this form adds is what a registry entry needs and a
+ * companion pairing does not: a label, whether to drive the host straight
+ * away, and an mDNS panel that fills the invitation with a live address.
  *
- * Off Tauri the credential vault can refuse the write while the browser vault
- * is locked. `PairStep` surfaces that as its own failure with an unlock
- * action, which beats a pairing that "succeeds" and then loses its identity.
+ * Desktop only. A browser or a phone has no plane of its own to drive another
+ * machine from; its "Add host" is `/pair?mode=add`, which records the Host as
+ * its runtime (`lib/devices/pair-entry.ts`). This form used to run there too,
+ * with a loopback probe and a camera scan of its own — copies of what `/pair`
+ * already does — and filed the Host in a store the rest of the client did not
+ * read.
  *
  * # Who owns the invitation field
  *
@@ -37,11 +40,10 @@
  * and never switches to it.
  */
 
-import { useCallback, useState, useSyncExternalStore } from "react"
+import { useCallback, useState } from "react"
 import Link from "next/link"
 import { useTranslations } from "next-intl"
 
-import { LoopbackDiscoveryPanel } from "@/components/settings/remote-hosts/loopback-discovery-panel"
 import { LanDiscoveryPanel } from "@/components/settings/remote-hosts/tabs/lan-discovery-panel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,26 +52,10 @@ import { Switch } from "@/components/ui/switch"
 import { useRegisterPairedHost } from "@/hooks/devices/use-register-paired-host"
 import { remoteHostRef } from "@/lib/devices/build-device-rows"
 import { deviceConsoleHref } from "@/lib/devices/device-console-href"
-import { isNativeMobile, isTauri } from "@/lib/platform/detect"
 import type { CompanionConfig } from "@/lib/tauri/transport-companion"
 import type { RemoteHost } from "@/stores/remote-host/remote-host-store"
 
 import { PairStep, type PairStepProps } from "./pair-step"
-
-/** The shell never changes under a running page, so there is nothing to subscribe to. */
-const subscribeNothing = () => () => undefined
-const serverNotNative = () => false
-
-/**
- * Whether the camera scanner works here. `scan()` is the Capacitor ML Kit
- * plugin (`lib/capacitor/barcode.ts`), which answers `unsupported` on Tauri
- * and in a browser: there is no webcam decoder in this app. Read through
- * `useSyncExternalStore` so the static export's server snapshot (never
- * native) and the first client render agree.
- */
-export function useScanAvailable(): boolean {
-  return useSyncExternalStore(subscribeNothing, isNativeMobile, serverNotNative)
-}
 
 export interface AddHostFormProps {
   /** Called after a host is successfully registered (e.g. to close a sheet). */
@@ -81,8 +67,6 @@ export interface AddHostFormProps {
    * not one, and pre-filling it made every submit fail as `wrong_format`.
    */
   initialBaseUrl?: string
-  /** Force the discovery lane instead of detecting it. Tests and Storybook. */
-  discoveryLane?: "mdns" | "loopback"
   /** Test seams forwarded to the shared pair step. */
   pairStepProps?: Pick<PairStepProps, "isCredentialStoreReady" | "onRequestUnlock">
   /** Start with "always-on host" on, e.g. from an always-on host entry point. */
@@ -92,13 +76,11 @@ export interface AddHostFormProps {
 export function AddHostForm({
   onPaired,
   initialBaseUrl,
-  discoveryLane,
   pairStepProps,
   defaultAlwaysOn = false,
 }: AddHostFormProps) {
   const t = useTranslations("settings.remoteHosts")
   const { register, dialog } = useRegisterPairedHost()
-  const scanAvailable = useScanAvailable()
 
   /** What the field holds right now, as reported by the step. Read-only here. */
   const [observedPayload, setObservedPayload] = useState("")
@@ -110,8 +92,6 @@ export function AddHostForm({
   const [success, setSuccess] = useState<string | null>(null)
   /** An always-on host just paired: the work it is for is one link away. */
   const [pairedAlwaysOn, setPairedAlwaysOn] = useState<RemoteHost | null>(null)
-
-  const lane = discoveryLane ?? (isTauri() ? "mdns" : "loopback")
 
   // Taking the live address is the one explicit write: the user asked for the
   // field to change, so remounting the step with the rewritten invitation is
@@ -143,7 +123,7 @@ export function AddHostForm({
   )
 
   return (
-    <div className="space-y-4" data-testid="add-host-form" data-discovery-lane={lane}>
+    <div className="space-y-4" data-testid="add-host-form">
       {initialBaseUrl ? (
         <p className="text-xs text-muted-foreground" data-testid="add-host-seeded-url">
           {t("add.seededFrom", { url: initialBaseUrl })}
@@ -154,17 +134,12 @@ export function AddHostForm({
           "connect after" ride inside the pair form: below the submit button
           they read as a second step after "Complete pairing" had already
           run with whatever they held. */}
-      {lane === "mdns" ? (
-        <LanDiscoveryPanel payload={observedPayload} onUseAddress={takeLiveAddress} />
-      ) : (
-        <LoopbackDiscoveryPanel />
-      )}
+      <LanDiscoveryPanel payload={observedPayload} onUseAddress={takeLiveAddress} />
 
       <PairStep
         key={seed.nonce}
         prefilledPairPayload={seed.payload}
         webMode
-        allowScan={scanAvailable}
         onPayloadChange={setObservedPayload}
         persistPairing={persistPairing}
         onPaired={() => undefined}

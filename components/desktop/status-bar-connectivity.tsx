@@ -77,6 +77,7 @@ import {
 import type { EventPlaneState } from "@/lib/companion/device-presence-registry"
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 import { useUIStore } from "@/stores/ui/ui-store"
+import { COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
 
 type ConnState = "online" | "offline" | "reconnecting"
 
@@ -688,7 +689,7 @@ function RuntimeConnectivity({ platform }: { platform: ReturnType<typeof usePlat
               size="sm"
               className="flex-1"
               onClick={() => {
-                router.push("/pair?mode=add")
+                router.push(COMPANION_ADD_HOST_HREF)
                 setOpen(false)
               }}
             >

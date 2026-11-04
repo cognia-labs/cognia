@@ -16,9 +16,16 @@
  * here cannot repoint the transport under a running turn without asking, and
  * remove always confirms (it forgets the stored credential, and removing the
  * active host also returns this window to local).
+ *
+ * Adding a host here is the desktop's act: only the desktop drives other
+ * machines. A browser or a phone pairs with a Host on `/pair`, which records
+ * it as this client's runtime and reconnects on launch, so off the desktop the
+ * add block links there instead of filing the Host in this registry — the
+ * second store that made "Add host" mean two things (`lib/devices/pair-entry.ts`).
  */
 
-import { useRef, useState } from "react"
+import { useRef, useState, useSyncExternalStore } from "react"
+import Link from "next/link"
 import { useTranslations } from "next-intl"
 import {
   AlertCircleIcon,
@@ -29,7 +36,7 @@ import {
   Trash2Icon,
 } from "lucide-react"
 
-import { AddHostForm, useScanAvailable } from "@/components/connectivity/pair/add-host-form"
+import { AddHostForm } from "@/components/connectivity/pair/add-host-form"
 import { GitHubRunnerPanel } from "@/components/settings/connectivity/github-runner-panel"
 import { DeviceConsoleLink } from "@/components/devices/device-console-link"
 import { hostTone } from "@/components/devices/execution-host-switcher"
@@ -43,9 +50,14 @@ import {
   type ExecutionHostSwitch,
 } from "@/hooks/devices/use-execution-host-switch"
 import { remoteHostRef } from "@/lib/devices/build-device-rows"
+import { addsHostsToRegistry, COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
 import type { RemoteHostInput } from "@/lib/devices/types"
 import { cn } from "@/lib/utils"
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
+
+/** The shell never changes under a running page, so there is nothing to subscribe to. */
+const subscribeNothing = () => () => undefined
+const serverNotRegistry = () => false
 
 export function RemoteHostsPanel() {
   const t = useTranslations("settings.connectivity.remoteHosts")
@@ -54,9 +66,9 @@ export function RemoteHostsPanel() {
   const active = hosts.find((host) => host.id === activeHostId)
   // One guard (and one dialog) for the whole list rather than one per row.
   const hostSwitch = useExecutionHostSwitch()
-  // The pair step only offers its camera scan where the scanner exists (the
-  // native mobile shell), so the description only promises scanning there.
-  const scanAvailable = useScanAvailable()
+  // Read through `useSyncExternalStore` so the static export's server snapshot
+  // and the first client render agree.
+  const registry = useSyncExternalStore(subscribeNothing, addsHostsToRegistry, serverNotRegistry)
 
   return (
     <SettingsStack>
@@ -90,12 +102,18 @@ export function RemoteHostsPanel() {
 
       <SettingsBlock
         title={t("addTitle")}
-        description={scanAvailable ? t("addDescriptionScan") : t("addDescription")}
+        description={registry ? t("addDescription") : t("addDescriptionCompanion")}
         testid="remote-hosts-add"
         collapsible
         defaultOpen={hosts.length === 0}
       >
-        <AddHostForm />
+        {registry ? (
+          <AddHostForm />
+        ) : (
+          <Button asChild size="sm" variant="outline" data-testid="remote-hosts-add-pair">
+            <Link href={COMPANION_ADD_HOST_HREF}>{t("addOnPairPage")}</Link>
+          </Button>
+        )}
       </SettingsBlock>
 
       <GitHubRunnerPanel />
