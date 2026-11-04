@@ -4143,8 +4143,12 @@ describe("agent imperative API", () => {
       }
     )
 
+    // ADR-0246: feishu-auth is a Host-managed provider and holds no refresh
+    // token or client secret; the Host refreshes through its own provenance-
+    // marked request. A plugin-built token POST therefore gets no plaintext
+    // exception from any source, built-in included.
     it.each(["builtin", "local", "git", "marketplace"] as const)(
-      "limits the interim Feishu refresh exception after PKCE to host source %s",
+      "redacts a plugin-built Feishu refresh request from host source %s",
       async (source) => {
         const plugin = createMockPlugin({
           source,
@@ -4170,9 +4174,8 @@ describe("agent imperative API", () => {
         )
         expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
           grant_type: "refresh_token",
-          refresh_token: source === "builtin" ? "person@example.com" : "<EMAIL_001>",
-          client_secret:
-            source === "builtin" ? "sk-proj-abcdefghijklmnopqrstuvwx" : "<API_KEY_001>",
+          refresh_token: "<EMAIL_001>",
+          client_secret: "<API_KEY_001>",
           code: "<EMAIL_001>",
         })
       }

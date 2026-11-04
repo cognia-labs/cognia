@@ -638,3 +638,18 @@ SDK/UI 在本任务冻结快照内实际构建；contract build、contract check
 **保留的失败与验收边界：** `lib/plugin/core/context.test.ts:4163` 的 `limits the interim Feishu refresh exception after PKCE to host source builtin` 仍失败：测试期望 builtin refresh 凭据明文透传，实际返回脱敏 placeholders。7-suite 探测为 1060 passed / 1 failed；采用后单独复测仍失败。该实现与断言均未被本轮修改，不能直接判定为生产缺陷，也没有为通过验收放宽脱敏策略。需单独确认当前凭据策略后处理。V26/V28、X14/X16、真实生产/native/最低 iOS/已有账户状态验收及暂缓的全局检查保持开放，完整 P1 尚未通过，不拆仓。
 
 证据位于 `.cache/plugin-extraction/2026-11-02-kit-host-refresh/`，汇总为 `verification.json`；`live-verification.json`、`final-independent-proof.json`、`frontend-packages.json` 和 `independent-lock-seed.json` 保留实际身份与安装边界。根 `authoring-proof.json` / `payload-equivalence.json` 已更新为本轮 tuple。本轮没有提交、发布、创建外部仓库或访问真实用户目录。
+
+## 26. Kit pin 重建、内置目录刷新与 Feishu refresh 用例结论（2026-11-04）
+
+§25 后并行提交再次改动了 authoring 输入，`e90e43dd79` 写入的 pin 与其所在提交树也不一致：catalog、style contract、SDK/UI source 与 lockfile 五个摘要不同，catalog 摘要回到更早的值，说明当时把共享工作树中未提交的改动算了进去。所有 artifact production 因此拒绝，`predev` / `prebuild` 无法 stage 插件。
+
+| 项目           | 本轮处理与结果                                                                                                                                                                                                                                                                                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kit pin        | 在 `cb9ef6cff6` 的干净 worktree 中重建：依赖以 `--ignore-scripts` 从本地 store 安装，sidecar 依赖补齐后 `plugin-contract` 连同声明完整构建（只有 JS 时 Kit 摘要不同，不能采用）。新 Kit `e02ce9625c59688d984cde5b67e9fc7ab8a077cd442e44c22a97a2232fb0f2c2`，提交 `5023cb0d80`                                                                                         |
+| 独立 proof     | 同一 worktree 运行 `scripts/plugin/test-authoring-kit.mjs`：76 个 frontend 包、346 个插件类型检查文件、19 组 helper suites 与 Python wheel 导入通过                                                                                                                                                                                                                   |
+| 内置目录       | 主工作树 `stage-plugin-artifacts` 成功并更新两个已提交的 generated catalog；干净 worktree 对同一提交生成的结果逐字节一致，说明是已提交目录滞后，提交 `b8d55cbde9`                                                                                                                                                                                                     |
+| Feishu refresh | §25 保留的 `context.test.ts` 失败按 ADR-0246 判定为过时断言：`feishu-auth` 已是 Host-managed provider，不持有 refresh token 或 client secret，refresh 由 Host 以私有 provenance 发起（ADR-0246 §5，`ed802d1c66`）。插件自建的 token POST 对任何来源（含 builtin）都不享有明文例外，用例改为四种来源均期望脱敏，`context.test.ts` 387/387 通过；产品代码与脱敏策略未改 |
+
+**规则：** pin 只能在目标提交的干净检出中重建，不在共享工作树中运行 `--write-pin`；任何改动 SDK/UI/contract、`globals.css` 或 `pnpm-lock.yaml` 的提交都会使 pin 失效，需要随之刷新。
+
+V26/V28、X14/X16 与 P1d 的其余边界不变：生产静态导出、真实 Tauri/Capacitor/最低 iOS、已有用户状态的升级/中断/回滚与暂缓的全局检查仍未验收，P1 未通过，不启动 P2。
