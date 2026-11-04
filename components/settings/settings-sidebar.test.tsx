@@ -116,7 +116,7 @@ describe("SettingsSidebar icon style", () => {
       expect(button.querySelector("svg")).toHaveClass("h-4", "w-4")
     }
     expect(
-      screen.getByRole("button", { name: "settings.tabs.squads" }).querySelector("svg")
+      screen.getByRole("button", { name: "squads.settingsSection.label" }).querySelector("svg")
     ).toHaveClass("lucide-users")
     expect(
       screen.getByRole("button", { name: "settings.tabs.harnessEvolution" }).querySelector("svg")

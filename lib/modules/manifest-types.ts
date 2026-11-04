@@ -25,11 +25,17 @@
  *   ordering number and no `SendOptions` patching.
  * - `tables` only declare ownership; the schema stays in `CURRENT_SCHEMA`.
  *
- * Phase M0 ships the schema and the ownership gate. The registries generated
- * from these fields arrive registry by registry from M1 on (§13), so until a
- * field's registry is generated the gate checks its shape and nothing reads it.
+ * The registries generated from these fields arrive registry by registry
+ * (§13). Since M1, `searchProviders`, `slashCommands` and `settingsSections` are
+ * generated (`scripts/build/gen-module-registry.mjs`) and read by their shells;
+ * every other field is shape-checked by the gate and read by nothing yet.
  */
 
+import type { ComponentType } from "react"
+
+import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
+import type { GlobalSearchProvider } from "@/lib/global-search/types"
+import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
 
 /** A lazy entry. The only kind of code a manifest may hold. */
@@ -77,6 +83,32 @@ export interface ModuleFlag {
   default: boolean
 }
 
+/** What a module's `searchProviders` entry resolves to. */
+export interface ModuleSearchProvidersModule {
+  searchProviders: readonly GlobalSearchProvider[]
+}
+
+/** What a slash command's `load` resolves to: the handler, nothing else. */
+export interface ModuleSlashCommandModule {
+  run: (ctx: SlashContext) => void | Promise<void>
+}
+
+/**
+ * An action command for the chat composer. The descriptor is data, so the
+ * picker lists it without loading the module; `load` brings the handler when
+ * the command runs. It joins `BUILTIN_SLASH_COMMANDS` (scope `builtin`).
+ */
+export interface ModuleSlashCommand {
+  /** Without the leading slash; lower-case kebab. */
+  name: string
+  description: string
+  /** Grouping bucket, as `SlashCommand.category` (defaults to `chat`). */
+  category?: string
+  argumentHint?: string
+  argumentOptions?: readonly string[]
+  load: LazyModule<ModuleSlashCommandModule>
+}
+
 export interface HostModuleManifest {
   /** Equals the directory name: `lib/<id>/module.ts`. */
   id: string
@@ -109,21 +141,45 @@ export interface HostModuleManifest {
   /** Plugin host API namespaces this module owns (ADR-0250 §9). */
   pluginApi?: { namespaces: readonly string[]; load: LazyModule }
   workflowNodes?: ModuleContribution
-  searchProviders?: LazyModule
-  slashCommands?: LazyModule
+  /** Global-search providers (ADR-0129), registered beside the built-ins. */
+  searchProviders?: LazyModule<ModuleSearchProvidersModule>
+  slashCommands?: readonly ModuleSlashCommand[]
   prompts?: LazyModule
   flags?: Readonly<Record<string, ModuleFlag>>
   /** i18n namespace under `i18n/messages/<locale>/`. */
   messages?: string
 }
 
+/** What a settings section's `load` resolves to. */
+export interface ModuleSettingsSectionModule {
+  default: ComponentType
+}
+
+/**
+ * A section of the Settings page, as `NavItem` in
+ * `components/settings/settings-nav-config.ts` describes the built-in ones.
+ */
 export interface ModuleSettingsSection {
+  /** The `?section=` value. */
   id: string
+  /** A `SettingsGroup` of the settings nav. */
   group: string
+  /** A Lucide icon name from the catalog (`lib/icons/lucide-catalog.tsx`), e.g. `"Users"`. */
   icon: string
-  /** Hosts the section appears on; absent means every host. */
-  requires?: readonly ModuleHost[]
-  load: LazyModule
+  /** Full i18n keys, in the module's own namespace: `"squads.settingsSection.label"`. */
+  label: string
+  description: string
+  /** The section this one follows inside its group; absent means the end of the group. */
+  after?: string
+  /** As `NavItem.requires`: capabilities that must all be available. */
+  requires?: readonly CapabilityId[]
+  /** As `NavItem.profiles`: host profiles the section is bound to. */
+  profiles?: readonly HostProfile[]
+  /** `"fill"`: the section owns its scroll (a rail plus a detail pane). */
+  layout?: "fill"
+  /** Extra words the settings finder matches, in both languages. */
+  keywords?: readonly string[]
+  load: LazyModule<ModuleSettingsSectionModule>
 }
 
 export interface ModuleNavEntry {

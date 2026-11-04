@@ -51851,7 +51851,6 @@
       "slashCommands": "Built-in, custom, and plugin-contributed slash commands — browse, search, and copy a command into the composer.",
       "sourceControl": "AI commit-message generation and other Git panel preferences.",
       "speech": "Voice input (STT) language and microphone, plus read-aloud (TTS) provider, voice and auto-play.",
-      "squads": "Squads are teams of agents you can hand a conversation to. Manage the ones you have, and start new ones from a template.",
       "subagents": "Sub-agent templates and live runtime — spawn focused workers from a parent agent for research, code review, content, or analysis sub-tasks.",
       "subscription": "Sign in with your Claude, Codex (ChatGPT), or OpenCode subscription, monitor rate-limit windows and balances, and manage OAuth credentials in your OS keychain.",
       "teams": "Multi-character coordination — round-robin, supervisor, manual.",
@@ -52128,6 +52127,8 @@
         "system": "System"
       }
     },
+    "experimentalSectionBody": "It belongs to an experimental feature module, which stays off until it is ready. Its settings are kept; the section returns when the module is released.",
+    "experimentalSectionTitle": "This section is turned off",
     "externalBridge": {
       "audit": {
         "clear": "Clear",
@@ -58371,7 +58372,6 @@
       "slashCommands": "Slash commands",
       "sourceControl": "Source Control",
       "speech": "Speech",
-      "squads": "Squads",
       "subagents": "Sub-agents",
       "subscription": "Subscription",
       "teams": "Teams",
@@ -62161,6 +62161,10 @@
       "loading": "Checking…",
       "ready": "Ready to run",
       "title": "Readiness"
+    },
+    "settingsSection": {
+      "description": "Squads are teams of agents you can hand a conversation to. Manage the ones you have, and start new ones from a template.",
+      "label": "Squads"
     }
   },
   "structuredConfig": {

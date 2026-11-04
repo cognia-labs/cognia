@@ -101,7 +101,7 @@ describe("ChangedSettingsDialog — group headings resolve to a nav label", () =
     const headings = screen
       .getAllByTestId("changed-group")
       .map((g) => g.querySelector("h3")?.textContent ?? "")
-    expect(headings).toContain("tabs.aiConnections")
+    expect(headings).toContain("settings.tabs.aiConnections")
     expect(headings).not.toContain("providers")
   })
 })

@@ -1,10 +1,10 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useState, type ComponentType } from "react"
 import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { ChevronRightIcon, MonitorIcon, SearchIcon } from "lucide-react"
+import { ChevronRightIcon, FlaskConicalIcon, MonitorIcon, SearchIcon } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -20,10 +20,13 @@ import { resetKeysForSection } from "@/lib/settings/section-keys"
 import { useSettingsSectionReachability } from "@/hooks/settings/use-settings-section-reachability"
 import { useSettingFocus } from "@/hooks/settings/use-setting-focus"
 import {
+  MODULE_SETTINGS_SECTIONS,
   SETTINGS_NAV,
+  settingsSectionLabelKey,
   settingsSectionNeedsServer,
   type SettingsSectionId,
 } from "./settings-nav-config"
+import { dormantSettingsSectionIds } from "./module-sections"
 import { CONNECTIVITY_PANEL_PARAM, panelForLegacySection } from "./connectivity/nav-config"
 
 const SectionLoading = () => {
@@ -165,10 +168,6 @@ const AgentRuntimeSection = dynamic(
   () => import("./agent-runtime/agent-runtime-section").then((m) => m.AgentRuntimeSection),
   { ssr: false, loading: () => <SectionLoading /> }
 )
-const SquadsSection = dynamic(
-  () => import("./squads/squads-section").then((m) => m.SquadsSection),
-  { ssr: false, loading: () => <SectionLoading /> }
-)
 const HooksSection = dynamic(() => import("./hooks/hooks-section").then((m) => m.HooksSection), {
   ssr: false,
   loading: () => <SectionLoading />,
@@ -307,6 +306,23 @@ const SecuritySection = dynamic(
   () => import("./security/security-section").then((m) => m.SecuritySection),
   { ssr: false, loading: () => <SectionLoading /> }
 )
+// Sections feature modules declare in `components/<id>/module.ui.ts`
+// (ADR-0250 §14), loaded the same way as the built-ins above.
+// A record, read by index: each component is made once here, at module scope.
+const MODULE_SECTION_COMPONENTS: Partial<Record<string, ComponentType>> = Object.fromEntries(
+  MODULE_SETTINGS_SECTIONS.map((entry) => [
+    entry.item.id,
+    dynamic(() => entry.load().then((m) => m.default), {
+      ssr: false,
+      loading: () => <SectionLoading />,
+    }),
+  ])
+)
+
+// Sections of `experimental` modules: off the nav, and a deep link to one says
+// so instead of rendering another section in its place (Rule 7).
+const DORMANT_MODULE_SECTIONS = dormantSettingsSectionIds()
+
 interface Props {
   /** Renders an actions menu (e.g., Reset/Export/Import) in the header. */
   actions?: React.ReactNode
@@ -352,10 +368,6 @@ const FILL_HEIGHT_SECTIONS = new Set<SettingsSectionId>([
   "appearance",
   "subscription",
   "subagents",
-  // Same conversion as Subagents: a rail plus a detail pane, both owning their
-  // own scroll. Left out of this set it renders capped at max-w-5xl with the
-  // two fighting over 1024px and the page, not the pane, doing the scrolling.
-  "squads",
   // Both became master/detail panes that own their own scroll; in the capped
   // ScrollArea branch they would render at max-w-5xl with the nav rail and the
   // detail pane fighting over 1024px.
@@ -382,6 +394,8 @@ const FILL_HEIGHT_SECTIONS = new Set<SettingsSectionId>([
   "chatTemplates",
   // The Prompt Center is the same rail + detail shape.
   "prompts",
+  // Module sections declare it themselves (`layout: "fill"`), as Squads does.
+  ...MODULE_SETTINGS_SECTIONS.filter((entry) => entry.fill).map((entry) => entry.item.id),
 ])
 
 /**
@@ -410,6 +424,7 @@ export function SettingsShell({ actions }: Props = {}) {
 
 function SettingsShellInner({ actions }: Props) {
   const t = useTranslations("settings")
+  const tRoot = useTranslations()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [searchQuery, setSearchQuery] = useState("")
@@ -434,6 +449,7 @@ function SettingsShellInner({ actions }: Props) {
   const activeSection: SettingsSectionId = isSection(requested)
     ? requested
     : (redirectTarget ?? DEFAULT_SECTION)
+  const dormantRequest = requested !== null && DORMANT_MODULE_SECTIONS.has(requested)
 
   // Rewrite deprecated `?section=` deep links to their new home. Done in an
   // effect (router writes can't happen during render); the body already
@@ -471,8 +487,10 @@ function SettingsShellInner({ actions }: Props) {
     }
   }
 
-  const activeItem = SETTINGS_NAV.find((item) => item.id === activeSection)
-  const hasSectionReset = Boolean(resetKeysForSection(activeSection))
+  const activeItem = dormantRequest
+    ? undefined
+    : SETTINGS_NAV.find((item) => item.id === activeSection)
+  const hasSectionReset = !dormantRequest && Boolean(resetKeysForSection(activeSection))
 
   return (
     <SidebarProvider
@@ -499,7 +517,7 @@ function SettingsShellInner({ actions }: Props) {
                 <>
                   <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="truncate font-normal text-muted-foreground">
-                    {t(`tabs.${activeItem.labelKey}` as never)}
+                    {tRoot(settingsSectionLabelKey(activeItem) as never)}
                   </span>
                 </>
               )}
@@ -540,7 +558,7 @@ function SettingsShellInner({ actions }: Props) {
           }
         />
 
-        {FILL_HEIGHT_SECTIONS.has(activeSection) ? (
+        {!dormantRequest && FILL_HEIGHT_SECTIONS.has(activeSection) ? (
           <div
             className="flex min-h-0 w-full max-w-[100vw] min-w-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 md:p-5 lg:p-6 safe-area-pb"
             data-settings-panel
@@ -560,11 +578,21 @@ function SettingsShellInner({ actions }: Props) {
               data-settings-panel
             >
               <div className="mx-auto w-full max-w-5xl animate-in fade-in slide-in-from-bottom-2 duration-200">
-                <SectionContent
-                  section={activeSection}
-                  onClose={goHome}
-                  headerActionsTarget={sectionHeaderActionsTarget}
-                />
+                {dormantRequest ? (
+                  <div data-testid="settings-dormant-section">
+                    <SettingsEmptyState
+                      icon={<FlaskConicalIcon />}
+                      title={t("experimentalSectionTitle")}
+                      description={t("experimentalSectionBody")}
+                    />
+                  </div>
+                ) : (
+                  <SectionContent
+                    section={activeSection}
+                    onClose={goHome}
+                    headerActionsTarget={sectionHeaderActionsTarget}
+                  />
+                )}
               </div>
             </div>
           </ScrollArea>
@@ -636,8 +664,6 @@ function SectionContent({
       return <CustomModeSettings />
     case "agent-runtime":
       return <AgentRuntimeSection />
-    case "squads":
-      return <SquadsSection />
     case "eval":
       return <EvalSettingsSection />
     case "harness-evolution":
@@ -752,8 +778,11 @@ function SectionContent({
       return <UpdatesSection />
     case "about":
       return <AboutSection />
-    default:
+    default: {
+      const ModuleSection = MODULE_SECTION_COMPONENTS[section]
+      if (ModuleSection) return <ModuleSection />
       return <ProvidersSection headerActionsTarget={headerActionsTarget} />
+    }
   }
 }
 

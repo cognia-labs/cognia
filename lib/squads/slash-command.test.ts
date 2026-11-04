@@ -30,8 +30,8 @@ jest.mock("@/lib/ai/agent/team/agent-team", () => ({
 import { getSession } from "@/lib/db/sessions"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { dispatchSquadSubcommand } from "./squad"
-import type { SlashContext } from "../builtin"
+import { dispatchSquadSubcommand, run } from "./slash-command"
+import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
 import type { AgentTeam, AgentTeamTask, AgentTeammate } from "@/types/agent/agent-team"
 
 const getSessionMock = getSession as jest.Mock
@@ -252,5 +252,14 @@ describe("unknown subcommand", () => {
     const result = await dispatchSquadSubcommand(ctx("frobnicate"))
     expect(result.system).toContain("`/squad list`")
     expect(startSquadRun).not.toHaveBeenCalled()
+  })
+})
+
+describe("module handler", () => {
+  it("pushes the dispatcher's card as a system message", async () => {
+    const context = ctx("list")
+    await run(context)
+    expect(context.pushSystemMessage).toHaveBeenCalledTimes(1)
+    expect(context.pushSystemMessage).toHaveBeenCalledWith(expect.stringContaining("Review Crew"))
   })
 })

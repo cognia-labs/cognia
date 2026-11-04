@@ -366,18 +366,6 @@
       "typeOnly": false
     },
     {
-      "key": "lib/global-search/providers/squads.ts",
-      "owner": "lib/global-search",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "targets": [
-        "components/mobile/mobile-spot-icon.tsx"
-      ],
-      "typeOnly": false
-    },
-    {
       "key": "lib/island/main-window-controls.ts",
       "owner": "lib/island",
       "note": "",
@@ -720,6 +708,18 @@
         "components/settings/settings-nav-config.ts"
       ],
       "typeOnly": true
+    },
+    {
+      "key": "lib/squads/search-provider.ts",
+      "owner": "lib/squads",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "targets": [
+        "components/mobile/mobile-spot-icon.tsx"
+      ],
+      "typeOnly": false
     },
     {
       "key": "lib/sync/host-state-service.ts",

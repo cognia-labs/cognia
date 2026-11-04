@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process"
-import { readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -81,7 +81,14 @@ export function runRootTypecheck(root, argv = process.argv.slice(2)) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    runRootTypecheck(resolve(dirname(fileURLToPath(import.meta.url)), "../.."))
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+    // The feature module registries are gitignored and generated (ADR-0250 §14).
+    // A tree without the module system (a compiler fixture) has none to write.
+    if (existsSync(join(root, "lib/modules/define.ts"))) {
+      const { ensureModuleRegistries } = await import("../build/gen-module-registry.mjs")
+      ensureModuleRegistries(root)
+    }
+    runRootTypecheck(root)
   } catch (error) {
     console.error(error.message)
     process.exitCode = 1

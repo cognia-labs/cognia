@@ -11,6 +11,7 @@ import type { GlobalSearchGroup, GlobalSearchOutcome } from "@/lib/global-search
 const runGlobalSearch = jest.fn()
 const runGlobalSearchSuggestions = jest.fn()
 const registerBuiltin = jest.fn()
+const registerModules = jest.fn(async () => [])
 const drainSearchIndex = jest.fn()
 const scheduleSearchIndexDrain = jest.fn()
 
@@ -20,6 +21,9 @@ jest.mock("@/lib/global-search/engine", () => ({
 }))
 jest.mock("@/lib/global-search/providers", () => ({
   registerBuiltinGlobalSearchProviders: (...args: unknown[]) => registerBuiltin(...args),
+}))
+jest.mock("@/lib/global-search/providers/module-providers", () => ({
+  registerModuleGlobalSearchProviders: () => registerModules(),
 }))
 jest.mock("@/lib/chat/search/indexer", () => ({
   drainSearchIndex: (...args: unknown[]) => drainSearchIndex(...args),
@@ -78,6 +82,8 @@ describe("useGlobalSearch", () => {
     expect(registerBuiltin).toHaveBeenCalledWith({
       messages: { pendingRows: pendingChatRows },
     })
+    // Feature modules' providers load beside them (ADR-0250 §14).
+    expect(registerModules).toHaveBeenCalledTimes(1)
     expect(scheduleSearchIndexDrain).toHaveBeenCalledTimes(1)
     await act(async () => {
       await Promise.resolve()

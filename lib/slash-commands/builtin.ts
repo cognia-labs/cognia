@@ -31,7 +31,6 @@ import { dispatchGoalSubcommand } from "./actions/goal"
 import { dispatchPlanSubcommand } from "./actions/plan"
 import { dispatchIssueSubcommand } from "./actions/issue"
 import { handleBestOfN } from "./actions/best-of-n"
-import { dispatchSquadSubcommand } from "./actions/squad"
 import { dispatchPetSubcommand } from "./actions/pet"
 import { dispatchLarkSubcommand } from "./actions/lark"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
@@ -42,6 +41,7 @@ import { WORKFLOW_SLASH_COMMANDS } from "./actions/workflow"
 import { handleRunWorkflow } from "./actions/run-saved-workflow"
 import { handleCouncil } from "./actions/council"
 import { VIDEO_COMMAND_PARAMS, handleVideoCommand } from "./actions/video"
+import { moduleSlashCommands } from "./module-commands"
 import type {
   SlashCommand,
   SlashScope,
@@ -479,19 +479,6 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
     argumentOptions: ["2", "3", "4", "status", "cancel", "pick"],
     handler: handleBestOfN,
   },
-  {
-    name: "squad",
-    description:
-      "Address the Squad running this conversation: status, roster board, and start / pause / resume / stop (ADR-0140).",
-    scope: "builtin",
-    category: "goal",
-    argumentHint: "<status | list | run [objective] | pause | resume | stop | tasks>",
-    argumentOptions: ["status", "list", "run", "pause", "resume", "stop", "tasks"],
-    handler: async (ctx) => {
-      const result = await dispatchSquadSubcommand(ctx)
-      ctx.pushSystemMessage(result.system)
-    },
-  },
   // Desktop-app only, like the pet itself (ADR-0058 D9). It stays listed on
   // every host, following `/record-skill`, and answers honestly where the pet
   // cannot run instead of confirming care nothing received: the handler goes
@@ -584,6 +571,9 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
     params: VIDEO_COMMAND_PARAMS,
     handler: handleVideoCommand,
   },
+  // Commands feature modules declare in `lib/<id>/module.ts` (ADR-0250 §14),
+  // such as `/squad`. Their handlers load when they run.
+  ...moduleSlashCommands(),
   // Workflow Copilot commands — only active inside workflow-editor sessions.
   // Each handler self-gates on activeSessionId so the picker never lists
   // them in the main chat.

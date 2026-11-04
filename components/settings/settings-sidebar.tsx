@@ -27,6 +27,8 @@ import {
   SETTINGS_GROUP_ORDER,
   SETTINGS_NAV,
   isSearchMatch,
+  settingsSectionDescriptionKey,
+  settingsSectionLabelKey,
   type NavItem,
   type SettingsGroup,
   type SettingsSectionId,
@@ -199,7 +201,7 @@ export function SettingsSidebar({ activeSection, onSelect, searchQuery, onSearch
                                   onSelect(item.id)
                                   setOpenMobile(false)
                                 }}
-                                tooltip={t(`settings.descriptions.${item.descriptionKey}` as never)}
+                                tooltip={t(settingsSectionDescriptionKey(item) as never)}
                                 className={cn(
                                   "px-2.5 py-2 h-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!",
                                   spotIcon && "py-1.5"
@@ -220,7 +222,7 @@ export function SettingsSidebar({ activeSection, onSelect, searchQuery, onSearch
                                     and pushes the icon out of view. */}
                                 <div className="flex flex-col gap-0.5 text-left leading-none flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
                                   <span className="font-medium truncate">
-                                    {t(`settings.tabs.${item.labelKey}` as never)}
+                                    {t(settingsSectionLabelKey(item) as never)}
                                   </span>
                                 </div>
                               </SidebarMenuButton>

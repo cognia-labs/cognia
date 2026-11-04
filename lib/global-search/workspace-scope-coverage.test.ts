@@ -16,9 +16,21 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { activeHostModules } from "@/lib/modules/registry"
 import { builtinGlobalSearchProviders } from "./providers"
+import type { GlobalSearchProvider } from "./types"
 
-const ALL_PROVIDERS = builtinGlobalSearchProviders()
+// Feature modules contribute providers from their manifests (ADR-0250 §14);
+// they are classified here exactly like the built-ins.
+const PROVIDER_MODULES = activeHostModules().filter((manifest) => manifest.searchProviders)
+let ALL_PROVIDERS: GlobalSearchProvider[] = []
+
+beforeAll(async () => {
+  const contributed = await Promise.all(
+    PROVIDER_MODULES.map(async (manifest) => (await manifest.searchProviders!()).searchProviders)
+  )
+  ALL_PROVIDERS = [...builtinGlobalSearchProviders(), ...contributed.flat()]
+})
 
 type Scoping =
   /** Rows belong to a workspace; out of scope they are noise. */
@@ -150,10 +162,15 @@ describe("workspace scoping is decided for every provider", () => {
 
 describe("the classification matches the code", () => {
   const providersDir = join(__dirname, "providers")
-  const sources = readdirSync(providersDir)
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
-    .map((f) => readFileSync(join(providersDir, f), "utf8"))
-    .join("\n")
+  const sourcesIn = (dir: string) =>
+    readdirSync(dir)
+      .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+      .map((f) => readFileSync(join(dir, f), "utf8"))
+  // A module's providers live in its own `lib/<id>/` directory.
+  const sources = [
+    ...sourcesIn(providersDir),
+    ...PROVIDER_MODULES.flatMap((manifest) => sourcesIn(join(__dirname, "..", manifest.id))),
+  ].join("\n")
 
   it("declares workspaceScope for each provider classified filter or demote", () => {
     const declared = [...sources.matchAll(/workspaceScope:\s*\{\s*mode:\s*"(filter|demote)"/g)].map(

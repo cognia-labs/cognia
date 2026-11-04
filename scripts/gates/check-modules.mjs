@@ -18,23 +18,30 @@
  *                  count is a ratchet (scripts/gates/baseline-growth.json).
  *   G2 direction   value imports from foundation to anything above it, from
  *                  the kernel to a module or the shell, and from a module to
- *                  the shell. REPORTING ONLY until phase M1 (ADR-0250 §13):
- *                  it prints new edges and never fails. Its baseline is kept
- *                  so M1 can turn it on without a new count.
+ *                  the shell. Blocking since phase M1 (ADR-0250 §13): an edge
+ *                  missing from the baseline fails. A shell's contribution kit
+ *                  (the settings section parts, the search provider helpers)
+ *                  is listed as that shell's `api` in the ownership table, and
+ *                  importing it is not an edge. The generated registries are
+ *                  the sanctioned inversion and are not source files here.
+ *   G5 generation  manifests are data only, their lazy entries resolve, and
+ *                  `lib/modules/generated/host.ts` and
+ *                  `components/modules/generated/ui.ts` equal what
+ *                  scripts/build/gen-module-registry.mjs writes, so nothing is
+ *                  hand-added to them. Since M1, for settings sections, search
+ *                  providers and slash commands.
  *   G6 cycles      `dependsOn` across manifests is acyclic (blocking), and the
  *                  largest strongly connected component of the lib/ owner
  *                  graph may only shrink.
  *   G7 size        module count, experimental modules, Dexie tables,
- *                  `SettingsState` members and settings-store importers may
- *                  only shrink. The eager graph of each host's generated
- *                  registry joins this list when M1 generates the first one.
+ *                  `SettingsState` members, settings-store importers and the
+ *                  files the generated registries load eagerly may only shrink.
  *   G8 vendors     framework directories (IM connectors, cloud documents,
  *                  issue sync, backup, scheduling) name no vendor and import
  *                  no vendor implementation. Existing violations are
  *                  baselined; a new one fails.
  *
- * G3 (public API), G4 (declared equals actual) and G5 (generated registries)
- * arrive with the registries they check, from M1 on.
+ * G3 (public API) and G4 (declared equals actual) arrive later in M1.
  *
  * Usage:
  *   node scripts/gates/check-modules.mjs                    # check
@@ -50,51 +57,43 @@ import { fileURLToPath } from "node:url"
 import ts from "typescript"
 
 import { createContext, importsIn, resolveModule } from "./convergence/counter.mjs"
+import {
+  GENERATED_FILES,
+  GENERATOR,
+  lazyEntries,
+  manifestKind,
+  readManifest,
+  renderRegistries,
+  unwrap,
+  validateHostManifest,
+  validateUiManifest,
+} from "./lib/module-manifests.mjs"
 import { createSubsystemClassifier, LAYERED_ROOTS } from "./lib/subsystems.mjs"
+
+export {
+  DEFINE_MODULE,
+  HOST_FIELDS,
+  SETTINGS_SECTION_FIELDS,
+  SLASH_COMMAND_FIELDS,
+  UI_FIELDS,
+  readManifest,
+  validateHostManifest,
+  validateUiManifest,
+} from "./lib/module-manifests.mjs"
 
 export const OWNERSHIP_FILE = "scripts/gates/module-ownership.json"
 export const BASELINE_FILE = "scripts/gates/modules-baseline.json"
-export const DEFINE_MODULE = "@/lib/modules/define"
 export const CODEOWNERS_FILE = ".github/CODEOWNERS"
 export const SETTINGS_STORE_FILE = "stores/settings/settings-store.ts"
 export const SETTINGS_STORE_ENTRIES = ["stores/settings/index.ts", SETTINGS_STORE_FILE]
 export const TABLE_CATALOG_FILE = "lib/data-governance/table-catalog.ts"
+/** The Lucide catalog's names, which a settings section's `icon` must be one of. */
+export const LUCIDE_NAMES_FILE =
+  "packages/plugin-contract/src/lib/icons/lucide-icon-names.generated.json"
 
 export const CLASSES = ["foundation", "kernel", "module", "shell"]
 const RANK = { foundation: 0, kernel: 1, module: 2, shell: 3 }
 const UI_LAYERS = new Set(["app", "components", "hooks"])
-
-/** Top-level fields of `HostModuleManifest` (`lib/modules/manifest-types.ts`). */
-export const HOST_FIELDS = [
-  "id",
-  "kind",
-  "stage",
-  "owner",
-  "acceptance",
-  "owns",
-  "dependsOn",
-  "api",
-  "provides",
-  "requires",
-  "runtimes",
-  "settings",
-  "tables",
-  "tools",
-  "capabilityContributions",
-  "taskExecutors",
-  "builtinSkills",
-  "pluginApi",
-  "workflowNodes",
-  "searchProviders",
-  "slashCommands",
-  "prompts",
-  "flags",
-  "messages",
-]
-/** Top-level fields of `UiModuleManifest`. */
-export const UI_FIELDS = ["id", "slots", "settingsSections", "nav", "effects"]
-const KINDS = ["kernel", "module"]
-const STAGES = ["kernel", "stable", "beta", "experimental", "deprecated"]
 
 /**
  * Framework directories that must stay vendor-neutral (G8), each with the
@@ -136,161 +135,6 @@ const sorted = (values) => [...new Set(values)].sort()
 
 // ------------------------------------------------------------- manifests
 
-function unwrap(node) {
-  while (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isSatisfiesExpression(node) ||
-    ts.isTypeAssertionExpression(node)
-  )
-    node = node.expression
-  return node
-}
-
-function propertyName(name) {
-  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name))
-    return name.text
-  return null
-}
-
-/**
- * Evaluate a manifest expression as data. Literals, arrays and objects pass
- * through; `() => import("…")` becomes `{ $lazy: "…" }`; anything else is an
- * error, because it would run when a host imports the generated registry.
- */
-function literalValue(node, at, errors) {
-  node = unwrap(node)
-  if (ts.isStringLiteralLike(node)) return node.text
-  if (ts.isNumericLiteral(node)) return Number(node.text)
-  if (node.kind === ts.SyntaxKind.TrueKeyword) return true
-  if (node.kind === ts.SyntaxKind.FalseKeyword) return false
-  if (node.kind === ts.SyntaxKind.NullKeyword) return null
-  if (
-    ts.isPrefixUnaryExpression(node) &&
-    node.operator === ts.SyntaxKind.MinusToken &&
-    ts.isNumericLiteral(node.operand)
-  )
-    return -Number(node.operand.text)
-  if (ts.isArrayLiteralExpression(node))
-    return node.elements.map((element, index) => literalValue(element, `${at}[${index}]`, errors))
-  if (ts.isObjectLiteralExpression(node)) {
-    const out = {}
-    for (const property of node.properties) {
-      const name = ts.isPropertyAssignment(property) ? propertyName(property.name) : null
-      if (name === null) {
-        errors.push(`${at}: only plain \`key: value\` properties are data`)
-        continue
-      }
-      out[name] = literalValue(property.initializer, `${at}.${name}`, errors)
-    }
-    return out
-  }
-  if (ts.isArrowFunction(node) && node.parameters.length === 0) {
-    const body = unwrap(node.body)
-    if (
-      ts.isCallExpression(body) &&
-      body.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      body.arguments.length === 1 &&
-      ts.isStringLiteralLike(body.arguments[0])
-    )
-      return { $lazy: body.arguments[0].text }
-  }
-  errors.push(`${at}: not data — use a literal or a lazy entry \`() => import("…")\``)
-  return undefined
-}
-
-/**
- * Read a manifest file: one named import of `helper` from `@/lib/modules/define`
- * and `export default helper({ … })`, nothing else.
- */
-export function readManifest(ctx, file, helper) {
-  const errors = []
-  const sourceFile = ctx.ast(file)
-  let value
-  for (const statement of sourceFile.statements) {
-    const line = sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1
-    if (ts.isImportDeclaration(statement)) {
-      const clause = statement.importClause
-      const names =
-        clause?.namedBindings && ts.isNamedImports(clause.namedBindings)
-          ? clause.namedBindings.elements.map((element) => element.name.text)
-          : []
-      const ok =
-        ts.isStringLiteralLike(statement.moduleSpecifier) &&
-        statement.moduleSpecifier.text === DEFINE_MODULE &&
-        !clause?.name &&
-        !clause?.isTypeOnly &&
-        names.length === 1 &&
-        names[0] === helper
-      if (!ok)
-        errors.push(`line ${line}: a manifest imports only { ${helper} } from "${DEFINE_MODULE}"`)
-    } else if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      const call = unwrap(statement.expression)
-      if (
-        !ts.isCallExpression(call) ||
-        !ts.isIdentifier(call.expression) ||
-        call.expression.text !== helper ||
-        call.arguments.length !== 1
-      )
-        errors.push(`line ${line}: export default ${helper}({ … })`)
-      else value = literalValue(call.arguments[0], "manifest", errors)
-    } else {
-      errors.push(
-        `line ${line}: a manifest's top level holds only its import and \`export default ${helper}(…)\``
-      )
-    }
-  }
-  if (value === undefined && errors.length === 0) errors.push(`exports no ${helper}(…) manifest`)
-  return { value, errors }
-}
-
-function lazyEntries(value, at = "manifest", out = []) {
-  if (Array.isArray(value))
-    value.forEach((item, index) => lazyEntries(item, `${at}[${index}]`, out))
-  else if (value && typeof value === "object") {
-    if (typeof value.$lazy === "string") out.push({ at, spec: value.$lazy })
-    else for (const [key, item] of Object.entries(value)) lazyEntries(item, `${at}.${key}`, out)
-  }
-  return out
-}
-
-const isStringArray = (value) =>
-  Array.isArray(value) && value.every((item) => typeof item === "string")
-
-export function validateHostManifest(manifest, id) {
-  const errors = []
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
-    return ["manifest is not an object"]
-  for (const key of Object.keys(manifest))
-    if (!HOST_FIELDS.includes(key)) errors.push(`unknown field "${key}"`)
-  if (manifest.id !== id) errors.push(`id "${manifest.id}" must equal its directory "${id}"`)
-  if (!KINDS.includes(manifest.kind)) errors.push(`kind must be one of ${KINDS.join(", ")}`)
-  if (!STAGES.includes(manifest.stage)) errors.push(`stage must be one of ${STAGES.join(", ")}`)
-  if ((manifest.kind === "kernel") !== (manifest.stage === "kernel"))
-    errors.push(`stage "kernel" goes with kind "kernel", and only with it`)
-  if (manifest.owner !== undefined && typeof manifest.owner !== "string")
-    errors.push("owner is one CODEOWNERS handle")
-  for (const field of ["owns", "dependsOn", "api", "requires", "tables"])
-    if (manifest[field] !== undefined && !isStringArray(manifest[field]))
-      errors.push(`${field} is a list of strings`)
-  if (manifest.settings !== undefined && !isStringArray(manifest.settings?.keys))
-    errors.push("settings.keys is a list of strings")
-  const smoke = manifest.acceptance?.realSmoke
-  if (smoke !== undefined && smoke !== "pending" && !/^passed:\d{4}-\d{2}-\d{2}$/.test(smoke))
-    errors.push(`acceptance.realSmoke is "pending" or "passed:<YYYY-MM-DD>"`)
-  return errors
-}
-
-export function validateUiManifest(manifest, id) {
-  const errors = []
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
-    return ["manifest is not an object"]
-  for (const key of Object.keys(manifest))
-    if (!UI_FIELDS.includes(key)) errors.push(`unknown field "${key}"`)
-  if (manifest.id !== id) errors.push(`id "${manifest.id}" must equal its directory "${id}"`)
-  return errors
-}
-
 /** `@handle` tokens CODEOWNERS assigns anywhere. */
 export function codeownerHandles(text) {
   const handles = new Set()
@@ -310,19 +154,21 @@ function collectManifests(ctx, files) {
   const handles = ctx.exists(CODEOWNERS_FILE)
     ? codeownerHandles(ctx.read(CODEOWNERS_FILE))
     : new Set()
+  const iconNames = ctx.exists(LUCIDE_NAMES_FILE)
+    ? new Set(JSON.parse(ctx.read(LUCIDE_NAMES_FILE)).iconNames)
+    : undefined
   for (const file of files) {
-    const hostMatch = /^lib\/([^/]+)\/module\.ts$/.exec(file)
-    const uiMatch = /^components\/([^/]+)\/module\.ui\.ts$/.exec(file)
-    if (!hostMatch && !uiMatch) continue
-    const id = (hostMatch ?? uiMatch)[1]
-    const helper = hostMatch ? "defineHostModule" : "defineUiModule"
+    const kind = manifestKind(file)
+    if (!kind) continue
+    const { id, helper } = kind
+    const hostMatch = kind.layer === "host"
     const { value, errors: readErrors } = readManifest(ctx, file, helper)
     const shapeErrors =
       value === undefined
         ? []
         : hostMatch
           ? validateHostManifest(value, id)
-          : validateUiManifest(value, id)
+          : validateUiManifest(value, id, iconNames)
     const lazyErrors = lazyEntries(value)
       .filter(({ spec }) => !resolveModule(ctx, spec, file))
       .map(({ at, spec }) => `${at}: lazy entry "${spec}" does not resolve`)
@@ -344,7 +190,79 @@ function collectManifests(ctx, files) {
   }
   for (const [id, { file }] of ui)
     if (!host.has(id)) errors.push(`${file}: no host manifest lib/${id}/module.ts declares "${id}"`)
+  errors.push(
+    ...duplicateContributions(
+      host,
+      (manifest) => manifest.slashCommands,
+      "name",
+      "slash command /"
+    ),
+    ...duplicateContributions(
+      ui,
+      (manifest) => manifest.settingsSections,
+      "id",
+      "settings section "
+    )
+  )
   return { host, ui, errors, warnings }
+}
+
+/** Two modules contributing the same slash command or section id would shadow each other. */
+function duplicateContributions(manifests, list, key, label) {
+  const errors = []
+  const seen = new Map()
+  for (const [id, { file, manifest }] of manifests)
+    for (const entry of Array.isArray(list(manifest)) ? list(manifest) : []) {
+      const name = entry?.[key]
+      if (typeof name !== "string") continue
+      const first = seen.get(name)
+      if (first && first !== id)
+        errors.push(`${file}: ${label}${name} is also contributed by "${first}"`)
+      else seen.set(name, id)
+    }
+  return errors
+}
+
+/**
+ * G5: the generated registries on disk equal what the generator writes from
+ * these manifests. A tree without `lib/modules/define.ts` (a fixture, a partial
+ * checkout) has no registries to check, the generator's own rule.
+ */
+export function registryErrors(ctx, manifests) {
+  if (!ctx.exists("lib/modules/define.ts")) return []
+  const entries = (map) => [...map].map(([id, { file }]) => ({ id, file }))
+  const expected = renderRegistries({ host: entries(manifests.host), ui: entries(manifests.ui) })
+  const errors = []
+  for (const [file, content] of Object.entries(expected)) {
+    if (!ctx.exists(file)) errors.push(`${file} is missing — run node ${GENERATOR}`)
+    else if (ctx.read(file) !== content)
+      errors.push(
+        `${file} differs from what ${GENERATOR} writes — it is generated, never edited; rerun it`
+      )
+  }
+  return errors
+}
+
+/**
+ * G7: files a host loads when it imports the generated registries: every
+ * manifest and what it imports eagerly. Lazy entries and type imports do not
+ * count; a manifest is data, so this should stay at the manifests plus
+ * `lib/modules/define.ts`.
+ */
+export function registryEagerFiles(ctx, manifests) {
+  const seen = new Set()
+  const queue = [...manifests.host.values(), ...manifests.ui.values()].map(({ file }) => file)
+  while (queue.length) {
+    const file = queue.pop()
+    if (seen.has(file) || !ctx.exists(file)) continue
+    seen.add(file)
+    for (const record of importsIn(ctx, file)) {
+      if (record.typeOnly || record.kind !== "static") continue
+      const target = resolveModule(ctx, record.spec, file)
+      if (target && !seen.has(target)) queue.push(target)
+    }
+  }
+  return seen.size
 }
 
 // ------------------------------------------------------------- ownership
@@ -413,7 +331,22 @@ export function resolveOwnership(ctx, files, table, manifests) {
   for (const [key, entry] of registry)
     if (entry.source === "table" && !used.has(key))
       errors.push(`${OWNERSHIP_FILE}: "${key}" owns no file — remove the row`)
-  return { owners, registry, errors }
+
+  // A shell's contribution kit: files modules build their contributions with.
+  const shellApi = new Set()
+  for (const [key, row] of Object.entries(table.subsystems ?? {})) {
+    if (row.api === undefined) continue
+    if (row.class !== "shell" || !Array.isArray(row.api)) {
+      errors.push(`${OWNERSHIP_FILE}: "${key}": only a shell lists \`api\` files, as a list`)
+      continue
+    }
+    for (const file of row.api) {
+      if (owners.get(file)?.owner !== key)
+        errors.push(`${OWNERSHIP_FILE}: "${key}" lists api file ${file}, which it does not own`)
+      else shellApi.add(file)
+    }
+  }
+  return { owners, registry, shellApi, errors }
 }
 
 // ---------------------------------------------------------------- graphs
@@ -549,7 +482,9 @@ function frameworkOf(file) {
 
 /** Compute every measure. Pure over `ctx`, so fixtures can drive it. */
 export function computeModules(ctx) {
-  const files = ctx.files(LAYERED_ROOTS)
+  // The generated registries are the one sanctioned kernel → module import (they
+  // collect the modules); G5 checks them, so they are not source files here.
+  const files = ctx.files(LAYERED_ROOTS).filter((file) => !GENERATED_FILES.includes(file))
   const table = ctx.exists(OWNERSHIP_FILE)
     ? JSON.parse(ctx.read(OWNERSHIP_FILE))
     : { subsystems: {}, paths: [] }
@@ -557,9 +492,15 @@ export function computeModules(ctx) {
   const {
     owners,
     registry,
+    shellApi,
     errors: ownershipErrors,
   } = resolveOwnership(ctx, files, table, manifests)
-  const errors = [...manifests.errors, ...ownershipErrors, ...dependsOnErrors(manifests, registry)]
+  const errors = [
+    ...manifests.errors,
+    ...ownershipErrors,
+    ...dependsOnErrors(manifests, registry),
+    ...registryErrors(ctx, manifests),
+  ]
 
   const direction = []
   const libGraph = new Map()
@@ -587,7 +528,8 @@ export function computeModules(ctx) {
       if (record.typeOnly || !source) continue
       const destination = owners.get(target)
       if (!destination || destination.node === source.node) continue
-      if (RANK[source.class] < RANK[destination.class])
+      const contributionKit = destination.class === "shell" && shellApi.has(target)
+      if (RANK[source.class] < RANK[destination.class] && !contributionKit)
         direction.push(`${file} -> ${destination.node}`)
       if (source.layer === "lib" && destination.layer === "lib") {
         if (!libGraph.has(source.node)) libGraph.set(source.node, new Set())
@@ -616,6 +558,7 @@ export function computeModules(ctx) {
         tables: coreTableCount(ctx),
         settingsStateMembers: settingsStateMembers(ctx),
         settingsStoreImporters: settingsImporters.size,
+        registryEagerFiles: registryEagerFiles(ctx, manifests),
       },
       vendorNeutral: sorted(vendorNeutral),
     },
@@ -624,13 +567,12 @@ export function computeModules(ctx) {
 }
 
 const BASELINE_NOTE =
-  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, reporting only until M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
+  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
 
 /** Compare the computed measures with the baseline. */
 export function compare(measures, baseline) {
   const failures = []
   const hints = []
-  const reports = []
   const listDelta = (name, current, known) => {
     const knownSet = new Set(known ?? [])
     const currentSet = new Set(current)
@@ -642,9 +584,8 @@ export function compare(measures, baseline) {
   }
   const direction = listDelta("direction", measures.direction, baseline.direction)
   if (direction.added.length)
-    reports.push(
-      `G2 direction (reporting only until M1): ${direction.added.length} new edge(s)\n${direction.added
-        .slice(0, 40)
+    failures.push(
+      `G2 direction: ${direction.added.length} new edge(s) — foundation must not import above it, the kernel must not import a module or a shell, and a module must not import a shell. Invert the dependency (a manifest contribution, a port, a kernel event), move the code to its owner, or, when the target is a shell's contribution kit, list it in that shell's \`api\` in ${OWNERSHIP_FILE}\n${direction.added
         .map((edge) => `  ${edge}`)
         .join("\n")}`
     )
@@ -670,7 +611,7 @@ export function compare(measures, baseline) {
       else if (value > limit) failures.push(`${gate} ${group}.${key}: ${value} > baseline ${limit}`)
       else if (value < limit) hints.push(`${group}.${key}: ${value} < baseline ${limit}`)
     }
-  return { failures, hints, reports }
+  return { failures, hints }
 }
 
 export function baselineDocument(measures) {
@@ -705,7 +646,7 @@ export function main(argv = [], output = console) {
     if (result.errors.length) {
       for (const error of result.errors) output.error(`  ${error}`)
       output.error(
-        `[modules] refusing to write a baseline while G1/G6 has ${result.errors.length} error(s)`
+        `[modules] refusing to write a baseline while G1/G5/G6 has ${result.errors.length} error(s)`
       )
       return 1
     }
@@ -714,7 +655,7 @@ export function main(argv = [], output = console) {
     return 0
   }
   const baseline = ctx.exists(BASELINE_FILE) ? JSON.parse(readFileSync(baselinePath, "utf8")) : {}
-  const { failures, hints, reports } = compare(result.measures, baseline)
+  const { failures, hints } = compare(result.measures, baseline)
   if (opts.json) {
     output.log(
       JSON.stringify(
@@ -723,7 +664,6 @@ export function main(argv = [], output = console) {
           warnings: result.warnings,
           failures,
           hints,
-          reports,
           measures: result.measures,
         },
         null,
@@ -733,12 +673,11 @@ export function main(argv = [], output = console) {
     return result.errors.length || failures.length ? 1 : 0
   }
   for (const warning of result.warnings) output.log(`[modules] warning: ${warning}`)
-  for (const report of reports) output.log(`[modules] ${report}`)
   for (const hint of hints)
     output.log(`[modules] paid down — ${hint}; run --write-baseline to lock it in`)
   if (result.errors.length || failures.length) {
     if (result.errors.length) {
-      output.error(`[modules] G1/G6: ${result.errors.length} error(s)`)
+      output.error(`[modules] G1/G5/G6: ${result.errors.length} error(s)`)
       for (const error of result.errors) output.error(`  ${error}`)
     }
     for (const failure of failures) output.error(`[modules] ${failure}`)

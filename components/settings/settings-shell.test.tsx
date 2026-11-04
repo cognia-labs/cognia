@@ -89,6 +89,13 @@ jest.mock("@/hooks/settings/use-setting-focus", () => ({
   useSettingFocus: jest.fn(),
 }))
 
+// One dormant (`experimental`) module section, so the deep-link notice has a
+// subject; the registry itself holds no experimental module.
+jest.mock("./module-sections", () => ({
+  ...jest.requireActual("./module-sections"),
+  dormantSettingsSectionIds: () => new Set(["lab"]),
+}))
+
 import { SettingsShell } from "./settings-shell"
 
 // Section reachability keys on the host profile, which `detectPlatform()`
@@ -361,6 +368,27 @@ describe("SettingsShell fill-height layout", () => {
     expect(panel).toHaveClass("w-full", "max-w-[100vw]", "min-w-0")
     expect(panel!.className).not.toMatch(/\bflex-1\b/)
     expect(container.innerHTML).toMatch(/max-w-5xl/)
+  })
+})
+
+describe("SettingsShell — module sections (ADR-0250 §14)", () => {
+  it("renders a module's section from its manifest, in the layout it declares", () => {
+    mockSection = "squads"
+    const { container } = render(<SettingsShell />)
+    expect(screen.getByTestId("section-body")).toBeInTheDocument()
+    // The crumb reads the module's own key, not `settings.tabs.squads`.
+    expect(screen.getByText("squads.settingsSection.label")).toBeInTheDocument()
+    expect(container.querySelector("[data-settings-panel]")!.className).toMatch(/\bflex-1\b/)
+  })
+
+  it("says a dormant module's section is off instead of rendering another one", () => {
+    mockSection = "lab"
+    render(<SettingsShell />)
+    expect(screen.getByTestId("settings-dormant-section")).toHaveTextContent(
+      "experimentalSectionTitle"
+    )
+    expect(screen.queryByTestId("section-body")).toBeNull()
+    expect(screen.queryByTestId("section-reset-button")).toBeNull()
   })
 })
 

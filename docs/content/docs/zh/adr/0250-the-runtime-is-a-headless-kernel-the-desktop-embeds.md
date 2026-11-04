@@ -205,7 +205,7 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
 | M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 已完成（2026-11-05）：基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
-| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器 |
+| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads` 试点已落地，G2 已改为阻断；`eval`、飞书三层、G3 和 G4 还没做 |
 | 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
 | M3. 内核汇点（与阶段 3 同期） | 设置键归属；能力端口，先做 `ocr`、`speech`（试点）和 `docs-provider`；能力授予贡献（先过 ADR-0198）；提示词贡献 | 设置 store 的引用文件数、`build-options` 触达的子系统数都在下降 |
 | 3. 工作主干 | 运行表引用台账；统一状态词表；ADR-0247 的承诺 | 所有运行都在台账里 |
@@ -252,9 +252,15 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 
 **生成注册表，永不进仓。**
 - `scripts/build/gen-module-registry.mjs` 为每个宿主生成一份注册表：`lib/modules/generated/{brain,desktop,mobile}.ts` 和 `components/modules/generated/ui.ts`，里面只有懒加载入口。按宿主拆开，brain 就看不到任何桌面专用的入口。
-- 这些文件加入 `.gitignore`，由 `postinstall`、`predev`、`prebuild`、`scripts/test/jest.mjs`、`typecheck-root.mjs` 以及 CI 和 brain 的 Docker 构建生成。提交进仓的聚合文件会冲突，现在提交进仓的 companion 命令目录就是这样。在共享工作区里重新生成，还会把其他会话尚未提交的 manifest 一起写进提交。
+- M2 之前，宿主层只有一份与宿主无关的 `lib/modules/generated/host.ts`。M1 生成的字段在所有宿主上都一样适用；设置分区能否访问，和内置分区一样在运行时由 `requires`、`profiles` 决定。到 M2 出现第一个按宿主区分的字段 `runtimes.adapters` 时，这份文件再按宿主拆开。每份注册表 import 的就是 manifest 本身（数据加懒加载入口），外壳读取的是 `lib/modules/registry.ts` 和 `components/modules/registry.ts`。
+- 这些文件加入 `.gitignore`，由 `postinstall`、`predev`、`prebuild`、`prestorybook`、`scripts/test/jest.mjs`、`typecheck-root.mjs` 和 CLI 构建生成，brain 的 Docker 构建和 CI 跑的正是这些入口。提交进仓的聚合文件会冲突，现在提交进仓的 companion 命令目录就是这样。在共享工作区里重新生成，还会把其他会话尚未提交的 manifest 一起写进提交。
 - 注册表按顺序迁移：M1 迁设置分区、搜索 provider 和 slash 命令；M2 迁插槽、导航、运行时与副作用、表归属；M3 迁提示词、能力授予贡献和设置键；插件宿主 API 随 §9 迁移。
 - 一份注册表改为生成之后，再往里手写条目，G5 就会失败。
+- **M1 为这三份注册表定下的规则。**
+  - slash 命令的描述是 manifest 里的数据，处理函数是懒加载的 `load`。它以 `builtin` 作用域并入 `BUILTIN_SLASH_COMMANDS`，所以列出内置命令的界面都会列出它。
+  - 搜索 provider 懒加载，和内置 provider 注册在一起。它到达后，对话框会重跑查询；无头搜索会等它加载完。provider 的 `kind` 仍属于搜索词表（`lib/global-search/types.ts`），模块要加新的 kind 就加在那里，就像加一个类型。
+  - 设置分区的元数据（分组、Lucide 图标名、`after`、`requires`、`profiles`、布局、关键词）是数据，文案是模块自己命名空间下的完整 key。分区 id 的类型由 manifest 推出；插件契约里的 `SettingsSectionId` 只列插件可以打开的分区。
+  - 休眠：`experimental` 模块不向这三处贡献任何东西；深链接到它的分区时，页面会说明该分区已关闭。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
@@ -277,17 +283,20 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **一个厂商的全套一起分发。** "一键安装某厂商全套"用 cogset（ADR-0209）组合，这是分发层的打包，不是代码依赖。
 - 同样的拆法适用于 Google（协议库、`auth.google`、Drive 备份和 Docs）、GitHub（由 `octokit-factory` 和 `auth-app` 组成的协议库、GitHub 连接、`forge` 实现、`backup-github`、runner），以及各家订阅（协议库、账号登录，再加订阅、余额、模型目录三个端口的实现）。
 
-**门禁。** G1、G2 和 G6–G8 合在一个门禁里运行：`scripts/gates/check-modules.mjs`（`pnpm audit:modules`），注册在 `scripts/gates/check-all.mjs`。它用 `scripts/gates/convergence/counter.mjs` 的源码读取器和解析器读取源码、解析 import。它的棘轮是过渡归属表 `scripts/gates/module-ownership.json` 和 `scripts/gates/modules-baseline.json`，两者都登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。G3–G5 随各自检查的注册表并入同一个门禁。下表的数字是门禁在 M0 时自己的计数。
+**门禁。** G1、G2 和 G6–G8 合在一个门禁里运行：`scripts/gates/check-modules.mjs`（`pnpm audit:modules`），注册在 `scripts/gates/check-all.mjs`。它用 `scripts/gates/convergence/counter.mjs` 的源码读取器和解析器读取源码、解析 import。它的棘轮是过渡归属表 `scripts/gates/module-ownership.json` 和 `scripts/gates/modules-baseline.json`，两者都登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。G5 在 M1 并入；G3 和 G4 在 M1 后续并入。下表的数字是门禁在 M0 时自己的计数，标明 M1 的是 M1 时的计数。
+
+- **外壳的贡献工具包。** 外壳把模块构建贡献时要用的文件，作为 `api` 列在归属表里：设置分区工具包（`components/settings/common/`）、搜索 provider 辅助函数、移动端 spot 图标。import 这些文件不算 G2 违规边；import 外壳的其他文件仍然算。
+- **生成的注册表**是唯一被允许的"内核 → 模块" import，因为它们负责收集各个模块。G5 检查它们，它们不算 G1、G2、G6 的源文件。
 
 | 门禁 | 检查什么 | 度量 | 起始 |
 | --- | --- | --- | --- |
 | G1 归属 | 每个非测试源文件恰好有一个所有者；`owner` 与 `.github/CODEOWNERS` 一致 | 过渡归属表的行数，只降不升 | M0，阻断 |
-| G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（1,124），只降不升 | M0 只报告，M1 阻断 |
+| G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（M0 时 1,124；M1 列出外壳工具包后为 1,088），只降不升 | M0 只报告；自 M1 起阻断 |
 | G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件；不新增 barrel | 违规 import，只降不升 | M1 |
 | G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用 | 不一致为 0 | M1 |
-| G5 生成 | manifest 只含数据；生成器无报错跑完；生成的注册表里没有手写条目 | 0 | 每迁一份注册表启用一份 |
+| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令 |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
-| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起每个宿主的注册表带来的急加载模块图 | 只降不升；例外要有记录 | M0 |
+| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表急加载的文件数（M1 时为 3：两份 manifest 和 `lib/modules/define.ts`） | 只降不升；例外要有记录 | M0 |
 | G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（166，大多在 connectors 框架里），只降不升 | M0 |
 
 子系统的键来自 `scripts/gates/lib/subsystems.mjs`，依赖分析脚本也用它，所以两者对任何路径的归属都一致。

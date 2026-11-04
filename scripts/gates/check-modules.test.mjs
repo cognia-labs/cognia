@@ -11,6 +11,8 @@ import {
   BASELINE_FILE,
   HOST_FIELDS,
   OWNERSHIP_FILE,
+  SETTINGS_SECTION_FIELDS,
+  SLASH_COMMAND_FIELDS,
   UI_FIELDS,
   codeownerHandles,
   compare,
@@ -20,6 +22,7 @@ import {
   readManifest,
   validateHostManifest,
 } from "./check-modules.mjs"
+import { GENERATED_HOST, GENERATED_UI, renderRegistries } from "./lib/module-manifests.mjs"
 import { createContext } from "./convergence/counter.mjs"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -121,6 +124,8 @@ test("the gate's field lists match lib/modules/manifest-types.ts", () => {
   }
   assert.deepEqual([...HOST_FIELDS].sort(), fields("HostModuleManifest"))
   assert.deepEqual([...UI_FIELDS].sort(), fields("UiModuleManifest"))
+  assert.deepEqual([...SLASH_COMMAND_FIELDS].sort(), fields("ModuleSlashCommand"))
+  assert.deepEqual([...SETTINGS_SECTION_FIELDS].sort(), fields("ModuleSettingsSection"))
 })
 
 test("codeownerHandles reads every assigned handle and ignores comments", () => {
@@ -203,6 +208,127 @@ test("G2: the kernel importing a module is an edge; types and the reverse are no
   assert.equal(result.owners.get("components/chat/v.ts").node, "chat:ui")
 })
 
+test("G2: a shell's listed contribution kit is not an edge; an unlisted shell file still is", () => {
+  const table = ownership({ pet: "module", settings: "shell" })
+  table.subsystems.settings.api = ["components/settings/common/block.tsx"]
+  const result = run({
+    [OWNERSHIP_FILE]: table,
+    "components/pet/section.tsx": `import { Block } from "@/components/settings/common/block"
+import { shell } from "@/components/settings/shell"
+export const S = [Block, shell]
+`,
+    "components/settings/common/block.tsx": "export const Block = 1\n",
+    "components/settings/shell.tsx": "export const shell = 1\n",
+  })
+  assert.deepEqual(result.errors, [])
+  assert.deepEqual(result.measures.direction, ["components/pet/section.tsx -> settings"])
+})
+
+test("G2: only a shell lists api files, and only files it owns", () => {
+  const table = ownership({ pet: "module", settings: "shell" })
+  table.subsystems.pet.api = ["lib/pet/p.ts"]
+  table.subsystems.settings.api = ["lib/pet/p.ts"]
+  const result = run({
+    [OWNERSHIP_FILE]: table,
+    "lib/pet/p.ts": "export const p = 1\n",
+    "components/settings/s.ts": "export const s = 1\n",
+  })
+  assert.ok(result.errors.some((e) => e.includes('"pet": only a shell lists `api` files')))
+  assert.ok(result.errors.some((e) => e.includes('"settings" lists api file lib/pet/p.ts')))
+})
+
+// ------------------------------------------------------------ generation
+
+const HOST_MANIFEST = `import { defineHostModule } from "@/lib/modules/define"
+export default defineHostModule({
+  id: "crew",
+  kind: "module",
+  stage: "beta",
+  searchProviders: () => import("./search"),
+  slashCommands: [{ name: "crew", description: "Talk to the crew.", load: () => import("./slash") }],
+})
+`
+const UI_MANIFEST = `import { defineUiModule } from "@/lib/modules/define"
+export default defineUiModule({
+  id: "crew",
+  settingsSections: [
+    {
+      id: "crew",
+      group: "agents",
+      icon: "Users",
+      label: "crew.settingsSection.label",
+      description: "crew.settingsSection.description",
+      load: () => import("./section"),
+    },
+  ],
+})
+`
+
+function moduleTree(extra = {}) {
+  const registries = renderRegistries({
+    host: [{ id: "crew", file: "lib/crew/module.ts" }],
+    ui: [{ id: "crew", file: "components/crew/module.ui.ts" }],
+  })
+  return {
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": `import type { X } from "./manifest-types"\nexport const defineHostModule = (m) => m\n`,
+    "lib/modules/manifest-types.ts": "export type X = 1\n",
+    "lib/crew/module.ts": HOST_MANIFEST,
+    "lib/crew/search.ts": "export const searchProviders = []\n",
+    "lib/crew/slash.ts": "export const run = () => {}\n",
+    "components/crew/module.ui.ts": UI_MANIFEST,
+    "components/crew/section.tsx": "export default function Section() { return null }\n",
+    ...registries,
+    ...extra,
+  }
+}
+
+test("G5: current generated registries pass, and they are not owned source files", () => {
+  const result = run(moduleTree())
+  assert.deepEqual(result.errors, [])
+  assert.equal(result.owners.has(GENERATED_HOST), false)
+  assert.equal(result.owners.get("lib/crew/module.ts").owner, "crew")
+})
+
+test("G5: a missing or hand-edited registry is an error", () => {
+  const missing = moduleTree()
+  delete missing[GENERATED_UI]
+  assert.ok(run(missing).errors.some((e) => e.startsWith(`${GENERATED_UI} is missing`)))
+  const edited = moduleTree({ [GENERATED_HOST]: "export const HOST_MODULES = [] as const\n" })
+  assert.ok(run(edited).errors.some((e) => e.startsWith(`${GENERATED_HOST} differs from what`)))
+})
+
+test("G5: contributions are checked for shape, icon and clashes between modules", () => {
+  const badUi = UI_MANIFEST.replace('icon: "Users"', 'icon: "users-round-x"').replace(
+    'label: "crew.settingsSection.label"',
+    'label: "crewLabel"'
+  )
+  const result = run(
+    moduleTree({
+      "packages/plugin-contract/src/lib/icons/lucide-icon-names.generated.json": {
+        iconNames: ["Users"],
+        exportNames: {},
+      },
+      "components/crew/module.ui.ts": badUi,
+      "lib/other/module.ts": HOST_MANIFEST.replace('id: "crew"', 'id: "other"'),
+      "lib/other/search.ts": "export const searchProviders = []\n",
+      "lib/other/slash.ts": "export const run = () => {}\n",
+    })
+  )
+  assert.ok(result.errors.some((e) => e.includes('icon "users-round-x" is not a Lucide icon name')))
+  assert.ok(result.errors.some((e) => e.includes("label is a full i18n key")))
+  assert.ok(
+    result.errors.some((e) => e.includes('slash command /crew is also contributed by "crew"'))
+  )
+})
+
+test("G7: the registries load the manifests and what they import eagerly, nothing lazy", () => {
+  const result = run(moduleTree())
+  // lib/crew/module.ts, components/crew/module.ui.ts, lib/modules/define.ts;
+  // not the lazy targets and not the type-only manifest-types.ts.
+  assert.equal(result.measures.size.registryEagerFiles, 3)
+})
+
 // ------------------------------------------------------------ cycles
 
 test("G6: largestComponent finds the biggest strongly connected component", () => {
@@ -248,6 +374,7 @@ test("G7: tables, SettingsState members and settings-store importers are counted
     tables: 3,
     settingsStateMembers: 3,
     settingsStoreImporters: 1,
+    registryEagerFiles: 0,
   })
 })
 
@@ -283,14 +410,19 @@ const MEASURES = {
     tables: 3,
     settingsStateMembers: 4,
     settingsStoreImporters: 5,
+    registryEagerFiles: 3,
   },
   vendorNeutral: ["x :: vendor file"],
 }
 
-test("G2 reports new edges and never fails before M1", () => {
-  const { failures, reports } = compare(MEASURES, { ...MEASURES, direction: ["a -> b"] })
-  assert.deepEqual(failures, [])
-  assert.ok(reports[0].startsWith("G2 direction (reporting only until M1): 1 new edge(s)"))
+test("G2 fails on an edge the baseline does not have, since M1", () => {
+  const { failures } = compare(MEASURES, { ...MEASURES, direction: ["a -> b"] })
+  assert.equal(failures.length, 1)
+  assert.ok(failures[0].startsWith("G2 direction: 1 new edge(s)"))
+  assert.ok(failures[0].endsWith("\n  c -> d"))
+  const paid = compare({ ...MEASURES, direction: ["a -> b"] }, MEASURES)
+  assert.deepEqual(paid.failures, [])
+  assert.ok(paid.hints.includes("direction: 1 baselined item(s) repaid"))
 })
 
 test("G6, G7 and G8 fail on growth and hint when paid down", () => {

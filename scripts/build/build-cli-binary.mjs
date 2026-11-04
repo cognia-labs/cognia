@@ -35,6 +35,7 @@ import { execFileSync } from "node:child_process"
 import path from "node:path"
 
 import { missingNativeHosts, nativeHostFiles } from "./native-host-files.mjs"
+import { ensureModuleRegistries } from "./gen-module-registry.mjs"
 import fs from "node:fs"
 import {
   createMcpHostBridgePlugin,
@@ -54,6 +55,10 @@ import {
 import { sidecarVersionDefines } from "./lib/sidecar-version-info.mjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+// The feature module registries are gitignored and generated (ADR-0250 §14).
+// The brain image runs this build after copying the source, so it generates
+// them here rather than relying on postinstall.
+ensureModuleRegistries(root)
 const pluginArtifacts = await prepareBuiltinPluginAssets({ root })
 const cliEntry = path.join(root, "cli/src/cli/entry.ts")
 const sidecarEntry = path.join(root, "sidecar/claude-host.mjs")

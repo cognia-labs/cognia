@@ -19,6 +19,7 @@ import {
   undeclaredCliRuntimeDependencies,
 } from "./esbuild-shared.mjs"
 import { missingNativeHosts, nativeHostFiles } from "./native-host-files.mjs"
+import { ensureModuleRegistries } from "./gen-module-registry.mjs"
 import { stagePiExtension } from "./lib/stage-pi-extension.mjs"
 import { stageNativeAgentBridges } from "./lib/stage-native-agent-bridges.mjs"
 import {
@@ -50,6 +51,10 @@ const jsOnly = process.argv.includes("--js-only")
 const pluginArtifacts = await prepareBuiltinPluginAssets({ root, allowProduce: !jsOnly })
 
 if (!jsOnly) stageNativeAgentBridges({ root, sidecarOutDir: path.join(outdir, "sidecar") })
+
+// The feature module registries are gitignored and generated (ADR-0250 §14);
+// the bundle reaches them through global search and the slash commands.
+ensureModuleRegistries(path.resolve(root))
 
 const esbuild = await loadEsbuild()
 

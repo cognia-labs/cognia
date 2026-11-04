@@ -206,5 +206,9 @@
       "none": "No Squad has run yet.",
       "viewAll": "View all runs"
     }
+  },
+  "settingsSection": {
+    "description": "Squads are teams of agents you can hand a conversation to. Manage the ones you have, and start new ones from a template.",
+    "label": "Squads"
   }
 }

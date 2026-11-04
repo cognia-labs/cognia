@@ -37,9 +37,13 @@ import { PauseIcon, PlayIcon } from "lucide-react"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
 
-import { createListProvider } from "./list-provider"
-import { byProjectId } from "../workspace-scope"
-import type { GlobalSearchItem, GlobalSearchProvider, GlobalSearchProviderInput } from "../types"
+import { createListProvider } from "@/lib/global-search/providers/list-provider"
+import { byProjectId } from "@/lib/global-search/workspace-scope"
+import type {
+  GlobalSearchItem,
+  GlobalSearchProvider,
+  GlobalSearchProviderInput,
+} from "@/lib/global-search/types"
 
 export const SQUADS_PROVIDER_ID = "builtin.squads"
 
@@ -224,3 +228,6 @@ export function createSquadsProvider(
 }
 
 export const squadsProvider = createSquadsProvider()
+
+/** What `lib/squads/module.ts` contributes to global search. */
+export const searchProviders = [squadsProvider]

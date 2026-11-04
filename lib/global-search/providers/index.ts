@@ -2,6 +2,10 @@
  * Built-in provider roster (ADR-0129). `registerBuiltinGlobalSearchProviders`
  * (re)registers every built-in by id — idempotent, so the dialog can call it
  * on mount and a plugin host earlier — and returns the ids it owns.
+ *
+ * Feature modules contribute theirs from their manifests instead of this list
+ * (ADR-0250 §14); `./module-providers.ts` loads and registers them, and both
+ * callers run it beside this one.
  */
 
 import { registerGlobalSearchProvider } from "../registry"
@@ -12,7 +16,6 @@ import { devicesProvider } from "./devices"
 import { filesArtifactsProvider, filesCanvasProvider, filesItemsProvider } from "./files"
 import { gitBranchesProvider, gitWorktreesProvider } from "./git"
 import { sitesProvider } from "./sites"
-import { squadsProvider } from "./squads"
 import { pluginActionsProvider, workbenchPanelsProvider } from "./host"
 import { inboxContactsProvider, inboxProvider } from "./inbox"
 import { issuesProvider } from "./issues"
@@ -67,9 +70,8 @@ export function builtinGlobalSearchProviders(
     // database that shell owns (ADR-0084). Only the privileged actions on
     // `/sites` are host-gated, and the palette does not offer those.
     sitesProvider,
-    // Not `teamsProvider` above, which finds a guild of Characters. A Squad is
-    // an `AgentTeam`, and typing its name found nothing before this.
-    squadsProvider,
+    // Squads moved to their module (`lib/squads/module.ts`) and register
+    // through `registerModuleGlobalSearchProviders` (ADR-0250 §14).
     // Scoped to whichever repository the panel is bound to, and empty on a
     // client that is not offered Source Control at all. Both return [] rather
     // than fetching, so the per-keystroke cost is a store read.

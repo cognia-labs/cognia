@@ -20,7 +20,11 @@ export type {
   ModuleNavEntry,
   ModulePortProvision,
   ModuleRuntime,
+  ModuleSearchProvidersModule,
   ModuleSettingsSection,
+  ModuleSettingsSectionModule,
+  ModuleSlashCommand,
+  ModuleSlashCommandModule,
   ModuleStage,
   UiModuleManifest,
 } from "./manifest-types"

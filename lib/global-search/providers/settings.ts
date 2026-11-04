@@ -15,6 +15,8 @@ import {
 import {
   SETTINGS_NAV,
   SETTINGS_SEARCH_KEYWORDS,
+  settingsSectionDescriptionKey,
+  settingsSectionLabelKey,
   type NavItem,
   type SettingsSectionId,
 } from "@/components/settings/settings-nav-config"
@@ -65,8 +67,8 @@ function sectionLabel(
 ): string {
   // A control may point at a merged / redirected section id that is no longer
   // a nav entry; fall back to the id so the row still names something.
-  const labelKey = nav.find((n) => n.id === id)?.labelKey ?? id
-  return ctx.t(`settings.tabs.${labelKey}`)
+  const item = nav.find((n) => n.id === id)
+  return ctx.t(item ? settingsSectionLabelKey(item) : `settings.tabs.${id}`)
 }
 
 function reachable(ctx: GlobalSearchContext, id: SettingsSectionId): boolean {
@@ -82,7 +84,7 @@ export function settingsCandidates(
     .map((item): SettingsCandidate => ({
       id: `section:${item.id}`,
       title: sectionLabel(ctx, sources.nav, item.id),
-      secondary: ctx.t(`settings.descriptions.${item.descriptionKey}`),
+      secondary: ctx.t(settingsSectionDescriptionKey(item)),
       keywords: [item.id, ...(sources.keywords[item.id] ?? [])],
       icon: { lucide: item.icon as never },
       action: { type: "open-settings", tab: item.id },

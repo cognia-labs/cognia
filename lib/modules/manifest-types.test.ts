@@ -2,6 +2,8 @@ import type {
   HostModuleManifest,
   ModuleAcceptance,
   ModuleHost,
+  ModuleSettingsSection,
+  ModuleSlashCommand,
   ModuleStage,
   UiModuleManifest,
 } from "./manifest-types"
@@ -37,8 +39,17 @@ describe("manifest-types", () => {
       builtinSkills: { load: () => import("./define") },
       pluginApi: { namespaces: ["pet"], load: () => import("./define") },
       workflowNodes: { load: () => import("./define") },
-      searchProviders: () => import("./define"),
-      slashCommands: () => import("./define"),
+      searchProviders: async () => ({ searchProviders: [] }),
+      slashCommands: [
+        {
+          name: "pet",
+          description: "Check on your pet.",
+          category: "system",
+          argumentHint: "<status | feed>",
+          argumentOptions: ["status", "feed"],
+          load: async () => ({ run: () => undefined }),
+        },
+      ],
       prompts: () => import("./define"),
       flags: { proactiveChat: { default: false } },
       messages: "pet",
@@ -53,15 +64,41 @@ describe("manifest-types", () => {
         {
           id: "pet",
           group: "appearance",
-          icon: "paw-print",
-          requires: ["desktop"],
-          load: () => import("./define"),
+          icon: "PawPrint",
+          label: "pet.settingsSection.label",
+          description: "pet.settingsSection.description",
+          after: "appearance",
+          requires: ["keyring"],
+          profiles: ["desktop"],
+          layout: "fill",
+          keywords: ["pet", "宠物"],
+          load: async () => ({ default: () => null }),
         },
       ],
       nav: [{ route: "/pet", icon: "paw-print" }],
       effects: [{ name: "pet-window-title", load: () => import("./define") }],
     }
     expect(manifest.settingsSections).toHaveLength(1)
+  })
+
+  it("loads a slash command's handler and a section's component, nothing else", () => {
+    const command: ModuleSlashCommand = {
+      name: "pet",
+      description: "Check on your pet.",
+      // @ts-expect-error -- `load` brings `{ run }`, not a bare function.
+      load: async () => () => undefined,
+    }
+    const section: ModuleSettingsSection = {
+      id: "pet",
+      group: "appearance",
+      icon: "PawPrint",
+      label: "pet.settingsSection.label",
+      description: "pet.settingsSection.description",
+      // @ts-expect-error -- a host profile, not a capability.
+      requires: ["desktop"],
+      load: async () => ({ default: () => null }),
+    }
+    expect([command.name, section.id]).toEqual(["pet", "pet"])
   })
 
   it("keeps acceptance to pending or a dated pass", () => {

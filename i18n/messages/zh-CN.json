@@ -51851,7 +51851,6 @@
       "slashCommands": "内置、自定义、插件贡献的斜杠命令统一浏览,可搜索并将命令复制到聊天输入框。",
       "sourceControl": "AI 提交信息生成及其他 Git 面板偏好。",
       "speech": "语音输入（STT）的语言与麦克风，朗读（TTS）的提供商、音色与自动播放。",
-      "squads": "小队是可以承接整个会话的 Agent 团队。在这里管理已有小队，或从模板新建。",
       "subagents": "子代理模板与实时运行状态 — 由父代理派生专注子任务（搜索、代码评审、内容生成、数据分析等）。",
       "subscription": "登录 Claude、Codex（ChatGPT）或 OpenCode 订阅，实时查看速率限制窗口与余额，并在系统钥匙串中管理 OAuth 凭据。",
       "teams": "多角色协作 — 轮询 / 主管 / 手动。",
@@ -52128,6 +52127,8 @@
         "system": "系统"
       }
     },
+    "experimentalSectionBody": "它属于一个实验性功能模块，在准备好之前保持关闭。它的设置会保留，模块发布后该设置项会重新出现。",
+    "experimentalSectionTitle": "该设置项已关闭",
     "externalBridge": {
       "audit": {
         "clear": "清空",
@@ -58371,7 +58372,6 @@
       "slashCommands": "斜杠命令",
       "sourceControl": "源代码管理",
       "speech": "语音",
-      "squads": "小队",
       "subagents": "子代理",
       "subscription": "订阅",
       "teams": "团队",
@@ -62161,6 +62161,10 @@
       "loading": "检查中…",
       "ready": "可以运行",
       "title": "就绪状态"
+    },
+    "settingsSection": {
+      "description": "小队是可以承接整个会话的 Agent 团队。在这里管理已有小队，或从模板新建。",
+      "label": "小队"
     }
   },
   "structuredConfig": {

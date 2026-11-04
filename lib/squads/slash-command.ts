@@ -30,7 +30,7 @@
 // Card renderers are hard-coded English, consistent with the `/plan` and
 // `/goal` cards.
 
-import type { SlashContext } from "../builtin"
+import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, AgentTeamTask, TeamStatus } from "@/types/agent/agent-team"
@@ -346,4 +346,13 @@ function usage(): string {
     "",
     "Every subcommand takes an optional Squad id or name: `/squad status Review Crew`.",
   ].join("\n")
+}
+
+/**
+ * The `/squad` handler. `lib/squads/module.ts` lists the command, so the
+ * composer's picker shows it without loading this file; this runs when it fires.
+ */
+export async function run(ctx: SlashContext): Promise<void> {
+  const result = await dispatchSquadSubcommand(ctx)
+  ctx.pushSystemMessage(result.system)
 }

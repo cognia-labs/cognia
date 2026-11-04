@@ -1,4 +1,4 @@
-import { UsersIcon } from "lucide-react"
+import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import { CORE_CAPABILITY_IDS, type CapabilityId } from "@/lib/platform/capabilities"
 import {
   SETTINGS_GROUP_ORDER,
@@ -7,6 +7,8 @@ import {
   isSearchMatch,
   isSettingsSectionReachable,
   settingsSectionBlockReason,
+  settingsSectionDescriptionKey,
+  settingsSectionLabelKey,
   settingsSectionNeedsServer,
   reachableSettingsSections,
   type NavItem,
@@ -34,12 +36,26 @@ describe("settings-nav-config", () => {
       }
     })
 
-    it("squads sits in the Agents group", () => {
-      const item = SETTINGS_NAV.find((n) => n.id === "squads")
-      expect(item).toBeDefined()
+    it("squads comes from its module manifest, right after Subagents in the Agents group", () => {
+      // `components/squads/module.ui.ts` (ADR-0250 §14), not a hand-written entry.
+      const index = SETTINGS_NAV.findIndex((n) => n.id === "squads")
+      const item = SETTINGS_NAV[index]
       expect(item?.group).toBe("agents")
-      expect(item?.labelKey).toBe("squads")
-      expect(item?.descriptionKey).toBe("squads")
+      expect(SETTINGS_NAV[index - 1]?.id).toBe("subagents")
+      expect(item?.messages).toEqual({
+        label: "squads.settingsSection.label",
+        description: "squads.settingsSection.description",
+      })
+      expect(settingsSectionLabelKey(item!)).toBe("squads.settingsSection.label")
+      expect(settingsSectionDescriptionKey(item!)).toBe("squads.settingsSection.description")
+    })
+
+    it("keys a built-in section's strings under settings.tabs and settings.descriptions", () => {
+      const item = SETTINGS_NAV.find((n) => n.id === "plugins")!
+      expect(settingsSectionLabelKey(item)).toBe(`settings.tabs.${item.labelKey}`)
+      expect(settingsSectionDescriptionKey(item)).toBe(
+        `settings.descriptions.${item.descriptionKey}`
+      )
     })
 
     it("splits AI Connections and Model Catalog without reusing generic Connections", () => {
@@ -340,6 +356,6 @@ describe("settings-nav-config", () => {
   })
 })
 
-it("provides an ordinary icon for Squads", () => {
-  expect(SETTINGS_NAV.find((entry) => entry.id === "squads")?.icon).toBe(UsersIcon)
+it("provides an ordinary icon for Squads, drawn from the name its manifest gives", () => {
+  expect(SETTINGS_NAV.find((entry) => entry.id === "squads")?.icon).toBe(resolveLucideIcon("Users"))
 })

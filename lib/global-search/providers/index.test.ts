@@ -1,5 +1,6 @@
 import { KIND_SCOPES, type GlobalSearchKind } from "../types"
 import { __resetGlobalSearchRegistryForTesting, listGlobalSearchProviders } from "../registry"
+import { activeHostModules } from "@/lib/modules/registry"
 import { builtinGlobalSearchProviders, registerBuiltinGlobalSearchProviders } from "./index"
 
 jest.mock("@/lib/db/characters", () => ({ listCharacters: jest.fn(async () => []) }))
@@ -30,8 +31,14 @@ jest.mock("@/lib/chat/search/engine", () => ({
 describe("built-in provider roster", () => {
   beforeEach(() => __resetGlobalSearchRegistryForTesting())
 
-  it("covers every kind exactly once with unique ids", () => {
-    const providers = builtinGlobalSearchProviders()
+  it("covers every kind exactly once with unique ids, module providers included", async () => {
+    // Squads contributes its provider from `lib/squads/module.ts` (ADR-0250 §14).
+    const contributed = await Promise.all(
+      activeHostModules()
+        .filter((manifest) => manifest.searchProviders)
+        .map(async (manifest) => (await manifest.searchProviders!()).searchProviders)
+    )
+    const providers = [...builtinGlobalSearchProviders(), ...contributed.flat()]
     const kinds = providers.map((p) => p.kind).sort()
     const expected = (Object.keys(KIND_SCOPES) as GlobalSearchKind[]).sort()
     expect(kinds).toEqual(expected)

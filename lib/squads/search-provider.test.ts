@@ -6,11 +6,13 @@ import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import {
   createSquadsProvider,
   loadSquadSearchRows,
+  searchProviders,
   squadControlVerb,
+  SQUADS_PROVIDER_ID,
   type SquadsProviderDeps,
-} from "./squads"
+} from "./search-provider"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
-import type { GlobalSearchContext } from "../types"
+import type { GlobalSearchContext } from "@/lib/global-search/types"
 
 const squad = (over: Partial<AgentTeam> = {}) =>
   ({
@@ -224,5 +226,12 @@ describe("control rows", () => {
   it("counts Squads in total, not rows", async () => {
     const result = await search(createSquadsProvider(deps()), "review")
     expect(result.total).toBe(1)
+  })
+})
+
+describe("searchProviders", () => {
+  it("is what the module manifest contributes: the Squads provider, under its stable id", () => {
+    expect(searchProviders.map((provider) => provider.id)).toEqual([SQUADS_PROVIDER_ID])
+    expect(searchProviders[0]?.kind).toBe("squad")
   })
 })

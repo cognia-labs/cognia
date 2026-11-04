@@ -50,7 +50,11 @@ export function forwardedJestArgs(argv) {
   return argv[0] === "--" ? argv.slice(1) : argv
 }
 
-function main() {
+async function main() {
+  // The feature module registries are gitignored and generated (ADR-0250 §14);
+  // suites import them, so a run regenerates them first.
+  const { ensureModuleRegistries } = await import("../build/gen-module-registry.mjs")
+  ensureModuleRegistries()
   const jestBin = createRequire(import.meta.url).resolve("jest/bin/jest")
   const child = spawn(
     process.execPath,
@@ -72,4 +76,8 @@ function main() {
   })
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().catch((error) => {
+    console.error(error.message)
+    process.exit(1)
+  })

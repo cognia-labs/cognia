@@ -7,7 +7,7 @@
 // sidecar install as its own later step. Local `pnpm install` behaves as
 // before.
 import fs from "node:fs"
-import { execSync } from "node:child_process"
+import { execSync, spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -32,6 +32,16 @@ function main() {
       if (error.code !== "MODULE_NOT_FOUND") throw error
     }
     if (packagePath) repairNodePtySpawnHelper(path.dirname(packagePath))
+  }
+
+  // The feature module registries are gitignored and generated (ADR-0250 §14).
+  // A partial checkout (the brain image's dependency layer) has no module
+  // system yet; its CLI build generates them once the source is copied in.
+  if (fs.existsSync("lib/modules/define.ts")) {
+    const registry = spawnSync(process.execPath, ["scripts/build/gen-module-registry.mjs"], {
+      stdio: "inherit",
+    })
+    if (registry.status !== 0) process.exit(registry.status ?? 1)
   }
 
   if (!fs.existsSync("sidecar/package.json")) {

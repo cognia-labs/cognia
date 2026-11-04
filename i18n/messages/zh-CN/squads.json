@@ -206,5 +206,9 @@
       "none": "还没有小队运行过。",
       "viewAll": "查看全部运行"
     }
+  },
+  "settingsSection": {
+    "description": "小队是可以承接整个会话的 Agent 团队。在这里管理已有小队，或从模板新建。",
+    "label": "小队"
   }
 }

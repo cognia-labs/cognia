@@ -79,7 +79,14 @@ describe("settings provider", () => {
       makeProviderInput("settings.", { ctx: ctxAll(), limit: 100 })
     )
     const firstControl = out.items.findIndex((i) => i.id.startsWith("settings:control:"))
-    const lastSection = out.items.map((i) => i.id.startsWith("settings:section:")).lastIndexOf(true)
+    // A module section's label is a key in its own namespace (ADR-0250 §14), so
+    // it does not share the "settings." fragment this ranking check searches for.
+    const moduleSections = new Set(
+      SETTINGS_NAV.filter((n) => n.messages).map((n) => `settings:section:${n.id}`)
+    )
+    const lastSection = out.items
+      .map((i) => i.id.startsWith("settings:section:") && !moduleSections.has(i.id))
+      .lastIndexOf(true)
     expect(firstControl).toBeGreaterThan(-1)
     expect(lastSection).toBeLessThan(firstControl)
     expect(out.total).toBe(SETTINGS_NAV.length + SETTING_CONTROLS.length)

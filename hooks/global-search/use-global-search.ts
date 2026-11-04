@@ -17,6 +17,7 @@ import { projectSearchText } from "@/lib/chat/search/project-text"
 import type { ChatSearchTextRow } from "@/lib/db/chat-search-text"
 import { runGlobalSearch, runGlobalSearchSuggestions } from "@/lib/global-search/engine"
 import { registerBuiltinGlobalSearchProviders } from "@/lib/global-search/providers"
+import { registerModuleGlobalSearchProviders } from "@/lib/global-search/providers/module-providers"
 import { parseGlobalSearchQuery } from "@/lib/global-search/query-parser"
 import {
   getGlobalSearchRegistryRevision,
@@ -113,6 +114,9 @@ export function useGlobalSearch({
   // revision, which re-runs the query below.
   useEffect(() => {
     registerBuiltinGlobalSearchProviders({ messages: { pendingRows: pendingChatRows } })
+    // Module providers load lazily; registering bumps the revision below, so a
+    // query typed before they arrive re-runs with them.
+    void registerModuleGlobalSearchProviders()
     scheduleSearchIndexDrain()
   }, [])
   const registryRevision = useSyncExternalStore(

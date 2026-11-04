@@ -1965,17 +1965,6 @@
       ]
     },
     {
-      "key": "lib/global-search/providers/squads.ts",
-      "owner": "lib/global-search",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/agent/agent-team-store/index.ts"
-      ]
-    },
-    {
       "key": "lib/goal/verification.ts",
       "owner": "lib/goal",
       "note": "",
@@ -3949,18 +3938,6 @@
       ]
     },
     {
-      "key": "lib/slash-commands/actions/squad.ts",
-      "owner": "lib/slash-commands",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/agent/agent-team-store/index.ts",
-        "stores/project/project-store.ts"
-      ]
-    },
-    {
       "key": "lib/slash-commands/builtin.ts",
       "owner": "lib/slash-commands",
       "note": "",
@@ -3969,6 +3946,29 @@
       ],
       "stores": [
         "stores/chat/index.ts"
+      ]
+    },
+    {
+      "key": "lib/squads/search-provider.ts",
+      "owner": "lib/squads",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts"
+      ]
+    },
+    {
+      "key": "lib/squads/slash-command.ts",
+      "owner": "lib/squads",
+      "note": "",
+      "imports": [
+        "static"
+      ],
+      "stores": [
+        "stores/agent/agent-team-store/index.ts",
+        "stores/project/project-store.ts"
       ]
     },
     {

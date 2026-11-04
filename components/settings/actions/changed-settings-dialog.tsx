@@ -34,10 +34,14 @@ import {
   humanizeSettingKey,
   previewValue,
 } from "@/lib/settings/changed-settings"
-import { SETTINGS_NAV, type SettingsSectionId } from "@/components/settings/settings-nav-config"
+import {
+  SETTINGS_NAV,
+  settingsSectionLabelKey,
+  type SettingsSectionId,
+} from "@/components/settings/settings-nav-config"
 
 const SECTION_LABEL_KEY: Partial<Record<SettingsSectionId, string>> = Object.fromEntries(
-  SETTINGS_NAV.map((n) => [n.id, n.labelKey])
+  SETTINGS_NAV.map((n) => [n.id, settingsSectionLabelKey(n)])
 )
 
 export function ChangedSettingsDialog({
@@ -48,6 +52,8 @@ export function ChangedSettingsDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const t = useTranslations("settings")
+  // Section labels are full keys: a module section's lives in its own namespace.
+  const tRoot = useTranslations()
   const settings = useSettingsStore((s) => s.settings)
   const resetSettings = useSettingsStore((s) => s.resetSettings)
   const [busy, setBusy] = useState(false)
@@ -61,7 +67,7 @@ export function ChangedSettingsDialog({
   const sectionLabel = (sectionId: SettingsSectionId | undefined): string => {
     if (!sectionId) return t("changedReview.otherSection")
     const labelKey = SECTION_LABEL_KEY[sectionId]
-    return labelKey ? t(`tabs.${labelKey}` as never) : sectionId
+    return labelKey ? tRoot(labelKey as never) : sectionId
   }
 
   const runReset = async (keys: (keyof AppSettings)[]) => {

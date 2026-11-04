@@ -67,8 +67,20 @@ import {
   type CapabilityId,
   type HostProfile,
 } from "@/lib/platform/capabilities"
-import type { SettingsSectionId } from "@cognia/plugin-contract/components/settings/settings-nav-config"
-export type { SettingsSectionId } from "@cognia/plugin-contract/components/settings/settings-nav-config"
+import type { SettingsSectionId as BuiltinSettingsSectionId } from "@cognia/plugin-contract/components/settings/settings-nav-config"
+import type { ModuleSettingsSectionId } from "@/components/modules/registry"
+import {
+  insertModuleSections,
+  moduleSectionKeywords,
+  moduleSettingsSections,
+} from "./module-sections"
+
+/**
+ * Every `?section=` value: the plugin contract's list, which plugins can open,
+ * plus the sections feature modules declare (ADR-0250 §14), typed from their
+ * manifests through the generated registry.
+ */
+export type SettingsSectionId = BuiltinSettingsSectionId | ModuleSettingsSectionId
 
 export type SettingsGroup =
   | "account"
@@ -90,6 +102,13 @@ export interface NavItem {
   labelKey: string
   /** i18n key under `settings.descriptions.<key>` — sidebar tooltip. */
   descriptionKey: string
+  /**
+   * Full i18n keys, set for a section a feature module contributes: its
+   * strings live in the module's own namespace, not under `settings`. When
+   * present they win over `labelKey` and `descriptionKey`; read both through
+   * `settingsSectionLabelKey` / `settingsSectionDescriptionKey`.
+   */
+  messages?: { label: string; description: string }
   group: SettingsGroup
   icon: ComponentType<{ className?: string }>
   /**
@@ -111,6 +130,18 @@ export interface NavItem {
    * Combined with `requires`, BOTH must pass.
    */
   profiles?: readonly HostProfile[]
+}
+
+/** The full i18n key of a section's label, for a root `useTranslations()`. */
+export function settingsSectionLabelKey(item: Pick<NavItem, "labelKey" | "messages">): string {
+  return item.messages?.label ?? `settings.tabs.${item.labelKey}`
+}
+
+/** The full i18n key of a section's description (the sidebar tooltip). */
+export function settingsSectionDescriptionKey(
+  item: Pick<NavItem, "descriptionKey" | "messages">
+): string {
+  return item.messages?.description ?? `settings.descriptions.${item.descriptionKey}`
 }
 
 /**
@@ -184,7 +215,8 @@ export function reachableSettingsSections(
   )
 }
 
-export const SETTINGS_NAV: NavItem[] = [
+/** The sections the settings shell writes itself; modules add theirs below. */
+const BUILTIN_SETTINGS_NAV: NavItem[] = [
   // === Account & Billing ===
   {
     id: "account",
@@ -274,13 +306,6 @@ export const SETTINGS_NAV: NavItem[] = [
     descriptionKey: "subagents",
     group: "agents",
     icon: NetworkIcon,
-  },
-  {
-    id: "squads",
-    labelKey: "squads",
-    descriptionKey: "squads",
-    group: "agents",
-    icon: UsersIcon,
   },
   {
     id: "teams",
@@ -782,11 +807,26 @@ export const SETTINGS_GROUP_ORDER: SettingsGroup[] = [
 ]
 
 /**
+ * Sections feature modules declare in `components/<id>/module.ui.ts`
+ * (ADR-0250 §14), such as Squads. The shell renders them from here.
+ */
+export const MODULE_SETTINGS_SECTIONS = moduleSettingsSections()
+
+/** Every section, built-in and module, in sidebar order. */
+export const SETTINGS_NAV: NavItem[] = insertModuleSections(
+  BUILTIN_SETTINGS_NAV,
+  MODULE_SETTINGS_SECTIONS,
+  SETTINGS_GROUP_ORDER
+)
+
+/**
  * Lightweight keyword index for the sidebar search. Each entry can attach
  * extra keywords beyond the label/description (e.g., "anthropic" for the
  * api-key section). Mirrors Cognia's SETTINGS_SEARCH_INDEX shape.
  */
 export const SETTINGS_SEARCH_KEYWORDS: Partial<Record<SettingsSectionId, string[]>> = {
+  // A module section's keywords come from its manifest.
+  ...moduleSectionKeywords(MODULE_SETTINGS_SECTIONS),
   account: [
     "account",
     "overview",
@@ -1518,19 +1558,6 @@ export const SETTINGS_SEARCH_KEYWORDS: Partial<Record<SettingsSectionId, string[
     "派发",
     "并行",
   ],
-  squads: [
-    "squad",
-    "squads",
-    "小队",
-    "team",
-    "teams",
-    "multi-agent",
-    "supervisor",
-    "round-robin",
-    "agent team",
-    "团队",
-    "多代理",
-  ],
   "harness-evolution": [
     "harness",
     "harness evolution",
@@ -1836,8 +1863,8 @@ export const SETTINGS_SEARCH_KEYWORDS: Partial<Record<SettingsSectionId, string[
 export function isSearchMatch(item: NavItem, query: string, t: (key: string) => string) {
   if (!query.trim()) return true
   const q = query.trim().toLowerCase()
-  if (t(`settings.tabs.${item.labelKey}`).toLowerCase().includes(q)) return true
-  if (t(`settings.descriptions.${item.descriptionKey}`).toLowerCase().includes(q)) return true
+  if (t(settingsSectionLabelKey(item)).toLowerCase().includes(q)) return true
+  if (t(settingsSectionDescriptionKey(item)).toLowerCase().includes(q)) return true
   const keywords = SETTINGS_SEARCH_KEYWORDS[item.id] ?? []
   return keywords.some((k) => k.toLowerCase().includes(q))
 }

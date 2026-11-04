@@ -24,6 +24,7 @@ import { loadMessageResolver, type HeadlessLocale } from "@/lib/headless/i18n"
 import { detectPlatform } from "@/lib/platform/detect"
 import { isTauri } from "@/lib/tauri"
 import { registerBuiltinGlobalSearchProviders } from "./providers"
+import { registerModuleGlobalSearchProviders } from "./providers/module-providers"
 import type { GlobalSearchContext, GlobalSearchKind, GlobalSearchScope } from "./types"
 
 /**
@@ -68,23 +69,27 @@ export interface HeadlessSearchContextInput {
   now?: number
 }
 
-let providersRegistered = false
+let providersRegistered: Promise<void> | null = null
 
 /**
- * Register the built-ins once per process. The registry is module-level and
- * framework-free, so this is safe outside React, and re-registering is a
- * replace rather than a duplicate.
+ * Register the built-ins and the module providers once per process. The
+ * registry is module-level and framework-free, so this is safe outside React,
+ * and re-registering is a replace rather than a duplicate. Module providers
+ * load lazily (ADR-0250 §14), so a caller awaits them before searching: a
+ * headless search has no dialog to re-run when they arrive.
  */
-export function ensureBuiltinSearchProviders(): void {
-  if (providersRegistered) return
-  registerBuiltinGlobalSearchProviders()
-  providersRegistered = true
+export function ensureBuiltinSearchProviders(): Promise<void> {
+  if (!providersRegistered) {
+    registerBuiltinGlobalSearchProviders()
+    providersRegistered = registerModuleGlobalSearchProviders().then(() => undefined)
+  }
+  return providersRegistered
 }
 
 export async function buildHeadlessSearchContext(
   input: HeadlessSearchContextInput = {}
 ): Promise<GlobalSearchContext> {
-  ensureBuiltinSearchProviders()
+  await ensureBuiltinSearchProviders()
 
   const activeProjectId = input.activeProjectId ?? null
   const [t, sessions, workspaces] = await Promise.all([
@@ -144,5 +149,5 @@ export async function buildHeadlessSearchContext(
 
 /** Test-only: forget that the built-ins were registered. */
 export function __resetHeadlessSearchProvidersForTesting(): void {
-  providersRegistered = false
+  providersRegistered = null
 }

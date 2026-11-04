@@ -52,6 +52,13 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
     }
   })
 
+  it("carries the commands feature modules declare, with no hand-written entry", () => {
+    // `/squad` lives in `lib/squads/module.ts` (ADR-0250 §14), not in builtin.ts.
+    const squad = BUILTIN_SLASH_COMMANDS.find((c) => c.name === "squad")
+    expect(squad).toMatchObject({ scope: "builtin", category: "goal" })
+    expect(typeof squad?.handler).toBe("function")
+  })
+
   it("/report is a diagnostics action command that opens the report dialog", async () => {
     const report = BUILTIN_SLASH_COMMANDS.find((c) => c.name === "report")
     expect(report?.category).toBe("diagnostics")

@@ -286,7 +286,13 @@
       "class": "module"
     },
     "global-search": {
-      "class": "shell"
+      "class": "shell",
+      "api": [
+        "lib/global-search/providers/helpers.ts",
+        "lib/global-search/providers/list-provider.ts",
+        "lib/global-search/workspace-scope.ts"
+      ],
+      "note": "`api` is the provider kit a module's search provider is built with."
     },
     "goal": {
       "class": "module"
@@ -406,7 +412,12 @@
       "class": "module"
     },
     "mobile": {
-      "class": "shell"
+      "class": "shell",
+      "api": [
+        "components/mobile/discover/list-skeleton.tsx",
+        "components/mobile/mobile-spot-icon.tsx"
+      ],
+      "note": "`api` is the mobile kit (spot icons, list skeleton) other modules draw with."
     },
     "modules": {
       "class": "kernel",
@@ -594,7 +605,25 @@
       "class": "module"
     },
     "settings": {
-      "class": "shell"
+      "class": "shell",
+      "api": [
+        "components/settings/common/clamped-number-input.tsx",
+        "components/settings/common/deferred-text-input.tsx",
+        "components/settings/common/directory-field.tsx",
+        "components/settings/common/model-override-fields.tsx",
+        "components/settings/common/number-row.tsx",
+        "components/settings/common/optional-number-input.tsx",
+        "components/settings/common/panel-transition.tsx",
+        "components/settings/common/related-sections-strip.tsx",
+        "components/settings/common/resolve-panel-id.ts",
+        "components/settings/common/section-reset-button.tsx",
+        "components/settings/common/settings-block.tsx",
+        "components/settings/common/settings-master-detail.tsx",
+        "components/settings/common/settings-panel-nav.tsx",
+        "components/settings/common/settings-section.tsx",
+        "components/settings/common/unsaved-bar.tsx"
+      ],
+      "note": "`api` is the section kit a module's settings section is built with (ADR-0250 §14)."
     },
     "settings-import": {
       "class": "module"
@@ -643,9 +672,6 @@
       "class": "shell"
     },
     "source-control": {
-      "class": "module"
-    },
-    "squads": {
       "class": "module"
     },
     "stack": {
