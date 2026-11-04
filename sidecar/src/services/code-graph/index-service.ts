@@ -16,6 +16,9 @@ import fastGlob from "fast-glob"
 import { loadIgnoreGlobs } from "../../platform/fs/gitignore.ts"
 import { isSupportedFile, languageFor } from "./languages/index.ts"
 import { extractFile } from "./extractor.ts"
+import type { ExtractResult } from "./extractor.ts"
+import type { ExtractionPool } from "./extraction-pool.ts"
+import { standaloneResourceDir } from "./parser.ts"
 import { resolveAll } from "./resolver-pass.ts"
 import { createStore } from "./store.ts"
 import { startWatcher, type Watcher } from "./watcher.ts"
@@ -47,6 +50,12 @@ export interface IndexServiceOptions {
   now?: () => number
   /** Omitted: `globalThis.Bun`. Null: always node:fs/crypto. */
   bunRuntime?: Partial<BunHashRuntime> | null
+  /** Experimental: two process-wide extraction threads; omitted defaults to serial. */
+  extractionWorkers?: 0 | 2
+  /** Pin discovery order for reproducible comparisons; omitted preserves glob order. */
+  fileOrder?: "lexical"
+  /** Bounded, content-free diagnostics for controlled extraction experiments. */
+  onExtraction?: (event: "worker" | "serial" | "fallback") => void
 }
 
 export interface IndexStatus extends Omit<StoreStats, "binding"> {
@@ -104,18 +113,77 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   let initPromise: Promise<void> | null = null
   let watcher: Watcher | null = null
   let lastSyncAt = 0
+  let disposed = false
+  let syncing: Promise<number> | null = null
+  let pool: ExtractionPool | null = null
+  let workerFailed = false
+  let serialTail: Promise<unknown> = Promise.resolve()
+  const workersEnabled =
+    (opts.extractionWorkers ?? (process.env.COGNIA_CODE_INDEX_WORKERS === "2" ? 2 : 0)) === 2 &&
+    // A compiled /$bunfs URL may identify the whole host, not a worker entry.
+    !standaloneResourceDir()
   /** files known-changed (from the watcher) awaiting re-index → drives the banner */
   const pendingPaths = new Set<string>()
   /** snippet LRU: relPath → { hash, lines } */
   const snippetCache = new Map<string, { hash: string | null; lines: string[] }>()
 
+  function assertActive(): void {
+    if (disposed) throw new Error("code graph index is disposed")
+  }
+
+  function observeExtraction(event: "worker" | "serial" | "fallback"): void {
+    try {
+      opts.onExtraction?.(event)
+    } catch {
+      /* Diagnostics cannot affect indexing. */
+    }
+  }
+
+  async function extract(rel: string, source: string): Promise<ExtractResult> {
+    assertActive()
+    if (workersEnabled && !workerFailed) {
+      try {
+        if (!pool) {
+          const { acquireExtractionPool } = await import("./extraction-pool.ts")
+          assertActive()
+          pool ??= acquireExtractionPool()
+        }
+        const result = await pool.extract(rel, source)
+        assertActive()
+        observeExtraction("worker")
+        return result
+      } catch {
+        assertActive()
+        // Only pure extraction is replayed. Stores and resolution never run
+        // in workers, and a failed pool stays disabled for this session.
+        workerFailed = true
+        observeExtraction("fallback")
+        pool?.dispose()
+        pool = null
+      }
+    }
+    if (!workerFailed) {
+      observeExtraction("serial")
+      return extractFile(rel, source)
+    }
+    const result = serialTail.then(() => {
+      assertActive()
+      observeExtraction("serial")
+      return extractFile(rel, source)
+    })
+    serialTail = result.catch(() => undefined)
+    return result
+  }
+
   /** The open store; the query methods run only after `ensureIndexed()`. */
   function openStore(): CodeGraphStore {
+    assertActive()
     if (!store) throw new Error("code graph is not indexed; await ensureIndexed() first")
     return store
   }
 
   function ensureStore(): CodeGraphStore {
+    assertActive()
     if (!store) {
       if (dbPath) {
         try {
@@ -140,7 +208,8 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
       suppressErrors: true,
       ignore,
     })
-    return all.filter((rel) => isSupportedFile(rel))
+    const supported = all.filter((rel) => isSupportedFile(rel))
+    return opts.fileOrder === "lexical" ? supported.sort() : supported
   }
 
   async function hashFile(abs: string): Promise<{ hash: string; size: number; buf: Uint8Array }> {
@@ -154,37 +223,58 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   }
 
   /** Re-extract a single file into the store (or delete it when gone). */
-  async function indexOne(rel: string): Promise<{ changed: boolean }> {
+  async function prepareOne(rel: string): Promise<() => boolean> {
+    assertActive()
     const abs = path.join(root, rel)
     let stat: fs.Stats
     try {
       stat = await fsp.stat(abs)
     } catch {
-      ensureStore().deleteFile(rel)
-      return { changed: true }
+      return () => {
+        ensureStore().deleteFile(rel)
+        return true
+      }
     }
-    if (stat.size > MAX_FILE_BYTES) return { changed: false }
+    if (stat.size > MAX_FILE_BYTES) return () => false
     const existing = ensureStore().getFile(rel)
     const { hash, size, buf } = await hashFile(abs)
-    if (existing && existing.content_hash === hash) return { changed: false }
+    assertActive()
+    if (existing && existing.content_hash === hash) return () => false
     const source = new TextDecoder().decode(buf)
-    const result = await extractFile(rel, source)
-    ensureStore().replaceFileGraph(rel, {
-      nodes: result.nodes,
-      edges: result.edges,
-      unresolved: result.unresolved,
-      file: {
-        path: rel,
-        content_hash: hash,
-        language: result.language ?? languageFor(rel),
-        size,
-        modified_at: Math.floor(stat.mtimeMs),
-        indexed_at: now(),
-        node_count: result.nodes.length - 1,
-        errors: result.errors.length ? JSON.stringify(result.errors) : null,
-      },
-    })
-    return { changed: true }
+    const result = await extract(rel, source)
+    return () => {
+      ensureStore().replaceFileGraph(rel, {
+        nodes: result.nodes,
+        edges: result.edges,
+        unresolved: result.unresolved,
+        file: {
+          path: rel,
+          content_hash: hash,
+          language: result.language ?? languageFor(rel),
+          size,
+          modified_at: Math.floor(stat.mtimeMs),
+          indexed_at: now(),
+          node_count: result.nodes.length - 1,
+          errors: result.errors.length ? JSON.stringify(result.errors) : null,
+        },
+      })
+      return true
+    }
+  }
+
+  async function indexFiles(paths: readonly string[]): Promise<string[]> {
+    const changed: string[] = []
+    const width = workersEnabled && !workerFailed ? 2 : 1
+    for (let i = 0; i < paths.length; i += width) {
+      assertActive()
+      const batch = paths.slice(i, i + width)
+      const prepared = await Promise.all(batch.map(prepareOne))
+      assertActive()
+      // Worker completion order cannot change store insertion, ranking or
+      // ambiguous-reference tie breaks. Commit in the original path order.
+      for (const [offset, commit] of prepared.entries()) if (commit()) changed.push(batch[offset]!)
+    }
+    return changed
   }
 
   /** Full build (or warm delta): index every changed/new file, drop the gone. */
@@ -192,11 +282,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     ensureStore()
     const onDisk = await listSourceFiles()
     const onDiskSet = new Set(onDisk)
-    let changed = 0
-    for (const rel of onDisk) {
-      const r = await indexOne(rel)
-      if (r.changed) changed++
-    }
+    let changed = (await indexFiles(onDisk)).length
     // Drop files removed from disk since the last index.
     const current = openStore()
     for (const f of current.allFiles()) {
@@ -210,6 +296,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   }
 
   function maybeStartWatcher(): void {
+    assertActive()
     if (!opts.watch || watcher) return
     watcher = startWatcher(root, {
       accept: (abs) => isSupportedFile(abs),
@@ -223,6 +310,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
   }
 
   async function ensureIndexed(): Promise<void> {
+    assertActive()
     if (!initPromise) {
       initPromise = buildAll()
         .then(() => maybeStartWatcher())
@@ -239,30 +327,22 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
    * is active this processes only its pending set; otherwise it throttled-walks
    * for content-hash deltas.
    */
-  async function syncStale(): Promise<number> {
+  async function performSync(): Promise<number> {
     await ensureIndexed()
     let changed = 0
     if (pendingPaths.size > 0) {
       const todo = [...pendingPaths]
       pendingPaths.clear()
-      for (const rel of todo) {
-        const r = await indexOne(rel)
-        if (r.changed) {
-          changed++
-          snippetCache.delete(rel)
-        }
-      }
+      const updates = await indexFiles(todo)
+      changed += updates.length
+      for (const rel of updates) snippetCache.delete(rel)
     } else if (now() - lastSyncAt >= SYNC_THROTTLE_MS) {
       // No watcher signal (or unsupported) → bounded re-scan.
       const onDisk = await listSourceFiles()
       const onDiskSet = new Set(onDisk)
-      for (const rel of onDisk) {
-        const r = await indexOne(rel)
-        if (r.changed) {
-          changed++
-          snippetCache.delete(rel)
-        }
-      }
+      const updates = await indexFiles(onDisk)
+      changed += updates.length
+      for (const rel of updates) snippetCache.delete(rel)
       const current = openStore()
       for (const f of current.allFiles()) {
         if (!onDiskSet.has(f.path)) {
@@ -274,6 +354,14 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     }
     if (changed > 0) resolveAll(openStore())
     return changed
+  }
+
+  async function syncStale(): Promise<number> {
+    assertActive()
+    syncing ??= performSync().finally(() => {
+      syncing = null
+    })
+    return syncing
   }
 
   /** Verbatim source for a node's line range, cached per file+hash. */
@@ -385,6 +473,10 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
     },
 
     dispose() {
+      if (disposed) return
+      disposed = true
+      pool?.dispose()
+      pool = null
       try {
         watcher?.dispose()
       } catch {
@@ -399,6 +491,7 @@ export function createIndexService(opts: IndexServiceOptions): IndexService {
       store = null
       initPromise = null
       snippetCache.clear()
+      pendingPaths.clear()
     },
   }
 }
