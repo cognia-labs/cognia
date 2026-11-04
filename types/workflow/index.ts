@@ -1,19 +1,12 @@
 /**
  * Workflow types — definitions only.
  *
- * Two type families live here, each addressing a different concern:
- *
- *   • `./workflow` — the legacy higher-level WorkflowType / WorkflowDefinition
- *     of the PPT/report/document generation pipelines.
- *   • `./visual`   — the n8n-style visual graph editor + execution engine
- *     (consumed by `lib/workflow/`, `components/workflow/`, the new Settings
- *     section, and the Tauri-side trigger daemons).
- *
- * The two families intentionally share zero type names; the only collision
- * candidate (`WorkflowDefinition`) is reserved for the legacy file, and the
- * visual graph's top-level shape is exported as `VisualWorkflow`.
+ *   • `./visual`     — the n8n-style visual graph editor + execution engine
+ *     (consumed by `lib/workflow/`, `components/workflow/`, the Settings
+ *     section, and the Tauri-side trigger daemons). Its top-level shape is
+ *     exported as `VisualWorkflow`.
+ *   • `./conditions` — the condition operators the graph's branch nodes use.
  */
 
-export * from "./workflow"
 export * from "./visual"
 export * from "./conditions"
