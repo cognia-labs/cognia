@@ -21,6 +21,7 @@ static AUTH_FAILURES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DPOP_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DPOP_REPLAYS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DPOP_CACHE_FULL_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DPOP_DEVICE_QUOTA_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WS_CLIENTS_ACTIVE: AtomicI64 = AtomicI64::new(0);
 static WORKFLOW_APP_REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WORKFLOW_APP_ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -307,6 +308,10 @@ pub fn record_dpop_cache_full() {
     DPOP_CACHE_FULL_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+pub fn record_dpop_device_quota() {
+    DPOP_DEVICE_QUOTA_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn record_dpop_rejection() {
     DPOP_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
@@ -416,6 +421,13 @@ pub fn render_prometheus() -> String {
         "counter",
         "Unseen DPoP proofs refused because the replay cache had no room.",
         DPOP_CACHE_FULL_TOTAL.load(Ordering::Relaxed),
+    );
+    push_metric(
+        &mut out,
+        "cognia_dpop_device_quota_total",
+        "counter",
+        "Unseen DPoP proofs refused because their device had used its replay-cache quota.",
+        DPOP_DEVICE_QUOTA_TOTAL.load(Ordering::Relaxed),
     );
     push_metric(
         &mut out,
@@ -745,6 +757,7 @@ mod tests {
         assert!(before.contains("cognia_auth_failures_total"));
         assert!(before.contains("cognia_dpop_replays_total"));
         assert!(before.contains("cognia_dpop_cache_full_total"));
+        assert!(before.contains("cognia_dpop_device_quota_total"));
         assert!(before.contains("cognia_dpop_rejections_total"));
         assert!(before.contains("cognia_ws_clients_active"));
         assert!(before.contains("cognia_workflow_app_requests_total"));
@@ -758,6 +771,7 @@ mod tests {
         record_auth_failure();
         record_dpop_replay();
         record_dpop_cache_full();
+        record_dpop_device_quota();
         record_dpop_rejection();
         ws_client_connected();
         let after = render_prometheus();
@@ -776,6 +790,7 @@ mod tests {
         assert!(value(&after, "cognia_auth_failures_total") >= 1);
         assert!(value(&after, "cognia_dpop_replays_total") >= 1);
         assert!(value(&after, "cognia_dpop_cache_full_total") >= 1);
+        assert!(value(&after, "cognia_dpop_device_quota_total") >= 1);
         assert!(value(&after, "cognia_dpop_rejections_total") >= 1);
         ws_client_disconnected();
     }

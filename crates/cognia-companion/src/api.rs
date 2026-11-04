@@ -55,7 +55,14 @@ const MAX_POLICY_COMMANDS: usize = 64;
 const ROOM_DESCRIPTOR_TTL_MS: i64 = 10 * 365 * 24 * 60 * 60 * 1_000;
 
 static ACCESS_TOKEN_AUTHORITY: Lazy<AccessTokenAuthority> = Lazy::new(AccessTokenAuthority::random);
-static DPOP_REPLAY_CACHE: Lazy<ReplayCache> = Lazy::new(ReplayCache::new);
+/// One device may hold this many unexpired proofs: above its media-transfer
+/// peak (a 4096 burst plus 64/s across the 60 s a proof is retained) with
+/// room to spare, so only a device far past its own rate limits reaches it.
+const DPOP_PROOFS_PER_DEVICE: usize = 16_384;
+/// The whole process: eight devices at their quota, about 25 MiB of keys.
+const DPOP_PROOFS_TOTAL: usize = 131_072;
+static DPOP_REPLAY_CACHE: Lazy<ReplayCache> =
+    Lazy::new(|| ReplayCache::with_limits(DPOP_PROOFS_TOTAL, DPOP_PROOFS_PER_DEVICE));
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -2516,7 +2523,7 @@ struct DeviceProofClaims {
 
 struct VerifiedDeviceProof {
     jti: String,
-    expires_at: i64,
+    issued_at: i64,
 }
 
 fn verify_device_proof(
@@ -2565,7 +2572,7 @@ fn verify_device_proof(
     }
     Ok(VerifiedDeviceProof {
         jti: claims.jti,
-        expires_at: claims.exp,
+        issued_at: claims.iat,
     })
 }
 
@@ -2594,12 +2601,13 @@ fn consume_device_proof(
     device_id: &str,
     proof: &VerifiedDeviceProof,
 ) -> Result<(), Problem> {
-    let cache_key = format!("{tenant_id}\0{device_id}\0{}", proof.jti);
+    let device = format!("{tenant_id}\0{device_id}");
     let now = unix_time_secs();
-    // jsonwebtoken accepts an expired proof within `PROOF_CLOCK_SKEW_SECS`, so
-    // the replay entry must live through that same leeway window.
-    let replay_expires_at = proof.expires_at.saturating_add(PROOF_CLOCK_SKEW_SECS);
-    match DPOP_REPLAY_CACHE.redeem(&cache_key, replay_expires_at, now) {
+    // A replay passes `verify_device_proof` only while `iat` is within
+    // `PROOF_CLOCK_SKEW_SECS` of now (and `exp`, which comes after `iat`, is
+    // within its leeway), so the entry must outlive `iat + skew` and no longer.
+    let replay_expires_at = proof.issued_at.saturating_add(PROOF_CLOCK_SKEW_SECS + 1);
+    match DPOP_REPLAY_CACHE.redeem_in_scope(&device, &proof.jti, replay_expires_at, now) {
         Redemption::Fresh => Ok(()),
         Redemption::Replayed => {
             super::metrics::record_dpop_replay();
@@ -2618,6 +2626,18 @@ fn consume_device_proof(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "device_proof_capacity",
                 "the Host cannot record more device proofs right now; retry with a new proof",
+            )
+            .retryable(true)
+            .with_detail_field("retryAfterSeconds", retry_after_secs))
+        }
+        // This device alone has more unexpired proofs than any rate limit
+        // lets it send; refusing it keeps the shared cache for everyone else.
+        Redemption::ScopeFull { retry_after_secs } => {
+            super::metrics::record_dpop_device_quota();
+            Err(Problem::with_status(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "this device sent more requests than the Host can track; slow down",
             )
             .retryable(true)
             .with_detail_field("retryAfterSeconds", retry_after_secs))
@@ -3158,7 +3178,7 @@ NHOGSfGvImUJsp87eHADUoTcnM3YNw6hlxze9OpZFPC7D4AB8kSk3+6hhQ==
         };
         // What every signer sends.
         let accepted = verify(&signed_proof(now, now + PROOF_MAX_LIFETIME_SECS)).unwrap();
-        assert_eq!(accepted.expires_at, now + PROOF_MAX_LIFETIME_SECS);
+        assert_eq!(accepted.issued_at, now);
         // A far-future `exp` would pin a replay-cache entry for as long as it claims.
         for exp in [now + PROOF_MAX_LIFETIME_SECS + 1, now + 10 * 365 * 24 * 60 * 60] {
             assert_eq!(verify(&signed_proof(now, exp)).err().expect("rejected").code, "device_proof_mismatch");
@@ -3168,10 +3188,25 @@ NHOGSfGvImUJsp87eHADUoTcnM3YNw6hlxze9OpZFPC7D4AB8kSk3+6hhQ==
     }
 
     #[test]
+    fn a_device_past_its_proof_quota_is_refused_alone() {
+        let proof = |jti: String| VerifiedDeviceProof { jti, issued_at: unix_time_secs() };
+        for index in 0..DPOP_PROOFS_PER_DEVICE {
+            consume_device_proof("tenant-quota", "device-noisy", &proof(format!("noisy-{index}"))).unwrap();
+        }
+        let refused = consume_device_proof("tenant-quota", "device-noisy", &proof("one-more".into())).unwrap_err();
+        assert_eq!(refused.code, "rate_limited");
+        assert_eq!(refused.status, 429);
+        assert!(refused.retryable);
+        // Every other device of the tenant, and of every tenant, is unaffected.
+        assert!(consume_device_proof("tenant-quota", "device-quiet", &proof("one-more".into())).is_ok());
+        assert!(consume_device_proof("tenant-other", "device-noisy", &proof("one-more".into())).is_ok());
+    }
+
+    #[test]
     fn dpop_replay_cache_is_scoped_to_tenant_and_device() {
         let proof = VerifiedDeviceProof {
             jti: uuid::Uuid::new_v4().to_string(),
-            expires_at: unix_time_secs() + 60,
+            issued_at: unix_time_secs(),
         };
 
         assert!(consume_device_proof("tenant-a", "device-a", &proof).is_ok());
