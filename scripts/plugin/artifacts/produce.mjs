@@ -6,9 +6,13 @@
 // `scripts/build/stage-plugin-artifacts.mjs` and never reads plugin source.
 //
 //   node scripts/plugin/artifacts/produce.mjs --out <set dir> [--plugins <plugin source dir>]
+//     [--kit <authoring kit dir>] [--repository <owner/name>]
 //
 // `--plugins` defaults to `<repo>/plugins`; curation is always the host's
-// (`lib/plugin/distribution/`), because which plugins ship is the app's choice.
+// (`lib/plugin/distribution/`, or the kit's product profile), because which
+// plugins ship is the app's choice. `--repository` names the checkout the set
+// is recorded as built from: this one by default, `cognia-labs/cognia-plugins`
+// when that repository runs the same producer.
 
 import { createHash } from "node:crypto"
 import fs from "node:fs"
@@ -91,6 +95,7 @@ export async function producePluginArtifacts({
   authoring,
   source,
   kitRoot,
+  repository = "cognia-labs/cognia-next",
 } = {}) {
   if (!outDir) throw new Error("producePluginArtifacts: `outDir` is required")
   root = path.resolve(root)
@@ -167,7 +172,7 @@ export async function producePluginArtifacts({
     })
     .sort((left, right) => left.directory.localeCompare(right.directory))
   source ??= {
-    repository: "cognia-labs/cognia-next",
+    repository,
     revision: execFileSync("git", ["-C", pluginsRoot, "rev-parse", "HEAD"], {
       encoding: "utf8",
     }).trim(),
@@ -234,7 +239,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   } else {
     const outDir = argument("--out")
     if (!outDir) {
-      console.error("usage: produce.mjs --out <set dir> [--plugins <plugin source dir>]")
+      console.error(
+        "usage: produce.mjs --out <set dir> [--plugins <plugin source dir>] [--kit <dir>] [--repository <owner/name>]"
+      )
       process.exit(2)
     }
     const pluginsRoot = argument("--plugins")
@@ -245,6 +252,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         : {}),
       ...(argument("--kit") ? { kitRoot: path.resolve(argument("--kit")) } : {}),
       ...(pluginsRoot ? { pluginsRoot: path.resolve(pluginsRoot) } : {}),
+      ...(argument("--repository") ? { repository: argument("--repository") } : {}),
     })
     console.log(
       `[plugin-artifacts] produced ${Object.keys(manifest.files).length} file(s) into ${outDir}`

@@ -4,6 +4,7 @@
 // the host consumer accepts.
 
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
@@ -129,6 +130,30 @@ test("a failed production leaves no manifest, so the consumer refuses the set", 
   )
   assert.equal(fs.existsSync(path.join(f.outDir, PLUGIN_ARTIFACT_MANIFEST)), false)
   assert.throws(() => readPluginArtifactSet(f.outDir), /has no plugin-artifacts\.json/)
+})
+
+test("without an explicit source, the set records the named repository at HEAD", async (t) => {
+  const f = fixture(t)
+  const git = (...args) =>
+    execFileSync("git", ["-C", f.root, ...args], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@t",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@t",
+      },
+    }).trim()
+  git("init", "-q")
+  git("add", "-A")
+  git("commit", "-q", "-m", "fixture")
+  const produceAt = (options) =>
+    produce({ authoring: AUTHORING, root: f.root, outDir: f.outDir, bundle: build, ...options })
+  assert.equal((await produceAt({})).manifest.source.repository, "cognia-labs/cognia-next")
+  const { manifest } = await produceAt({ repository: "cognia-labs/cognia-plugins" })
+  assert.equal(manifest.source.repository, "cognia-labs/cognia-plugins")
+  assert.equal(manifest.source.revision, git("rev-parse", "HEAD"))
 })
 
 test("a missing plugin source directory is an error, not an empty set", async (t) => {
