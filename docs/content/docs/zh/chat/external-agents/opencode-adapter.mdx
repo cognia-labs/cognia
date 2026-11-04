@@ -27,6 +27,27 @@ description: OpenCodeClientAdapter 通过官方 @opencode-ai/sdk + SSE 工作，
   <Stat label="鉴权" value="Basic / Bearer / headers" hint="buildAuthFetch —— 自定义 fetch" />
 </StatGrid>
 
+## 在 OpenCode V2 Agent 中登录
+
+在 **设置 → Agents** 中连接 OpenCode V2 Agent，然后使用服务状态卡里的 **OpenCode 账号**。
+选择该服务提供的 OAuth 方式，填写必填信息并打开授权页面。设备授权会自动检查结果；需要粘贴
+授权码的方式会显示授权码输入框。可取消本次授权，也可重试状态检查，无需重复发起登录。
+
+凭据由 OpenCode 保存和刷新。Cognia 通过选定的服务读取公开的 integration 和账号摘要，不会把
+OAuth token 复制到自己的订阅凭据库。点击 **刷新登录状态**、返回应用或重新连接 Agent，均可
+发现其他 OpenCode 客户端创建的账号。切换该 Agent 的服务或项目会取消旧的待完成登录。发现
+失败表示状态未知，不能据此判定用户未登录；账号已连接也不代表模型可用或余额充足。
+
+原有 Zen/Go API key 流程仍位于账号中心。旧版凭据发现按 `OPENCODE_AUTH_PATH`、
+`XDG_DATA_HOME/opencode/auth.json`、默认的 `~/.local/share/opencode/auth.json` 解析路径；
+Windows 在默认文件不存在时保留历史位置的兼容探测。显式配置的路径具有优先权。Zen/Go key
+可导入为可用的 Cognia 账号，第三方 key 与旧版 OAuth 条目仅作为只读记录。V2 账号通过服务
+API 发现，不直接读取其数据库文件。
+
+V2 adapter 的窄接口 `getAuthClient()` 仅提供 `integration.list` 和 `integration.oauth`，
+复用相同的服务认证信息和 Host transport。认证信息及授权码保持原始内容，模型请求继续经过
+现有的出站 PII gate。
+
 ## ProtocolAdapter 契约
 
 `protocol-adapter.ts` 为两种不同的传输协议提供统一抽象，使 Manager 使用相同接口。该抽象包含三部分：

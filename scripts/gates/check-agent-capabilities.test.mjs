@@ -77,6 +77,22 @@ other.register("unrelated", () => new Adapter())
     registeredProtocols(`${helper}\nregisterBuiltinProtocolAdapters(protocolAdapterRegistry)`),
     ["acp", "pi-rpc"]
   )
+  // Moving the composition root must not make an uncalled registration count.
+  assert.deepEqual(
+    registeredProtocols(
+      'import { registerBuiltinProtocolAdapters } from "./integrations/register"',
+      helper
+    ),
+    []
+  )
+  assert.deepEqual(
+    registeredProtocols("registerBuiltinProtocolAdapters(otherRegistry)", helper),
+    []
+  )
+  assert.deepEqual(
+    registeredProtocols("registerBuiltinProtocolAdapters(protocolAdapterRegistry)", helper),
+    ["acp", "pi-rpc"]
+  )
 })
 
 test("specCapabilityIds and externalOnlyCapabilityIds read the frozen lists", () => {

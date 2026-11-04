@@ -41,6 +41,7 @@ if (!requested) {
 const SPECS = {
   "agent-contracts": {
     entries: [
+      "./runtime-policy",
       ".",
       "./adapter",
       "./adapter-extension",
@@ -92,6 +93,9 @@ const SPECS = {
   },
   "agent-runtime-kit": {
     entries: [
+      "./connection-coordinator", "./thinking-levels", "./credential-names", "./json-rpc-error",
+      "./lifecycle/catalog", "./lifecycle/service", "./lifecycle/providers", "./lifecycle/receipts", "./lifecycle/credentials", "./lifecycle/runtime-host", "./lifecycle/runtime-version", "./lifecycle/duplicate-config",
+      "./agent-path",
       ".",
       "./base-adapter",
       "./json-rpc-peer",
@@ -200,6 +204,7 @@ const SPECS = {
   },
   "agent-codex": {
     entries: [
+      "./runtime-policy",
       ".",
       "./manifest",
       "./history",
@@ -282,6 +287,9 @@ const SPECS = {
   },
   "agent-acp": {
     entries: [
+      "./registry-lifecycle",
+      "./runtime-policy",
+      "./factory", "./hermes-daemon", "./hermes-acp-bridge", "./hermes-gateway-probe",
       ".",
       "./manifest",
       "./client",
@@ -392,6 +400,7 @@ const SPECS = {
   },
   "agent-pi": {
     entries: [
+      "./runtime-policy",
       ".",
       "./manifest",
       "./history",
@@ -609,7 +618,7 @@ for (const [name, identity, manifest, adapter, protocol, extraEntries] of [
   ["openclaude", "openclaude", "openClaudeManifest", "OpenClaudeAdapter", "openclaude-cli", []],
   ["crush", "crush", "crushManifest", "CrushAdapter", "crush-http", ["./socket-bridge", "./node-bridge"]],
   ["continue", "continue-dev", "continueDevManifest", "ContinueAdapter", "continue-cli", []],
-  ["rovo", "rovo-dev", "rovoDevManifest", "RovoDevAdapter", "rovo-http", []],
+  ["rovo", "rovo-dev", "rovoDevManifest", "RovoDevAdapter", "rovo-http", ["./service-launcher"]],
   ["codebuff", "codebuff", "codebuffManifest", "CodebuffAdapter", "codebuff-sdk", ["./node-bridge"]],
 ]) {
   const pkg = `@cognia/agent-${name}`
@@ -644,6 +653,118 @@ for (const [name, identity, manifest, adapter, protocol, extraEntries] of [
   }
 }
 
+
+// Exercise newly extracted surfaces from installed tarballs, not workspace aliases.
+SPECS["agent-runtime-kit"].cjsSmoke = `
+const peerError = require("@cognia/agent-runtime-kit/json-rpc-peer").JsonRpcMethodError
+const standaloneError = require("@cognia/agent-runtime-kit/json-rpc-error").JsonRpcMethodError
+if (peerError !== standaloneError) throw new Error("CJS JSON-RPC error identity split")
+`
+SPECS["agent-runtime-kit"].smoke += `
+import { JsonRpcMethodError as PeerMethodError } from "@cognia/agent-runtime-kit/json-rpc-peer"
+import { JsonRpcMethodError as StandaloneMethodError } from "@cognia/agent-runtime-kit/json-rpc-error"
+if (PeerMethodError !== StandaloneMethodError) throw new Error("ESM JSON-RPC error identity split")
+
+import { createRuntimeCatalog } from "@cognia/agent-runtime-kit/lifecycle/catalog"
+import { ExternalAgentLifecycleService } from "@cognia/agent-runtime-kit/lifecycle/service"
+import { AgentConnectionCoordinator } from "@cognia/agent-runtime-kit/connection-coordinator"
+const catalog = createRuntimeCatalog({ version: 1, runtimes: [], unpinnedLaunchWaivers: { runtimes: {} } }, { presetId: () => undefined, baseCommandName: value => value })
+if (catalog.findRuntimeById("missing") !== undefined) throw new Error("catalog injection")
+const marker = { source: "injected registry" }
+const lifecycle = new ExternalAgentLifecycleService({ discoverRegistry: async () => ({ result: marker, runtimes: [] }) })
+if (await lifecycle.discoverRegistryRuntimes("linux-x64") !== marker) throw new Error("registry port")
+const connection = new AgentConnectionCoordinator()
+let connectCount = 0
+await Promise.all([connection.connect("agent", async () => { connectCount++ }, true), connection.connect("agent", async () => { connectCount++ }, true)])
+if (connectCount !== 1) throw new Error("connection ownership")
+`
+SPECS["agent-runtime-kit"].types += `
+import { ExternalAgentLifecycleService, type LifecycleDependencies } from "@cognia/agent-runtime-kit/lifecycle/service"
+declare const lifecyclePorts: LifecycleDependencies<{ source: string }>
+const lifecycle = new ExternalAgentLifecycleService(lifecyclePorts)
+const discovered: Promise<{ source: string }> = lifecycle.discoverRegistryRuntimes("darwin-arm64")
+export { lifecycle, discovered }
+`
+SPECS["agent-acp"].types += `
+import { createHermesControlledDaemonHost, type HermesControlledDaemonDeps } from "@cognia/agent-acp/hermes-daemon"
+import { isolateNativeAcp, type AcpIsolationHost } from "@cognia/agent-acp/factory"
+import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
+declare const hermesPorts: HermesControlledDaemonDeps
+declare const isolationPorts: AcpIsolationHost
+declare const configuration: ExternalAgentConfig
+const prepare = createHermesControlledDaemonHost(hermesPorts)
+const isolated: ProtocolAdapter | undefined = isolateNativeAcp(configuration, undefined, isolationPorts)
+export { prepare, isolated }
+`
+
+// Installed consumers must exercise every extracted launch surface independently of Host aliases.
+SPECS["agent-contracts"].entries.push("./gateway-task")
+SPECS["agent-runtime-kit"].entries.push("./gateway-task")
+SPECS["agent-runtime-kit"].dataOnly.push("./gateway-task")
+SPECS["agent-runtime-kit"].types += `
+import { createGatewayTaskTools, type GatewayTaskBuildInput } from "@cognia/agent-runtime-kit/gateway-task"
+declare const packedBuildInput: GatewayTaskBuildInput
+const packedTools = createGatewayTaskTools({profiles:[],findRuntimeForConfig:()=>undefined})
+const packedResult = () => packedTools.buildGatewayTaskConfig(packedBuildInput)
+export { packedResult }
+`
+for (const [target, entry, symbol] of [
+ ["agent-codex","./gateway-config","codexGatewayProfile"],
+ ["agent-pi","./gateway-config","piGatewayProfile"],
+ ["agent-opencode","./gateway-config","opencodeGatewayProfile"],
+ ["agent-dsh","./gateway-config","dshGatewayProfile"],
+ ["agent-claude-code","./gateway-config","claudeGatewayProfile"],
+ ["agent-aider","./gateway-config","aiderGatewayProfile"],
+ ["agent-acp","./vendors/qwen-gateway","qwenGatewayProfile"],
+ ["agent-acp","./vendors/kimi-gateway","kimiGatewayProfile"],
+ ["agent-acp","./vendors/goose-gateway","gooseGatewayProfile"],
+ ["agent-acp","./vendors/copilot-gateway","copilotGatewayProfile"],
+]) {
+ const spec = SPECS[target]
+ spec.entries.push(entry); spec.dataOnly.push(entry)
+ spec.smoke += `
+import { ${symbol} } from "@cognia/${target}/${entry.slice(2)}"
+{
+ const context = {config:{id:"saved",protocol:"acp",transport:"stdio",process:{command:"agent",env:{}}},binding:{providerId:"p",modelId:"model"},taskId:"task",endpoint:"http://127.0.0.1:9999/v1",secret:"fixture-lease",model:"model",meta:{id:"model"},modelMetadataFor:id=>({id}),reasoningEffortsFor:()=>[],parseFrontmatter:body=>({data:{},body})}
+ const projected = ${symbol}.project(context)
+ if (!projected.env || !projected.files || JSON.stringify(projected.files).includes(context.secret)) throw new Error("installed gateway recipe or secret isolation")
+}
+`
+ spec.types += `
+import { ${symbol} } from "@cognia/${target}/${entry.slice(2)}"
+const ${symbol}Contract: import("@cognia/agent-contracts/gateway-task").GatewayRuntimeProfile = ${symbol}
+export { ${symbol}Contract }
+`
+}
+SPECS["agent-acp"].entries.push("./session-catalog","./devin-mcp-config")
+SPECS["agent-acp"].dataOnly.push("./session-catalog","./devin-mcp-config")
+SPECS["agent-acp"].smoke += `
+import { createKimiSessionCatalog } from "@cognia/agent-acp/session-catalog"
+import { parseDevinJsonc, devinInjectedServers, projectDevinMcpConfig } from "@cognia/agent-acp/devin-mcp-config"
+const listing = createKimiSessionCatalog(()=>0)
+listing.deleted("gone")
+if(listing.listed([{sessionId:"gone"}]).length)throw new Error("installed deletion reconciliation")
+listing.clear()
+if(listing.listed([{sessionId:"gone"}]).length!==1)throw new Error("installed reconciliation cleanup")
+if(parseDevinJsonc('{/*comment*/"value":"https://local",}').value!=="https://local")throw new Error("installed JSONC")
+const injected=devinInjectedServers(JSON.stringify([{name:"session",command:"node",args:[],env:[]}]))
+if(projectDevinMcpConfig({}, {}, injected, "/owned",false).dedicated.mcpServers.session.env.XDG_CONFIG_HOME!=="/owned")throw new Error("installed MCP overlay")
+`
+SPECS["agent-pi"].entries.push("./subagent-snapshot")
+SPECS["agent-pi"].dataOnly.push("./subagent-snapshot")
+SPECS["agent-pi"].smoke += `
+import { resolvePiSubagents, piSubagentSupport } from "@cognia/agent-pi/subagent-snapshot"
+const snapshotFiles={"/pi/settings.json":JSON.stringify({packages:["npm:pi-subagents@0.80.0"]}),"/pi/npm/node_modules/pi-subagents/package.json":JSON.stringify({name:"pi-subagents",version:"0.80.0",pi:{extensions:["index.js"]}}),"/pi/npm/node_modules/pi-subagents/index.js":"extension"}
+const snap=await resolvePiSubagents({protocol:"pi-rpc",process:{command:"pi"}},{agentDir:async()=>"/pi",read:async path=>snapshotFiles[path]??null,list:async()=>[],digest:text=>text,parseFrontmatter:body=>({body,data:{}}),parseSource:()=>({kind:"npm",name:"pi-subagents"}),packages:settings=>settings.packages})
+if(piSubagentSupport(snap)?.family!=="nico")throw new Error("installed Pi snapshot")
+`
+SPECS["agent-codex"].entries.push("./model-catalog")
+SPECS["agent-codex"].dataOnly.push("./model-catalog")
+SPECS["agent-codex"].smoke += `
+import { buildCodexModelCatalog, codexCatalogData } from "@cognia/agent-codex/model-catalog"
+const taskCatalog=JSON.parse(buildCodexModelCatalog({models:[{slug:"fixture-model",inputModalities:["text"]}]}))
+if(!codexCatalogData.models.length || taskCatalog.models[0].slug!=="fixture-model")throw new Error("installed pinned catalog")
+`
 
 function run(command, args, cwd, extraEnv = {}) {
   return execFileSync(command, args, {
@@ -761,7 +882,7 @@ function packTest(target) {
     run("node", ["entries.mjs"], consumer)
     fs.writeFileSync(
       path.join(consumer, "entries.cjs"),
-      spec.entries.map((entry) => `require(${JSON.stringify(subpath(entry))})`).join("\n") + "\n"
+      spec.entries.map((entry) => `require(${JSON.stringify(subpath(entry))})`).join("\n") + "\n" + (spec.cjsSmoke ?? "")
     )
     run("node", ["entries.cjs"], consumer)
 

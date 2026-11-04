@@ -1,3 +1,7 @@
+import {
+  DEFAULT_RUNTIME_POLICY,
+  type AgentRuntimePolicy,
+} from "@cognia/agent-contracts/runtime-policy"
 /**
  * Protocol adapter registry (host side).
  *
@@ -32,13 +36,25 @@ export {
  */
 export class ProtocolAdapterRegistry {
   private adapters: Map<string, () => ProtocolAdapter> = new Map()
+  private policies = new Map<string, AgentRuntimePolicy>()
+  nativeChildControls(adapter: ProtocolAdapter) {
+    for (const policy of this.policies.values()) {
+      const controls = policy.nativeChildren?.(adapter)
+      if (controls) return controls
+    }
+    return undefined
+  }
+  runtimePolicy(protocol: string | undefined): AgentRuntimePolicy {
+    return (protocol ? this.policies.get(protocol) : undefined) ?? DEFAULT_RUNTIME_POLICY
+  }
 
   /**
    * Register a protocol adapter factory
    * @param protocol Protocol identifier
    * @param factory Factory function to create adapter instances
    */
-  register(protocol: string, factory: () => ProtocolAdapter): void {
+  register(protocol: string, factory: () => ProtocolAdapter, policy?: AgentRuntimePolicy): void {
+    if (policy) this.policies.set(protocol, policy)
     this.adapters.set(protocol, factory)
   }
 
@@ -48,6 +64,7 @@ export class ProtocolAdapterRegistry {
    */
   unregister(protocol: string): void {
     this.adapters.delete(protocol)
+    this.policies.delete(protocol)
   }
 
   /**

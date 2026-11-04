@@ -6,9 +6,8 @@
     "version": "0.10.7"
   },
   "sources": {
-    "cli/src/runtime/external/agent-path.ts": "178c56111008d25b7983451186632d1a22bb9704117984d40c06f73a877b5450",
-    "cli/src/runtime/external/hermes-acp-bridge.ts": "bca9a44920b8e38e5f5b82372cf7533349ae9b8da66a6de7019faa635d2d5fac",
-    "cli/src/runtime/external/hermes-gateway-probe.ts": "d56a2730d7d373324fc76efea40b3e8bb331bf302b6ef2208373aa717fc832ad",
+    "packages/agent-acp/src/hermes-acp-bridge.ts": "cde875d5d73aad7e14c156b4b2fca4fde677ba0643bbe3fcfa0d5f1cabb261e3",
+    "packages/agent-acp/src/hermes-gateway-probe.ts": "d56a2730d7d373324fc76efea40b3e8bb331bf302b6ef2208373aa717fc832ad",
     "packages/agent-codebuff/package.json": "ac20a33a7e087d76597361a735eee3be9f5dba78b36b0f79b0065af3bc9d720e",
     "packages/agent-codebuff/src/bridge-protocol.ts": "1c5b7062cc3142834feaee44f5864971941c271bb3e955acf88c578a029d2a15",
     "packages/agent-codebuff/src/bridge-runtime.ts": "e2c694d20d8cc9eb87c6c1ea2f409b392438fcc2c49a95032f7d03ac386934c3",
@@ -16,8 +15,9 @@
     "packages/agent-codebuff/src/node-bridge.ts": "213ccd40d7d1e6f4cf739d06435565419dd4b91e63c21ee466b56848b60fa927",
     "packages/agent-crush/src/node-bridge.ts": "be472e96954c6ae19daad4fb8abec91e58dc8a059ae7ef321ad5a8808cc7eff5",
     "packages/agent-crush/src/socket-bridge.ts": "d726b0127f294d50a1fadeefd118f5aba53e54576dd1dc20243b325aec768892",
+    "packages/agent-runtime-kit/src/agent-path.ts": "178c56111008d25b7983451186632d1a22bb9704117984d40c06f73a877b5450",
     "scripts/build/lib/copy-runtime-closure.mjs": "2d5f88c45671a4b61baa462f251825b662621ee6fc0b60fdcf2702d7790ec5af",
-    "scripts/build/lib/stage-native-agent-bridges.mjs": "9d4f73371f6baa3b744963ab6507d6c3c3b6b6e7f94b91fb66012b77cca732ec"
+    "scripts/build/lib/stage-native-agent-bridges.mjs": "2de6078cbf6776b3f8e7671498869635703bdf6cf421fb131a405a977fcc51f7"
   },
   "bridges": {
     "codebuff": {
@@ -39,14 +39,14 @@
       "args": [
         "--hermes-gateway-probe"
       ],
-      "sha256": "0810ab250e3d3a5d410d9935cdbc4c2dae4387c2d465bcd1288558b15bfd9d90"
+      "sha256": "25e41f01dc6b8dbd1d5dc36f0c9bb37d7908f74aa9afe49a6c147231491a3e35"
     },
     "hermes-acp": {
       "file": "hermes-acp.cjs",
       "args": [
         "--cognia-hermes-acp"
       ],
-      "sha256": "d502530b32bb66a51d00c095437792daab4a62d43ec844e3db00239af0c5db11"
+      "sha256": "6ac50bfbd025b1fc0aa0339e8e3dd5de65ae1e6d3fdfb081961fd3b1399fdb04"
     }
   },
   "dependencyFiles": {

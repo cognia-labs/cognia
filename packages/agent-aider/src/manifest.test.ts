@@ -1,8 +1,15 @@
 import { hasLaunchableRuntime, isMigratable } from "@cognia/agent-contracts/ecosystem"
-import { AIDER_CLI_EXECUTION_SEMANTICS, AIDER_CLI_PROTOCOL, aiderManifest } from "./manifest"
+import {
+  AIDER_CLI_EXECUTION_SEMANTICS,
+  AIDER_CLI_PROTOCOL,
+  aiderManifest,
+  aiderRuntimePolicy,
+} from "./manifest"
 
 describe("aiderManifest", () => {
   it("is frozen data naming the aider-cli protocol and its semantics", () => {
+    expect(aiderRuntimePolicy.passEffectivePermissionMode).toBe(true)
+    expect(Object.isFrozen(aiderRuntimePolicy)).toBe(true)
     expect(Object.isFrozen(aiderManifest)).toBe(true)
     expect(Object.isFrozen(AIDER_CLI_EXECUTION_SEMANTICS)).toBe(true)
     expect(aiderManifest.protocols).toEqual([

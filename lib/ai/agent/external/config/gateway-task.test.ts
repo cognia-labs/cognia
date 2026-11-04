@@ -22,6 +22,17 @@ import { parse as parseToml } from "smol-toml"
 import { cogniaModelReasoningFacts } from "./cognia-model-options"
 import { parseFrontmatter } from "@/lib/claude/subagent-importers/_parse-helpers"
 
+it("preserves the managed-runtime refusal classification before its command is resolved", () => {
+  const source = {
+    ...getPresetConfig("deepseek-harness-acp"),
+    protocol: "acp",
+    transport: "stdio",
+    process: undefined,
+    metadata: { preset: "deepseek-harness-acp" },
+  } as ExternalAgentConfig
+  expect(cogniaGatewaySupport(source)).toEqual({ supported: false, reason: "unsupported-runtime" })
+})
+
 const config = (preset: string, protocol = "acp", transport = "stdio") =>
   ({
     id: "saved",

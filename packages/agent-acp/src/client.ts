@@ -933,7 +933,16 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
   // Terminal IDs are process-global native handles. ACP scopes every terminal
   // follow-up request to a session, so retain ownership locally and fail closed
   // before a request can operate on another session's terminal.
-  private terminalSessions: Map<string, string> = new Map()
+  private releasedTerminals = new Set<string>()
+  private terminalSessions = new Map<
+    string,
+    { sessionId: string; childRunId?: string; dispatchEpoch?: number }
+  >()
+  private terminalAdmissions = new Map<string, Set<Promise<unknown>>>()
+  private closedTerminalSessions = new Set<string>()
+  // Owner-level evidence only; terminal IDs and in-flight creates retire separately.
+  private terminalDisposal = new Map<string, { closed: boolean; confirmed: boolean }>()
+  private ambiguousTerminalSessions = new Set<string>()
   private featureProfile?: AcpFeatureProfile
   private terminalAuthState?: AcpTerminalAuthState
   private terminalAuthPending = false
@@ -1187,7 +1196,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    * `connect()` error path. Does NOT set `_connectionStatus` — the caller decides
    * between "disconnected" and "error". Idempotent.
    */
-  private async teardownTransport(): Promise<void> {
+  private async teardownTransport(terminalDeadline = Date.now() + 2_000): Promise<void> {
     const daemonLease = this.daemonLease
     this.daemonLease = undefined
     try {
@@ -1214,16 +1223,24 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       this._eventsEndpoint = undefined
 
       this.processId = undefined
-      for (const sessionId of new Set(this.terminalSessions.values())) {
-        await this.cleanupNativeSessionTerminals(sessionId)
-      }
+      await Promise.all(
+        [
+          ...new Set([
+            ...[...this.terminalSessions.values()].map((origin) => origin.sessionId),
+            ...this.terminalAdmissions.keys(),
+            ...this.ambiguousTerminalSessions,
+            ...this.closedTerminalSessions,
+          ]),
+        ].map((sessionId) => this.cleanupNativeSessionTerminals(sessionId, terminalDeadline))
+      )
       this._sessions.clear()
+      for (const sessionId of this.closedTerminalSessions) this.pruneSessionTerminalState(sessionId)
       this.pendingSessionResumes.clear()
       this.hostPermissionModes.clear()
       this.presentationListeners.clear()
       this.pendingForkMcpRebind.clear()
       this.toolCallStates.clear()
-      this.terminalSessions.clear()
+      // Verified cleanup removed its own entries; retain every uncertain origin.
       this.cumulativeUsage.clear()
       this.turnStartUsage.clear()
       this.primedUsageSessions.clear()
@@ -1928,6 +1945,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    * Disconnect from the agent
    */
   async disconnect(): Promise<void> {
+    const terminalDeadline = Date.now() + 2_000
     // Mark intent before the early-return so a reconnect already scheduled by a
     // concurrent process-exit/socket-close cannot resurrect the connection.
     this.intentionalDisconnect = true
@@ -1940,7 +1958,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     if (this._connectionStatus === "disconnected") {
       // A process exit changes status before its listeners, pending approvals,
       // and native terminals have been released. Retirement still owns cleanup.
-      await this.teardownTransport()
+      await this.teardownTransport(terminalDeadline)
       return
     }
 
@@ -1948,13 +1966,13 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     // shared teardown below clears the session map afterwards.
     for (const session of this._sessions.values()) {
       try {
-        await this.closeSession(session.id)
+        await this.closeSession(session.id, terminalDeadline)
       } catch (error) {
         this.log.warn("Error closing session", { sessionId: session.id, error })
       }
     }
 
-    await this.teardownTransport()
+    await this.teardownTransport(terminalDeadline)
     this._connectionStatus = "disconnected"
 
     this.log.info("Disconnected")
@@ -2189,16 +2207,20 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
    * When the agent advertises it, we send the RPC so the agent frees the
    * session's resources; regardless of support we always clean up local state.
    */
-  async closeSession(sessionId: string): Promise<void> {
+  async closeSession(sessionId: string, terminalDeadline = Date.now() + 2_000): Promise<void> {
     this.pendingSessionResumes.delete(sessionId)
     const session = this._sessions.get(sessionId)
     if (!session) {
+      await this.cleanupNativeSessionTerminals(sessionId, terminalDeadline)
       return
     }
 
     if (this._agentCapabilities?.sessionCapabilities?.close) {
       try {
-        await this.sendRequest("session/close", { sessionId })
+        await this.withTerminalDeadline(
+          () => this.sendRequest("session/close", { sessionId }),
+          terminalDeadline
+        )
       } catch (error) {
         // A close failure must not strand local cleanup.
         this.log.warn("session/close failed", { sessionId, error })
@@ -2221,9 +2243,9 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this.toolCallStates.delete(sessionId)
     this.turnMessageId.delete(sessionId)
     await this.cleanupDynamicMcpConnections(sessionId)
-    await this.cleanupNativeSessionTerminals(sessionId)
-    this.forgetSessionTerminals(sessionId)
+    await this.cleanupNativeSessionTerminals(sessionId, terminalDeadline)
     this._sessions.delete(sessionId)
+    this.pruneSessionTerminalState(sessionId)
     this.hostPermissionModes.delete(sessionId)
     this.presentationListeners.delete(sessionId)
     this.pendingForkMcpRebind.delete(sessionId)
@@ -2261,8 +2283,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this.cancelPendingElicitations(sessionId)
     await this.cleanupDynamicMcpConnections(sessionId)
     await this.cleanupNativeSessionTerminals(sessionId)
-    this.forgetSessionTerminals(sessionId)
     this._sessions.delete(sessionId)
+    this.pruneSessionTerminalState(sessionId)
     this.hostPermissionModes.delete(sessionId)
     this.presentationListeners.delete(sessionId)
     this.pendingForkMcpRebind.delete(sessionId)
@@ -2283,19 +2305,175 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     }
   }
 
-  private async cleanupNativeSessionTerminals(sessionId: string): Promise<void> {
-    if (!this.terminals.available) return
-    if (![...this.terminalSessions.values()].includes(sessionId)) return
+  private async cleanupNativeSessionTerminals(
+    sessionId: string,
+    deadline = Date.now() + 2_000
+  ): Promise<void> {
     try {
-      await this.terminals.closeSession(sessionId)
+      await this.stopSessionProcesses(sessionId, deadline)
     } catch (error) {
+      // Lifecycle teardown must finish. Keep uncertain origins for the separate,
+      // strict stop-proof path instead of losing them with the session state.
       this.log.warn("Failed to clean up ACP session terminals", { sessionId, error })
     }
   }
 
-  private forgetSessionTerminals(sessionId: string): void {
-    for (const [terminalId, ownerSessionId] of this.terminalSessions) {
-      if (ownerSessionId === sessionId) this.terminalSessions.delete(terminalId)
+  private pruneSessionTerminalState(sessionId: string): void {
+    if (
+      this._sessions.has(sessionId) ||
+      this.terminalAdmissions.get(sessionId)?.size ||
+      this.ambiguousTerminalSessions.has(sessionId) ||
+      [...this.terminalSessions.values()].some((origin) => origin.sessionId === sessionId)
+    )
+      return
+    this.terminalAdmissions.delete(sessionId)
+    this.closedTerminalSessions.delete(sessionId)
+    this.ambiguousTerminalSessions.delete(sessionId)
+  }
+
+  /** Hosted children retain their origin even after the prompt returns end_turn. */
+  async confirmSessionProcessesStopped(sessionId: string): Promise<boolean> {
+    const disposal = this.terminalDisposal.get(sessionId)
+    if (!disposal?.closed) return false
+    if (
+      this.ambiguousTerminalSessions.has(sessionId) ||
+      this.terminalAdmissions.get(sessionId)?.size
+    )
+      return false
+    const deadline = Date.now() + 2_000
+    for (const [terminalId, origin] of this.terminalSessions) {
+      if (origin.sessionId !== sessionId) continue
+      if (
+        !this.terminals.isRunning ||
+        (await this.withTerminalDeadline(() => this.terminals.isRunning!(terminalId), deadline))
+      )
+        return false
+      if (this.releasedTerminals.has(terminalId)) continue
+      const output = await this.withTerminalDeadline(
+        () => this.terminals.output(terminalId),
+        deadline
+      )
+      if (
+        !output.exitStatus ||
+        (output.exitStatus.exitCode == null && output.exitStatus.signal == null)
+      )
+        return false
+    }
+    return (
+      this.terminalDisposal.get(sessionId) === disposal && disposal.closed && disposal.confirmed
+    )
+  }
+
+  /** Admission closes before draining in-flight creates, never after a kill snapshot. */
+  async stopSessionProcesses(sessionId: string, deadline = Date.now() + 2_000): Promise<void> {
+    const disposal = { closed: true, confirmed: false }
+    this.terminalDisposal.set(sessionId, disposal)
+    this.closedTerminalSessions.add(sessionId)
+    const stopping = new Map<string, Promise<void>>()
+    const stopKnown = () => {
+      for (const [terminalId, origin] of this.terminalSessions) {
+        if (origin.sessionId !== sessionId || stopping.has(terminalId)) continue
+        const pending = (async () => {
+          await this.stopTerminal(terminalId, deadline)
+          if (!this.releasedTerminals.has(terminalId))
+            await this.withTerminalDeadline(() => this.terminals.release(terminalId), deadline)
+          this.releasedTerminals.delete(terminalId)
+          this.terminalSessions.delete(terminalId)
+        })()
+        // Admissions may still be draining when a stop fails.
+        void pending.catch(() => undefined)
+        stopping.set(terminalId, pending)
+      }
+    }
+    stopKnown()
+    let admissionFailure: unknown
+    try {
+      await this.withTerminalDeadline(
+        () => Promise.allSettled([...(this.terminalAdmissions.get(sessionId) ?? [])]),
+        deadline
+      )
+    } catch (error) {
+      admissionFailure = error
+    }
+    stopKnown()
+    const results = await Promise.allSettled(stopping.values())
+    const failure = results.find((result) => result.status === "rejected")
+    if (failure?.status === "rejected") throw failure.reason
+    if (admissionFailure) throw admissionFailure
+    if (this.ambiguousTerminalSessions.has(sessionId))
+      throw new Error(`ACP session ${sessionId} has an unconfirmed terminal admission`)
+    if (
+      this.terminalAdmissions.get(sessionId)?.size ||
+      [...this.terminalSessions.values()].some((origin) => origin.sessionId === sessionId)
+    )
+      throw new Error(`ACP session ${sessionId} still has running processes`)
+    if (this.terminalDisposal.get(sessionId) !== disposal)
+      throw new Error("ACP terminal admission changed during disposal; stop unconfirmed")
+    disposal.confirmed = true
+    this.pruneSessionTerminalState(sessionId)
+  }
+
+  private async withTerminalDeadline<T>(operation: () => Promise<T>, deadline: number): Promise<T> {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error("ACP terminal cleanup timed out; stop unconfirmed")
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        operation(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("ACP terminal cleanup timed out; stop unconfirmed")),
+            remaining
+          )
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private async stopTerminal(terminalId: string, deadline = Date.now() + 2_000): Promise<void> {
+    // The budget includes kill itself: a Host blocked in wait must not hang teardown.
+    try {
+      await this.withTerminalDeadline(() => this.terminals.kill(terminalId), deadline)
+    } catch {
+      /* verify independently */
+    }
+    // A Host may acknowledge kill before its exit callback. Poll within our
+    // own budget; zero-wait keeps this independent of Host timeout units.
+    let lastError: unknown = new Error(`ACP terminal ${terminalId} is still running`)
+    for (;;) {
+      try {
+        if (this.releasedTerminals.has(terminalId)) {
+          if (
+            this.terminals.isRunning &&
+            !(await this.withTerminalDeadline(
+              () => this.terminals.isRunning!(terminalId),
+              deadline
+            ))
+          )
+            return
+          throw new Error(`ACP terminal ${terminalId} group stop unconfirmed`)
+        }
+        const result = await this.withTerminalDeadline(
+          () => this.terminals.waitForExit(terminalId, 0),
+          deadline
+        )
+        if (
+          result.exitStatus &&
+          (result.exitStatus.exitCode != null || result.exitStatus.signal != null) &&
+          this.terminals.isRunning &&
+          !(await this.withTerminalDeadline(() => this.terminals.isRunning!(terminalId), deadline))
+        )
+          return
+      } catch (error) {
+        lastError = error
+      }
+      if (Date.now() >= deadline)
+        throw new Error(`ACP terminal ${terminalId} is still running; cleanup timed out`, {
+          cause: lastError,
+        })
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
     }
   }
 
@@ -2444,6 +2622,19 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       }
     }
 
+    // A new prompt may reopen admission after a completed cancellation. The
+    // origin fence stays on every already-admitted terminal.
+    const previousDisposal = this.terminalDisposal.get(sessionId)
+    if (previousDisposal?.closed && !previousDisposal.confirmed)
+      throw new Error("ACP session stop_unconfirmed: previous terminal disposal is incomplete")
+    this.terminalDisposal.set(sessionId, { closed: false, confirmed: false })
+    this.closedTerminalSessions.delete(sessionId)
+    if (options?.context?.custom?.processOrigin) {
+      session.metadata = {
+        ...session.metadata,
+        processOrigin: options.context.custom.processOrigin,
+      }
+    }
     // Update session status
     this.updateSession(sessionId, { status: "executing" })
 
@@ -2620,6 +2811,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
   async cancel(sessionId: string): Promise<void> {
     const session = this._sessions.get(sessionId)
     if (!session || session.status !== "executing") {
+      await this.cleanupNativeSessionTerminals(sessionId)
       return
     }
 
@@ -2674,7 +2866,6 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     }
     this.cancelPendingElicitations(sessionId)
     await this.cleanupNativeSessionTerminals(sessionId)
-    this.forgetSessionTerminals(sessionId)
     if (acknowledged) {
       try {
         await acknowledged
@@ -4580,24 +4771,51 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     if (!this.terminals.available) {
       throw new Error("Terminal support requires the Tauri desktop environment")
     }
-
-    const terminalId = await this.terminals.create({
-      sessionId: params.sessionId,
-      command: params.command,
-      args: params.args || [],
-      cwd: params.cwd,
-      env: params.env
-        ? Object.fromEntries(params.env.map(({ name, value }) => [name, value]))
-        : undefined,
-      outputByteLimit: params.outputByteLimit,
-    })
-    this.terminalSessions.set(terminalId, params.sessionId)
-
-    return { terminalId }
+    if (!this._sessions.has(params.sessionId) || this.closedTerminalSessions.has(params.sessionId))
+      throw new Error(`ACP session ${params.sessionId} process admission is closed`)
+    const admissions = this.terminalAdmissions.get(params.sessionId) ?? new Set<Promise<unknown>>()
+    this.terminalAdmissions.set(params.sessionId, admissions)
+    const origin = this._sessions.get(params.sessionId)?.metadata?.processOrigin as
+      { childRunId?: unknown; dispatchEpoch?: unknown } | undefined
+    const pending = this.terminals
+      .create({
+        sessionId: params.sessionId,
+        command: params.command,
+        args: params.args || [],
+        cwd: params.cwd,
+        env: params.env
+          ? Object.fromEntries(params.env.map(({ name, value }) => [name, value]))
+          : undefined,
+        outputByteLimit: params.outputByteLimit,
+      })
+      .then(
+        (terminalId) => {
+          this.terminalSessions.set(terminalId, {
+            sessionId: params.sessionId,
+            ...(typeof origin?.childRunId === "string" ? { childRunId: origin.childRunId } : {}),
+            ...(typeof origin?.dispatchEpoch === "number"
+              ? { dispatchEpoch: origin.dispatchEpoch }
+              : {}),
+          })
+          return { terminalId }
+        },
+        (error: unknown) => {
+          // A rejected transport can conceal an accepted Host create.
+          this.ambiguousTerminalSessions.add(params.sessionId)
+          throw error
+        }
+      )
+    admissions.add(pending)
+    try {
+      return await pending
+    } finally {
+      admissions.delete(pending)
+      if (!admissions.size) this.terminalAdmissions.delete(params.sessionId)
+    }
   }
 
   private assertTerminalOwnership(sessionId: string, terminalId: string): void {
-    if (this.terminalSessions.get(terminalId) !== sessionId) {
+    if (this.terminalSessions.get(terminalId)?.sessionId !== sessionId) {
       throw new Error(`Terminal ${terminalId} does not belong to ACP session ${sessionId}`)
     }
   }
@@ -4647,8 +4865,16 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     }
 
     this.assertTerminalOwnership(params.sessionId, params.terminalId)
+    await this.terminals.kill(params.terminalId)
+    // Release follows the leader lifecycle. Keep uncertain origin ownership
+    // separately so a successful release can never become a stop proof.
+    const groupRunning = this.terminals.isRunning
+      ? await this.terminals.isRunning(params.terminalId).catch(() => true)
+      : true
     await this.terminals.release(params.terminalId)
-    this.terminalSessions.delete(params.terminalId)
+    if (!groupRunning) this.terminalSessions.delete(params.terminalId)
+    else this.releasedTerminals.add(params.terminalId)
+    this.pruneSessionTerminalState(params.sessionId)
   }
 
   /**

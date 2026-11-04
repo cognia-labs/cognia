@@ -170,6 +170,10 @@ import type {
 const newMockedAcpClient = () => new (AcpClientAdapter as unknown as new () => AcpClientAdapter)()
 
 class MockAdapter {
+  confirmSessionProcessesStopped: ((sessionId: string) => Promise<boolean>) | undefined = jest.fn(
+    async () => true
+  )
+  stopSessionProcesses = jest.fn(async (_sessionId: string) => {})
   readonly protocol = "mock"
   protected _connectionStatus: "connected" | "disconnected" | "connecting" | "error" =
     "disconnected"
@@ -1830,9 +1834,7 @@ describe("Capability helpers (unsupported / ok / error)", () => {
     await m.deleteSession("agent-1", "deleted")
     if (operation === "remove") await m.removeAgent("agent-1")
     else await m.dispose()
-    expect(
-      (m as unknown as { kimiDeletedSessions: Map<string, unknown> }).kimiDeletedSessions.size
-    ).toBe(0)
+    expect((m as unknown as { sessionCatalogs: Map<string, unknown> }).sessionCatalogs.size).toBe(0)
   })
 
   it("keeps other runtimes' native listings unchanged after deletion", async () => {
@@ -2772,6 +2774,156 @@ describe("execute — model selection", () => {
     expect(agent?.status).toBe("failed")
     expect(agent?.lastError).toMatch(/refused the model/)
     expect(agent?.stats.failedExecutions).toBe(1)
+  })
+})
+
+describe("execution stop observation", () => {
+  it.each(["done", "session_end"] as const)(
+    "confirms a normal execution after its %s event and an independent process read",
+    async (type) => {
+      const manager = freshManager()
+      await manager.addAgent(buildBaseConfig())
+      const stopped = jest.fn()
+      const execute = currentMock.execute.bind(currentMock)
+      jest.spyOn(currentMock, "execute").mockImplementation(async (sessionId, message, options) => {
+        options?.onEvent?.(
+          type === "done"
+            ? { type, sessionId, timestamp: new Date(), success: true }
+            : { type, sessionId, timestamp: new Date(), reason: "completed" }
+        )
+        expect(stopped).not.toHaveBeenCalled()
+        return execute(sessionId, message, options)
+      })
+      await expect(manager.execute("agent-1", "work", undefined, stopped)).resolves.toMatchObject({
+        success: true,
+      })
+      expect(stopped).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("withholds proof when the adapter cannot read its session processes", async () => {
+    const manager = freshManager()
+    await manager.addAgent(buildBaseConfig())
+    currentMock.confirmSessionProcessesStopped = undefined
+    const stopped = jest.fn()
+    jest.spyOn(currentMock, "execute").mockImplementation(async (sessionId, _message, options) => {
+      options?.onEvent?.({ type: "done", sessionId, timestamp: new Date(), success: true })
+      return {
+        success: true,
+        sessionId,
+        finalResponse: "done",
+        messages: [],
+        toolCalls: [],
+        steps: [],
+        duration: 1,
+      }
+    })
+    await manager.execute("agent-1", "work", undefined, stopped)
+    expect(stopped).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])(
+    "a live Host terminal after end_turn gates stop proof (reaped=%s)",
+    async (reaped) => {
+      const manager = freshManager()
+      await manager.addAgent(buildBaseConfig())
+      const stopped = jest.fn()
+      let release!: () => void
+      const disposal = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      currentMock.stopSessionProcesses.mockImplementation(async () => {
+        await disposal
+      })
+      currentMock.confirmSessionProcessesStopped = jest.fn(async () => reaped)
+      jest
+        .spyOn(currentMock, "execute")
+        .mockImplementation(async (sessionId, _message, options) => {
+          options?.onEvent?.({ type: "done", sessionId, timestamp: new Date(), success: true })
+          return {
+            success: true,
+            sessionId,
+            finalResponse: "done",
+            messages: [],
+            toolCalls: [],
+            steps: [],
+            duration: 1,
+          }
+        })
+      const running = manager.execute("agent-1", "work", undefined, stopped)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(stopped).not.toHaveBeenCalled()
+      release()
+      await running
+      expect(stopped).toHaveBeenCalledTimes(reaped ? 1 : 0)
+    }
+  )
+
+  it.each(["timeout", "transport"])(
+    "requires a terminal event after %s failure",
+    async (failure) => {
+      const manager = freshManager()
+      await manager.addAgent(buildBaseConfig({ timeout: 10 }))
+      let emit!: NonNullable<ExternalAgentExecutionOptions["onEvent"]>
+      const stopped = jest.fn()
+      jest
+        .spyOn(currentMock, "execute")
+        .mockImplementation(async (_sessionId, _message, options) => {
+          emit = options!.onEvent!
+          if (failure === "transport") throw new Error("transport lost")
+          return new Promise<ExternalAgentResult>(() => {})
+        })
+      await expect(manager.execute("agent-1", "work", undefined, stopped)).rejects.toThrow(
+        failure === "timeout" ? "timed out" : "transport lost"
+      )
+      expect(stopped).not.toHaveBeenCalled()
+      emit({ type: "error", timestamp: new Date(), error: "connection lost" })
+      expect(stopped).not.toHaveBeenCalled()
+      emit({ type: "done", timestamp: new Date(), success: false })
+      emit({ type: "session_end", timestamp: new Date(), reason: "cancelled" })
+      expect(stopped).not.toHaveBeenCalled()
+      emit({ type: "done", timestamp: new Date(), success: true })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(stopped).toHaveBeenCalledTimes(1)
+      emit({ type: "session_end", timestamp: new Date(), reason: "completed" })
+      expect(stopped).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("requires terminal evidence for every retry, including a later timed-out attempt", async () => {
+    const manager = freshManager()
+    await manager.addAgent(
+      buildBaseConfig({
+        timeout: 10,
+        retryConfig: {
+          maxRetries: 1,
+          retryDelay: 0,
+          exponentialBackoff: false,
+          maxRetryDelay: 0,
+          retryOnErrors: ["network"],
+        },
+      })
+    )
+    const stopped = jest.fn()
+    let emit!: NonNullable<ExternalAgentExecutionOptions["onEvent"]>
+    jest
+      .spyOn(currentMock, "execute")
+      .mockImplementationOnce(async (_sessionId, _message, options) => {
+        options?.onEvent?.({ type: "done", timestamp: new Date(), success: true })
+        throw new Error("network connection reset")
+      })
+      .mockImplementationOnce(async (_sessionId, _message, options) => {
+        emit = options!.onEvent!
+        return new Promise<ExternalAgentResult>(() => {})
+      })
+    await expect(manager.execute("agent-1", "work", undefined, stopped)).rejects.toThrow(
+      "timed out"
+    )
+    expect(currentMock.execute).toHaveBeenCalledTimes(2)
+    expect(stopped).not.toHaveBeenCalled()
+    emit({ type: "done", timestamp: new Date(), success: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(stopped).toHaveBeenCalledTimes(1)
   })
 })
 

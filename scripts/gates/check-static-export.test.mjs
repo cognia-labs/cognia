@@ -9,20 +9,37 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
 import {
   parseNodeOnlyModules,
   buildDenySet,
   extractImports,
   scanSource,
+  listSourceFiles,
 } from "./check-static-export.mjs"
+
+test("includes non-ignored new sources before staging, without scanning ignored output", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "static-new-sources-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const initialized = spawnSync("git", ["init", "--quiet", root], { encoding: "utf8" })
+  assert.equal(initialized.status, 0, initialized.stderr)
+  mkdirSync(join(root, "packages/example/src"), { recursive: true })
+  writeFileSync(join(root, ".gitignore"), "ignored.ts\n")
+  writeFileSync(join(root, "packages/example/src/new.ts"), 'import fs from "node:fs"')
+  writeFileSync(join(root, "packages/example/src/ignored.ts"), 'import fs from "node:fs"')
+  const files = await listSourceFiles(root)
+  assert.ok(files.includes("packages/example/src/new.ts"))
+  assert.ok(!files.includes("packages/example/src/ignored.ts"))
+})
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = resolve(__dirname, "check-static-export.mjs")
+const require = createRequire(import.meta.url)
 
 const NEXT_CONFIG_FIXTURE = `
 const NODE_ONLY_MODULES = [
@@ -85,6 +102,22 @@ test("import type and typeof import() are type-only (auto-exempt)", () => {
   )
 })
 
+test("named type-only imports and exports are erased while mixed and aliased values remain", () => {
+  const imports = extractImports(
+    [
+      'import { type Stats, type Dirent } from "node:fs"',
+      'export { type ChildProcess } from "node:child_process"',
+      'import { spawn, type ChildProcess } from "node:child_process"',
+      'import { type as valueType } from "node:events"',
+      'import { type /* value */ as valueType } from "node:events"',
+    ].join("\n")
+  )
+  assert.deepEqual(
+    imports.sort((a, b) => a.line - b.line).map(({ typeOnly }) => typeOnly),
+    [true, true, false, false, false]
+  )
+})
+
 test("value import + typeof import on one line keeps exactly one value hit", () => {
   const src = `const net = (await import("node:net")) as typeof import("node:net")`
   const imports = extractImports(src)
@@ -93,7 +126,27 @@ test("value import + typeof import on one line keeps exactly one value hit", () 
   assert.equal(values[0].module, "node:net")
 })
 
-test("lazy import regex never crosses into a later statement's string", () => {
+test("AST extraction ignores comments and strings while retaining runtime TS imports", () => {
+  const imports = extractImports(
+    [
+      '// require("node:fs")',
+      'const text = `require("node:fs")`',
+      'import child = require("node:child_process"); const load = () => import(`node:net`, { with: { type: "json" } })',
+      'import value, { type Stats } from "node:fs"',
+      'type Module = import("node:os").Module',
+      'const wrapped = require((("node:" + "http") satisfies string)!)',
+    ].join("\n")
+  )
+  assert.deepEqual(imports, [
+    { module: "node:child_process", line: 3, typeOnly: false },
+    { module: "node:net", line: 3, typeOnly: false },
+    { module: "node:fs", line: 4, typeOnly: false },
+    { module: "node:os", line: 5, typeOnly: true },
+    { module: "node:http", line: 6, typeOnly: false },
+  ])
+})
+
+test("export declarations never turn later statements' strings into imports", () => {
   // Regression: `export interface ... { }` followed by unrelated strings must
   // not synthesize a bogus module from a later string literal.
   const src = [
@@ -173,6 +226,13 @@ function makeFixture({ tsFiles = [], allowlist = [] }) {
   spawnSync("git", ["config", "user.name", "audit"], { cwd: root })
   spawnSync("git", ["add", "."], { cwd: root })
   spawnSync("git", ["commit", "-q", "-m", "fixture"], { cwd: root })
+  mkdirSync(join(root, "node_modules"), { recursive: true })
+  for (const dependency of ["jsonc-parser", "typescript"])
+    symlinkSync(
+      dirname(require.resolve(`${dependency}/package.json`)),
+      join(root, "node_modules", dependency),
+      "junction"
+    )
   return root
 }
 
@@ -182,6 +242,116 @@ function runScript(root) {
     encoding: "utf8",
   })
 }
+
+const NODE_BRIDGE_FILE = "packages/example/src/node-bridge.ts"
+const NODE_BRIDGE_RULE = {
+  file: NODE_BRIDGE_FILE,
+  module: "node:fs",
+  reason: "Standalone Node entrypoint with an enforced renderer import boundary.",
+  nodeOnly: true,
+}
+
+for (const [name, importer, contents] of [
+  [
+    "relative JS path",
+    "packages/example/src/client.ts",
+    'export { bridge } from "./node-bridge.js"',
+  ],
+  ["root alias", "app/main.tsx", 'import "@/packages/example/src/node-bridge"'],
+  ["workspace alias", "lib/main.ts", 'import "@cognia/example/node-bridge"'],
+  ["custom alias", "lib/main.ts", 'import "@private/worker"'],
+  ["dynamic template", "lib/main.ts", "const load = () => import(`@private/worker`)"],
+  ["parenthesized dynamic", "lib/main.ts", 'const load = () => import(("@private/worker"))'],
+  ["constant concatenation", "lib/main.ts", 'const load = () => import("@private/" + "worker")'],
+  [
+    "second import on one line",
+    "app/main.tsx",
+    'import "./browser-helper"; import "@/packages/example/src/node-bridge";',
+  ],
+  [
+    "commented value alias",
+    "app/main.tsx",
+    'import { type /* value */ as valueType } from "@/packages/example/src/node-bridge"; console.log(valueType)',
+  ],
+]) {
+  test(`e2e: ${name} cannot import an allowlisted standalone Node module`, () => {
+    const root = makeFixture({
+      tsFiles: [
+        { path: NODE_BRIDGE_FILE, contents: 'import fs from "node:fs"; export const bridge = 1' },
+        { path: importer, contents },
+        {
+          path: "tsconfig.json",
+          contents: `// Repo aliases are JSONC, including trailing commas.
+{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./*"],"@cognia/example/*":["./packages/example/src/*"],"@private/worker":["./${NODE_BRIDGE_FILE}"],}}}`,
+        },
+      ],
+      allowlist: [NODE_BRIDGE_RULE],
+    })
+    try {
+      const result = runScript(root)
+      assert.equal(result.status, 1, result.stderr + result.stdout)
+      assert.match(result.stderr, /imports standalone Node module/)
+      assert.match(result.stderr, /packages\/example\/src\/node-bridge\.ts/)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+}
+
+test("e2e: isolated Node modules may import one another and expose erased types", () => {
+  const root = makeFixture({
+    tsFiles: [
+      { path: NODE_BRIDGE_FILE, contents: 'import fs from "node:fs"; export type Handle = string' },
+      {
+        path: "packages/example/src/helper.ts",
+        contents: 'import "./node-bridge"; import path from "node:path"',
+      },
+      {
+        path: "lib/types.ts",
+        contents:
+          'import type { Handle } from "../packages/example/src/node-bridge"; type Module = typeof import("../packages/example/src/node-bridge")',
+      },
+    ],
+    allowlist: [
+      NODE_BRIDGE_RULE,
+      {
+        file: "packages/example/src/helper.ts",
+        module: "node:path",
+        reason: "Standalone Node helper.",
+        nodeOnly: true,
+      },
+    ],
+  })
+  try {
+    const result = runScript(root)
+    assert.equal(result.status, 0, result.stderr + result.stdout)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("actual agent browser entrypoints bundle without their standalone Node bridges", async () => {
+  const { build } = await import("esbuild")
+  const root = resolve(__dirname, "../..")
+  const result = await build({
+    absWorkingDir: root,
+    entryPoints: ["packages/agent-codebuff/src/index.ts", "packages/agent-crush/src/index.ts"],
+    outdir: "browser-boundary-proof",
+    platform: "browser",
+    format: "esm",
+    bundle: true,
+    write: false,
+    metafile: true,
+    logLevel: "silent",
+  })
+  assert.equal(result.outputFiles.length, 2)
+  assert.deepEqual(
+    Object.keys(result.metafile.inputs).filter((file) =>
+      /packages\/agent-(?:codebuff|crush)\/src\/(?:node-bridge|native-process)\.ts$/.test(file)
+    ),
+    []
+  )
+})
 
 test("e2e: clean tree exits 0; violation exits 1 with file:line", () => {
   const clean = makeFixture({

@@ -266,6 +266,28 @@ wire 不依赖 SDK。sidecar 的 `SendOptions` 中的 `permissionMode`、`settin
 | 5 | 位于存储/日志/脱敏/路径/远程会话端口之后的编排包；账本；打破 Team↔Workflow 导入环；结束会话的取消从不被报告为暂停 | 完成（`6bf0a830a`、`a4f1dd183`、`3719c8d51`、`ed4ea6611`、`e931feec0`）；闸门、队友池、波次运行器与合成工作流留在应用中（见范围决定） |
 | 6 | 文档、闸门、CI 和最终回归 | 已完成，包括阶段 3（子系统页面、包 README、CLAUDE.md 地图、pack 测试覆盖每个包） |
 
+### 2026-11-02：启动与生命周期的归属
+
+后续拆分将 Hermes daemon coordinator、按 workspace 隔离的 ACP factory、registry 分类和原生 Node helpers 放入 `@cognia/agent-acp`；Rovo 自有服务 launcher 放入 `@cognia/agent-rovo/service-launcher`。原生 helper 从 package 源码构建，原 CLI 路径保留兼容重导出。Node 入口与 browser 入口分别构建。
+
+`AgentRuntimePolicy` 是可选的受信集成契约。Host composition root 同时注册 factory 和 policy，manager 通过 policy 处理连接归属、重试、模型发现、缓存 session、被动 child controls 和能力投影；现有插件无需增加必填方法。通用连接 coordinator、安装与 lifecycle 状态机、catalog 算法、receipt 和凭证转换进入 `@cognia/agent-runtime-kit`，通过注入的 catalog、持久化、keyring、discovery 和机器端口工作。
+
+主体保留配置与 UI 投影、账号绑定、沙箱与权限上限，以及真实 Host 实现。声明 policy 不授予写权限；`host/process-write-authority` 计算实际写入授权，package policy 只把授权翻译为对应 runtime 配置。共享 runtime catalog 与安全策略仍是唯一权威输入，package 不复制 catalog。
+
+双向 AST 检查阻止 agent package 反向导入主体，也阻止厂商实现回流到主体启动模块或 manager 的 protocol 分支。静态导出检查覆盖尚未暂存且未被忽略的新文件，禁止 browser 导入原生 helper。安装后的 ESM/CJS consumer 验证 data-only JSON-RPC error 入口与 peer 在各自模块格式内共享同一个构造器。
+
+验证范围与环境限制见[拆分证据](../../../../evidence/2026-11-01-external-agent-launch-extraction-audit.md)。
+
+### 2026-11-02：任务启动投影与 session index 协调
+
+Kimi 删除后的列表协调由 package 提供的 `AgentRuntimePolicy.createSessionCatalog` 持有；manager 只委托成功删除与列表投影。Pi 的版本化子 agent 探测和快照位于 `@cognia/agent-pi/subagent-snapshot`，Host 注入受限的 read/list 遍历、现有解析器与 digest 端口，并通过已注册 policy 绑定任务准备。
+
+各集成 package 持有自己的 `GatewayRuntimeProfile`：runtime 识别、参数文法、环境规则、model slots 和启动投影。Codex、OpenCode、Pi、DSH、Aider 与 Claude Code 使用现有 package；仅使用 ACP 的 runtime 放入 ACP vendor 模块。`agent-runtime-kit/gateway-task` 通过注册表组装投影；Host 继续负责模型和账号准入、模型事实、租约签发与撤销、文件和进程授权，以及私有文件落盘。
+
+固定版本的 Codex catalog 及其 LICENSE/NOTICE 统一放入 `packages/agent-codex/catalog-data`，package 与 Rust 读取同一份数据，Docker 编译阶段显式携带该目录；共享 golden fixture 保留为测试输入。Devin 的 JSONC、MCP 校验与合并、Bot 隔离配置投影进入 ACP；私有目录分配、凭据复制、挂载和清理由 CLI Host 持有。
+
+反向门禁覆盖 manager 的 preset/runtime 判别及别名、受保护的配置 facade、CLI catalog 重导出和回流的 Devin parser。安装包消费检查覆盖新增入口的 ESM/CJS、NodeNext 声明和 data-only 加载闭包；共享工作区可通过独立 review index 验证 Docker 输入，保留用户真实 index。
+
 ## 后果
 
 - **复用：**主机只要实现集成所用的端口就能使用它。DSH、Codex、Aider、Pi、OpenCode、A2A 和 ACP 适配器不再导入应用代码。

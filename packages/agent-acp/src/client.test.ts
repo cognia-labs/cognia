@@ -51,6 +51,7 @@ const mockListen: jest.Mock = jest.fn(async () => jest.fn())
 const mockTerminalCreate: jest.Mock = jest.fn(async () => "terminal-1")
 const mockCleanupSessionTerminals: jest.Mock = jest.fn(async () => undefined)
 const mockTerminalKill: jest.Mock = jest.fn(async () => undefined)
+const mockTerminalIsRunning: jest.Mock = jest.fn(async () => false)
 const mockTerminalOutput: jest.Mock = jest.fn(async () => ({
   output: "",
   truncated: false,
@@ -214,6 +215,7 @@ function acpDeps(): AcpClientDeps {
         await mockTerminalRelease(...args)
       },
       waitForExit: (...args) => mockTerminalWaitForExit(...args),
+      isRunning: (...args: [string]) => mockTerminalIsRunning(...args),
       closeSession: async (...args) => {
         await mockCleanupSessionTerminals(...args)
       },
@@ -419,7 +421,7 @@ describe("AcpClientAdapter — prompt deadlines and host response envelopes", ()
       expect(listenerBag(adapter)).toEqual([])
       expect((adapter as unknown as { peer?: JsonRpcPeer }).peer).toBeUndefined()
       expect(adapter.getSessions()).toEqual([])
-      expect(mockCleanupSessionTerminals).toHaveBeenCalledWith("s")
+      expect(mockTerminalWaitForExit).toHaveBeenCalledWith(expect.any(String), 0)
       await expect(pending).resolves.toEqual({ outcome: { outcome: "cancelled" } })
       await adapter.disconnect()
       for (const unsubscribe of listeners) expect(unsubscribe).toHaveBeenCalledTimes(1)
@@ -1983,7 +1985,13 @@ afterEach(() => {
   mockTerminalWrite.mockClear()
   mockTerminalCreate.mockClear()
   mockTerminalKill.mockClear()
-  mockTerminalOutput.mockClear()
+  mockTerminalIsRunning.mockReset().mockResolvedValue(false)
+  mockTerminalWaitForExit
+    .mockReset()
+    .mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+  mockTerminalOutput
+    .mockReset()
+    .mockResolvedValue({ output: "", truncated: false, exitStatus: { exitCode: 0, signal: null } })
   mockTerminalRelease.mockClear()
   mockTerminalWaitForExit.mockClear()
   mockCleanupSessionTerminals.mockClear()
@@ -2094,9 +2102,9 @@ function callTerminalWrite(
 }
 
 function seedTerminal(a: AcpClientAdapter, sessionId: string, terminalId: string): void {
-  ;(a as unknown as { terminalSessions: Map<string, string> }).terminalSessions.set(
+  ;(a as unknown as { terminalSessions: Map<string, { sessionId: string }> }).terminalSessions.set(
     terminalId,
-    sessionId
+    { sessionId }
   )
 }
 
@@ -3179,6 +3187,228 @@ describe("AcpClientAdapter — terminal/write", () => {
 })
 
 describe("AcpClientAdapter — current terminal wire shape", () => {
+  it("releases lifecycle ownership while retaining an uncertain group for later proof", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    seedTerminal(a, "s", "released-group")
+    mockTerminalIsRunning.mockResolvedValue(true)
+    try {
+      await expect(
+        dispatchAgentRequest(a, "terminal/release", {
+          sessionId: "s",
+          terminalId: "released-group",
+        })
+      ).resolves.toBeUndefined()
+      expect(mockTerminalRelease).toHaveBeenCalledWith("released-group")
+      await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+      mockTerminalIsRunning.mockResolvedValue(false)
+      // Lifecycle output/wait handles have been released; group proof alone
+      // still closes the retained origin once the native group becomes empty.
+      mockTerminalWaitForExit.mockRejectedValueOnce(new Error("released"))
+      await a.stopSessionProcesses("s")
+      expect(mockTerminalRelease.mock.calls.filter(([id]) => id === "released-group")).toHaveLength(
+        1
+      )
+      await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+    } finally {
+      mockTerminalIsRunning.mockResolvedValue(false)
+    }
+  })
+
+  it("does not accept leader exit as proof while its terminal group is alive", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    seedTerminal(a, "s", "descendant")
+    mockTerminalIsRunning.mockResolvedValue(true)
+    try {
+      await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+      await expect(a.stopSessionProcesses("s")).rejects.toThrow(/still running|cleanup timed out/)
+      expect(mockTerminalRelease).not.toHaveBeenCalledWith("descendant")
+      mockTerminalIsRunning.mockResolvedValue(false)
+      await a.stopSessionProcesses("s")
+      await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+    } finally {
+      mockTerminalIsRunning.mockResolvedValue(false)
+    }
+  })
+
+  it.each(["cancel", "closeSession", "disconnect"] as const)(
+    "%s bounds cleanup while a Host wait and kill never resolve",
+    async (method) => {
+      mockIsTauri.mockReturnValue(true)
+      const a = new AcpClientAdapter(acpDeps())
+      seedSession(a, "s", "default")
+      seedTerminal(a, "s", "blocked-wait")
+      mockTerminalWaitForExit.mockImplementationOnce(() => new Promise(() => {}))
+      void dispatchAgentRequest(a, "terminal/wait_for_exit", {
+        sessionId: "s",
+        terminalId: "blocked-wait",
+      })
+      mockTerminalKill.mockImplementation(() => new Promise(() => {}))
+      const started = Date.now()
+      try {
+        await a[method]("s")
+        expect(Date.now() - started).toBeLessThan(2_500)
+        expect(mockTerminalRelease).not.toHaveBeenCalledWith("blocked-wait")
+        const state = a as unknown as { terminalSessions: Map<string, unknown> }
+        expect(state.terminalSessions.has("blocked-wait")).toBe(true)
+      } finally {
+        mockTerminalKill.mockResolvedValue(undefined)
+      }
+    },
+    5_000
+  )
+  it("does not turn end_turn into proof while an origin terminal is running", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    ;(a as unknown as { sendRequest: jest.Mock }).sendRequest = jest.fn(async () => {
+      await dispatchAgentRequest(a, "terminal/create", {
+        sessionId: "s",
+        command: "sleep",
+        args: ["60"],
+      })
+      return { stopReason: "end_turn" }
+    })
+    const events: ExternalAgentEvent[] = []
+    for await (const event of a.prompt(
+      "s",
+      { id: "m", role: "user", content: [{ type: "text", text: "work" }], timestamp: new Date() },
+      { context: { custom: { processOrigin: { childRunId: "child", dispatchEpoch: 9 } } } }
+    ))
+      events.push(event)
+    expect(events).toContainEqual(expect.objectContaining({ type: "done", success: true }))
+    expect(
+      (a as unknown as { terminalSessions: Map<string, unknown> }).terminalSessions.get(
+        "terminal-1"
+      )
+    ).toEqual({ sessionId: "s", childRunId: "child", dispatchEpoch: 9 })
+    mockTerminalOutput.mockResolvedValueOnce({
+      output: "",
+      truncated: false,
+      exitStatus: { exitCode: null, signal: null },
+    })
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+    await a.stopSessionProcesses("s")
+    expect(mockTerminalKill).toHaveBeenCalledWith("terminal-1")
+    expect(mockTerminalWaitForExit).toHaveBeenCalledWith("terminal-1", 0)
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+    await expect(
+      dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "late" })
+    ).rejects.toThrow(/admission is closed/)
+  })
+
+  it("requires closed terminal admission and invalidates disposal proof when a new prompt opens it", async () => {
+    const adapter = new AcpClientAdapter(acpDeps())
+    seedSession(adapter, "s", "default")
+    await expect(adapter.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+    await adapter.stopSessionProcesses("s")
+    await expect(adapter.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+    ;(adapter as unknown as { sendRequest: jest.Mock }).sendRequest = jest.fn(async () => ({
+      stopReason: "end_turn",
+    }))
+    for await (const _event of adapter.prompt("s", {
+      id: "new-prompt",
+      role: "user",
+      content: [{ type: "text", text: "next" }],
+      timestamp: new Date(),
+    })) {
+      /* drain the new turn */
+    }
+    await expect(adapter.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+    await adapter.stopSessionProcesses("s")
+    await expect(adapter.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+    const state = adapter as unknown as {
+      terminalSessions: Map<string, unknown>
+      terminalAdmissions: Map<string, Set<Promise<unknown>>>
+    }
+    expect(state.terminalSessions.size).toBe(0)
+    expect(state.terminalAdmissions.get("s")?.size ?? 0).toBe(0)
+  })
+
+  it("retains terminal attribution after an unreadable or still-live cleanup", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    seedTerminal(a, "s", "t")
+    mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: null, signal: null } })
+    await expect(a.stopSessionProcesses("s")).rejects.toThrow(/still running/)
+    mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+    mockTerminalOutput.mockRejectedValueOnce(new Error("host gone"))
+    await expect(a.confirmSessionProcessesStopped("s")).rejects.toThrow("host gone")
+    await a.stopSessionProcesses("s")
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+  })
+
+  it("waits for a terminal exit read after an early kill acknowledgement", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    seedTerminal(a, "s", "reaping")
+    mockTerminalWaitForExit.mockResolvedValueOnce({ exitStatus: { exitCode: null, signal: null } })
+    await a.stopSessionProcesses("s")
+    expect(mockTerminalWaitForExit).toHaveBeenCalledTimes(2)
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+  })
+
+  it("drains terminal creation admitted before cancellation and kills it even after turn end", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    let accept!: (id: string) => void
+    mockTerminalCreate.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        accept = resolve
+      })
+    )
+    const creating = dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "work" })
+    const cancelling = a.cancel("s")
+    accept("late-terminal")
+    await Promise.all([creating, cancelling])
+    expect(mockTerminalKill).toHaveBeenCalledWith("late-terminal")
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+  })
+
+  it("disconnect drains a terminal admission before its Host id is known", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    let accept!: (id: string) => void
+    mockTerminalCreate.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        accept = resolve
+      })
+    )
+    const creating = dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "work" })
+    const disconnecting = a.disconnect()
+    accept("late-on-disconnect")
+    await Promise.all([creating, disconnecting])
+    expect(mockTerminalKill).toHaveBeenCalledWith("late-on-disconnect")
+    expect(mockTerminalWaitForExit).toHaveBeenCalledWith("late-on-disconnect", 0)
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+  })
+
+  it("an ambiguous admission does not prevent killing the session's known terminals", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    seedTerminal(a, "s", "known")
+    mockTerminalCreate.mockRejectedValueOnce(new Error("lost create response"))
+    await expect(
+      dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "work" })
+    ).rejects.toThrow("lost create response")
+    await expect(a.stopSessionProcesses("s")).rejects.toThrow(/unconfirmed terminal admission/)
+    expect(mockTerminalKill).toHaveBeenCalledWith("known")
+    expect(mockTerminalRelease).toHaveBeenCalledWith("known")
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+    await expect(a.closeSession("s")).resolves.toBeUndefined()
+    expect((a as unknown as { _sessions: Map<string, unknown> })._sessions.has("s")).toBe(false)
+    // A lost create response still represents an uncertain Host process even
+    // after the local session is gone; it cannot be pruned into a stop proof.
+    await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+  })
   it("rejects direct terminal delegation from a strictly isolated Bot", async () => {
     mockIsTauri.mockReturnValue(true)
     const a = new AcpClientAdapter(acpDeps())
@@ -3248,7 +3478,95 @@ describe("AcpClientAdapter — current terminal wire shape", () => {
 
     await a.closeSession("s")
 
-    expect(mockCleanupSessionTerminals).toHaveBeenCalledWith("s")
+    expect(mockTerminalWaitForExit).toHaveBeenCalledWith(expect.any(String), 0)
+  })
+
+  it.each(["closeSession", "cancel"] as const)(
+    "%s completes local teardown while a terminal refuses to die",
+    async (method) => {
+      mockIsTauri.mockReturnValue(true)
+      const a = new AcpClientAdapter(acpDeps())
+      seedSession(a, "s", "default")
+      seedTerminal(a, "s", "stubborn")
+      if (method === "cancel") {
+        ;(a as unknown as { _sessions: Map<string, { status: string }> })._sessions.get(
+          "s"
+        )!.status = "executing"
+      }
+      const warn = jest.spyOn(testLogger, "warn")
+      mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: null, signal: null } })
+      try {
+        await expect(a[method]("s")).resolves.toBeUndefined()
+        const state = a as unknown as {
+          _sessions: Map<string, unknown>
+          terminalSessions: Map<string, unknown>
+        }
+        expect(state._sessions.has("s")).toBe(method === "cancel")
+        expect(state.terminalSessions.has("stubborn")).toBe(true)
+        mockTerminalOutput.mockResolvedValueOnce({
+          output: "",
+          truncated: false,
+          exitStatus: { exitCode: null, signal: null },
+        })
+        await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
+        expect(warn).toHaveBeenCalledWith(
+          "Failed to clean up ACP session terminals",
+          expect.objectContaining({ sessionId: "s", error: expect.any(Error) })
+        )
+        mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+        await a.stopSessionProcesses("s")
+        await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(true)
+        expect(
+          (a as unknown as { closedTerminalSessions: Set<string> }).closedTerminalSessions.has("s")
+        ).toBe(method === "cancel")
+      } finally {
+        mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+        warn.mockRestore()
+      }
+    }
+  )
+
+  it("disconnect tears down the peer and logs unconfirmed terminal cleanup", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedTerminal(a, "s", "stubborn")
+    const rejectAll = jest.fn()
+    const state = a as unknown as { peer: unknown; terminalSessions: Map<string, unknown> }
+    state.peer = { rejectAll }
+    const warn = jest.spyOn(testLogger, "warn")
+    mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: null, signal: null } })
+    try {
+      await expect(a.disconnect()).resolves.toBeUndefined()
+      expect(rejectAll).toHaveBeenCalledWith("Disconnected")
+      expect(state.peer).toBeUndefined()
+      expect(state.terminalSessions.has("stubborn")).toBe(true)
+      expect(warn).toHaveBeenCalledWith(
+        "Failed to clean up ACP session terminals",
+        expect.objectContaining({ sessionId: "s", error: expect.any(Error) })
+      )
+    } finally {
+      mockTerminalWaitForExit.mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+      warn.mockRestore()
+    }
+  })
+
+  it("releases terminal admission bookkeeping after a verified session close", async () => {
+    mockIsTauri.mockReturnValue(true)
+    const a = new AcpClientAdapter(acpDeps())
+    seedSession(a, "s", "default")
+    await dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "work" })
+    await a.closeSession("s")
+    const state = a as unknown as {
+      closedTerminalSessions: Set<string>
+      ambiguousTerminalSessions: Set<string>
+      terminalAdmissions: Map<string, unknown>
+    }
+    expect(state.closedTerminalSessions.has("s")).toBe(false)
+    expect(state.ambiguousTerminalSessions.has("s")).toBe(false)
+    expect(state.terminalAdmissions.has("s")).toBe(false)
+    await expect(
+      dispatchAgentRequest(a, "terminal/create", { sessionId: "s", command: "late" })
+    ).rejects.toThrow(/admission is closed/)
   })
 })
 

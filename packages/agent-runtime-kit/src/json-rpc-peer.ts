@@ -87,16 +87,8 @@ interface JsonRpcInbound {
   error?: { code: number; message: string; data?: unknown }
 }
 
-/** An error carrying a JSON-RPC error code, used by `onServerRequest`. */
-export class JsonRpcMethodError extends Error {
-  constructor(
-    public readonly code: number,
-    message: string
-  ) {
-    super(message)
-    this.name = "JsonRpcMethodError"
-  }
-}
+import { JsonRpcMethodError } from "@cognia/agent-runtime-kit/json-rpc-error"
+export { JsonRpcMethodError } from "@cognia/agent-runtime-kit/json-rpc-error"
 
 export class JsonRpcPeer {
   private messageId = 0

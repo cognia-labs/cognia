@@ -369,6 +369,28 @@ Team↔Workflow import cycle is broken. A boundary test keeps it that way.
 | 5 | Orchestration package behind store/journal/redaction/path/remote-session ports; ledgers; Team↔Workflow cycle broken; session-ending cancel never reported as pause | Done (`6bf0a830a`, `a4f1dd183`, `3719c8d51`, `ed4ea6611`, `e931feec0`); gates, pool, wave runner and synthesized workflow stay in the app (Scope decisions) |
 | 6 | Docs, gates, CI and final regression | Done, including Phase 3 (subsystem pages, package READMEs, the CLAUDE.md map, every package in the pack test) |
 
+### 2026-11-02: launch and lifecycle ownership
+
+The follow-up extraction places the Hermes daemon coordinator, workspace-scoped ACP factory, registry classification and native Node helpers in `@cognia/agent-acp`. The Rovo owned-service launcher lives in `@cognia/agent-rovo/service-launcher`. Native helper sources are staged directly from their packages; their CLI paths are compatibility re-exports. Node entry points remain separate from browser entry points.
+
+`AgentRuntimePolicy` is an optional trusted integration contract. The Host composition root registers policies beside factories, and the manager consumes those policies for connection ownership, retries, model discovery, cached sessions, passive child controls and capability projection. Existing plugin factories gain no mandatory methods. The generic connection coordinator, install/lifecycle state machines, catalog algorithms, receipts and credential transformations live in `@cognia/agent-runtime-kit` behind injected catalog, persistence, keyring, discovery and machine ports.
+
+The app keeps its configuration/UI projection, account binding, sandbox/permission ceilings and real Host implementations. Declaring a policy never grants write authority. `host/process-write-authority` computes the actual write grant; package policies only translate it into their runtime's configuration. The shared runtime catalog and security policy remain the authoritative inputs, with no copied catalog in a package.
+
+Bidirectional AST checks reject app-private imports from agent packages and vendor implementations returning to app launch modules or manager protocol branches. The static-export gate includes non-ignored new files before staging and fences native helpers from browser imports. Installed ESM/CJS consumers verify that the data-only JSON-RPC error entry and the peer preserve one constructor identity per module format.
+
+See the [extraction evidence](../../../../evidence/2026-11-01-external-agent-launch-extraction-audit.md) for verification scope and remaining environment limits.
+
+### 2026-11-02: task launch recipes and session-index reconciliation
+
+Kimi deletion reconciliation is package-owned through `AgentRuntimePolicy.createSessionCatalog`; the manager delegates successful deletion and list projection without knowing the vendor. Pi's versioned subagent detector and snapshot live in `@cognia/agent-pi/subagent-snapshot`. The Host supplies scoped read/list traversal, existing parsing and digest ports, and binds task preparation through the registered policy.
+
+Each integration owns its `GatewayRuntimeProfile`: accepted runtime identities, argument grammar, environment rules, model slots and launch projection. Codex, OpenCode, Pi, DSH, Aider and Claude Code use their existing packages; ACP-only runtimes use ACP vendor modules. `agent-runtime-kit/gateway-task` assembles the recipes without a vendor switch. The Host still admits model/account choices, resolves model facts, mints/revokes leases, authorizes filesystem/process access and materializes private artifacts.
+
+The pinned Codex catalog and its license/notice have one source under `packages/agent-codex/catalog-data`; package assembly and Rust read those same bytes. Docker compile stages explicitly include that directory. The shared golden fixture remains a test input. Devin's JSONC, MCP validation/merge and isolated-bot config projection live in ACP; private directory allocation, credential copying, mounts and cleanup remain in the CLI Host.
+
+Reverse gates cover manager preset/runtime discriminators and aliases, protected configuration facades, the CLI catalog re-export and returned Devin parsers. Installed-consumer checks import the new entries in ESM/CJS, check NodeNext declarations and prove their data-only closure. Shared-tree Docker context checks can use an isolated review index so the user's real index remains untouched.
+
 ## Consequences
 
 - **Reuse:** a host gets an integration by implementing the ports it uses. The DSH, Codex,

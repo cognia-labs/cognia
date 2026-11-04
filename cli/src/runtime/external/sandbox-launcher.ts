@@ -24,7 +24,7 @@ import {
 } from "./node-backend"
 import { devinOwnedConfigRoot, devinOriginalConfigRoot } from "./devin-mcp-config"
 import { hostAgentStateDataDir, type StateIsolationPlan } from "./state-isolation"
-import { assertDshWritableRoots, canonicalDshPath } from "./dsh-installer"
+import { assertDshWritableRoots } from "./dsh-installer"
 import {
   registeredNativeBridgeId,
   registeredNativeBridgeRoot,
@@ -229,6 +229,18 @@ export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): s
   })
 }
 
+function canonicalSandboxPath(candidate: string): string {
+  try {
+    return fs.realpathSync(candidate)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    const absolute = path.resolve(candidate)
+    const parent = path.dirname(absolute)
+    if (parent === absolute) throw error
+    return path.join(canonicalSandboxPath(parent), path.basename(absolute))
+  }
+}
+
 /** Command admission has already pinned the runtime; environment cannot widen its state. */
 function managedDshSandboxRoots(config: NodeExternalAgentSpawnConfig) {
   const raw = config.env?.COGNIA_DSH_RUNTIME_HOME
@@ -271,13 +283,13 @@ function managedDshSandboxRoots(config: NodeExternalAgentSpawnConfig) {
     const requested = config.env?.[key]
     if (
       (requested !== state[index] && requested !== path.join(raw, path.basename(state[index]))) ||
-      canonicalDshPath(state[index]) !== state[index]
+      canonicalSandboxPath(state[index]) !== state[index]
     )
       throw invalid()
   }
   const controlRoot = path.join(path.dirname(runtimeHome), ".deepseek-harness-control")
   const processes = path.join(controlRoot, "processes")
-  if (canonicalDshPath(processes) !== processes) throw invalid()
+  if (canonicalSandboxPath(processes) !== processes) throw invalid()
   return { runtimeHome, state, controlRoot, processes }
 }
 

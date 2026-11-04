@@ -42,6 +42,28 @@ describe("isolated Devin MCP configuration", () => {
   const read = (root: string) =>
     JSON.parse(fs.readFileSync(path.join(root, "devin/mcp_config.json"), "utf8"))
 
+  it.each([".devin/config.json", ".config/devin/config.json"])(
+    "refuses oversized and non-file %s inputs with the fixed diagnostic and cleans overlays",
+    (relative) => {
+      const filename = path.join(home, relative)
+      write(relative, '"' + "a".repeat(1_048_576) + '"')
+      expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
+        new Error("Invalid Devin MCP configuration")
+      )
+      expect(
+        fs.readdirSync(home).filter((name) => name.startsWith("cognia-devin-config-"))
+      ).toEqual([])
+      fs.rmSync(filename)
+      fs.mkdirSync(filename)
+      expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
+        new Error("Invalid Devin MCP configuration")
+      )
+      expect(
+        fs.readdirSync(home).filter((name) => name.startsWith("cognia-devin-config-"))
+      ).toEqual([])
+    }
+  )
+
   it("copies only Devin credentials into Bot state and excludes inherited publication MCPs", () => {
     write(".local/share/devin/credentials.toml", 'token = "model-token"')
     write(

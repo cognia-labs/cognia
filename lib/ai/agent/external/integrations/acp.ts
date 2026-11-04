@@ -16,13 +16,7 @@ import type {
   AcpDynamicMcpHostController,
   ExternalAgentConfig,
 } from "@cognia/agent-contracts/external-agent"
-import { AcpClientAdapter, acpClientExtension, type AcpClientDeps } from "@cognia/agent-acp/client"
-import { MiniMaxAcpAdapter } from "@cognia/agent-acp/minimax-adapter"
-import { DevinAcpAdapter } from "@cognia/agent-acp/devin-adapter"
-import { IsolatedAcpAdapter } from "@cognia/agent-acp/isolated-adapter"
-import { resolveAcpVendorProfile } from "@cognia/agent-acp/vendor-profile"
-import { ACP_VENDOR_PROFILES } from "@cognia/agent-acp/vendor-profiles"
-import type { SessionCreateOptions } from "@cognia/agent-contracts/adapter"
+import { AcpClientAdapter, type AcpClientDeps } from "@cognia/agent-acp/client"
 import { loggers } from "@cognia/logging"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { platformStreamingFetch } from "@/lib/network/platform-streaming-fetch"
@@ -31,7 +25,6 @@ import { proxyFetch } from "@/lib/network/proxy-fetch"
 import { isPathUnderRoot } from "@/lib/sandbox/policy-bridge"
 import { getAcpHostCapabilities } from "../agent-transport"
 import { buildAgentEnv } from "../config/env-builder"
-import { isDevinAgentConfig, isMiniMaxAgentConfig } from "../config/preset-identity"
 import { createAgentLogger } from "../host/agent-logger"
 import { createAgentTransportFileHost } from "../host/file-host"
 import { createAgentTransportProcessHost } from "../host/process-host"
@@ -87,97 +80,31 @@ export function createAcpAdapterFactory(): ProtocolAdapterFactory {
   return () => createAcpClientAdapter()
 }
 
-/**
- * Devin over stdio: `discovery` serves the configuration, and each
- * conversation gets its own ACP client over the same ports.
- */
-export function createDevinAcpAdapter(discovery: AcpClientAdapter): DevinAcpAdapter {
-  return new DevinAcpAdapter(
-    discovery,
-    () => createAcpClientAdapter(),
-    createAgentLogger(loggers.agent)
-  )
+import {
+  createDevinAcpAdapter as wrapDevin,
+  isolateNativeDevin as isolateDevin,
+  isolateNativeAcp as isolateAcp,
+  type AcpIsolationHost,
+} from "@cognia/agent-acp/factory"
+const isolationHost = (): AcpIsolationHost => ({
+  createClient: createAcpClientAdapter,
+  logger: createAgentLogger(loggers.agent),
+  isWithinRoot: isPathUnderRoot,
+  stateKey: hermesStateKey,
+  stateKeyEnv: AGENT_STATE_KEY_ENV,
+})
+export function createDevinAcpAdapter(discovery: AcpClientAdapter) {
+  return wrapDevin(discovery, isolationHost())
 }
-
-/**
- * Give native Devin one ACP process per conversation. Applies only when the
- * factory registered for `acp` still produced the built-in client: a custom
- * factory a host or plugin registered stays authoritative.
- */
 export function isolateNativeDevin(
   config: ExternalAgentConfig,
   adapter: ProtocolAdapter | undefined
-): ProtocolAdapter | undefined {
-  const acp = adapter ? acpClientExtension.resolve(adapter) : undefined
-  return config.transport === "stdio" &&
-    isDevinAgentConfig(config) &&
-    acp?.constructor === AcpClientAdapter
-    ? createDevinAcpAdapter(acp)
-    : adapter
+) {
+  return isolateDevin(config, adapter, isolationHost())
 }
-
-/**
- * These protocols bind a viewer to a project. Hermes' viewers deliberately
- * retain one stable host-managed gateway key: native session durability must
- * not depend on the order in which child viewer processes were constructed.
- */
-class WorkspaceScopedAcpAdapter extends IsolatedAcpAdapter {
-  protected override readonly isolationId: string
-  protected override readonly label: string
-  constructor(id: string, label: string, discovery: AcpClientAdapter) {
-    super(discovery, () => createAcpClientAdapter(), createAgentLogger(loggers.agent))
-    this.isolationId = id
-    this.label = label
-  }
-  protected override processConfig(
-    suffix: string,
-    options?: SessionCreateOptions
-  ): ExternalAgentConfig {
-    const workspace = this._config?.process?.cwd
-    if (!workspace || !(workspace.startsWith("/") || /^[a-z]:[\\/]/i.test(workspace)))
-      throw new Error(`${this.label} requires an absolute configured workspace before discovery`)
-    const requested = options?.cwd ?? workspace
-    if (!isPathUnderRoot(requested, workspace))
-      throw new Error(`${this.label} session workspace must remain inside the configured workspace`)
-    const config = super.processConfig(suffix, options)
-    if (this.isolationId !== "hermes-agent") return config
-    return {
-      ...config,
-      process: {
-        ...config.process!,
-        args: ["--profile", "default", "acp"],
-        env: {
-          ...config.process!.env,
-          [AGENT_STATE_KEY_ENV]: hermesStateKey(this._config!.id),
-        },
-      },
-    }
-  }
-}
-
-/** Isolate process-wide ACP authority without replacing plugin-owned factories. */
 export function isolateNativeAcp(
   config: ExternalAgentConfig,
   adapter: ProtocolAdapter | undefined
-): ProtocolAdapter | undefined {
-  const acp = adapter ? acpClientExtension.resolve(adapter) : undefined
-  if (
-    config.transport === "stdio" &&
-    isMiniMaxAgentConfig(config) &&
-    acp?.constructor === AcpClientAdapter
-  )
-    return new MiniMaxAcpAdapter(
-      acp,
-      () => createAcpClientAdapter(),
-      createAgentLogger(loggers.agent)
-    )
-  const profile = resolveAcpVendorProfile(config, ACP_VENDOR_PROFILES)
-  if (
-    config.transport === "stdio" &&
-    acp?.constructor === AcpClientAdapter &&
-    profile &&
-    ["command-code", "zcode", "hermes-agent"].includes(profile.id)
-  )
-    return new WorkspaceScopedAcpAdapter(profile.id, profile.label, acp)
-  return isolateNativeDevin(config, adapter)
+) {
+  return isolateAcp(config, adapter, isolationHost())
 }

@@ -5,8 +5,6 @@
  * Handles agent lifecycle, routing, and coordination.
  */
 
-import { resolvePiSubagents } from "./config/pi-subagents"
-import { gooseSessionExtension } from "@cognia/agent-acp/goose-session"
 import { assertExternalAgentContentSafety } from "./policy/outbound-prompt-pii"
 import type {
   ExternalAgentConfig,
@@ -89,36 +87,25 @@ import { supportsModelCatalog } from "@cognia/agent-contracts/adapter"
 import type { AdapterExtension } from "@cognia/agent-contracts/adapter-extension"
 import {
   type ProtocolAdapter,
-  ProtocolAdapterRegistry,
   protocolAdapterRegistry,
   type SessionCreateOptions,
   type SessionListOptions,
 } from "./protocol-adapter"
-import { acpClientExtension } from "@cognia/agent-acp/client"
-import { isolatedAcpExtension } from "@cognia/agent-acp/isolated-adapter"
-import { createAcpAdapterFactory, isolateNativeAcp } from "./integrations/acp"
-import { createAiderCliAdapterFactory } from "./integrations/aider"
-import { createOpenClaudeAdapterFactory } from "./integrations/openclaude"
-import { createCrushAdapterFactory } from "./integrations/crush"
-import { createContinueAdapterFactory } from "./integrations/continue"
-import { createRovoDevAdapterFactory } from "./integrations/rovo"
-import { createCodebuffAdapterFactory } from "./integrations/codebuff"
-
-import { createCodexAppServerAdapterFactory } from "./integrations/codex"
-import { createSiwcAppServerAdapterFactory, isCodexAppServerProtocol } from "./integrations/siwc"
-import {
-  canProjectOpenCodeV2McpOnThisHost,
-  createOpenCodeV1AdapterFactory,
-  createOpenCodeV2AdapterFactory,
-} from "./integrations/opencode"
-import { createA2aAdapterFactory } from "./integrations/a2a"
 import { isHeadlessHost } from "@/lib/platform/detect"
-import { prepareDshManagedLaunch } from "@cognia/agent-dsh/managed-launch"
-import { createDshSdkAdapterFactory, dshManagedLaunchHost } from "./integrations/dsh"
-import { clampThinkingLevel, piRpcExtension } from "@cognia/agent-pi/rpc-client"
-import { createPiRpcAdapterFactory } from "./integrations/pi"
+import { clampThinkingLevel } from "@cognia/agent-runtime-kit/thinking-levels"
+import { AgentConnectionCoordinator } from "@cognia/agent-runtime-kit/connection-coordinator"
+import { acquireProcessWriteScope } from "./host/process-write-authority"
 import {
-  catalogModelSurface,
+  registerBuiltinProtocolAdapters,
+  createConfiguredProtocolAdapter,
+  prepareExternalAgentConnection,
+  prepareExternalAgentTaskConfig,
+} from "./integrations/register"
+export {
+  registerBuiltinProtocolAdapters,
+  createConfiguredProtocolAdapter,
+} from "./integrations/register"
+import {
   EMPTY_THINKING_SURFACE,
   findModelConfigOption,
   resolveExternalAgentModels,
@@ -183,7 +170,7 @@ import type {
   ExternalAgentCapabilityProfileV1,
   ExternalAgentHostCeilings,
   ExternalAgentHostFacts,
-} from "@cognia/agent-config-types/external-agent-capability"
+} from "@cognia/agent-contracts/external-agent-capability"
 import { resolveSessionOperationCapabilities } from "@cognia/agent-contracts/session-operations"
 import type {
   ExternalAgentCompactionCapability,
@@ -394,34 +381,6 @@ export interface ExternalAgentLifecycleEvent {
  * the user adds the agent and then throws `Unsupported protocol` at connect
  * time, which is the worst place to find out.
  */
-export function registerBuiltinProtocolAdapters(registry: ProtocolAdapterRegistry): void {
-  registry.register("acp", createAcpAdapterFactory())
-  registry.register("codex-app-server", createCodexAppServerAdapterFactory())
-  registry.register("codex-siwc-app-server", createSiwcAppServerAdapterFactory())
-  registry.register("opencode-v2", createOpenCodeV2AdapterFactory())
-  registry.register("opencode", createOpenCodeV1AdapterFactory())
-  registry.register("a2a", createA2aAdapterFactory())
-  // Managed install/facts are local-host commands; the integration wiring
-  // hands DSH the local process host (paired remote installation is not exposed).
-  registry.register("dsh-sdk", createDshSdkAdapterFactory())
-  // Pi's own RPC protocol, not ACP (ADR-0119).
-  registry.register("pi-rpc", createPiRpcAdapterFactory())
-  registry.register("aider-cli", createAiderCliAdapterFactory())
-  registry.register("openclaude-cli", createOpenClaudeAdapterFactory())
-  registry.register("crush-http", createCrushAdapterFactory())
-  registry.register("continue-cli", createContinueAdapterFactory())
-  registry.register("rovo-http", createRovoDevAdapterFactory())
-  registry.register("codebuff-sdk", createCodebuffAdapterFactory())
-
-  // Future: registry.register("http", () => new HttpClientAdapter())
-}
-
-/** Keep custom protocol factories authoritative; isolate only the built-in native Devin adapter. */
-export function createConfiguredProtocolAdapter(
-  config: ExternalAgentConfig
-): ProtocolAdapter | undefined {
-  return isolateNativeAcp(config, protocolAdapterRegistry.create(config.protocol))
-}
 
 function placementWithToolHostLeases(
   placement: import("@/types/sandbox/environment-spec").SandboxPlacement | undefined,
@@ -493,7 +452,10 @@ export class ExternalAgentManager {
   >()
   private adapters: Map<string, ProtocolAdapter> = new Map()
   private nesSessions = new Map<string, Set<string>>()
-  private kimiDeletedSessions = new Map<string, Map<string, { cwd?: string; expiresAt: number }>>()
+  private sessionCatalogs = new Map<
+    string,
+    import("@cognia/agent-contracts/runtime-policy").AgentSessionCatalog
+  >()
   private delegationRules: ExternalAgentDelegationRule[] = []
   private healthCheckTimer?: ReturnType<typeof setInterval>
   private sessionCancellations = new Map<string, Promise<void>>()
@@ -503,18 +465,7 @@ export class ExternalAgentManager {
   private lifecycleListeners: Set<(event: ExternalAgentLifecycleEvent) => void> = new Set()
   private processExitUnlisten?: Promise<() => void>
   private intentionalProcessStops = new Set<string>()
-  private codexConnections = new Map<string, Promise<void>>()
-  private codexDisconnections = new Map<string, Promise<void>>()
-  private codexWritableScopes = new Map<
-    string,
-    {
-      roots: string[]
-      ceiling?: string[]
-      permissionMode: AcpPermissionMode | undefined
-      users: number
-      ready: Promise<void>
-    }
-  >()
+  private connectionCoordinator = new AgentConnectionCoordinator()
   private gatewayTasks = new Map<
     string,
     {
@@ -647,7 +598,7 @@ export class ExternalAgentManager {
       else throw new Error("This task is bound to a different model or account; start a new task")
     }
     const taskCwd = this.buildSessionOptions(source, options).cwd
-    const taskConfig = await resolvePiSubagents({
+    const taskConfig = await prepareExternalAgentTaskConfig({
       ...source.config,
       process: {
         ...source.config.process!,
@@ -1075,9 +1026,10 @@ export class ExternalAgentManager {
     const adapter = this.adapters.get(agentId)
     if (!instance || !adapter) {
       for (const [parentId, candidate] of this.adapters) {
-        const devin = isolatedAcpExtension.resolve(candidate)
-        if (!devin) continue
-        const retired = await devin.handleProcessExit(agentId)
+        const handler = protocolAdapterRegistry.runtimePolicy(
+          this.instances.get(parentId)?.config.protocol
+        ).handleProcessExit
+        const retired = await handler?.(candidate, agentId)
         if (!retired) continue
         const parent = this.instances.get(parentId)
         for (const sessionId of retired) parent?.sessions.delete(sessionId)
@@ -1176,7 +1128,7 @@ export class ExternalAgentManager {
 
   private gooseSessionTarget(agentId: string, sessionId: string) {
     const target = this.sessionOperationTarget(agentId, sessionId)
-    return { ...target, controls: gooseSessionExtension.resolve(target.adapter) }
+    return { ...target, controls: protocolAdapterRegistry.nativeChildControls(target.adapter) }
   }
 
   async listGooseChildren(agentId: string, sessionId: string): Promise<string[] | undefined> {
@@ -1553,7 +1505,9 @@ export class ExternalAgentManager {
       throw new Error("Agent does not support steering an active turn")
     }
     if (!sessionId) throw new Error("A native session id is required for steering")
-    if (!adapter.getSession(sessionId)) throw new Error("Session not found for this agent")
+    const session =
+      this.instances.get(agentId)?.sessions.get(sessionId) ?? adapter.getSession(sessionId)
+    if (!session) throw new Error("Session not found for this agent")
     await this.enforceSessionContentPolicy(adapter, sessionId, text)
     await adapter.steerTurn(sessionId, text)
   }
@@ -1789,38 +1743,31 @@ export class ExternalAgentManager {
     const instance = this.instances.get(agentId)
     if (!adapter || !instance || !adapter.isConnected()) return { status: "unsupported" }
     try {
-      const pi = this.getAdapterExtension(agentId, piRpcExtension)
-      if (pi) {
-        // The RPC first, because it is the one a live session will use. Both
-        // sources enumerate the same models, but only this one carries Pi's
-        // display names and Pi's ordering, so the list the user picks from
-        // before the first turn is the same list they see after it.
-        const viaRpc = await pi.listAgentModelsViaRpc()
-        if (viaRpc) {
-          const surface = resolveExternalAgentModels({ sessionModels: viaRpc })
-          return {
-            status: "ok",
-            data: {
-              models: {
-                ...surface,
+      const discovery = await protocolAdapterRegistry
+        .runtimePolicy(instance.config.protocol)
+        .discoverModels?.(adapter)
+      if (discovery) {
+        const models =
+          discovery.kind === "session-models"
+            ? resolveExternalAgentModels({ sessionModels: discovery.models })
+            : {
+                choices: discovery.models.map((model) => ({
+                  modelId: model.id,
+                  name: model.name ?? model.id,
+                })),
                 currentModelId: null,
-                write: surface.choices.length ? { kind: "session-seed" } : { kind: "none" },
-              },
-              thinking: EMPTY_THINKING_SURFACE,
-            },
-          }
-        }
-        // The CLI listing as a floor. It reaches the same set through a
-        // different projection, so falling back costs display names and Pi's
-        // ordering, and it only happens when a discovery process could not be
-        // started at all, which is a state in which a real session would fare
-        // no better. Offering the models with worse labels beats telling the
-        // user this agent has none.
-        const listing = await pi.listAgentModels()
-        if (listing.status !== "ok") throw new Error("Pi's model listing was unreadable")
+                write: { kind: "session-seed" as const },
+              }
         return {
           status: "ok",
-          data: { models: catalogModelSurface(listing.models), thinking: EMPTY_THINKING_SURFACE },
+          data: {
+            models: {
+              ...models,
+              currentModelId: null,
+              write: models.choices.length ? { kind: "session-seed" } : { kind: "none" },
+            },
+            thinking: EMPTY_THINKING_SURFACE,
+          },
         }
       }
       if (supportsModelCatalog(adapter)) {
@@ -2001,20 +1948,7 @@ export class ExternalAgentManager {
     try {
       const sessions = options ? await adapter.listSessions(options) : await adapter.listSessions()
       this.setSessionExtensionSupport(agentId, instance, "session/list", "supported", "ok")
-      const deleted = this.kimiDeletedSessions.get(agentId)
-      if (deleted) {
-        const listedIds = new Set(sessions.map((session) => session.sessionId))
-        for (const [id, marker] of deleted) {
-          if (
-            marker.expiresAt <= Date.now() ||
-            ((!options?.cwd || options.cwd === marker.cwd) && !listedIds.has(id))
-          )
-            deleted.delete(id)
-        }
-        if (deleted.size === 0) this.kimiDeletedSessions.delete(agentId)
-        return sessions.filter((session) => !deleted.has(session.sessionId))
-      }
-      return sessions
+      return this.sessionCatalogs.get(agentId)?.listed(sessions, options) ?? sessions
     } catch (error) {
       if (
         isExternalAgentMethodNotFoundError(error) ||
@@ -2400,20 +2334,10 @@ export class ExternalAgentManager {
     const adapter = this.adapters.get(agentId)
     if (adapter?.deleteSession) {
       await adapter.deleteSession(sessionId)
-      const instance = this.instances.get(agentId)
-      if (instance?.config.metadata?.preset === "kimi") {
-        // Kimi's background session-index projection can briefly republish a
-        // successfully deleted row. Keep native RPC results authoritative, but
-        // do not resurrect that row in the desktop while reconciliation catches up.
-        const deleted = this.kimiDeletedSessions.get(agentId) ?? new Map()
-        const cwd = instance.sessions.get(sessionId)?.metadata?.cwd
-        deleted.set(sessionId, {
-          cwd: typeof cwd === "string" ? cwd : undefined,
-          expiresAt: Date.now() + 120_000,
-        })
-        if (deleted.size > 256) deleted.delete(deleted.keys().next().value!)
-        this.kimiDeletedSessions.set(agentId, deleted)
-      }
+      const cwd = this.instances.get(agentId)?.sessions.get(sessionId)?.metadata?.cwd
+      this.sessionCatalogs
+        .get(agentId)
+        ?.deleted(sessionId, typeof cwd === "string" ? cwd : undefined)
     } else {
       await adapter?.closeSession(sessionId)
     }
@@ -3036,6 +2960,10 @@ export class ExternalAgentManager {
 
     this.instances.set(hydratedConfig.id, instance)
     this.adapters.set(hydratedConfig.id, adapter)
+    const sessionCatalog = protocolAdapterRegistry
+      .runtimePolicy(hydratedConfig.protocol)
+      .createSessionCatalog?.(hydratedConfig)
+    if (sessionCatalog) this.sessionCatalogs.set(hydratedConfig.id, sessionCatalog)
     this.emitLifecycleEvent(hydratedConfig.id, instance)
 
     // Connect if enabled unless the caller explicitly requested registration only.
@@ -3061,7 +2989,10 @@ export class ExternalAgentManager {
     if (adapter) {
       this.intentionalProcessStops.add(agentId)
       try {
-        if (isCodexAppServerProtocol(this.instances.get(agentId)?.config.protocol)) {
+        if (
+          protocolAdapterRegistry.runtimePolicy(this.instances.get(agentId)?.config.protocol)
+            .serializeConnections
+        ) {
           await this.disconnect(agentId)
         } else {
           await adapter.disconnect()
@@ -3072,12 +3003,13 @@ export class ExternalAgentManager {
       this.adapters.delete(agentId)
     }
 
-    this.codexWritableScopes.delete(agentId)
+    this.connectionCoordinator.writeScopes.delete(agentId)
     this.sessionHostFacts.delete(agentId)
     this.instances.delete(agentId)
     this.eventListeners.delete(agentId)
     this.nesSessions.delete(agentId)
-    this.kimiDeletedSessions.delete(agentId)
+    this.sessionCatalogs.get(agentId)?.clear()
+    this.sessionCatalogs.delete(agentId)
     this.capabilityCommandSignatures.delete(agentId)
 
     externalAgentManagerLogger.info("Removed external agent", { agentId })
@@ -3120,7 +3052,9 @@ export class ExternalAgentManager {
       // Drop the adapter so no resident protocol logic outlives the plugin that
       // contributed it. The config/instance stays for restore + UI explanation.
       this.adapters.delete(agentId)
-      this.codexWritableScopes.delete(agentId)
+      this.sessionCatalogs.get(agentId)?.clear()
+      this.sessionCatalogs.delete(agentId)
+      this.connectionCoordinator.writeScopes.delete(agentId)
       this.capabilityCommandSignatures.delete(agentId)
       const instance = this.instances.get(agentId)
       if (instance) {
@@ -3178,6 +3112,10 @@ export class ExternalAgentManager {
         continue
       }
       this.adapters.set(agentId, adapter)
+      const catalog = protocolAdapterRegistry
+        .runtimePolicy(instance.config.protocol)
+        .createSessionCatalog?.(instance.config)
+      if (catalog) this.sessionCatalogs.set(agentId, catalog)
       const blockAssessment = getExternalAgentExecutionBlock(instance.config)
       this.updateInstanceState(agentId, instance, {
         connectionStatus: "disconnected",
@@ -3212,22 +3150,14 @@ export class ExternalAgentManager {
     // Provider credentials are task-scoped. Settings/preflight may register this
     // agent, but only execution can mint a lease and launch its isolated child.
     if (this.instances.get(agentId)?.config.cogniaModel) return
-    if (!isCodexAppServerProtocol(this.instances.get(agentId)?.config.protocol)) {
-      return this.connectAdapter(agentId)
-    }
-    // A reconnect must finish teardown first, and simultaneous callers must
-    // share one native process/handshake and one bounded retry budget.
-    const disconnecting = this.codexDisconnections.get(agentId)
-    if (disconnecting) await disconnecting
-    const existing = this.codexConnections.get(agentId)
-    if (existing) return existing
-    const connecting = this.connectAdapter(agentId)
-    this.codexConnections.set(agentId, connecting)
-    try {
-      await connecting
-    } finally {
-      if (this.codexConnections.get(agentId) === connecting) this.codexConnections.delete(agentId)
-    }
+    return this.connectionCoordinator.connect(
+      agentId,
+      () => this.connectAdapter(agentId),
+      Boolean(
+        protocolAdapterRegistry.runtimePolicy(this.instances.get(agentId)?.config.protocol)
+          .serializeConnections
+      )
+    )
   }
 
   private async connectAdapter(agentId: string): Promise<void> {
@@ -3278,7 +3208,7 @@ export class ExternalAgentManager {
     let lastError: unknown
 
     for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
-      if (this.codexDisconnections.has(agentId)) {
+      if (this.connectionCoordinator.disconnections.has(agentId)) {
         throw new Error("Codex connection cancelled by disconnect")
       }
       instance.connectionAttempts++
@@ -3296,25 +3226,15 @@ export class ExternalAgentManager {
         // do less than the project asked for, so the connect stops here
         // rather than starting an unsandboxed agent.
         await assertRunEnvironmentPlaced(agentId)
-        const scopedConfig = isCodexAppServerProtocol(instance.config.protocol)
-          ? {
-              ...instance.config,
-              defaultPermissionMode:
-                this.codexWritableScopes.get(agentId)?.permissionMode ??
-                instance.config.defaultPermissionMode,
-              metadata: {
-                ...instance.config.metadata,
-                cogniaCodexWritableCeiling: this.codexWritableScopes.get(agentId)?.ceiling,
-              },
-              codexOptions: {
-                ...instance.config.codexOptions,
-                writableRoots: this.codexWritableScopes.get(agentId)?.roots ?? [],
-              },
-            }
-          : instance.config
-        const launchConfig = await prepareDshManagedLaunch(scopedConfig, dshManagedLaunchHost)
+        const runtimePolicy = protocolAdapterRegistry.runtimePolicy(instance.config.protocol)
+        const scopedConfig =
+          runtimePolicy.connectionConfig?.(
+            instance.config,
+            this.connectionCoordinator.writeScopes.get(agentId)
+          ) ?? instance.config
+        const launchConfig = await prepareExternalAgentConnection(scopedConfig)
         const connectTimeout = this.resolveExecutionTimeoutMs(instance)
-        if (isCodexAppServerProtocol(instance.config.protocol)) {
+        if (protocolAdapterRegistry.runtimePolicy(instance.config.protocol).ownsConnectionTimeout) {
           // Native connect times out its handshake and tears down the child
           // before rejecting. Racing an outer timeout would abandon that
           // owner and start a retry while its process was still initializing.
@@ -3389,7 +3309,7 @@ export class ExternalAgentManager {
 
         const shouldRetry =
           attempt < retryConfig.maxRetries &&
-          !this.codexDisconnections.has(agentId) &&
+          !this.connectionCoordinator.disconnections.has(agentId) &&
           this.isRetryableError(error, retryConfig.retryOnErrors)
 
         if (!shouldRetry) {
@@ -3449,26 +3369,14 @@ export class ExternalAgentManager {
     for (const task of [...this.gatewayTasks.values()]) {
       if (task.parentId === agentId) await task.release()
     }
-    if (!isCodexAppServerProtocol(this.instances.get(agentId)?.config.protocol)) {
-      return this.disconnectAdapter(agentId)
-    }
-    const existing = this.codexDisconnections.get(agentId)
-    if (existing) return existing
-    const connecting = this.codexConnections.get(agentId)
-    const disconnecting = (async () => {
-      // An unresolved connect still owns the process it is spawning. Do not
-      // tear down early and then let that old handshake resurrect the link.
-      if (connecting) await connecting.catch(() => undefined)
-      await this.disconnectAdapter(agentId)
-    })()
-    this.codexDisconnections.set(agentId, disconnecting)
-    try {
-      await disconnecting
-    } finally {
-      if (this.codexDisconnections.get(agentId) === disconnecting) {
-        this.codexDisconnections.delete(agentId)
-      }
-    }
+    return this.connectionCoordinator.disconnect(
+      agentId,
+      () => this.disconnectAdapter(agentId),
+      Boolean(
+        protocolAdapterRegistry.runtimePolicy(this.instances.get(agentId)?.config.protocol)
+          .serializeConnections
+      )
+    )
   }
 
   private async disconnectAdapter(agentId: string): Promise<void> {
@@ -3508,7 +3416,8 @@ export class ExternalAgentManager {
     // without fetching, so nothing rewrote `metadata.configOptions` and the
     // session panel rendered no config rows at all.
     forgetAgentModelSurface(agentId)
-    if (!this.codexWritableScopes.get(agentId)?.users) this.codexWritableScopes.delete(agentId)
+    if (!this.connectionCoordinator.writeScopes.get(agentId)?.users)
+      this.connectionCoordinator.writeScopes.delete(agentId)
 
     externalAgentManagerLogger.info("Disconnected external agent", { agentId })
   }
@@ -3551,12 +3460,7 @@ export class ExternalAgentManager {
       instructionEnvelope: options?.instructionEnvelope,
       // Per-agent Codex defaults (sandbox mode / reasoning effort / summary)
       // ride to the adapter through metadata — same channel as selectedModel.
-      codexOptions: isCodexAppServerProtocol(instance.config.protocol)
-        ? {
-            ...instance.config.codexOptions,
-            writableRoots: this.codexWritableScopes.get(instance.config.id)?.roots ?? [],
-          }
-        : instance.config.codexOptions,
+      codexOptions: instance.config.codexOptions,
       // Per-execution thinking level. Rides the same metadata channel as
       // `selectedModel`, and because the Codex client only applies
       // `codexOptions.defaultReasoningEffort` when this is undefined, setting it
@@ -3567,12 +3471,14 @@ export class ExternalAgentManager {
       // writes, which is the only one adapters read (e.g. the Codex app-server
       // client lifts it into `thread/start` params.model). Callers used to pass
       // a `model` that nothing consumed.
-      selectedModel:
-        options?.model ??
-        (instance.config.protocol === "codex-siwc-app-server" &&
-        typeof instance.config.metadata?.selectedModel === "string"
-          ? instance.config.metadata.selectedModel
-          : undefined),
+      selectedModel: options?.model,
+      ...protocolAdapterRegistry
+        .runtimePolicy(instance.config.protocol)
+        .sessionMetadata?.(
+          instance.config,
+          options,
+          this.connectionCoordinator.writeScopes.get(instance.config.id)
+        ),
     } as Record<string, unknown>
     const metadata =
       Object.entries(metadataPayload).filter(([, value]) => value !== undefined).length > 0
@@ -3610,136 +3516,25 @@ export class ExternalAgentManager {
   }
 
   /** Reserve the process-wide writable scope before a Codex turn can connect. */
-  private async acquireCodexWritableScope(
+  private async acquireProcessWriteScope(
     agentId: string,
     options?: PermissionBoundExternalExecutionOptions
-  ): Promise<{
-    options: PermissionBoundExternalExecutionOptions | undefined
-    release: () => void
-  }> {
+  ) {
     const instance = this.instances.get(agentId)
-    const adapter = this.adapters.get(agentId)
-    if (!instance || !adapter || !isCodexAppServerProtocol(instance.config.protocol)) {
-      return { options, release: () => {} }
-    }
-    options = enforceExternalPermissionCeiling(
-      options,
-      instance.config.protocol,
-      instance.capabilities,
-      instance.config.defaultPermissionMode,
-      this.getAgentCapabilityProfile(agentId)
-    )
-    const mode = this.resolveEffectivePermissionMode(instance, options?.permissionMode)
-    const report = (root: string, reason: string) => {
-      externalAgentManagerLogger.warn("Codex extra writable root was refused", {
-        agentId,
-        root,
-        reason,
-      })
-    }
-    const { validateCodexWritableRoots } = await import("@cognia/agent-codex/app-server-client")
-    const { sandboxSessionRuntime } = await import("@/lib/sandbox/session-runtime")
-    const { narrowRequiredWriteScope } = await import("@/lib/sandbox/policy-bridge")
-    const custom = options?.context?.custom
-    const nativeSessionId =
-      options?.sessionId ?? (typeof custom?.sessionId === "string" ? custom.sessionId : undefined)
-    const nativeSession = nativeSessionId
-      ? (instance.sessions.get(nativeSessionId) ?? adapter.getSession(nativeSessionId))
-      : undefined
-    const boundChatSessionId = nativeSession?.metadata?.cogniaSessionId
-    const chatSessionId =
-      typeof custom?.chatSessionId === "string"
-        ? custom.chatSessionId
-        : typeof boundChatSessionId === "string"
-          ? boundChatSessionId
-          : undefined
-    const ref = sandboxSessionRuntime.activeRefForSession(chatSessionId)
-    // A retired runtime or a native-only resume must not erase a ceiling the
-    // connected process already knows. Reuse it until an active binding replaces it.
-    const configuredCeiling = ref
-      ? sandboxSessionRuntime.writableRootsFor(ref)
-      : this.codexWritableScopes.get(agentId)?.ceiling
-    const ceiling = configuredCeiling?.length ? [...configuredCeiling].sort() : undefined
-    const requested =
-      mode === "acceptEdits" && instance.config.codexOptions?.sandboxMode !== "readOnly"
-        ? validateCodexWritableRoots(instance.config.codexOptions?.writableRoots, report)
-        : []
-    const roots = [
-      ...new Set(
-        requested.flatMap((root) => {
-          try {
-            if (!ref)
-              return ceiling
-                ? (narrowRequiredWriteScope([root], ceiling, "writable") ?? [])
-                : [root]
-            return sandboxSessionRuntime.clampRequest(ref, {
-              maxCpuSeconds: 0,
-              maxMemoryMb: 0,
-              network: "off",
-              networkHosts: [],
-              writable: [root],
-              readable: [],
-              targetFiles: [],
-            }).writable
-          } catch (error) {
-            report(root, this.normalizeErrorMessage(error))
-            return []
-          }
-        })
-      ),
-    ].sort()
-    let scope = this.codexWritableScopes.get(agentId)
-    const changed =
-      JSON.stringify([scope?.roots ?? [], scope?.ceiling]) !== JSON.stringify([roots, ceiling])
-    if (
-      changed &&
-      (scope?.users || this.liveSessions(agentId).some((session) => session.status === "executing"))
-    ) {
-      throw new Error("Codex writable roots cannot change while another session is executing")
-    }
-    if (!scope || changed) {
-      // Disconnect clears session caches. Preserve the conversation's native
-      // session so the normal resolver resumes it under the narrower process.
-      if (
-        changed &&
-        !options?.resetExternalSession &&
-        !options?.sessionId &&
-        !custom?.sessionId &&
-        chatSessionId
-      ) {
-        const previous = latestSession(
-          adapter
-            .getSessions()
-            .filter((session) => session.metadata?.cogniaSessionId === chatSessionId)
-        )
-        if (previous) options = { ...options, sessionId: previous.id }
-      }
-      scope = { roots, ceiling, permissionMode: mode, users: 0, ready: Promise.resolve() }
-      this.codexWritableScopes.set(agentId, scope)
-      if (changed && (adapter.isConnected() || this.codexConnections.has(agentId))) {
-        scope.ready = this.disconnect(agentId)
-      }
-    }
-    const acquiredScope = scope
-    acquiredScope.users++
-    const release = () => {
-      acquiredScope.users--
-      if (
-        acquiredScope.users === 0 &&
-        !adapter.isConnected() &&
-        this.codexWritableScopes.get(agentId) === acquiredScope
-      ) {
-        this.codexWritableScopes.delete(agentId)
-      }
-    }
-    try {
-      await scope.ready
-      return { options, release }
-    } catch (error) {
-      release()
-      if (this.codexWritableScopes.get(agentId) === scope) this.codexWritableScopes.delete(agentId)
-      throw error
-    }
+    return acquireProcessWriteScope(agentId, options, {
+      instance,
+      adapter: this.adapters.get(agentId),
+      policy: protocolAdapterRegistry.runtimePolicy(instance?.config.protocol),
+      profile: this.getAgentCapabilityProfile(agentId),
+      scopes: this.connectionCoordinator.writeScopes,
+      connections: this.connectionCoordinator.connections,
+      resolvePermissionMode: (current, mode) => this.resolveEffectivePermissionMode(current, mode),
+      warn: (message, data) => externalAgentManagerLogger.warn(message, data),
+      normalizeError: (error) => this.normalizeErrorMessage(error),
+      liveSessions: () => this.liveSessions(agentId),
+      latestSession,
+      disconnect: () => this.disconnect(agentId),
+    })
   }
 
   private async resolveExecutionSession(
@@ -3764,10 +3559,12 @@ export class ExternalAgentManager {
         : undefined
     const sessionOptions = this.buildSessionOptions(instance, options)
 
-    const devin = isolatedAcpExtension.resolve(adapter)
+    const authoritative = protocolAdapterRegistry
+      .runtimePolicy(instance.config.protocol)
+      .authoritativeSessions?.(adapter)
     let session = preferredSessionId
-      ? devin
-        ? devin.getSession(preferredSessionId)
+      ? authoritative
+        ? adapter.getSession(preferredSessionId)
         : (instance.sessions.get(preferredSessionId) ?? adapter.getSession?.(preferredSessionId))
       : chatSessionId && !reset
         ? latestSession(
@@ -3776,12 +3573,14 @@ export class ExternalAgentManager {
               .filter((candidate) => candidate.metadata?.cogniaSessionId === chatSessionId)
           )
         : undefined
-    const acp = acpClientExtension.resolve(adapter)
-    if (session && acp) {
+    const prepare = protocolAdapterRegistry.runtimePolicy(
+      instance.config.protocol
+    ).prepareCachedSession
+    if (session && prepare) {
       try {
-        session = (await acp.prepareForkSessionForExecution(session.id, sessionOptions)) ?? session
+        session = (await prepare(adapter, session, sessionOptions)) ?? session
       } catch (error) {
-        if (!acp.getSession(session.id)) instance.sessions.delete(session.id)
+        if (!adapter.getSession(session.id)) instance.sessions.delete(session.id)
         throw error
       }
     }
@@ -4417,7 +4216,7 @@ export class ExternalAgentManager {
     const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
     let releaseScope = () => {}
     try {
-      const scoped = await this.acquireCodexWritableScope(agentId, options)
+      const scoped = await this.acquireProcessWriteScope(agentId, options)
       releaseScope = scoped.release
       yield* this.executePreparedStreaming(agentId, prompt, scoped.options)
     } finally {
@@ -4524,7 +4323,8 @@ export class ExternalAgentManager {
         .prompt(
           session.id,
           message,
-          instance.config.protocol === "aider-cli"
+          protocolAdapterRegistry.runtimePolicy(instance.config.protocol)
+            .passEffectivePermissionMode
             ? { ...options, permissionMode: effectivePermissionMode }
             : options
         )
@@ -4695,7 +4495,14 @@ export class ExternalAgentManager {
     const current = this.sessionCancellations.get(key)
     if (current) return current
     const pending = (async () => {
-      const queue = await adapter.cancel(sessionId)
+      let queue
+      try {
+        queue = await adapter.cancel(sessionId)
+      } finally {
+        // A team stop must reach Host children even when the turn already
+        // ended, or the protocol cancel itself failed.
+        await adapter.stopSessionProcesses?.(sessionId)
+      }
       // A cancel that retires the session (DeepSeek Harness has no wire
       // cancel and closes the session's process) must not leave the session
       // cached: the next turn would be routed to a runtime that no longer
@@ -4799,13 +4606,20 @@ export class ExternalAgentManager {
   async execute(
     agentId: string,
     prompt: string,
-    options?: PermissionBoundExternalExecutionOptions
+    options?: PermissionBoundExternalExecutionOptions,
+    /** Independent terminal evidence; execute rejection alone never calls this. */
+    onExecutorStopped?: () => void
   ): Promise<ExternalAgentResult> {
     assertExternalAgentContentSafety(prompt, options)
     const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
     if (gateway) {
       try {
-        const result = await this.execute(gateway.agentId, prompt, gateway.options)
+        const result = await this.execute(
+          gateway.agentId,
+          prompt,
+          gateway.options,
+          onExecutorStopped
+        )
         if (result.success) gateway.recordResult(result.finalResponse)
         return {
           ...result,
@@ -4818,9 +4632,9 @@ export class ExternalAgentManager {
     const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
     let releaseScope = () => {}
     try {
-      const scoped = await this.acquireCodexWritableScope(agentId, options)
+      const scoped = await this.acquireProcessWriteScope(agentId, options)
       releaseScope = scoped.release
-      return await this.executePrepared(agentId, prompt, scoped.options)
+      return await this.executePrepared(agentId, prompt, scoped.options, onExecutorStopped)
     } finally {
       releaseScope()
       releaseToolHosts()
@@ -4830,7 +4644,8 @@ export class ExternalAgentManager {
   private async executePrepared(
     agentId: string,
     prompt: string,
-    options?: PermissionBoundExternalExecutionOptions
+    options?: PermissionBoundExternalExecutionOptions,
+    onExecutorStopped?: () => void
   ): Promise<ExternalAgentResult> {
     const adapter = this.adapters.get(agentId)
     const instance = this.instances.get(agentId)
@@ -4908,7 +4723,8 @@ export class ExternalAgentManager {
     // Codex owns response retries inside its native turn. A timeout or failed
     // response does not prove the turn was rejected or that its tools never
     // ran, so replaying execute() could duplicate accepted work and requests.
-    const maxExecutionRetries = isCodexAppServerProtocol(instance.config.protocol)
+    const maxExecutionRetries = protocolAdapterRegistry.runtimePolicy(instance.config.protocol)
+      .ownsExecutionRetries
       ? 0
       : retryConfig.maxRetries
     const hookCtx: AgentHookContext = {
@@ -4919,6 +4735,32 @@ export class ExternalAgentManager {
       cwd: options?.workingDirectory || instance.config.process?.cwd || undefined,
     }
 
+    let activeAttempts = 0
+    let executionFinished = false
+    let stopReported = false
+    const reportStop = async () => {
+      if (!onExecutorStopped || !executionFinished || activeAttempts !== 0 || stopReported) return
+      // WP1 proves ACP terminal/create TOOL groups, not the agent CLI internals.
+      // Successful turn frames account for attempts, never for Host children.
+      // Adapters without an authoritative process read cannot supply proof.
+      if (!adapter.confirmSessionProcessesStopped) return
+      stopReported = true
+      try {
+        await adapter.stopSessionProcesses?.(session.id)
+        if (!(await adapter.confirmSessionProcessesStopped(session.id))) {
+          stopReported = false
+          return
+        }
+        onExecutorStopped()
+      } catch (error) {
+        stopReported = false
+        externalAgentManagerLogger.warn("External session process stop remains unconfirmed", {
+          agentId,
+          sessionId: session.id,
+          error: this.normalizeErrorMessage(error),
+        })
+      }
+    }
     try {
       let result: ExternalAgentResult | null = null
       let lastError: unknown
@@ -4945,9 +4787,11 @@ export class ExternalAgentManager {
             options?.onEvent?.(hookEvent)
             void traceBridge.onEvent(hookEvent)
           }
+          let attemptStopped = false
           const wrappedOptions: ExternalAgentExecutionOptions = {
             ...options,
-            ...(instance.config.protocol === "aider-cli"
+            ...(protocolAdapterRegistry.runtimePolicy(instance.config.protocol)
+              .passEffectivePermissionMode
               ? {
                   permissionMode: this.resolveEffectivePermissionMode(
                     instance,
@@ -4956,6 +4800,20 @@ export class ExternalAgentManager {
                 }
               : {}),
             onEvent: (event) => {
+              // Adapters can synthesize failed/cancelled terminal frames on
+              // transport loss, before interruption is acknowledged. Positive
+              // completion proves only the turn ended. Host children require
+              // a separate authoritative process read below.
+              if (
+                !attemptStopped &&
+                (!event.sessionId || event.sessionId === session.id) &&
+                ((event.type === "done" && event.success) ||
+                  (event.type === "session_end" && event.reason === "completed"))
+              ) {
+                attemptStopped = true
+                activeAttempts--
+                void reportStop()
+              }
               if (
                 event.type === "tool_use_start" ||
                 event.type === "tool_use_end" ||
@@ -5010,6 +4868,7 @@ export class ExternalAgentManager {
           if (abortSignal?.aborted) void stopAgent()
           abortSignal?.addEventListener("abort", stopAgent, { once: true })
           this.gateExecutionContent(adapter, session.id, message, wrappedOptions)
+          activeAttempts++
           const attemptResult = await this.withTimeout(
             adapter.execute(session.id, message, wrappedOptions),
             executionTimeoutMs,
@@ -5186,6 +5045,9 @@ export class ExternalAgentManager {
         })
       )
       throw error
+    } finally {
+      executionFinished = true
+      await reportStop()
     }
   }
 
@@ -5718,11 +5580,10 @@ export class ExternalAgentManager {
         ceilings: this.resolveHostCeilings(),
         liveFacts: liveCapabilityFacts({
           negotiated: {
-            ...adapter.capabilities,
-            ...(instance.config.protocol === "opencode-v2" &&
-            !canProjectOpenCodeV2McpOnThisHost(instance.config)
-              ? { mcpTools: false }
-              : {}),
+            ...(protocolAdapterRegistry
+              .runtimePolicy(instance.config.protocol)
+              .projectCapabilities?.(instance.config, adapter.capabilities) ??
+              adapter.capabilities),
           },
           ...(availableCommands ? { availableCommands } : {}),
         }),
@@ -5853,10 +5714,12 @@ export class ExternalAgentManager {
       let attemptedReconnect = false
       try {
         const healthy = await adapter.healthCheck()
-        const devin = isolatedAcpExtension.resolve(adapter)
-        if (devin) {
+        const authoritative = protocolAdapterRegistry
+          .runtimePolicy(instance.config.protocol)
+          .authoritativeSessions?.(adapter)
+        if (authoritative) {
           for (const sessionId of instance.sessions.keys()) {
-            if (!devin.getSession(sessionId)) instance.sessions.delete(sessionId)
+            if (!adapter.getSession(sessionId)) instance.sessions.delete(sessionId)
           }
         }
         this.updateInstanceState(agentId, instance, {
@@ -6029,8 +5892,9 @@ export class ExternalAgentManager {
 
     this.instances.clear()
     this.adapters.clear()
-    this.codexWritableScopes.clear()
-    this.kimiDeletedSessions.clear()
+    this.connectionCoordinator.writeScopes.clear()
+    for (const catalog of this.sessionCatalogs.values()) catalog.clear()
+    this.sessionCatalogs.clear()
     this.delegationRules = []
     this.eventListeners.clear()
     this.lifecycleListeners.clear()

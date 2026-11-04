@@ -7,6 +7,7 @@
     // Only the packages this one may depend on. These `paths` replace the
     // root's, so an `@/` import or an undeclared sibling fails to compile.
     "paths": {
+      "@cognia/agent-runtime-kit/*": ["./src/*"],
       "@cognia/agent-contracts": ["../agent-contracts/src/index.ts"],
       "@cognia/agent-contracts/*": ["../agent-contracts/src/*"]
     }

@@ -38,3 +38,5 @@ Omit `COGNIA_CODEX_BINARY` to test `codex` on `PATH`. Without
 credential-free protocol check, not authenticated release certification.
 The [2026-10-18 report](../../docs/reports/codex-app-server-2026-10-18/README.md)
 records the tested versions, schema fingerprints and verification limits.
+
+`gateway-config` owns Codex task launch projection. `model-catalog` builds bounded task catalogs from the pinned `catalog-data/` source, shared with Rust and shipped with its LICENSE/NOTICE; it is a separate entry so other consumers do not load the catalog prompts.

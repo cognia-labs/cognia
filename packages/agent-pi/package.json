@@ -36,7 +36,8 @@
   },
   "dependencies": {
     "@cognia/agent-contracts": "workspace:*",
-    "@cognia/agent-runtime-kit": "workspace:*"
+    "@cognia/agent-runtime-kit": "workspace:*",
+    "yaml": "^2.9.1"
   },
   "engines": {
     "node": ">=20.19.0"

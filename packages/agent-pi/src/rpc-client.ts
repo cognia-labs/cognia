@@ -161,45 +161,15 @@ export function classifyPiVersion(raw: string | null | undefined): PiVersionVerd
 // ============================================================================
 
 /** Pi's ordered thinking levels; the per-model subset comes from the runtime. */
-export const PI_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const
+import {
+  THINKING_LEVELS as PI_THINKING_LEVELS,
+  clampThinkingLevel,
+} from "@cognia/agent-runtime-kit/thinking-levels"
+export {
+  THINKING_LEVELS as PI_THINKING_LEVELS,
+  clampThinkingLevel,
+} from "@cognia/agent-runtime-kit/thinking-levels"
 export type PiThinkingLevel = (typeof PI_THINKING_LEVELS)[number]
-
-/**
- * Pick the closest supported thinking level.
- *
- * Pi accepts an unsupported level, answers `success: true`, and silently
- * clamps to `off` — verified against 0.84.1. Sending an unvalidated level
- * therefore turns "think hard" into "don't think" with no error anywhere, so
- * the clamp has to happen here.
- */
-export function clampThinkingLevel(
-  requested: string,
-  available: readonly string[]
-): string | undefined {
-  if (available.length === 0) return undefined
-  if (available.includes(requested)) return requested
-
-  const wanted = PI_THINKING_LEVELS.indexOf(requested as PiThinkingLevel)
-  if (wanted < 0) return undefined
-
-  // Step down to the nearest supported level rather than up: silently
-  // spending more reasoning budget than asked for is worse than less.
-  const ordered = PI_THINKING_LEVELS.filter((level) => available.includes(level))
-  if (ordered.length === 0) return undefined
-  let best = ordered[0]
-  for (const level of ordered) {
-    if (PI_THINKING_LEVELS.indexOf(level) <= wanted) best = level
-  }
-  return best
-}
 
 /** Split Pi's `provider/modelId` form; a bare id keeps the active provider. */
 export function parsePiModel(model: string): { provider?: string; modelId: string } {

@@ -7,19 +7,8 @@ import type { AgentModelSlotDescriptor } from "./model-slots"
 
 type ModelPlanSource = "call" | "subagent" | "config"
 
-export interface TaskModelPlan {
-  version: 2 | 3
-  primaryModelId: string
-  slots: Record<
-    string,
-    { modelId: string; reasoningEffort?: string; variant?: string; source: ModelPlanSource }
-  >
-  models: string[]
-  allowedSpawnModels?: string[]
-  /** Collision-safe client selectors mapped to their selected provider/account. */
-  bindings?: Record<string, ExternalAgentCogniaModelBinding>
-  fingerprint: string
-}
+import type { TaskModelPlan } from "@cognia/agent-contracts/gateway-task"
+export type { TaskModelPlan } from "@cognia/agent-contracts/gateway-task"
 
 /** Why a set of slot overrides cannot run; `slot` names the offending slot. */
 export type TaskModelPlanRefusal =

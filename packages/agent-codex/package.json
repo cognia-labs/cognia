@@ -12,7 +12,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "catalog-data"
   ],
   "exports": {
     ".": {
@@ -36,7 +37,8 @@
   },
   "dependencies": {
     "@cognia/agent-contracts": "workspace:*",
-    "@cognia/agent-runtime-kit": "workspace:*"
+    "@cognia/agent-runtime-kit": "workspace:*",
+    "smol-toml": "^1.9.0"
   },
   "engines": {
     "node": ">=20.19.0"

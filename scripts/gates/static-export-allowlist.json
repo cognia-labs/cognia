@@ -60,11 +60,6 @@
     "reason": "Only reached from lib/plugin/convert/bin.ts, the esbuild entry for the standalone cognia-cli convert bundle; never imported by renderer pages."
   },
   {
-    "file": "lib/plugin/vscode-shim/permission-inference.ts",
-    "module": "fs",
-    "reason": "Not an import: regex/pattern literal that DETECTS require(\"fs\") in scanned extension source."
-  },
-  {
     "file": "lib/plugin/vscode-shim/vsix-installer.ts",
     "module": "node:crypto",
     "reason": "Lazy Node fallback for jest node-env only; browser path uses Web Crypto and never loads it."
@@ -73,5 +68,167 @@
     "file": "lib/qr/pair-payload.ts",
     "module": "buffer",
     "reason": "Resolves to the npm `buffer` browser polyfill in the bundle (base64url codec); verified in shipped builds."
+  },
+  {
+    "file": "packages/agent-codebuff/src/native-process.ts",
+    "module": "node:child_process",
+    "reason": "Helper of the standalone Codebuff Node 26 bridge; nodeOnly enforces a renderer import fence.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/native-process.ts",
+    "module": "node:module",
+    "reason": "Helper of the standalone Codebuff Node 26 bridge; nodeOnly enforces a renderer import fence.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/native-process.ts",
+    "module": "node:fs",
+    "reason": "Helper of the standalone Codebuff Node 26 bridge; nodeOnly enforces a renderer import fence.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/native-process.ts",
+    "module": "node:path",
+    "reason": "Helper of the standalone Codebuff Node 26 bridge; nodeOnly enforces a renderer import fence.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/node-bridge.ts",
+    "module": "node:fs/promises",
+    "reason": "Standalone Node 26 entry staged by stage-native-agent-bridges.mjs; renderer imports the neutral client.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/node-bridge.ts",
+    "module": "node:path",
+    "reason": "Standalone Node 26 entry staged by stage-native-agent-bridges.mjs; renderer imports the neutral client.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-codebuff/src/node-bridge.ts",
+    "module": "node:events",
+    "reason": "Standalone Node 26 entry staged by stage-native-agent-bridges.mjs; renderer imports the neutral client.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:fs/promises",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:http",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:path",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:child_process",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:os",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-crush/src/node-bridge.ts",
+    "module": "node:events",
+    "reason": "Standalone Crush HTTP Node 26 entry staged by stage-native-agent-bridges.mjs; neutral browser entries are fenced from it.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:child_process",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:fs",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:fs/promises",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:path",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:stream",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-acp-bridge.ts",
+    "module": "node:stream/promises",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:child_process",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:crypto",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:fs",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:fs/promises",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:net",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-acp/src/hermes-gateway-probe.ts",
+    "module": "node:path",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-runtime-kit/src/agent-path.ts",
+    "module": "node:path",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
+  },
+  {
+    "file": "packages/agent-runtime-kit/src/agent-path.ts",
+    "module": "node:os",
+    "reason": "Native external-agent helper, built and packaged separately; renderer value imports are forbidden.",
+    "nodeOnly": true
   }
 ]

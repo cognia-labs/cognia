@@ -5,6 +5,17 @@ import {
   piModelBinding,
 } from "./pi-subagents"
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
+import { agentInvoke, agentReadTextFile, agentListFiles } from "../agent-transport"
+import { ProtocolAdapterRegistry } from "../protocol-adapter"
+import { registerBuiltinProtocolAdapters } from "../integrations/register"
+import { piRuntimePolicy } from "../integrations/pi"
+
+jest.mock("../agent-transport", () => ({
+  ...jest.requireActual("../agent-transport"),
+  agentInvoke: jest.fn(),
+  agentReadTextFile: jest.fn(),
+  agentListFiles: jest.fn(),
+}))
 
 const config = {
   protocol: "pi-rpc",
@@ -37,6 +48,44 @@ function fixture(name = "pi-subagents", version = "0.80.0") {
     },
   }
 }
+
+it("prepares the registered Pi policy through real Host/parser/digest bindings", async () => {
+  const { files } = fixture()
+  const invoke = agentInvoke as jest.Mock
+  const read = agentReadTextFile as jest.Mock
+  const list = agentListFiles as jest.Mock
+  invoke.mockImplementation(async (command, args) => {
+    if (command === "agent_vendor_roots") return { piAgentDir: root }
+    if (command === "fs_list_workspace_dir") {
+      const directory = args.root + (args.relPath ? "/" + args.relPath : "")
+      return Object.keys(files)
+        .filter(
+          (path) =>
+            path.startsWith(directory + "/") && !path.slice(directory.length + 1).includes("/")
+        )
+        .map((absolute_path) => ({ absolute_path, is_dir: false }))
+    }
+    throw new Error("Unexpected Host command")
+  })
+  read.mockImplementation(async (path) => files[path] ?? null)
+  list.mockResolvedValue([])
+  try {
+    const registry = new ProtocolAdapterRegistry()
+    registerBuiltinProtocolAdapters(registry)
+    expect(registry.runtimePolicy("pi-rpc")).toBe(piRuntimePolicy)
+    const prepared = await registry.runtimePolicy("pi-rpc").prepareTaskConfig!(config)
+    const snapshot = piSubagentSupport(prepared)
+    expect(snapshot?.family).toBe("nico")
+    expect(snapshot?.agents.reviewer.model).toBe("cognia/review")
+    expect(snapshot?.agents.reviewer.digest).toMatch(/^sha256-[a-f0-9]{64}$/)
+    expect(invoke).toHaveBeenCalledWith("agent_vendor_roots", {})
+    expect(read).toHaveBeenCalledWith(root + "/settings.json", [root])
+  } finally {
+    invoke.mockReset()
+    read.mockReset()
+    list.mockReset()
+  }
+})
 
 it.each([
   ["pi-subagents", "0.80.0", "nico"],

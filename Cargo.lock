@@ -3379,6 +3379,7 @@ dependencies = [
  "cognia-companion",
  "cognia-companion-rpc",
  "cognia-core",
+ "cognia-exec-sandbox",
  "cognia-external-agent",
  "cognia-file-share",
  "cognia-gateway",

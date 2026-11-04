@@ -3,7 +3,7 @@ import type {
   AcpElicitationResponse,
   ExternalAgentTokenUsage,
 } from "@cognia/agent-contracts/external-agent"
-import { JsonRpcMethodError } from "@cognia/agent-runtime-kit/json-rpc-peer"
+import { JsonRpcMethodError } from "@cognia/agent-runtime-kit/json-rpc-error"
 import type { AcpVendorProfile } from "../vendor-profile"
 
 interface GrokQuestion {

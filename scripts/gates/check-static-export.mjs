@@ -21,9 +21,11 @@
  *     or the line directly above it (a bare marker without a reason fails),
  *   - scripts/gates/static-export-allowlist.json entries `{file, module,
  *     reason}` for whole-file/module pairs (stale entries are warnings so the
- *     list self-cleans).
+ *     list self-cleans). `nodeOnly: true` additionally fences the file from
+ *     runtime imports by other scanned sources, resolving relative paths and
+ *     the repository's tsconfig aliases. Only fenced Node files may import it.
  *
- * Scope: .ts/.tsx under app/ components/ hooks/ stores/ lib/ (git-tracked),
+ * Scope: .ts/.tsx under app/ components/ hooks/ stores/ lib/ packages/ (tracked and non-ignored new sources),
  * excluding tests/stories/mocks. `.mjs` hook scripts (hooks/builtin/) run
  * under Node by design and are naturally out of scope.
  *
@@ -32,10 +34,12 @@
  */
 
 import { readFileSync, realpathSync, existsSync } from "node:fs"
-import { resolve, dirname } from "node:path"
+import { resolve, dirname, relative, posix } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawn } from "node:child_process"
 import { builtinModules } from "node:module"
+import { parse } from "jsonc-parser"
+import ts from "typescript"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "../..")
@@ -77,35 +81,73 @@ export function buildDenySet(configSrc) {
  * require() / dynamic import(). Multi-line statements anchor to the line
  * where the statement starts.
  */
-export function extractImports(src) {
+export function extractImports(src, filename = "source.ts") {
+  const source = ts.createSourceFile(filename, src, ts.ScriptTarget.Latest, false)
   const found = []
-  const push = (index, module, typeOnly = false) => {
-    let line = 1
-    for (let i = 0; i < index; i += 1) if (src[i] === "\n") line += 1
-    found.push({ module, line, typeOnly })
+  const staticString = (node) => {
+    if (!node) return undefined
+    if (ts.isStringLiteralLike(node)) return node.text
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) ||
+      ts.isSatisfiesExpression(node) ||
+      ts.isNonNullExpression(node)
+    )
+      return staticString(node.expression)
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = staticString(node.left)
+      const right = staticString(node.right)
+      if (left !== undefined && right !== undefined) return left + right
+    }
+    return undefined
   }
-  // Static imports (incl. multi-line specifier lists). `import type` is erased
-  // at emit. The specifier-list wildcard excludes quotes and semicolons so the
-  // lazy scan can never cross into a later statement's string literal.
-  for (const m of src.matchAll(/(?:^|\n)\s*import\s+(type\s+)?[^;'"]*?from\s*["']([^"']+)["']/g)) {
-    push(m.index + 1, m[2], Boolean(m[1]))
+  const push = (node, expression, typeOnly = false) => {
+    const specifier = staticString(expression)
+    if (specifier === undefined) return
+    const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
+    found.push({ module: specifier, line: line + 1, typeOnly })
   }
-  // Bare side-effect imports: import "x"
-  for (const m of src.matchAll(/(?:^|\n)\s*import\s*["']([^"']+)["']/g)) {
-    push(m.index + 1, m[1])
+  const namedTypesOnly = (bindings) =>
+    bindings && bindings.elements.length > 0 && bindings.elements.every((entry) => entry.isTypeOnly)
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause
+      const bindings = clause?.namedBindings
+      push(
+        node,
+        node.moduleSpecifier,
+        Boolean(
+          clause?.isTypeOnly ||
+          (!clause?.name && bindings && ts.isNamedImports(bindings) && namedTypesOnly(bindings))
+        )
+      )
+    } else if (ts.isExportDeclaration(node)) {
+      const bindings = node.exportClause
+      push(
+        node,
+        node.moduleSpecifier,
+        Boolean(
+          node.isTypeOnly || (bindings && ts.isNamedExports(bindings) && namedTypesOnly(bindings))
+        )
+      )
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      push(node, node.moduleReference.expression, node.isTypeOnly)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      push(node, node.argument.literal, true)
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      push(node, node.arguments[0])
+    }
+    ts.forEachChild(node, visit)
   }
-  // Re-exports: export ... from "x" (export type ... is erased)
-  for (const m of src.matchAll(/(?:^|\n)\s*export\s+(type\s+)?[^;'"]*?from\s*["']([^"']+)["']/g)) {
-    push(m.index + 1, m[2], Boolean(m[1]))
-  }
-  // require("x") and dynamic import("x"). `typeof import("x")` is a type
-  // position (erased at emit) and is treated as type-only.
-  for (const m of src.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)) {
-    push(m.index, m[1])
-  }
-  for (const m of src.matchAll(/(typeof\s+)?\bimport\(\s*["']([^"']+)["']\s*\)/g)) {
-    push(m.index, m[2], Boolean(m[1]))
-  }
+  visit(source)
   // Dedupe identical (module, line, typeOnly) triples — e.g.
   // `(await import("x")) as typeof import("x")` yields one value + one type hit.
   const seen = new Set()
@@ -130,7 +172,7 @@ function denyMatch(deny, module) {
  * Scan one file. Returns { violations, badExempts } where each entry is
  * { file, line, module }.
  */
-export function scanSource(relPath, src, deny, allowlist) {
+export function scanSource(relPath, src, deny, allowlist, imports = extractImports(src, relPath)) {
   const violations = []
   const badExempts = []
   const lines = src.split("\n")
@@ -144,7 +186,7 @@ export function scanSource(relPath, src, deny, allowlist) {
     return "none"
   }
 
-  for (const imp of extractImports(src)) {
+  for (const imp of imports) {
     if (imp.typeOnly) continue
     if (!denyMatch(deny, imp.module)) continue
     if (allowlist.some((a) => a.file === relPath && a.module === imp.module)) continue
@@ -157,10 +199,24 @@ export function scanSource(relPath, src, deny, allowlist) {
   return { violations, badExempts }
 }
 
-export async function listSourceFiles() {
-  const child = spawn("git", ["-C", REPO_ROOT, "ls-files", "-z", "--", ...SEARCH_DIRS], {
-    stdio: ["ignore", "pipe", "pipe"],
-  })
+export async function listSourceFiles(repoRoot = REPO_ROOT) {
+  const child = spawn(
+    "git",
+    [
+      "-C",
+      repoRoot,
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...SEARCH_DIRS,
+    ],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  )
   const completion = new Promise((resolve, reject) => {
     child.once("error", reject)
     child.once("close", (code, signal) => {
@@ -187,7 +243,7 @@ export async function listSourceFiles() {
   ])
   return paths
     .filter((p) => p.endsWith(".ts") || p.endsWith(".tsx"))
-    .filter((p) => existsSync(resolve(REPO_ROOT, p)))
+    .filter((p) => existsSync(resolve(repoRoot, p)))
     .filter(
       (p) =>
         !/\.(test|stories)\.tsx?$/.test(p) && !p.includes("__tests__/") && !p.includes("__mocks__/")
@@ -200,28 +256,112 @@ function loadAllowlist() {
   if (!Array.isArray(parsed)) {
     throw new Error("static-export-allowlist.json must be a JSON array of {file, module, reason}")
   }
+  for (const entry of parsed) {
+    if (
+      typeof entry?.file !== "string" ||
+      typeof entry.module !== "string" ||
+      typeof entry.reason !== "string" ||
+      !entry.reason.trim() ||
+      (entry.nodeOnly !== undefined && typeof entry.nodeOnly !== "boolean")
+    )
+      throw new Error(
+        "Invalid static-export allowlist entry; file, module, reason and optional boolean nodeOnly are required"
+      )
+  }
   return parsed
+}
+
+/** Resolve repository source aliases before enforcing the standalone Node fence. */
+function loadSourcePaths() {
+  const file = resolve(REPO_ROOT, "tsconfig.json")
+  if (!existsSync(file)) return { baseUrl: REPO_ROOT, paths: [] }
+  const errors = []
+  const config = parse(readFileSync(file, "utf8"), errors, { allowTrailingComma: true })
+  if (errors.length)
+    throw new Error("Cannot read tsconfig.json aliases for the static-export boundary")
+  const options = config?.compilerOptions ?? {}
+  return {
+    baseUrl: resolve(REPO_ROOT, options.baseUrl ?? "."),
+    paths: Object.entries(options.paths ?? {}).sort(([a], [b]) => {
+      const specificity = (key) => (key.includes("*") ? key.indexOf("*") : Number.MAX_SAFE_INTEGER)
+      return specificity(b) - specificity(a) || b.length - a.length
+    }),
+  }
+}
+
+function standaloneTarget(importer, specifier, nodeOnlyFiles, sourcePaths) {
+  let targets = []
+  if (specifier.startsWith(".")) {
+    targets = [posix.normalize(posix.join(posix.dirname(importer), specifier))]
+  } else {
+    for (const [pattern, paths] of sourcePaths.paths) {
+      const star = pattern.indexOf("*")
+      const prefix = star < 0 ? pattern : pattern.slice(0, star)
+      const suffix = star < 0 ? "" : pattern.slice(star + 1)
+      if (
+        star < 0
+          ? specifier !== pattern
+          : specifier.length < prefix.length + suffix.length ||
+            !specifier.startsWith(prefix) ||
+            !specifier.endsWith(suffix)
+      )
+        continue
+      const match = star < 0 ? "" : specifier.slice(prefix.length, specifier.length - suffix.length)
+      targets = paths.map((target) =>
+        relative(
+          REPO_ROOT,
+          resolve(
+            sourcePaths.baseUrl,
+            target.replaceAll("*", () => match)
+          )
+        ).replaceAll("\\", "/")
+      )
+      break
+    }
+  }
+  for (const target of targets) {
+    const stem = target.replace(/\.[cm]?jsx?$/, "")
+    const found = [
+      target,
+      `${stem}.ts`,
+      `${stem}.tsx`,
+      `${stem}/index.ts`,
+      `${stem}/index.tsx`,
+    ].find((candidate) => nodeOnlyFiles.has(candidate))
+    if (found) return found
+  }
+  return undefined
 }
 
 async function main() {
   const deny = buildDenySet(readFileSync(NEXT_CONFIG, "utf8"))
   const allowlist = loadAllowlist()
   const files = await listSourceFiles()
+  const nodeOnlyFiles = new Set(
+    allowlist.filter((entry) => entry.nodeOnly).map((entry) => entry.file)
+  )
+  const sourcePaths = loadSourcePaths()
 
   const violations = []
   const badExempts = []
+  const nodeBoundaryViolations = []
   const usedAllowlist = new Set()
 
   for (const rel of files) {
     const src = readFileSync(resolve(REPO_ROOT, rel), "utf8")
+    const imports = extractImports(src, rel)
     // Track which allowlist entries actually matched so stale ones warn.
-    for (const imp of extractImports(src)) {
+    for (const imp of imports) {
       if (imp.typeOnly) continue
+      if (!nodeOnlyFiles.has(rel)) {
+        const target = standaloneTarget(rel, imp.module, nodeOnlyFiles, sourcePaths)
+        if (target) nodeBoundaryViolations.push({ file: rel, ...imp, target })
+      }
       if (!denyMatch(deny, imp.module)) continue
       const hit = allowlist.findIndex((a) => a.file === rel && a.module === imp.module)
       if (hit >= 0) usedAllowlist.add(hit)
     }
-    const result = scanSource(rel, src, deny, allowlist)
+    const result = scanSource(rel, src, deny, allowlist, imports)
     violations.push(...result.violations)
     badExempts.push(...result.badExempts)
   }
@@ -235,10 +375,11 @@ async function main() {
     for (const s of stale) console.warn(`  ${s.file} → ${s.module}`)
   }
 
-  if (violations.length === 0 && badExempts.length === 0) {
+  if (violations.length === 0 && badExempts.length === 0 && nodeBoundaryViolations.length === 0) {
     console.log(
       `[static-export] OK: ${files.length} TS files audited, ` +
-        `${allowlist.length - stale.length} allowlisted import(s), no Node-only imports in the bundle.`
+        `${allowlist.length - stale.length} allowlisted import(s), no Node-only imports in the bundle; ` +
+        `${nodeOnlyFiles.size} standalone Node source(s) fenced.`
     )
     return 0
   }
@@ -267,7 +408,14 @@ async function main() {
     console.error("")
   }
 
-  console.error(`[static-export] ${violations.length + badExempts.length} issue(s).`)
+  for (const entry of nodeBoundaryViolations)
+    console.error(
+      `  ${entry.file}:${entry.line} imports standalone Node module "${entry.module}" (${entry.target})`
+    )
+
+  console.error(
+    `[static-export] ${violations.length + badExempts.length + nodeBoundaryViolations.length} issue(s).`
+  )
   return 1
 }
 

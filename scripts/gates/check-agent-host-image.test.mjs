@@ -328,6 +328,22 @@ test("both server compile stages carry Rust out-of-tree embedded inputs", () => 
   }
 })
 
+test("bundle sandboxd compile stage carries the canonical package-owned Codex catalog", () => {
+  const dockerfile = readFileSync(
+    new URL("../../deploy/bundle/Dockerfile", import.meta.url),
+    "utf8"
+  )
+  const copies = stageText(dockerfile, "sandboxd")
+    .split("\n")
+    .filter((line) => line.startsWith("COPY ") && !line.includes("--from="))
+    .flatMap((line) => line.split(/\s+/).slice(1, -1))
+  const target = "packages/agent-codex/catalog-data/codex-catalog.json"
+  assert.ok(
+    copies.some((input) => target === input || target.startsWith(input + "/")),
+    "sandboxd is missing the canonical Codex catalog"
+  )
+})
+
 for (const [file, stage] of [
   ["deploy/docker/Dockerfile.cognia-server", "brain-builder"],
   ["deploy/compose/Dockerfile.web", "web-build"],

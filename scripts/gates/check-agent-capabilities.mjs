@@ -106,14 +106,14 @@ export function declaredExecutableProtocols(source) {
 }
 
 /** The protocols `manager.ts` actually registers an adapter for. */
-export function registeredProtocols(source) {
+export function registeredProtocols(source, registrationSource = source) {
   const clean = stripComments(source)
   const registered = [...clean.matchAll(/protocolAdapterRegistry\.register\(\s*"([^"]+)"/g)].map(
     (m) => m[1]
   )
   // Built-ins share a registration helper with plugin bootstrap. Only count it
   // when the manager actually invokes it with the live protocol registry.
-  const helper = clean.match(
+  const helper = stripComments(registrationSource).match(
     /function\s+registerBuiltinProtocolAdapters\s*\(\s*(\w+)\s*:\s*ProtocolAdapterRegistry\s*\)\s*:\s*void\s*\{([\s\S]*?)^\}/m
   )
   if (helper && /\bregisterBuiltinProtocolAdapters\(\s*protocolAdapterRegistry\s*\)/.test(clean)) {
@@ -468,7 +468,10 @@ export function runChecks() {
     ...specCapabilityIds(read(EXECUTION_TS)),
     ...externalOnlyCapabilityIds(contract),
   ]
-  const registered = registeredProtocols(read(MANAGER_TS))
+  const registered = registeredProtocols(
+    read(MANAGER_TS),
+    read("lib/ai/agent/external/integrations/register.ts")
+  )
   const declaredExecutable = declaredExecutableProtocols(contract)
 
   const errors = []

@@ -94,6 +94,35 @@ class TestAdapter extends BaseProtocolAdapter {
   }
 }
 describe("ProtocolAdapterRegistry", () => {
+  it("retains a trusted protocol policy on factory replacement and removes it on unregister", () => {
+    const reg = new ProtocolAdapterRegistry()
+    const policy = { ownsExecutionRetries: true }
+    reg.register("test", () => new TestAdapter(), policy)
+    const replacement = new TestAdapter()
+    reg.register("test", () => replacement)
+    expect(reg.create("test")).toBe(replacement)
+    expect(reg.runtimePolicy("test")).toBe(policy)
+    reg.unregister("test")
+    expect(reg.runtimePolicy("test").ownsExecutionRetries).toBeUndefined()
+    reg.register("test", () => replacement)
+    expect(reg.runtimePolicy("test").ownsExecutionRetries).toBeUndefined()
+  })
+
+  it("resolves passive extensions independently of the adapter's protocol and cleans them up", () => {
+    const reg = new ProtocolAdapterRegistry()
+    const adapter = new TestAdapter(),
+      other = new TestAdapter()
+    const controls = { listChildren: jest.fn(), inspect: jest.fn(), recoveryPrompt: jest.fn() }
+    reg.register("integration", () => adapter, {
+      nativeChildren: (candidate) => (candidate === adapter ? controls : undefined),
+    })
+    expect(reg.nativeChildControls(other)).toBeUndefined()
+    expect(reg.nativeChildControls(adapter)).toBe(controls)
+    expect(controls.listChildren).not.toHaveBeenCalled()
+    reg.unregister("integration")
+    expect(reg.nativeChildControls(adapter)).toBeUndefined()
+  })
+
   it("registers, looks up, and unregisters factories", () => {
     const reg = new ProtocolAdapterRegistry()
     reg.register("test", () => new TestAdapter())

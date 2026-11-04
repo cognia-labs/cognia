@@ -8,6 +8,12 @@ import { fileURLToPath } from "node:url"
 import ts from "typescript"
 import { NATIVE_AGENT_BRIDGES, stageNativeAgentBridges } from "./stage-native-agent-bridges.mjs"
 
+test("native bridge implementations are owned by integration packages", () => {
+  for (const [id, spec] of Object.entries(NATIVE_AGENT_BRIDGES)) {
+    assert.match(spec.source, /^packages\/agent-[^/]+\/src\//, `${id} must not point into a Host source tree`)
+  }
+})
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-agent-stage-test-"))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -36,6 +42,7 @@ test("the CLI syntax target preserves the pinned native bridge class-field seman
   }
   console.log(new ProbeError("owned-error").code)
   `)
+  fs.mkdirSync(path.dirname(configFile), { recursive: true })
   fs.writeFileSync(configFile, JSON.stringify({ compilerOptions: { target: "ES2018" } }))
   const pinned = stageNativeAgentBridges({ ...args, pin: true })
   const current = ts.readConfigFile(

@@ -5566,7 +5566,7 @@ describe("native 0.154.0 request regressions", () => {
           expect(fs.existsSync(path.join(dir, "auth.json"))).toBe(false)
           const baseConfig = fs.readFileSync(path.join(dir, "config.toml"), "utf8")
           const bundled = JSON.parse(
-            fs.readFileSync("cli/src/runtime/external/codex-catalog/codex-catalog.json", "utf8")
+            fs.readFileSync("packages/agent-codex/catalog-data/codex-catalog.json", "utf8")
           ) as { models: Array<Record<string, unknown>> }
           const template = bundled.models.find((model) => model.slug === "gpt-6.1-sol")!
           const until = async (check: () => boolean) => {

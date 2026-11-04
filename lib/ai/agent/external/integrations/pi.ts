@@ -65,3 +65,7 @@ export function createPiRpcAdapterFactory(
 ): ProtocolAdapterFactory {
   return () => createPiRpcAdapter(processHost, hostServices)
 }
+
+import { createPiRuntimePolicy } from "@cognia/agent-pi/runtime-policy"
+import { resolvePiSubagents } from "../config/pi-subagents"
+export const piRuntimePolicy = createPiRuntimePolicy(resolvePiSubagents)

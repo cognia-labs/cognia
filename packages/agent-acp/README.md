@@ -43,3 +43,7 @@ policies. Native Auto is hidden. No App Server or vendor extensions are used.
 Run `COGNIA_MINIMAX_MCODE=/absolute/path/to/mcode pnpm exec tsx
 scripts/smoke/minimax-acp-smoke.ts` for the real CLI/sandbox test against a
 synthetic local provider. It uses temporary state and requires no cloud login.
+
+The package also owns `./factory` (native isolation selection), `./hermes-daemon` (shared foreground gateway leases), `./runtime-policy` and `./registry-lifecycle`. Hosts inject path containment, approved state-key rules, runtime facts, process authority and verified bridge resolution. `./hermes-acp-bridge` and `./hermes-gateway-probe` are separate Node-only entry points, never imported by the browser/root entries.
+
+`session-catalog` owns Kimi delayed-index reconciliation. `devin-mcp-config` owns pure JSONC/MCP validation and projection; filesystem/credential authority stays with the Host. `vendors/*-gateway` define Qwen, Kimi, Goose and Copilot gateway recipes without importing Host state.

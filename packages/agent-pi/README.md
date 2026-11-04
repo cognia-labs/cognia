@@ -20,3 +20,5 @@ The app wires the adapter in `lib/ai/agent/external/integrations/pi.ts`; the
 parity tests that pin `./permission` to the shipped sidecar extension live in
 `lib/ai/agent/external/integrations/pi.test.ts`. Checked by
 `node scripts/build/pack-test-agent-package.mjs agent-pi`.
+
+`subagent-snapshot` detects supported installed executors through injected read/parser/digest ports. `gateway-config` owns Pi model/settings and child-definition projection; the Host supplies admitted model facts and its gateway lease.

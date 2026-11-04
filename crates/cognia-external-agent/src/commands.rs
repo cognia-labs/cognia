@@ -412,9 +412,14 @@ pub async fn acp_terminal_kill_session_terminals(
 #[tauri::command]
 pub async fn acp_terminal_is_running(
     terminal_id: String,
+    for_stop_proof: Option<bool>,
     state: State<'_, AcpTerminalState>,
 ) -> Result<bool, String> {
-    state.0.is_running(&terminal_id).await
+    if for_stop_proof.unwrap_or(false) {
+        state.0.is_group_running(&terminal_id).await
+    } else {
+        state.0.is_running(&terminal_id).await
+    }
 }
 
 /// Get terminal info (state, command, session_id)
@@ -428,8 +433,15 @@ pub async fn acp_terminal_get_info(
 
 /// List all terminal IDs
 #[tauri::command]
-pub async fn acp_terminal_list(state: State<'_, AcpTerminalState>) -> Result<Vec<String>, String> {
-    Ok(state.0.list().await)
+pub async fn acp_terminal_list(
+    for_stop_proof: Option<bool>,
+    state: State<'_, AcpTerminalState>,
+) -> Result<Vec<String>, String> {
+    Ok(if for_stop_proof.unwrap_or(false) {
+        state.0.list_for_stop_proof().await
+    } else {
+        state.0.list().await
+    })
 }
 
 // ============================================================================

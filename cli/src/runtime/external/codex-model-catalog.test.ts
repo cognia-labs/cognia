@@ -1,5 +1,5 @@
 import { buildCodexModelCatalog } from "./codex-model-catalog"
-import vendored from "./codex-catalog/codex-catalog.json"
+import { codexCatalogData as vendored } from "@cognia/agent-codex/model-catalog"
 import golden from "./codex-catalog/fixtures/catalog.json"
 
 const request = {

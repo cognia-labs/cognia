@@ -320,3 +320,8 @@ export const AIDER_CAPABILITIES: AgentCapabilityContribution = {
     },
   },
 }
+
+/** Permission translation required by Aider's per-turn CLI launch. */
+export const aiderRuntimePolicy: Readonly<
+  import("@cognia/agent-contracts/runtime-policy").AgentRuntimePolicy
+> = Object.freeze({ passEffectivePermissionMode: true })

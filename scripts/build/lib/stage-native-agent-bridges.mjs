@@ -10,8 +10,8 @@ import { copyRuntimeClosure, findInstalledPackage } from "./copy-runtime-closure
 export const NATIVE_AGENT_BRIDGES = Object.freeze({
   codebuff: { source: "packages/agent-codebuff/src/node-bridge.ts", args: ["--cognia-codebuff-bridge"] },
   "crush-http": { source: "packages/agent-crush/src/node-bridge.ts", args: ["--cognia-crush-bridge"] },
-  "hermes-probe": { source: "cli/src/runtime/external/hermes-gateway-probe.ts", args: ["--hermes-gateway-probe"] },
-  "hermes-acp": { source: "cli/src/runtime/external/hermes-acp-bridge.ts", args: ["--cognia-hermes-acp"] },
+  "hermes-probe": { source: "packages/agent-acp/src/hermes-gateway-probe.ts", args: ["--hermes-gateway-probe"] },
+  "hermes-acp": { source: "packages/agent-acp/src/hermes-acp-bridge.ts", args: ["--cognia-hermes-acp"] },
 })
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const json = (value) => JSON.stringify(value, null, 2) + "\n"

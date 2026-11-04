@@ -5,7 +5,7 @@ use std::{collections::HashSet, sync::OnceLock};
 
 const INVALID: &str = "Invalid gateway task configuration";
 const VENDORED: &str =
-    include_str!("../../../cli/src/runtime/external/codex-catalog/codex-catalog.json");
+    include_str!("../../../packages/agent-codex/catalog-data/codex-catalog.json");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
