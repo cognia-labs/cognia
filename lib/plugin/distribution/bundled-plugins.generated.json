@@ -238,8 +238,8 @@
         },
         {
           "path": "dist/plugin.css",
-          "bytes": 8156,
-          "sha256": "d1b4c13758a1ecaad94cdc434436b07ed4fdd667fedace1b76822e12ee6e428a"
+          "bytes": 8146,
+          "sha256": "93566fd04ef168be3ef187c75872d16ef777e5e08932302cb384d93a9a58c0ce"
         },
         {
           "path": "plugin.json",
