@@ -13,6 +13,7 @@ import { BaseProtocolAdapter } from "@cognia/agent-runtime-kit/base-adapter"
 import { promptInputPassesGate } from "@cognia/agent-runtime-kit/prompt-gate"
 import { OPENCODE_V2_CURRENT_VERSION, type OpenCodeV2ServiceDiscovery } from "./discovery"
 import { OPENCODE_V2_EXECUTION_SEMANTICS, OPENCODE_V2_PROTOCOL } from "./manifest"
+import type { OpenCodeAuthClient } from "./v2-auth"
 import type {
   AcpAvailableCommand,
   AcpConfigOption,
@@ -213,6 +214,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
   readonly protocol = OPENCODE_V2_PROTOCOL
   readonly semantics = OPENCODE_V2_EXECUTION_SEMANTICS
   private client?: OpenCodeClient
+  private authClient?: OpenCodeAuthClient
+  private authFactory?: () => OpenCodeAuthClient
   private connectionService?: OpenCodeV2OwnedService
   private catalog = new Map<string, ModelInfo[]>()
   private models = new Map<string, ModelRef>()
@@ -451,6 +454,18 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
           return this.fetch(input, { ...init, readTimeout: 90_000 })
         },
       })
+      // User-initiated OAuth data is destined for authentication, never model
+      // context. Keep its bytes intact through the same authenticated host
+      // transport; expose only discovery and OAuth operations on this client.
+      this.authClient = undefined
+      this.authFactory = () => {
+        const auth = OpenCode.make({
+          baseUrl: endpoint,
+          headers: Object.fromEntries(headers.entries()),
+          fetch: (input, init) => this.fetch(input, { ...init, readTimeout: 15_000 }),
+        })
+        return { integration: { list: auth.integration.list, oauth: auth.integration.oauth } }
+      }
       const status = await this.client.server.info({ signal: this.connection.signal })
       if (
         !CURRENT_VERSION.test(status.version) ||
@@ -482,6 +497,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
       await this.connectionService?.close().catch(() => undefined)
       this.connectionService = undefined
       this.client = undefined
+      this.authClient = undefined
+      this.authFactory = undefined
       this._connectionStatus = "error"
       throw error
     }
@@ -521,6 +538,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     this.active.clear()
     this.restoredForms.clear()
     this.client = undefined
+    this.authClient = undefined
+    this.authFactory = undefined
     this.catalog.clear()
     this.commands.clear()
     this.models.clear()
@@ -535,6 +554,11 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     if (sessionId && this.owned.has(sessionId)) return this.owned.get(sessionId)!.client
     if (!this.client) throw new Error("Not connected to OpenCode V2 service")
     return this.client
+  }
+
+  getAuthClient(): OpenCodeAuthClient {
+    if (!this.client || !this.authFactory) throw new Error("Not connected to OpenCode V2 service")
+    return (this.authClient ??= this.authFactory())
   }
 
   /**

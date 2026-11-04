@@ -1,6 +1,7 @@
 import type { AgentProcessHost } from "@cognia/agent-contracts/host"
 import {
   canProjectOpenCodeV2Mcp,
+  createOpenCodeV2RuntimePolicy,
   launchOpenCodeV2Service,
   openCodeV2McpConfig,
   type OpenCodeV2Placement,
@@ -17,6 +18,19 @@ const placementFor = (local: boolean): OpenCodeV2Placement => ({
   processesLocal: () => local,
 })
 const placement = placementFor(true)
+
+it("projects MCP capability from live Host placement and never grants a missing capability", () => {
+  let local = true
+  const policy = createOpenCodeV2RuntimePolicy({
+    processesLocal: () => local,
+    hasSelectedSandbox: () => false,
+  })
+  const input = { id: "agent", process: { command: "opencode" } } as ExternalAgentConfig
+  expect(policy.projectCapabilities!(input, { mcpTools: true })).toMatchObject({ mcpTools: true })
+  expect(policy.projectCapabilities!(input, { mcpTools: false })).toMatchObject({ mcpTools: false })
+  local = false
+  expect(policy.projectCapabilities!(input, { mcpTools: true })).toMatchObject({ mcpTools: false })
+})
 
 interface FakePlane {
   invoke(operation: string, args: Record<string, unknown>): Promise<unknown>

@@ -583,13 +583,13 @@
     "title": "订阅设置"
   },
   "opencode": {
-    "description": "从 `~/.local/share/opencode/auth.json` 读取已配置的凭证；OpenCode-Zen 订阅以「粘贴 API key」的方式接入。OpenCode 本身管理大量服务商，我们只展示白名单内的几项。",
+    "description": "添加 Zen/Go API key，或发现旧版 OpenCode auth.json 中的凭据。OpenCode V2 OAuth 登录入口位于对应 Agent 的设置中。",
     "discovery": {
       "adopt": "采纳",
       "adoptFailed": "凭据采纳失败：{error}",
       "adoptSuccess": "已将 \"{subProvider}\" 采纳进保险库。",
-      "description": "只读地扫描 OpenCode CLI 的 auth.json，从不写回。",
-      "empty": "auth.json 中没有白名单内的条目。运行 opencode auth 配置 Anthropic / OpenAI / OpenCode Zen / OpenCode Go 之一。",
+      "description": "只读发现旧版 auth.json，支持自定义 XDG 数据目录。V2 账号通过已连接的 Agent 服务发现。",
+      "empty": "未发现支持的旧版凭据。可在 OpenCode V2 Agent 中使用 OAuth 登录，或添加 Zen/Go API key。",
       "kindApiKey": "API key",
       "kindLabel": "类型",
       "kindOauth": "OAuth",
@@ -599,7 +599,8 @@
       "scanning": "正在扫描 auth.json…",
       "subProviderLabel": "服务商",
       "title": "OpenCode 中已配置的服务商",
-      "whitelistLabel": "白名单"
+      "whitelistLabel": "白名单",
+      "readOnlyHint": "Zen/Go API key 可导入为可用账号。第三方 key 和 OAuth 条目仅作为只读记录；OAuth 登录请使用 OpenCode V2 Agent。"
     },
     "quotaConsoleLink": "OpenCode 控制台",
     "quotaConsoleOnly": "Zen/Go 的余额与配额无法通过 API key 查询——OpenCode 仅在其登录态控制台中展示。",
@@ -613,7 +614,7 @@
       "baseUrlPlaceholder": "留空则使用默认 Zen 端点",
       "baseUrlReplaceHint": "更新凭据会覆盖已保存的 Base URL。只有该账号使用默认 Zen 端点时才留空。",
       "cancel": "取消",
-      "description": "粘贴 opencode.ai 给出的 API key（Zen 按请求付费或 Go 包月）。等上游公开 OAuth 接口后，会替换为完整 OAuth 流程。",
+      "description": "粘贴 OpenCode Zen 或 Go API key。服务管理的 OAuth 账号请在对应 OpenCode V2 Agent 中登录。",
       "labelField": "别名（可选）",
       "labelPlaceholder": "OpenCode Zen",
       "labelPlaceholderGo": "OpenCode Go",

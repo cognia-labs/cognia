@@ -6,6 +6,7 @@ import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useOpencodeStatus } from "@/hooks/agent/use-opencode-status"
+import { OpencodeAuthPanel } from "./opencode-auth-panel"
 
 interface OpencodeStatusCardProps {
   agentId: string
@@ -89,6 +90,12 @@ export function OpencodeStatusCard({ agentId, connected }: OpencodeStatusCardPro
         </Button>
       }
     >
+      <OpencodeAuthPanel
+        key={agentId}
+        agentId={agentId}
+        connected={connected}
+        onAuthenticated={refresh}
+      />
       {(status.project ||
         status.surfaces?.project === "error" ||
         status.surfaces?.project === "loading") && (

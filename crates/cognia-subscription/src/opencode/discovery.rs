@@ -1,10 +1,9 @@
-// Read-only discovery of the OpenCode CLI's auth.json.
+// Read-only discovery of the OpenCode CLI's legacy auth.json.
 //
-// Location: `~/.local/share/opencode/auth.json` on EVERY platform — the
-// opencode CLI (Bun) uses the XDG-style path on Windows too (verified
-// against a real Windows install 2026-06-07; `%LOCALAPPDATA%\opencode\` is
-// NOT used, but we keep it as a fallback probe in case older builds or
-// future versions move there).
+// Location: $XDG_DATA_HOME/opencode/auth.json, defaulting to
+// ~/.local/share/opencode/auth.json on every platform. The historical
+// Windows location is a fallback only when the default file is absent.
+// Current V2 accounts are discovered through the service API instead.
 //
 // Override via the `OPENCODE_AUTH_PATH` env var (useful for testing and for
 // users who symlink their auth.json into an alt location).
@@ -49,43 +48,52 @@ pub struct DiscoveredOpencodeEntry {
     pub payload_json: String,
 }
 
-/// Resolve the OpenCode auth.json path. Honors `OPENCODE_AUTH_PATH` first.
+/// Resolve legacy auth.json: explicit override, XDG_DATA_HOME, then the default.
 ///
-/// OpenCode uses `~/.local/share/opencode/auth.json` on EVERY platform —
-/// Linux, macOS AND Windows (Bun's XDG-style data dir; verified against a
-/// real Windows install). On Windows we additionally fall back to
-/// `%LOCALAPPDATA%\opencode\auth.json` when the XDG path has no file, so a
-/// hypothetical future relocation keeps working; when neither exists we
-/// return the XDG path for the "we looked here" UI hint.
+/// On Windows, the historical local-data path is a fallback when the
+/// default file is absent. Explicit overrides and XDG_DATA_HOME remain
+/// authoritative even if their file does not exist.
 pub fn opencode_auth_file_path() -> Option<PathBuf> {
-    if let Ok(s) = std::env::var("OPENCODE_AUTH_PATH") {
-        let trimmed = s.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
+    let legacy = if cfg!(target_os = "windows") {
+        dirs::data_local_dir().map(|d| d.join("opencode").join("auth.json"))
+    } else {
+        None
+    };
+    resolve_auth_path(
+        std::env::var("OPENCODE_AUTH_PATH").ok(),
+        std::env::var("XDG_DATA_HOME").ok(),
+        dirs::home_dir(),
+        legacy,
+    )
+}
+
+/// Explicit locations remain authoritative even when absent: falling back
+/// would silently import another installation's stale credentials.
+fn resolve_auth_path(
+    explicit: Option<String>,
+    data_home: Option<String>,
+    home: Option<PathBuf>,
+    legacy: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(path) = explicit.filter(|value| !value.trim().is_empty()) {
+        return Some(PathBuf::from(path.trim()));
     }
-    let xdg = dirs::home_dir().map(|h| {
+    if let Some(path) = data_home.filter(|value| !value.trim().is_empty()) {
+        return Some(
+            PathBuf::from(path.trim())
+                .join("opencode")
+                .join("auth.json"),
+        );
+    }
+    let xdg = home.map(|h| {
         h.join(".local")
             .join("share")
             .join("opencode")
             .join("auth.json")
     });
-    #[cfg(target_os = "windows")]
-    {
-        match xdg {
-            Some(p) if p.is_file() => Some(p),
-            xdg => {
-                let local = dirs::data_local_dir().map(|d| d.join("opencode").join("auth.json"));
-                match local {
-                    Some(l) if l.is_file() => Some(l),
-                    _ => xdg,
-                }
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        xdg
+    match xdg {
+        Some(path) if path.is_file() => Some(path),
+        default => legacy.filter(|path| path.is_file()).or(default),
     }
 }
 
@@ -206,6 +214,61 @@ mod tests {
     use std::sync::{Mutex, MutexGuard};
 
     static OPENCODE_AUTH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn resolves_explicit_and_xdg_paths_without_falling_back_to_stale_credentials() {
+        let home = Some(PathBuf::from("/home/test"));
+        assert_eq!(
+            resolve_auth_path(
+                Some(" /override/auth.json ".into()),
+                Some("/data".into()),
+                home.clone(),
+                None
+            ),
+            Some(PathBuf::from("/override/auth.json"))
+        );
+        assert_eq!(
+            resolve_auth_path(
+                None,
+                Some("/data".into()),
+                home.clone(),
+                Some(PathBuf::from("/legacy/auth.json"))
+            ),
+            Some(PathBuf::from("/data/opencode/auth.json"))
+        );
+        assert_eq!(
+            resolve_auth_path(Some(" ".into()), Some(" ".into()), home, None),
+            Some(PathBuf::from("/home/test/.local/share/opencode/auth.json"))
+        );
+        assert_eq!(
+            resolve_auth_path(None, Some("/data".into()), None, None),
+            Some(PathBuf::from("/data/opencode/auth.json"))
+        );
+    }
+
+    #[test]
+    fn falls_back_to_existing_windows_legacy_file_only_when_default_is_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let legacy = temp.path().join("legacy.json");
+        fs::write(&legacy, "{}").unwrap();
+        assert_eq!(
+            resolve_auth_path(None, None, Some(home.clone()), Some(legacy.clone())),
+            Some(legacy)
+        );
+        let primary = home.join(".local/share/opencode/auth.json");
+        fs::create_dir_all(primary.parent().unwrap()).unwrap();
+        fs::write(&primary, "{}").unwrap();
+        assert_eq!(
+            resolve_auth_path(
+                None,
+                None,
+                Some(home),
+                Some(temp.path().join("legacy.json"))
+            ),
+            Some(primary)
+        );
+    }
 
     struct AuthPathRestore {
         prev: Option<String>,

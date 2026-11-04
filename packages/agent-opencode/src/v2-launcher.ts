@@ -215,3 +215,15 @@ export async function launchOpenCodeV2Service(
     throw error
   }
 }
+
+/** Project runtime MCP truth from the Host placement facts without granting a capability. */
+export function createOpenCodeV2RuntimePolicy(
+  placement: OpenCodeV2Placement
+): import("@cognia/agent-contracts/runtime-policy").AgentRuntimePolicy {
+  return {
+    projectCapabilities: (config, capabilities) =>
+      canProjectOpenCodeV2Mcp(config, placement)
+        ? capabilities
+        : { ...capabilities, mcpTools: false },
+  }
+}

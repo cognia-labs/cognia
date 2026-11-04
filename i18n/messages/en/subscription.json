@@ -583,13 +583,13 @@
     "title": "Subscription settings"
   },
   "opencode": {
-    "description": "Discover credentials from `~/.local/share/opencode/auth.json` and paste an OpenCode-Zen subscription key. OpenCode itself manages many providers; we surface only the whitelisted ones.",
+    "description": "Add a Zen/Go API key or discover credentials from a legacy OpenCode auth.json file. OpenCode V2 OAuth sign-in is available in its Agent settings.",
     "discovery": {
       "adopt": "Adopt",
       "adoptFailed": "Couldn't adopt the credential: {error}",
       "adoptSuccess": "Adopted \"{subProvider}\" into the vault.",
-      "description": "Read-only probe of the OpenCode CLI's auth.json. We never write back.",
-      "empty": "No whitelisted entries in auth.json. Run opencode auth for one of: Anthropic, OpenAI, OpenCode Zen, or OpenCode Go.",
+      "description": "Read-only discovery of legacy auth.json, including custom XDG data locations. V2 accounts are discovered through the connected Agent service.",
+      "empty": "No supported legacy credentials found. Use the OpenCode V2 Agent to sign in with OAuth, or add a Zen/Go API key.",
       "kindApiKey": "API key",
       "kindLabel": "Kind",
       "kindOauth": "OAuth",
@@ -599,7 +599,8 @@
       "scanning": "Scanning auth.json…",
       "subProviderLabel": "Provider",
       "title": "Discovered in OpenCode",
-      "whitelistLabel": "Whitelist"
+      "whitelistLabel": "Whitelist",
+      "readOnlyHint": "Zen/Go API keys become usable accounts. Third-party keys and OAuth entries are read-only records; use the OpenCode V2 Agent for OAuth sign-in."
     },
     "quotaConsoleLink": "OpenCode Console",
     "quotaConsoleOnly": "Zen/Go balance and quota can't be queried with an API key — OpenCode only shows them in its session-authenticated console.",
@@ -613,7 +614,7 @@
       "baseUrlPlaceholder": "Leave blank to use the default Zen endpoint",
       "baseUrlReplaceHint": "Updating the credential replaces the stored base URL. Leave this blank only if this account uses the default Zen endpoint.",
       "cancel": "Cancel",
-      "description": "Paste the API key from opencode.ai (Zen pay-per-request or Go flat-rate). Full OAuth is on the roadmap once the endpoint surface is documented.",
+      "description": "Paste an OpenCode Zen or Go API key. For service-owned OAuth accounts, sign in from your OpenCode V2 Agent.",
       "labelField": "Label (optional)",
       "labelPlaceholder": "OpenCode Zen",
       "labelPlaceholderGo": "OpenCode Go",

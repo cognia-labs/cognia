@@ -29,6 +29,33 @@ description: OpenCodeClientAdapter over the official @opencode-ai/sdk + SSE, plu
   <Stat label="Auth" value="Basic / Bearer / headers" hint="buildAuthFetch — custom fetch" />
 </StatGrid>
 
+## Sign in through an OpenCode V2 Agent
+
+Connect an OpenCode V2 Agent under **Settings → Agents**, then use **OpenCode accounts**
+in its server status card. Choose an OAuth method advertised by that service, fill any
+required fields, and open the authorization page. Device authorization is checked
+automatically; methods that return a code prompt provide an authorization-code field.
+You can cancel an attempt or retry a failed status check without starting another login.
+
+OpenCode stores and refreshes these credentials. Cognia reads public integration/account
+summaries through the selected service; it does not copy OAuth tokens into its subscription
+vault. **Refresh sign-in status**, returning to the app, or reconnecting the Agent discovers
+accounts created by another OpenCode client. Changing the Agent's service or project cancels
+its old pending login. A failed discovery is an unknown state, not proof that the user is
+signed out. A connected account also does not establish model entitlement or available funds.
+
+The existing Zen/Go API-key flow remains in Account Center. Legacy credential discovery
+honors `OPENCODE_AUTH_PATH`, then `XDG_DATA_HOME/opencode/auth.json`, then the default
+`~/.local/share/opencode/auth.json`, with the historical Windows location as a fallback
+when the default is absent. Explicit paths stay authoritative. Zen/Go keys can become
+usable Cognia accounts; third-party keys and legacy OAuth entries remain read-only records.
+OpenCode V2 accounts are discovered through its service API rather than its database files.
+
+The V2 adapter's narrow `getAuthClient()` exposes only `integration.list` and
+`integration.oauth` over the same authenticated Host transport. Authentication fields
+and codes keep their original bytes; model-bound requests continue through the existing
+outbound PII gate.
+
 ## The ProtocolAdapter Contract
 
 `protocol-adapter.ts` is the abstraction that lets two very different wire protocols look identical

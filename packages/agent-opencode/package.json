@@ -36,7 +36,8 @@
   },
   "dependencies": {
     "@cognia/agent-contracts": "workspace:*",
-    "@cognia/agent-runtime-kit": "workspace:*"
+    "@cognia/agent-runtime-kit": "workspace:*",
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "@opencode-ai/sdk": "^1.18.32",

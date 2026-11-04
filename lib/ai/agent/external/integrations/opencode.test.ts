@@ -17,6 +17,11 @@ jest.mock("@cognia/agent-opencode/discovery", () => ({
   ...jest.requireActual("@cognia/agent-opencode/discovery"),
   discoverOpenCodeV2InProcess: (...args: unknown[]) => mockInProcess(...args),
 }))
+const mockProcessesLocal = jest.fn(() => true)
+jest.mock("../agent-transport", () => ({
+  ...jest.requireActual("../agent-transport"),
+  runsExternalAgentProcessesLocally: () => mockProcessesLocal(),
+}))
 
 import {
   __resetSpawnPlacementsForTests,
@@ -30,6 +35,7 @@ import {
   createOpenCodeV1AdapterFactory,
   createOpenCodeV2AdapterFactory,
   discoverOpenCodeV2Service,
+  openCodeV2RuntimePolicy,
 } from "./opencode"
 
 const processHost: AgentProcessHost = {
@@ -55,6 +61,7 @@ describe("OpenCode host wiring", () => {
   afterEach(() => {
     __resetSpawnPlacementsForTests()
     jest.clearAllMocks()
+    mockProcessesLocal.mockReturnValue(true)
   })
 
   it("builds the opencode-v2 adapter with turn-scoped cancel semantics", () => {
@@ -67,9 +74,23 @@ describe("OpenCode host wiring", () => {
   it("reads sandbox placement from the app's registry", () => {
     const config = { id: "oc", protocol: "opencode-v2", process: { command: "opencode" } } as never
     expect(appOpenCodeV2Placement.hasSelectedSandbox("oc")).toBe(false)
+    expect(openCodeV2RuntimePolicy.projectCapabilities!(config, { mcpTools: true })).toEqual({
+      mcpTools: true,
+    })
     registerSpawnPlacement("oc", { kind: "container" } as SandboxPlacement)
     expect(appOpenCodeV2Placement.hasSelectedSandbox("oc")).toBe(true)
     expect(canProjectOpenCodeV2McpOnThisHost(config)).toBe(false)
+    expect(openCodeV2RuntimePolicy.projectCapabilities!(config, { mcpTools: true })).toEqual({
+      mcpTools: false,
+    })
+    __resetSpawnPlacementsForTests()
+    expect(openCodeV2RuntimePolicy.projectCapabilities!(config, { mcpTools: true })).toEqual({
+      mcpTools: true,
+    })
+    mockProcessesLocal.mockReturnValue(false)
+    expect(openCodeV2RuntimePolicy.projectCapabilities!(config, { mcpTools: true })).toEqual({
+      mcpTools: false,
+    })
   })
 
   it("discovers through the sidecar on the desktop and in-process on the CLI", async () => {

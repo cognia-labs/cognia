@@ -140,6 +140,7 @@ export function ProviderTabOpencode() {
                   </li>
                 ))}
               </ul>
+              <p className="text-[11px] text-muted-foreground">{tDiscovery("readOnlyHint")}</p>
               <p className="text-[11px] text-muted-foreground">
                 {tDiscovery("whitelistLabel")}:{" "}
                 <code className="font-mono">{OPENCODE_WHITELIST.join(", ")}</code>

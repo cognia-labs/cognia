@@ -2,6 +2,11 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { OpencodeStatusCard } from "./opencode-status-card"
+jest.mock("./opencode-auth-panel", () => ({
+  OpencodeAuthPanel: ({ agentId }: { agentId: string }) => (
+    <div aria-label={`OpenCode authentication ${agentId}`} />
+  ),
+}))
 import enMessages from "@/i18n/messages/en/externalAgent.json"
 import type { OpencodeStatus } from "@/hooks/agent/use-opencode-status"
 
@@ -81,6 +86,10 @@ beforeEach(() => {
 })
 
 describe("OpencodeStatusCard", () => {
+  it("mounts authentication on the connected Agent status surface", () => {
+    renderCard()
+    expect(screen.getByLabelText("OpenCode authentication a1")).toBeInTheDocument()
+  })
   it("renders a not-connected hint when unavailable", () => {
     hookValue.available = false
     renderCard()

@@ -89,13 +89,21 @@ async function scriptedProvider(reply: string): Promise<Server> {
   return server
 }
 
-/** Spawn the real host with the Claude Agent SDK made unresolvable. */
-function hostWithoutClaudeSdk(env: Record<string, string>) {
+/** Spawn the real host; engine-isolation tests make the Claude SDK unresolvable. */
+function hostProcess(
+  env: Record<string, string>,
+  { executable = process.execPath, blockClaudeSdk = true, args = [] as string[] } = {}
+) {
   const child = spawn(
-    process.execPath,
+    executable,
     [
-      "--import",
-      new URL("../../test-support/block-claude-agent-sdk.ts", import.meta.url).pathname,
+      ...args,
+      ...(blockClaudeSdk
+        ? [
+            "--import",
+            new URL("../../test-support/block-claude-agent-sdk.ts", import.meta.url).pathname,
+          ]
+        : []),
       new URL("../../agent-host.mjs", import.meta.url).pathname,
     ],
     { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } }
@@ -139,7 +147,7 @@ test(
   { timeout: 60_000 },
   async () => {
     const provider = await scriptedProvider("ENGINE_ISOLATED_PONG")
-    const host = hostWithoutClaudeSdk({ [ENGINES_ENV]: "ai-sdk" })
+    const host = hostProcess({ [ENGINES_ENV]: "ai-sdk" })
     const options = {
       provider: "openai",
       model: "scripted",
@@ -187,9 +195,76 @@ test(
 )
 
 test("the blocker is real: loading the Claude engine without its SDK stops the host", async () => {
-  const host = hostWithoutClaudeSdk({ [ENGINES_ENV]: "claude-agent-sdk" })
+  const host = hostProcess({ [ENGINES_ENV]: "claude-agent-sdk" })
   host.child.stdin.end()
   const code = await host.exited
   assert.notEqual(code, 0)
   assert.match(host.stderr(), /claude-agent-sdk.*blocked by the test/)
 })
+
+for (const [runtime, executable] of [
+  ["node", process.execPath],
+  ["bun", process.env.COGNIA_TEST_BUN],
+] as const) {
+  test(
+    `the full ${runtime} host loads both engines before an immediately queued turn`,
+    {
+      skip: !executable,
+      timeout: 30_000,
+    },
+    async () => {
+      const provider = await scriptedProvider("FULL_HOST_PONG")
+      const host = hostProcess(
+        {
+          [ENGINES_ENV]: ENGINE_IDS.join(","),
+          OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "",
+          COGNIA_POSTHOG_DESTINATIONS_JSON: "[]",
+          LANGFUSE_PUBLIC_KEY: "",
+          LANGFUSE_SECRET_KEY: "",
+          HTTPS_PROXY: "",
+          HTTP_PROXY: "",
+          https_proxy: "",
+          http_proxy: "",
+        },
+        {
+          executable: executable!,
+          blockClaudeSdk: false,
+          args: runtime === "bun" ? ["--no-env-file"] : [],
+        }
+      )
+      try {
+        // Deliberately queue before ready: the loader gate must finish first.
+        host.send({
+          type: "send",
+          sessionId: "full-host",
+          prompt: "ping",
+          options: {
+            provider: "openai",
+            model: "scripted",
+            cwd: process.cwd(),
+            providerCredentials: {
+              apiKey: "fixture",
+              protocol: "openai",
+              baseURL: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`,
+            },
+          },
+        })
+        const ended = await host.wait(
+          (frame) => frame.type === "session_ended" && frame.sessionId === "full-host"
+        )
+        assert.equal(ended.error, undefined, host.stderr())
+        assert.match(JSON.stringify(host.frames), /FULL_HOST_PONG/)
+        assert.equal(
+          host.frames[0]?.type,
+          "ready",
+          "no turn may bypass completed host initialization"
+        )
+      } finally {
+        host.child.stdin.end()
+        await host.exited
+        await new Promise((resolve) => provider.close(resolve))
+      }
+    }
+  )
+}

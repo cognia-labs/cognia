@@ -22,6 +22,7 @@ import { createAgentLogger } from "../host/agent-logger"
 import {
   canProjectOpenCodeV2Mcp,
   createOpenCodeV2Launcher,
+  createOpenCodeV2RuntimePolicy,
   type OpenCodeV2Placement,
 } from "@cognia/agent-opencode/v2-launcher"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
@@ -88,3 +89,5 @@ export function createOpenCodeV1AdapterFactory(
       logger: createAgentLogger(loggers.agent),
     })
 }
+
+export const openCodeV2RuntimePolicy = createOpenCodeV2RuntimePolicy(appOpenCodeV2Placement)

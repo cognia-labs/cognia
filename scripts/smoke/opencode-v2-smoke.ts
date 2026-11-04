@@ -14,6 +14,7 @@ import { createServer } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import type { V2Event } from "@opencode/client"
 import type { ExternalAgentEvent, ExternalAgentMessage } from "../../types/agent/external-agent"
+import { OpenCodeV2Auth } from "../../packages/agent-opencode/src/v2-auth"
 
 async function localModelFixture() {
   const requests: Array<Record<string, unknown>> = []
@@ -334,6 +335,21 @@ async function main() {
           defaultPermissionMode: "default",
         })
         assert.equal(await adapter.healthCheck(), true)
+        const auth = new OpenCodeV2Auth(adapter.getAuthClient(), workspace)
+        await auth.refresh()
+        assert.equal(auth.getSnapshot().error, undefined)
+        assert.ok(
+          auth
+            .getSnapshot()
+            .integrations.some(
+              (integration) =>
+                integration.id === "opencode" &&
+                integration.methods.some((method) => method.type === "oauth")
+            )
+        )
+        assert.deepEqual(Object.keys(adapter.getAuthClient().integration).sort(), ["list", "oauth"])
+        auth.dispose()
+        checked("adapter service-owned OAuth discovery through authenticated Host transport")
         const managed = await adapter.createSession({
           cwd: workspace,
           systemPrompt: "COGNIA_INSTRUCTION_MARKER",

@@ -401,6 +401,37 @@ describe("current OpenCode V2 adapter", () => {
       expect.arrayContaining([expect.objectContaining({ type: "done", success: true })])
     )
   })
+  it("exposes only service authentication and preserves auth bytes without weakening model PII checks", async () => {
+    await adapter.connect({ ...config, metadata: { serverPassword: "secret" } })
+    const modelFetch = jest.mocked(OpenCode.make).mock.calls.at(-1)![0]!.fetch!
+    const authApi = {
+      list: jest.fn(),
+      oauth: { connect: jest.fn(), status: jest.fn(), complete: jest.fn(), cancel: jest.fn() },
+    }
+    jest.mocked(OpenCode.make).mockReturnValueOnce({ integration: authApi } as never)
+    const auth = adapter.getAuthClient()
+    expect(Object.keys(auth)).toEqual(["integration"])
+    expect(Object.keys(auth.integration)).toEqual(["list", "oauth"])
+    expect(adapter.getAuthClient()).toBe(auth)
+    const authOptions = jest.mocked(OpenCode.make).mock.calls.at(-1)![0]!
+    expect(authOptions.headers).toMatchObject({ authorization: expect.stringMatching(/^Basic /) })
+    const body = JSON.stringify({ code: "alice@example.com" })
+    await authOptions.fetch!(
+      "http://localhost:4096/api/integration/opencode/connect/oauth/a/complete",
+      { method: "POST", body }
+    )
+    expect(platformStreamingFetch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ body })
+    )
+    platformStreamingFetch.mockClear()
+    expect(() =>
+      modelFetch("http://localhost:4096/api/session/s1/prompt", { method: "POST", body })
+    ).toThrow(/PII/)
+    expect(platformStreamingFetch).not.toHaveBeenCalled()
+    await adapter.disconnect()
+    expect(() => adapter.getAuthClient()).toThrow(/Not connected/)
+  })
   it("discovers local auth and rejects legacy servers without fallback", async () => {
     await adapter.connect({ ...config, network: undefined })
     expect(discoverOpenCodeV2ViaSidecar).toHaveBeenCalledTimes(1)
