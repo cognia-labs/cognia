@@ -8,6 +8,7 @@ import {
 } from "./schema"
 import {
   appendAgentTeamTrajectory,
+  projectAgentTeamDispatchEvent,
   advanceAgentTeamRemoteEvent,
   aggregateAgentTeamRunUsage,
   claimAgentTeamDispatchLease,
@@ -31,11 +32,14 @@ import {
   updateAgentTeamChildRun,
   updateAgentTeamChildRunIfCurrent,
   updateAgentTeamRunIfCurrent,
+  settleAgentTeamRunIfCurrent,
   dexieTeamRunStore,
   getAgentTeamContent,
 } from "./agent-team-runtime"
 import {
   TEAM_RUN_STORE_CONTRACT,
+  contractChild,
+  contractRun,
   type StoreContractAssert,
 } from "@cognia/agent-orchestration/store-contract"
 
@@ -59,6 +63,91 @@ describe("durable AgentTeam runtime persistence", () => {
     __resetDbForTesting()
     disableDbRuntime?.()
   })
+
+  it("preserves a pending stop intent when a late executor tries to complete the run", async () => {
+    await dexieTeamRunStore.createRun({
+      ...contractRun(),
+      executionConstraints: undefined,
+      stop: { state: "requested", action: "terminate", epoch: 1, requestedAt: 1 },
+    })
+    await createAgentTeamChildRun(
+      contractChild({
+        status: "completed",
+        dispatchEpoch: 1,
+        settledEpoch: 1,
+        stop: {
+          state: "confirmed",
+          epoch: 1,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 1, at: 2 },
+        },
+      })
+    )
+    const current = (await getAgentTeamRun("run-1"))!
+    expect(
+      await settleAgentTeamRunIfCurrent("run-1", current, {
+        status: "completed",
+        updatedAt: 2,
+      })
+    ).toBe("terminated")
+    expect(await getAgentTeamRun("run-1")).toMatchObject({
+      status: "terminated",
+      completedAt: 2,
+      stop: { state: "confirmed", action: "terminate" },
+    })
+  })
+
+  it("keeps completed turns without disposal unconfirmed across repeated settlement", async () => {
+    await dexieTeamRunStore.createRun({
+      ...contractRun(),
+      executionConstraints: undefined,
+      stop: { state: "requested", action: "terminate", epoch: 1, requestedAt: 1 },
+    })
+    await createAgentTeamChildRun(contractChild({ status: "completed", dispatchEpoch: 1 }))
+    for (let read = 0; read < 2; read++) {
+      const current = (await getAgentTeamRun("run-1"))!
+      expect(
+        await settleAgentTeamRunIfCurrent("run-1", current, { status: "completed", updatedAt: 2 })
+      ).toBe("needs_input")
+      expect(await getAgentTeamRun("run-1")).toMatchObject({
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+        stop: { state: "unconfirmed" },
+      })
+    }
+  })
+
+  it.each(["completed", "failed", "cancelled", "terminated"] as const)(
+    "gates lifecycle %s on actual child stop evidence",
+    async (status) => {
+      await dexieTeamRunStore.createRun({ ...contractRun(), executionConstraints: undefined })
+      await createAgentTeamChildRun(contractChild())
+      await claimAgentTeamDispatchLease({
+        childRunId: "child-1",
+        leaseId: "lease-1",
+        hostRef: "host-a",
+        now: 1,
+        ttlMs: 10,
+        fenceCapable: true,
+        fenceGraceMs: 5,
+      })
+      const run = (await getAgentTeamRun("run-1"))!
+      expect(
+        await settleAgentTeamRunIfCurrent(run.id, run, { status, completedAt: 10, updatedAt: 10 })
+      ).toBe("needs_input")
+      expect((await getAgentTeamRun(run.id))?.completedAt).toBeUndefined()
+      const parked = (await getAgentTeamRun(run.id))!
+      expect(
+        await settleAgentTeamRunIfCurrent(run.id, parked, {
+          status,
+          completedAt: 16,
+          updatedAt: 16,
+        })
+      ).toBe(status)
+      expect((await getAgentTeamChildRun("child-1"))?.stop?.proof?.kind).toBe("fence-expiry")
+      expect((await getAgentTeamRun(run.id))?.stop?.proof).toBeUndefined()
+    }
+  )
 
   it("scopes evidence to a run, child, task and attempt in creation order", async () => {
     for (const row of [
@@ -257,29 +346,56 @@ describe("durable AgentTeam runtime persistence", () => {
         now: 11,
       })
     ).toBeUndefined()
-    expect(await renewAgentTeamDispatchLease("child-lease", "lease-b", 20)).toBe(false)
-    expect(await renewAgentTeamDispatchLease("child-lease", "lease-a", 20)).toBe(true)
-    expect(await advanceAgentTeamRemoteEvent("child-lease", undefined, "event-1", 21)).toBe(true)
-    expect(await advanceAgentTeamRemoteEvent("child-lease", undefined, "event-1", 22)).toBe(false)
+    expect(await renewAgentTeamDispatchLease("child-lease", "lease-b", 20, undefined, 1)).toBe(
+      false
+    )
+    expect(await renewAgentTeamDispatchLease("child-lease", "lease-a", 20, undefined, 1)).toBe(true)
+    expect(
+      await advanceAgentTeamRemoteEvent("child-lease", undefined, "event-1", 21, undefined, 1)
+    ).toBe(true)
+    expect(
+      await advanceAgentTeamRemoteEvent("child-lease", undefined, "event-1", 22, undefined, 1)
+    ).toBe(false)
     await expect(
-      advanceAgentTeamRemoteEvent("child-lease", "event-1", "event-2", 23, {
-        runId: "wrong-run",
-        event: { text: "no" },
-      })
+      advanceAgentTeamRemoteEvent(
+        "child-lease",
+        "event-1",
+        "event-2",
+        23,
+        {
+          runId: "wrong-run",
+          event: { text: "no" },
+        },
+        1
+      )
     ).rejects.toThrow("another run")
     expect((await getAgentTeamChildRun("child-lease"))?.lastRemoteEventId).toBe("event-1")
     const envelope = { type: "delta", text: "x".repeat(9000) }
     expect(
-      await advanceAgentTeamRemoteEvent("child-lease", "event-1", "event-2", 24, {
-        runId: "run-lease",
-        event: envelope,
-      })
+      await advanceAgentTeamRemoteEvent(
+        "child-lease",
+        "event-1",
+        "event-2",
+        24,
+        {
+          runId: "run-lease",
+          event: envelope,
+        },
+        1
+      )
     ).toBe(true)
     expect(
-      await advanceAgentTeamRemoteEvent("child-lease", "event-1", "event-2", 25, {
-        runId: "run-lease",
-        event: envelope,
-      })
+      await advanceAgentTeamRemoteEvent(
+        "child-lease",
+        "event-1",
+        "event-2",
+        25,
+        {
+          runId: "run-lease",
+          event: envelope,
+        },
+        1
+      )
     ).toBe(false)
     const events = await listAgentTeamTrajectory("run-lease")
     expect(events).toHaveLength(1)
@@ -287,8 +403,41 @@ describe("durable AgentTeam runtime persistence", () => {
     expect(await getDb().agentTeamContentObjects.get(events[0]!.contentHash!)).toMatchObject({
       byteLength: 9026,
     })
-    expect(await settleAgentTeamDispatchLease("child-lease", "lease-b", 23)).toBe(false)
-    expect(await settleAgentTeamDispatchLease("child-lease", "lease-a", 23)).toBe(true)
+    expect(await settleAgentTeamDispatchLease("child-lease", "lease-b", 23, 1)).toBe(false)
+    expect(await settleAgentTeamDispatchLease("child-lease", "lease-a", 23, 1)).toBe(true)
+  })
+
+  it("fences late lifecycle and result projections atomically with the execution journal", async () => {
+    await createAgentTeamRun({ ...contractRun(), executionConstraints: undefined })
+    await createAgentTeamChildRun(contractChild({ dispatchEpoch: 2 }))
+    await getDb().executionRuns.add({
+      id: "execution:team:run-1",
+      kind: "team",
+      sourceId: "run-1",
+      title: "test",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    for (const type of ["step.started", "step.completed", "tool.completed"] as const) {
+      const event = {
+        type,
+        ts: 10,
+        visibility: "summary" as const,
+        sourceEventId: type,
+        payload: { stepId: "task-1", childRunId: "child-1" },
+      }
+      expect(await projectAgentTeamDispatchEvent("child-1", 1, 10, event)).toBe(false)
+      expect(await getDb().executionRunEvents.count()).toBe(0)
+      expect(await projectAgentTeamDispatchEvent("child-1", 2, 10, event)).toBe(true)
+      await getDb().executionRunEvents.clear()
+    }
+    expect(
+      (await listAgentTeamTrajectory("run-1")).filter(
+        (event) => event.payload?.action === "epoch_rejected"
+      )
+    ).toHaveLength(3)
   })
 
   it("rolls content back when evidence reference insertion fails", async () => {

@@ -1,3 +1,5 @@
+import { isStoredChildStopped } from "@cognia/agent-orchestration/coordinator"
+import { matchesControlState } from "@cognia/agent-orchestration/rules"
 import {
   authorityFromPermissionCeiling,
   recordedRunMetadata,
@@ -23,7 +25,7 @@ import {
 
 import { appendRunEventInsideTransaction } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
-import { getAgentTeamRun, updateAgentTeamRunIfCurrent } from "@/lib/db/agent-team-runtime"
+import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import type { ExecutionRun } from "@/types/execution/run"
@@ -65,7 +67,10 @@ export interface SquadRunRecords {
 }
 
 export class SquadRunConflictError extends Error {
-  constructor(readonly runId: string) {
+  constructor(
+    readonly runId: string,
+    readonly recoveryReason?: string
+  ) {
     super(`Squad already has a live run: ${runId}`)
     this.name = "SquadRunConflictError"
   }
@@ -78,12 +83,17 @@ export class SquadRunConflictError extends Error {
 export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRunRecords> {
   const db = getDb()
   const executionRunId = agentTeamExecutionRunId(seed.runId)
-  return db.transaction(
+  const pending = db.transaction(
     "rw",
-    db.agentTeamRuns,
-    db.executionRuns,
-    db.executionRunEvents,
-    db.notificationProjectionWork,
+    [
+      db.agentTeamRuns,
+      db.agentTeamChildRuns,
+      db.agentTeamCheckpoints,
+      db.agentTeamTrajectory,
+      db.executionRuns,
+      db.executionRunEvents,
+      db.notificationProjectionWork,
+    ],
     async () => {
       const [existingRun, existingExecution] = await Promise.all([
         db.agentTeamRuns.get(seed.runId),
@@ -111,6 +121,22 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
             executionRun: replacement,
           }
         }
+      }
+      if (seed.parentRunId && !existingRun && !existingExecution) {
+        const parentId = seed.parentRunId.replace(/^execution:team:/, "")
+        const children = await db.agentTeamChildRuns.where("runId").equals(parentId).toArray()
+        // A linked replacement starts new work; none of the parent's unsafe
+        // checkpoints are replayed. The old executors must still be stopped.
+        if (
+          (
+            await Promise.all(
+              children.map((child) =>
+                isStoredChildStopped(dexieTeamRunStore, child, seed.startedAt)
+              )
+            )
+          ).some((stopped) => !stopped)
+        )
+          throw new SquadRunConflictError(parentId, "stop_unconfirmed")
       }
       let replacedRunId: string | undefined
       if (!existingRun && !existingExecution) {
@@ -248,6 +274,12 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
       }
     }
   )
+  return pending.catch(async (error: unknown) => {
+    if (error instanceof SquadRunConflictError && error.recoveryReason) {
+      await parkActiveSquadRun(error.runId, error.recoveryReason, seed.startedAt)
+    }
+    throw error
+  })
 }
 
 /** The team's live run, if one exists. Newest first when several somehow do. */
@@ -270,13 +302,26 @@ export function isTerminalSquadRunStatus(status: AgentTeamRunStatus): boolean {
 export async function parkActiveSquadRun(
   runId: string,
   reason: string,
-  now: number
+  now: number,
+  expected?: Pick<AgentTeamRunRecord, "status" | "updatedAt" | "stop">
 ): Promise<boolean> {
-  const run = await getAgentTeamRun(runId)
-  if (!run || isTerminalSquadRunStatus(run.status)) return false
-  return updateAgentTeamRunIfCurrent(runId, run, {
-    status: "needs_input",
-    recoveryReason: reason,
-    updatedAt: now,
+  const db = getDb()
+  return db.transaction("rw", db.agentTeamRuns, db.executionRuns, async () => {
+    const run = await db.agentTeamRuns.get(runId)
+    const execution = await db.executionRuns.get(agentTeamExecutionRunId(runId))
+    if (
+      !run ||
+      (expected && (run.stop || !matchesControlState(run, expected))) ||
+      isTerminalSquadRunStatus(run.status) ||
+      (execution && ["completed", "failed", "cancelled"].includes(execution.status))
+    )
+      return false
+    return (
+      (await db.agentTeamRuns.update(runId, {
+        status: "needs_input",
+        recoveryReason: reason,
+        updatedAt: now,
+      })) > 0
+    )
   })
 }

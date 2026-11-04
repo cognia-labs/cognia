@@ -24,6 +24,7 @@ import type { LeadPlanResult, RunTeamLifecycleDeps } from "./agent-team-runtime"
 import type { TeamRunOrigin } from "./gates/gate-policy"
 import type { StartSquadRunResult } from "./squad/start-squad-run"
 import type { SquadControlResult } from "./squad/squad-control"
+import type { RecoveryOutcome } from "./durable/durable-runtime"
 
 export {
   configureAgentTeamRuntime,
@@ -74,7 +75,7 @@ export interface AgentTeamManager {
 /** Rebuild durable queues after a restart and replay only safe checkpoints. */
 export async function recoverDurableAgentTeams(
   options: { signal?: AbortSignal } = {}
-): Promise<Array<{ runId: string; status: "recovering" | "needs_input" }>> {
+): Promise<RecoveryOutcome[]> {
   if (options.signal?.aborted) return []
   const [{ getDurableTeamCoordinator }, { getAgentTeamRun }] = await Promise.all([
     import("./durable/durable-runtime"),
@@ -87,6 +88,13 @@ export async function recoverDurableAgentTeams(
     outcomes.map(async (outcome) => {
       const run = await getAgentTeamRun(outcome.runId)
       if (!run || options.signal?.aborted) return
+      if (outcome.status === "cancelled" || outcome.status === "terminated") {
+        if (run.status !== outcome.status) return
+        const { settleAgentTeamExecutionRun } = await import("@/lib/execution/agent-team-bridge")
+        await settleAgentTeamExecutionRun(run, "cancelled", run.completedAt)
+        useAgentTeamStore.getState().setTeamStatus(run.teamId, "cancelled")
+        return
+      }
       const team = useAgentTeamStore.getState().getTeam(run.teamId)
       if (!team) return
       if (outcome.status === "needs_input") {

@@ -1,3 +1,9 @@
+import { isStoredChildStopped } from "@cognia/agent-orchestration/coordinator"
+import {
+  childStopProof,
+  hasRemoteDispatch,
+  isChildSettled,
+} from "@cognia/agent-orchestration/replay"
 import type {
   AgentTeamCheckpoint,
   AgentTeamChildRun,
@@ -15,12 +21,14 @@ import type {
 import type { AgentTeamExecutionConstraints } from "@/types/agent/agent-team-runtime"
 import { createContentObject, verifiedContent } from "@cognia/agent-orchestration/content"
 import {
+  DEFAULT_DISPATCH_LEASE_TTL_MS,
   assertChildBoundary,
   assertDecisionBoundary,
   assertRunBoundary,
   canAdvanceRemoteEvent,
   checkpointChildPatch,
   dispatchLeaseClaimPatch,
+  rejectedEpochEvent,
   dispatchLeaseRenewPatch,
   dispatchLeaseSettlePatch,
   evidenceInScope,
@@ -42,6 +50,7 @@ import {
 import type { TeamRunStore } from "@cognia/agent-orchestration/store"
 import { sumChildUsage } from "@cognia/agent-orchestration/usage"
 import { getDb } from "./schema"
+import { appendRunEventInsideTransaction, type AppendRunEventInput } from "./execution-runs"
 
 // The persistence rules (compare-and-set, dispatch lease, monotonic trajectory,
 // checkpoint and steering bookkeeping, recovery order) are defined once in
@@ -77,7 +86,7 @@ export async function updateAgentTeamRun(
 /** Atomically update a run only while its durable control state is unchanged. */
 export async function updateAgentTeamRunIfCurrent(
   id: string,
-  expected: Pick<AgentTeamRunRecord, "status" | "updatedAt">,
+  expected: Pick<AgentTeamRunRecord, "status" | "updatedAt" | "stop">,
   patch: Partial<Omit<AgentTeamRunRecord, "id" | "teamId" | "createdAt">>
 ): Promise<boolean> {
   const db = getDb()
@@ -85,6 +94,73 @@ export async function updateAgentTeamRunIfCurrent(
     const run = await db.agentTeamRuns.get(id)
     if (!matchesControlState(run, expected)) return false
     return (await db.agentTeamRuns.update(id, patch)) > 0
+  })
+}
+
+/** Lifecycle terminal admission and its row update share the child/run transaction. */
+export async function settleAgentTeamRunIfCurrent(
+  id: string,
+  expected: Pick<AgentTeamRunRecord, "status" | "updatedAt" | "stop">,
+  patch: Partial<Omit<AgentTeamRunRecord, "id" | "teamId" | "createdAt">>
+): Promise<AgentTeamRunRecord["status"] | undefined> {
+  const db = getDb()
+  return db.transaction("rw", [db.agentTeamRuns, db.agentTeamChildRuns], async () => {
+    const run = await db.agentTeamRuns.get(id)
+    if (!matchesControlState(run, expected)) return undefined
+    const children = await db.agentTeamChildRuns.where("runId").equals(id).toArray()
+    const at = patch.updatedAt ?? Date.now()
+    if (
+      (
+        await Promise.all(
+          children.map((child) => isStoredChildStopped(dexieTeamRunStore, child, at))
+        )
+      ).some((stopped) => !stopped)
+    ) {
+      await db.agentTeamRuns.update(id, {
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+        completedAt: undefined,
+        ...(run.stop ? { stop: { ...run.stop, state: "unconfirmed", proof: undefined } } : {}),
+        updatedAt: at,
+      })
+      return "needs_input"
+    }
+    const targetStatus =
+      run.stop?.state === "requested" || run.stop?.state === "unconfirmed"
+        ? run.stop.action === "terminate"
+          ? "terminated"
+          : "cancelled"
+        : (patch.status ?? run.status)
+    const stopping = targetStatus === "cancelled" || targetStatus === "terminated"
+    for (const child of children) {
+      if (isChildSettled(child)) continue
+      const epoch = child.dispatchEpoch ?? 0
+      const proof =
+        childStopProof(child, at) ??
+        (!hasRemoteDispatch(child) ? { kind: "ack" as const, epoch, at } : undefined)
+      if (proof)
+        await db.agentTeamChildRuns.update(child.id, {
+          ...(stopping ? { status: "terminated", completedAt: at } : {}),
+          stop: { state: "confirmed", epoch, requestedAt: child.stop?.requestedAt ?? at, proof },
+          updatedAt: at,
+        })
+    }
+    await db.agentTeamRuns.update(id, {
+      ...patch,
+      status: targetStatus,
+      ...(stopping
+        ? {
+            completedAt: patch.completedAt ?? at,
+            stop: {
+              state: "confirmed",
+              epoch: Math.max(0, ...children.map((child) => child.dispatchEpoch ?? 0)),
+              action: targetStatus === "terminated" ? "terminate" : "stop",
+              requestedAt: run.stop?.requestedAt ?? at,
+            },
+          }
+        : {}),
+    })
+    return targetStatus
   })
 }
 
@@ -132,63 +208,106 @@ export async function updateAgentTeamChildRun(
 /** Atomically update a child only while its durable control state is unchanged. */
 export async function updateAgentTeamChildRunIfCurrent(
   id: string,
-  expected: Pick<AgentTeamChildRun, "status" | "updatedAt">,
+  expected: Pick<AgentTeamChildRun, "status" | "updatedAt" | "dispatchEpoch">,
   patch: Partial<Omit<AgentTeamChildRun, "id" | "runId" | "teamId" | "createdAt">>
 ): Promise<boolean> {
   const db = getDb()
-  return db.transaction("rw", db.agentTeamChildRuns, async () => {
-    const child = await db.agentTeamChildRuns.get(id)
-    if (!matchesControlState(child, expected)) return false
-    return (await db.agentTeamChildRuns.update(id, patch)) > 0
-  })
+  return db.transaction(
+    "rw",
+    [db.agentTeamChildRuns, db.agentTeamTrajectory, db.agentTeamContentObjects],
+    async () => {
+      const child = await db.agentTeamChildRuns.get(id)
+      if (child && (child.dispatchEpoch ?? 0) !== (expected.dispatchEpoch ?? 0))
+        await appendAgentTeamTrajectory(
+          rejectedEpochEvent(
+            child,
+            expected.dispatchEpoch ?? 0,
+            "child_projection",
+            patch.updatedAt ?? Date.now()
+          )
+        )
+      if (!matchesControlState(child, expected)) return false
+      return (await db.agentTeamChildRuns.update(id, patch)) > 0
+    }
+  )
 }
 
 /**
  * Claim the existing child row as the remote dispatch lease authority. The CAS
- * permits idempotent replay by the same lease and rejects a competing lease
- * until the old claim expires.
+ * rejects any reused identity and any competing lease until the claim expires.
  */
 export async function claimAgentTeamDispatchLease(
   input: ClaimAgentTeamDispatchLeaseInput
 ): Promise<AgentTeamChildRun | undefined> {
   const db = getDb()
-  return db.transaction("rw", db.agentTeamChildRuns, async () => {
-    const child = await db.agentTeamChildRuns.get(input.childRunId)
-    if (!child) return undefined
-    const patch = dispatchLeaseClaimPatch(child, input)
-    if (!patch) return undefined
-    await db.agentTeamChildRuns.update(child.id, patch)
-    return { ...child, ...patch }
-  })
+  return db.transaction(
+    "rw",
+    [db.agentTeamChildRuns, db.agentTeamTrajectory, db.agentTeamContentObjects],
+    async () => {
+      const child = await db.agentTeamChildRuns.get(input.childRunId)
+      if (!child) return undefined
+      if (input.expectedEpoch !== undefined && (child.dispatchEpoch ?? 0) !== input.expectedEpoch)
+        await appendAgentTeamTrajectory(
+          rejectedEpochEvent(child, input.expectedEpoch, "claim", input.now)
+        )
+      const patch = dispatchLeaseClaimPatch(child, input)
+      if (!patch) return undefined
+      await db.agentTeamChildRuns.update(child.id, patch)
+      return { ...child, ...patch }
+    }
+  )
 }
 
 export async function renewAgentTeamDispatchLease(
   childRunId: string,
   expectedLeaseId: string,
   now: number,
-  ttlMs?: number
+  ttlMs?: number,
+  expectedEpoch = 0
 ): Promise<boolean> {
   const db = getDb()
-  return db.transaction("rw", db.agentTeamChildRuns, async () => {
-    const child = await db.agentTeamChildRuns.get(childRunId)
-    const patch = dispatchLeaseRenewPatch(child, expectedLeaseId, now, ttlMs)
-    if (!patch) return false
-    return (await db.agentTeamChildRuns.update(childRunId, patch)) > 0
-  })
+  return db.transaction(
+    "rw",
+    [db.agentTeamChildRuns, db.agentTeamTrajectory, db.agentTeamContentObjects],
+    async () => {
+      const child = await db.agentTeamChildRuns.get(childRunId)
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        await appendAgentTeamTrajectory(rejectedEpochEvent(child, expectedEpoch, "renew", now))
+      // A valid-epoch renewal attempt may have reached the worker even if its reply is lost.
+      if (
+        child?.dispatchLeaseId === expectedLeaseId &&
+        (child.dispatchEpoch ?? 0) === expectedEpoch
+      )
+        await db.agentTeamChildRuns.update(childRunId, {
+          lastRenewalSentAt: now,
+          leaseTtlMs: ttlMs ?? DEFAULT_DISPATCH_LEASE_TTL_MS,
+        })
+      const patch = dispatchLeaseRenewPatch(child, expectedLeaseId, now, ttlMs, expectedEpoch)
+      if (!patch) return false
+      return (await db.agentTeamChildRuns.update(childRunId, patch)) > 0
+    }
+  )
 }
 
 export async function settleAgentTeamDispatchLease(
   childRunId: string,
   expectedLeaseId: string,
-  now: number
+  now: number,
+  expectedEpoch = 0
 ): Promise<boolean> {
   const db = getDb()
-  return db.transaction("rw", db.agentTeamChildRuns, async () => {
-    const child = await db.agentTeamChildRuns.get(childRunId)
-    const patch = dispatchLeaseSettlePatch(child, expectedLeaseId, now)
-    if (!patch) return false
-    return (await db.agentTeamChildRuns.update(childRunId, patch)) > 0
-  })
+  return db.transaction(
+    "rw",
+    [db.agentTeamChildRuns, db.agentTeamTrajectory, db.agentTeamContentObjects],
+    async () => {
+      const child = await db.agentTeamChildRuns.get(childRunId)
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        await appendAgentTeamTrajectory(rejectedEpochEvent(child, expectedEpoch, "settle", now))
+      const patch = dispatchLeaseSettlePatch(child, expectedLeaseId, now, expectedEpoch)
+      if (!patch) return false
+      return (await db.agentTeamChildRuns.update(childRunId, patch)) > 0
+    }
+  )
 }
 
 /** Sequential event CAS used by the remote adapter to reject duplicate replay. */
@@ -197,7 +316,8 @@ export async function advanceAgentTeamRemoteEvent(
   expectedPreviousEventId: string | undefined,
   eventId: string,
   now: number,
-  envelope?: { runId: string; event: Record<string, unknown> }
+  envelope?: { runId: string; event: Record<string, unknown> },
+  expectedEpoch = 0
 ): Promise<boolean> {
   const db = getDb()
   const object = envelope
@@ -208,7 +328,9 @@ export async function advanceAgentTeamRemoteEvent(
     [db.agentTeamChildRuns, db.agentTeamTrajectory, db.agentTeamContentObjects],
     async () => {
       const child = await db.agentTeamChildRuns.get(childRunId)
-      if (!canAdvanceRemoteEvent(child, expectedPreviousEventId)) return false
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        await appendAgentTeamTrajectory(rejectedEpochEvent(child, expectedEpoch, "advance", now))
+      if (!canAdvanceRemoteEvent(child, expectedPreviousEventId, expectedEpoch)) return false
       if (envelope && object) {
         if (child.runId !== envelope.runId) throw new Error("Remote event belongs to another run")
         await db.agentTeamContentObjects.put(object)
@@ -231,6 +353,49 @@ export async function advanceAgentTeamRemoteEvent(
   )
 }
 
+/** Keep epoch validation and the execution journal projection in one transaction. */
+export async function projectAgentTeamDispatchEpoch(
+  childRunId: string,
+  expectedEpoch: number,
+  now: number,
+  project: (child: AgentTeamChildRun, db: ReturnType<typeof getDb>) => Promise<void>
+): Promise<boolean> {
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    [
+      db.agentTeamChildRuns,
+      db.agentTeamTrajectory,
+      db.agentTeamContentObjects,
+      db.executionRuns,
+      db.executionRunEvents,
+      db.notificationProjectionWork,
+    ],
+    async () => {
+      const child = await db.agentTeamChildRuns.get(childRunId)
+      if (!child) return false
+      if ((child.dispatchEpoch ?? 0) !== expectedEpoch) {
+        await appendAgentTeamTrajectory(rejectedEpochEvent(child, expectedEpoch, "projection", now))
+        return false
+      }
+      await project(child, db)
+      return true
+    }
+  )
+}
+
+/** The regular run journal reopens transactions; use its atomic seam for fenced writes. */
+export async function projectAgentTeamDispatchEvent(
+  childRunId: string,
+  expectedEpoch: number,
+  now: number,
+  event: AppendRunEventInput
+): Promise<boolean> {
+  return projectAgentTeamDispatchEpoch(childRunId, expectedEpoch, now, async (child, db) => {
+    await appendRunEventInsideTransaction(db, `execution:team:${child.runId}`, event)
+  })
+}
+
 export async function appendAgentTeamTrajectory(
   input: AppendTrajectoryInput,
   content?: { data: string | Uint8Array; mimeType: string }
@@ -239,16 +404,39 @@ export async function appendAgentTeamTrajectory(
   const object = content
     ? await makeAgentTeamContent(content.data, content.mimeType, input.createdAt)
     : undefined
-  return db.transaction(
+  const result = await db.transaction(
     "rw",
     [db.agentTeamTrajectory, db.agentTeamChildRuns, db.agentTeamContentObjects],
     async () => {
+      const child = input.childRunId ? await db.agentTeamChildRuns.get(input.childRunId) : undefined
+      if (
+        (input.expectedDispatchEpoch !== undefined &&
+          (!child || (child.dispatchEpoch ?? 0) !== input.expectedDispatchEpoch)) ||
+        (input.expectedDispatchAttempt !== undefined &&
+          child?.attempt !== input.expectedDispatchAttempt)
+      ) {
+        if (child)
+          await appendAgentTeamTrajectory(
+            rejectedEpochEvent(
+              child,
+              input.expectedDispatchEpoch ?? 0,
+              "trajectory",
+              input.createdAt
+            )
+          )
+        return undefined
+      }
       if (object) await db.agentTeamContentObjects.put(object)
       const last = await db.agentTeamTrajectory
         .where("[runId+sequence]")
         .between([input.runId, -Infinity], [input.runId, Infinity])
         .last()
-      const event = nextTrajectoryEvent(last?.sequence, input, object?.hash)
+      const {
+        expectedDispatchEpoch: _expectedEpoch,
+        expectedDispatchAttempt: _expectedAttempt,
+        ...record
+      } = input
+      const event = nextTrajectoryEvent(last?.sequence, record, object?.hash)
       await db.agentTeamTrajectory.add(event)
       if (input.childRunId) {
         await db.agentTeamChildRuns.update(input.childRunId, trajectoryChildPatch(event))
@@ -256,6 +444,8 @@ export async function appendAgentTeamTrajectory(
       return event
     }
   )
+  if (!result) throw new Error("Dispatch epoch no longer owns trajectory")
+  return result
 }
 
 export async function listAgentTeamTrajectory(
@@ -272,14 +462,47 @@ export async function markAgentTeamCheckpoint(
   input: MarkCheckpointInput
 ): Promise<AgentTeamCheckpoint> {
   const db = getDb()
-  const checkpoint: AgentTeamCheckpoint = { ...input, id: id("team-checkpoint") }
-  await db.transaction("rw", db.agentTeamCheckpoints, db.agentTeamChildRuns, async () => {
-    await db.agentTeamCheckpoints.add(checkpoint)
-    if (input.childRunId) {
-      await db.agentTeamChildRuns.update(input.childRunId, checkpointChildPatch(checkpoint))
+  const result = await db.transaction(
+    "rw",
+    [
+      db.agentTeamCheckpoints,
+      db.agentTeamChildRuns,
+      db.agentTeamTrajectory,
+      db.agentTeamContentObjects,
+    ],
+    async () => {
+      const child = input.childRunId ? await db.agentTeamChildRuns.get(input.childRunId) : undefined
+      if (
+        (input.expectedDispatchEpoch !== undefined &&
+          (!child || (child.dispatchEpoch ?? 0) !== input.expectedDispatchEpoch)) ||
+        (input.expectedDispatchAttempt !== undefined &&
+          child?.attempt !== input.expectedDispatchAttempt)
+      ) {
+        if (child)
+          await appendAgentTeamTrajectory(
+            rejectedEpochEvent(
+              child,
+              input.expectedDispatchEpoch ?? 0,
+              "checkpoint",
+              input.createdAt
+            )
+          )
+        return undefined
+      }
+      const {
+        expectedDispatchEpoch: _expectedEpoch,
+        expectedDispatchAttempt: _expectedAttempt,
+        ...record
+      } = input
+      const checkpoint: AgentTeamCheckpoint = { ...record, id: id("team-checkpoint") }
+      await db.agentTeamCheckpoints.add(checkpoint)
+      if (input.childRunId)
+        await db.agentTeamChildRuns.update(input.childRunId, checkpointChildPatch(checkpoint))
+      return checkpoint
     }
-  })
-  return checkpoint
+  )
+  if (!result) throw new Error("Dispatch epoch no longer owns checkpoint")
+  return result
 }
 
 export async function getLatestAgentTeamCheckpoint(

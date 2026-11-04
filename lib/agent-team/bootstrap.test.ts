@@ -7,6 +7,21 @@ import {
   type SquadBootstrapDeps,
   type SquadBootstrapStage,
 } from "./bootstrap"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import {
+  getDurableTeamCoordinator,
+  __resetDurableTeamCoordinatorForTesting,
+} from "@/lib/ai/agent/team/durable/durable-runtime"
+import { beginDurableDispatch } from "@/lib/ai/agent/team/durable/durable-dispatch"
+import { awaitSquadRunSettlement } from "@/lib/ai/agent/team/squad/watch-squad-run"
+import type { AgentTeam } from "@/types/agent/agent-team"
+
+const mockLiveSidecarSessions = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
+jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
+  getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
+}))
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -58,6 +73,133 @@ function harness(over: Partial<SquadBootstrapDeps> = {}) {
   }
   return { calls, stages, deps, disposeBridge }
 }
+
+describe("startup stop reconciliation through the recovery bootstrap", () => {
+  const fixture = createDbTestFixture()
+  beforeAll(fixture.initialize)
+  beforeEach(async () => {
+    await fixture.restore()
+    __resetSquadBootstrapForTesting()
+    __resetDurableTeamCoordinatorForTesting()
+    mockLiveSidecarSessions.mockReset().mockResolvedValue(new Set())
+  })
+  afterAll(fixture.dispose)
+
+  it.each(["live", "unknown"] as const)(
+    "does not settle a surviving local turn at startup: %s",
+    async (mode) => {
+      mockLiveSidecarSessions.mockResolvedValue(
+        mode === "live" ? new Set(["surviving-session"]) : undefined
+      )
+      const coordinator = getDurableTeamCoordinator()
+      const team = {
+        id: "surviving-team",
+        leadId: "lead",
+        task: "Finish",
+        config: {
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as AgentTeam
+      const runId = `startup-${mode}`
+      await coordinator.prepareRun(team, runId)
+      await coordinator.registerChild({
+        runId,
+        childRunId: "survivor",
+        runtime: "claude",
+        executorRegistry: "sidecar",
+        teammateId: "mate",
+        taskId: "task",
+        repositoryId: "primary",
+        access: "read",
+        sessionId: "surviving-session",
+      })
+      await coordinator.store.updateChild("survivor", {
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+      })
+      await coordinator.store.updateRun(runId, {
+        stop: { state: "requested", action: "stop", epoch: 1, requestedAt: 10 },
+      })
+      const handle = runSquadBootstrap(harness({ recoverRuns: undefined }).deps)
+      try {
+        expect(await handle.done).toMatchObject({
+          ok: true,
+          recovered: [{ runId, status: "needs_input" }],
+        })
+        expect((await coordinator.store.getChild("survivor"))?.stop?.proof).toBeUndefined()
+        expect((await getDb().executionRuns.get(`execution:team:${runId}`))?.status).not.toBe(
+          "cancelled"
+        )
+        expect(mockLiveSidecarSessions).toHaveBeenCalled()
+      } finally {
+        handle.dispose()
+      }
+    }
+  )
+
+  it.each(["stop", "terminate"] as const)(
+    "settles the canonical execution run after a persisted %s request",
+    async (action) => {
+      const coordinator = getDurableTeamCoordinator()
+      const runId = `startup-${action}`
+      const team = {
+        id: "missing-definition",
+        leadId: "lead",
+        task: "Finish",
+        config: {
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as AgentTeam
+      await coordinator.prepareRun(team, runId)
+      const dispatch = await beginDurableDispatch({
+        coordinator,
+        team,
+        runId,
+        teammateId: "mate",
+        taskId: "task",
+        access: "read",
+        repositoryId: "primary",
+        runtime: "claude",
+        executorRegistry: "sidecar",
+      })
+      // Persist the pre-restart state. This process has no executor or live control;
+      // only the production restart rule may establish its stop proof.
+      await dispatch.startLocalExecution()
+      await coordinator.store.updateRun(runId, {
+        stop: { state: "requested", action, epoch: dispatch.dispatchEpoch, requestedAt: 10 },
+      })
+      const handle = runSquadBootstrap(harness({ recoverRuns: undefined }).deps)
+      try {
+        expect(await handle.done).toMatchObject({
+          ok: true,
+          recovered: [{ runId, status: action === "stop" ? "cancelled" : "terminated" }],
+        })
+        expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+          status: "cancelled",
+        })
+        const events = await getDb()
+          .executionRunEvents.where("runId")
+          .equals(`execution:team:${runId}`)
+          .toArray()
+        expect(events.filter((event) => event.type === "run.cancelled")).toHaveLength(1)
+        await expect(awaitSquadRunSettlement(`execution:team:${runId}`)).resolves.toBe("cancelled")
+        const second = runSquadBootstrap(harness({ recoverRuns: undefined }).deps)
+        await second.done
+        second.dispose()
+        expect(
+          await getDb()
+            .executionRunEvents.where("runId")
+            .equals(`execution:team:${runId}`)
+            .filter((event) => event.type === "run.cancelled")
+            .count()
+        ).toBe(1)
+      } finally {
+        handle.dispose()
+      }
+    }
+  )
+})
 
 describe("runSquadBootstrap", () => {
   beforeEach(() => __resetSquadBootstrapForTesting())

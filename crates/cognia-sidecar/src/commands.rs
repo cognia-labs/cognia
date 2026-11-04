@@ -266,6 +266,8 @@ impl SendOptions {
 #[derive(Debug, Serialize)]
 pub struct SidecarStatus {
     pub ready: bool,
+    #[serde(rename = "liveSessionIds")]
+    pub live_session_ids: Vec<String>,
 }
 
 // ---- Canonical agent_* command surface (ADR-0090 Phase 3) -------------------
@@ -336,7 +338,7 @@ pub async fn agent_start_with_host(
 ) -> Result<SidecarStatus, String> {
     spawn_sidecar(host, state.clone()).await?;
     state.wait_until_ready().await?;
-    Ok(SidecarStatus { ready: true })
+    claude_sidecar_status_impl(&state).await
 }
 
 /// Host-generic body of `claude_send` (ADR-0059 R6). The desktop command
@@ -362,54 +364,61 @@ pub async fn claude_send_with_host_and_id(
 ) -> Result<(), String> {
     let _perf = cognia_instrument::guard("claude.send");
     validate_send_request(&session_id, &prompt)?;
-    spawn_sidecar(Arc::clone(&host), state.clone()).await?;
-    let person_tool_less = options.as_ref().is_some_and(|options| options.person_tool_less);
-    let mut opts_value = match options {
-        Some(o) => {
-            o.validate()?;
-            serde_json::to_value(o).map_err(|e| e.to_string())?
-        }
-        None => Value::Object(Default::default()),
-    };
+    // Native admission survives a WebView reload, including while spawn waits.
+    // Pending holds are not owned by the old process generation being replaced.
+    let token = state.begin_pending_run(&session_id, command_id.as_deref());
+    let result = async {
+        spawn_sidecar(Arc::clone(&host), state.clone()).await?;
+        let person_tool_less = options
+            .as_ref()
+            .is_some_and(|options| options.person_tool_less);
+        let mut opts_value = match options {
+            Some(o) => {
+                o.validate()?;
+                serde_json::to_value(o).map_err(|e| e.to_string())?
+            }
+            None => Value::Object(Default::default()),
+        };
 
-    if !person_tool_less {
-        // Resolve trusted settings once and inject them into the SDK-native hook
-        // pipeline. The SDK owns every built-in lifecycle event, including
-        // UserPromptSubmit. Running that event here as well would execute each
-        // configured handler twice because `buildAgentHooks` registers all SDK
-        // lifecycle events.
-        let cwd = opts_value
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        // Project/local hooks load only for a trusted cwd; untrusted → user scope.
-        let trusted_cwd = hooks::trust::resolve_trusted_cwd(cwd.as_deref());
-        let settings = hooks::load_effective_settings(trusted_cwd.as_deref());
+        if !person_tool_less {
+            // Resolve trusted settings once and inject them into the SDK-native hook
+            // pipeline. The SDK owns every built-in lifecycle event, including
+            // UserPromptSubmit. Running that event here as well would execute each
+            // configured handler twice because `buildAgentHooks` registers all SDK
+            // lifecycle events.
+            let cwd = opts_value
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            // Project/local hooks load only for a trusted cwd; untrusted → user scope.
+            let trusted_cwd = hooks::trust::resolve_trusted_cwd(cwd.as_deref());
+            let settings = hooks::load_effective_settings(trusted_cwd.as_deref());
 
-        // Injected host-side after the trust gate, so a compromised renderer cannot
-        // smuggle untrusted project hooks through `options`.
-        if let Some(hooks_value) = settings.merged.hooks.clone() {
-            if let Value::Object(map) = &mut opts_value {
-                map.insert("hooks".to_string(), hooks_value);
+            // Injected host-side after the trust gate, so a compromised renderer cannot
+            // smuggle untrusted project hooks through `options`.
+            if let Some(hooks_value) = settings.merged.hooks.clone() {
+                if let Value::Object(map) = &mut opts_value {
+                    map.insert("hooks".to_string(), hooks_value);
+                }
             }
         }
 
+        let msg = with_command_id(
+            json!({
+              "type": "send",
+              "sessionId": session_id,
+              "prompt": prompt,
+              "options": opts_value,
+            }),
+            command_id,
+        );
+        state.write_pending_run_command(&msg, &token).await
     }
-
-    let active_command_id = command_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
-        .map(str::to_string);
-    let msg = with_command_id(
-        json!({
-          "type": "send",
-          "sessionId": session_id,
-          "prompt": prompt,
-          "options": opts_value,
-        }),
-        command_id,
-    );
-    write_active_run_command(&state, &msg, &session_id, active_command_id.as_deref()).await
+    .await;
+    if result.is_err() {
+        state.cancel_active_run(token);
+    }
+    result
 }
 
 fn validate_send_request(session_id: &str, prompt: &Value) -> Result<(), String> {
@@ -428,8 +437,8 @@ pub async fn write_active_run_command(
     session_id: &str,
     command_id: Option<&str>,
 ) -> Result<(), String> {
-    let token = state.begin_active_run(session_id, command_id);
-    if let Err(error) = state.write_command(message).await {
+    let token = state.begin_pending_run(session_id, command_id);
+    if let Err(error) = state.write_pending_run_command(message, &token).await {
         state.cancel_active_run(token);
         return Err(error);
     }
@@ -573,6 +582,7 @@ pub async fn claude_close_session_impl_with_id(
 pub async fn claude_sidecar_status_impl(state: &SidecarState) -> Result<SidecarStatus, String> {
     Ok(SidecarStatus {
         ready: state.is_ready().await,
+        live_session_ids: state.live_session_ids(),
     })
 }
 
@@ -1192,14 +1202,29 @@ mod tests {
     use super::*;
 
     /// `claude_sidecar_status` answers this struct over the companion RPC, and
-    /// its declared output contract is the `{ "ready": bool }` object
-    /// `remote_execution`'s contract test validates.
+    /// Its additive liveness field stays optional in the published contract
+    /// so older hosts' ready-only responses remain valid.
     #[test]
-    fn sidecar_status_serializes_as_the_ready_object() {
+    fn sidecar_status_serializes_the_host_turn_registry() {
         assert_eq!(
-            serde_json::to_value(SidecarStatus { ready: true }).unwrap(),
-            serde_json::json!({ "ready": true })
+            serde_json::to_value(SidecarStatus {
+                ready: true,
+                live_session_ids: vec!["live".into()],
+            })
+            .unwrap(),
+            serde_json::json!({ "ready": true, "liveSessionIds": ["live"] })
         );
+    }
+
+    #[tokio::test]
+    async fn sidecar_status_reports_a_fresh_hosts_empty_registry() {
+        let value = serde_json::to_value(
+            claude_sidecar_status_impl(&SidecarState::new())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value, json!({ "ready": false, "liveSessionIds": [] }));
     }
 
     fn parse(json_str: &str) -> SendOptions {

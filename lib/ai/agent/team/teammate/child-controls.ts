@@ -52,11 +52,12 @@ export function externalSessionControl(
 export interface SidecarSessionControls {
   steerSession(sessionId: string, message: string, sourceMessageId?: string): Promise<unknown>
   interruptSession(sessionId: string): Promise<void>
+  closeSession(sessionId: string): Promise<void>
 }
 
 /**
  * A built-in engine session in the sidecar. Its interrupt ends the turn and
- * keeps the session, so pause and terminate both interrupt.
+ * keeps the session. Termination closes it to reap background processes.
  */
 export function sidecarSessionControl(
   ipc: SidecarSessionControls,
@@ -67,7 +68,7 @@ export function sidecarSessionControl(
       await ipc.steerSession(sessionId, message, sourceMessageId)
     },
     pause: () => ipc.interruptSession(sessionId),
-    terminate: () => ipc.interruptSession(sessionId),
+    terminate: () => ipc.closeSession(sessionId),
   }
 }
 
@@ -75,7 +76,7 @@ export function sidecarSessionControl(
 export interface RemoteTurnControls {
   steer(message: string, commandId: string): Promise<void>
   pause(commandId: string): Promise<void>
-  terminate(commandId: string): Promise<void>
+  terminate(commandId: string): Promise<void | import("@cognia/agent-orchestration").StopProof>
 }
 
 /**

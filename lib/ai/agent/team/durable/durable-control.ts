@@ -1,8 +1,11 @@
+import { childStopProof, isChildSettled } from "@cognia/agent-orchestration/replay"
 import {
   appendAgentTeamTrajectory,
   getAgentTeamRun,
+  settleAgentTeamRunIfCurrent,
   listAgentTeamChildRuns,
   updateAgentTeamRun,
+  updateAgentTeamChildRunIfCurrent,
 } from "@/lib/db/agent-team-runtime"
 import type { AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import { getDurableTeamCoordinator, type DurableTeamCoordinator } from "./durable-runtime"
@@ -30,23 +33,76 @@ export async function controlDurableRun(
   const now = options.now ?? Date.now
   const run = await getAgentTeamRun(runId)
   if (!run) throw new Error(`Unknown durable AgentTeam run: ${runId}`)
-  const children = (await listAgentTeamChildRuns(runId)).filter(
-    (child) => !TERMINAL_CHILDREN.has(child.status)
-  )
   const at = now()
-  const requestedStatus: AgentTeamRunStatus =
-    action === "pause"
-      ? "pausing"
-      : action === "sleep"
-        ? "sleeping"
-        : action === "stop"
-          ? "cancelled"
-          : action === "terminate"
-            ? "terminated"
-            : "running"
-  await updateAgentTeamRun(runId, { status: requestedStatus, updatedAt: at })
-  if (action === "pause" || action === "sleep") coordinator.setRunPaused(runId, true)
-  if (action === "resume" || action === "wake") coordinator.setRunPaused(runId, false)
+  if (action === "stop" || action === "terminate") {
+    const children = await listAgentTeamChildRuns(runId)
+    const epoch = Math.max(0, ...children.map((child) => child.dispatchEpoch ?? 0))
+    await updateAgentTeamRun(runId, {
+      stop: { state: "requested", action, epoch, requestedAt: at },
+      updatedAt: at,
+    })
+    coordinator.setRunPaused(runId, true)
+    const operations = await Promise.allSettled(
+      children
+        .filter((child) => !isChildSettled(child) && !childStopProof(child, now()))
+        .map(async (child) => {
+          try {
+            await coordinator.terminateChild(child.id)
+          } catch (error) {
+            await updateAgentTeamChildRunIfCurrent(child.id, child, {
+              stop: { state: "unconfirmed", epoch: child.dispatchEpoch ?? 0, requestedAt: at },
+              status: "needs_input",
+              waitingReason: "stop_unconfirmed",
+              updatedAt: now(),
+            })
+            throw error
+          }
+        })
+    )
+    const latest = await listAgentTeamChildRuns(runId)
+    let confirmed = latest.every((child) => isChildSettled(child) || !!childStopProof(child, now()))
+    if (confirmed) {
+      const current = await getAgentTeamRun(runId)
+      const settled =
+        current &&
+        (await settleAgentTeamRunIfCurrent(runId, current, {
+          status: action === "stop" ? "cancelled" : "terminated",
+          completedAt: now(),
+          stop: { state: "confirmed", epoch, requestedAt: at, action },
+          updatedAt: now(),
+        }))
+      confirmed = settled === "cancelled" || settled === "terminated"
+    } else {
+      await updateAgentTeamRun(runId, {
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+        completedAt: undefined,
+        stop: { state: "unconfirmed", action, epoch, requestedAt: at },
+        updatedAt: now(),
+      })
+    }
+    await appendAgentTeamTrajectory({
+      runId,
+      kind: "run_controlled",
+      correlationId: `run-control:${runId}:${at}`,
+      payload: { action, childCount: children.length, confirmed },
+      createdAt: now(),
+    })
+    if (!confirmed)
+      throw new AggregateError(
+        operations.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        "stop_unconfirmed"
+      )
+    return
+  }
+  const children = (await listAgentTeamChildRuns(runId)).filter((child) => !isChildSettled(child))
+  if (action === "pause" || action === "sleep") {
+    await updateAgentTeamRun(runId, {
+      status: action === "pause" ? "pausing" : "sleeping",
+      updatedAt: at,
+    })
+    coordinator.setRunPaused(runId, true)
+  }
   const operation =
     action === "pause"
       ? coordinator.pauseChild
@@ -54,25 +110,29 @@ export async function controlDurableRun(
         ? coordinator.resumeChild
         : action === "sleep"
           ? coordinator.sleepChild
-          : action === "wake"
-            ? coordinator.wakeChild
-            : coordinator.terminateChild
+          : coordinator.wakeChild
   await Promise.all(children.map((child) => operation(child.id)))
+  const latest = await listAgentTeamChildRuns(runId)
+  if (
+    latest.some(
+      (child) =>
+        child.status === "needs_input" &&
+        ["stop_unconfirmed", "pause_unconfirmed"].includes(child.waitingReason ?? "")
+    )
+  ) {
+    await updateAgentTeamRun(runId, {
+      status: "needs_input",
+      recoveryReason: "stop_unconfirmed",
+      updatedAt: now(),
+    })
+    throw new Error("stop_unconfirmed")
+  }
+  if (action === "resume" || action === "wake") coordinator.setRunPaused(runId, false)
   const finalStatus: AgentTeamRunStatus =
-    action === "pause"
-      ? "paused"
-      : action === "sleep"
-        ? "sleeping"
-        : action === "stop"
-          ? "cancelled"
-          : action === "terminate"
-            ? "terminated"
-            : "running"
-  const completedAt =
-    finalStatus === "cancelled" || finalStatus === "terminated" ? now() : undefined
+    action === "pause" ? "paused" : action === "sleep" ? "sleeping" : "running"
   await updateAgentTeamRun(runId, {
     status: finalStatus,
-    ...(completedAt ? { completedAt } : {}),
+    ...(["resume", "wake"].includes(action) ? { stop: undefined } : {}),
     updatedAt: now(),
   })
   await appendAgentTeamTrajectory({

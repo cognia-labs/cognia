@@ -7,6 +7,7 @@
 
 import {
   createDurableTeamCoordinator,
+  isStoredChildStopped,
   type DurableTeamCoordinator,
   type DurableTeamCoordinatorOptions,
   type DurableTeamSpec,
@@ -65,6 +66,7 @@ describe("durable AgentTeam coordinator", () => {
       redactForPersistence: (text) => text.replace(/[\w.+-]+@[\w.-]+\.\w+/g, "[EMAIL]"),
       paths: posixPaths,
       remoteSessions: { release: releaseRemoteSession },
+      localSessions: { isStopped: async (runtime) => (runtime === "claude" ? true : undefined) },
       ...overrides,
     })
 
@@ -86,6 +88,7 @@ describe("durable AgentTeam coordinator", () => {
       taskId: childRunId,
       repositoryId: "primary",
       access: "read",
+      runtime: "claude",
     })
 
   const waitUntil = async (ready: () => boolean): Promise<void> => {
@@ -96,17 +99,463 @@ describe("durable AgentTeam coordinator", () => {
     throw new Error("Condition did not settle")
   }
 
-  it("keeps terminal children terminal during recovery even without checkpoints", async () => {
+  it("recovers interrupted local execution from its checkpoint in a fresh coordinator", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+    await coordinator.checkpoint("local", {
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: 0,
+    })
+    const detach = coordinator.attachLiveControl("local", { steer: async () => {} })
+    // Process loss removes its live handles; the durable checkpoint remains.
+    detach()
+    const restarted = make()
+    await expect(restarted.recover()).resolves.toEqual([
+      { runId: "run-admission", status: "recovering" },
+    ])
+    await expect(restarted.retryChild("local")).resolves.toMatchObject({ status: "queued" })
+  })
+
+  it.each(["live", "absent", "unknown", "error"] as const)(
+    "uses host liveness after renderer state is lost: %s",
+    async (mode) => {
+      const coordinator = make()
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "local")
+      await store.updateChild("local", {
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+        sessionId: "surviving-session",
+      })
+      await coordinator.checkpoint("local", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 0,
+      })
+      const restarted = make({
+        localSessions: {
+          isStopped: async (runtime, sessionId) => {
+            expect(runtime).toBe("claude")
+            expect(sessionId).toBe("surviving-session")
+            if (mode === "error") throw new Error("Host unavailable")
+            return mode === "unknown" ? undefined : mode === "absent"
+          },
+        },
+      })
+      await expect(restarted.recover()).resolves.toEqual([
+        { runId: "run-admission", status: mode === "absent" ? "recovering" : "needs_input" },
+      ])
+      if (mode === "absent")
+        await expect(restarted.retryChild("local")).resolves.toMatchObject({ status: "queued" })
+      else {
+        await expect(restarted.retryChild("local")).rejects.toThrow("stop_unconfirmed")
+        await expect(restarted.terminateChild("local")).rejects.toThrow("stop_unconfirmed")
+        expect((await store.getChild("local"))?.stop?.state).toBe("unconfirmed")
+      }
+    }
+  )
+
+  it("retains local activity beyond capture rejection until executor evidence arrives", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+    await coordinator.checkpoint("local", {
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: 0,
+    })
+    let stopped!: () => void
+    const evidence = new Promise<void>((resolve) => {
+      stopped = resolve
+    })
+    await expect(
+      coordinator.trackChildExecution(
+        "local",
+        async () => {
+          throw new Error("capture timeout")
+        },
+        () => evidence
+      )
+    ).rejects.toThrow("capture timeout")
+    await expect(coordinator.assessTaskRecovery("run-admission", "local")).resolves.toMatchObject({
+      eligible: false,
+      reason: "stop_unconfirmed",
+    })
+    stopped()
+    await evidence
+    await expect(coordinator.assessTaskRecovery("run-admission", "local")).resolves.toEqual({
+      eligible: true,
+    })
+  })
+
+  it.each(["codex", "future-runtime", undefined])(
+    "does not infer quiescence for an unqueryable runtime: %s",
+    async (runtime) => {
+      const coordinator = make()
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "unconfirmed")
+      await store.updateChild("unconfirmed", {
+        runtime,
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+      })
+      const child = (await store.getChild("unconfirmed"))!
+      await expect(isStoredChildStopped(store, child, 100)).resolves.toBe(false)
+      await expect(coordinator.terminateChild(child.id)).rejects.toThrow("stop_unconfirmed")
+    }
+  )
+
+  it.each(["failed", "paused"] as const)(
+    "queries the Host for legacy %s children after release cleared sessionId",
+    async (status) => {
+      const isStopped = jest.fn(async () => false)
+      const coordinator = make({ localSessions: { isStopped } })
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "legacy")
+      await store.updateChild("legacy", {
+        status,
+        startedAt: undefined,
+        dispatchEpoch: undefined,
+        sessionId: undefined,
+      })
+      await store.appendTrajectory({
+        runId: "run-admission",
+        childRunId: "legacy",
+        kind: "tool_result",
+        correlationId: "executed",
+        createdAt: 1,
+      })
+      await coordinator.checkpoint("legacy", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 1,
+      })
+      await expect(coordinator.recover()).resolves.toEqual([
+        expect.objectContaining({ status: "needs_input" }),
+      ])
+      expect(isStopped).toHaveBeenCalled()
+      await expect(coordinator.terminateChild("legacy")).rejects.toThrow("stop_unconfirmed")
+      expect((await store.getChild("legacy"))?.stop?.state).toBe("unconfirmed")
+    }
+  )
+
+  it("requires disposal even for completed legacy rows without startup metadata", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "legacy-completed")
+    await store.updateChild("legacy-completed", { status: "completed" })
+    const child = (await store.getChild("legacy-completed"))!
+    await expect(isStoredChildStopped(store, child, 100)).resolves.toBe(false)
+    await expect(coordinator.assessTaskRecovery(child.runId, child.taskId)).resolves.toMatchObject({
+      eligible: false,
+      reason: "stop_unconfirmed",
+    })
+    for (let read = 0; read < 2; read++) {
+      await coordinator.recover()
+      await expect(coordinator.retryChild(child.id)).rejects.toThrow(
+        "cannot be retried from completed"
+      )
+      await expect(
+        coordinator.assessTaskRecovery(child.runId, child.taskId)
+      ).resolves.toMatchObject({
+        eligible: false,
+        reason: "stop_unconfirmed",
+      })
+    }
+  })
+
+  it("does not convert an unproved completed turn into a stopped child via fence expiry", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "completed-fence")
+    await store.updateChild("completed-fence", {
+      status: "completed",
+      dispatchEpoch: 1,
+      remoteDispatchEpoch: 1,
+      startedAt: 1,
+      fenceCapable: true,
+      lastRenewalSentAt: 1,
+      leaseTtlMs: 1,
+      fenceGraceMs: 0,
+    })
+    await store.updateRun("run-admission", {
+      stop: { state: "requested", action: "stop", epoch: 1, requestedAt: 2 },
+    })
+    await coordinator.recover()
+    expect((await store.getChild("completed-fence"))?.status).toBe("completed")
+    expect((await store.getRun("run-admission"))?.stop?.state).toBe("unconfirmed")
+    await expect(
+      coordinator.assessTaskRecovery("run-admission", "completed-fence")
+    ).resolves.toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+  })
+
+  it("does not infer stop from lost process activity after a capture reported unconfirmed", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", {
+      startedAt: 1,
+      dispatchEpoch: 1,
+      status: "needs_input",
+      stop: { state: "unconfirmed", epoch: 1, requestedAt: 2 },
+    })
+    await coordinator.checkpoint("local", {
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: 0,
+    })
+    await store.updateRun("run-admission", {
+      stop: { state: "requested", action: "stop", epoch: 1, requestedAt: 2 },
+    })
+    const restarted = make({ localSessions: { isStopped: async () => undefined } })
+    await expect(restarted.recover()).resolves.toEqual([
+      { runId: "run-admission", status: "needs_input" },
+    ])
+    await expect(restarted.terminateChild("local")).rejects.toThrow("stop_unconfirmed")
+    expect((await store.getChild("local"))?.stop).toMatchObject({ state: "unconfirmed" })
+    expect((await store.getChild("local"))?.stop?.proof).toBeUndefined()
+  })
+
+  it("does not mistake another coordinator's live local execution for process loss", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+    await coordinator.checkpoint("local", {
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: 0,
+    })
+    const detach = coordinator.attachLiveControl("local", { steer: async () => {} })
+    const second = make()
+    await expect(second.recover()).resolves.toEqual([
+      { runId: "run-admission", status: "needs_input" },
+    ])
+    detach()
+  })
+
+  it.each(["requested", "unconfirmed"] as const)(
+    "reconciles a persisted %s stop instead of resuming it",
+    async (state) => {
+      const coordinator = make()
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "local")
+      await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+      await store.updateRun("run-admission", {
+        stop: { state, action: "terminate", epoch: 1, requestedAt: 2 },
+      })
+      await expect(make().recover()).resolves.toEqual([
+        { runId: "run-admission", status: "terminated" },
+      ])
+      expect(await store.getRun("run-admission")).toMatchObject({
+        status: "terminated",
+        stop: { state: "confirmed" },
+      })
+      expect((await store.getRun("run-admission"))?.stop?.proof).toBeUndefined()
+    }
+  )
+
+  it("retains a startup remote stop without worker proof as needs_input", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "remote")
+    await store.claimDispatchLease({
+      childRunId: "remote",
+      leaseId: "remote-lease",
+      hostRef: "host-a",
+      now: 1,
+    })
+    await store.updateRun("run-admission", {
+      stop: { state: "requested", epoch: 1, requestedAt: 2 },
+    })
+    await expect(make().recover()).resolves.toEqual([
+      { runId: "run-admission", status: "needs_input" },
+    ])
+    expect(await store.getRun("run-admission")).toMatchObject({
+      recoveryReason: "stop_unconfirmed",
+      stop: { state: "unconfirmed" },
+    })
+  })
+
+  it.each(["requested", "unconfirmed"] as const)(
+    "does not clear a %s run stop barrier while a different task is unconfirmed",
+    async (state) => {
+      const coordinator = make()
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "local")
+      await store.updateChild("local", { startedAt: 1, status: "failed" })
+      await coordinator.checkpoint("local", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 0,
+      })
+      await register(coordinator, "remote")
+      await store.claimDispatchLease({
+        childRunId: "remote",
+        leaseId: "remote-lease",
+        hostRef: "host-a",
+        now: 1,
+      })
+      await store.updateRun("run-admission", {
+        status: "running",
+        stop: { state, epoch: 1, requestedAt: 2 },
+      })
+      await expect(coordinator.retryChild("local")).rejects.toThrow("stop_unconfirmed")
+      expect(await store.getRun("run-admission")).toMatchObject({
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+        stop: { state: "unconfirmed" },
+      })
+    }
+  )
+
+  it("times out a local void terminate while the real execution remains pending", async () => {
+    const coordinator = make({ localStopTimeoutMs: 5 })
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+    let release!: () => void
+    const pending = coordinator.trackChildExecution(
+      "local",
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    coordinator.attachLiveControl("local", { steer: async () => {}, terminate: async () => {} })
+    await expect(coordinator.terminateChild("local")).rejects.toThrow("stop_unconfirmed")
+    expect((await store.getChild("local"))?.stop?.state).toBe("unconfirmed")
+    release()
+    await pending
+  })
+
+  it("does not confirm a concurrent terminate when only the execution wrapper rejects", async () => {
+    const coordinator = make({ localSessions: { isStopped: async () => false } })
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    await store.updateChild("local", { startedAt: 1, dispatchEpoch: 1 })
+    let fail!: () => void
+    const execution = coordinator.trackChildExecution(
+      "local",
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = () => reject(new Error("transport lost"))
+        })
+    )
+    const observed = execution.catch(() => undefined)
+    coordinator.attachLiveControl("local", {
+      steer: async () => {},
+      terminate: async () => {
+        fail()
+      },
+    })
+    await expect(coordinator.terminateChild("local")).rejects.toThrow("stop_unconfirmed")
+    await observed
+    expect(await store.getChild("local")).toMatchObject({
+      status: "needs_input",
+      stop: { state: "unconfirmed", epoch: 1 },
+    })
+  })
+
+  it("stops the started epoch when executor start commits after terminate's initial read", async () => {
+    const coordinator = make({ localSessions: { isStopped: async () => false } })
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "local")
+    const getChild = store.getChild.bind(store)
+    jest.spyOn(store, "getChild").mockImplementationOnce(async (id) => {
+      const beforeStart = await getChild(id)
+      await store.atomically(async (tx) => {
+        await tx.updateChild(id, { startedAt: 1, dispatchEpoch: 1 })
+      })
+      return beforeStart
+    })
+    await expect(coordinator.terminateChild("local")).rejects.toThrow("stop_unconfirmed")
+    expect(await store.getChild("local")).toMatchObject({
+      dispatchEpoch: 1,
+      status: "needs_input",
+      stop: { state: "unconfirmed", epoch: 1 },
+    })
+    expect((await store.getChild("local"))?.settledEpoch).toBeUndefined()
+  })
+
+  // Remote fixtures model worker acknowledgement; local fixtures rely on process truth.
+  const proveStopped = async (coordinator: ReturnType<typeof make>, childId: string) => {
+    const child = (await store.getChild(childId))!
+    const epoch = child.dispatchEpoch ?? 0
+    if (child.remoteSessionId || child.dispatchLeaseId || child.remoteDispatchEpoch !== undefined)
+      await store.updateChild(childId, {
+        stop: { state: "confirmed", epoch, requestedAt: 1, proof: { kind: "ack", epoch, at: 2 } },
+      })
+    await coordinator.checkpoint(childId, {
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: child.lastTrajectorySequence ?? 0,
+    })
+  }
+
+  it.each(["retryChild", "resumeChild", "wakeChild", "beginTakeover", "completeTakeover"] as const)(
+    "%s applies the task gate even when a different teammate has the unconfirmed child",
+    async (entry) => {
+      const coordinator = make()
+      await coordinator.prepareRun(spec(), "run-admission")
+      await register(coordinator, "child")
+      await proveStopped(coordinator, "child")
+      coordinator.attachLiveControl("child", { steer: jest.fn(), pause: async () => true })
+      const child = (await store.getChild("child"))!
+      await store.createChild({
+        ...child,
+        id: "other",
+        teammateId: "other",
+        dispatchEpoch: 1,
+        remoteDispatchEpoch: 1,
+        stop: undefined,
+        status: "failed",
+      })
+      if (entry === "wakeChild") await store.updateChild("child", { status: "sleeping" })
+      const operation =
+        entry === "completeTakeover"
+          ? () => coordinator.completeTakeover({ childRunId: "child" })
+          : () => coordinator[entry]("child")
+      await expect(operation()).rejects.toThrow("stop_unconfirmed")
+      expect((await store.getRun("run-admission"))?.recoveryReason).toBe("stop_unconfirmed")
+    }
+  )
+
+  it("records a missing takeover handle as pause unconfirmed", async () => {
+    const coordinator = make()
+    await coordinator.prepareRun(spec(), "run-admission")
+    await register(coordinator, "child")
+    await expect(coordinator.beginTakeover("child")).rejects.toThrow("stop_unconfirmed")
+    expect(await store.getChild("child")).toMatchObject({
+      status: "needs_input",
+      waitingReason: "pause_unconfirmed",
+    })
+    expect(
+      (await store.listTrajectory("run-admission")).some(
+        (event) => event.kind === "manual_takeover_started"
+      )
+    ).toBe(false)
+  })
+
+  it("requires proof for failed or cancelled history even if its status looks terminal", async () => {
     const coordinator = make()
     await coordinator.prepareRun(spec(), "run-admission")
     for (const status of ["completed", "failed", "cancelled", "terminated"] as const) {
       await register(coordinator, status)
-      await store.updateChild(status, { status })
+      await store.updateChild(status, { status, startedAt: 1, remoteDispatchEpoch: 1 })
     }
     const recovered = await coordinator.recover()
-    expect(recovered).toEqual([{ runId: "run-admission", status: "recovering" }])
+    expect(recovered).toEqual([{ runId: "run-admission", status: "needs_input" }])
     for (const status of ["completed", "failed", "cancelled", "terminated"] as const) {
-      expect((await store.getChild(status))?.status).toBe(status)
+      expect((await store.getChild(status))?.status).toBe(
+        status === "completed" ? "completed" : "needs_input"
+      )
     }
   })
 
@@ -202,6 +651,7 @@ describe("durable AgentTeam coordinator", () => {
     const coordinator = make()
     await coordinator.prepareRun(spec(), "run-admission")
     await register(coordinator, "child")
+    await proveStopped(coordinator, "child")
     await coordinator.sleepChild("child")
     coordinator.attachLiveControl("child", {
       steer: jest.fn(),
@@ -236,7 +686,7 @@ describe("durable AgentTeam coordinator", () => {
     })
     await expect(coordinator.resumeChild("child")).rejects.toThrow("safe checkpoint")
     await expect(coordinator.retryChild("child", "device:b")).rejects.toThrow("safe checkpoint")
-    expect((await store.getChild("child"))?.status).toBe("paused")
+    expect((await store.getChild("child"))?.status).toBe("needs_input")
   })
 
   it.each(["completed", "failed", "cancelled", "terminated"] as const)(
@@ -310,6 +760,11 @@ describe("durable AgentTeam coordinator", () => {
       const second = coordinator.withChildAdmission("second", operation)
       const rejected = expect(second).rejects.toThrow()
       await waitUntil(() => coordinator.schedulerSnapshot().queued.length === 1)
+      coordinator.attachLiveControl("second", {
+        steer: jest.fn(),
+        pause: async () => true,
+        terminate: async () => ({ kind: "ack", epoch: 0, at: 1 }),
+      })
       await coordinator[action]("second")
       release()
       await first
@@ -468,6 +923,7 @@ describe("durable AgentTeam coordinator", () => {
     const coordinator = make()
     await coordinator.prepareRun(spec(), "run-admission")
     await register(coordinator, "child")
+    await proveStopped(coordinator, "child")
     await coordinator.sleepChild("child")
     let release!: () => void
     const resumed = new Promise<void>((resolve) => {
@@ -495,7 +951,9 @@ describe("durable AgentTeam coordinator", () => {
     coordinator.attachLiveControl("child", { steer: jest.fn(), resume })
     await expect(coordinator.wakeChild("child")).rejects.toThrow("safe checkpoint")
     expect(resume).not.toHaveBeenCalled()
-    expect(await store.getChild("child")).toMatchObject({ status: "sleeping" })
+    expect(await store.getChild("child")).toMatchObject({ status: "needs_input" })
+    await proveStopped(coordinator, "child")
+    await store.updateChild("child", { status: "sleeping" })
     await coordinator.checkpoint("child", {
       replay: "safe",
       sideEffects: [],
@@ -517,14 +975,16 @@ describe("durable AgentTeam coordinator", () => {
     expect(resume).not.toHaveBeenCalled()
   })
 
-  it("keeps a newer pause when a concurrent wake finishes later", async () => {
+  it("keeps a newer pause when a resource-only wake finishes later", async () => {
     const coordinator = make()
     await coordinator.prepareRun(spec(), "run-admission")
     await register(coordinator, "child")
+    await proveStopped(coordinator, "child")
     await coordinator.sleepChild("child")
     let release!: () => void
     coordinator.attachLiveControl("child", {
       steer: jest.fn(),
+      resumeStartsExecution: false,
       resume: () =>
         new Promise<void>((resolve) => {
           release = resolve
@@ -813,6 +1273,7 @@ describe("durable AgentTeam coordinator", () => {
       repositoryId: "primary",
       access: "read",
     })
+    await proveStopped(coordinator, "child-refused")
     const steer = jest.fn(async () => undefined)
     coordinator.attachLiveControl("child-refused", { steer })
     await expect(coordinator.steer("child-refused", "anything")).rejects.toThrow(/PII/)
@@ -857,7 +1318,11 @@ describe("durable AgentTeam coordinator", () => {
     })
     const pause = jest.fn(async () => undefined)
     const resume = jest.fn(async () => undefined)
-    const terminate = jest.fn(async () => undefined)
+    const terminate = jest.fn(async () => ({
+      kind: "ack" as const,
+      epoch: (await store.getChild("child-control"))!.dispatchEpoch ?? 0,
+      at: 250,
+    }))
     coordinator.attachLiveControl("child-control", {
       steer: async () => undefined,
       pause,
@@ -866,9 +1331,11 @@ describe("durable AgentTeam coordinator", () => {
     })
 
     await coordinator.pauseChild("child-control")
+    await proveStopped(coordinator, "child-control")
     await coordinator.resumeChild("child-control")
     await store.updateChild("child-control", {
       remoteSessionId: "remote-control",
+      stop: undefined,
     })
     await coordinator.terminateChild("child-control")
 
@@ -905,12 +1372,14 @@ describe("durable AgentTeam coordinator", () => {
       repositoryId: "primary",
       access: "write",
     })
+    await store.updateChild("child-uncertain", { startedAt: 1 })
     await coordinator.checkpoint("child-uncertain", {
       replay: "needs_input",
       trajectorySequence: 0,
       sideEffects: [{ id: "publish", kind: "github_pr", state: "unknown", replay: "unknown" }],
     })
 
+    await proveStopped(coordinator, "child-safe")
     const recovered = await coordinator.recover()
     expect(recovered).toEqual(
       expect.arrayContaining([
@@ -920,7 +1389,7 @@ describe("durable AgentTeam coordinator", () => {
     )
   })
 
-  it("retries on the same host but requires a safe checkpoint to migrate", async () => {
+  it("requires stop proof and a safe checkpoint for same-host and cross-host retry", async () => {
     let now = 500
     const coordinator = make({ now: () => now })
     await coordinator.prepareRun(spec(), "run-retry")
@@ -940,22 +1409,17 @@ describe("durable AgentTeam coordinator", () => {
     })
 
     await expect(coordinator.retryChild("child-retry", "device:b")).rejects.toThrow(
-      "Cross-host retry requires a safe checkpoint"
+      "stop_unconfirmed"
     )
+    await expect(coordinator.retryChild("child-retry", "device:a")).rejects.toThrow(
+      "stop_unconfirmed"
+    )
+    now = 550
+    await proveStopped(coordinator, "child-retry")
     const sameHost = await coordinator.retryChild("child-retry", "device:a")
-    expect(sameHost).toMatchObject({
-      status: "queued",
-      waitingReason: "retry_host:device:a",
-    })
+    expect(sameHost).toMatchObject({ status: "queued", waitingReason: "retry_host:device:a" })
     expect(sameHost.dispatchLeaseId).toBeUndefined()
     expect(sameHost.dispatchLeaseExpiresAt).toBeUndefined()
-
-    now = 550
-    await coordinator.checkpoint("child-retry", {
-      trajectorySequence: 0,
-      replay: "safe",
-      sideEffects: [],
-    })
     const migrated = await coordinator.retryChild("child-retry", "device:b")
     expect(migrated.waitingReason).toBe("retry_host:device:b")
     expect((await store.getRun("run-retry"))?.status).toBe("recovering")
@@ -988,6 +1452,7 @@ describe("durable AgentTeam coordinator", () => {
       replay: "safe",
       sideEffects: [],
     })
+    await proveStopped(coordinator, "child-remote-resume")
     await coordinator.resumeChild("child-remote-resume")
 
     expect(resume).not.toHaveBeenCalled()
@@ -1098,6 +1563,7 @@ describe("durable AgentTeam coordinator", () => {
       repositoryId: "primary",
       access: "write",
     })
+    await proveStopped(coordinator, "child-takeover")
     const pause = jest.fn(async () => true)
     const resume = jest.fn(async () => undefined)
     coordinator.attachLiveControl("child-takeover", { steer: jest.fn(), pause, resume })
@@ -1123,6 +1589,6 @@ describe("durable AgentTeam coordinator", () => {
       expect.arrayContaining(["manual_takeover_started", "manual_takeover_completed"])
     )
     expect(resume).toHaveBeenCalledTimes(1)
-    expect((await store.getChild("child-takeover"))?.status).toBe("queued")
+    expect((await store.getChild("child-takeover"))?.status).toBe("running")
   })
 })

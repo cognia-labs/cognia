@@ -38,7 +38,9 @@ describe("managed desktop placement", () => {
     sandboxEnabled: false,
     computerUseEnabled: true,
   }
-  function managedRow(overrides: { operationsQualified?: boolean } = {}): SandboxConnectionRow {
+  function managedRow(overrides: { operationsQualified?: boolean } = {}): SandboxConnectionRow & {
+    config: Extract<SandboxConnectionRow["config"], { provider: "e2b" }>
+  } {
     return {
       ...runningConnection(),
       id: "managed:desktop:2",

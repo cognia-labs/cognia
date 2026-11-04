@@ -46,13 +46,26 @@ export function assertChildBoundary(child: AgentTeamChildRun): void {
 }
 
 /** The control state a compare-and-set update expects to find unchanged. */
-export type ControlState = { status: string; updatedAt: number }
+export type ControlState = {
+  status: string
+  updatedAt: number
+  dispatchEpoch?: number
+  attempt?: number
+  stop?: AgentTeamRunRecord["stop"]
+}
 
 export function matchesControlState(
   record: ControlState | undefined,
   expected: ControlState
 ): record is ControlState {
-  return !!record && record.status === expected.status && record.updatedAt === expected.updatedAt
+  return (
+    !!record &&
+    record.status === expected.status &&
+    record.updatedAt === expected.updatedAt &&
+    (record.dispatchEpoch ?? 0) === (expected.dispatchEpoch ?? 0) &&
+    JSON.stringify(record.stop) === JSON.stringify(expected.stop) &&
+    (expected.attempt === undefined || record.attempt === expected.attempt)
+  )
 }
 
 /**
@@ -62,7 +75,12 @@ export function matchesControlState(
  */
 export function selectRecoveryCandidates<R extends AgentTeamRunRecord>(runs: readonly R[]): R[] {
   return runs
-    .filter((run) => INTERRUPTED_EXECUTION_STATUSES.has(run.status))
+    .filter(
+      (run) =>
+        INTERRUPTED_EXECUTION_STATUSES.has(run.status) ||
+        run.stop?.state === "requested" ||
+        run.stop?.state === "unconfirmed"
+    )
     .sort(
       (a, b) =>
         b.priority - a.priority ||
@@ -82,30 +100,45 @@ export function latestChildFor(
 }
 
 export interface ClaimDispatchLeaseInput {
+  expectedEpoch?: number
   childRunId: string
   leaseId: string
   hostRef: string
   now: number
   ttlMs?: number
   executionFingerprint?: string
+  fenceCapable?: boolean
+  fenceGraceMs?: number
 }
 
 /**
  * The patch that claims a child as the remote dispatch lease authority, or
- * `undefined` while a different, unexpired lease holds it. Re-claiming with
- * the same lease id is an idempotent replay.
+ * `undefined` while an unexpired lease holds it. A claim always has a fresh
+ * identity and increments the epoch; renewal is a separate operation.
  */
 export function dispatchLeaseClaimPatch(
   child: AgentTeamChildRun,
   input: ClaimDispatchLeaseInput
 ): Partial<AgentTeamChildRun> | undefined {
+  if (input.expectedEpoch !== undefined && (child.dispatchEpoch ?? 0) !== input.expectedEpoch)
+    return undefined
+  if (child.stop?.epoch === (child.dispatchEpoch ?? 0) && child.stop.state !== "confirmed")
+    return undefined
   const heldByOther =
-    child.dispatchLeaseId !== undefined &&
-    child.dispatchLeaseId !== input.leaseId &&
-    (child.dispatchLeaseExpiresAt ?? 0) > input.now
+    child.dispatchLeaseId === input.leaseId ||
+    (child.dispatchLeaseId !== undefined && (child.dispatchLeaseExpiresAt ?? 0) > input.now)
   if (heldByOther) return undefined
   return {
     dispatchLeaseId: input.leaseId,
+    dispatchEpoch: (child.dispatchEpoch ?? 0) + 1,
+    remoteDispatchEpoch: (child.dispatchEpoch ?? 0) + 1,
+    settledEpoch: undefined,
+    startedAt: input.now,
+    stop: undefined,
+    fenceCapable: input.fenceCapable === true,
+    fenceGraceMs: input.fenceGraceMs ?? 30_000,
+    leaseTtlMs: input.ttlMs ?? DEFAULT_DISPATCH_LEASE_TTL_MS,
+    lastRenewalSentAt: input.now,
     dispatchLeaseExpiresAt: input.now + (input.ttlMs ?? DEFAULT_DISPATCH_LEASE_TTL_MS),
     hostRef: input.hostRef,
     waitingReason: undefined,
@@ -119,31 +152,79 @@ export function dispatchLeaseRenewPatch(
   child: AgentTeamChildRun | undefined,
   expectedLeaseId: string,
   now: number,
-  ttlMs = DEFAULT_DISPATCH_LEASE_TTL_MS
+  ttlMs = DEFAULT_DISPATCH_LEASE_TTL_MS,
+  expectedEpoch = 0
 ): Partial<AgentTeamChildRun> | undefined {
-  if (!child || child.dispatchLeaseId !== expectedLeaseId) return undefined
-  return { dispatchLeaseExpiresAt: now + ttlMs, updatedAt: now }
+  if (
+    !child ||
+    child.dispatchLeaseId !== expectedLeaseId ||
+    (child.dispatchEpoch ?? 0) !== expectedEpoch ||
+    child.stop?.epoch === expectedEpoch ||
+    (child.dispatchLeaseExpiresAt ?? 0) <= now
+  )
+    return undefined
+  return {
+    dispatchLeaseExpiresAt: now + ttlMs,
+    leaseTtlMs: ttlMs,
+    lastRenewalSentAt: now,
+    updatedAt: now,
+  }
 }
 
 /** The release patch, or `undefined` when the caller no longer holds the lease. */
 export function dispatchLeaseSettlePatch(
   child: AgentTeamChildRun | undefined,
   expectedLeaseId: string,
-  now: number
+  now: number,
+  expectedEpoch = 0
 ): Partial<AgentTeamChildRun> | undefined {
-  if (!child || child.dispatchLeaseId !== expectedLeaseId) return undefined
+  if (
+    !child ||
+    child.dispatchLeaseId !== expectedLeaseId ||
+    (child.dispatchEpoch ?? 0) !== expectedEpoch
+  )
+    return undefined
   return { dispatchLeaseId: undefined, dispatchLeaseExpiresAt: undefined, updatedAt: now }
 }
 
 /** Whether a remote event may advance the child: it must follow the last one seen. */
 export function canAdvanceRemoteEvent(
   child: AgentTeamChildRun | undefined,
-  expectedPreviousEventId: string | undefined
+  expectedPreviousEventId: string | undefined,
+  expectedEpoch = 0
 ): child is AgentTeamChildRun {
-  return !!child && child.lastRemoteEventId === expectedPreviousEventId
+  return (
+    !!child &&
+    (child.dispatchEpoch ?? 0) === expectedEpoch &&
+    child.lastRemoteEventId === expectedPreviousEventId
+  )
 }
 
-export type AppendTrajectoryInput = Omit<AgentTeamTrajectoryEvent, "id" | "sequence">
+export function rejectedEpochEvent(
+  child: AgentTeamChildRun,
+  epoch: number,
+  operation: string,
+  now: number
+): AppendTrajectoryInput {
+  return {
+    runId: child.runId,
+    childRunId: child.id,
+    kind: "run_controlled",
+    correlationId: `epoch-rejected:${child.id}:${epoch}:${operation}:${now}`,
+    payload: {
+      action: "epoch_rejected",
+      operation,
+      rejectedEpoch: epoch,
+      dispatchEpoch: child.dispatchEpoch ?? 0,
+    },
+    createdAt: now,
+  }
+}
+
+export type AppendTrajectoryInput = Omit<AgentTeamTrajectoryEvent, "id" | "sequence"> & {
+  expectedDispatchEpoch?: number
+  expectedDispatchAttempt?: number
+}
 
 /** The next event of a run's trajectory: sequence = last + 1, id `${runId}:${sequence}`. */
 export function nextTrajectoryEvent(
@@ -165,7 +246,10 @@ export function trajectoryChildPatch(event: AgentTeamTrajectoryEvent): Partial<A
   return { lastTrajectorySequence: event.sequence, updatedAt: event.createdAt }
 }
 
-export type MarkCheckpointInput = Omit<AgentTeamCheckpoint, "id">
+export type MarkCheckpointInput = Omit<AgentTeamCheckpoint, "id"> & {
+  expectedDispatchEpoch?: number
+  expectedDispatchAttempt?: number
+}
 
 /** The child patch that records a checkpoint. */
 export function checkpointChildPatch(checkpoint: AgentTeamCheckpoint): Partial<AgentTeamChildRun> {

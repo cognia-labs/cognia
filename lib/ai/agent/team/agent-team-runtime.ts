@@ -233,7 +233,7 @@ async function settleDurableRunStatus(
   status: AgentTeamRunStatus,
   reason?: string
 ): Promise<AgentTeamRunStatus | undefined> {
-  const { getAgentTeamRun, updateAgentTeamRunIfCurrent } =
+  const { getAgentTeamRun, settleAgentTeamRunIfCurrent } =
     await import("@/lib/db/agent-team-runtime")
   for (;;) {
     const current = await getAgentTeamRun(runId)
@@ -246,7 +246,7 @@ async function settleDurableRunStatus(
       return current.status
     }
     const now = Date.now()
-    const updated = await updateAgentTeamRunIfCurrent(runId, current, {
+    const updated = await settleAgentTeamRunIfCurrent(runId, current, {
       status,
       ...(reason ? { recoveryReason: reason } : {}),
       ...(["completed", "cancelled", "failed", "terminated"].includes(status)
@@ -254,7 +254,7 @@ async function settleDurableRunStatus(
         : {}),
       updatedAt: now,
     })
-    if (updated) return status
+    if (updated) return updated
     // A control decision or usage update raced us. Read its result before
     // choosing the canonical journal event; never publish our stale status.
   }

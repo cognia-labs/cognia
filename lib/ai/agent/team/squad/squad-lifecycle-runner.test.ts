@@ -1,11 +1,32 @@
+import { contractChild } from "@cognia/agent-orchestration/store-contract"
+import type { AgentTeamChildRun } from "@/types/agent/agent-team-runtime"
+const recoveryChildren = jest.fn(async () => [] as AgentTeamChildRun[])
 const getAgentTeamRun = jest.fn(async (_runId: string) => undefined as unknown)
 const updateAgentTeamRun = jest.fn(async (_runId: string, _patch: unknown) => true)
 jest.mock("@/lib/db/agent-team-runtime", () => ({
+  listAgentTeamChildRuns: () => recoveryChildren(),
+  dexieTeamRunStore: {
+    listChildren: () => recoveryChildren(),
+    getLatestCheckpoint: async (childRunId: string) => ({
+      childRunId,
+      runId: "run-1",
+      replay: "safe",
+      sideEffects: [],
+      trajectorySequence: 1,
+    }),
+    listTrajectory: async () => [],
+  },
   getAgentTeamRun: (runId: string) => getAgentTeamRun(runId),
   updateAgentTeamRun: (runId: string, patch: unknown) => updateAgentTeamRun(runId, patch),
 }))
+jest.mock("./squad-run-records", () => ({
+  ...jest.requireActual("./squad-run-records"),
+  parkActiveSquadRun: (runId: string, reason: string) =>
+    updateAgentTeamRun(runId, { status: "needs_input", recoveryReason: reason }),
+}))
 const settleAgentTeamExecutionRun = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/execution/agent-team-bridge", () => ({
+  agentTeamExecutionRunId: (id: string) => `execution:team:${id}`,
   settleAgentTeamExecutionRun: (...args: unknown[]) => settleAgentTeamExecutionRun(...args),
 }))
 const emitSchedulerEvent = jest.fn(async (..._args: unknown[]) => undefined)
@@ -111,6 +132,7 @@ beforeEach(() => {
   useAgentTeamStore.getState().reset()
   __resetAgentTeamRuntimeForTesting()
   jest.clearAllMocks()
+  recoveryChildren.mockResolvedValue([])
   getAgentTeamRun.mockResolvedValue({
     id: "run-1",
     teamId: "t1",
@@ -120,6 +142,36 @@ beforeEach(() => {
 })
 
 describe("runSquadLifecycle", () => {
+  it.each([false, true])(
+    "checks stop proof before re-entering the lifecycle (fence proof=%s)",
+    async (fenceCapable) => {
+      useAgentTeamStore.getState().upsertTeam(makeTeam())
+      recoveryChildren.mockResolvedValue([
+        contractChild({
+          id: "old",
+          runId: "run-1",
+          dispatchEpoch: 1,
+          status: "failed",
+          fenceCapable,
+          lastRenewalSentAt: 1,
+          leaseTtlMs: 1,
+          fenceGraceMs: 1,
+        }),
+      ])
+      const run = jest.fn(async () => ({ runId: "run-1", status: "completed" as const }))
+      const result = await runSquadLifecycle({ teamId: "t1", runId: "run-1" }, { run })
+      if (fenceCapable) expect(run).toHaveBeenCalledTimes(1)
+      else {
+        expect(run).not.toHaveBeenCalled()
+        expect(result.reason).toBe("stop_unconfirmed")
+        expect(updateAgentTeamRun).toHaveBeenCalledWith(
+          "run-1",
+          expect.objectContaining({ recoveryReason: "stop_unconfirmed" })
+        )
+      }
+    }
+  )
+
   it("does not admit automatic recovery when a pause wins during dependency loading", async () => {
     useAgentTeamStore.getState().upsertTeam(makeTeam({ status: "paused" }))
     getAgentTeamRun

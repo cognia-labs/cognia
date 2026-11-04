@@ -279,11 +279,18 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
     ctx.emitStream = (delta) => sink.push(delta)
     ctx.emitCommentary = (delta) => commentarySink.push(delta)
     ctx.reportUsage = (usage) => void logger.stepUsage(node.id, usage)
+    let executionSettled = false
     try {
       const result = await runWithTimeout(
         reg.timeoutMs ?? input.workflow.settings.timeoutMs,
         signal,
-        (attemptSignal) => reg.execute({ ...ctx, signal: attemptSignal })
+        async (attemptSignal) => {
+          try {
+            return await reg.execute({ ...ctx, signal: attemptSignal })
+          } finally {
+            executionSettled = true
+          }
+        }
       )
       sink.final()
       commentarySink.final()
@@ -303,9 +310,26 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
       if (breaker) recordCircuitSuccess(input.workflow.id, node.id)
       await logger.stepCompleted(node.id, result.output, input.iterationMeta)
       return exec
-    } catch (err) {
+    } catch (caught) {
+      let err = caught
       sink.final()
       commentarySink.final()
+      if (node.type === "action.team.task.dispatch") {
+        try {
+          const { loadTeamWorkflowNodes } =
+            await import("@/lib/workflow/nodes/teams/team-runtime-port")
+          const team = await loadTeamWorkflowNodes(node.type)
+          if (!team.assertDispatchRetry) throw new Error("stop_unconfirmed")
+          await team.assertDispatchRetry(ctx, executionSettled)
+          if (!executionSettled) throw new Error("stop_unconfirmed")
+        } catch (refusal) {
+          err = Object.assign(new Error("stop_unconfirmed", { cause: refusal }), {
+            name: "NeedsHumanError",
+            retryable: false,
+            needsHuman: true,
+          })
+        }
+      }
       const message = err instanceof Error ? err.message : String(err)
       const retryable = reg.retryable !== false && isRetryableError(err)
       const lastAttempt = attempt >= retryPolicy.attempts

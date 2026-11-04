@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { contractChild } from "@cognia/agent-orchestration/store-contract"
 import "fake-indexeddb/auto"
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
@@ -183,6 +184,49 @@ describe("createSquadRunRecords", () => {
     expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("cancelled")
   })
 
+  it.each([false, true])(
+    "admits replacement records with stop proof alone (unsafe=%s)",
+    async (unsafe) => {
+      await createSquadRunRecords(seed)
+      await getDb().agentTeamRuns.update(seed.runId, { status: "needs_input" })
+      await getDb().agentTeamChildRuns.add(
+        contractChild({
+          id: "stopped-child",
+          runId: seed.runId,
+          teamId: seed.teamId,
+          taskId: "old-task",
+          status: "needs_input",
+          dispatchEpoch: 1,
+          startedAt: 1,
+          stop: {
+            state: "confirmed",
+            epoch: 1,
+            requestedAt: 1,
+            proof: { kind: "ack", epoch: 1, at: 2 },
+          },
+        })
+      )
+      if (unsafe)
+        await getDb().agentTeamCheckpoints.add({
+          id: "old-checkpoint",
+          runId: seed.runId,
+          childRunId: "stopped-child",
+          trajectorySequence: 0,
+          decisionVersion: 0,
+          replay: "needs_input",
+          sideEffects: [{ id: "write", kind: "Write", state: "unknown", replay: "unknown" }],
+          createdAt: 2,
+        })
+      const replacement = await createSquadRunRecords({
+        ...seed,
+        runId: "replacement",
+        parentRunId: `execution:team:${seed.runId}`,
+      })
+      expect(replacement.created).toBe(true)
+      expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("cancelled")
+    }
+  )
+
   it("does not replace an actively executing run", async () => {
     await createSquadRunRecords(seed)
     await getDb().agentTeamRuns.update(seed.runId, { status: "running" })
@@ -194,6 +238,71 @@ describe("createSquadRunRecords", () => {
       })
     ).rejects.toThrow(/already has a live run/)
     expect(await getDb().agentTeamRuns.count()).toBe(1)
+  })
+
+  it("does not reopen finalized parent rows when replacement admission refuses stop proof", async () => {
+    await createSquadRunRecords(seed)
+    await getDb().agentTeamRuns.update(seed.runId, { status: "cancelled" })
+    await getDb().executionRuns.update(`execution:team:${seed.runId}`, { status: "cancelled" })
+    await getDb().agentTeamChildRuns.add(
+      contractChild({
+        runId: seed.runId,
+        teamId: seed.teamId,
+        dispatchEpoch: 1,
+        remoteDispatchEpoch: 1,
+        startedAt: 1,
+        stop: { state: "unconfirmed", epoch: 1, requestedAt: 2 },
+      })
+    )
+    await expect(
+      createSquadRunRecords({
+        ...seed,
+        runId: "replacement",
+        parentRunId: `execution:team:${seed.runId}`,
+      })
+    ).rejects.toThrow("already has a live run")
+    expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("cancelled")
+    expect((await getDb().executionRuns.get(`execution:team:${seed.runId}`))?.status).toBe(
+      "cancelled"
+    )
+  })
+
+  it("does not park a durable row after its canonical execution is terminal", async () => {
+    await createSquadRunRecords(seed)
+    await getDb().executionRuns.update(`execution:team:${seed.runId}`, { status: "cancelled" })
+    await expect(parkActiveSquadRun(seed.runId, "stop_unconfirmed", 2_000)).resolves.toBe(false)
+    expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("queued")
+  })
+
+  it.each(["requested", "unconfirmed", "confirmed"] as const)(
+    "does not park a retry assessment over a %s stop, even with unchanged timestamps",
+    async (state) => {
+      const { run } = await createSquadRunRecords(seed)
+      await getDb().agentTeamRuns.update(seed.runId, {
+        stop: { state, epoch: 1, requestedAt: 2_000 },
+      })
+      await expect(parkActiveSquadRun(seed.runId, "stop_unconfirmed", 3_000, run)).resolves.toBe(
+        false
+      )
+      const current = (await getDb().agentTeamRuns.get(seed.runId))!
+      // A gate that starts after the stop must also leave it alone.
+      await expect(
+        parkActiveSquadRun(seed.runId, "stop_unconfirmed", 3_000, current)
+      ).resolves.toBe(false)
+      expect(await getDb().agentTeamRuns.get(seed.runId)).toEqual(current)
+    }
+  )
+
+  it("does not park a retry assessment after another durable transition", async () => {
+    const { run } = await createSquadRunRecords(seed)
+    await getDb().agentTeamRuns.update(seed.runId, { status: "paused", updatedAt: 2_000 })
+    await expect(parkActiveSquadRun(seed.runId, "stop_unconfirmed", 3_000, run)).resolves.toBe(
+      false
+    )
+    expect(await getDb().agentTeamRuns.get(seed.runId)).toMatchObject({
+      status: "paused",
+      updatedAt: 2_000,
+    })
   })
 
   it("reuses a settled replacement when the same parent restart is delivered again", async () => {
@@ -276,6 +385,106 @@ describe("createSquadRunRecords", () => {
     await getDb().agentTeamRuns.update(seed.runId, { status: "cancelled" })
     expect(await parkActiveSquadRun(seed.runId, "reentry_failed", 3_000)).toBe(false)
     expect((await getDb().agentTeamRuns.get(seed.runId))?.status).toBe("cancelled")
+  })
+
+  it("requires a real local pause before replacement while a control is still live", async () => {
+    const { createDurableTeamCoordinator } = await import("../durable/durable-runtime")
+    const { beginDurableDispatch } = await import("../durable/durable-dispatch")
+    const { sidecarSessionControl } = await import("../teammate/child-controls")
+    const parent = await createSquadRunRecords(seed)
+    const coordinator = createDurableTeamCoordinator()
+    const team = {
+      id: seed.teamId,
+      leadId: "lead",
+      task: seed.objective,
+      config: { repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }] },
+    } as import("@/types/agent/agent-team").AgentTeam
+    await coordinator.prepareRun(team, seed.runId)
+    const dispatch = await beginDurableDispatch({
+      coordinator,
+      team,
+      runId: seed.runId,
+      teammateId: "mate",
+      taskId: "task",
+      repositoryId: "primary",
+      access: "read",
+    })
+    let release!: () => void
+    const execute = async () => {
+      await dispatch.attachControl(
+        sidecarSessionControl(
+          {
+            steerSession: async () => {},
+            interruptSession: async () => {
+              release()
+            },
+            closeSession: async () => {
+              release()
+            },
+          },
+          "local-session"
+        )
+      )
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+    const execution = dispatch.run(() => {
+      const pending = execute()
+      dispatch.trackLocalStop(
+        pending.then(
+          () => undefined,
+          () => undefined
+        )
+      )
+      return pending
+    })
+    const observed = execution.catch(() => undefined)
+    while (!release) await new Promise((resolve) => setTimeout(resolve, 1))
+    await getDb().agentTeamRuns.update(seed.runId, { status: "paused" })
+    const replacement = { ...seed, runId: "replacement", parentRunId: parent.executionRunId }
+    try {
+      await expect(createSquadRunRecords(replacement)).rejects.toThrow("live run")
+      expect(await getDb().agentTeamRuns.get("replacement")).toBeUndefined()
+      expect(
+        (await getDb().executionRunEvents.toArray()).some((event) => event.type === "run.cancelled")
+      ).toBe(false)
+      await coordinator.pauseChild(dispatch.childRunId)
+      expect((await getDb().agentTeamChildRuns.get(dispatch.childRunId))?.stop?.proof?.kind).toBe(
+        "ack"
+      )
+      await expect(createSquadRunRecords(replacement)).resolves.toMatchObject({ created: true })
+    } finally {
+      release()
+      await observed
+      dispatch.dispose()
+    }
+  })
+
+  it("refuses replacement records without a stop proof even for a queued old child", async () => {
+    await createSquadRunRecords(seed)
+    await getDb().agentTeamRuns.update(seed.runId, { status: "needs_input" })
+    await getDb().agentTeamChildRuns.add(
+      contractChild({
+        runId: seed.runId,
+        status: "queued",
+        startedAt: 1,
+        dispatchEpoch: 1,
+        remoteDispatchEpoch: 1,
+      })
+    )
+    await expect(
+      createSquadRunRecords({
+        ...seed,
+        runId: "replacement",
+        parentRunId: `execution:team:${seed.runId}`,
+      })
+    ).rejects.toThrow("live run")
+    expect(await getDb().agentTeamRuns.get("replacement")).toBeUndefined()
+    expect((await getDb().agentTeamRuns.get(seed.runId))?.recoveryReason).toBe("stop_unconfirmed")
+    expect(
+      (await getDb().executionRunEvents.toArray()).some((event) => event.type === "run.cancelled")
+    ).toBe(false)
   })
 
   it("links a replacement to the run it replaces", async () => {

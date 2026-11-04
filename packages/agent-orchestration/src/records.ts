@@ -99,6 +99,20 @@ export interface AgentTeamResourceUsage {
   failures: number
 }
 
+/** WP1 ACK covers closed TOOL admission and empty Bash/jobs/PTY/ACP terminal
+ * groups plus the Claude CLI group. MCP/hooks/LSP/other CLI internals are deferred. */
+export type StopProof =
+  { kind: "ack"; epoch: number; at: number } | { kind: "fence-expiry"; epoch: number; at: number }
+
+export interface AgentTeamStopRecord {
+  /** Run stop intent survives process loss. */
+  action?: "stop" | "terminate"
+  state: "requested" | "confirmed" | "unconfirmed"
+  epoch: number
+  requestedAt: number
+  proof?: StopProof
+}
+
 /**
  * One durable team run. `TConstraints` is the host's serialized launch
  * authority (the desktop app binds its `AgentTeamExecutionConstraints`); the
@@ -117,6 +131,7 @@ export interface AgentTeamRunRecord<TConstraints = unknown> {
   executionConstraints?: TConstraints
   activeWriterRepositoryId?: string
   recoveryReason?: string
+  stop?: AgentTeamStopRecord
   resourceUsage?: AgentTeamResourceUsage
   createdAt: number
   startedAt?: number
@@ -140,9 +155,22 @@ export interface AgentTeamChildRun {
   remoteSessionId?: string
   dispatchLeaseId?: string
   dispatchLeaseExpiresAt?: number
+  /** Non-indexed fencing token; never reset when an attempt is retried. */
+  dispatchEpoch?: number
+  /** Persisted even after lease release: this child has held remote authority. */
+  remoteDispatchEpoch?: number
+  fenceCapable?: boolean
+  fenceGraceMs?: number
+  leaseTtlMs?: number
+  lastRenewalSentAt?: number
+  /** Executor completion, distinct from a failed transport or released lease. */
+  settledEpoch?: number
+  stop?: AgentTeamStopRecord
   lastRemoteEventId?: string
   waitingReason?: string
   runtime?: string
+  /** Actual local executor owner; preset names can also name network agents. */
+  executorRegistry?: "sidecar" | "external-process" | "unconfirmed"
   decisionVersion?: number
   workspacePath?: string
   branch?: string

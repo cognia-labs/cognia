@@ -79,7 +79,17 @@ describe("durable AgentTeam run controls", () => {
   })
 
   it("terminates active children and records a terminal timestamp", async () => {
-    const terminateChild = jest.fn(async () => undefined)
+    const terminateChild = jest.fn(async () => {
+      await getDb().agentTeamChildRuns.update("child-1", {
+        status: "terminated",
+        stop: {
+          state: "confirmed",
+          epoch: 0,
+          requestedAt: 20,
+          proof: { kind: "ack", epoch: 0, at: 20 },
+        },
+      })
+    })
     await controlDurableRun("run-1", "terminate", {
       coordinator: {
         pauseChild: jest.fn(),
@@ -93,6 +103,26 @@ describe("durable AgentTeam run controls", () => {
     })
     expect(terminateChild).toHaveBeenCalledWith("child-1")
     expect(await getAgentTeamRun("run-1")).toMatchObject({ status: "terminated", completedAt: 20 })
+  })
+  it("leaves a failing child unconfirmed and never cancels the run first", async () => {
+    const terminateChild = jest.fn(async () => {
+      expect((await getAgentTeamRun("run-1"))?.stop?.state).toBe("requested")
+      expect((await getAgentTeamRun("run-1"))?.status).toBe("running")
+      throw new Error("connection closed")
+    })
+    await expect(
+      controlDurableRun("run-1", "stop", {
+        coordinator: { terminateChild, setRunPaused: jest.fn() } as never,
+        now: () => 20,
+      })
+    ).rejects.toThrow("stop_unconfirmed")
+    expect(await getAgentTeamRun("run-1")).toMatchObject({
+      status: "needs_input",
+      recoveryReason: "stop_unconfirmed",
+      stop: { state: "unconfirmed" },
+    })
+    expect((await getDb().agentTeamChildRuns.get("child-1"))?.stop?.state).toBe("unconfirmed")
+    expect((await getAgentTeamRun("run-1"))?.completedAt).toBeUndefined()
   })
 })
 

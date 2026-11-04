@@ -172,8 +172,56 @@ export async function runTeamNode(ctx: StepExecutionContext): Promise<StepExecut
 // text-only fallback on web/mobile), validates output, and records pool /
 // budget / hooks. The same primitive powers the ultracode `pattern.*` nodes.
 //
-// Retryable: true → workflow runStep retries on transient failures, and each
-// retry re-claims from the pool, naturally rotating to a different teammate.
+// The workflow waits for settlement and checks this task's entire child history
+// before retrying, including when the pool rotates to another teammate.
+export async function assertTeamDispatchRetry(
+  ctx: StepExecutionContext,
+  executionSettled = true
+): Promise<void> {
+  const { getTeamRunContext } = await import("../team-run-context")
+  const team = getTeamRunContext(ctx.runId)
+  if (!team) throw nonRetryable("stop_unconfirmed")
+  const taskId = (ctx.params as { taskId?: string }).taskId
+  if (!taskId) throw nonRetryable("stop_unconfirmed")
+  const [{ getDurableTeamCoordinator }, { assessStoredTaskRecovery }] = await Promise.all([
+    import("../durable/durable-runtime"),
+    import("@cognia/agent-orchestration/coordinator"),
+  ])
+  const store = getDurableTeamCoordinator().store
+  const { isTerminalSquadRunStatus, parkActiveSquadRun } =
+    await import("../squad/squad-run-records")
+  const run = await store.getRun(team.runId)
+  if (!run || run.stop?.state === "requested" || run.stop?.state === "unconfirmed")
+    throw Object.assign(nonRetryable("stop_unconfirmed"), {
+      name: "NeedsHumanError",
+      needsHuman: true,
+    })
+  const eligibility = await assessStoredTaskRecovery(store, team.runId, taskId, Date.now())
+  if (isTerminalSquadRunStatus(run.status) && eligibility.eligible) return
+  if (eligibility.eligible && executionSettled) return
+  const reason = eligibility.eligible ? "stop_unconfirmed" : eligibility.reason
+  // A stop can finish while recovery reads children/checkpoints. Compare the
+  // snapshot and canonical terminal state inside the same write transaction.
+  if (!(await parkActiveSquadRun(team.runId, reason, Date.now(), run))) {
+    const latest = await store.getRun(team.runId)
+    if (latest && latest.stop?.state !== "requested" && latest.stop?.state !== "unconfirmed") {
+      if (isTerminalSquadRunStatus(latest.status) && eligibility.eligible) return
+      const [{ getDb }, { agentTeamExecutionRunId }] = await Promise.all([
+        import("@/lib/db/schema"),
+        import("@/lib/execution/agent-team-bridge"),
+      ])
+      const execution = await getDb().executionRuns.get(agentTeamExecutionRunId(team.runId))
+      if (
+        execution &&
+        ["completed", "failed", "cancelled"].includes(execution.status) &&
+        eligibility.eligible
+      )
+        return
+    }
+  }
+  throw Object.assign(nonRetryable(reason), { name: "NeedsHumanError", needsHuman: true })
+}
+
 export async function dispatchTeamTask(ctx: StepExecutionContext): Promise<StepExecutionResult> {
   const params = ctx.params as {
     teamId?: string
@@ -666,6 +714,7 @@ export async function reconcileTeamRun(ctx: StepExecutionContext): Promise<StepE
 export const teamWorkflowNodes: TeamWorkflowNodes = {
   run: runTeamNode,
   dispatchTask: dispatchTeamTask,
+  assertDispatchRetry: assertTeamDispatchRetry,
   reviewTask: reviewTeamTask,
   reconcile: reconcileTeamRun,
   compose: runTeamCompose,

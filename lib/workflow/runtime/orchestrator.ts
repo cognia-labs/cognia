@@ -880,6 +880,13 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           return
         }
         const errorObj = err instanceof Error ? err : new Error(String(err))
+        // A recovery gate owns the next execution. Error branches and fallback
+        // values must not turn an unresolved human decision into completion.
+        if ("needsHuman" in errorObj && errorObj.needsHuman === true) {
+          if (!firstFailure) firstFailure = { stepId, err: errorObj }
+          ac.abort(errorObj)
+          return
+        }
         getPluginEventHooks().dispatchWorkflowNodeError(workflow.id, stepId, errorObj)
         const policy = validated.settings.errorPolicy
         const outgoing = workflowGraph.outgoingEdgesByNode.get(stepId) ?? []
@@ -1038,6 +1045,21 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   if (firstFailure) {
     if (timeoutHandle) clearTimeout(timeoutHandle)
     const { stepId, err, code } = firstFailure
+    if (err instanceof Error && "needsHuman" in err && err.needsHuman === true) {
+      const error = { message: err.message, nodeId: stepId, code: "needs_human" }
+      runRow = await commitOutcome({ ...runRow, status: "waiting", error })
+      if (runRow.status !== "waiting") return finishExistingTerminal(runRow)
+      await logger.log("warn", "Workflow run requires input", error, stepId)
+      await persistRunState({
+        runId,
+        workflowId: workflow.id,
+        status: "waiting",
+        lastStepId: stepId,
+      })
+      if (input.signal) input.signal.removeEventListener("abort", externalAbort)
+      await releaseRunResources(runId)
+      return { runId, status: "waiting", error }
+    }
     const baseMessage = err instanceof Error ? err.message : String(err)
     const message = wallClockExpired
       ? `Wall-clock timeout (${wallClockTimeoutMs}ms) exceeded — aborted at ${stepId}`

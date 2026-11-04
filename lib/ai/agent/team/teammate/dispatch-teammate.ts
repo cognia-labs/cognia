@@ -253,7 +253,10 @@ async function runToolEnabled(
   spanId?: string,
   onSessionCreated?: (sessionId: string) => Promise<void | (() => void)>,
   taskKind?: DispatchTeammateArgs["taskKind"],
-  baseAgent?: Character
+  baseAgent?: Character,
+  onExecutorStarted?: (stopped: Promise<void>) => void,
+  onExecutorAccepted?: (sessionId: string) => void,
+  processOrigin?: { childRunId: string; dispatchEpoch: number }
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const cwd = cwdOverride ?? teamCtx.team.config?.workingDir
   const character = teammateToCharacter({
@@ -306,6 +309,7 @@ async function runToolEnabled(
     await import("@/lib/execution/acting-authority")
   let execution: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
   let executionFailed = true
+  const executorStops: Promise<void>[] = []
   try {
     execution = await startToolExecutionRun(session.id, {
       ...(teamCtx.runId ? { parentRunId: `execution:team:${teamCtx.runId}` } : {}),
@@ -370,6 +374,7 @@ async function runToolEnabled(
     // an anonymous chat session — indistinguishable from the user typing.
     sendOptions.agentKind = "teammate"
     sendOptions.agentRef = teammate.id
+    if (processOrigin) Object.assign(sendOptions, { processOrigin })
     // Apply the resolved step budget as an explicit per-dispatch turn cap. The
     // sidecar dispatcher honors `maxTurns` (an explicit value takes precedence
     // over its default 256-turn budget).
@@ -433,9 +438,24 @@ async function runToolEnabled(
         })
       }
       let committed = false
+      let executorStopped = true
       try {
+        signal.throwIfAborted()
         result = await runner.runAndCaptureAssistantReply(session.id, prompt, attemptOptions, {
           signal,
+          ...(onExecutorAccepted ? { onExecutorAccepted } : {}),
+          ...(onExecutorStarted
+            ? {
+                onExecutorStarted: (stopped: Promise<void>) => {
+                  executorStopped = false
+                  executorStops.push(stopped)
+                  void stopped.then(() => {
+                    executorStopped = true
+                  })
+                  onExecutorStarted(stopped)
+                },
+              }
+            : {}),
           ...(plan || onCaptureEvent
             ? {
                 onEvent: (event: CaptureStreamEvent) => {
@@ -475,6 +495,7 @@ async function runToolEnabled(
           controller?.cancel()
           throw error
         }
+        if (!executorStopped) throw error
         const next = controller?.failAndAdvance() ?? null
         if (!next || !appSettings) throw error
         candidate = next
@@ -531,6 +552,25 @@ async function runToolEnabled(
     executionFailed = Boolean(result.resultSubtype?.startsWith("error"))
     return { text: result.text ?? "", usage: readUsage(result) }
   } finally {
+    // These sessions belong to one dispatch, not to a continuing conversation.
+    // An interrupted/completed turn may leave background tools alive. Closing
+    // requests disposal; only the independent runtime signal confirms it.
+    if (onExecutorStarted) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const close = (await import("@/lib/claude/ipc")).closeSession(session.id)
+        await Promise.race([
+          close.then(() => Promise.all(executorStops)),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 2_000)
+          }),
+        ])
+      } catch {
+        // The durable observer retains unconfirmed state after transport loss.
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
     releaseLiveControl?.()
     const { clearKnowledgeReaderForSession } =
       await import("@/lib/knowledge-base/runtime/session-reader")
@@ -563,7 +603,9 @@ async function runExternalBacked(
   cwdOverride?: string,
   model?: string,
   sessionId?: string,
-  onSessionCreated?: (sessionId: string) => Promise<void | (() => void)>
+  onSessionCreated?: (sessionId: string) => Promise<void | (() => void)>,
+  onExecutorStopped?: () => void,
+  processOrigin?: { childRunId: string; dispatchEpoch: number }
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const [
     { getExternalAgentManager },
@@ -644,37 +686,52 @@ async function runExternalBacked(
   const { placeDispatchedAgent } = await import("@/lib/sandbox/host-agent-placement")
   await placeDispatchedAgent(agentId, cwdOverride ?? teamCtx.team.config?.workingDir, manager)
   try {
-    const result = await manager.execute(agentId, prompt, {
-      // The preset is only the executable. An absent teammate binding selects
-      // native mode; a retained gateway session carries its frozen binding. A
-      // teammate pinned to one exact config runs THAT saved agent, so its own
-      // gateway binding (or native mode) applies unless the teammate overrides.
-      ...(teammate.config?.cogniaModel !== undefined
-        ? { cogniaModel: teammate.config.cogniaModel }
-        : sessionId || resolveTeammatePinnedConfigId(teammate)
-          ? {}
-          : { cogniaModel: null }),
-      ...(sessionId ? { sessionId } : {}),
-      systemPrompt,
-      // The sidecar and text channels both honour the resolved model; the
-      // external channel used to drop it on the floor, so an external teammate
-      // silently ran on whatever its CLI's own config selected.
-      ...(model ? { model } : {}),
-      ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
-      ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
-      ...((cwdOverride ?? teamCtx.team.config?.workingDir)
-        ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
-        : {}),
-      ...(mcpServers.length > 0 ? { context: { custom: { mcpServers } } } : {}),
-      // Live progress: translate the external protocol stream into the same
-      // CaptureStreamEvent frames the sidecar channel emits, so an external
-      // teammate streams tool-calls/text into the activity panel too.
-      onEvent: (event) => {
-        observeSession(event.sessionId)
-        capture?.(event)
+    signal.throwIfAborted()
+    const result = await manager.execute(
+      agentId,
+      prompt,
+      {
+        // The preset is only the executable. An absent teammate binding selects
+        // native mode; a retained gateway session carries its frozen binding. A
+        // teammate pinned to one exact config runs THAT saved agent, so its own
+        // gateway binding (or native mode) applies unless the teammate overrides.
+        ...(teammate.config?.cogniaModel !== undefined
+          ? { cogniaModel: teammate.config.cogniaModel }
+          : sessionId || resolveTeammatePinnedConfigId(teammate)
+            ? {}
+            : { cogniaModel: null }),
+        ...(sessionId ? { sessionId } : {}),
+        systemPrompt,
+        // The sidecar and text channels both honour the resolved model; the
+        // external channel used to drop it on the floor, so an external teammate
+        // silently ran on whatever its CLI's own config selected.
+        ...(model ? { model } : {}),
+        ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
+        ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
+        ...((cwdOverride ?? teamCtx.team.config?.workingDir)
+          ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
+          : {}),
+        ...(mcpServers.length > 0 || processOrigin
+          ? {
+              context: {
+                custom: {
+                  ...(mcpServers.length > 0 ? { mcpServers } : {}),
+                  ...(processOrigin ? { processOrigin } : {}),
+                },
+              },
+            }
+          : {}),
+        // Live progress: translate the external protocol stream into the same
+        // CaptureStreamEvent frames the sidecar channel emits, so an external
+        // teammate streams tool-calls/text into the activity panel too.
+        onEvent: (event) => {
+          observeSession(event.sessionId)
+          capture?.(event)
+        },
+        signal,
       },
-      signal,
-    })
+      ...(onExecutorStopped ? ([onExecutorStopped] as const) : [])
+    )
     observeSession(result.sessionId)
     await sessionWrite
     if (sessionWriteError) throw sessionWriteError
@@ -706,9 +763,11 @@ async function runTextOnly(
   modelHint: string | undefined,
   signal: AbortSignal,
   maxSteps?: number,
-  knowledgeAccess?: TeamRunContext["knowledgeAccess"]
+  knowledgeAccess?: TeamRunContext["knowledgeAccess"],
+  onExecutorStopped?: () => void
 ): Promise<{ text: string; usage?: TokenUsage }> {
   const { executeAgent } = await import("../../agent-executor")
+  signal.throwIfAborted()
   const result = await executeAgent(prompt, {
     systemPrompt,
     ...(modelHint ? { model: modelHint } : {}),
@@ -716,6 +775,10 @@ async function runTextOnly(
     abortSignal: signal,
     ...(knowledgeAccess ? { knowledgeAccess } : {}),
   })
+  // Only the completion rail drains its text stream and finishReason here.
+  // A Host/environment change can select a tool rail instead; its capture
+  // result alone cannot prove executor teardown.
+  if (result.channel === "text") onExecutorStopped?.()
   return { text: result.text ?? "", usage: readUsage(result) }
 }
 
@@ -1042,7 +1105,8 @@ export async function dispatchTeammate(
           import("@/lib/ai/agent/external/manager"),
           import("@cognia/agent-config-types/external-agent-capability"),
         ])
-      const profile = getExternalAgentManager().getAgentCapabilityProfile(externalAgentId)
+      const manager = getExternalAgentManager()
+      const profile = manager.getAgentCapabilityProfile(externalAgentId)
       if (profile) {
         const projection = projectExternalAgentCapabilitiesToSpec(profile)
         externalCapabilities = {
@@ -1168,6 +1232,10 @@ export async function dispatchTeammate(
         repositoryId: durableRepositoryId,
         ...(args.fileOwnership ? { fileOwnership: args.fileOwnership } : {}),
         runtime,
+        // A preset/channel is not ownership: connection can await, switch
+        // Hosts, use a network adapter or be replaced by a Fusion turn.
+        // Bind only after observing the actual process/active-turn registry.
+        executorRegistry: "unconfirmed",
       })
     })()
 
@@ -1243,7 +1311,11 @@ export async function dispatchTeammate(
 
     const activeDispatch = durableDispatch
     const activeSpan = span
-    const executeTurn = async (): Promise<{ text: string; usage?: TokenUsage }> => {
+    const executeTurn = async (
+      admissionSignal?: AbortSignal
+    ): Promise<{ text: string; usage?: TokenUsage }> => {
+      if (admissionSignal) combinedSignal = AbortSignal.any([combinedSignal, admissionSignal])
+      combinedSignal.throwIfAborted()
       const durableTurnContext = await activeDispatch?.prepareTurnContext()
       if (durableTurnContext) {
         promptText = [
@@ -1324,27 +1396,53 @@ export async function dispatchTeammate(
         )
         const {
           advanceAgentTeamRemoteEvent,
-          claimAgentTeamDispatchLease,
-          getAgentTeamChildRun,
+          projectAgentTeamDispatchEpoch,
+          projectAgentTeamDispatchEvent,
           getAgentTeamRun,
           renewAgentTeamDispatchLease,
           settleAgentTeamDispatchLease,
           updateAgentTeamChildRun,
         } = await import("@/lib/db/agent-team-runtime")
-        const existingChild = await getAgentTeamChildRun(activeDispatch.childRunId)
-        const leaseId =
-          existingChild?.dispatchLeaseId ??
-          `dispatch:${activeDispatch.childRunId}:${globalThis.crypto.randomUUID()}`
-        const claimed = await claimAgentTeamDispatchLease({
+        const leaseId = `dispatch:${activeDispatch.childRunId}:${globalThis.crypto.randomUUID()}`
+        const declaredFenceGraceMs: unknown = Reflect.get(target.manifest, "fenceGraceMs")
+        const claimed = await activeDispatch.claimRemoteLease({
           childRunId: activeDispatch.childRunId,
+          expectedEpoch: activeDispatch.dispatchEpoch,
           leaseId,
           hostRef: target.hostRef,
+          fenceCapable: (target.manifest.hardCapabilities as readonly string[]).includes(
+            "worker-self-fence-v1"
+          ),
+          fenceGraceMs:
+            typeof declaredFenceGraceMs === "number" &&
+            Number.isFinite(declaredFenceGraceMs) &&
+            declaredFenceGraceMs >= 0
+              ? declaredFenceGraceMs
+              : 30_000,
           executionFingerprint: remoteExecutionSpec.executionFingerprint,
           now: Date.now(),
         })
         if (!claimed) throw new RemoteWorkerWaitingError("no_compatible_capacity", target.hostRef)
+        const dispatchEpoch = claimed.dispatchEpoch ?? 0
+        activeDispatch.bindDispatchEpoch(dispatchEpoch)
+        const projectCurrent = async (project: () => Promise<void>) => {
+          if (
+            !(await projectAgentTeamDispatchEpoch(
+              activeDispatch.childRunId,
+              dispatchEpoch,
+              Date.now(),
+              project
+            ))
+          )
+            throw new Error("Dispatch epoch no longer owns projection")
+        }
         settleRemoteDispatchLease = async () => {
-          await settleAgentTeamDispatchLease(activeDispatch.childRunId, leaseId, Date.now())
+          await settleAgentTeamDispatchLease(
+            activeDispatch.childRunId,
+            leaseId,
+            Date.now(),
+            dispatchEpoch
+          )
         }
         const sourceRun = await getAgentTeamRun(teamCtx.runId)
         if (!sourceRun) throw new Error(`Unknown durable AgentTeam run: ${teamCtx.runId}`)
@@ -1358,11 +1456,76 @@ export async function dispatchTeammate(
             throw new Error("Remote session recovery requires a safe checkpoint")
           }
         }
-        const {
-          agentTeamExecutionRunId,
-          projectAgentTeamChildLifecycle,
-          projectRemoteAgentTeamEvent,
-        } = await import("@/lib/execution/agent-team-bridge")
+        const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
+        const { semanticRunEvent } = await import("@/lib/db/execution-runs")
+        const projectAgentTeamChildLifecycle = async (
+          input: Parameters<
+            typeof import("@/lib/execution/agent-team-bridge").projectAgentTeamChildLifecycle
+          >[0]
+        ) => {
+          const type =
+            input.state === "started"
+              ? "step.started"
+              : input.state === "completed"
+                ? "step.completed"
+                : input.state === "failed"
+                  ? "step.failed"
+                  : input.state === "recovery_required"
+                    ? "run.recovery_required"
+                    : "step.progress"
+          const accepted = await projectAgentTeamDispatchEvent(
+            activeDispatch.childRunId,
+            dispatchEpoch,
+            Date.now(),
+            semanticRunEvent(
+              type,
+              {
+                stepId: input.taskId,
+                childRunId: input.childRunId,
+                ...(input.state === "waiting" ? { status: "blocked" } : {}),
+              },
+              { ts: input.ts ?? Date.now(), sourceEventId: input.sourceEventId }
+            )
+          )
+          if (!accepted) throw new Error("Dispatch epoch no longer owns lifecycle projection")
+        }
+        const projectRemoteAgentTeamEvent = async (
+          input: Parameters<
+            typeof import("@/lib/execution/agent-team-bridge").projectRemoteAgentTeamEvent
+          >[0]
+        ) => {
+          const event = input.envelope.event
+          const type =
+            event.kind === "tool-call"
+              ? "tool.started"
+              : event.kind === "tool-result"
+                ? event.isError === true
+                  ? "tool.failed"
+                  : "tool.completed"
+                : "step.progress"
+          const toolName = typeof event.toolName === "string" ? event.toolName : undefined
+          const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined
+          const accepted = await projectAgentTeamDispatchEvent(
+            activeDispatch.childRunId,
+            dispatchEpoch,
+            Date.now(),
+            semanticRunEvent(
+              type,
+              {
+                stepId: input.taskId,
+                activityId: toolCallId ?? input.envelope.eventId,
+                hostRef: input.hostRef,
+                childRunId: input.childRunId,
+                ...(toolName ? { toolName, safeToolName: true } : {}),
+              },
+              {
+                ts: input.ts ?? Date.now(),
+                sourceEventId: `agent-team:${input.sourceRun.id}:remote:${input.envelope.eventId}`,
+              }
+            )
+          )
+          if (!accepted) throw new Error("Dispatch epoch no longer owns event projection")
+        }
         const { preflightCrossHostDispatch } =
           await import("@/lib/ai/agent/execution/cross-host-preflight")
         const handoff = preflightCrossHostDispatch({
@@ -1435,7 +1598,13 @@ export async function dispatchTeammate(
         }
         const leaseController = new AbortController()
         const renew = setInterval(() => {
-          void renewAgentTeamDispatchLease(activeDispatch.childRunId, leaseId, Date.now())
+          void renewAgentTeamDispatchLease(
+            activeDispatch.childRunId,
+            leaseId,
+            Date.now(),
+            undefined,
+            dispatchEpoch
+          )
             .then((ok) => {
               if (!ok) leaseController.abort(new Error("Remote dispatch lease was lost"))
             })
@@ -1453,10 +1622,12 @@ export async function dispatchTeammate(
             signal: AbortSignal.any([combinedSignal, leaseController.signal]),
             onSession: async (remoteSessionId) => {
               projectedRemoteSessionId = remoteSessionId
-              await updateAgentTeamChildRun(activeDispatch.childRunId, {
-                remoteSessionId,
-                sessionId: remoteSessionId,
-                updatedAt: Date.now(),
+              await projectCurrent(async () => {
+                await updateAgentTeamChildRun(activeDispatch.childRunId, {
+                  remoteSessionId,
+                  sessionId: remoteSessionId,
+                  updatedAt: Date.now(),
+                })
               })
               await projectFleet("working")
             },
@@ -1477,7 +1648,8 @@ export async function dispatchTeammate(
                 {
                   runId: teamCtx.runId,
                   event: JSON.parse(safeEnvelope),
-                }
+                },
+                dispatchEpoch
               )
               if (!advanced) return
               lastRemoteEventId = envelope.eventId
@@ -1521,10 +1693,12 @@ export async function dispatchTeammate(
           // `requires_action` turn status this used to branch on (ADR-0142).
           if (outcome.recoveryRequired === true) {
             await projectFleet("waiting-input")
-            await updateAgentTeamChildRun(activeDispatch.childRunId, {
-              status: "needs_input",
-              waitingReason: "recovery_required",
-              updatedAt: Date.now(),
+            await projectCurrent(async () => {
+              await updateAgentTeamChildRun(activeDispatch.childRunId, {
+                status: "needs_input",
+                waitingReason: "recovery_required",
+                updatedAt: Date.now(),
+              })
             })
             await projectAgentTeamChildLifecycle({
               sourceRun,
@@ -1549,6 +1723,13 @@ export async function dispatchTeammate(
                 : `Remote worker turn ${outcome.status}`
             )
           }
+          // WP2a/WP3 will supply the worker receipt. Until then completion
+          // projects normally; only executor settlement/recovery stays closed.
+          if (
+            outcome.disposalProof?.kind === "ack" &&
+            outcome.disposalProof.epoch === dispatchEpoch
+          )
+            await activeDispatch.recordRemoteDisposal(outcome.disposalProof)
           await projectAgentTeamChildLifecycle({
             sourceRun,
             childRunId: activeDispatch.childRunId,
@@ -1617,6 +1798,8 @@ export async function dispatchTeammate(
       // `runMemberFusionTurn` returns null after one property read for every
       // teammate on `auto` — which is all of them by default — and while the
       // `agentsWorkflows` surface is off, so the channels below are untouched.
+      await activeDispatch?.startLocalExecution()
+      combinedSignal.throwIfAborted()
       const memberFusion = await runMemberFusionTurn({
         runId: teamCtx.runId,
         teammate,
@@ -1628,7 +1811,13 @@ export async function dispatchTeammate(
         signal: combinedSignal,
         ...(onTurnCapture ? { onCapture: onTurnCapture } : {}),
       })
-      if (memberFusion) return memberFusion
+      if (memberFusion) {
+        // An answered Fusion outcome is a terminal result. A rejection has
+        // no drain guarantee and deliberately supplies no stop proof.
+        activeDispatch?.trackLocalStop?.(Promise.resolve())
+        return memberFusion
+      }
+      combinedSignal.throwIfAborted()
       if (channel === "external" && externalAgentId) {
         const { getAgentTeamChildRun } = await import("@/lib/db/agent-team-runtime")
         const { parseGatewaySessionId } =
@@ -1655,16 +1844,28 @@ export async function dispatchTeammate(
           activeDispatch
             ? async (sessionId) => {
                 const { getExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
+                const { isKnownLocalExternalAgentProcess } =
+                  await import("@/lib/ai/agent/external/agent-transport")
+                const manager = getExternalAgentManager()
+                const config = manager.getAgent(externalAgentId)?.config
+                const task = parseGatewaySessionId(sessionId)
+                const processId = task ? `gateway-task-${task.taskId}` : externalAgentId
+                const processOwned =
+                  config?.transport === "stdio" &&
+                  ["acp", "codex-app-server"].includes(config.protocol) &&
+                  Boolean(config.process?.command) &&
+                  !config.network?.endpoint &&
+                  isKnownLocalExternalAgentProcess(processId)
                 return activeDispatch.attachControl(
-                  externalSessionControl(
-                    getExternalAgentManager(),
-                    externalAgentId,
-                    sessionId,
-                    activeDispatch
-                  ),
-                  sessionId
+                  externalSessionControl(manager, externalAgentId, sessionId, activeDispatch),
+                  sessionId,
+                  processOwned ? "external-process" : "unconfirmed"
                 )
               }
+            : undefined,
+          activeDispatch ? () => activeDispatch.trackLocalStop(Promise.resolve()) : undefined,
+          activeDispatch
+            ? { childRunId: activeDispatch.childRunId, dispatchEpoch: activeDispatch.dispatchEpoch }
             : undefined
         )
       }
@@ -1694,6 +1895,8 @@ export async function dispatchTeammate(
                         ),
                       interruptSession: async (id) =>
                         (await import("@/lib/claude/ipc")).interruptSession(id),
+                      closeSession: async (id) =>
+                        (await import("@/lib/claude/ipc")).closeSession(id),
                     },
                     sessionId
                   ),
@@ -1701,7 +1904,16 @@ export async function dispatchTeammate(
                 )
             : undefined,
           args.taskKind,
-          baseAgent
+          baseAgent,
+          activeDispatch?.trackLocalStop,
+          activeDispatch
+            ? (sessionId) => {
+                void activeDispatch.bindLocalSidecarSession(sessionId).catch(() => undefined)
+              }
+            : undefined,
+          activeDispatch
+            ? { childRunId: activeDispatch.childRunId, dispatchEpoch: activeDispatch.dispatchEpoch }
+            : undefined
         )
       }
 
@@ -1726,11 +1938,12 @@ export async function dispatchTeammate(
         modelHint,
         combinedSignal,
         maxSteps,
-        teamCtx.knowledgeAccess
+        teamCtx.knowledgeAccess,
+        activeDispatch ? () => activeDispatch.trackLocalStop?.(Promise.resolve()) : undefined
       )
     }
     const turn = durableDispatch
-      ? await durableDispatch.run(executeTurn, combinedSignal)
+      ? await durableDispatch.run(executeTurn, combinedSignal, { deferExecutionStart: true })
       : await executeTurn()
 
     const text = (turn.text ?? "").toString()
@@ -1818,7 +2031,13 @@ export async function dispatchTeammate(
         // unblocks dependents, so this never stalls the run itself.
         const requireReview =
           teamCtx.team?.config?.governancePolicy?.approval?.requireResultReview === true
-        teamCtx.storeWriter.setTaskStatus(args.taskId, requireReview ? "review" : "completed", text)
+        const projectSuccess = () =>
+          teamCtx.storeWriter.setTaskStatus(
+            args.taskId,
+            requireReview ? "review" : "completed",
+            text
+          )
+        if (durableDispatch) await durableDispatch.projectIfCurrent(projectSuccess)
       }
     }
     endSpan(span.spanId, {
@@ -1869,12 +2088,14 @@ export async function dispatchTeammate(
       budgetAccount?.recordFailure()
     }
     if (args.recordToStore && !(err instanceof RemoteWorkerWaitingError)) {
-      teamCtx.storeWriter.setTaskStatus(
-        args.taskId,
-        "failed",
-        undefined,
-        err instanceof Error ? err.message : String(err)
-      )
+      const projectFailure = () =>
+        teamCtx.storeWriter.setTaskStatus(
+          args.taskId,
+          "failed",
+          undefined,
+          err instanceof Error ? err.message : String(err)
+        )
+      if (durableDispatch) await durableDispatch.projectIfCurrent(projectFailure)
     }
     const original = err instanceof Error ? err : new Error(String(err))
     const error = cleanupErrors.length

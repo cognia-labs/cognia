@@ -1,3 +1,8 @@
+import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { createSquadRunRecords } from "../squad/squad-run-records"
+import { contractChild, contractRun } from "@cognia/agent-orchestration/store-contract"
 /**
  * Unit tests for the team node implementations installed into the workflow
  * engine's port (ADR-0217): the task dispatch and lead review executors, and
@@ -9,12 +14,18 @@ import type { StepExecutionContext, TriggerEvent } from "@/types/workflow/visual
 import { runTeamCompose, runTeamDelegate, runTeamMessage, runTeamStatus } from "./team-ops"
 import {
   dispatchTeamTask,
+  assertTeamDispatchRetry,
   reconcileTeamRun,
   reviewTeamTask,
   runTeamNode,
   resolveTeamKnowledgeBaseIds,
   teamWorkflowNodes,
 } from "./index"
+
+const retryStore = dexieTeamRunStore
+jest.mock("../durable/durable-runtime", () => ({
+  getDurableTeamCoordinator: () => ({ store: retryStore }),
+}))
 
 const getStoredTeam = jest.fn()
 const getStoredTeammates = jest.fn()
@@ -25,6 +36,7 @@ jest.mock("@/stores/agent/agent-team-store", () => ({
   },
 }))
 jest.mock("@/lib/db/characters", () => ({
+  ...jest.requireActual("@/lib/db/characters"),
   resolveCharacterById: (...args: unknown[]) => resolveCharacterById(...args),
 }))
 
@@ -71,6 +83,7 @@ jest.mock("@/lib/git/commands", () => ({
 
 const listAgentTeamEvidence = jest.fn()
 jest.mock("@/lib/db/agent-team-runtime", () => ({
+  ...jest.requireActual("@/lib/db/agent-team-runtime"),
   listAgentTeamEvidence: (...args: unknown[]) => listAgentTeamEvidence(...args),
 }))
 
@@ -138,11 +151,167 @@ beforeEach(() => {
   listAgentTeamEvidence.mockResolvedValue([])
 })
 
+describe("workflow dispatch retry admission", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  it.each(["completed", "failed", "cancelled", "terminated"] as const)(
+    "leaves a terminal durable %s run alone",
+    async (status) => {
+      await retryStore.createRun({ ...contractRun({ status }), executionConstraints: undefined })
+      getTeamRunContext.mockReturnValue({ runId: "run-1" })
+      await expect(
+        assertTeamDispatchRetry(ctx({ taskId: "task-1" }), false)
+      ).resolves.toBeUndefined()
+      expect(await retryStore.getRun("run-1")).toEqual(contractRun({ status }))
+    }
+  )
+
+  it.each(["requested", "unconfirmed", "confirmed"] as const)(
+    "leaves a %s stop alone",
+    async (state) => {
+      const run = {
+        ...contractRun({ stop: { state, epoch: 1, requestedAt: 1 } }),
+        executionConstraints: undefined,
+      }
+      await retryStore.createRun(run)
+      getTeamRunContext.mockReturnValue({ runId: run.id })
+      const checking = assertTeamDispatchRetry(ctx({ taskId: "task-1" }), false)
+      await expect(checking).rejects.toMatchObject({ needsHuman: true, retryable: false })
+      expect(await retryStore.getRun(run.id)).toEqual(run)
+    }
+  )
+
+  it.each(["completed", "failed", "cancelled", "terminated"] as const)(
+    "does not use a terminal %s run as child disposal evidence",
+    async (status) => {
+      const run = { ...contractRun({ status }), executionConstraints: undefined }
+      await retryStore.createRun(run)
+      await retryStore.createChild(contractChild({ status: "completed" }))
+      getTeamRunContext.mockReturnValue({ runId: "run-1" })
+      await expect(assertTeamDispatchRetry(ctx({ taskId: "task-1" }))).rejects.toMatchObject({
+        needsHuman: true,
+        retryable: false,
+      })
+      expect(await retryStore.getRun("run-1")).toEqual(run)
+    }
+  )
+
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "leaves a run alone when its canonical execution is %s",
+    async (status) => {
+      await createSquadRunRecords({
+        runId: "run-1",
+        teamId: "team-1",
+        objective: "work",
+        origin: "chat",
+        startedAt: 1,
+      })
+      await getDb().executionRuns.update("execution:team:run-1", { status })
+      const run = await retryStore.getRun("run-1")
+      getTeamRunContext.mockReturnValue({ runId: "run-1" })
+      await expect(
+        assertTeamDispatchRetry(ctx({ taskId: "task-1" }), false)
+      ).resolves.toBeUndefined()
+      expect(await retryStore.getRun("run-1")).toEqual(run)
+    }
+  )
+
+  it.each([false, true])(
+    "checks the old teammate's stop proof before pool rotation (proof=%s)",
+    async (proof) => {
+      await retryStore.createRun({ ...contractRun(), executionConstraints: undefined })
+      await retryStore.createChild(
+        contractChild({
+          status: "failed",
+          dispatchEpoch: 1,
+          remoteDispatchEpoch: 1,
+          teammateId: "old",
+          ...(proof
+            ? {
+                stop: {
+                  state: "confirmed" as const,
+                  epoch: 1,
+                  requestedAt: 1,
+                  proof: { kind: "ack" as const, epoch: 1, at: 2 },
+                },
+              }
+            : {}),
+        })
+      )
+      await retryStore.markCheckpoint({
+        childRunId: "child-1",
+        runId: "run-1",
+        decisionVersion: 0,
+        trajectorySequence: 0,
+        replay: "safe",
+        sideEffects: [],
+        createdAt: 2,
+      })
+      getTeamRunContext.mockReturnValue({ runId: "run-1" })
+      const operation = assertTeamDispatchRetry(ctx({ teamId: "team-1", taskId: "task-1" }))
+      if (proof) await expect(operation).resolves.toBeUndefined()
+      else {
+        await expect(operation).rejects.toMatchObject({ needsHuman: true, retryable: false })
+        expect(await retryStore.getRun("run-1")).toMatchObject({
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+        })
+      }
+    }
+  )
+
+  it("surfaces stop_unconfirmed when a concurrent stop prevents recovery parking", async () => {
+    await retryStore.createRun({ ...contractRun(), executionConstraints: undefined })
+    await retryStore.createChild(contractChild({ status: "completed" }))
+    getTeamRunContext.mockReturnValue({ runId: "run-1" })
+    const read = retryStore.listChildren.bind(retryStore)
+    const reading = jest.spyOn(retryStore, "listChildren").mockImplementationOnce(async (runId) => {
+      await retryStore.updateRun(runId, {
+        stop: { state: "unconfirmed", epoch: 1, requestedAt: 3 },
+        updatedAt: 3,
+      })
+      return read(runId)
+    })
+    try {
+      await expect(assertTeamDispatchRetry(ctx({ taskId: "task-1" }))).rejects.toMatchObject({
+        name: "NeedsHumanError",
+        needsHuman: true,
+        retryable: false,
+        message: "stop_unconfirmed",
+      })
+      expect(await retryStore.getRun("run-1")).toMatchObject({
+        status: "running",
+        stop: { state: "unconfirmed" },
+      })
+    } finally {
+      reading.mockRestore()
+    }
+  })
+
+  it("does not substitute a run-level confirmed stop for a completed child's disposal", async () => {
+    await retryStore.createRun({
+      ...contractRun({ stop: { state: "confirmed", epoch: 1, requestedAt: 1 } }),
+      executionConstraints: undefined,
+    })
+    await retryStore.createChild(contractChild({ status: "completed" }))
+    getTeamRunContext.mockReturnValue({ runId: "run-1" })
+    await expect(assertTeamDispatchRetry(ctx({ taskId: "task-1" }))).rejects.toMatchObject({
+      needsHuman: true,
+      retryable: false,
+      message: "stop_unconfirmed",
+    })
+  })
+})
+
 describe("teamWorkflowNodes", () => {
   it("maps every port slot to its implementation", () => {
     expect(teamWorkflowNodes).toEqual({
       run: runTeamNode,
       dispatchTask: dispatchTeamTask,
+      assertDispatchRetry: assertTeamDispatchRetry,
       reviewTask: reviewTeamTask,
       reconcile: reconcileTeamRun,
       compose: runTeamCompose,

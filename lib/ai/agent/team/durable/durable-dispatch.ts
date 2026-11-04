@@ -1,10 +1,20 @@
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
-import { ownsDispatchAttempt, planDispatchAttempt } from "@cognia/agent-orchestration/replay"
+import {
+  childStopProof,
+  hasRemoteDispatch,
+  ownsDispatchAttempt,
+  planDispatchAttempt,
+} from "@cognia/agent-orchestration/replay"
+import { assessStoredTaskRecovery } from "@cognia/agent-orchestration/coordinator"
+import { rejectedEpochEvent } from "@cognia/agent-orchestration/rules"
 import { recordRunUsage } from "@cognia/agent-orchestration/usage"
 import { reportTeamRunUsage } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeam } from "@/types/agent/agent-team"
-import type { AgentTeamSideEffect } from "@/types/agent/agent-team-runtime"
+import type {
+  AgentTeamSideEffect,
+  AgentTeamTrajectoryEvent,
+} from "@/types/agent/agent-team-runtime"
 import { createEvidenceBundle } from "@cognia/agent-orchestration/evidence"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
 import type { AgentExecutionEnvironment } from "../../execution/local-tauri-environment"
@@ -23,6 +33,7 @@ export interface BeginDurableDispatchInput {
   repositoryId: string
   fileOwnership?: string[]
   runtime?: string
+  executorRegistry?: import("@/types/agent/agent-team-runtime").AgentTeamChildRun["executorRegistry"]
   /** Independent attempts retain child recovery gates without parking sibling tasks. */
   isolateFailure?: boolean
   now?: () => number
@@ -72,6 +83,8 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   let retryTargetHostRef: string | undefined
   let attempt = 1
   let previousFailures = 0
+  let dispatchEpoch = 0
+  let admissionRefusal: string | undefined
   const startedAt = now()
   const store = input.coordinator.store
   try {
@@ -82,14 +95,46 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         run
       )
       if (plan.kind === "conflict") throw new DispatchControlConflictError(plan.reason)
+      const eligibility = await input.coordinator.assessTaskRecovery(input.runId, input.taskId, tx)
+      if (!eligibility.eligible) {
+        admissionRefusal = eligibility.reason
+        if (run)
+          await tx.updateRunIfCurrent(run.id, run, {
+            status: "needs_input",
+            recoveryReason: eligibility.reason,
+            updatedAt: now(),
+          })
+        for (const childId of eligibility.childRunIds) {
+          const child = await tx.getChild(childId)
+          if (child)
+            await tx.updateChildIfCurrent(childId, child, {
+              // Preserve turn completion as evidence even on legacy rows with
+              // no startup metadata; a second gate must not infer never-started.
+              status: child.status === "completed" ? "completed" : "needs_input",
+              waitingReason: eligibility.reason,
+              updatedAt: now(),
+            })
+        }
+        return
+      }
       attempt = plan.attempt
       if (plan.kind === "resume") {
         childRunId = plan.child.id
         retryTargetHostRef = plan.retryTargetHostRef
         previousFailures = plan.previousFailures
+        dispatchEpoch = plan.child.dispatchEpoch ?? 0
         const resumed = await tx.updateChildIfCurrent(childRunId, plan.child, {
           status: "running",
+          runtime: input.runtime ?? plan.child.runtime,
+          executorRegistry: input.executorRegistry,
+          dispatchEpoch,
+          dispatchLeaseId: undefined,
+          dispatchLeaseExpiresAt: undefined,
           attempt,
+          // Recovery admitted a new attempt using the previous attempt's proof.
+          // A stop written after this admission belongs to this attempt and
+          // must survive (and refuse) the later executor-start transaction.
+          stop: undefined,
           decisionVersion: run?.decisionVersion ?? plan.child.decisionVersion,
           error: undefined,
           waitingReason: undefined,
@@ -109,18 +154,13 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
             access: input.access,
             ...(input.fileOwnership ? { fileOwnership: input.fileOwnership } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
+            ...(input.executorRegistry ? { executorRegistry: input.executorRegistry } : {}),
           },
           tx
         )
       }
-      await tx.appendTrajectory({
-        runId: input.runId,
-        childRunId,
-        kind: "model_turn_started",
-        correlationId: childRunId,
-        createdAt: startedAt,
-      })
     })
+    if (admissionRefusal) throw new DispatchControlConflictError(admissionRefusal)
   } catch (error) {
     if (error instanceof DispatchControlConflictError) throw error
     const parking = await Promise.allSettled([
@@ -157,6 +197,167 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         { cause: error }
       )
     throw error
+  }
+
+  let executionStarted = false
+  let executionInvoked = false
+  let executionFinished = false
+  let localStopObserved = false
+  let localStopFailed = false
+  const pendingLocalStops = new Set<Promise<void>>()
+  let localSettlement: Promise<void> | undefined
+  const appendDispatchTrajectory = (
+    event: Parameters<typeof store.appendTrajectory>[0],
+    content?: Parameters<typeof store.appendTrajectory>[1],
+    epoch = dispatchEpoch
+  ) =>
+    store.appendTrajectory(
+      { ...event, expectedDispatchEpoch: epoch, expectedDispatchAttempt: attempt },
+      content
+    )
+  const checkpointDispatch = (
+    checkpoint: Parameters<typeof input.coordinator.checkpoint>[1],
+    epoch = dispatchEpoch
+  ) =>
+    input.coordinator.checkpoint(childRunId, {
+      ...checkpoint,
+      expectedDispatchEpoch: epoch,
+      expectedDispatchAttempt: attempt,
+    })
+  const admitExecution = async (
+    claim: (
+      tx: typeof store,
+      child: NonNullable<Awaited<ReturnType<typeof store.getChild>>>
+    ) => ReturnType<typeof store.getChild>
+  ) => {
+    let refusal: string | undefined
+    const result = await store.atomically(async (tx) => {
+      const child = await tx.getChild(childRunId)
+      const run = await tx.getRun(input.runId)
+      if (!child || child.attempt !== attempt || (child.dispatchEpoch ?? 0) !== dispatchEpoch)
+        throw new Error("Dispatch epoch changed before executor start")
+      if (!["running", "queued"].includes(child.status) || child.stop?.epoch === dispatchEpoch)
+        throw new DOMException("Child stopped before executor start", "AbortError")
+      if (
+        !run ||
+        !["running", "recovering", "queued"].includes(run.status) ||
+        run.stop?.state === "requested" ||
+        run.stop?.state === "unconfirmed"
+      )
+        throw new Error("Run is not accepting execution")
+      const eligibility = await input.coordinator.assessTaskRecovery(
+        input.runId,
+        input.taskId,
+        tx,
+        childRunId
+      )
+      if (!eligibility.eligible) {
+        refusal = eligibility.reason
+        await tx.updateRunIfCurrent(run.id, run, {
+          status: "needs_input",
+          recoveryReason: eligibility.reason,
+          updatedAt: now(),
+        })
+        await tx.updateChildIfCurrent(child.id, child, {
+          status: "needs_input",
+          waitingReason: eligibility.reason,
+          updatedAt: now(),
+        })
+        return undefined
+      }
+      return claim(tx, child)
+    })
+    if (refusal) throw new Error(refusal)
+    return result
+  }
+  const startLocalExecution = async (): Promise<void> => {
+    if (executionStarted) return
+    const epoch = dispatchEpoch + 1
+    const started = await admitExecution(async (tx, child) => {
+      const patch = {
+        dispatchEpoch: epoch,
+        ...(hasRemoteDispatch(child)
+          ? { remoteDispatchEpoch: child.remoteDispatchEpoch ?? child.dispatchEpoch ?? 0 }
+          : {}),
+        startedAt: now(),
+        settledEpoch: undefined,
+        fenceCapable: false,
+        fenceGraceMs: undefined,
+        leaseTtlMs: undefined,
+        lastRenewalSentAt: undefined,
+        dispatchLeaseId: undefined,
+        dispatchLeaseExpiresAt: undefined,
+        updatedAt: now(),
+      }
+      if (!(await tx.updateChildIfCurrent(childRunId, child, patch))) return undefined
+      await tx.appendTrajectory({
+        runId: input.runId,
+        childRunId,
+        expectedDispatchEpoch: epoch,
+        kind: "model_turn_started",
+        correlationId: childRunId,
+        createdAt: now(),
+      })
+      return { ...child, ...patch }
+    })
+    if (!started) throw new Error("Child changed before local executor start")
+    dispatchEpoch = epoch
+    executionStarted = true
+  }
+  const claimRemoteLease = async (lease: Parameters<typeof store.claimDispatchLease>[0]) => {
+    if (executionStarted) throw new Error("Dispatch already claimed an execution")
+    const child = await admitExecution(async (tx) => {
+      const claimed = await tx.claimDispatchLease({
+        ...lease,
+        childRunId,
+        expectedEpoch: dispatchEpoch,
+      })
+      if (claimed)
+        await tx.appendTrajectory({
+          runId: input.runId,
+          childRunId,
+          expectedDispatchEpoch: claimed.dispatchEpoch,
+          kind: "model_turn_started",
+          correlationId: childRunId,
+          createdAt: now(),
+        })
+      return claimed
+    })
+    if (child) {
+      dispatchEpoch = child.dispatchEpoch ?? 0
+      executionStarted = true
+    }
+    return child
+  }
+  const settleLocalExecution = async (): Promise<void> => {
+    // ACK comes from runtime disposal of the WP1 TOOL groups (including the
+    // Claude CLI); turn completion and deferred helper lifetimes are separate.
+    if (!executionStarted) return
+    for (;;) {
+      const child = await store.getChild(childRunId)
+      if (!child) return
+      if (child.attempt !== attempt || (child.dispatchEpoch ?? 0) !== dispatchEpoch) {
+        await store.appendTrajectory(
+          rejectedEpochEvent(child, dispatchEpoch, "local_settlement", now())
+        )
+        return
+      }
+      if (hasRemoteDispatch(child)) return
+      const at = now()
+      if (
+        await store.updateChildIfCurrent(childRunId, child, {
+          settledEpoch: dispatchEpoch,
+          stop: {
+            state: "confirmed",
+            epoch: dispatchEpoch,
+            requestedAt: child.stop?.requestedAt ?? at,
+            proof: { kind: "ack", epoch: dispatchEpoch, at },
+          },
+          updatedAt: at,
+        })
+      )
+        return
+    }
   }
 
   const sideEffects = new Map<string, AgentTeamSideEffect>()
@@ -200,7 +401,9 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   }
   const ownedChild = async () => {
     const child = await store.getChild(childRunId)
-    if (!ownsDispatchAttempt(child, attempt)) {
+    if (!ownsDispatchAttempt(child, attempt) || (child.dispatchEpoch ?? 0) !== dispatchEpoch) {
+      if (child)
+        await store.appendTrajectory(rejectedEpochEvent(child, dispatchEpoch, "projection", now()))
       const error = new Error("Dispatch no longer owns this child attempt")
       error.name = "AbortError"
       throw error
@@ -209,12 +412,25 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   }
   const currentChild = async () => {
     const child = await ownedChild()
-    if (!["running", "queued"].includes(child.status)) {
+    if (
+      !["running", "queued"].includes(child.status) ||
+      child.stop?.state === "requested" ||
+      child.stop?.state === "unconfirmed" ||
+      (executionStarted &&
+        hasRemoteDispatch(child) &&
+        !!childStopProof(child, now()) &&
+        child.settledEpoch !== dispatchEpoch)
+    ) {
       const error = new Error("Child is no longer active")
       error.name = "AbortError"
       throw error
     }
     return child
+  }
+  const updateOwnedChild = async (patch: Parameters<typeof store.updateChild>[1]) => {
+    if (!(await store.updateChildIfCurrent(childRunId, await ownedChild(), patch))) {
+      throw new Error("Dispatch no longer owns this child projection")
+    }
   }
   const hasUnsafeRemoteHistory = async (): Promise<boolean> => {
     const [checkpoint, trajectory] = await Promise.all([
@@ -230,6 +446,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
   }
 
   const capture = (event: CaptureStreamEvent): void => {
+    const eventEpoch = dispatchEpoch
     if (event.type === "tool-call") {
       const effectId = event.id ?? `tool-${sideEffects.size + 1}`
       toolStartedAt.set(effectId, now())
@@ -244,7 +461,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       enqueue(async () => {
         const safeInput = redactedJson(event.input)
         const large = safeInput.length > 8192
-        const trajectory = await store.appendTrajectory(
+        const trajectory = await appendDispatchTrajectory(
           {
             runId: input.runId,
             childRunId,
@@ -256,13 +473,17 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
             },
             createdAt: now(),
           },
-          large ? { data: safeInput, mimeType: "application/json" } : undefined
+          large ? { data: safeInput, mimeType: "application/json" } : undefined,
+          eventEpoch
         )
-        await input.coordinator.checkpoint(childRunId, {
-          trajectorySequence: trajectory.sequence,
-          replay: "needs_input",
-          sideEffects: checkpointEffects,
-        })
+        await checkpointDispatch(
+          {
+            trajectorySequence: trajectory.sequence,
+            replay: "needs_input",
+            sideEffects: checkpointEffects,
+          },
+          eventEpoch
+        )
       })
       return
     }
@@ -288,7 +509,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       enqueue(async () => {
         const safeResult = redactedJson({ input: event.input, result: event.result })
         const large = safeResult.length > 8192
-        const trajectory = await store.appendTrajectory(
+        const trajectory = await appendDispatchTrajectory(
           {
             runId: input.runId,
             childRunId,
@@ -301,13 +522,17 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
             },
             createdAt: now(),
           },
-          large ? { data: safeResult, mimeType: "application/json" } : undefined
+          large ? { data: safeResult, mimeType: "application/json" } : undefined,
+          eventEpoch
         )
-        await input.coordinator.checkpoint(childRunId, {
-          trajectorySequence: trajectory.sequence,
-          replay: checkpointReplay,
-          sideEffects: checkpointEffects,
-        })
+        await checkpointDispatch(
+          {
+            trajectorySequence: trajectory.sequence,
+            replay: checkpointReplay,
+            sideEffects: checkpointEffects,
+          },
+          eventEpoch
+        )
       })
     }
   }
@@ -328,23 +553,33 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         await executionEnvironment?.suspend(childRunId)
         return safe
       },
-      async resume() {
+      async resume(epoch) {
+        // A resumed executor owns a new epoch; this dispatch keeps fencing its old callbacks.
         await executionEnvironment?.resume(childRunId)
-        await providerControl?.resume?.()
+        await providerControl?.resume?.(epoch)
       },
+      resumeStartsExecution:
+        providerControl?.resumeStartsExecution ?? providerControl?.resume !== undefined,
       async terminate() {
-        await providerControl?.terminate?.()
+        const proof = await providerControl?.terminate?.()
         await executionEnvironment?.terminate(childRunId)
+        return proof
       },
     })
   }
 
   const attachControl = async (
     control: DurableChildControl,
-    sessionId?: string
+    sessionId?: string,
+    executorRegistry?: BeginDurableDispatchInput["executorRegistry"]
   ): Promise<() => void> => {
     await ownedChild()
-    if (sessionId) await store.updateChild(childRunId, { sessionId, updatedAt: now() })
+    if (sessionId || executorRegistry)
+      await updateOwnedChild({
+        ...(sessionId ? { sessionId } : {}),
+        ...(executorRegistry ? { executorRegistry } : {}),
+        updatedAt: now(),
+      })
     providerControl = control
     refreshControl()
     return () => detachControl?.()
@@ -413,8 +648,98 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
     }
   }
 
+  const checkpointPause = async (): Promise<boolean> => {
+    await flush()
+    await ownedChild()
+    const pausedAt = now()
+    const effects = [...sideEffects.values()]
+    const safe =
+      !(await hasUnsafeRemoteHistory()) &&
+      effects.every(
+        (effect) =>
+          effect.state !== "unknown" && !(effect.state === "intent" && effect.replay !== "safe")
+      )
+    const event = await appendDispatchTrajectory({
+      runId: input.runId,
+      childRunId,
+      kind: "checkpoint",
+      correlationId: `pause:${childRunId}:${pausedAt}`,
+      payload: { replay: safe ? "safe" : "needs_input", paused: true },
+      createdAt: pausedAt,
+    })
+    await checkpointDispatch({
+      trajectorySequence: event.sequence,
+      replay: safe ? "safe" : "needs_input",
+      sideEffects: effects,
+    })
+    return safe
+  }
+
+  const finishLocalExecution = async (): Promise<void> => {
+    try {
+      const child = await store.getChild(childRunId)
+      if (
+        child?.attempt === attempt &&
+        (child.dispatchEpoch ?? 0) === dispatchEpoch &&
+        !hasRemoteDispatch(child) &&
+        (["pausing", "paused"].includes(child.status) ||
+          child.waitingReason === "pause_unconfirmed")
+      )
+        await checkpointPause()
+    } finally {
+      await settleLocalExecution()
+    }
+  }
+
   return {
     childRunId,
+    /** Serialize task projection with epoch claims, including the outer catch. */
+    projectIfCurrent(project: () => void): Promise<boolean> {
+      return store.atomically(async (tx) => {
+        const child = await tx.getChild(childRunId)
+        const taskChildren = new Set(
+          (await tx.listChildren(input.runId))
+            .filter((candidate) => candidate.taskId === input.taskId)
+            .map((candidate) => candidate.id)
+        )
+        // Journal sequence orders task admission/execution across teammates,
+        // even when clocks tie or an older child's updatedAt changes later.
+        const owner = (await tx.listTrajectory(input.runId))
+          .filter(
+            (event) =>
+              event.childRunId &&
+              taskChildren.has(event.childRunId) &&
+              (event.kind === "child_created" || event.kind === "model_turn_started")
+          )
+          .reduce<AgentTeamTrajectoryEvent | undefined>(
+            (latest, event) => (!latest || event.sequence > latest.sequence ? event : latest),
+            undefined
+          )
+        if (
+          !child ||
+          owner?.childRunId !== childRunId ||
+          child.attempt !== attempt ||
+          (child.dispatchEpoch ?? 0) !== dispatchEpoch
+        ) {
+          if (child)
+            await tx.appendTrajectory(
+              rejectedEpochEvent(child, dispatchEpoch, "task_status", now())
+            )
+          return false
+        }
+        project()
+        return true
+      })
+    },
+    get dispatchEpoch(): number {
+      return dispatchEpoch
+    },
+    bindDispatchEpoch(epoch: number): void {
+      dispatchEpoch = epoch
+      executionStarted = true
+    },
+    startLocalExecution,
+    claimRemoteLease,
     retryTargetHostRef,
     capture,
     flush,
@@ -435,7 +760,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       providerControl = undefined
       refreshControl()
       if (child.sessionId === sessionId) {
-        await store.updateChild(childRunId, { sessionId: undefined, updatedAt: now() })
+        await updateOwnedChild({ sessionId: undefined, updatedAt: now() })
       }
     },
     attachEnvironment(environment: AgentExecutionEnvironment): void {
@@ -443,8 +768,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       refreshControl()
     },
     async setWorkspace(input: { workspacePath: string; branch?: string }): Promise<void> {
-      await ownedChild()
-      await store.updateChild(childRunId, {
+      await updateOwnedChild({
         workspacePath: input.workspacePath,
         ...(input.branch ? { branch: input.branch } : {}),
         updatedAt: now(),
@@ -468,7 +792,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         leadId: input.team.leadId,
         now,
       }).context()
-      await store.updateChild(childRunId, {
+      await updateOwnedChild({
         decisionVersion: run.decisionVersion,
         updatedAt: now(),
       })
@@ -522,7 +846,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       for (const receipt of pending) {
         const deliveredAt = now()
         await store.updateSteeringReceipt(receipt.id, "delivered", deliveredAt)
-        await store.appendTrajectory({
+        await appendDispatchTrajectory({
           runId: input.runId,
           childRunId,
           kind: "steering_delivered",
@@ -532,26 +856,120 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       }
       return redacted
     },
-    async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    trackLocalStop(stopped: Promise<void>): void {
+      pendingLocalStops.add(stopped)
+      void stopped
+        .then(
+          async () => {
+            pendingLocalStops.delete(stopped)
+            localStopObserved = true
+            // A terminal event can arrive after a transport/timeout rejection.
+            if (
+              executionFinished &&
+              !localSettlement &&
+              pendingLocalStops.size === 0 &&
+              !localStopFailed
+            ) {
+              localSettlement = finishLocalExecution()
+              await localSettlement
+            }
+          },
+          () => {
+            pendingLocalStops.delete(stopped)
+            localStopFailed = true
+          }
+        )
+        .catch(() => undefined)
+    },
+    async recordRemoteDisposal(
+      proof: import("@cognia/agent-orchestration").StopProof
+    ): Promise<void> {
+      // A current-epoch receipt remains evidence when an operator stop or a
+      // transport failure wins the result race. Result projection stays gated.
+      const child = await ownedChild()
+      if (!hasRemoteDispatch(child) || proof.kind !== "ack" || proof.epoch !== dispatchEpoch)
+        throw new Error("stop_unconfirmed: remote disposal acknowledgement does not match")
+      await updateOwnedChild({
+        settledEpoch: dispatchEpoch,
+        stop: { state: "confirmed", epoch: dispatchEpoch, requestedAt: proof.at, proof },
+        updatedAt: now(),
+      })
+    },
+    async bindLocalSidecarSession(sessionId: string): Promise<void> {
+      const { getLiveSidecarSessionIds } = await import("@/lib/claude/ipc")
+      const live = await getLiveSidecarSessionIds()
+      if (!live?.has(sessionId)) return
+      const child = await ownedChild()
+      if (child.sessionId !== sessionId) return
+      await updateOwnedChild({ executorRegistry: "sidecar", updatedAt: now() })
+    },
+    async run<T>(
+      operation: (admissionSignal: AbortSignal) => Promise<T>,
+      signal?: AbortSignal,
+      options?: { deferExecutionStart?: boolean }
+    ): Promise<T> {
+      if (executionInvoked) throw new Error("Dispatch executor was already invoked")
+      executionInvoked = true
       await currentChild()
-      return input.coordinator.withChildAdmission(
+      return input.coordinator.trackChildExecution(
         childRunId,
-        (admissionSignal) =>
-          input.coordinator.withWorkspaceLease(
-            {
+        async () => {
+          try {
+            return await input.coordinator.withChildAdmission(
               childRunId,
-              runId: input.runId,
-              repositoryId: input.repositoryId,
-              access: input.access,
-              ...(input.fileOwnership ? { fileOwnership: input.fileOwnership } : {}),
-            },
-            async () => {
-              await currentChild()
-              return operation()
-            },
-            admissionSignal
-          ),
-        signal ? AbortSignal.any([signal, persistenceAbort.signal]) : persistenceAbort.signal
+              (admissionSignal) =>
+                input.coordinator.withWorkspaceLease(
+                  {
+                    childRunId,
+                    runId: input.runId,
+                    repositoryId: input.repositoryId,
+                    access: input.access,
+                    ...(input.fileOwnership ? { fileOwnership: input.fileOwnership } : {}),
+                  },
+                  async () => {
+                    await currentChild()
+                    if (!options?.deferExecutionStart) await startLocalExecution()
+                    admissionSignal.throwIfAborted()
+                    return operation(admissionSignal)
+                  },
+                  admissionSignal
+                ),
+              signal ? AbortSignal.any([signal, persistenceAbort.signal]) : persistenceAbort.signal
+            )
+          } finally {
+            executionFinished = true
+            // The operation may wrap a timeout or a transport race. Only an
+            // executor's independent terminal observation can confirm its stop.
+            if (pendingLocalStops.size > 0) {
+              localSettlement = Promise.allSettled([...pendingLocalStops]).then(async () => {
+                if (localStopObserved && !localStopFailed) await finishLocalExecution()
+              })
+            } else if (localStopObserved && !localStopFailed) {
+              localSettlement = finishLocalExecution()
+              await localSettlement
+            }
+            if (!localStopObserved || localStopFailed || pendingLocalStops.size > 0) {
+              const child = await store.getChild(childRunId)
+              if (
+                executionStarted &&
+                child?.attempt === attempt &&
+                (child.dispatchEpoch ?? 0) === dispatchEpoch &&
+                !hasRemoteDispatch(child) &&
+                !childStopProof(child, now())
+              )
+                await store.updateChildIfCurrent(childRunId, child, {
+                  stop: {
+                    ...child.stop,
+                    state: "unconfirmed",
+                    epoch: dispatchEpoch,
+                    requestedAt: child.stop?.requestedAt ?? now(),
+                  },
+                  updatedAt: now(),
+                })
+            }
+          }
+        },
+        () => localSettlement
       )
     },
 
@@ -572,32 +990,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       }
     },
 
-    async checkpointPause(): Promise<boolean> {
-      await flush()
-      await ownedChild()
-      const pausedAt = now()
-      const effects = [...sideEffects.values()]
-      const safe =
-        !(await hasUnsafeRemoteHistory()) &&
-        effects.every(
-          (effect) =>
-            effect.state !== "unknown" && !(effect.state === "intent" && effect.replay !== "safe")
-        )
-      const event = await store.appendTrajectory({
-        runId: input.runId,
-        childRunId,
-        kind: "checkpoint",
-        correlationId: `pause:${childRunId}:${pausedAt}`,
-        payload: { replay: safe ? "safe" : "needs_input", paused: true },
-        createdAt: pausedAt,
-      })
-      await input.coordinator.checkpoint(childRunId, {
-        trajectorySequence: event.sequence,
-        replay: safe ? "safe" : "needs_input",
-        sideEffects: effects,
-      })
-      return safe
-    },
+    checkpointPause,
 
     async complete(result: {
       text: string
@@ -616,7 +1009,23 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       }>
     }): Promise<void> {
       await flush()
-      const child = await currentChild()
+      if (pendingLocalStops.size > 0)
+        throw new Error("stop_unconfirmed: local executor has not ended")
+      if (localStopObserved && !localStopFailed) {
+        localSettlement ??= finishLocalExecution()
+        await localSettlement
+      }
+      const child = await ownedChild()
+      if (!["running", "queued"].includes(child.status)) await currentChild()
+      const executorUnconfirmed =
+        child.settledEpoch !== dispatchEpoch ||
+        child.stop?.state !== "confirmed" ||
+        child.stop.proof?.kind !== "ack" ||
+        child.stop.proof.epoch !== dispatchEpoch ||
+        localStopFailed
+      if (executorUnconfirmed && !hasRemoteDispatch(child))
+        throw new Error("stop_unconfirmed: executor disposal has not been acknowledged")
+      await currentChild()
       const completedAt = now()
       if (
         [...sideEffects.values()].some(
@@ -637,7 +1046,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       if (!hasNoLeakingPii(safeText)) {
         throw new Error("Durable AgentTeam outcome still contains PII after redaction")
       }
-      const terminal = await store.appendTrajectory(
+      const terminal = await appendDispatchTrajectory(
         {
           runId: input.runId,
           childRunId,
@@ -693,7 +1102,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         await parkRun("evidence_incomplete", completedAt)
         throw new Error(reason)
       }
-      const checkpointEvent = await store.appendTrajectory({
+      const checkpointEvent = await appendDispatchTrajectory({
         runId: input.runId,
         childRunId,
         kind: "checkpoint",
@@ -701,7 +1110,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         payload: { replay: "safe", terminalSequence: terminal.sequence },
         createdAt: completedAt,
       })
-      await input.coordinator.checkpoint(childRunId, {
+      await checkpointDispatch({
         trajectorySequence: checkpointEvent.sequence,
         replay: "safe",
         sideEffects: [...sideEffects.values()],
@@ -709,7 +1118,18 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       })
       const completed = await store.updateChildIfCurrent(childRunId, await currentChild(), {
         status: "completed",
-        waitingReason: undefined,
+        // Worker disposal receipts are dormant in WP1. Keep the result and
+        // existing recovery projection explicit without certifying settlement.
+        waitingReason: executorUnconfirmed ? "stop_unconfirmed" : undefined,
+        ...(executorUnconfirmed
+          ? {
+              stop: {
+                state: "unconfirmed" as const,
+                epoch: dispatchEpoch,
+                requestedAt: completedAt,
+              },
+            }
+          : {}),
         completedAt,
         updatedAt: completedAt,
         resourceUsage: {
@@ -741,15 +1161,33 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       await writes
       try {
         const current = await store.getChild(childRunId)
+        if (!current) return
+        if (current.attempt !== attempt || (current.dispatchEpoch ?? 0) !== dispatchEpoch) {
+          await store.appendTrajectory(
+            rejectedEpochEvent(current, dispatchEpoch, "failure_projection", now())
+          )
+          return
+        }
+        if (["completed", "cancelled", "terminated", "paused"].includes(current.status)) return
         if (
-          !current ||
-          current.attempt !== attempt ||
-          ["completed", "cancelled", "terminated", "paused", "needs_input"].includes(current.status)
+          current.status === "queued" &&
+          current.startedAt !== undefined &&
+          current.stop?.state === "confirmed"
         )
           return
+        if (current.status === "needs_input") {
+          const eligibility = await assessStoredTaskRecovery(
+            store,
+            input.runId,
+            input.taskId,
+            now()
+          )
+          if (!eligibility.eligible) await parkRun(eligibility.reason, now())
+          return
+        }
         const failedAt = now()
         const message = redactText(error instanceof Error ? error.message : String(error)).redacted
-        const event = await store.appendTrajectory({
+        const event = await appendDispatchTrajectory({
           runId: input.runId,
           childRunId,
           kind: "child_failed",
@@ -760,24 +1198,38 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
         const effects = [...sideEffects.values()].map((effect) =>
           effect.state === "intent" ? { ...effect, state: "unknown" as const } : effect
         )
-        const needsInput =
+        const replayUnsafe =
           persistenceAbort.signal.aborted ||
           (await hasUnsafeRemoteHistory()) ||
           effects.some((effect) => effect.state === "unknown" && effect.replay !== "safe")
-        await input.coordinator.checkpoint(childRunId, {
+        await checkpointDispatch({
           trajectorySequence: event.sequence,
-          replay: needsInput ? "needs_input" : "safe",
+          replay: replayUnsafe ? "needs_input" : "safe",
           sideEffects: effects,
         })
+        const eligibility = await assessStoredTaskRecovery(store, input.runId, input.taskId, now())
+        const needsInput = !eligibility.eligible
         const latest = await store.getChild(childRunId)
         if (
           !latest ||
           latest.attempt !== attempt ||
+          (latest.dispatchEpoch ?? 0) !== dispatchEpoch ||
           ["completed", "cancelled", "terminated", "paused", "needs_input"].includes(latest.status)
         )
           return
         await store.updateChildIfCurrent(childRunId, latest, {
           status: needsInput ? "needs_input" : "failed",
+          ...(!eligibility.eligible &&
+          eligibility.reason === "stop_unconfirmed" &&
+          !childStopProof(latest, now())
+            ? {
+                stop: {
+                  state: "unconfirmed" as const,
+                  epoch: dispatchEpoch,
+                  requestedAt: failedAt,
+                },
+              }
+            : {}),
           waitingReason: needsInput ? "recovery_required" : undefined,
           error: message,
           completedAt: failedAt,
@@ -793,7 +1245,10 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
           },
         })
         if (needsInput) {
-          await parkRun("uncertain_side_effect", failedAt)
+          await parkRun(
+            !eligibility.eligible ? eligibility.reason : "uncertain_side_effect",
+            failedAt
+          )
         }
         await reportTeamRunUsage(
           input.runId,

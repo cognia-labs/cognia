@@ -157,6 +157,9 @@ export class WorkerRpcPool implements RemoteWorkerRuntime {
           .state()
           .then((state) => state.status === "recovery_required")
           .catch(() => false)
+        // Legacy close() is only a request ACK, not process-disposal evidence.
+        // A worker without the strict disposal receipt remains unconfirmed.
+        if (outcome.status === "completed" && !recoveryRequired) await session.close()
         return {
           ...outcome,
           ...(recoveryRequired ? { recoveryRequired: true } : {}),

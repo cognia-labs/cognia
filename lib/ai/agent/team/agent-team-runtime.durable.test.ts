@@ -10,10 +10,10 @@ const runWorkflow = jest.fn<Promise<{ runId: string; status: "succeeded" }>, unk
 const dispatchOnTeamComplete = jest.fn()
 const dispatchTeamCompletedTriggers = jest.fn<Promise<void>, unknown[]>(async () => undefined)
 let persistedRunStatus: "running" | "needs_input" = "running"
-const updateAgentTeamRunIfCurrent = jest.fn<
-  ReturnType<typeof import("@/lib/db/agent-team-runtime").updateAgentTeamRunIfCurrent>,
-  Parameters<typeof import("@/lib/db/agent-team-runtime").updateAgentTeamRunIfCurrent>
->(async () => true)
+const settleAgentTeamRunIfCurrent = jest.fn<
+  ReturnType<typeof import("@/lib/db/agent-team-runtime").settleAgentTeamRunIfCurrent>,
+  Parameters<typeof import("@/lib/db/agent-team-runtime").settleAgentTeamRunIfCurrent>
+>(async (_id, _expected, patch) => patch.status)
 const appendExecutionRunEvent = jest.fn<Promise<{ appended: boolean }>, [string, unknown]>(
   async () => ({ appended: true })
 )
@@ -38,8 +38,8 @@ jest.mock("../execution/local-tauri-environment", () => ({
 
 jest.mock("@/lib/db/agent-team-runtime", () => ({
   getAgentTeamRun: async () => ({ id: "run-durable", status: persistedRunStatus, updatedAt: 1 }),
-  updateAgentTeamRunIfCurrent: (...args: Parameters<typeof updateAgentTeamRunIfCurrent>) =>
-    updateAgentTeamRunIfCurrent(...args),
+  settleAgentTeamRunIfCurrent: (...args: Parameters<typeof settleAgentTeamRunIfCurrent>) =>
+    settleAgentTeamRunIfCurrent(...args),
 }))
 
 jest.mock("@/lib/db/execution-runs", () => ({
@@ -131,7 +131,7 @@ describe("runTeamLifecycle durable preflight", () => {
       reason: "Execution environment cannot enforce: sandbox",
     })
     expect(prepareRun).toHaveBeenCalledWith(durableTeam, "run-durable")
-    expect(updateAgentTeamRunIfCurrent).toHaveBeenCalledWith(
+    expect(settleAgentTeamRunIfCurrent).toHaveBeenCalledWith(
       "run-durable",
       expect.objectContaining({ status: "running", updatedAt: 1 }),
       expect.objectContaining({
@@ -171,7 +171,7 @@ describe("runTeamLifecycle durable preflight", () => {
     expect(result.status).toBe("completed")
     // The coordinator's `needs_input` stands: the lifecycle must not settle
     // over it, and the execution row parks on `run.waiting` instead.
-    expect(updateAgentTeamRunIfCurrent).not.toHaveBeenCalled()
+    expect(settleAgentTeamRunIfCurrent).not.toHaveBeenCalled()
     expect(appendExecutionRunEvent).toHaveBeenCalledWith(
       "execution:team:run-durable",
       expect.objectContaining({ type: "run.waiting" })

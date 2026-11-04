@@ -25,7 +25,7 @@ jest.mock("@/lib/db/project-environments", () => ({
 const updateRunIfCurrentMock = jest.fn()
 jest.mock("@/lib/db/agent-team-runtime", () => ({
   ...jest.requireActual("@/lib/db/agent-team-runtime"),
-  updateAgentTeamRunIfCurrent: (...args: unknown[]) => updateRunIfCurrentMock(...args),
+  settleAgentTeamRunIfCurrent: (...args: unknown[]) => updateRunIfCurrentMock(...args),
 }))
 jest.mock("./workspace/registry-controller", () => ({
   AgentTeamRegistryWorkspaceController: class FakeController {
@@ -46,6 +46,10 @@ jest.mock("./workspace/registry-controller", () => ({
     }
   },
 }))
+jest.mock("@/lib/agent-team/squad-readiness", () => {
+  const actual = jest.requireActual("@/lib/agent-team/squad-readiness")
+  return { ...actual, evaluateSquadReadiness: jest.fn(actual.evaluateSquadReadiness) }
+})
 jest.mock("@/lib/project-environment/executor", () => ({
   executeProjectEnvironment: () => executeEnvironmentMock(),
 }))
@@ -284,7 +288,7 @@ beforeEach(async () => {
   updateRunIfCurrentMock
     .mockReset()
     .mockImplementation(
-      jest.requireActual("@/lib/db/agent-team-runtime").updateAgentTeamRunIfCurrent
+      jest.requireActual("@/lib/db/agent-team-runtime").settleAgentTeamRunIfCurrent
     )
   abortWorkspaceMock.mockReset().mockResolvedValue(undefined)
   executeEnvironmentMock.mockReset().mockResolvedValue({ success: true })
@@ -342,7 +346,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     }
     ;(executeAgent as jest.Mock).mockImplementation(async () => {
       observed.push(getTeamRunContext("run_team_knowledge")?.knowledgeAccess)
-      return { text: "result" }
+      return { channel: "text", text: "result" }
     })
     const result = await runTeamLifecycle("team-1", {
       ...buildDeps(baseTeam, [task("t1")], [lead, worker("w1")]),
@@ -376,6 +380,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("happy path: independent tasks complete via workflow", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 },
     })
@@ -388,6 +393,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("threads an IM triggeredFrom onto the team run row for progress fan-out", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -423,6 +429,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     ;(executeAgent as jest.Mock).mockImplementation(async () => {
       observed.push(getTeamRunContext("run_team_permission_ceiling")?.parentPermissionCeiling)
       return {
+        channel: "text",
         text: "result",
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
       }
@@ -463,6 +470,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     ;(executeAgent as jest.Mock).mockImplementation(async () => {
       observed.push(getTeamRunContext("run_team_registry")?.workspaceController)
       return {
+        channel: "text",
         text: "result",
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
       }
@@ -492,6 +500,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("omits triggeredBy for non-IM (UI/API) runs", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -503,6 +512,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("dependency chain executes in order", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -525,6 +535,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     // checkpoint: a fenced continue-JSON is non-empty (valid task output) and
     // parses to a valid ReplanDecision (continue → plan unchanged).
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: '```json\n{"action":"continue","reasoning":"steady"}\n```',
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -543,10 +554,234 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     expect(deps._taskStatuses).toMatchObject({ t1: "completed", t2: "completed" })
   })
 
+  it("does not reopen an operator-cancelled run when the aborted retry gate resumes", async () => {
+    const { getDurableTeamCoordinator } = await import("./durable/durable-runtime")
+    const { controlSquadRun } = await import("./squad/squad-control")
+    const { findLiveSquadRun } = await import("./squad/squad-run-records")
+    const runId = "cancel-during-retry-gate"
+    const coordinator = getDurableTeamCoordinator()
+    await createSquadRunRecords({
+      runId,
+      teamId: baseTeam.id,
+      objective: baseTeam.task,
+      origin: "chat",
+      startedAt: Date.now(),
+    })
+    let entered!: () => void
+    let finishExecutor!: () => void
+    const executing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    ;(executeAgent as jest.Mock).mockImplementationOnce(async () => {
+      entered()
+      await new Promise<void>((resolve) => {
+        finishExecutor = resolve
+      })
+      return { channel: "text", text: "finished while stopping" }
+    })
+    const lifecycle = runTeamLifecycle(baseTeam.id, {
+      ...buildDeps(baseTeam, [task("cancelled-task")], [lead, worker("w1")]),
+      runId,
+    })
+    await executing
+    let gateEntered!: () => void
+    let resumeGate!: () => void
+    const checking = new Promise<void>((resolve) => {
+      gateEntered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      resumeGate = resolve
+    })
+    const listChildren = coordinator.store.listChildren.bind(coordinator.store)
+    // Hold the real recovery assessment after abortTeam has entered the workflow
+    // catch. The stop path must be free to commit before that assessment returns.
+    const read = jest
+      .spyOn(coordinator.store, "listChildren")
+      .mockImplementationOnce(async (id) => {
+        const children = await listChildren(id)
+        gateEntered()
+        await gate
+        return children
+      })
+    try {
+      const stopping = controlSquadRun(runId, "stop")
+      await checking
+      finishExecutor()
+      const deadline = Date.now() + 4_000
+      while (
+        (await getDb().agentTeamChildRuns.where("runId").equals(runId).toArray()).some(
+          (child) => child.settledEpoch !== child.dispatchEpoch
+        )
+      ) {
+        if (Date.now() > deadline) throw new Error("Executor did not settle during stop")
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      // A stop can initially report unconfirmed while the executor drains.
+      if (!(await stopping).ok)
+        await expect(controlSquadRun(runId, "stop")).resolves.toMatchObject({ ok: true })
+      expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+        status: "cancelled",
+      })
+      resumeGate()
+      await lifecycle
+      expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+        status: "cancelled",
+        stop: { state: "confirmed" },
+      })
+      expect(await findLiveSquadRun(baseTeam.id)).toBeUndefined()
+      await expect(
+        createSquadRunRecords({
+          runId: "after-cancellation",
+          teamId: baseTeam.id,
+          objective: "next",
+          origin: "chat",
+          startedAt: Date.now(),
+        })
+      ).resolves.toMatchObject({ created: true })
+    } finally {
+      finishExecutor()
+      resumeGate()
+      await lifecycle
+      read.mockRestore()
+    }
+  })
+
+  it.each([false, true])(
+    "manually recovers a timed-out dispatch through defaultReenter (adaptive=%s)",
+    async (adaptive) => {
+      const { useAgentTeamStore } = await import("@/stores/agent/agent-team-store")
+      const { getExecutor, registerNodeExecutor } = await import("@/lib/workflow/nodes/registry")
+      const { configureAgentTeamRuntime, runSquadLifecycle, __resetAgentTeamRuntimeForTesting } =
+        await import("./squad/squad-lifecycle-runner")
+      const { ensureTeamRecoveryInterrupt, applyTeamRecoveryDecision } =
+        await import("./durable/team-recovery")
+      const { getDurableTeamCoordinator } = await import("./durable/durable-runtime")
+      const { evaluateSquadReadiness } = await import("@/lib/agent-team/squad-readiness")
+      const runId = `recover-dispatch-${adaptive}`
+      const team = {
+        ...baseTeam,
+        taskIds: ["recover-first", "recover-next"],
+        config: { ...baseTeam.config, adaptiveReplan: { enabled: adaptive } },
+      }
+      const tasks = [task("recover-first"), task("recover-next", ["recover-first"])]
+      useAgentTeamStore.setState({
+        teams: { [team.id]: team },
+        teammates: { [lead.id]: lead, w1: worker("w1"), w2: worker("w2") },
+        tasks: Object.fromEntries(tasks.map((t) => [t.id, t])),
+      })
+      configureAgentTeamRuntime(buildDeps(team, tasks, [lead, worker("w1"), worker("w2")]))
+      await createSquadRunRecords({
+        runId,
+        teamId: team.id,
+        objective: team.task,
+        origin: "chat",
+        startedAt: Date.now(),
+        executionConstraints: {
+          version: 1,
+          teamConfig: team.config,
+          origin: "chat",
+          triggeredFrom: { source: "ui" },
+          requirePlanApprovalFloor: false,
+        },
+      })
+      const original = getExecutor("action.team.task.dispatch", 1)!
+      registerNodeExecutor({ ...original, timeoutMs: 500 })
+      let release!: () => void
+      let entered!: () => void
+      const executing = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      ;(executeAgent as jest.Mock)
+        .mockImplementationOnce(async () => {
+          entered()
+          return await new Promise((resolve) => {
+            // The timed-out wrapper stays unconfirmed until the completion
+            // rail actually drains and supplies its terminal text result.
+            release = () => resolve({ channel: "text", text: "late drained result" })
+          })
+        })
+        .mockResolvedValue({
+          channel: "text",
+          text: '```json\n{"action":"continue","reasoning":"steady"}\n```',
+        })
+      const waitFor = async (check: () => Promise<boolean>) => {
+        const deadline = Date.now() + 4_000
+        while (!(await check())) {
+          if (Date.now() > deadline)
+            throw new Error(
+              `Recovery did not make progress: ${JSON.stringify({ run: await getDb().agentTeamRuns.get(runId), workflow: await getDb().workflowRuns.get(runId), tasks: useAgentTeamStore.getState().tasks })}`
+            )
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+      }
+      try {
+        const first = runSquadLifecycle({ teamId: team.id, runId })
+        await Promise.race([
+          executing,
+          first.then((result) => {
+            throw new Error(`Dispatch never started: ${JSON.stringify(result)}`)
+          }),
+        ])
+        await first
+        expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+        })
+        expect(await getDb().workflowRuns.get(runId)).toMatchObject({ status: "waiting" })
+        const armed = (await ensureTeamRecoveryInterrupt(runId))!
+        const interrupt = (await getDb().executionRunInterrupts.get(armed.interruptId))!
+        release()
+        const coordinator = getDurableTeamCoordinator()
+        await waitFor(
+          async () => (await coordinator.assessTaskRecovery(runId, tasks[0].id)).eligible
+        )
+        // Restore the real executor timeout for recovery; no proofs or checkpoints are injected.
+        registerNodeExecutor(original)
+        // The fixture supplies Registry/environment ports; expose that host to
+        // the real readiness gate without changing the mocked provider rail.
+        jest.mocked(evaluateSquadReadiness).mockImplementation((input) =>
+          jest.requireActual("@/lib/agent-team/squad-readiness").evaluateSquadReadiness(input, {
+            hostIsAuthoritative: () => true,
+            workspaceControllerAvailable: () => true,
+          })
+        )
+        expect(
+          await applyTeamRecoveryDecision(runId, interrupt, "approve", {
+            kind: "team_recovery",
+            choice: "retry_same_host",
+          })
+        ).toMatchObject({ applied: true })
+        await waitFor(async () => (await getDb().agentTeamRuns.get(runId))?.status === "completed")
+        expect(useAgentTeamStore.getState().tasks["recover-next"].status).toBe("completed")
+        expect(await getDb().workflowRuns.get(runId)).toMatchObject({ status: "succeeded" })
+        expect(await getDb().executionRuns.get(`execution:team:${runId}`)).toMatchObject({
+          status: "completed",
+        })
+      } finally {
+        release?.()
+        registerNodeExecutor(original)
+        // Drain the old executor before the database fixture is restored.
+        await waitFor(async () => {
+          const children = await getDb().agentTeamChildRuns.where("runId").equals(runId).toArray()
+          return children.every((child) => child.settledEpoch === child.dispatchEpoch)
+        })
+        __resetAgentTeamRuntimeForTesting()
+        jest
+          .mocked(evaluateSquadReadiness)
+          .mockImplementation(
+            jest.requireActual("@/lib/agent-team/squad-readiness").evaluateSquadReadiness
+          )
+        useAgentTeamStore.getState().reset()
+      }
+    },
+    15_000
+  )
+
   it("engages the wave path when only the progress ledger is enabled (no adaptiveReplan)", async () => {
     // Progress is made each wave, so the ledger never reaches its stall judge;
     // the continue-JSON mock serves dispatch + the ledger's wrapped re-plan.
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: '```json\n{"action":"continue","reasoning":"steady"}\n```',
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -566,6 +801,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("taskFilter skips done tasks and treats them as satisfied dependencies", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -591,6 +827,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
           setTimeout(
             () =>
               resolve({
+                channel: "text",
                 text: "ok",
                 usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
               }),
@@ -606,6 +843,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
 
   it("does not abort the current lifecycle for a different run id", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -656,6 +894,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
         return false
       })
       return {
+        channel: "text",
         text: "late result",
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
       }
@@ -684,6 +923,7 @@ describe("runTeamLifecycle (F-path synthesizer)", () => {
     })
     executeEnvironmentMock.mockRejectedValueOnce(new Error("setup failed"))
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "replacement result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -722,6 +962,7 @@ describe("runTeamLifecycle — plan-approval gate", () => {
 
   it("approves on first revision → run completes", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -751,6 +992,7 @@ describe("runTeamLifecycle — plan-approval gate", () => {
 
   it("publishes the plan to the board lead and opens the plan gate before waiting", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -890,6 +1132,7 @@ describe("runTeamLifecycle — risk-raised plan approval (ADR-0070)", () => {
 
   it("riskGating=false restores the old unattended behavior", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -902,6 +1145,7 @@ describe("runTeamLifecycle — risk-raised plan approval (ADR-0070)", () => {
 
   it("leaves a low-risk roster completely alone", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -917,6 +1161,7 @@ describe("runTeamLifecycle — risk-raised plan approval (ADR-0070)", () => {
     // run by its origin (rather than by what its roster can reach) would make
     // every headless IM-bound team run fail-fast. See ADR-0070 §Rejected.
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -962,6 +1207,7 @@ describe("runTeamLifecycle — an attended headless run asks instead of failing"
     // fails fast on the premise that there is no human. A chat thread with a
     // person in it and a working approval channel makes that premise false.
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -985,6 +1231,7 @@ describe("runTeamLifecycle — an attended headless run asks instead of failing"
 
   it("names the risk to the person being asked, since risk is what raised the gate", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -1041,6 +1288,7 @@ describe("runTeamLifecycle — an attended headless run asks instead of failing"
 
   it("lets the operator's autonomy raise the gate on a run risk would not have gated", async () => {
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "ok",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })
@@ -1072,6 +1320,7 @@ describe("runTeamLifecycle — ultracode orchestration", () => {
     ;(executeAgent as jest.Mock).mockImplementation(async (prompt: string) => {
       if (prompt.includes("lead planner")) {
         return {
+          channel: "text",
           text: fence({
             summary: "sweep then synthesize",
             stages: [
@@ -1082,12 +1331,15 @@ describe("runTeamLifecycle — ultracode orchestration", () => {
         }
       }
       if (prompt.includes("Search approach")) {
-        return { text: fence({ findings: [{ title: "Bug", detail: "d", location: "a.ts:1" }] }) }
+        return {
+          channel: "text",
+          text: fence({ findings: [{ title: "Bug", detail: "d", location: "a.ts:1" }] }),
+        }
       }
       if (prompt.includes("Write the final report")) {
-        return { text: fence({ report: "Final report.", citations: ["a.ts:1"] }) }
+        return { channel: "text", text: fence({ report: "Final report.", citations: ["a.ts:1"] }) }
       }
-      return { text: "{}" }
+      return { channel: "text", text: "{}" }
     })
   }
 
@@ -1100,6 +1352,70 @@ describe("runTeamLifecycle — ultracode orchestration", () => {
         ultracode: { enabled: true, autoMode: "always" },
       },
     }) as AgentTeam
+
+  it("does not publish cancellation while a pattern.synthesize remote child lacks stop proof", async () => {
+    wireUltracodeMock()
+    const ordinary = (executeAgent as jest.Mock).getMockImplementation()!
+    const runId = "unconfirmed-synthesis"
+    let release!: () => void
+    let entered!: () => void
+    const executing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    ;(executeAgent as jest.Mock).mockImplementation(async (prompt: string, ...args: unknown[]) => {
+      if (!prompt.includes("Write the final report")) return ordinary(prompt, ...args)
+      const { claimAgentTeamDispatchLease } = await import("@/lib/db/agent-team-runtime")
+      const children = await getDb().agentTeamChildRuns.where("runId").equals(runId).toArray()
+      const child = children.find((child) => child.taskId.endsWith(":synthesize"))!
+      expect(child).toBeDefined()
+      await claimAgentTeamDispatchLease({
+        childRunId: child.id,
+        leaseId: "synthesis-remote-lease",
+        hostRef: "remote-host",
+        now: Date.now(),
+      })
+      entered()
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return { channel: "text", text: fence({ report: "late remote result", citations: [] }) }
+    })
+    const controller = new AbortController()
+    const lifecycle = runTeamLifecycle(
+      "team-1",
+      { ...buildDeps(ultracodeTeam(), [], [lead, worker("w1"), worker("w2")]), runId },
+      controller.signal
+    )
+    await executing
+    controller.abort(new Error("shutdown"))
+    await lifecycle
+    expect(await getDb().agentTeamRuns.get(runId)).toMatchObject({
+      status: "needs_input",
+      recoveryReason: "stop_unconfirmed",
+    })
+    expect((await getDb().agentTeamRuns.get(runId))?.completedAt).toBeUndefined()
+    const events = await getDb()
+      .executionRunEvents.where("runId")
+      .equals(`execution:team:${runId}`)
+      .toArray()
+    expect(events.some((event) => event.type === "run.cancelled")).toBe(false)
+    expect(events.some((event) => event.type === "run.waiting")).toBe(true)
+    release()
+    // Drain the still-live executor before this fixture's database is reset.
+    const { isStoredChildStopped } = await import("@cognia/agent-orchestration/coordinator")
+    const { dexieTeamRunStore } = await import("@/lib/db/agent-team-runtime")
+    for (let count = 0; count < 100; count++) {
+      const localProbe = {
+        ...(await getDb().agentTeamChildRuns.where("runId").equals(runId).last())!,
+        remoteDispatchEpoch: undefined,
+        remoteSessionId: undefined,
+        dispatchLeaseId: undefined,
+        leaseTtlMs: undefined,
+      }
+      if (await isStoredChildStopped(dexieTeamRunStore, localProbe, Date.now())) break
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+  })
 
   it("plans, fans out patterns, and writes the synthesized report to finalResult", async () => {
     wireUltracodeMock()
@@ -1158,6 +1474,7 @@ describe("runTeamLifecycle — Employee Digital Twin runtime gating", () => {
   beforeEach(() => {
     resolveTeamTwinRuntimeMock.mockClear()
     ;(executeAgent as jest.Mock).mockResolvedValue({
+      channel: "text",
       text: "result",
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     })

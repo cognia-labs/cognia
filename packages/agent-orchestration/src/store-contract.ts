@@ -123,6 +123,54 @@ function receipt(overrides: Partial<AgentTeamSteeringReceipt> = {}): AgentTeamSt
 
 export const TEAM_RUN_STORE_CONTRACT: readonly StoreContractCase[] = [
   {
+    name: "rejects stale dispatch trajectory and checkpoints inside the write boundary",
+    async run(store, assert) {
+      await store.createChild(contractChild({ dispatchEpoch: 2 }))
+      await assert.rejects(
+        store.appendTrajectory({
+          runId: "run-1",
+          childRunId: "child-1",
+          expectedDispatchEpoch: 1,
+          kind: "tool_result",
+          correlationId: "late",
+          createdAt: 20,
+        }),
+        /epoch/
+      )
+      await assert.rejects(
+        store.markCheckpoint({
+          runId: "run-1",
+          childRunId: "child-1",
+          expectedDispatchEpoch: 1,
+          trajectorySequence: 0,
+          decisionVersion: 0,
+          replay: "safe",
+          sideEffects: [],
+          createdAt: 21,
+        }),
+        /epoch/
+      )
+      assert.equal(await store.getLatestCheckpoint("child-1"), undefined)
+      const events = await store.listTrajectory("run-1")
+      assert.equal(events.length, 2)
+      assert.ok(events.every((event) => event.payload?.action === "epoch_rejected"))
+    },
+  },
+  {
+    name: "run CAS includes the stop barrier even when timestamps are unchanged",
+    async run(store, assert) {
+      await store.createRun(contractRun())
+      const old = (await store.getRun("run-1"))!
+      await store.updateRun("run-1", { stop: { state: "requested", epoch: 1, requestedAt: 1 } })
+      assert.equal(
+        await store.updateRunIfCurrent("run-1", old, { stop: undefined, status: "recovering" }),
+        false
+      )
+      assert.equal((await store.getRun("run-1"))?.stop?.state, "requested")
+    },
+  },
+
+  {
     name: "creates, reads and patches runs; refuses a run without its identity",
     async run(store, assert) {
       await store.createRun(contractRun())
@@ -215,14 +263,19 @@ export const TEAM_RUN_STORE_CONTRACT: readonly StoreContractCase[] = [
       assert.equal(claimed?.dispatchLeaseId, "L1")
       assert.equal(claimed?.dispatchLeaseExpiresAt, 1_100)
       assert.equal(claimed?.waitingReason, undefined)
-      // Same lease: idempotent replay.
-      assert.ok(
+      assert.equal(claimed?.dispatchEpoch, 1)
+      assert.equal(claimed?.fenceCapable, false)
+      assert.equal(claimed?.leaseTtlMs, 1_000)
+      assert.equal(claimed?.lastRenewalSentAt, 100)
+      // A claim is not a renewal: the identity must never be reused.
+      assert.equal(
         await store.claimDispatchLease({
           childRunId: "child-1",
           leaseId: "L1",
           hostRef: "host-a",
           now: 200,
-        })
+        }),
+        undefined
       )
       // Another lease while L1 is live: refused.
       assert.equal(
@@ -235,9 +288,10 @@ export const TEAM_RUN_STORE_CONTRACT: readonly StoreContractCase[] = [
         }),
         undefined
       )
-      assert.equal(await store.renewDispatchLease("child-1", "L2", 400), false)
-      assert.equal(await store.renewDispatchLease("child-1", "L1", 400, 1_000), true)
+      assert.equal(await store.renewDispatchLease("child-1", "L2", 400, undefined, 1), false)
+      assert.equal(await store.renewDispatchLease("child-1", "L1", 400, 1_000, 1), true)
       assert.equal((await store.getChild("child-1"))?.dispatchLeaseExpiresAt, 1_400)
+      assert.equal((await store.getChild("child-1"))?.lastRenewalSentAt, 400)
       // Expired: another host may take it over.
       const taken = await store.claimDispatchLease({
         childRunId: "child-1",
@@ -246,8 +300,26 @@ export const TEAM_RUN_STORE_CONTRACT: readonly StoreContractCase[] = [
         now: 5_000,
       })
       assert.equal(taken?.hostRef, "host-b")
-      assert.equal(await store.settleDispatchLease("child-1", "L1", 5_100), false)
-      assert.equal(await store.settleDispatchLease("child-1", "L2", 5_100), true)
+      assert.equal(taken?.dispatchEpoch, 2)
+      assert.equal(await store.renewDispatchLease("child-1", "L2", 5_010, 1_000, 1), false)
+      assert.equal(await store.settleDispatchLease("child-1", "L2", 5_020, 1), false)
+      assert.equal(
+        await store.advanceRemoteEvent("child-1", undefined, "late", 5_030, undefined, 1),
+        false
+      )
+      assert.equal((await store.getChild("child-1"))?.lastRemoteEventId, undefined)
+      assert.equal(
+        (await store.listTrajectory("run-1")).filter(
+          (event) => event.payload?.action === "epoch_rejected"
+        ).length,
+        3
+      )
+      assert.equal((await store.getChild("child-1"))?.lastRenewalSentAt, 5_000)
+      assert.equal(await store.renewDispatchLease("child-1", "L2", 65_001, 1_000, 2), false)
+      assert.equal((await store.getChild("child-1"))?.lastRenewalSentAt, 65_001)
+      assert.equal((await store.getChild("child-1"))?.leaseTtlMs, 1_000)
+      assert.equal(await store.settleDispatchLease("child-1", "L1", 65_002, 1), false)
+      assert.equal(await store.settleDispatchLease("child-1", "L2", 65_002, 2), true)
       assert.equal((await store.getChild("child-1"))?.dispatchLeaseId, undefined)
       assert.equal(
         await store.claimDispatchLease({

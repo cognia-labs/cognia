@@ -50,6 +50,7 @@ function child(id: string, status: AgentTeamChildRun["status"]): AgentTeamChildR
     taskId: `task-${id}`,
     repositoryId: "primary",
     status,
+    ...(status !== "queued" ? { startedAt: 1 } : {}),
     attempt: 1,
     resourceUsage: {
       promptTokens: 0,
@@ -184,7 +185,15 @@ describe("controlSquadRun", () => {
 
   it("re-enters an exited lifecycle from a verified safe checkpoint", async () => {
     await seedRun("paused")
-    await getDb().agentTeamChildRuns.add(child("c1", "paused"))
+    await getDb().agentTeamChildRuns.add({
+      ...child("c1", "paused"),
+      stop: {
+        state: "confirmed",
+        epoch: 0,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 0, at: 2 },
+      },
+    })
     await getDb().agentTeamCheckpoints.add(checkpoint("c1", "safe"))
     const reenter = jest.fn(async () => undefined)
     const result = await controlSquadRun(RUN, "resume", { isLive: () => false, reenter })
@@ -253,7 +262,15 @@ describe("controlSquadRun", () => {
   /** Never silently replay ambiguous side effects. */
   it("parks an uncertain resume on a recovery decision instead of replaying", async () => {
     await seedRun("paused")
-    await getDb().agentTeamChildRuns.add(child("c1", "running"))
+    await getDb().agentTeamChildRuns.add({
+      ...child("c1", "running"),
+      stop: {
+        state: "confirmed",
+        epoch: 0,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 0, at: 2 },
+      },
+    })
     await getDb().agentTeamCheckpoints.add(
       checkpoint("c1", "safe", [{ id: "e1", kind: "Bash", state: "unknown", replay: "unknown" }])
     )
@@ -318,6 +335,43 @@ describe("assessSquadRunReplay", () => {
   it("is safe with no children, with settled children, and with never-started ones", async () => {
     expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
     await getDb().agentTeamChildRuns.bulkAdd([child("done", "completed"), child("fresh", "queued")])
+    await getDb().agentTeamCheckpoints.add(checkpoint("done", "safe"))
+    expect(await assessSquadRunReplay(RUN)).toMatchObject({
+      safe: false,
+      reason: "stop_unconfirmed",
+    })
+    await getDb().agentTeamChildRuns.update("done", {
+      settledEpoch: 0,
+      stop: {
+        state: "confirmed",
+        epoch: 0,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 0, at: 2 },
+      },
+    })
+    expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
+  })
+
+  it("does not mistake a queued previous dispatch for work that never started", async () => {
+    await getDb().agentTeamChildRuns.add({
+      ...child("queued-old", "queued"),
+      startedAt: 1,
+      dispatchEpoch: 1,
+      remoteDispatchEpoch: 1,
+    })
+    await getDb().agentTeamCheckpoints.add(checkpoint("queued-old", "safe"))
+    expect(await assessSquadRunReplay(RUN)).toMatchObject({
+      safe: false,
+      reason: "stop_unconfirmed",
+    })
+    await getDb().agentTeamChildRuns.update("queued-old", {
+      stop: {
+        state: "confirmed",
+        epoch: 1,
+        requestedAt: 1,
+        proof: { kind: "ack", epoch: 1, at: 2 },
+      },
+    })
     expect(await assessSquadRunReplay(RUN)).toEqual({ safe: true, uncertainChildIds: [] })
   })
 
@@ -326,7 +380,15 @@ describe("assessSquadRunReplay", () => {
       child("no-cp", "running"),
       child("needs", "paused"),
       child("intent", "running"),
-      child("ok", "paused"),
+      {
+        ...child("ok", "paused"),
+        stop: {
+          state: "confirmed",
+          epoch: 0,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 0, at: 2 },
+        },
+      },
     ])
     await getDb().agentTeamCheckpoints.bulkAdd([
       checkpoint("needs", "needs_input"),
@@ -339,7 +401,7 @@ describe("assessSquadRunReplay", () => {
   })
 
   it("requires review for a remote event not covered by the safe checkpoint", async () => {
-    await getDb().agentTeamChildRuns.add(child("remote", "paused"))
+    await getDb().agentTeamChildRuns.add({ ...child("remote", "paused"), remoteDispatchEpoch: 1 })
     await getDb().agentTeamCheckpoints.add(checkpoint("remote", "safe"))
     await getDb().agentTeamTrajectory.add({
       id: "remote-tail",
@@ -350,6 +412,10 @@ describe("assessSquadRunReplay", () => {
       correlationId: "remote-tail",
       createdAt: 3,
     })
-    expect(await assessSquadRunReplay(RUN)).toEqual({ safe: false, uncertainChildIds: ["remote"] })
+    expect(await assessSquadRunReplay(RUN)).toEqual({
+      safe: false,
+      uncertainChildIds: ["remote"],
+      reason: "stop_unconfirmed",
+    })
   })
 })

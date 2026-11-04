@@ -85,21 +85,28 @@ export interface TeamRunStore<TConstraints = unknown> {
     childRunId: string,
     expectedLeaseId: string,
     now: number,
-    ttlMs?: number
+    ttlMs?: number,
+    expectedEpoch?: number
   ): Promise<boolean>
-  settleDispatchLease(childRunId: string, expectedLeaseId: string, now: number): Promise<boolean>
+  settleDispatchLease(
+    childRunId: string,
+    expectedLeaseId: string,
+    now: number,
+    expectedEpoch?: number
+  ): Promise<boolean>
   /**
    * Advance the child's remote event cursor from `expectedPreviousEventId` to
    * `eventId`, recording the event in the trajectory when `envelope` is given.
-   * False (nothing written) when the cursor moved: a duplicate or out-of-order
-   * replay.
+   * False when the cursor moved or epoch changed. Epoch rejections are recorded
+   * in the trajectory; duplicate cursors write nothing.
    */
   advanceRemoteEvent(
     childRunId: string,
     expectedPreviousEventId: string | undefined,
     eventId: string,
     now: number,
-    envelope?: { runId: string; event: Record<string, unknown> }
+    envelope?: { runId: string; event: Record<string, unknown> },
+    expectedEpoch?: number
   ): Promise<boolean>
 
   appendTrajectory(

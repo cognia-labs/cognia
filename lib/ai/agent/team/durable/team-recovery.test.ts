@@ -17,6 +17,12 @@ import { createDurableTeamCoordinator } from "./durable-runtime"
 import { controlSquadRun } from "../squad/squad-control"
 import { startSquadRun } from "../squad/start-squad-run"
 
+jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
+  // These startup fixtures model a fully restarted host, not a WebView reload.
+  getLiveSidecarSessionIds: async () => new Set<string>(),
+}))
+
 const RUN = "run_team_rec01"
 const EXECUTION = `execution:team:${RUN}`
 
@@ -219,6 +225,76 @@ describe("team recovery", () => {
   })
 
   describe("applyTeamRecoveryDecision", () => {
+    it.each([false, true])(
+      "restarts a stopped local child without replaying its checkpoint (unsafe=%s)",
+      async (unsafe) => {
+        await seedParkedRun()
+        const coordinator = createDurableTeamCoordinator()
+        await coordinator.registerChild({
+          runId: RUN,
+          childRunId: "started-local",
+          runtime: "claude",
+          executorRegistry: "sidecar",
+          teammateId: "m",
+          taskId: "task",
+          repositoryId: "repo",
+          access: "read",
+        })
+        await coordinator.store.updateChild("started-local", { startedAt: 1, dispatchEpoch: 1 })
+        if (unsafe)
+          await coordinator.checkpoint("started-local", {
+            trajectorySequence: 0,
+            replay: "needs_input",
+            sideEffects: [{ id: "write", kind: "Write", state: "unknown", replay: "unknown" }],
+          })
+        // The host confirms no live local executor; retry still cannot replay this history.
+        await expect(coordinator.assessTaskRecovery(RUN, "task")).resolves.toMatchObject({
+          eligible: false,
+          reason: "uncertain_side_effect",
+        })
+        const startReplacement = jest.fn(async () => ({
+          started: true,
+          executionRunId: "replacement",
+        }))
+        const result = await applyTeamRecoveryDecision(
+          RUN,
+          {
+            subject: { choices: ALL_RECOVERY_CHOICES },
+          },
+          "approve",
+          { kind: "team_recovery", choice: "restart_run" },
+          {
+            startReplacement,
+            control: (id, action) => controlSquadRun(id, action),
+          }
+        )
+        expect(result).toMatchObject({ applied: true, replacementExecutionRunId: "replacement" })
+        expect(startReplacement).toHaveBeenCalledTimes(1)
+        expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({ status: "cancelled" })
+        expect(await getDb().executionRuns.get(EXECUTION)).toMatchObject({ status: "cancelled" })
+      }
+    )
+
+    it("does not reopen a finalized run when stop reports an error after finalization", async () => {
+      await seedParkedRun()
+      const result = await applyTeamRecoveryDecision(
+        RUN,
+        {
+          subject: { choices: ALL_RECOVERY_CHOICES },
+        },
+        "approve",
+        { kind: "team_recovery", choice: "restart_run" },
+        {
+          control: async (id, action) => {
+            await controlSquadRun(id, action)
+            throw new Error("late control failure")
+          },
+        }
+      )
+      expect(result).toMatchObject({ applied: false, reason: "stop_unconfirmed" })
+      expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({ status: "cancelled" })
+      expect(await getDb().executionRuns.get(EXECUTION)).toMatchObject({ status: "cancelled" })
+    })
     it("composes real retry and resume state machines without stranding recovering work", async () => {
       await seedParkedRun()
       const coordinator = createDurableTeamCoordinator()
@@ -229,6 +305,19 @@ describe("team recovery", () => {
         taskId: "task1",
         repositoryId: "repo",
         access: "read",
+      })
+      await getDb().agentTeamChildRuns.update("real-child", {
+        stop: {
+          state: "confirmed",
+          epoch: 0,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 0, at: 2 },
+        },
+      })
+      await coordinator.checkpoint("real-child", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 0,
       })
       const reenter = jest.fn(async () => undefined)
       const result = await applyTeamRecoveryDecision(
@@ -248,51 +337,72 @@ describe("team recovery", () => {
       expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("running")
     })
 
-    it("restarts through the real launch transaction while the old run is parked", async () => {
-      await seedParkedRun()
-      const runLifecycle = jest.fn(async () => undefined)
-      const stopReplacedRun = jest.fn(async () => undefined)
-      const result = await applyTeamRecoveryDecision(
-        RUN,
-        {
-          subject: { choices: ALL_RECOVERY_CHOICES, uncertainChildIds: [] },
-        },
-        "approve",
-        { kind: "team_recovery", choice: "restart_run" },
-        {
-          startReplacement: (input) =>
-            startSquadRun(
-              {
-                squadId: input.teamId,
-                goal: input.objective,
-                origin: "interactive",
-                triggeredFrom: { source: "ui" },
-                parentRunId: input.parentExecutionRunId,
-                executionConstraints: input.executionConstraints,
-              },
-              {
-                awaitRuntimeReady: async () => true,
-                loadStore: async () => ({
-                  getTeam: () => ({ id: "team-1", task: "changed after launch", config: {} }),
-                  getTeammates: () => [],
-                  getTeamTasks: () => [],
-                  updateTeam: () => undefined,
-                }),
-                evaluateReadiness: async () => ({ ready: true, blockers: [], evaluatedAt: 1 }),
-                runLifecycle,
-                stopReplacedRun,
-              }
-            ),
-          control: (id, action) => controlSquadRun(id, action),
-        }
-      )
-      expect(result.applied).toBe(true)
-      expect(stopReplacedRun).toHaveBeenCalledWith(RUN, "team-1")
-      expect(runLifecycle).toHaveBeenCalledWith(
-        expect.objectContaining({ requirePlanApprovalFloor: true, origin: "chat" })
-      )
-      expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("cancelled")
-    })
+    it.each([false, true])(
+      "restarts through the real launch transaction without replaying history (unsafe=%s)",
+      async (unsafe) => {
+        await seedParkedRun()
+        const coordinator = createDurableTeamCoordinator()
+        await coordinator.registerChild({
+          runId: RUN,
+          childRunId: "old-local",
+          runtime: "claude",
+          executorRegistry: "sidecar",
+          teammateId: "m",
+          taskId: "task",
+          repositoryId: "repo",
+          access: "read",
+        })
+        await coordinator.store.updateChild("old-local", { startedAt: 1, dispatchEpoch: 1 })
+        if (unsafe)
+          await coordinator.checkpoint("old-local", {
+            trajectorySequence: 0,
+            replay: "needs_input",
+            sideEffects: [{ id: "old-write", kind: "Write", state: "unknown", replay: "unknown" }],
+          })
+        const runLifecycle = jest.fn(async () => undefined)
+        const stopReplacedRun = jest.fn(async () => undefined)
+        const result = await applyTeamRecoveryDecision(
+          RUN,
+          {
+            subject: { choices: ALL_RECOVERY_CHOICES, uncertainChildIds: [] },
+          },
+          "approve",
+          { kind: "team_recovery", choice: "restart_run" },
+          {
+            startReplacement: (input) =>
+              startSquadRun(
+                {
+                  squadId: input.teamId,
+                  goal: input.objective,
+                  origin: "interactive",
+                  triggeredFrom: { source: "ui" },
+                  parentRunId: input.parentExecutionRunId,
+                  executionConstraints: input.executionConstraints,
+                },
+                {
+                  awaitRuntimeReady: async () => true,
+                  loadStore: async () => ({
+                    getTeam: () => ({ id: "team-1", task: "changed after launch", config: {} }),
+                    getTeammates: () => [],
+                    getTeamTasks: () => [],
+                    updateTeam: () => undefined,
+                  }),
+                  evaluateReadiness: async () => ({ ready: true, blockers: [], evaluatedAt: 1 }),
+                  runLifecycle,
+                  stopReplacedRun,
+                }
+              ),
+            control: (id, action) => controlSquadRun(id, action),
+          }
+        )
+        expect(result.applied).toBe(true)
+        expect(stopReplacedRun).not.toHaveBeenCalled() // The recovery controller stopped the parent before launch.
+        expect(runLifecycle).toHaveBeenCalledWith(
+          expect.objectContaining({ requirePlanApprovalFloor: true, origin: "chat" })
+        )
+        expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("cancelled")
+      }
+    )
     const subject = {
       reason: "uncertain_side_effect",
       choices: [...ALL_RECOVERY_CHOICES],
@@ -358,7 +468,51 @@ describe("team recovery", () => {
       expect(h.controlled).toEqual([])
     })
 
-    it("restart_run launches a linked replacement first and stops the parked run after", async () => {
+    it("restart_run without proof neither cancels the old run nor launches a replacement", async () => {
+      await seedParkedRun("stop_unconfirmed")
+      const coordinator = createDurableTeamCoordinator()
+      await coordinator.registerChild({
+        runId: RUN,
+        childRunId: "unconfirmed",
+        teammateId: "m",
+        taskId: "task",
+        repositoryId: "repo",
+        access: "read",
+      })
+      await coordinator.store.claimDispatchLease({
+        childRunId: "unconfirmed",
+        leaseId: "remote-unconfirmed",
+        hostRef: "host-a",
+        now: 1,
+      })
+      await coordinator.checkpoint("unconfirmed", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 0,
+      })
+      const startReplacement = jest.fn(async () => ({
+        started: true,
+        executionRunId: "replacement",
+      }))
+      const result = await applyTeamRecoveryDecision(
+        RUN,
+        { subject },
+        "approve",
+        { kind: "team_recovery", choice: "restart_run" },
+        { startReplacement }
+      )
+      expect(result).toMatchObject({ applied: false, reason: "stop_unconfirmed" })
+      expect(startReplacement).not.toHaveBeenCalled()
+      expect(await getDb().agentTeamRuns.get(RUN)).toMatchObject({
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+      })
+      expect(
+        (await getDb().executionRunEvents.toArray()).some((event) => event.type === "run.cancelled")
+      ).toBe(false)
+    })
+
+    it("restart_run stops the parent before launching a linked replacement", async () => {
       await seedParkedRun()
       const order: string[] = []
       const h = harness({
@@ -383,10 +537,10 @@ describe("team recovery", () => {
         choice: "restart_run",
         replacementExecutionRunId: "execution:team:run_new",
       })
-      expect(order).toEqual([`start:${EXECUTION}`, "stop"])
+      expect(order).toEqual(["stop", `start:${EXECUTION}`])
     })
 
-    it("a refused replacement leaves the parked run untouched", async () => {
+    it("a refused replacement does not undo the confirmed parent stop", async () => {
       await seedParkedRun()
       const h = harness({
         startReplacement: async () => ({ started: false, reason: "not_ready" }),
@@ -399,7 +553,7 @@ describe("team recovery", () => {
         h.deps
       )
       expect(result).toEqual({ applied: false, choice: "restart_run", reason: "restart_refused" })
-      expect(h.controlled).toEqual([])
+      expect(h.controlled).toEqual([[RUN, "stop"]])
     })
 
     it("refuses a choice the interrupt did not offer", async () => {

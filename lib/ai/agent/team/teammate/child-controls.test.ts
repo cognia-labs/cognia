@@ -67,18 +67,20 @@ describe("externalSessionControl", () => {
 })
 
 describe("sidecarSessionControl", () => {
-  it("steers with the source message and interrupts for pause and terminate", async () => {
+  it("interrupts for pause and closes the runtime for termination", async () => {
     const ipc = {
       steerSession: jest.fn(async () => ({ accepted: true })),
       interruptSession: jest.fn(async (_sessionId: string) => undefined),
+      closeSession: jest.fn(async (_sessionId: string) => undefined),
     }
     const control = sidecarSessionControl(ipc, "sidecar-1")
     await control.steer("check", "msg-1")
     await control.pause?.()
     await control.terminate?.()
     expect(ipc.steerSession).toHaveBeenCalledWith("sidecar-1", "check", "msg-1")
-    expect(ipc.interruptSession).toHaveBeenCalledTimes(2)
+    expect(ipc.interruptSession).toHaveBeenCalledTimes(1)
     expect(ipc.interruptSession).toHaveBeenCalledWith("sidecar-1")
+    expect(ipc.closeSession).toHaveBeenCalledWith("sidecar-1")
   })
 })
 
@@ -160,6 +162,7 @@ describe("a mixed built-in and external team on one durable run", () => {
     const ipc = {
       steerSession: jest.fn(async () => ({ accepted: true })),
       interruptSession: jest.fn(async (_sessionId: string) => undefined),
+      closeSession: jest.fn(async (_sessionId: string) => undefined),
     }
     // DeepSeek Harness shape: its cancel retires the session's process.
     const manager = externalManager(true)
@@ -168,48 +171,78 @@ describe("a mixed built-in and external team on one durable run", () => {
       externalSessionControl(manager, "agent-dsh", "dsh-1", external),
       "dsh-1"
     )
-
-    expect(
-      (await store.listChildren("run-mixed")).map((child) => [child.teammateId, child.runtime])
-    ).toEqual([
-      ["builtin", "claude"],
-      ["external", "dsh"],
-    ])
-
-    await coordinator.steer(builtin.childRunId, "check the parser")
-    await coordinator.steer(external.childRunId, "check the schema")
-    expect(ipc.steerSession).toHaveBeenCalledWith(
-      "sidecar-1",
-      "check the parser",
-      expect.any(String)
-    )
-    expect(manager.steerSession).toHaveBeenCalledWith("agent-dsh", "dsh-1", "check the schema")
-
-    // The external child is mid tool call when the operator pauses the team.
-    external.capture({ type: "tool-call", id: "write-1", toolName: "Write", input: {} })
-    await external.flush()
-    await coordinator.pauseChild(builtin.childRunId)
-    await coordinator.pauseChild(external.childRunId)
-
-    // The built-in session survives its interrupt and is paused.
-    expect(ipc.interruptSession).toHaveBeenCalledWith("sidecar-1")
-    expect(await store.getChild(builtin.childRunId)).toMatchObject({
-      status: "paused",
-      sessionId: "sidecar-1",
+    let releaseBuiltin!: () => void
+    let releaseExternal!: () => void
+    const builtinExecution = builtin.run(() => {
+      const stopped = new Promise<void>((resolve) => {
+        releaseBuiltin = resolve
+      })
+      builtin.trackLocalStop(stopped)
+      return stopped
     })
-    // The external cancel retired its session: it is forgotten, and with an
-    // unfinished tool call the child needs input rather than a paused session.
-    expect(manager.cancel).toHaveBeenCalledWith("agent-dsh", "dsh-1")
-    const parked = await store.getChild(external.childRunId)
-    expect(parked?.status).toBe("needs_input")
-    expect(parked?.sessionId).toBeUndefined()
+    const externalExecution = external.run(() => {
+      const stopped = new Promise<void>((resolve) => {
+        releaseExternal = resolve
+      })
+      external.trackLocalStop(stopped)
+      return stopped
+    })
+    const observed = Promise.allSettled([builtinExecution, externalExecution])
+    while (!releaseBuiltin || !releaseExternal)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    ipc.interruptSession.mockImplementation(async () => {
+      releaseBuiltin()
+    })
+    manager.cancel.mockImplementation(async () => {
+      releaseExternal()
+    })
 
-    // Steering a retired session waits in the durable queue for the next turn.
-    const queued = await coordinator.steer(external.childRunId, "resume carefully")
-    expect(queued.status).toBe("queued")
-    expect(manager.steerSession).toHaveBeenCalledTimes(1)
+    try {
+      expect(
+        (await store.listChildren("run-mixed")).map((child) => [child.teammateId, child.runtime])
+      ).toEqual([
+        ["builtin", "claude"],
+        ["external", "dsh"],
+      ])
 
-    builtin.dispose()
-    external.dispose()
+      await coordinator.steer(builtin.childRunId, "check the parser")
+      await coordinator.steer(external.childRunId, "check the schema")
+      expect(ipc.steerSession).toHaveBeenCalledWith(
+        "sidecar-1",
+        "check the parser",
+        expect.any(String)
+      )
+      expect(manager.steerSession).toHaveBeenCalledWith("agent-dsh", "dsh-1", "check the schema")
+
+      // The external child is mid tool call when the operator pauses the team.
+      external.capture({ type: "tool-call", id: "write-1", toolName: "Write", input: {} })
+      await external.flush()
+      await coordinator.pauseChild(builtin.childRunId)
+      await coordinator.pauseChild(external.childRunId)
+
+      // The built-in session survives its interrupt and is paused.
+      expect(ipc.interruptSession).toHaveBeenCalledWith("sidecar-1")
+      expect(await store.getChild(builtin.childRunId)).toMatchObject({
+        status: "paused",
+        sessionId: "sidecar-1",
+      })
+      // The external cancel retired its session: it is forgotten, and with an
+      // unfinished tool call the child needs input rather than a paused session.
+      expect(manager.cancel).toHaveBeenCalledWith("agent-dsh", "dsh-1")
+      const parked = await store.getChild(external.childRunId)
+      expect(parked?.status).toBe("needs_input")
+      expect(parked?.sessionId).toBeUndefined()
+
+      // Steering a retired session waits in the durable queue for the next turn.
+      const queued = await coordinator.steer(external.childRunId, "resume carefully")
+      expect(queued.status).toBe("queued")
+      expect(manager.steerSession).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseBuiltin()
+      releaseExternal()
+      await observed
+      builtin.dispose()
+      external.dispose()
+    }
   })
 })

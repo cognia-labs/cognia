@@ -13,6 +13,17 @@ import {
   redactTeamTextForPersistence,
 } from "./durable-runtime"
 import * as runtimeDb from "@/lib/db/agent-team-runtime"
+import { isStoredChildStopped } from "@cognia/agent-orchestration/coordinator"
+
+const mockLiveSidecarSessions = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
+const mockLiveExternalProcesses = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
+jest.mock("@/lib/ai/agent/external/agent-transport", () => ({
+  getLiveExternalAgentProcessIds: () => mockLiveExternalProcesses(),
+}))
+jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
+  getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
+}))
 
 const mockIsTauri = jest.fn(() => false)
 const mockCanonicalRoot = jest.fn()
@@ -175,7 +186,133 @@ describe("the app's durable AgentTeam coordinator", () => {
     __resetDbForTesting()
     __resetDurableTeamCoordinatorForTesting()
     removeManagedFleetSession.mockReset().mockResolvedValue(true)
+    mockLiveSidecarSessions.mockReset().mockResolvedValue(undefined)
+    mockLiveExternalProcesses.mockReset().mockResolvedValue(undefined)
   })
+
+  it.each(["live", "absent", "unknown", "error"] as const)(
+    "queries the external executor registry after reload: %s",
+    async (mode) => {
+      const coordinator = createDurableTeamCoordinator()
+      await coordinator.prepareRun(team(), "external-reload")
+      await coordinator.registerChild({
+        runId: "external-reload",
+        childRunId: "external-child",
+        teammateId: "mate",
+        taskId: "task",
+        repositoryId: "primary",
+        access: "read",
+        runtime: "codex",
+        executorRegistry: "external-process",
+        sessionId: "native-thread-id",
+      })
+      await runtimeDb.updateAgentTeamChildRun("external-child", {
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+      })
+      await coordinator.checkpoint("external-child", {
+        replay: "safe",
+        sideEffects: [],
+        trajectorySequence: 0,
+      })
+      // JS has no live controls. The empty sidecar list knows nothing about
+      // the external process, whose id differs from the native thread id.
+      mockLiveSidecarSessions.mockResolvedValue(new Set())
+      if (mode === "error") mockLiveExternalProcesses.mockRejectedValue(new Error("Host lost"))
+      else
+        mockLiveExternalProcesses.mockResolvedValue(
+          mode === "unknown" ? undefined : new Set(mode === "live" ? ["codex-process-id"] : [])
+        )
+      __resetDurableTeamCoordinatorForTesting()
+      const restarted = createDurableTeamCoordinator()
+      await expect(restarted.recover()).resolves.toEqual([
+        { runId: "external-reload", status: mode === "absent" ? "recovering" : "needs_input" },
+      ])
+      expect(mockLiveExternalProcesses).toHaveBeenCalled()
+      expect(mockLiveSidecarSessions).not.toHaveBeenCalled()
+      if (mode === "absent")
+        await expect(restarted.retryChild("external-child")).resolves.toMatchObject({
+          status: "queued",
+        })
+      else {
+        await expect(restarted.retryChild("external-child")).rejects.toThrow("stop_unconfirmed")
+        await expect(restarted.terminateChild("external-child")).rejects.toThrow("stop_unconfirmed")
+        expect((await runtimeDb.getAgentTeamChildRun("external-child"))?.stop?.state).toBe(
+          "unconfirmed"
+        )
+      }
+    }
+  )
+
+  it.each([
+    ["claude", "session", ["session"], false],
+    ["claude-agent-sdk", "session", ["another-session"], true],
+    ["ai-sdk", undefined, ["another-session"], false],
+    ["ai-sdk", undefined, [], true],
+    ["codex-acp", "thread", ["process"], false],
+    ["claude-code", "thread", [], true],
+    ["opencode-server", "thread", ["process"], false],
+    ["unknown-runtime", "session", [], false],
+    ["toString", "session", [], false],
+    [undefined, "session", [], false],
+  ] as const)(
+    "uses only the registry owning %s (session=%s, ids=%j)",
+    async (runtime, sessionId, ids, stopped) => {
+      const coordinator = createDurableTeamCoordinator()
+      await coordinator.prepareRun(team(), "owning-registry")
+      await registerChild(coordinator, "owning-registry", "registry-child")
+      await coordinator.store.updateChild("registry-child", {
+        runtime,
+        executorRegistry: ["codex-acp", "claude-code", "opencode-server"].includes(runtime ?? "")
+          ? "external-process"
+          : "sidecar",
+        sessionId,
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+      })
+      const child = (await coordinator.store.getChild("registry-child"))!
+      mockLiveSidecarSessions.mockResolvedValue(new Set(ids))
+      mockLiveExternalProcesses.mockResolvedValue(new Set(ids))
+      await expect(isStoredChildStopped(coordinator.store, child, 100)).resolves.toBe(stopped)
+      const sidecar = ["claude", "claude-agent-sdk", "ai-sdk"].includes(runtime ?? "")
+      const external = ["codex-acp", "claude-code", "opencode-server"].includes(runtime ?? "")
+      expect(mockLiveSidecarSessions).toHaveBeenCalledTimes(sidecar ? 1 : 0)
+      expect(mockLiveExternalProcesses).toHaveBeenCalledTimes(external ? 1 : 0)
+    }
+  )
+
+  it.each([
+    ["codex", "external-process", true],
+    ["codex", "unconfirmed", false],
+    ["codex", undefined, false],
+    ["claude", undefined, false],
+    ["opencode-server", "unconfirmed", false],
+    ["claude", "external-process", true],
+    ["unknown-runtime", "external-process", false],
+  ] as const)(
+    "requires actual process ownership before an empty registry proves %s stopped: %s",
+    async (runtime, executorRegistry, stopped) => {
+      const coordinator = createDurableTeamCoordinator()
+      await coordinator.prepareRun(team(), "bound-registry")
+      await registerChild(coordinator, "bound-registry", "bound-child")
+      await coordinator.store.updateChild("bound-child", {
+        runtime,
+        executorRegistry,
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+      })
+      mockLiveSidecarSessions.mockResolvedValue(new Set())
+      mockLiveExternalProcesses.mockResolvedValue(new Set())
+      const child = (await coordinator.store.getChild("bound-child"))!
+      await expect(isStoredChildStopped(coordinator.store, child, 100)).resolves.toBe(stopped)
+      expect(mockLiveSidecarSessions).toHaveBeenCalledTimes(
+        runtime === "claude" && executorRegistry === undefined ? 1 : 0
+      )
+    }
+  )
 
   it("records an already frozen scheduled run's resolved ceiling", async () => {
     await runtimeDb.createAgentTeamRun({
@@ -229,6 +366,8 @@ describe("the app's durable AgentTeam coordinator", () => {
       taskId: "task-1",
       repositoryId: "primary",
       access: "read",
+      runtime: "claude",
+      executorRegistry: "sidecar",
     })
 
   it("keeps run state in Dexie by default", async () => {
@@ -241,6 +380,35 @@ describe("the app's durable AgentTeam coordinator", () => {
       status: "running",
     })
   })
+
+  it.each([true, false])(
+    "keeps a real settlement transaction alive during delayed host IPC (live=%s)",
+    async (live) => {
+      const coordinator = createDurableTeamCoordinator()
+      await coordinator.prepareRun(team(), "run-native-query")
+      await registerChild(coordinator, "run-native-query", "native-child")
+      await coordinator.store.updateChild("native-child", {
+        status: "running",
+        startedAt: 1,
+        dispatchEpoch: 1,
+        sessionId: "native-session",
+      })
+      mockLiveSidecarSessions.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve(new Set(live ? ["native-session"] : [])), 20)
+          })
+      )
+      const run = (await coordinator.store.getRun("run-native-query"))!
+      await expect(
+        runtimeDb.settleAgentTeamRunIfCurrent(run.id, run, { status: "completed", updatedAt: 100 })
+      ).resolves.toBe(live ? "needs_input" : "completed")
+      expect(mockLiveSidecarSessions).toHaveBeenCalledTimes(1)
+      expect((await coordinator.store.getRun(run.id))?.status).toBe(
+        live ? "needs_input" : "completed"
+      )
+    }
+  )
 
   it("journals the run under the bridge's execution id and notes a resumption", async () => {
     await runtimeDb.createAgentTeamRun({
@@ -348,6 +516,10 @@ describe("the app's durable AgentTeam coordinator", () => {
     await coordinator.prepareRun(team(), "run-control")
     await registerChild(coordinator, "run-control", "child-control")
     await runtimeDb.updateAgentTeamChildRun("child-control", { remoteSessionId: "remote-control" })
+    coordinator.attachLiveControl("child-control", {
+      steer: jest.fn(),
+      terminate: async () => ({ kind: "ack", epoch: 0, at: 250 }),
+    })
     removeManagedFleetSession.mockRejectedValueOnce(new Error("projection offline"))
 
     await coordinator.terminateChild("child-control")

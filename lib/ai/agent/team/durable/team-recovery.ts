@@ -1,3 +1,7 @@
+import {
+  assessStoredTaskRecovery,
+  isStoredChildStopped,
+} from "@cognia/agent-orchestration/coordinator"
 /**
  * The `team_recovery` review (ADR-0169).
  *
@@ -24,13 +28,15 @@
 import { LEGACY_RUN_NOT_RESUMABLE } from "@/lib/agent-team/legacy-run-history"
 import {
   getAgentTeamRun,
+  dexieTeamRunStore,
+  listAgentTeamChildRuns,
   listAgentTeamRecoveryCandidates,
   listAgentTeamRuns,
 } from "@/lib/db/agent-team-runtime"
 import { getDb } from "@/lib/db/schema"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { getExecutionRun } from "@/lib/db/execution-runs"
-import { isTerminalSquadRunStatus } from "../squad/squad-run-records"
+import { isTerminalSquadRunStatus, parkActiveSquadRun } from "../squad/squad-run-records"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type {
   ExecutionRunInterrupt,
@@ -52,6 +58,7 @@ export const SQUAD_NOT_READY = "squad_not_ready"
 
 export const RECOVERY_REASONS: ReadonlySet<string> = new Set([
   "uncertain_side_effect",
+  "stop_unconfirmed",
   "missing_checkpoint",
   "recover_needs_input",
   SQUAD_NOT_READY,
@@ -102,6 +109,7 @@ export type TeamRecoveryApplyRefusal =
   | "cross_host_unsafe"
   | "restart_refused"
   | "control_refused"
+  | "stop_unconfirmed"
 
 export interface TeamRecoveryApplyResult {
   applied: boolean
@@ -303,6 +311,8 @@ async function applyTeamRecoveryDecisionInner(
   const run = await getAgentTeamRun(runId)
   if (!run) return { applied: false, choice, reason: "run_not_found" }
   const control = deps.control ?? defaultControl
+  const parkRecovery = (reason: string) =>
+    parkActiveSquadRun(runId, reason, (deps.now ?? Date.now)())
 
   if (choice === "terminate") {
     const result = await control(runId, "stop")
@@ -315,6 +325,28 @@ async function applyTeamRecoveryDecisionInner(
   }
 
   if (choice === "restart_run") {
+    // A replacement never replays the old checkpoints. Require only stop
+    // evidence, before control can finalize the parent or launch new work.
+    const children = await listAgentTeamChildRuns(runId)
+    if (
+      (
+        await Promise.all(
+          children.map((child) =>
+            isStoredChildStopped(dexieTeamRunStore, child, (deps.now ?? Date.now)())
+          )
+        )
+      ).some((stopped) => !stopped)
+    ) {
+      await parkRecovery("stop_unconfirmed")
+      return { applied: false, choice, reason: "stop_unconfirmed" }
+    }
+    try {
+      const stopped = await control(runId, "stop")
+      if (!stopped.ok && stopped.reason !== "already_terminal") throw new Error("stop_unconfirmed")
+    } catch {
+      await parkRecovery("stop_unconfirmed")
+      return { applied: false, choice, reason: "stop_unconfirmed" }
+    }
     // The conversation, if the parked run had one, lives on its execution
     // run row. The replacement keeps it so the chat sees the new run.
     const parentExecution = await getExecutionRun(agentTeamExecutionRunId(runId)).catch(
@@ -330,12 +362,27 @@ async function applyTeamRecoveryDecisionInner(
     if (!started.started || !started.executionRunId) {
       return { applied: false, choice, reason: "restart_refused" }
     }
-    // The old run stops AFTER the replacement exists, so a failed launch
-    // leaves the parked run where a person can still decide.
-    // The launch transaction retires the old row and drains its live controls
-    // before replacement dispatch. Injected launchers may still need this no-op.
-    await control(runId, "stop").catch(() => undefined)
     return { applied: true, choice, replacementExecutionRunId: started.executionRunId }
+  }
+
+  for (const taskId of new Set(
+    (await listAgentTeamChildRuns(runId)).map((child) => child.taskId)
+  )) {
+    const eligibility = await assessStoredTaskRecovery(
+      dexieTeamRunStore,
+      runId,
+      taskId,
+      (deps.now ?? Date.now)()
+    )
+    if (!eligibility.eligible) {
+      await parkRecovery(eligibility.reason)
+      return {
+        applied: false,
+        choice,
+        reason:
+          eligibility.reason === "stop_unconfirmed" ? "stop_unconfirmed" : "cross_host_unsafe",
+      }
+    }
   }
 
   // retry_same_host / retry_host: re-queue the uncertain children, then

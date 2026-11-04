@@ -13,6 +13,10 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
 }))
 const recover = jest.fn()
 jest.mock("./durable/durable-runtime", () => ({ getDurableTeamCoordinator: () => ({ recover }) }))
+jest.mock("@/lib/execution/agent-team-bridge", () => ({
+  ...jest.requireActual("@/lib/execution/agent-team-bridge"),
+  settleAgentTeamExecutionRun: jest.fn(async () => undefined),
+}))
 jest.mock("./gates/squad-review-gate", () => ({ listPendingSquadReviews: async () => [] }))
 const recoveryLifecycle = jest.fn()
 const restoreSquadRunInput = jest.fn()
@@ -49,6 +53,7 @@ jest.mock("./squad/watch-squad-run", () => ({
 import { agentTeamManager, recoverDurableAgentTeams } from "./agent-team"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import type { AgentTeam } from "@/types/agent/agent-team"
+import { settleAgentTeamExecutionRun } from "@/lib/execution/agent-team-bridge"
 
 function makeTeam(overrides: Partial<AgentTeam> = {}): AgentTeam {
   const now = new Date(2026, 0, 1)
@@ -81,6 +86,7 @@ beforeEach(() => {
   controlSquadTeam.mockClear()
   controlSquadRun.mockClear()
   awaitSquadRunSettlement.mockClear()
+  jest.mocked(settleAgentTeamExecutionRun).mockClear()
   startSquadRun.mockResolvedValue({
     started: true,
     runId: "run_team_1",
@@ -193,6 +199,24 @@ describe("agentTeamManager.start", () => {
 })
 
 describe("recoverDurableAgentTeams", () => {
+  it.each(["cancelled", "terminated"] as const)(
+    "journals recovered %s even without a team definition",
+    async (status) => {
+      const run = { id: "run-1", teamId: "deleted-team", status, completedAt: 123 }
+      getAgentTeamRun.mockResolvedValue(run)
+      recover.mockResolvedValue([{ runId: run.id, status }])
+      await expect(recoverDurableAgentTeams()).resolves.toEqual([{ runId: run.id, status }])
+      expect(settleAgentTeamExecutionRun).toHaveBeenCalledWith(run, "cancelled", 123)
+    }
+  )
+
+  it("does not publish a stale terminal recovery outcome", async () => {
+    getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "t1", status: "running" })
+    recover.mockResolvedValue([{ runId: "run-1", status: "cancelled" }])
+    await recoverDurableAgentTeams()
+    expect(settleAgentTeamExecutionRun).not.toHaveBeenCalled()
+  })
+
   it("finishes recovery admission without awaiting a long recovered lifecycle", async () => {
     agentTeamManager.create(makeTeam())
     getAgentTeamRun.mockResolvedValue({ id: "run-1", teamId: "t1", status: "recovering" })

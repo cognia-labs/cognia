@@ -33,6 +33,7 @@ import {
 } from "@/stores/agent/agent-team-store/dexie-bridge"
 import type { SquadBindingCandidates } from "./definition-contract"
 import type { LegacyRunBackfillOutcome } from "./legacy-run-history"
+import type { RecoveryOutcome } from "@cognia/agent-orchestration/coordinator"
 
 export type SquadBootstrapStage = "hydrate" | "adapters" | "import_history" | "recover" | "ready"
 
@@ -43,7 +44,7 @@ export interface SquadBootstrapOutcome {
   /** The stage that failed, when `ok` is false. */
   failedStage?: SquadBootstrapStage
   history?: LegacyRunBackfillOutcome
-  recovered?: Array<{ runId: string; status: "recovering" | "needs_input" }>
+  recovered?: RecoveryOutcome[]
   recoveries?: { armed: number; alreadyPending: number }
   durationMs: number
 }
@@ -61,9 +62,7 @@ export interface SquadBootstrapDeps {
   installAdapters?: () => Promise<void> | void
   backfillHistory?: (now: number) => Promise<LegacyRunBackfillOutcome>
   recoverInterrupts?: (now: number) => Promise<void>
-  recoverRuns?: (
-    signal: AbortSignal
-  ) => Promise<Array<{ runId: string; status: "recovering" | "needs_input" }>>
+  recoverRuns?: (signal: AbortSignal) => Promise<RecoveryOutcome[]>
   /** Re-raise the `team_recovery` interrupt of every parked run that lacks one. */
   armRecoveries?: () => Promise<{ armed: number; alreadyPending: number }>
   onStage?: (stage: SquadBootstrapStage) => void

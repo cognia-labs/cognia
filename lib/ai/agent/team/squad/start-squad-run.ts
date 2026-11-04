@@ -401,6 +401,15 @@ export async function startSquadRun(
       }
     )
   ) as AgentTeamExecutionConstraints
+  // Stop the parent before record creation can retire it or publish cancellation.
+  if (replacesRunId && live?.id === replacesRunId && replacesRunId !== runId) {
+    try {
+      await (deps.stopReplacedRun ?? defaultStopReplacedRun)(replacesRunId, squadId)
+    } catch {
+      await (deps.parkFailedLaunch ?? defaultParkFailedLaunch)(replacesRunId, "stop_unconfirmed")
+      return { started: false, reason: "dispatch_error", ...named }
+    }
+  }
   try {
     const records = await (deps.createRunRecords ?? defaultCreateRunRecords)({
       localAuthorization: input.localAuthorization,
@@ -443,7 +452,7 @@ export async function startSquadRun(
     try {
       await (deps.stopReplacedRun ?? defaultStopReplacedRun)(replacedRunId, squadId)
     } catch {
-      await (deps.parkFailedLaunch ?? defaultParkFailedLaunch)(runId, "replacement_cleanup_failed")
+      await (deps.parkFailedLaunch ?? defaultParkFailedLaunch)(runId, "stop_unconfirmed")
       return { started: false, runId, executionRunId, reason: "dispatch_error", ...named }
     }
   }

@@ -1,6 +1,9 @@
 import { contractChild, contractRun } from "./store-contract"
 import {
   dispatchLeaseClaimPatch,
+  dispatchLeaseRenewPatch,
+  dispatchLeaseSettlePatch,
+  canAdvanceRemoteEvent,
   matchesControlState,
   nextTrajectoryEvent,
   selectRecoveryCandidates,
@@ -9,6 +12,35 @@ import {
 } from "./rules"
 
 describe("persistence rules", () => {
+  it("checks the epoch even if a stalled dispatch presents the current lease id", () => {
+    expect(
+      matchesControlState(
+        { status: "running", updatedAt: 1, dispatchEpoch: 1 },
+        { status: "running", updatedAt: 1 }
+      )
+    ).toBe(false)
+    const child = contractChild({
+      dispatchEpoch: 2,
+      dispatchLeaseId: "lease",
+      dispatchLeaseExpiresAt: 100,
+    })
+    expect(dispatchLeaseRenewPatch(child, "lease", 10, 60, 1)).toBeUndefined()
+    expect(dispatchLeaseSettlePatch(child, "lease", 10, 1)).toBeUndefined()
+    expect(canAdvanceRemoteEvent(child, undefined, 1)).toBe(false)
+    expect(dispatchLeaseRenewPatch(child, "lease", 10, 60, 2)).toMatchObject({
+      lastRenewalSentAt: 10,
+    })
+    expect(
+      dispatchLeaseRenewPatch(
+        { ...child, stop: { state: "requested", epoch: 2, requestedAt: 1 } },
+        "lease",
+        10,
+        60,
+        2
+      )
+    ).toBeUndefined()
+  })
+
   it("matches control state only on identical status and updatedAt", () => {
     expect(
       matchesControlState({ status: "running", updatedAt: 1 }, { status: "running", updatedAt: 1 })

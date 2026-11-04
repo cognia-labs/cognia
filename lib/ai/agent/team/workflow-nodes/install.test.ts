@@ -33,6 +33,7 @@ describe("installTeamWorkflowNodeRuntime", () => {
   it("provides an implementation for every team node kind", () => {
     expect(Object.keys(teamWorkflowNodes).sort()).toEqual(
       [
+        "assertDispatchRetry",
         "compose",
         "delegate",
         "dispatchTask",

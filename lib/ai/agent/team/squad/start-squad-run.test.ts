@@ -95,12 +95,27 @@ const start = (h: Harness, extra: Record<string, unknown> = {}) =>
   )
 
 describe("startSquadRun: fast failures", () => {
+  it("does not create or dispatch a replacement when stopping its parent is unconfirmed", async () => {
+    const h = harness({ liveRunId: "parent" })
+    const park = jest.fn(async () => undefined)
+    h.deps.stopReplacedRun = async () => {
+      throw new Error("stop_unconfirmed")
+    }
+    h.deps.parkFailedLaunch = park
+    const result = await start(h, { parentRunId: "execution:team:parent" })
+    expect(result.started).toBe(false)
+    expect(h.seeds).toEqual([])
+    expect(h.runCalls).toEqual([])
+    expect(park).toHaveBeenCalledWith("parent", "stop_unconfirmed")
+  })
+
   it("threads a host-only authorization through atomic run admission", async () => {
     const { LOCAL_PERSON_RUN } = await import("@/lib/execution/acting-authority")
     const h = harness()
     await start(h, { localAuthorization: LOCAL_PERSON_RUN })
     expect(h.seeds[0].localAuthorization).toBe(LOCAL_PERSON_RUN)
   })
+
   it("refuses with runtime_not_ready when the bootstrap has not finished, touching nothing", async () => {
     const h = harness()
     const result = await startSquadRun(

@@ -22,16 +22,27 @@ import type {
   AgentTeamSteeringReceipt,
   AgentTeamTrajectoryEvent,
   AgentTeamWriteMode,
+  StopProof,
 } from "./records"
-import { CHILD_ADMISSION_WAITING_REASON, isChildReplaySafe } from "./replay"
+import {
+  CHILD_ADMISSION_WAITING_REASON,
+  isChildReplaySafe,
+  assessRecoveryEligibility,
+  childStopProof,
+  isChildSettled,
+  isChildNeverStarted,
+  hasRemoteDispatch,
+} from "./replay"
 import type { TeamRunStore } from "./store"
 
 export interface DurableChildControl {
   /** Must route through the runtime's PII-gated steering adapter. */
   steer(message: string, sourceMessageId: string): Promise<void>
   pause?(): Promise<boolean | void>
-  resume?(): Promise<void>
-  terminate?(): Promise<void>
+  resume?(dispatchEpoch?: number): Promise<void>
+  /** False only for resource preparation that cannot resume an executor. */
+  resumeStartsExecution?: boolean
+  terminate?(): Promise<StopProof | void>
 }
 
 /**
@@ -98,8 +109,17 @@ export interface DurableTeamCoordinatorOptions<TConstraints = unknown> {
   redactForPersistence: (text: string) => string | undefined
   paths: TeamPathPolicy
   remoteSessions: TeamRemoteSessions
+  /** Query the runtime's owning host registry; undefined means unconfirmed. */
+  localSessions?: {
+    isStopped(
+      runtime: string,
+      sessionId?: string,
+      registry?: AgentTeamChildRun["executorRegistry"]
+    ): Promise<boolean | undefined>
+  }
   now?: () => number
   globalConcurrency?: number
+  localStopTimeoutMs?: number
   agingIntervalMs?: number
 }
 
@@ -111,6 +131,7 @@ export interface RegisterDurableChildInput {
   repositoryId: string
   access: "read" | "write"
   runtime?: string
+  executorRegistry?: AgentTeamChildRun["executorRegistry"]
   sessionId?: string
   workspacePath?: string
   branch?: string
@@ -127,7 +148,7 @@ export interface WorkspaceLeaseRequest {
 
 export interface RecoveryOutcome {
   runId: string
-  status: Extract<AgentTeamRunStatus, "recovering" | "needs_input">
+  status: Extract<AgentTeamRunStatus, "recovering" | "needs_input" | "cancelled" | "terminated">
 }
 
 interface RunPolicy {
@@ -159,6 +180,81 @@ export async function isStoredChildReplaySafe(
   if (!candidate) return false
   const events = trajectory ?? (await store.listTrajectory(candidate.runId))
   return isChildReplaySafe(childRunId, candidate, events)
+}
+
+// Renderer activity can disprove stop, but its absence cannot prove host quiescence.
+const localActivity = new WeakMap<object, Set<() => ReadonlySet<string>>>()
+const localHostSessions = new WeakMap<
+  object,
+  NonNullable<DurableTeamCoordinatorOptions["localSessions"]>
+>()
+function activeLocalChildrenFor(store: object): ReadonlySet<string> {
+  return new Set([...(localActivity.get(store) ?? [])].flatMap((activity) => [...activity()]))
+}
+
+/** Local quiescence requires an affirmative host answer, including after reload. */
+export async function isStoredChildStopped(
+  store: TeamRunStore<unknown>,
+  child: AgentTeamChildRun,
+  now: number,
+  activeLocalChildIds = activeLocalChildrenFor(store),
+  localSessions = localHostSessions.get(store)
+): Promise<boolean> {
+  if (child.status === "completed") return isChildSettled(child)
+  if (isChildSettled(child) || !!childStopProof(child, now)) return true
+  if (isChildNeverStarted(child)) {
+    const [checkpoint, trajectory] = await Promise.all([
+      store.getLatestCheckpoint(child.id),
+      store.listTrajectory(child.runId),
+    ])
+    if (isChildNeverStarted(child, checkpoint, trajectory)) return true
+  }
+  if (hasRemoteDispatch(child) || activeLocalChildIds.has(child.id) || !child.runtime) return false
+  try {
+    return (
+      (await localSessions?.isStopped(child.runtime, child.sessionId, child.executorRegistry)) ===
+      true
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Store-backed adapter of the pure task gate, shared by every execution entry. */
+export async function assessStoredTaskRecovery(
+  store: TeamRunStore<unknown>,
+  runId: string,
+  taskId: string,
+  now: number,
+  prospectiveChildId?: string,
+  activeLocalChildIds = activeLocalChildrenFor(store),
+  localSessions = localHostSessions.get(store)
+) {
+  const children = (await store.listChildren(runId)).filter(
+    (child) => child.id !== prospectiveChildId
+  )
+  const checkpoints = await Promise.all(
+    children
+      .filter((child) => child.taskId === taskId)
+      .map((child) => store.getLatestCheckpoint(child.id))
+  )
+  const stoppedLocalChildIds = new Set<string>()
+  await Promise.all(
+    children
+      .filter((child) => child.taskId === taskId)
+      .map(async (child) => {
+        if (await isStoredChildStopped(store, child, now, activeLocalChildIds, localSessions))
+          stoppedLocalChildIds.add(child.id)
+      })
+  )
+  return assessRecoveryEligibility(
+    { runId, taskId },
+    children,
+    checkpoints,
+    await store.listTrajectory(runId),
+    now,
+    stoppedLocalChildIds
+  )
 }
 
 function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -232,6 +328,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
   options: DurableTeamCoordinatorOptions<TConstraints>
 ) {
   const { store, journal, paths, remoteSessions } = options
+  if (options.localSessions) localHostSessions.set(store, options.localSessions)
   const now = options.now ?? Date.now
   const persistable = (text: string, refusal: string): string => {
     const redacted = options.redactForPersistence(text)
@@ -251,6 +348,75 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
   const runResumeWaiters = new Map<string, Set<() => void>>()
   const admissions = new Map<string, { controller: AbortController; runId?: string }>()
   const pendingWakes = new Map<string, Promise<void>>()
+  const executions = new Map<string, Promise<void>>()
+  const activeLocalChildren = () =>
+    new Set([...controls.keys(), ...admissions.keys(), ...executions.keys()])
+  const processActivity = localActivity.get(store) ?? new Set<() => ReadonlySet<string>>()
+  processActivity.add(activeLocalChildren)
+  localActivity.set(store, processActivity)
+  const assessTaskRecovery = (
+    runId: string,
+    taskId: string,
+    tx: TeamRunStore = store,
+    prospectiveChildId?: string
+  ) =>
+    assessStoredTaskRecovery(
+      tx,
+      runId,
+      taskId,
+      now(),
+      prospectiveChildId,
+      activeLocalChildrenFor(store),
+      localHostSessions.get(store)
+    )
+
+  /** Tracks the real executor promise, not a timeout/abort race around it. */
+  const trackChildExecution = async <T>(
+    childRunId: string,
+    operation: () => Promise<T>,
+    stopEvidence?: () => Promise<void> | undefined
+  ): Promise<T> => {
+    let settled!: () => void
+    const completion = new Promise<void>((resolve) => {
+      settled = resolve
+    })
+    if (executions.has(childRunId)) throw new Error("Child already has a live execution")
+    executions.set(childRunId, completion)
+    try {
+      return await operation()
+    } finally {
+      const release = () => {
+        if (executions.get(childRunId) === completion) executions.delete(childRunId)
+        settled()
+      }
+      const pending = stopEvidence?.()
+      // Capture can finish before the executor. Keep local activity and stop
+      // waiters alive until independent evidence has also been persisted.
+      if (pending) void pending.then(release, () => undefined)
+      else release()
+    }
+  }
+  const waitForLocalSettlement = async (childRunId: string): Promise<boolean> => {
+    const pending = executions.get(childRunId)
+    if (!pending) {
+      const child = await store.getChild(childRunId)
+      return !!child && (await isStoredChildStopped(store, child, now()))
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        pending.then(async () => {
+          const child = await store.getChild(childRunId)
+          return !!child && (await isStoredChildStopped(store, child, now()))
+        }),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), options.localStopTimeoutMs ?? 5_000)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
 
   const assertRunnable = async (childRunId: string, signal?: AbortSignal) => {
     signal?.throwIfAborted()
@@ -266,7 +432,12 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     }
     const run = await store.getRun(child.runId)
     if (!run) throw new Error(`Unknown durable AgentTeam run: ${child.runId}`)
-    if (TERMINAL_STATUSES.has(run.status) || run.status === "needs_input") {
+    if (
+      TERMINAL_STATUSES.has(run.status) ||
+      run.status === "needs_input" ||
+      run.stop?.state === "requested" ||
+      run.stop?.state === "unconfirmed"
+    ) {
       throw new Error(
         `Durable AgentTeam run ${run.id} is not accepting new turns while ${run.status}`
       )
@@ -401,15 +572,16 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
       repositoryId: input.repositoryId,
       status: "running",
       attempt: 1,
+      dispatchEpoch: 0,
       decisionVersion: run.decisionVersion,
       ...(input.runtime ? { runtime: input.runtime } : {}),
+      ...(input.executorRegistry ? { executorRegistry: input.executorRegistry } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.workspacePath ? { workspacePath: input.workspacePath } : {}),
       ...(input.branch ? { branch: input.branch } : {}),
       ...(input.fileOwnership ? { fileOwnership: input.fileOwnership } : {}),
       resourceUsage: { ...EMPTY_USAGE },
       createdAt: at,
-      startedAt: at,
       updatedAt: at,
     }
     await via.createChild(child)
@@ -573,11 +745,11 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
         priority: run.priority,
         maxConcurrentChildren: 1,
       }
-      const queued = await store.updateChildIfCurrent(
-        childRunId,
-        { status: child.status, updatedAt: child.updatedAt },
-        { status: "queued", waitingReason: CHILD_ADMISSION_WAITING_REASON, updatedAt: now() }
-      )
+      const queued = await store.updateChildIfCurrent(childRunId, child, {
+        status: "queued",
+        waitingReason: CHILD_ADMISSION_WAITING_REASON,
+        updatedAt: now(),
+      })
       if (!queued) throw new Error(`Durable child ${childRunId} changed before admission`)
       admissionSignal.throwIfAborted()
       scheduler.enqueue({
@@ -599,11 +771,31 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
         throw new Error(`Durable AgentTeam run ${run.id} is paused`)
       }
       await assertBudget(childRunId, run)
-      const started = await store.updateChildIfCurrent(
-        childRunId,
-        { status: child.status, updatedAt: child.updatedAt },
-        { status: "running", waitingReason: undefined, updatedAt: now() }
+      const eligibility = await assessStoredTaskRecovery(
+        store,
+        run.id,
+        child.taskId,
+        now(),
+        childRunId
       )
+      if (!eligibility.eligible) {
+        await store.updateRun(run.id, {
+          status: "needs_input",
+          recoveryReason: eligibility.reason,
+          updatedAt: now(),
+        })
+        await store.updateChildIfCurrent(child.id, child, {
+          status: "needs_input",
+          waitingReason: eligibility.reason,
+          updatedAt: now(),
+        })
+        throw new Error(eligibility.reason)
+      }
+      const started = await store.updateChildIfCurrent(childRunId, child, {
+        status: "running",
+        waitingReason: undefined,
+        updatedAt: now(),
+      })
       if (!started) throw new Error(`Durable child ${childRunId} changed during admission`)
       await assertRunnable(childRunId, admissionSignal)
       const result = await operation(admissionSignal)
@@ -678,6 +870,8 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
       replay: AgentTeamCheckpoint["replay"]
       sideEffects: AgentTeamSideEffect[]
       workspaceCommit?: string
+      expectedDispatchEpoch?: number
+      expectedDispatchAttempt?: number
     }
   ): Promise<AgentTeamCheckpoint> => {
     const child = await store.getChild(childRunId)
@@ -687,6 +881,8 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     return store.markCheckpoint({
       runId: child.runId,
       childRunId,
+      expectedDispatchEpoch: input.expectedDispatchEpoch,
+      expectedDispatchAttempt: input.expectedDispatchAttempt,
       trajectorySequence: input.trajectorySequence,
       decisionVersion: child.decisionVersion ?? run.decisionVersion,
       replay: input.replay,
@@ -696,40 +892,116 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     })
   }
 
+  const requireRecoveryAdmission = async (child: AgentTeamChildRun): Promise<void> => {
+    const eligibility = await assessStoredTaskRecovery(store, child.runId, child.taskId, now())
+    if (eligibility.eligible) return
+    await store.atomically(async (tx) => {
+      const current = await tx.getChild(child.id)
+      if (current)
+        await tx.updateChildIfCurrent(child.id, child, {
+          status: child.status === "completed" ? "completed" : "needs_input",
+          waitingReason: eligibility.reason,
+          updatedAt: now(),
+        })
+      const run = await tx.getRun(child.runId)
+      if (run && !TERMINAL_STATUSES.has(run.status))
+        await tx.updateRunIfCurrent(run.id, run, {
+          status: "needs_input",
+          recoveryReason: eligibility.reason,
+          updatedAt: now(),
+        })
+    })
+    throw new Error(`${eligibility.reason}: recovery requires stop proof and a safe checkpoint`)
+  }
+
   const recover = async (): Promise<RecoveryOutcome[]> => {
-    const runs = await store.listRecoveryCandidates()
     const outcomes: RecoveryOutcome[] = []
-    for (const run of runs) {
-      const children = (await store.listChildren(run.id)).filter(
-        (child) => !TERMINAL_STATUSES.has(child.status)
-      )
-      const checkpoints = await Promise.all(
-        children.map((child) => store.getLatestCheckpoint(child.id))
-      )
-      const trajectory = await store.listTrajectory(run.id)
-      const replaySafety = await Promise.all(
-        children.map((child, index) =>
-          isStoredChildReplaySafe(store, child.id, checkpoints[index], trajectory)
+    for (const run of await store.listRecoveryCandidates()) {
+      const children = await store.listChildren(run.id)
+      if (run.stop?.state === "requested" || run.stop?.state === "unconfirmed") {
+        const at = now()
+        for (const child of children) {
+          const proof = childStopProof(child, at)
+          if (!isChildSettled(child) && proof) {
+            await store.updateChildIfCurrent(child.id, child, {
+              status: "terminated",
+              stop: {
+                state: "confirmed",
+                epoch: child.dispatchEpoch ?? 0,
+                requestedAt: child.stop?.requestedAt ?? run.stop.requestedAt,
+                proof,
+              },
+              completedAt: at,
+              updatedAt: at,
+            })
+          } else if ((await isStoredChildStopped(store, child, at)) && !isChildSettled(child)) {
+            const epoch = child.dispatchEpoch ?? 0
+            await store.updateChildIfCurrent(child.id, child, {
+              status: "terminated",
+              settledEpoch: epoch,
+              stop: {
+                state: "confirmed",
+                epoch,
+                requestedAt: run.stop.requestedAt,
+                proof: { kind: "ack", epoch, at },
+              },
+              completedAt: at,
+              updatedAt: at,
+            })
+          }
+        }
+        const confirmed = (await store.listChildren(run.id)).every(
+          (child) =>
+            isChildSettled(child) || !!childStopProof(child, at) || isChildNeverStarted(child)
+        )
+        const status = confirmed
+          ? run.stop.action === "terminate"
+            ? "terminated"
+            : "cancelled"
+          : "needs_input"
+        if (
+          await store.updateRunIfCurrent(run.id, run, {
+            status,
+            completedAt: confirmed ? at : undefined,
+            recoveryReason: confirmed ? undefined : "stop_unconfirmed",
+            stop: { ...run.stop, state: confirmed ? "confirmed" : "unconfirmed", proof: undefined },
+            updatedAt: at,
+          })
+        ) {
+          outcomes.push({ runId: run.id, status })
+        }
+        continue
+      }
+      const assessments = await Promise.all(
+        [...new Set(children.map((child) => child.taskId))].map((taskId) =>
+          assessStoredTaskRecovery(store, run.id, taskId, now())
         )
       )
-      const uncertain = replaySafety.some((safe) => !safe)
-      const status: RecoveryOutcome["status"] = uncertain ? "needs_input" : "recovering"
+      const refusal =
+        assessments.find((result) => !result.eligible && result.reason === "stop_unconfirmed") ??
+        assessments.find((result) => !result.eligible)
+      const status = refusal ? "needs_input" : "recovering"
       const at = now()
-      const recovered = await store.updateRunIfCurrent(run.id, run, {
-        status,
-        updatedAt: at,
-        recoveryReason: uncertain ? "uncertain_side_effect" : "checkpoint_replay",
-      })
-      if (!recovered) continue
-      await Promise.all(
-        children.map((child) =>
-          store.updateChildIfCurrent(
-            child.id,
-            { status: child.status, updatedAt: child.updatedAt },
-            { status, updatedAt: at }
-          )
-        )
+      if (
+        !(await store.updateRunIfCurrent(run.id, run, {
+          status,
+          recoveryReason: refusal && !refusal.eligible ? refusal.reason : "checkpoint_replay",
+          updatedAt: at,
+        }))
       )
+        continue
+      for (const child of children.filter(
+        (child) =>
+          !isChildSettled(child) && !(child.status === "queued" && isChildNeverStarted(child))
+      )) {
+        await store.updateChildIfCurrent(child.id, child, {
+          status: child.status === "completed" ? "completed" : status,
+          ...(refusal && !refusal.eligible && refusal.childRunIds.includes(child.id)
+            ? { waitingReason: refusal.reason }
+            : {}),
+          updatedAt: at,
+        })
+      }
       outcomes.push({ runId: run.id, status })
     }
     return outcomes
@@ -751,36 +1023,55 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
       throw new Error(`Durable AgentTeam run ${run.id} cannot be retried from ${run.status}`)
     }
 
-    const checkpoint = await store.getLatestCheckpoint(childRunId)
-    const safeToMigrate = await isStoredChildReplaySafe(store, childRunId, checkpoint)
-    const changesHost =
-      requestedHostRef !== undefined &&
-      child.hostRef !== undefined &&
-      requestedHostRef !== child.hostRef
-    if (changesHost && !safeToMigrate) {
-      throw new Error("Cross-host retry requires a safe checkpoint")
-    }
-
-    // Unsafe automatic retries remain pinned to the authenticated source host.
-    // beginDurableDispatch consumes this marker before clearing waitingReason.
-    const retryHostRef =
-      requestedHostRef ?? (!safeToMigrate && child.hostRef ? child.hostRef : undefined)
+    await requireRecoveryAdmission(child)
+    const retryHostRef = requestedHostRef
     const at = now()
-    const retried = await store.updateChildIfCurrent(childRunId, child, {
-      status: "queued",
-      error: undefined,
-      dispatchLeaseId: undefined,
-      dispatchLeaseExpiresAt: undefined,
-      waitingReason: retryHostRef ? `retry_host:${retryHostRef}` : undefined,
-      updatedAt: at,
+    let retryRefusal: string | undefined
+    await store.atomically(async (tx) => {
+      const currentRun = await tx.getRun(run.id)
+      if (!currentRun || JSON.stringify(currentRun.stop) !== JSON.stringify(run.stop))
+        throw new Error("Run stop changed before retry")
+      const children = await tx.listChildren(run.id)
+      const assessments = await Promise.all(
+        [...new Set(children.map((child) => child.taskId))].map((taskId) =>
+          assessTaskRecovery(run.id, taskId, tx)
+        )
+      )
+      const allEligible = assessments.every((result) => result.eligible)
+      if (run.stop && !allEligible) {
+        await tx.updateRunIfCurrent(run.id, run, {
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+          stop: { ...run.stop, state: "unconfirmed" },
+          updatedAt: at,
+        })
+        retryRefusal = "stop_unconfirmed: run stop barrier still has unconfirmed children"
+        return
+      }
+      const eligibility = await assessTaskRecovery(child.runId, child.taskId, tx)
+      if (!eligibility.eligible) throw new Error(eligibility.reason)
+      if (
+        !(await tx.updateChildIfCurrent(childRunId, child, {
+          status: "queued",
+          error: undefined,
+          dispatchLeaseId: undefined,
+          dispatchLeaseExpiresAt: undefined,
+          waitingReason: retryHostRef ? `retry_host:${retryHostRef}` : undefined,
+          updatedAt: at,
+        }))
+      )
+        throw new Error(`Durable child ${childRunId} changed before retry`)
+      if (
+        !(await tx.updateRunIfCurrent(run.id, run, {
+          status: "recovering",
+          recoveryReason: retryHostRef ? "operator_retry_host" : "operator_retry_auto",
+          ...(allEligible ? { stop: undefined } : {}),
+          updatedAt: at,
+        }))
+      )
+        throw new Error(`Durable AgentTeam run ${run.id} changed before retry`)
     })
-    if (!retried) throw new Error(`Durable child ${childRunId} changed before retry`)
-    const recovering = await store.updateRunIfCurrent(run.id, run, {
-      status: "recovering",
-      recoveryReason: retryHostRef ? "operator_retry_host" : "operator_retry_auto",
-      updatedAt: at,
-    })
-    if (!recovering) throw new Error(`Durable AgentTeam run ${run.id} changed before retry`)
+    if (retryRefusal) throw new Error(retryRefusal)
     const updated = await store.getChild(childRunId)
     if (!updated) throw new Error(`Durable child disappeared during retry: ${childRunId}`)
     return updated
@@ -793,76 +1084,188 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
     const control = controls.get(childRunId)
-    if (["completed", "failed", "cancelled", "terminated"].includes(child.status)) return
+    if (
+      isChildSettled(child) ||
+      (["cancelled", "terminated"].includes(child.status) && childStopProof(child, now()))
+    )
+      return
     if (action === "resume") {
       const run = await store.getRun(child.runId)
-      if (!run || TERMINAL_STATUSES.has(run.status)) {
-        throw new Error(`Durable child ${childRunId} cannot resume after its run stopped`)
-      }
-    }
-    if (action === "terminate") {
-      admissions
-        .get(childRunId)
-        ?.controller.abort(new DOMException("Child terminated", "AbortError"))
-    }
-    // Pause is cooperative: never kill an in-flight tool call. The current
-    // turn reaches its next durable boundary, while new admissions wait.
-    if (action === "pause") {
-      const pausingAt = now()
-      const admitted = await store.updateChildIfCurrent(
-        childRunId,
-        { status: child.status, updatedAt: child.updatedAt },
-        { status: "pausing", updatedAt: pausingAt }
+      if (
+        !run ||
+        TERMINAL_STATUSES.has(run.status) ||
+        run.stop?.state === "requested" ||
+        run.stop?.state === "unconfirmed"
       )
-      if (!admitted) {
-        const changed = await store.getChild(childRunId)
-        if (
-          changed &&
-          ["completed", "failed", "cancelled", "terminated"].includes(changed.status)
-        ) {
-          return
+        throw new Error(`Durable child ${childRunId} cannot resume after its run stopped`)
+      await requireRecoveryAdmission(child)
+      if (child.status === "queued") return
+      // A live resume itself can execute. Reserve its new epoch before calling
+      // the provider so a concurrent dispatch cannot consume the same proof.
+      const prepareResume = !hasRemoteDispatch(child) && !!control?.resume
+      const liveResume = prepareResume && control?.resumeStartsExecution !== false
+      const epoch = (child.dispatchEpoch ?? 0) + 1
+      const resumed = await store.atomically(async (tx) => {
+        const eligibility = await assessTaskRecovery(child.runId, child.taskId, tx)
+        if (!eligibility.eligible) return false
+        return tx.updateChildIfCurrent(childRunId, child, {
+          status: liveResume ? "running" : "queued",
+          ...(liveResume
+            ? {
+                dispatchEpoch: epoch,
+                stop: undefined,
+                fenceCapable: false,
+                fenceGraceMs: undefined,
+                leaseTtlMs: undefined,
+                lastRenewalSentAt: undefined,
+                dispatchLeaseId: undefined,
+                dispatchLeaseExpiresAt: undefined,
+              }
+            : {}),
+          remoteSessionId: undefined,
+          sessionId: undefined,
+          updatedAt: now(),
+        })
+      })
+      if (!resumed) {
+        await requireRecoveryAdmission(child)
+        throw new Error("Child changed before resume")
+      }
+      if (prepareResume) {
+        try {
+          await control!.resume!(liveResume ? epoch : undefined)
+        } catch (error) {
+          const current = await store.getChild(childRunId)
+          if (current && current.dispatchEpoch === epoch)
+            await store.updateChildIfCurrent(childRunId, current, {
+              status: "needs_input",
+              stop: { state: "unconfirmed", epoch, requestedAt: now() },
+              waitingReason: "stop_unconfirmed",
+              updatedAt: now(),
+            })
+          await store.updateRun(child.runId, {
+            status: "needs_input",
+            recoveryReason: "stop_unconfirmed",
+            updatedAt: now(),
+          })
+          throw error
         }
-        throw new Error(`Durable child ${childRunId} changed while pause was requested`)
       }
-      admissions.get(childRunId)?.controller.abort(new DOMException("Child paused", "AbortError"))
+      return
     }
-    const pauseSafe = action === "pause" ? await control?.pause?.() : undefined
-    if (action === "resume" && child.remoteSessionId) {
-      const checkpoint = await store.getLatestCheckpoint(childRunId)
-      if (!(await isStoredChildReplaySafe(store, childRunId, checkpoint))) {
-        throw new Error("Remote child resume requires a safe checkpoint")
+    admissions.get(childRunId)?.controller.abort(new DOMException(`Child ${action}`, "AbortError"))
+    const epoch = child.dispatchEpoch ?? 0
+    const requestedAt = now()
+    if (action === "terminate") {
+      // Serialize with executor start. A stale never-started snapshot must
+      // never certify an execution that won the start transaction first.
+      const requested = await store.atomically(async (tx) => {
+        const current = await tx.getChild(childRunId)
+        if (!current) throw new Error(`Unknown durable child: ${childRunId}`)
+        if (
+          isChildSettled(current) ||
+          (["cancelled", "terminated"].includes(current.status) && childStopProof(current, now()))
+        )
+          return undefined
+        if (
+          !(await tx.updateChildIfCurrent(childRunId, current, {
+            stop: { state: "requested", epoch: current.dispatchEpoch ?? 0, requestedAt },
+            updatedAt: requestedAt,
+          }))
+        )
+          throw new Error("Child changed before stop")
+        return current
+      })
+      if (!requested) return
+      const child = requested
+      const epoch = child.dispatchEpoch ?? 0
+      let proof = childStopProof(child, now())
+      let failure: unknown
+      if (!proof && (await isStoredChildStopped(store, child, now())))
+        proof = { kind: "ack", epoch, at: now() }
+      try {
+        // Even an already-paused executor may still own environment resources.
+        const ack = await control?.terminate?.()
+        if (hasRemoteDispatch(child) && ack?.epoch === epoch && ack.kind === "ack") proof = ack
+        if (!proof && !hasRemoteDispatch(child) && (await waitForLocalSettlement(childRunId)))
+          proof = { kind: "ack", epoch, at: now() }
+      } catch (error) {
+        failure = error
       }
+      const current = await store.getChild(childRunId)
+      if (!current || (current.dispatchEpoch ?? 0) !== epoch)
+        throw new Error("Child epoch changed during stop")
+      if (isChildSettled(current)) return
+      proof ??= childStopProof(current, now())
+      await store.updateChildIfCurrent(
+        childRunId,
+        current,
+        proof
+          ? {
+              status: "terminated",
+              stop: { state: "confirmed", epoch, requestedAt, proof },
+              completedAt: now(),
+              updatedAt: now(),
+            }
+          : {
+              status: "needs_input",
+              stop: { state: "unconfirmed", epoch, requestedAt },
+              waitingReason: "stop_unconfirmed",
+              updatedAt: now(),
+            }
+      )
+      if (!proof) {
+        await store.updateRun(child.runId, {
+          status: "needs_input",
+          recoveryReason: "stop_unconfirmed",
+          updatedAt: now(),
+        })
+        throw failure ?? new Error("stop_unconfirmed")
+      }
+      if (child.remoteSessionId) await remoteSessions.release(child.remoteSessionId)
+      return
     }
-    if (action === "resume" && !child.remoteSessionId) await control?.resume?.()
-    if (action === "terminate") await control?.terminate?.()
-    const current = await store.getChild(childRunId)
-    if (!current) throw new Error(`Durable child disappeared during ${action}: ${childRunId}`)
-    if (["completed", "failed", "cancelled", "terminated"].includes(current.status)) return
-    if (action === "pause" && current.status !== "pausing") return
-    if (action === "resume" && current.status !== child.status) return
-    const status =
-      action === "pause"
-        ? pauseSafe === false
-          ? "needs_input"
-          : "paused"
-        : action === "resume"
-          ? "queued"
-          : "terminated"
-    const patch = {
-      status,
-      ...(action === "resume" && child.remoteSessionId
-        ? { remoteSessionId: undefined, sessionId: undefined }
-        : {}),
-      ...(action === "terminate" ? { completedAt: now() } : {}),
-      updatedAt: now(),
-    } as const
-    await store.updateChildIfCurrent(
-      childRunId,
-      { status: current.status, updatedAt: current.updatedAt },
-      patch
+    if (
+      !(await store.updateChildIfCurrent(childRunId, child, {
+        status: "pausing",
+        updatedAt: requestedAt,
+      }))
     )
-    if (action === "terminate" && child.remoteSessionId) {
-      await remoteSessions.release(child.remoteSessionId)
+      throw new Error("Child changed before pause")
+    let safe = false
+    try {
+      safe = !!control?.pause && (await control.pause()) !== false
+      // A local interrupt only writes IPC. Its executor must actually exit
+      // before a pause can be confirmed, just like a local termination.
+      if (safe && !hasRemoteDispatch(child) && !isChildNeverStarted(child)) {
+        const settled = await waitForLocalSettlement(childRunId)
+        const latest = await store.getChild(childRunId)
+        safe = settled || (!!latest && (await isStoredChildStopped(store, latest, now())))
+      }
+    } catch {
+      /* Persist uncertainty below. */
+    }
+    const current = await store.getChild(childRunId)
+    if (!current || isChildSettled(current) || current.status !== "pausing") return
+    await store.updateChildIfCurrent(childRunId, current, {
+      status: safe ? "paused" : "needs_input",
+      waitingReason: safe ? undefined : "pause_unconfirmed",
+      updatedAt: now(),
+    })
+    if (!safe) {
+      await store.appendTrajectory({
+        runId: child.runId,
+        childRunId,
+        kind: "run_controlled",
+        correlationId: `pause-unconfirmed:${childRunId}:${epoch}:${requestedAt}`,
+        payload: { action: "pause_unconfirmed", dispatchEpoch: epoch },
+        createdAt: now(),
+      })
+      await store.updateRun(child.runId, {
+        status: "needs_input",
+        recoveryReason: "stop_unconfirmed",
+        updatedAt: now(),
+      })
     }
   }
 
@@ -870,11 +1273,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
     if (TERMINAL_STATUSES.has(child.status)) return
-    await store.updateChildIfCurrent(
-      childRunId,
-      { status: child.status, updatedAt: child.updatedAt },
-      { status: "sleeping", updatedAt: now() }
-    )
+    await store.updateChildIfCurrent(childRunId, child, { status: "sleeping", updatedAt: now() })
   }
 
   const wakeChild = (childRunId: string): Promise<void> => {
@@ -897,6 +1296,9 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     await setChildControlState(childRunId, "pause")
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
+    if (child.waitingReason === "pause_unconfirmed")
+      throw new Error("stop_unconfirmed: pause_unconfirmed")
+    await requireRecoveryAdmission(child)
     await store.appendTrajectory({
       runId: child.runId,
       childRunId,
@@ -916,6 +1318,7 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
   }): Promise<void> => {
     const child = await store.getChild(input.childRunId)
     if (!child) throw new Error(`Unknown durable child: ${input.childRunId}`)
+    await requireRecoveryAdmission(child)
     const bundle = createEvidenceBundle({
       store,
       runId: child.runId,
@@ -965,6 +1368,8 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
     prepareRun,
     registerChild,
     withChildAdmission,
+    trackChildExecution,
+    assessTaskRecovery,
     withWorkspaceLease,
     attachLiveControl,
     steer,

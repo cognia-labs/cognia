@@ -15,6 +15,9 @@ import {
  */
 
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
+import Dexie from "dexie"
+import { getLiveSidecarSessionIds } from "@/lib/claude/ipc"
+import { getLiveExternalAgentProcessIds } from "@/lib/ai/agent/external/agent-transport"
 import {
   createDurableTeamCoordinator as createCoordinator,
   isStoredChildReplaySafe,
@@ -30,9 +33,10 @@ import { createExecutionRun, getExecutionRun, runEventJournal } from "@/lib/db/e
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { isPathWithinRoot, normalizeFsPath } from "@/lib/files/permissions"
 import { isTauri } from "@/lib/tauri"
-import type { AgentTeam } from "@/types/agent/agent-team"
+import type { AgentTeam, TeammateRuntime } from "@/types/agent/agent-team"
 import type {
   AgentTeamCheckpoint,
+  AgentTeamChildRun,
   AgentTeamExecutionConstraints,
   AgentTeamTrajectoryEvent,
 } from "@/types/agent/agent-team-runtime"
@@ -151,6 +155,90 @@ export interface DurableTeamCoordinatorOptions {
   agingIntervalMs?: number
 }
 
+// Explicitly name the executor owner. New/plugin runtimes have no stop proof
+// until an authoritative registry is mapped here; never default to sidecar.
+const LOCAL_EXECUTOR_REGISTRIES = {
+  claude: "sidecar",
+  "claude-agent-sdk": "sidecar",
+  "ai-sdk": "sidecar",
+  openclaude: "external",
+  crush: "external",
+  "continue-dev": "external",
+  "rovo-dev": "external",
+  codebuff: "external",
+  auggie: "external",
+  "autohand-code": "external",
+  codebuddy: "external",
+  "command-code": "external",
+  kilocode: "external",
+  "mistral-vibe": "external",
+  "mimo-code": "external",
+  "hermes-agent": "external",
+  "oh-my-pi": "external",
+  muse: "external",
+  amp: "external",
+  zcode: "external",
+  codex: "external",
+  "codex-acp": "external",
+  "codex-app-server": "external",
+  "claude-code": "external",
+  "gemini-cli": "external",
+  "antigravity-acp": "external",
+  "cursor-cli": "external",
+  "copilot-cli": "external",
+  kiro: "external",
+  "qwen-code": "external",
+  "pi-rpc": "external",
+  droid: "external",
+  devin: "external",
+  "minimax-code": "external",
+  grok: "external",
+  kimi: "external",
+  cline: "external",
+  qoder: "external",
+  goose: "external",
+  aider: "external",
+  "opencode-acp": "external",
+  "opencode-server": "external",
+} as const satisfies Record<TeammateRuntime | "claude-agent-sdk" | "ai-sdk", "sidecar" | "external">
+
+async function isLocalExecutorStopped(
+  runtime: string,
+  sessionId?: string,
+  executorRegistry?: AgentTeamChildRun["executorRegistry"]
+): Promise<boolean | undefined> {
+  if (!Object.hasOwn(LOCAL_EXECUTOR_REGISTRIES, runtime)) return undefined
+  if (
+    executorRegistry !== undefined &&
+    executorRegistry !== "sidecar" &&
+    executorRegistry !== "external-process"
+  )
+    return undefined
+  const defaultRegistry =
+    LOCAL_EXECUTOR_REGISTRIES[runtime as keyof typeof LOCAL_EXECUTOR_REGISTRIES]
+  if (
+    executorRegistry === "external-process" ||
+    (!executorRegistry && defaultRegistry === "external")
+  ) {
+    const processes = await getLiveExternalAgentProcessIds()
+    // ACP/Codex native session ids are not Rust process ids. Without a
+    // process-to-session binding, only a wholly quiescent owning registry is proof.
+    // Legacy preset names can also name network executors: their absence
+    // from the process table is not stop evidence without an owner binding.
+    if (processes === undefined) return undefined
+    if (processes.size > 0) return false
+    return executorRegistry === "external-process" ? true : undefined
+  }
+  const sessions = await getLiveSidecarSessionIds()
+  // Old rows do not identify which Host actually ran their executor.
+  if (!executorRegistry) return undefined
+  return sessions === undefined
+    ? undefined
+    : sessionId
+      ? !sessions.has(sessionId)
+      : sessions.size === 0
+}
+
 export function createDurableTeamCoordinator(options: DurableTeamCoordinatorOptions = {}) {
   const coordinator = createCoordinator<AgentTeamExecutionConstraints>({
     store: options.store ?? dexieTeamRunStore,
@@ -158,6 +246,12 @@ export function createDurableTeamCoordinator(options: DurableTeamCoordinatorOpti
     redactForPersistence: redactTeamTextForPersistence,
     paths: appTeamPathPolicy,
     remoteSessions: fleetTeamRemoteSessions,
+    // Some recovery gates run inside a Dexie transaction. Keep it alive while
+    // Rust answers; a reload must not turn an IPC wait into an auto-commit.
+    localSessions: {
+      isStopped: (runtime, sessionId, registry) =>
+        Dexie.waitFor(isLocalExecutorStopped(runtime, sessionId, registry)),
+    },
     ...(options.now ? { now: options.now } : {}),
     ...(options.globalConcurrency !== undefined
       ? { globalConcurrency: options.globalConcurrency }

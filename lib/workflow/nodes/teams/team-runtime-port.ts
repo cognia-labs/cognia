@@ -21,6 +21,8 @@ export interface TeamWorkflowNodes {
   run: TeamNodeExecutor
   /** `action.team.task.dispatch` */
   dispatchTask: TeamNodeExecutor
+  /** Re-check durable task stop proof and replay safety before an automatic retry. */
+  assertDispatchRetry?: (ctx: StepExecutionContext, executionSettled?: boolean) => Promise<void>
   /** `action.team.task.review` */
   reviewTask: TeamNodeExecutor
   /** `action.team.reconcile` */

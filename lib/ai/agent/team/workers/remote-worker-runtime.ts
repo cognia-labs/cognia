@@ -212,7 +212,7 @@ export interface RemoteWorkerRunInput {
 export interface RemoteWorkerTurnControl {
   steer(message: string, commandId: string): Promise<void>
   pause(commandId: string): Promise<void>
-  terminate(commandId: string): Promise<void>
+  terminate(commandId: string): Promise<void | import("@cognia/agent-orchestration").StopProof>
 }
 
 /**
@@ -227,6 +227,13 @@ export interface RemoteWorkerTurnControl {
  */
 export interface RemoteWorkerOutcome extends AgentTurnOutcome {
   recoveryRequired?: boolean
+  /**
+   * Dormant until the WP2a/WP3 worker receipt is wired. A completed turn still
+   * projects its result without this field, but its executor remains
+   * unconfirmed (waitingReason/stop = stop_unconfirmed) and cannot be replayed.
+   * Only the worker can acknowledge closed admission and empty TOOL groups.
+   */
+  disposalProof?: import("@cognia/agent-orchestration").StopProof
 }
 
 export interface RemoteWorkerRuntime {

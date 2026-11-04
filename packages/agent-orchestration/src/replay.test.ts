@@ -5,6 +5,9 @@ import {
   isChildReplaySafe,
   ownsDispatchAttempt,
   planDispatchAttempt,
+  assessRecoveryEligibility,
+  deriveFenceExpiryProof,
+  childStopProof,
 } from "./replay"
 
 function checkpoint(overrides: Partial<AgentTeamCheckpoint> = {}): AgentTeamCheckpoint {
@@ -32,6 +35,166 @@ function event(sequence: number, kind: AgentTeamTrajectoryEvent["kind"], childRu
     createdAt: sequence,
   }
 }
+
+describe("task recovery admission", () => {
+  it("does not treat a completed legacy row without startup metadata as never started", () => {
+    const child = contractChild({ status: "completed" })
+    expect(
+      assessRecoveryEligibility({ runId: child.runId, taskId: child.taskId }, [child], [], [], 100)
+    ).toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+  })
+  it("requires current epoch disposal ACK for a completed child, not turn completion or expiry", () => {
+    const child = contractChild({ status: "completed", startedAt: 1, dispatchEpoch: 2 })
+    const task = { runId: child.runId, taskId: child.taskId }
+    const ack = {
+      state: "confirmed" as const,
+      epoch: 2,
+      requestedAt: 1,
+      proof: { kind: "ack" as const, epoch: 2, at: 2 },
+    }
+    for (const candidate of [
+      child,
+      { ...child, settledEpoch: 2 },
+      { ...child, settledEpoch: 1, stop: ack },
+      { ...child, stop: ack },
+    ]) {
+      expect(
+        assessRecoveryEligibility(task, [candidate], [checkpoint()], [], 100, new Set([child.id]))
+      ).toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+    }
+    expect(
+      assessRecoveryEligibility(
+        task,
+        [{ ...child, settledEpoch: 2, stop: ack }],
+        [checkpoint()],
+        [],
+        100
+      )
+    ).toEqual({ eligible: true })
+  })
+  it("requires host-confirmed absence for a started local child after WebView reload", () => {
+    const child = contractChild({ status: "running", startedAt: 1, dispatchEpoch: 1 })
+    expect(
+      assessRecoveryEligibility(
+        { runId: child.runId, taskId: child.taskId },
+        [child],
+        [checkpoint()],
+        [],
+        100
+      )
+    ).toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+  })
+  it("preserves an explicitly unconfirmed local stop after process activity is lost", () => {
+    const child = contractChild({
+      status: "needs_input",
+      dispatchEpoch: 1,
+      startedAt: 1,
+      stop: { state: "unconfirmed", epoch: 1, requestedAt: 2 },
+    })
+    expect(
+      assessRecoveryEligibility(
+        { runId: child.runId, taskId: child.taskId },
+        [child],
+        [checkpoint()],
+        [],
+        100
+      )
+    ).toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+  })
+  const child = contractChild({
+    status: "failed",
+    dispatchEpoch: 2,
+    remoteDispatchEpoch: 2,
+    hostRef: "a",
+    startedAt: 1,
+  })
+  it("refuses settled Write plus connection loss, regardless of the next teammate or host", () => {
+    expect(
+      assessRecoveryEligibility(
+        { runId: child.runId, taskId: child.taskId },
+        [child],
+        [checkpoint()],
+        [],
+        100
+      )
+    ).toMatchObject({ eligible: false, reason: "stop_unconfirmed" })
+  })
+  it.each(["ack", "fence-expiry"] as const)(
+    "accepts a current %s proof and safe checkpoint",
+    (kind) => {
+      const stopped = {
+        ...child,
+        ...(kind === "fence-expiry"
+          ? { fenceCapable: true, lastRenewalSentAt: 1, leaseTtlMs: 1, fenceGraceMs: 0 }
+          : {}),
+        stop: {
+          state: "confirmed" as const,
+          epoch: 2,
+          requestedAt: 1,
+          proof: { kind, epoch: 2, at: 10 },
+        },
+      }
+      expect(
+        assessRecoveryEligibility(
+          { runId: child.runId, taskId: child.taskId },
+          [stopped],
+          [checkpoint()],
+          [],
+          100
+        ).eligible
+      ).toBe(true)
+      expect(
+        assessRecoveryEligibility(
+          { runId: child.runId, taskId: child.taskId },
+          [{ ...stopped, dispatchEpoch: 3 }],
+          [checkpoint()],
+          [],
+          100
+        ).eligible
+      ).toBe(false)
+    }
+  )
+  it("does not reuse a recorded fence proof after a later renewal was sent", () => {
+    const fenced = {
+      ...child,
+      fenceCapable: true,
+      lastRenewalSentAt: 1,
+      leaseTtlMs: 10,
+      fenceGraceMs: 5,
+      stop: {
+        state: "confirmed" as const,
+        epoch: 2,
+        requestedAt: 1,
+        proof: { kind: "fence-expiry" as const, epoch: 2, at: 16 },
+      },
+    }
+    expect(childStopProof(fenced, 16)?.kind).toBe("fence-expiry")
+    expect(childStopProof({ ...fenced, lastRenewalSentAt: 17 }, 20)).toBeUndefined()
+  })
+  it("counts expiry from renewal sent, refuses old workers and a newer lease epoch", () => {
+    const fencing = {
+      ...child,
+      fenceCapable: true,
+      lastRenewalSentAt: 100,
+      leaseTtlMs: 60,
+      fenceGraceMs: 30,
+      dispatchLeaseExpiresAt: 160,
+    }
+    expect(deriveFenceExpiryProof(fencing, 189)).toBeUndefined()
+    expect(deriveFenceExpiryProof(fencing, 190)).toEqual({
+      kind: "fence-expiry",
+      epoch: 2,
+      at: 190,
+    })
+    expect(deriveFenceExpiryProof({ ...fencing, fenceCapable: false }, 1000)).toBeUndefined()
+    expect(
+      deriveFenceExpiryProof(
+        { ...fencing, stop: { state: "requested", epoch: 1, requestedAt: 1 } },
+        1000
+      )
+    ).toBeUndefined()
+  })
+})
 
 describe("isChildReplaySafe", () => {
   it("allows replay from a safe checkpoint with no later remote work", () => {

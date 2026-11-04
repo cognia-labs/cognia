@@ -13,6 +13,11 @@ import { CircuitOpenError, resetCircuitBreaker } from "./circuit-breaker"
 import { addPluginCatalogEntry, __resetPluginCatalogForTesting } from "@/lib/workflow/nodes/catalog"
 import { workflowVersionDigest } from "@/lib/workflow/versioning/version-snapshot"
 import {
+  installTeamWorkflowNodes,
+  __resetTeamWorkflowNodesForTesting,
+  type TeamWorkflowNodes,
+} from "@/lib/workflow/nodes/teams/team-runtime-port"
+import {
   DEFAULT_WORKFLOW_SETTINGS,
   type StepExecutionContext,
   type TriggerEvent,
@@ -91,6 +96,88 @@ async function buildInput(opts: {
     securityContext: opts.securityContext,
   }
 }
+
+describe("team dispatch automatic retry", () => {
+  afterEach(__resetTeamWorkflowNodesForTesting)
+  const teamInput = async () => {
+    const input = await buildInput({})
+    const teamNode: WorkflowNode = {
+      ...node,
+      type: "action.team.task.dispatch",
+      data: {
+        label: "dispatch",
+        params: { teamId: "t", taskId: "task", title: "task", description: "work" },
+      },
+    }
+    return {
+      ...input,
+      node: teamNode,
+      workflow: { ...input.workflow, nodes: [teamNode] },
+      retryPolicy: { attempts: 2, backoff: "fixed" as const, baseMs: 0 },
+    }
+  }
+  it("refuses teammate rotation without proof even after the executor rejected", async () => {
+    const execute = jest.fn(async () => {
+      throw new Error("connection closed")
+    })
+    const assertDispatchRetry = jest.fn(async () => {
+      throw new Error("stop_unconfirmed")
+    })
+    installTeamWorkflowNodes(async () => ({ assertDispatchRetry }) as unknown as TeamWorkflowNodes)
+    registerNodeExecutor({
+      kind: "action.team.task.dispatch",
+      typeVersion: 1,
+      retryable: true,
+      execute,
+    })
+    await expect(runStep(await teamInput())).rejects.toMatchObject({
+      name: "NeedsHumanError",
+      needsHuman: true,
+      retryable: false,
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(assertDispatchRetry).toHaveBeenCalledWith(expect.anything(), true)
+  })
+  it("does not treat a timeout after abort as settlement", async () => {
+    let end!: () => void
+    const execute = jest.fn(
+      () =>
+        new Promise<{ output: unknown }>((resolve) => {
+          end = () => resolve({ output: "late" })
+        })
+    )
+    const assertDispatchRetry = jest.fn(async () => undefined)
+    installTeamWorkflowNodes(async () => ({ assertDispatchRetry }) as unknown as TeamWorkflowNodes)
+    registerNodeExecutor({
+      kind: "action.team.task.dispatch",
+      typeVersion: 1,
+      retryable: true,
+      timeoutMs: 5,
+      execute,
+    })
+    await expect(runStep(await teamInput())).rejects.toMatchObject({ name: "NeedsHumanError" })
+    expect(assertDispatchRetry).toHaveBeenCalledWith(expect.anything(), false)
+    expect(execute).toHaveBeenCalledTimes(1)
+    end()
+  })
+  it("retries after both settlement and the installed task gate pass", async () => {
+    const execute = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("provider unavailable"))
+      .mockResolvedValueOnce({ output: "new teammate" })
+    const assertDispatchRetry = jest.fn(async () => undefined)
+    installTeamWorkflowNodes(async () => ({ assertDispatchRetry }) as unknown as TeamWorkflowNodes)
+    registerNodeExecutor({
+      kind: "action.team.task.dispatch",
+      typeVersion: 1,
+      retryable: true,
+      execute,
+    })
+    expect((await runStep(await teamInput())).output).toBe("new teammate")
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(assertDispatchRetry).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe("runStep pin short-circuit", () => {
   it("returns the pinned value WITHOUT invoking the executor when honorPinData is true", async () => {

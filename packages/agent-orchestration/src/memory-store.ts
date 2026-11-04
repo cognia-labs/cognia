@@ -20,12 +20,14 @@ import type {
   AgentTeamTrajectoryEvent,
 } from "./records"
 import {
+  DEFAULT_DISPATCH_LEASE_TTL_MS,
   assertChildBoundary,
   assertDecisionBoundary,
   assertRunBoundary,
   canAdvanceRemoteEvent,
   checkpointChildPatch,
   dispatchLeaseClaimPatch,
+  rejectedEpochEvent,
   dispatchLeaseRenewPatch,
   dispatchLeaseSettlePatch,
   evidenceInScope,
@@ -177,6 +179,15 @@ export function createMemoryTeamRunStore<TConstraints = unknown>(
     },
     async updateChildIfCurrent(id, expected, patch) {
       const child = state.children.get(id)
+      if (child && (child.dispatchEpoch ?? 0) !== (expected.dispatchEpoch ?? 0))
+        appendEvent(
+          rejectedEpochEvent(
+            child,
+            expected.dispatchEpoch ?? 0,
+            "child_projection",
+            patch.updatedAt ?? child.updatedAt
+          )
+        )
       if (!matchesControlState(child, expected)) return false
       state.children.set(id, apply(child as AgentTeamChildRun, patch))
       return true
@@ -185,32 +196,58 @@ export function createMemoryTeamRunStore<TConstraints = unknown>(
     async claimDispatchLease(input) {
       const child = state.children.get(input.childRunId)
       if (!child) return undefined
+      if (input.expectedEpoch !== undefined && (child.dispatchEpoch ?? 0) !== input.expectedEpoch)
+        appendEvent(rejectedEpochEvent(child, input.expectedEpoch, "claim", input.now))
       const patch = dispatchLeaseClaimPatch(child, input)
       if (!patch) return undefined
       const next = apply(child, patch)
       state.children.set(child.id, next)
       return { ...next }
     },
-    async renewDispatchLease(childRunId, expectedLeaseId, now, ttlMs) {
+    async renewDispatchLease(childRunId, expectedLeaseId, now, ttlMs, expectedEpoch = 0) {
       const child = state.children.get(childRunId)
-      const patch = dispatchLeaseRenewPatch(child, expectedLeaseId, now, ttlMs)
+      if (
+        child?.dispatchLeaseId === expectedLeaseId &&
+        (child.dispatchEpoch ?? 0) === expectedEpoch
+      )
+        state.children.set(
+          childRunId,
+          apply(child, {
+            lastRenewalSentAt: now,
+            leaseTtlMs: ttlMs ?? DEFAULT_DISPATCH_LEASE_TTL_MS,
+          })
+        )
+      const patch = dispatchLeaseRenewPatch(child, expectedLeaseId, now, ttlMs, expectedEpoch)
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        appendEvent(rejectedEpochEvent(child, expectedEpoch, "lease_write", now))
       if (!child || !patch) return false
       state.children.set(childRunId, apply(child, patch))
       return true
     },
-    async settleDispatchLease(childRunId, expectedLeaseId, now) {
+    async settleDispatchLease(childRunId, expectedLeaseId, now, expectedEpoch = 0) {
       const child = state.children.get(childRunId)
-      const patch = dispatchLeaseSettlePatch(child, expectedLeaseId, now)
+      const patch = dispatchLeaseSettlePatch(child, expectedLeaseId, now, expectedEpoch)
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        appendEvent(rejectedEpochEvent(child, expectedEpoch, "lease_write", now))
       if (!child || !patch) return false
       state.children.set(childRunId, apply(child, patch))
       return true
     },
-    async advanceRemoteEvent(childRunId, expectedPreviousEventId, eventId, now, envelope) {
+    async advanceRemoteEvent(
+      childRunId,
+      expectedPreviousEventId,
+      eventId,
+      now,
+      envelope,
+      expectedEpoch = 0
+    ) {
       const object = envelope
         ? await createContentObject(JSON.stringify(envelope.event), "application/json", now)
         : undefined
       const child = state.children.get(childRunId)
-      if (!canAdvanceRemoteEvent(child, expectedPreviousEventId)) return false
+      if (child && (child.dispatchEpoch ?? 0) !== expectedEpoch)
+        appendEvent(rejectedEpochEvent(child, expectedEpoch, "advance", now))
+      if (!canAdvanceRemoteEvent(child, expectedPreviousEventId, expectedEpoch)) return false
       if (envelope && object) {
         if (child.runId !== envelope.runId) throw new Error("Remote event belongs to another run")
         state.content.set(object.hash, object)
@@ -232,8 +269,31 @@ export function createMemoryTeamRunStore<TConstraints = unknown>(
       const object = content
         ? await createContentObject(content.data, content.mimeType, input.createdAt)
         : undefined
+      const child = input.childRunId ? state.children.get(input.childRunId) : undefined
+      if (
+        (input.expectedDispatchEpoch !== undefined &&
+          (!child || (child.dispatchEpoch ?? 0) !== input.expectedDispatchEpoch)) ||
+        (input.expectedDispatchAttempt !== undefined &&
+          child?.attempt !== input.expectedDispatchAttempt)
+      ) {
+        if (child)
+          appendEvent(
+            rejectedEpochEvent(
+              child,
+              input.expectedDispatchEpoch ?? 0,
+              "trajectory",
+              input.createdAt
+            )
+          )
+        throw new Error("Dispatch epoch no longer owns trajectory")
+      }
       if (object) state.content.set(object.hash, object)
-      return appendEvent(input, object?.hash)
+      const {
+        expectedDispatchEpoch: _expectedEpoch,
+        expectedDispatchAttempt: _expectedAttempt,
+        ...event
+      } = input
+      return appendEvent(event, object?.hash)
     },
     async listTrajectory(runId, afterSequence = 0) {
       return (state.trajectory.get(runId) ?? [])
@@ -242,7 +302,30 @@ export function createMemoryTeamRunStore<TConstraints = unknown>(
     },
 
     async markCheckpoint(input) {
-      const checkpoint: AgentTeamCheckpoint = { ...input, id: newId("team-checkpoint") }
+      const child = input.childRunId ? state.children.get(input.childRunId) : undefined
+      if (
+        (input.expectedDispatchEpoch !== undefined &&
+          (!child || (child.dispatchEpoch ?? 0) !== input.expectedDispatchEpoch)) ||
+        (input.expectedDispatchAttempt !== undefined &&
+          child?.attempt !== input.expectedDispatchAttempt)
+      ) {
+        if (child)
+          appendEvent(
+            rejectedEpochEvent(
+              child,
+              input.expectedDispatchEpoch ?? 0,
+              "checkpoint",
+              input.createdAt
+            )
+          )
+        throw new Error("Dispatch epoch no longer owns checkpoint")
+      }
+      const {
+        expectedDispatchEpoch: _expectedEpoch,
+        expectedDispatchAttempt: _expectedAttempt,
+        ...record
+      } = input
+      const checkpoint: AgentTeamCheckpoint = { ...record, id: newId("team-checkpoint") }
       const key = input.childRunId ?? `run:${input.runId}`
       state.checkpoints.set(key, [...(state.checkpoints.get(key) ?? []), checkpoint])
       if (input.childRunId) {

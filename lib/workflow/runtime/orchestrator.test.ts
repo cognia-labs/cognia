@@ -1067,6 +1067,75 @@ describe("runWorkflow — startStepId (run from here)", () => {
 import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { createConcurrencyController } from "./concurrency-controller"
 
+describe("runWorkflow — resumable needs-human outcomes", () => {
+  it.each(
+    (["stop", "continue", "branch"] as const).flatMap((errorPolicy) =>
+      (["continue", "defaultValue", "errorBranch"] as const).map((onError) => ({
+        errorPolicy,
+        onError,
+      }))
+    )
+  )(
+    "parks before $errorPolicy/$onError error handling and re-enters the same run",
+    async ({ errorPolicy, onError }) => {
+      let attempts = 0
+      registerNodeExecutor({
+        kind: "action.test.needs-human" as never,
+        typeVersion: 1,
+        execute: async () => {
+          if (++attempts === 1)
+            throw Object.assign(new Error("stop_unconfirmed"), {
+              name: "NeedsHumanError",
+              needsHuman: true,
+              retryable: false,
+            })
+          return { output: "recovered" }
+        },
+      })
+      const workflow = buildWorkflow(
+        [
+          {
+            id: "wait",
+            type: "action.test.needs-human" as never,
+            typeVersion: 1,
+            position: { x: 0, y: 0 },
+            data: {
+              label: "Wait",
+              params: {},
+              errorHandling: { onError, defaultValue: "fallback" },
+            },
+          },
+          setNode("next", "done"),
+        ],
+        [{ id: "e", source: "wait", target: "next" }]
+      )
+      workflow.settings.errorPolicy = errorPolicy
+      // One attempt means zero automatic retries.
+      workflow.settings.retryDefaults = { ...workflow.settings.retryDefaults, attempts: 1 }
+      const first = await runWorkflow({ workflow, trigger, runId: "human-reentry" })
+      expect(first.status).toBe("waiting")
+      const row = await getDb().workflowRuns.get(first.runId)
+      expect(row?.completedAt).toBeUndefined()
+      expect(row?.lease).toBeUndefined()
+      expect(
+        (await listRunEvents(first.runId)).some(
+          (event) => event.type === "run_failed" || event.type === "run_completed"
+        )
+      ).toBe(false)
+      await flushFanout()
+      expect(mockEmitCompletionFanout).not.toHaveBeenCalled()
+      const resumed = await runWorkflow({ workflow, trigger, runId: first.runId })
+      expect(resumed.status).toBe("succeeded")
+      expect(attempts).toBe(2)
+      expect(
+        (await listRunEvents(first.runId)).some(
+          (event) => event.type === "step_completed" && event.stepId === "next"
+        )
+      ).toBe(true)
+    }
+  )
+})
+
 describe("runWorkflow — concurrent scheduling", () => {
   it("atomically rejects excess runs of one workflow without blocking other workflows", async () => {
     let active = 0

@@ -1,4 +1,9 @@
 import { dispatchTeammate, ExternalRuntimeUnavailableError } from "./dispatch-teammate"
+import { closeSession } from "@/lib/claude/ipc"
+jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
+  closeSession: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   startToolExecutionRun: jest.fn(async () => ({ id: "member-run" })),
@@ -188,6 +193,18 @@ const externalCancelRetiresSessionMock = jest.fn<boolean, unknown[]>(() => false
 // frozen spec.
 let externalCapabilityProfileMock: unknown
 let externalProtocolMock = "acp"
+let externalTransportMock = "stdio"
+let externalEndpointMock: string | undefined
+const knownLocalExternalProcessMock = jest.fn((_processId: string) => false)
+jest.mock("@/lib/ai/agent/external/agent-transport", () => ({
+  ...jest.requireActual("@/lib/ai/agent/external/agent-transport"),
+  isKnownLocalExternalAgentProcess: (processId: string) => knownLocalExternalProcessMock(processId),
+}))
+const remoteHostActiveMock = jest.fn(() => false)
+jest.mock("@/lib/tauri/transport-routing", () => ({
+  ...jest.requireActual("@/lib/tauri/transport-routing"),
+  isRemoteHostActive: () => remoteHostActiveMock(),
+}))
 jest.mock("@/lib/ai/agent/external/manager", () => ({
   getExternalAgentManager: () => ({
     execute: (...a: Parameters<typeof externalExecuteMock>) => externalExecuteMock(...a),
@@ -195,7 +212,14 @@ jest.mock("@/lib/ai/agent/external/manager", () => ({
     cancel: (...args: unknown[]) => externalCancelMock(...args),
     cancelRetiresSession: (...args: unknown[]) => externalCancelRetiresSessionMock(...args),
     getAgentCapabilityProfile: () => externalCapabilityProfileMock,
-    getAgent: () => ({ config: { protocol: externalProtocolMock } }),
+    getAgent: () => ({
+      config: {
+        protocol: externalProtocolMock,
+        transport: externalTransportMock,
+        process: { command: "agent" },
+        network: externalEndpointMock ? { endpoint: externalEndpointMock } : undefined,
+      },
+    }),
   }),
 }))
 
@@ -211,9 +235,30 @@ jest.mock("./twin-context", () => ({
 }))
 
 const beginDurableDispatchMock = jest.fn()
+function mockCurrentDispatch() {
+  beginDurableDispatchMock.mockResolvedValue({
+    childRunId: "current-child",
+    startLocalExecution: async () => {},
+    prepareTurnContext: async () => "",
+    capture: jest.fn(),
+    run: (operation: () => Promise<unknown>) => operation(),
+    complete: jest.fn(),
+    fail: jest.fn(),
+  })
+}
 jest.mock("../durable/durable-dispatch", () => ({
-  beginDurableDispatch: (...args: Parameters<typeof beginDurableDispatchMock>) =>
-    beginDurableDispatchMock(...args),
+  beginDurableDispatch: async (...args: Parameters<typeof beginDurableDispatchMock>) => {
+    const dispatch = await beginDurableDispatchMock(...args)
+    return dispatch
+      ? {
+          projectIfCurrent: async (project: () => void) => {
+            project()
+            return true
+          },
+          ...dispatch,
+        }
+      : dispatch
+  },
 }))
 
 jest.mock("../durable/durable-runtime", () => ({
@@ -239,6 +284,25 @@ const updateChildRunMock = jest.fn(async (..._args: unknown[]) => true)
 const settleDispatchLeaseMock = jest.fn(async (..._args: unknown[]) => true)
 const advanceRemoteEventMock = jest.fn(async (..._args: unknown[]) => true)
 jest.mock("@/lib/db/agent-team-runtime", () => ({
+  projectAgentTeamDispatchEpoch: async (
+    _child: string,
+    _epoch: number,
+    _now: number,
+    project: () => Promise<void>
+  ) => {
+    await project()
+    return true
+  },
+  projectAgentTeamDispatchEvent: async (
+    _child: string,
+    _epoch: number,
+    _now: number,
+    event: { type: string; sourceEventId?: string }
+  ) => {
+    if (event.sourceEventId?.includes(":remote:")) await projectRemoteEventMock(event)
+    else await projectChildLifecycleMock(event)
+    return true
+  },
   claimAgentTeamDispatchLease: (...args: Parameters<typeof claimDispatchLeaseMock>) =>
     claimDispatchLeaseMock(...args),
   getAgentTeamChildRun: (...args: Parameters<typeof getAgentTeamChildRunMock>) =>
@@ -407,6 +471,10 @@ function makeCtx(
 beforeEach(() => {
   jest.clearAllMocks()
   externalProtocolMock = "acp"
+  externalTransportMock = "stdio"
+  externalEndpointMock = undefined
+  knownLocalExternalProcessMock.mockReturnValue(false)
+  remoteHostActiveMock.mockReturnValue(false)
   externalCancelRetiresSessionMock.mockReset().mockReturnValue(false)
   resolveSendOptionsMock.mockResolvedValue({})
   isTauriMock.mockReturnValue(false)
@@ -452,6 +520,47 @@ beforeEach(() => {
 })
 
 describe("dispatchTeammate — text-only fallback", () => {
+  it.each([
+    ["stdio", false, "acp", undefined, true],
+    ["stdio", true, "acp", undefined, false],
+    ["websocket", false, "acp", undefined, false],
+    ["stdio", false, "acp", "https://executor.invalid", false],
+    ["stdio", false, "a2a", undefined, false],
+    ["stdio", false, "custom", undefined, false],
+  ] as const)(
+    "records the actual external executor owner for %s (remote=%s, protocol=%s, endpoint=%s)",
+    async (transport, remote, protocol, endpoint, processOwned) => {
+      isTauriMock.mockReturnValue(true)
+      externalTransportMock = transport
+      externalProtocolMock = protocol
+      externalEndpointMock = endpoint
+      knownLocalExternalProcessMock.mockReturnValue(!remote)
+      resolveExternalMock.mockResolvedValue("agent-1")
+      // Connecting may await before choosing a Host. The actual process
+      // origin, rather than the pre-admission snapshot, decides ownership.
+      externalExecuteMock.mockImplementation(async () => {
+        remoteHostActiveMock.mockReturnValue(remote)
+        return { success: true, finalResponse: "ok", sessionId: "native-session" }
+      })
+      const attachControl = jest.fn(async () => () => {})
+      mockCurrentDispatch()
+      const dispatch = await beginDurableDispatchMock()
+      beginDurableDispatchMock.mockResolvedValue({ ...dispatch, attachControl })
+      const { ctx } = makeCtx(makeTeammate({ config: { runtime: "codex" } }))
+      await dispatchTeammate(ctx, { taskId: "t1", prompt: "go" })
+      expect(beginDurableDispatchMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "codex",
+          executorRegistry: "unconfirmed",
+        })
+      )
+      expect(attachControl).toHaveBeenCalledWith(
+        expect.anything(),
+        "native-session",
+        processOwned ? "external-process" : "unconfirmed"
+      )
+    }
+  )
   it("runs the AI-SDK path off-desktop and records success", async () => {
     executeAgentMock.mockResolvedValue({ text: "the answer" })
     const { ctx, pool } = makeCtx(makeTeammate())
@@ -459,6 +568,9 @@ describe("dispatchTeammate — text-only fallback", () => {
     const result = await dispatchTeammate(ctx, { taskId: "t1", prompt: "do it" })
 
     expect(result.channel).toBe("text")
+    expect(beginDurableDispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ executorRegistry: "unconfirmed" })
+    )
     expect(result.text).toBe("the answer")
     expect(result.teammateId).toBe("tm1")
     expect(executeAgentMock).toHaveBeenCalledTimes(1)
@@ -637,10 +749,107 @@ describe("dispatchTeammate — text-only fallback", () => {
 })
 
 describe("dispatchTeammate — durable execution environment", () => {
+  it.each(["sidecar", "external"])(
+    "passes the origin child and dispatch epoch to %s processes",
+    async (channel) => {
+      isTauriMock.mockReturnValue(true)
+      mockCurrentDispatch()
+      const dispatch = await beginDurableDispatchMock()
+      beginDurableDispatchMock.mockResolvedValue({
+        ...dispatch,
+        dispatchEpoch: 7,
+        attachControl: jest.fn(),
+        trackLocalStop: jest.fn(),
+        bindLocalSidecarSession: jest.fn(async () => {}),
+      })
+      createSessionMock.mockResolvedValue({ id: "origin-session" })
+      getSessionMock.mockResolvedValue({ id: "origin-session", kind: "team" })
+      runAndCaptureMock.mockResolvedValue({ text: "answer" })
+      externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "answer" })
+      if (channel === "external") resolveExternalMock.mockResolvedValue("agent-1")
+      const { ctx } = makeCtx(
+        makeTeammate({ config: { runtime: channel === "external" ? "codex" : "claude" } })
+      )
+      await dispatchTeammate(ctx, { taskId: "t1", prompt: "work" })
+      const origin = { childRunId: "current-child", dispatchEpoch: 7 }
+      if (channel === "sidecar")
+        expect(runAndCaptureMock.mock.calls[0][2]).toMatchObject({ processOrigin: origin })
+      else
+        expect(externalExecuteMock.mock.calls[0][2]).toMatchObject({
+          context: { custom: { processOrigin: origin } },
+        })
+    }
+  )
+
+  it("passes admission cancellation through environment preparation without invoking the executor", async () => {
+    const admission = new AbortController()
+    mockCurrentDispatch()
+    const dispatch = await beginDurableDispatchMock()
+    beginDurableDispatchMock.mockResolvedValue({
+      ...dispatch,
+      attachEnvironment: jest.fn(),
+      setWorkspace: jest.fn(),
+      run: (operation: (signal: AbortSignal) => Promise<unknown>) => operation(admission.signal),
+    })
+    const { ctx } = makeCtx(makeTeammate(), {
+      repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+    })
+    Object.assign(ctx, {
+      durableEnvironment: {
+        adapter: {
+          prepare: async () => {
+            admission.abort(Object.assign(new Error("Child terminated"), { name: "AbortError" }))
+            return { executionRoot: "/repo" }
+          },
+          openChild: async () => ({ executionRoot: "/isolated", settle: async () => [] }),
+          dispose: async () => {},
+        },
+        profile: { id: "env-v1" },
+        preparedByRepository: new Map(),
+      },
+    })
+    await expect(dispatchTeammate(ctx, { taskId: "t1", prompt: "work" })).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    expect(executeAgentMock).not.toHaveBeenCalled()
+    expect(externalExecuteMock).not.toHaveBeenCalled()
+    expect(runAndCaptureMock).not.toHaveBeenCalled()
+    expect(runAgentsWorkflowsFusionMock).not.toHaveBeenCalled()
+  })
+
+  it("does not write task status when admission rejects before acquiring an epoch", async () => {
+    beginDurableDispatchMock.mockRejectedValue(new Error("Child already has an active dispatch"))
+    const { ctx, storeWriter } = makeCtx(makeTeammate())
+    await expect(
+      dispatchTeammate(ctx, { taskId: "t1", prompt: "work", recordToStore: true })
+    ).rejects.toThrow("Child already has an active dispatch")
+    expect(storeWriter.setTaskStatus).not.toHaveBeenCalled()
+  })
+  it("does not fail a newer completed task after stale-epoch rejection", async () => {
+    const projectIfCurrent = jest.fn(async (_project: () => void) => false)
+    beginDurableDispatchMock.mockResolvedValue({
+      childRunId: "child-1",
+      prepareTurnContext: async () => "",
+      capture: jest.fn(),
+      run: async () => {
+        throw new Error("Dispatch no longer owns this child attempt")
+      },
+      fail: jest.fn(),
+      projectIfCurrent,
+    })
+    const { ctx, storeWriter } = makeCtx(makeTeammate())
+    await expect(
+      dispatchTeammate(ctx, { taskId: "t1", prompt: "work", recordToStore: true })
+    ).rejects.toThrow("Dispatch no longer owns this child attempt")
+    expect(storeWriter.setTaskStatus).not.toHaveBeenCalled()
+    expect(projectIfCurrent).toHaveBeenCalled()
+  })
   it("preserves settlement and disposal errors and never reports success", async () => {
     executeAgentMock.mockResolvedValue({ text: "answer" })
     const complete = jest.fn()
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-1",
       capture: jest.fn(),
       attachEnvironment: jest.fn(),
@@ -681,6 +890,8 @@ describe("dispatchTeammate — durable execution environment", () => {
     executeAgentMock.mockResolvedValue({ text: "answer" })
     const fail = jest.fn(async () => undefined)
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-1",
       prepareTurnContext: async () => "",
       capture: jest.fn(),
@@ -706,6 +917,8 @@ describe("dispatchTeammate — durable execution environment", () => {
     const complete = jest.fn(async () => undefined)
     const attachEnvironment = jest.fn()
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-1",
       capture: jest.fn(),
       attachControl: jest.fn(),
@@ -846,6 +1059,8 @@ describe("dispatchTeammate — remote durable worker", () => {
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
     const fail = jest.fn()
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-remote",
       prepareTurnContext: async () => {
         process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "false"
@@ -872,6 +1087,8 @@ describe("dispatchTeammate — remote durable worker", () => {
     const wait = jest.fn()
     const fail = jest.fn()
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-remote",
       prepareTurnContext: async () => "",
       run: (operation: () => Promise<unknown>) => operation(),
@@ -903,6 +1120,8 @@ describe("dispatchTeammate — remote durable worker", () => {
   it("waits for a compatible worker when inherited permissions require the new contract", async () => {
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-remote",
       wait: jest.fn(async () => undefined),
       capture: jest.fn(),
@@ -939,11 +1158,17 @@ describe("dispatchTeammate — remote durable worker", () => {
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
     const complete = jest.fn(async () => undefined)
     const attachControl = jest.fn(async () => undefined)
+    const recordRemoteDisposal = jest.fn(async () => undefined)
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-remote",
+      dispatchEpoch: 1,
+      bindDispatchEpoch: jest.fn(),
       retryTargetHostRef: undefined,
       capture: jest.fn(),
       attachControl,
+      recordRemoteDisposal,
       attachEnvironment: jest.fn(),
       prepareTurnContext: jest.fn(async () => ""),
       setWorkspace: jest.fn(async () => undefined),
@@ -986,6 +1211,7 @@ describe("dispatchTeammate — remote durable worker", () => {
     ])
     claimDispatchLeaseMock.mockImplementation(async (input: unknown) => ({
       id: "child-remote",
+      dispatchEpoch: 2,
       dispatchLeaseId: (input as { leaseId: string }).leaseId,
     }))
     getAgentTeamChildRunMock.mockResolvedValue({ dispatchLeaseId: "dispatch:existing" })
@@ -1003,6 +1229,7 @@ describe("dispatchTeammate — remote durable worker", () => {
       })
       return {
         status: "completed",
+        disposalProof: { kind: "ack", epoch: 2, at: 3 },
         result: {
           status: "completed",
           text: "remote answer",
@@ -1034,10 +1261,11 @@ describe("dispatchTeammate — remote durable worker", () => {
       })
 
       expect(result.text).toBe("remote answer")
+      expect(recordRemoteDisposal).toHaveBeenCalledWith({ kind: "ack", epoch: 2, at: 3 })
       expect(remoteRunMock).toHaveBeenCalledWith(
         expect.objectContaining({
           hostRef: "device:worker-a",
-          commandId: "dispatch:existing",
+          commandId: expect.stringMatching(/^dispatch:child-remote:/),
           prompt: expect.not.stringContaining("alice@example.com"),
           handoff: expect.objectContaining({
             execution: expect.objectContaining({
@@ -1055,6 +1283,8 @@ describe("dispatchTeammate — remote durable worker", () => {
       expect(claimDispatchLeaseMock).toHaveBeenCalledWith(
         expect.objectContaining({
           hostRef: "device:worker-a",
+          fenceCapable: false,
+          fenceGraceMs: 30_000,
           executionFingerprint:
             remoteRunMock.mock.calls[0]![0].handoff.execution.executionFingerprint,
         })
@@ -1075,6 +1305,13 @@ describe("dispatchTeammate — remote durable worker", () => {
           executionRunId: expect.stringMatching(/^execution:team:/),
         })
       )
+      expect(remoteRunMock.mock.calls[0]![0].commandId).not.toBe("dispatch:existing")
+      expect(settleDispatchLeaseMock).toHaveBeenCalledWith(
+        "child-remote",
+        expect.any(String),
+        expect.any(Number),
+        2
+      )
       expect(settleDispatchLeaseMock).toHaveBeenCalledTimes(1)
       expect(complete).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1086,6 +1323,18 @@ describe("dispatchTeammate — remote durable worker", () => {
         settleDispatchLeaseMock.mock.invocationCallOrder[0]!
       )
       expect(pool.recordSuccess).toHaveBeenCalledWith("tm1")
+      const acknowledged = remoteRunMock.getMockImplementation()!
+      for (const disposalProof of [undefined, { kind: "ack", epoch: 1, at: 3 }]) {
+        recordRemoteDisposal.mockClear()
+        remoteRunMock.mockImplementationOnce(async (input: RemoteWorkerRunInput) => ({
+          ...(await acknowledged(input)),
+          disposalProof,
+        }))
+        await expect(
+          dispatchTeammate(ctx, { taskId: "task-1", prompt: "again" })
+        ).resolves.toMatchObject({ text: "remote answer" })
+        expect(recordRemoteDisposal).not.toHaveBeenCalled()
+      }
     } finally {
       delete process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH
     }
@@ -1146,6 +1395,110 @@ describe("dispatchTeammate — degraded text-channel diagnostic", () => {
 })
 
 describe("dispatchTeammate — tool-enabled sidecar path", () => {
+  it.each([false, true])(
+    "closes the child runtime and waits for disposal (failed=%s)",
+    async (failed) => {
+      isTauriMock.mockReturnValue(true)
+      mockCurrentDispatch()
+      const current = await beginDurableDispatchMock()
+      beginDurableDispatchMock.mockResolvedValue({
+        ...current,
+        attachControl: jest.fn(async () => undefined),
+        trackLocalStop: jest.fn(),
+      })
+      let disposed!: () => void
+      const proof = new Promise<void>((resolve) => {
+        disposed = resolve
+      })
+      runAndCaptureMock.mockImplementationOnce(async (_session, _prompt, _options, capture) => {
+        capture.onExecutorStarted(proof)
+        if (failed) throw new Error("capture failed with background jobs")
+        return { text: "done" }
+      })
+      let requested!: () => void
+      const closing = new Promise<void>((resolve) => {
+        requested = resolve
+      })
+      const close = closeSession as jest.Mock
+      close.mockImplementationOnce(async () => {
+        requested()
+      })
+      const { ctx } = makeCtx(makeTeammate())
+      let settled = false
+      const operation = dispatchTeammate(ctx, { taskId: "t1", prompt: "work" })
+      void operation.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        }
+      )
+      await closing
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      expect(close).toHaveBeenCalledWith("sess1")
+      disposed()
+      if (failed) await expect(operation).rejects.toThrow("capture failed")
+      else await expect(operation).resolves.toMatchObject({ text: "done" })
+    }
+  )
+  it("uses the manager's independent stop observation after an external timeout", async () => {
+    const trackLocalStop = jest.fn()
+    mockCurrentDispatch()
+    const dispatch = await beginDurableDispatchMock()
+    beginDurableDispatchMock.mockResolvedValue({ ...dispatch, trackLocalStop })
+    resolveExternalMock.mockResolvedValue("agent-1")
+    let stopped!: () => void
+    externalExecuteMock.mockImplementation(async (_agent, _prompt, _options, observeStop) => {
+      stopped = observeStop
+      throw new Error("External agent execution timed out")
+    })
+    const { ctx } = makeCtx(makeTeammate({ config: { runtime: "codex" } }))
+    await expect(dispatchTeammate(ctx, { taskId: "t1", prompt: "work" })).rejects.toThrow(
+      "timed out"
+    )
+    expect(trackLocalStop).not.toHaveBeenCalled()
+    stopped()
+    expect(trackLocalStop).toHaveBeenCalledTimes(1)
+    await expect(trackLocalStop.mock.calls[0][0]).resolves.toBeUndefined()
+  })
+
+  it.each([true, false])(
+    "wires sidecar evidence and gates routing fallback (stopped=%s)",
+    async (hasStopped) => {
+      isTauriMock.mockReturnValue(true)
+      const trackLocalStop = jest.fn()
+      beginDurableDispatchMock.mockResolvedValue({
+        childRunId: "local-child",
+        startLocalExecution: jest.fn(async () => {}),
+        capture: jest.fn(),
+        trackLocalStop,
+        attachControl: jest.fn(async () => undefined),
+        prepareTurnContext: jest.fn(async () => ""),
+        run: (operation: () => Promise<unknown>) => operation(),
+        complete: jest.fn(async () => undefined),
+        fail: jest.fn(async () => undefined),
+      })
+      resolveSendOptionsMock.mockResolvedValue({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        routingPlan: routingPlan(),
+      })
+      const stopped = hasStopped ? Promise.resolve() : new Promise<void>(() => {})
+      runAndCaptureMock.mockImplementationOnce(async (_session, _prompt, _options, capture) => {
+        capture.onExecutorStarted(stopped)
+        if (!hasStopped) throw new Error("capture watchdog")
+        return { text: "done" }
+      })
+      const { ctx } = makeCtx(makeTeammate())
+      const dispatch = dispatchTeammate(ctx, { taskId: "t1", prompt: "work" })
+      if (hasStopped) await dispatch
+      else await expect(dispatch).rejects.toThrow("capture watchdog")
+      expect(trackLocalStop).toHaveBeenCalledWith(stopped)
+      expect(runAndCaptureMock).toHaveBeenCalledTimes(1)
+    }
+  )
   it("forwards public workflow knowledge authority and clears the reader when the teammate finishes", async () => {
     const { registerKnowledgeAccessForSession, getKnowledgeAccessForSession } =
       await import("@/lib/knowledge-base/runtime/session-reader")
@@ -1576,6 +1929,7 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
   })
 
   it("still completes the task itself when review is off", async () => {
+    mockCurrentDispatch()
     isTauriMock.mockReturnValue(false)
     executeAgentMock.mockResolvedValue({ text: "the work" })
     const { ctx, storeWriter } = makeCtx(makeTeammate())
@@ -1650,12 +2004,8 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
       dispatchTeammate(ctx, { taskId: "t1", prompt: "edit code", recordToStore: true })
     ).rejects.toThrow("requires an external teammate runtime")
     expect(pool.recordFailure).toHaveBeenCalled()
-    expect(storeWriter.setTaskStatus).toHaveBeenCalledWith(
-      "t1",
-      "failed",
-      undefined,
-      expect.any(String)
-    )
+    // Rejection precedes epoch admission, so it cannot overwrite a task owner.
+    expect(storeWriter.setTaskStatus).not.toHaveBeenCalled()
     expect(externalExecuteMock).not.toHaveBeenCalled()
     expect(executeAgentMock).not.toHaveBeenCalled()
   })
@@ -1676,6 +2026,8 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     const releaseSession = jest.fn(async (_sessionId: string) => undefined)
     const checkpointPause = jest.fn(async () => false)
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-gateway",
       capture: jest.fn(),
       attachControl,
@@ -1738,6 +2090,8 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
       return () => undefined
     })
     beginDurableDispatchMock.mockResolvedValue({
+      startLocalExecution: jest.fn(async () => {}),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
       childRunId: "child-turn-cancel",
       capture: jest.fn(),
       attachControl,
@@ -2101,6 +2455,14 @@ describe("dispatchTeammate — failures + validation", () => {
   })
 
   it("records a breaker failure + fires onAgentError when the LLM throws", async () => {
+    beginDurableDispatchMock.mockResolvedValue({
+      childRunId: "current-failing-child",
+      startLocalExecution: async () => {},
+      prepareTurnContext: async () => "",
+      capture: jest.fn(),
+      run: (operation: () => Promise<unknown>) => operation(),
+      fail: jest.fn(),
+    })
     executeAgentMock.mockRejectedValue(new Error("boom"))
     const { ctx, pool, storeWriter } = makeCtx(makeTeammate())
 
@@ -2216,6 +2578,7 @@ describe("dispatchTeammate — usage + signal", () => {
 })
 
 describe("dispatchTeammate — store recording on validation failure", () => {
+  beforeEach(mockCurrentDispatch)
   it("writes a failed status when empty output + recordToStore", async () => {
     executeAgentMock.mockResolvedValue({ text: "" })
     const { ctx, storeWriter } = makeCtx(makeTeammate())
@@ -2246,6 +2609,7 @@ describe("dispatchTeammate — store recording on validation failure", () => {
 })
 
 describe("dispatchTeammate — store recording", () => {
+  beforeEach(mockCurrentDispatch)
   it("writes a result_share message + completed status when recordToStore", async () => {
     executeAgentMock.mockResolvedValue({ text: "deliverable" })
     const { ctx, storeWriter } = makeCtx(makeTeammate())
@@ -2597,6 +2961,7 @@ describe("dispatchTeammate — Router + Fusion member action", () => {
   }
 
   it("runs the member's turn as a child fusion run and books it on the team's child account", async () => {
+    isTauriMock.mockReturnValue(true)
     fusionSettings = { routerFusion: { enabled: true, surfaces: { agentsWorkflows: true } } }
     runAgentsWorkflowsFusionMock.mockResolvedValue(answered)
     const { createRunBudgetGovernor } = await import("@/lib/ai/agent/execution/run-budget-governor")
@@ -2612,6 +2977,9 @@ describe("dispatchTeammate — Router + Fusion member action", () => {
     const result = await dispatchTeammate(ctx, { taskId: "t1", prompt: "do it" })
 
     expect(result.text).toBe("the member's checked answer")
+    expect(beginDurableDispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ executorRegistry: "unconfirmed" })
+    )
     // The fusion run replaced the member's model turn on every channel.
     expect(executeAgentMock).not.toHaveBeenCalled()
     expect(runAndCaptureMock).not.toHaveBeenCalled()

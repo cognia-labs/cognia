@@ -218,8 +218,8 @@ registerNodeExecutor({
 // (`lib/ai/agent/team/workflow-nodes`) and are reached through the installable
 // port, so the workflow engine never imports team code (ADR-0217).
 //
-// Retry flags stay here, with the registration: task dispatch retries (each
-// retry re-claims from the pool, rotating teammates); review, compose and
+// Task dispatch retries only after settlement and the task-level recovery gate;
+// the next claim may rotate teammates. Review, compose and
 // delegate are single-shot decisions or side effects and never retry.
 registerNodeExecutor({
   kind: "action.team.run",

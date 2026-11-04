@@ -231,6 +231,7 @@ describe("WorkerRpcPool", () => {
 
   it("fills two one-slot workers without creating a second scheduler", async () => {
     const releases: Array<() => void> = []
+    const close = jest.fn(async () => undefined)
     let sessionSequence = 0
     const createClient = jest.fn(async (): Promise<CogniaClient> => {
       sessionSequence += 1
@@ -249,7 +250,7 @@ describe("WorkerRpcPool", () => {
         state: jest.fn(async () => ({ sessionId: "session-1", status: "idle" })),
         waitForIdle: jest.fn(),
         snapshot: jest.fn(),
-        close: jest.fn(),
+        close,
       }
       return {
         sessions: {
@@ -318,7 +319,12 @@ describe("WorkerRpcPool", () => {
       expect.objectContaining({ activeTurns: 1 }),
     ])
     releases.splice(0).forEach((release) => release())
-    await Promise.all([firstRun, secondRun])
+    expect(await Promise.all([firstRun, secondRun])).toEqual([
+      { status: "completed", result: {} },
+      { status: "completed", result: {} },
+    ])
+    expect(close).toHaveBeenCalledTimes(2)
+    // Legacy close() has no current-epoch disposal ACK; never invent one.
     expect(pool.listWorkers().map((worker) => worker.activeTurns)).toEqual([0, 0])
   })
 

@@ -30,6 +30,7 @@ import { LEGACY_RUN_NOT_RESUMABLE } from "@/lib/agent-team/legacy-run-history"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import {
   getAgentTeamRun,
+  dexieTeamRunStore,
   listAgentTeamChildRuns,
   updateAgentTeamRunIfCurrent,
 } from "@/lib/db/agent-team-runtime"
@@ -38,7 +39,7 @@ import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent-team-runtime"
 import { abortTeam } from "../agent-team-runtime"
 import { controlDurableRun } from "../durable/durable-control"
-import { isDurableChildReplaySafe } from "../durable/durable-runtime"
+import { assessStoredTaskRecovery } from "@cognia/agent-orchestration/coordinator"
 import { isTerminalSquadRunStatus, parkActiveSquadRun } from "./squad-run-records"
 import { getTeamRunContext } from "../team-run-context"
 
@@ -168,17 +169,29 @@ async function defaultReenter(input: { teamId: string; runId: string }): Promise
  */
 export async function assessSquadRunReplay(
   runId: string
-): Promise<{ safe: boolean; uncertainChildIds: string[] }> {
+): Promise<{ safe: boolean; uncertainChildIds: string[]; reason?: string }> {
   const children = await listAgentTeamChildRuns(runId)
-  const uncertain: string[] = []
-  for (const child of children) {
-    if (["completed", "cancelled", "terminated"].includes(child.status)) continue
-    // A child that never started has nothing to replay and is safe to re-queue.
-    if (child.status !== "queued" && !(await isDurableChildReplaySafe(child.id))) {
-      uncertain.push(child.id)
-    }
+  const assessments = await Promise.all(
+    [...new Set(children.map((child) => child.taskId))].map((taskId) =>
+      assessStoredTaskRecovery(dexieTeamRunStore, runId, taskId, Date.now())
+    )
+  )
+  const refusals = assessments.filter((result) => !result.eligible)
+  return {
+    safe: refusals.length === 0,
+    uncertainChildIds: [
+      ...new Set(refusals.flatMap((result) => (!result.eligible ? result.childRunIds : []))),
+    ],
+    ...(refusals.length
+      ? {
+          reason: refusals.some(
+            (result) => !result.eligible && result.reason === "stop_unconfirmed"
+          )
+            ? "stop_unconfirmed"
+            : "uncertain_side_effect",
+        }
+      : {}),
   }
-  return { safe: uncertain.length === 0, uncertainChildIds: uncertain }
 }
 
 export async function controlSquadRun(
@@ -211,12 +224,6 @@ export async function controlSquadRun(
     if (run.recoveryReason === LEGACY_RUN_NOT_RESUMABLE) {
       return { ok: false, reason: "not_resumable", status: run.status }
     }
-    if (isLive(runId)) {
-      await controlDurableRun(runId, "resume", { now })
-      await journal(runId, "run.resumed", "operator_resume", now())
-      useAgentTeamStore.getState().setTeamStatus(run.teamId, "executing")
-      return { ok: true, status: "running" }
-    }
     if (run.executionConstraints?.version !== 1 || !run.executionConstraints.teamConfig) {
       if (!(await parkActiveSquadRun(runId, "missing_execution_constraints", now()))) {
         return { ok: false, reason: "already_terminal" }
@@ -227,7 +234,7 @@ export async function controlSquadRun(
     const replay = await assessSquadRunReplay(runId)
     if (!replay.safe) {
       const at = now()
-      if (!(await parkActiveSquadRun(runId, "uncertain_side_effect", at))) {
+      if (!(await parkActiveSquadRun(runId, replay.reason ?? "uncertain_side_effect", at))) {
         return { ok: false, reason: "already_terminal" }
       }
       await journal(runId, "run.waiting", "team_recovery", at)
@@ -236,6 +243,12 @@ export async function controlSquadRun(
       // surface can see. Best-effort here: the bootstrap re-arms it.
       await (deps.openRecovery ?? defaultOpenRecovery)(runId).catch(() => undefined)
       return { ok: false, reason: "recovery_required", status: "needs_input" }
+    }
+    if (isLive(runId)) {
+      await controlDurableRun(runId, "resume", { now })
+      await journal(runId, "run.resumed", "operator_resume", now())
+      useAgentTeamStore.getState().setTeamStatus(run.teamId, "executing")
+      return { ok: true, status: "running" }
     }
     const at = now()
     if (
@@ -273,7 +286,12 @@ export async function controlSquadRun(
   // deny whatever was waiting on a person.
   const at = now()
   abortTeam(run.teamId, new Error("shutdown"), runId)
-  await controlDurableRun(runId, "stop", { now })
+  try {
+    await controlDurableRun(runId, "stop", { now })
+  } catch {
+    await (deps.openRecovery ?? defaultOpenRecovery)(runId).catch(() => undefined)
+    return { ok: false, reason: "recovery_required", status: "needs_input" }
+  }
   await (deps.denyPendingInterrupts ?? defaultDenyPendingInterrupts)(
     agentTeamExecutionRunId(runId),
     at

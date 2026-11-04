@@ -359,6 +359,15 @@ export async function runSquadLifecycle(
     return { runId, status: "failed", reason: "recovery_superseded" }
   }
 
+  if (admitted) {
+    const { assessSquadRunReplay } = await import("./squad-control")
+    const eligibility = await assessSquadRunReplay(runId)
+    if (!eligibility.safe) {
+      await parkSquadRecovery(runId, teamId, eligibility.reason ?? "stop_unconfirmed")
+      return { runId, status: "failed", reason: eligibility.reason ?? "stop_unconfirmed" }
+    }
+  }
+
   // The store's `status` is a mirror of the durable run, written here and only
   // here (ADR-0169): surfaces read the run record, and the mirror exists so
   // synchronous callers (board guards, presence) do not each open a query.
@@ -469,6 +478,20 @@ async function settleSquadRun(
       import("@/lib/execution/agent-team-bridge"),
     ])
   const durableRun = await getAgentTeamRun(runId).catch(() => undefined)
+  if (
+    result.status === "cancelled" &&
+    durableRun &&
+    !["cancelled", "terminated"].includes(durableRun.status)
+  ) {
+    const { controlDurableRun } = await import("../durable/durable-control")
+    try {
+      await controlDurableRun(runId, "stop")
+    } catch {
+      await parkSquadRecovery(runId, teamId, "stop_unconfirmed")
+      return
+    }
+  }
+
   const durableStatus: AgentTeamRunStatus | undefined = durableRun?.status
   if (
     durableStatus === "cancelled" ||

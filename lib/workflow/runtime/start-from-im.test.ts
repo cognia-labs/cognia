@@ -6,7 +6,26 @@ import { createPublishedWorkflowDependencyBinding } from "./execution-authority"
 import { startWorkflowFromIM } from "./start-from-im"
 import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
 
+const mockActiveExecutions: Promise<unknown>[] = []
+jest.mock("./execution-authority", () => {
+  const actual = jest.requireActual<typeof import("./execution-authority")>("./execution-authority")
+  return {
+    ...actual,
+    executeDeployedWorkflow: (...args: Parameters<typeof actual.executeDeployedWorkflow>) => {
+      const execution = actual.executeDeployedWorkflow(...args)
+      mockActiveExecutions.push(execution)
+      return execution
+    },
+  }
+})
+
 jest.setTimeout(60_000)
+
+afterEach(async () => {
+  // A terminal row precedes final native mirroring/resource release. Join the
+  // real detached execution before Jest removes its dynamic-import context.
+  await Promise.allSettled(mockActiveExecutions.splice(0))
+})
 
 async function waitForTerminalRun(runId: string): Promise<void> {
   for (let attempt = 0; attempt < 3_000; attempt += 1) {
