@@ -95,8 +95,11 @@ export function readHostAuthoringAbi(root) {
     witSha256: sha256(fs.readFileSync(path.join(root, "src-tauri/wit/cognia-plugin.wit"))),
     sdkSourceSha256: hashFiles([
       ...sourceFiles("packages/plugin-sdk/src"),
+      // The packed SDK vendors contract declarations even when SDK entrypoints stay unchanged.
+      ...sourceFiles("packages/plugin-contract/src"),
       ...sourceFiles("types/plugin"),
       "packages/plugin-sdk/package.json",
+      "packages/plugin-contract/package.json",
     ]),
     uiSourceSha256: hashFiles([
       ...sourceFiles("packages/plugin-ui/src"),

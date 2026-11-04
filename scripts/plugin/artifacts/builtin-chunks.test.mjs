@@ -11,12 +11,14 @@ import {
 
 test("curates every builtin as an independent asset", async () => {
   const BROWSER_BUILTIN_PLUGIN_IDS = await readBrowserBuiltinIds()
-  assert.equal(BROWSER_BUILTIN_PLUGIN_IDS.length, 58)
+  assert.equal(BROWSER_BUILTIN_PLUGIN_IDS.length, 60)
   assert.equal(new Set(BROWSER_BUILTIN_PLUGIN_IDS).size, BROWSER_BUILTIN_PLUGIN_IDS.length)
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("github-comment-bot"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("clipboard-tools"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("ui-surface-reference"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("cognia-pdf"))
+  assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("feishu-auth"))
+  assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("feishu-calendar"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("remote-desktop-vnc"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("remote-desktop-rustdesk"))
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("remote-desktop-web-console"))

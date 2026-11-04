@@ -16,6 +16,19 @@ const mockGetVersions = jest.fn()
 const mockInstallPlugin = jest.fn()
 const mockStoreGetState = jest.fn()
 const mockStoreSetState = jest.fn()
+const mockManager = {
+  scanPlugins: jest.fn(),
+  syncRuntimeState: jest.fn(),
+  disablePlugin: jest.fn(),
+  unloadPlugin: jest.fn(),
+  loadPlugin: jest.fn(),
+  enablePlugin: jest.fn(),
+  suspendPlugin: jest.fn(),
+  reservePluginRuntimeGraph: jest.fn(),
+  releasePluginRuntimeGraph: jest.fn(),
+}
+
+jest.mock("../core/manager", () => ({ getPluginManager: () => mockManager }))
 
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
@@ -52,7 +65,11 @@ jest.mock("../core/logger", () => ({
 type MockStoreState = {
   plugins: Record<
     string,
-    { manifest: { id: string; version: string }; config: Record<string, unknown> }
+    {
+      manifest: { id: string; version: string }
+      status: string
+      config: Record<string, unknown>
+    }
   >
   setPluginConfig: jest.Mock
 }
@@ -70,6 +87,7 @@ describe("PluginRollbackManager", () => {
       plugins: {
         "plugin-a": {
           manifest: { id: "plugin-a", version: "2.0.0" },
+          status: "enabled",
           config: {},
         },
       },
@@ -94,6 +112,28 @@ describe("PluginRollbackManager", () => {
     mockGetVersions.mockResolvedValue([])
     mockInstallPlugin.mockResolvedValue({ success: true })
     mockInvoke.mockResolvedValue(null)
+    for (const mock of Object.values(mockManager)) mock.mockReset()
+    mockManager.reservePluginRuntimeGraph.mockReturnValue({ pluginId: "plugin-a" })
+    mockManager.scanPlugins.mockImplementation(async () => {
+      storeState.plugins["plugin-a"].manifest.version = "1.0.0"
+    })
+    for (const status of [
+      "disablePlugin",
+      "unloadPlugin",
+      "loadPlugin",
+      "enablePlugin",
+      "suspendPlugin",
+    ] as const) {
+      mockManager[status].mockImplementation(async () => {
+        storeState.plugins["plugin-a"].status = {
+          disablePlugin: "disabled",
+          unloadPlugin: "installed",
+          loadPlugin: "loaded",
+          enablePlugin: "enabled",
+          suspendPlugin: "suspended",
+        }[status]
+      })
+    }
   })
 
   describe("getRollbackInfo", () => {
@@ -126,6 +166,13 @@ describe("PluginRollbackManager", () => {
   })
 
   describe("createRollbackPlan", () => {
+    it("does not plan to load or enable a disabled plugin", async () => {
+      storeState.plugins["plugin-a"].status = "disabled"
+      mockGetBackups.mockReturnValue([{ version: "1.0.0", createdAt: new Date() }])
+      const plan = await manager.createRollbackPlan("plugin-a", "1.0.0")
+      expect(plan.steps.map((step) => step.action)).not.toContain("enable")
+      expect(plan.steps.map((step) => step.action)).not.toContain("load")
+    })
     it("should create a rollback plan with steps", async () => {
       mockGetBackups.mockReturnValue([
         { pluginId: "plugin-a", version: "1.0.0", createdAt: new Date(), size: 1000 },
@@ -190,10 +237,65 @@ describe("PluginRollbackManager", () => {
       const result = await manager.rollback("plugin-a", "1.0.0")
 
       expect(result.success).toBe(true)
-      expect(mockInvoke).toHaveBeenCalledWith("plugin_load", {
-        pluginId: "plugin-a",
-        manifest: expect.objectContaining({ id: "plugin-a", version: "1.0.0" }),
+      expect(mockManager.enablePlugin).toHaveBeenCalledWith("plugin-a")
+      expect(mockManager.unloadPlugin).toHaveBeenCalledWith("plugin-a")
+      expect(mockInvoke).not.toHaveBeenCalled()
+    })
+
+    it("keeps a disabled plugin inactive and preserves its config", async () => {
+      storeState.plugins["plugin-a"].status = "disabled"
+      storeState.plugins["plugin-a"].config = { userChoice: "keep" }
+      const result = await manager.rollback("plugin-a", "1.0.0")
+      expect(result.success).toBe(true)
+      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
+      expect(mockInvoke).not.toHaveBeenCalledWith("plugin_enable", expect.anything())
+      expect(storeState.plugins["plugin-a"].status).toBe("disabled")
+      expect(storeState.plugins["plugin-a"].config).toEqual({ userChoice: "keep" })
+    })
+
+    it("restores suspended intent instead of leaving the plugin active", async () => {
+      storeState.plugins["plugin-a"].status = "suspended"
+      expect((await manager.rollback("plugin-a", "1.0.0")).success).toBe(true)
+      expect(mockManager.suspendPlugin).toHaveBeenCalledWith("plugin-a", "rollback")
+      expect(storeState.plugins["plugin-a"].status).toBe("suspended")
+    })
+
+    it("reports a failed down migration and does not reactivate", async () => {
+      storeState.plugins["plugin-a"].config = { nested: { value: "keep" } }
+      manager.registerMigration("plugin-a", {
+        fromVersion: "1.0.0",
+        toVersion: "2.0.0",
+        up: (data) => data,
+        down: (data) => {
+          ;(data.nested as { value: string }).value = "changed"
+          throw new Error("down migration rejected")
+        },
       })
+      const result = await manager.rollback("plugin-a", "1.0.0")
+      expect(result).toMatchObject({
+        success: false,
+        migrationApplied: false,
+        error: "down migration rejected",
+      })
+      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
+      expect(storeState.plugins["plugin-a"].config).toEqual({ nested: { value: "keep" } })
+      expect(mockManager.releasePluginRuntimeGraph).toHaveBeenCalled()
+    })
+
+    it("does not manufacture the target version when scanning fails", async () => {
+      mockManager.scanPlugins.mockRejectedValueOnce(new Error("scan failed"))
+      expect(await manager.rollback("plugin-a", "1.0.0")).toMatchObject({
+        success: false,
+        error: "scan failed",
+      })
+      expect(storeState.plugins["plugin-a"].manifest.version).toBe("2.0.0")
+      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
+    })
+
+    it("rejects an installed version different from the requested rollback", async () => {
+      mockManager.scanPlugins.mockResolvedValueOnce([])
+      expect((await manager.rollback("plugin-a", "1.0.0")).success).toBe(false)
+      expect(mockManager.enablePlugin).not.toHaveBeenCalled()
     })
   })
 
@@ -215,6 +317,10 @@ describe("PluginRollbackManager", () => {
           path: "/backup/1.0.0",
         },
       ])
+
+      mockManager.scanPlugins.mockImplementationOnce(async () => {
+        storeState.plugins["plugin-a"].manifest.version = "1.5.0"
+      })
 
       const result = await manager.rollbackToLatestBackup("plugin-a")
       expect(result.success).toBe(true)

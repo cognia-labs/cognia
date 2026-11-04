@@ -82,6 +82,8 @@ describe("browser-builtin-registry", () => {
       "cognia-workflow-ai",
       "cognia-workspace-tools",
       "cognia-zenless-zone-zero-theme",
+      "feishu-auth",
+      "feishu-calendar",
       "figma-external-service",
       "github-comment-bot",
       "github-delivery",
@@ -240,9 +242,10 @@ describe("browser-builtin-registry", () => {
     })
     expect(injected).toBe(true)
 
-    const css = document.querySelector<HTMLStyleElement>(
+    const style = document.querySelector<HTMLStyleElement>(
       'style[data-plugin-styles="cognia-anime-effort"]'
-    )?.textContent
+    )
+    const css = style?.textContent
     expect(css).toContain(".aef-panel")
 
     // `@keyframes` is invalid inside `@scope` and only TOP-LEVEL at-rules are
@@ -251,7 +254,25 @@ describe("browser-builtin-registry", () => {
     // Compared against the at-rule itself: the hoist header is a comment that
     // also spells "@scope", and matching that would pass either way.
     expect(css!.indexOf("@keyframes aef-pulse")).toBeGreaterThanOrEqual(0)
-    expect(css!.indexOf("@keyframes aef-pulse")).toBeLessThan(css!.indexOf("@scope ("))
+    if ("CSSScopeRule" in globalThis) {
+      expect(css!.indexOf("@keyframes aef-pulse")).toBeLessThan(css!.indexOf("@scope ("))
+    } else {
+      expect(css).not.toContain("@scope (")
+      const rules = Array.from(style!.sheet!.cssRules)
+      const animation = rules.find(
+        (rule) =>
+          rule.type === CSSRule.KEYFRAMES_RULE && (rule as CSSKeyframesRule).name === "aef-pulse"
+      ) as CSSKeyframesRule | undefined
+      expect(animation).toBeDefined()
+      expect(animation!.cssRules.length).toBeGreaterThan(0)
+      expect(animation!.cssText).not.toContain("data-plugin-root")
+      const panel = rules.find(
+        (rule) =>
+          rule.type === CSSRule.STYLE_RULE &&
+          (rule as CSSStyleRule).selectorText.includes(".aef-panel")
+      ) as CSSStyleRule | undefined
+      expect(panel?.selectorText).toContain(':where([data-plugin-root="cognia-anime-effort"]')
+    }
 
     // Injection appends to `document.head`, which outlives the test. Left there
     // it would be picked up by anything later in this file that queries the

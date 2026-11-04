@@ -15,6 +15,8 @@ test("utility styles close responsive, focus and animation rules without leaking
   })
   assert.ok(first.css.includes(".sm\\:px-2"))
   assert.ok(first.css.includes("focus-visible"))
+  assert.ok(!first.css.includes("&"), "release utilities must not depend on CSS nesting in iOS 16")
+  assert.doesNotMatch(first.css, /@media\s*\(width\s*>=/, "iOS 16.0 needs min-width queries")
   assert.ok(first.css.includes("@keyframes spin"))
   assert.match(first.css, /var\(--spacing,/) // standalone fallback while allowing Host overrides
   assert.match(first.css, /var\(--animate-spin,/)

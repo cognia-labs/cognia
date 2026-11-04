@@ -1,13 +1,23 @@
 #!/usr/bin/env node
 /** Independent distribution proof. Never links a package or alias back to Host. */
 import fs from "node:fs"
+import assert from "node:assert/strict"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createRequire, isBuiltin } from "node:module"
 import { execFileSync } from "node:child_process"
 import { bootstrapAuthoringKit, readAuthoringKit } from "./bootstrap-authoring-kit.mjs"
-import { sha256, valueSha256 } from "../build/plugin-artifact-contract.mjs"
+import { collectExtractionInventory } from "./extraction-inventory.mjs"
+import {
+  sha256,
+  valueSha256,
+  readHostAuthoringIdentity,
+  readProductProfile,
+  verifyPluginArtifactContract,
+} from "../build/plugin-artifact-contract.mjs"
+import { readPluginArtifactSet } from "../build/stage-plugin-artifacts.mjs"
+import { PLUGIN_ARTIFACT_SECTIONS } from "../build/plugin-artifact-format.mjs"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const require = createRequire(import.meta.url)
@@ -17,7 +27,29 @@ const argument = (name) => {
   return index < 0 ? undefined : process.argv[index + 1]
 }
 const kitRoot = path.resolve(argument("--kit") ?? ".cache/plugin-extraction/authoring-kit")
-const { manifest, compilerContract } = readAuthoringKit(kitRoot)
+const authoring = readHostAuthoringIdentity(ROOT)
+const kit = readAuthoringKit(kitRoot, authoring.kitSha256)
+assert.deepEqual(kit.authoring, authoring, "Kit and Host authoring mismatch")
+const { manifest, compilerContract } = kit
+const profile = readProductProfile(ROOT)
+assert.equal(valueSha256(kit.profile), valueSha256(profile), "Kit and Host profile mismatch")
+const hostArtifactRoot = argument("--compare-host")
+  ? path.resolve(argument("--compare-host"))
+  : undefined
+const hostArtifact = hostArtifactRoot ? readPluginArtifactSet(hostArtifactRoot) : undefined
+if (hostArtifact)
+  verifyPluginArtifactContract({
+    manifest: hostArtifact.manifest,
+    sections: hostArtifact,
+    authoring,
+    profile,
+    contractCatalog: kit.contractCatalog,
+  })
+const harnessSha256 = sha256(fs.readFileSync(fileURLToPath(import.meta.url)))
+const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: ROOT,
+  encoding: "utf8",
+}).trim()
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-authoring-proof-"))
 const json = (file) => JSON.parse(fs.readFileSync(file, "utf8"))
 const write = (relative, content) => {
@@ -97,6 +129,16 @@ try {
       if (!dependencies[name]) dependencies[name] = dependencyVersion(name)
     }
   }
+  const frontendPackages = collectExtractionInventory({
+    root: directory,
+    files: Object.keys(sourceSnapshot),
+    revision: sourceRevision,
+    status: [],
+  })
+    .plugins.filter((plugin) => plugin.type === "frontend")
+    .map(({ directory, id }) => ({ directory, id }))
+  assert.ok(frontendPackages.length > 0, "The copied snapshot has no frontend plugins")
+  console.log("[authoring-proof] frontend inventory", frontendPackages.length)
   for (const name of [
     "tsx",
     "esbuild",
@@ -179,7 +221,17 @@ try {
           `import * as p${imports.length} from ${JSON.stringify(entry.name + (key === "." ? "" : key.slice(1)))}; void p${imports.length};`
         )
   }
-  write("exports.ts", imports.join("\n"))
+  write(
+    "exports.ts",
+    [
+      ...imports,
+      'import type { PluginBackupAPI, BackupDestinationContribution, BackupDestinationRegistration } from "@cognia/plugin-sdk";',
+      "declare const backup: PluginBackupAPI;",
+      "declare const contribution: BackupDestinationContribution;",
+      "const registration: BackupDestinationRegistration = backup.registerDestination(contribution);",
+      "void registration;",
+    ].join("\n")
+  )
   write(
     "tsconfig.json",
     JSON.stringify({
@@ -248,10 +300,12 @@ try {
       ["runtime/abort", "api/abort"],
       ["templates/index", "templates"],
       ["api/agent-team-template", "api/agent-team-template"],
+      ["define/define-issue-sync-provider", ""],
+      ["define/define-backup-destination", ""],
     ].map(([source, entry]) => ({
       source: `packages/plugin-sdk/src/${source}.test.ts`,
       name: `sdk-${source.replaceAll("/", "-")}.test.ts`,
-      specifier: `@cognia/plugin-sdk/${entry}`,
+      specifier: `@cognia/plugin-sdk${entry ? `/${entry}` : ""}`,
     })),
   ]
   for (const suite of helperSuites) {
@@ -305,23 +359,135 @@ try {
   ])
   write(
     "produce-proof.mjs",
-    `import fs from 'node:fs'; import path from 'node:path'; import {buildFrontendPlugin,writeFrontendPackage} from './scripts/plugin/build-frontend-plugins.mjs'; import {readAuthoringKit} from './scripts/plugin/bootstrap-authoring-kit.mjs'; import {producePluginArtifacts} from './scripts/plugin/artifacts/produce.mjs'; const root=process.cwd(),kitRoot=path.join(root,'.vendor/authoring-kit'),kit=readAuthoringKit(kitRoot); let count=0; for(const directory of fs.readdirSync('plugins')){const file=path.join('plugins',directory,'plugin.json');if(!fs.existsSync(file))continue;const m=JSON.parse(fs.readFileSync(file));if(m.type!=='frontend')continue;const result=await buildFrontendPlugin({root,directory,contractCatalog:kit.contractCatalog,styleContract:kit.styleContract,compilerContract:kit.compilerContract}); for(const input of result.inputs)if(!path.resolve(input).startsWith(root+path.sep))throw new Error('Escaped independent build: '+input);await writeFrontendPackage(result,path.join(root,'packages-out'));count++} if(count!==69)throw new Error('Expected 69 frontend packages, received '+count);await producePluginArtifacts({root,kitRoot,outDir:path.join(root,'artifact'),source:{repository:'cognia-labs/cognia-next',revision:${JSON.stringify(execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim())},sourceTreeSha256:${JSON.stringify(valueSha256(sourceSnapshot))},lockfileSha256:${JSON.stringify(sha256(fs.readFileSync(path.join(directory, "pnpm-lock.yaml"))))}}});console.log('[authoring-proof] packages',count)\n`
+    `import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {buildFrontendPlugin,writeFrontendPackage} from './scripts/plugin/build-frontend-plugins.mjs';
+import {readAuthoringKit} from './scripts/plugin/bootstrap-authoring-kit.mjs';
+import {producePluginArtifacts} from './scripts/plugin/artifacts/produce.mjs';
+import {sha256} from './scripts/build/plugin-artifact-contract.mjs';
+const root=process.cwd(),kitRoot=path.join(root,'.vendor/authoring-kit'),kit=readAuthoringKit(kitRoot);
+const expected=${JSON.stringify(frontendPackages)},packages=[];
+for(const directory of fs.readdirSync('plugins').sort()){
+  const file=path.join('plugins',directory,'plugin.json');
+  if(!fs.existsSync(file)||JSON.parse(fs.readFileSync(file)).type!=='frontend')continue;
+  const result=await buildFrontendPlugin({root,directory,contractCatalog:kit.contractCatalog,styleContract:kit.styleContract,compilerContract:kit.compilerContract});
+  for(const input of result.inputs)if(!path.resolve(input).startsWith(root+path.sep))throw new Error('Escaped independent build: '+input);
+  const archive=await writeFrontendPackage(result,path.join(root,'packages-out'));
+  packages.push({directory,id:result.manifest.id,version:result.manifest.version,archive:path.relative(root,archive),sha256:sha256(fs.readFileSync(archive)),files:result.files.size});
+}
+assert.deepEqual(packages.map(({directory,id})=>({directory,id})),expected,'Frontend packages differ from the copied source inventory');
+fs.writeFileSync('frontend-packages.json',JSON.stringify({expected,packages},null,2));
+await producePluginArtifacts({root,kitRoot,outDir:path.join(root,'artifact'),source:{repository:'cognia-labs/cognia-next',revision:${JSON.stringify(sourceRevision)},sourceTreeSha256:${JSON.stringify(valueSha256(sourceSnapshot))},lockfileSha256:${JSON.stringify(sha256(fs.readFileSync(path.join(directory, "pnpm-lock.yaml"))))}}});
+console.log('[authoring-proof] packages',packages.length);
+`
   )
   run(process.execPath, ["produce-proof.mjs"])
   for (const [relative, expected] of Object.entries(sourceSnapshot)) {
-    const file = path.join(directory, relative)
-    if (
-      sha256(fs.readFileSync(file)) !== expected.sha256 ||
-      (fs.statSync(file).mode & 0o111 ? 0o755 : 0o644) !== expected.mode
+    for (const sourceRoot of [directory, ROOT]) {
+      const file = path.join(sourceRoot, relative)
+      if (
+        sha256(fs.readFileSync(file)) !== expected.sha256 ||
+        (fs.statSync(file).mode & 0o111 ? 0o755 : 0o644) !== expected.mode
+      )
+        throw new Error(`Plugin source changed during validation: ${file}`)
+    }
+  }
+  assert.equal(sha256(fs.readFileSync(fileURLToPath(import.meta.url))), harnessSha256)
+  assert.deepEqual(readHostAuthoringIdentity(ROOT), authoring, "Host Kit drifted during proof")
+  assert.deepEqual(
+    readAuthoringKit(kitRoot, authoring.kitSha256).authoring,
+    authoring,
+    "Kit distribution drifted during proof"
+  )
+  assert.equal(
+    valueSha256(readProductProfile(ROOT)),
+    valueSha256(profile),
+    "Host profile drifted during proof"
+  )
+  const currentFrontendPackages = collectExtractionInventory({
+    root: ROOT,
+    files: fs.readdirSync(path.join(ROOT, "plugins")).map((name) => `plugins/${name}/plugin.json`),
+    revision: sourceRevision,
+    status: [],
+  })
+    .plugins.filter((plugin) => plugin.type === "frontend")
+    .map(({ directory, id }) => ({ directory, id }))
+  assert.deepEqual(
+    currentFrontendPackages,
+    frontendPackages,
+    "Host frontend inventory drifted during proof"
+  )
+  const packageProof = json(path.join(directory, "frontend-packages.json"))
+  let payloadComparison
+  if (hostArtifact) {
+    const independent = readPluginArtifactSet(path.join(directory, "artifact"))
+    verifyPluginArtifactContract({
+      manifest: independent.manifest,
+      sections: independent,
+      profile,
+      authoring,
+      contractCatalog: kit.contractCatalog,
+    })
+    assert.deepEqual(
+      Object.keys(independent.manifest.files).sort(),
+      Object.keys(hostArtifact.manifest.files).sort(),
+      "Host and independent file membership differs"
     )
-      throw new Error(`Independent source changed during validation: ${relative}`)
+    assert.deepEqual(
+      independent.manifest.modes,
+      hostArtifact.manifest.modes,
+      "Host and independent shipping modes differ"
+    )
+    assert.deepEqual(
+      independent.manifest.inventory,
+      hostArtifact.manifest.inventory,
+      "Host and independent plugin inventories differ"
+    )
+    for (const [name, section] of Object.entries(PLUGIN_ARTIFACT_SECTIONS)) {
+      for (const [relative, expected] of hostArtifact[name]) {
+        const key = relative ? `${section.set}/${relative}` : section.set
+        assert.ok(
+          independent[name].get(relative)?.equals(expected),
+          `Host and independent bytes differ: ${key}`
+        )
+        assert.equal(
+          fs.statSync(path.join(directory, "artifact", key)).mode & 0o777,
+          hostArtifact.manifest.modes[key],
+          `Independent file mode differs: ${key}`
+        )
+        assert.equal(
+          fs.statSync(path.join(hostArtifactRoot, key)).mode & 0o777,
+          hostArtifact.manifest.modes[key],
+          `Host file mode differs: ${key}`
+        )
+      }
+    }
+    assert.equal(
+      sha256(fs.readFileSync(path.join(hostArtifactRoot, "plugin-artifacts.json"))),
+      sha256(hostArtifact.manifestBytes),
+      "Host artifact changed during proof"
+    )
+    payloadComparison = {
+      hostArtifactSha256: sha256(hostArtifact.manifestBytes),
+      independentArtifactSha256: sha256(independent.manifestBytes),
+      files: Object.keys(independent.manifest.files).length,
+      membership: "equal",
+      bytes: "equal",
+      modes: "equal",
+      inventory: "equal",
+    }
   }
   const report = {
     kitSha256: pin.sha256,
-    harnessSha256: sha256(fs.readFileSync(fileURLToPath(import.meta.url))),
+    harnessSha256,
     sourceFiles: copied,
     pluginTypecheckFiles: pluginSources.length,
     helperSuites: helperSuites.length,
+    frontendPackages: packageProof.packages.length,
+    frontendPackageIds: packageProof.packages.map((entry) => entry.id),
+    frontendPackageInventorySha256: valueSha256(packageProof),
+    payloadComparison,
     independentRoot: directory,
     result: "passed",
   }

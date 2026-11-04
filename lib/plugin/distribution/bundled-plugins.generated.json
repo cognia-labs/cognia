@@ -224,7 +224,7 @@
     },
     "cognia-office": {
       "id": "cognia-office",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "files": [
         {
           "path": "assets/icon.png",
@@ -234,17 +234,17 @@
         {
           "path": "dist/index.js",
           "bytes": 1812953,
-          "sha256": "ceec3afdbaf534d1b8022958bc70f06d0cb6cad9d3b49024d1f5856e3a38dcd6"
+          "sha256": "f25a27b612c10a6299559ab13a13c68ef260057e7f9bee4935759e0ac5c0bab4"
         },
         {
           "path": "dist/plugin.css",
-          "bytes": 8117,
-          "sha256": "2af987c50a2f7d7b87652740151eedf797b052ae23dac23b90d36d25f04e23d4"
+          "bytes": 8156,
+          "sha256": "d1b4c13758a1ecaad94cdc434436b07ed4fdd667fedace1b76822e12ee6e428a"
         },
         {
           "path": "plugin.json",
           "bytes": 14172,
-          "sha256": "0195cb8bca15f1aab43a96ea84449167036877ffdc28aa06659fb4eed75591a8"
+          "sha256": "d4bfaf787fa475b66f8fde8f395022d1c8f34f72abe90aaf5813035a05045203"
         },
         {
           "path": "runtime/package.json",

@@ -20,6 +20,7 @@ import {
   stagePluginArtifacts as stage,
 } from "./stage-plugin-artifacts.mjs"
 import { valueSha256 } from "./plugin-artifact-contract.mjs"
+import { withPluginArtifactLock } from "./plugin-artifact-lease.mjs"
 import { build } from "esbuild"
 import {
   prepareBuiltinPluginAssets,
@@ -187,6 +188,38 @@ function host(root, relative) {
 function noProduce() {
   throw new Error("must not produce")
 }
+
+for (const state of ["cold", "warm"])
+  test(`${state} promotion guard runs under the writer lock and aborts before staging`, async (t) => {
+    const root = tempDir(t, "artifact-promotion-guard-")
+    const from = writeSet(tempDir(t, "artifact-promotion-set-"))
+    if (state === "warm") await stagePluginArtifacts({ root, from })
+    const target = host(root, PLUGIN_ARTIFACT_SECTIONS.builtinIndex.host)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, "parallel writer output")
+    const receipt = host(root, ".cache/plugin-artifact-access/receipt.json")
+    const previousReceipt = fs.existsSync(receipt) ? fs.readFileSync(receipt) : undefined
+    const immutable = host(root, ".cache/plugin-artifact-sets")
+    const previousSets = fs.existsSync(immutable) ? fs.readdirSync(immutable) : []
+    let called = false
+    await assert.rejects(
+      stagePluginArtifacts({ root, from, beforeWrite: async ({ accessDirectory, artifactSha256 }) => {
+        called = true
+        assert.equal(accessDirectory, host(root, ".cache/plugin-artifact-access"))
+        assert.equal(artifactSha256, createHash("sha256").update(fs.readFileSync(path.join(from, PLUGIN_ARTIFACT_MANIFEST))).digest("hex"))
+        await assert.rejects(
+          withPluginArtifactLock(root, () => assert.fail("writer lock was released"), { timeoutMs: 0 }),
+          /artifact_in_use/
+        )
+        throw new Error("Concurrent output changed; preserve it")
+      } }),
+      /Concurrent output changed/
+    )
+    assert.equal(called, true)
+    assert.equal(fs.readFileSync(target, "utf8"), "parallel writer output")
+    assert.deepEqual(fs.existsSync(receipt) ? fs.readFileSync(receipt) : undefined, previousReceipt)
+    assert.deepEqual(fs.existsSync(immutable) ? fs.readdirSync(immutable) : [], previousSets)
+  })
 
 for (const state of ["cold", "warm"])
   test(`${state} CLI input A is replaced with explicit B before real compilation and final layout copy`, async (t) => {

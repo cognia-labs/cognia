@@ -82,6 +82,8 @@ function makeCtx() {
 
 it("declares its manifest and a complete en/zh-CN bundle from plugin.json", () => {
   expect(manifest.id).toBe("cognia-office")
+  expect(manifest.version).toBe(manifestJson.version)
+  expect(manifest.version).not.toBe("0.1.0") // Two different historical payloads used this identity.
   expect(Object.keys(LOCALES["zh-CN"]).sort()).toEqual(Object.keys(LOCALES.en).sort())
   expect(manifest.runtimeCompatibility?.mobile?.reason).toContain("Documents/cognia/exports")
   expect(manifest.nodeRuntime).toEqual({ directory: "runtime", entry: "probe.mjs" })

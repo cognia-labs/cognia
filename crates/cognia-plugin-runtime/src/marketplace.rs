@@ -163,6 +163,29 @@ pub(crate) fn stage_tree_install(
     result
 }
 
+/// Local directory/ZIP installs use the same journal and startup recovery as
+/// marketplace updates. The caller populates and validates its scratch tree
+/// before this function can mutate an existing installation.
+pub fn install_local_tree_for_state(
+    state: &PluginRuntimeState,
+    source: &Path,
+    manifest: &serde_json::Value,
+) -> Result<DownloadPayload> {
+    let transaction_id = stage_tree_install(&state.plugin_state_dir, source, manifest)?;
+    let plugin_id = manifest["id"].as_str().unwrap(); // validated by stage_tree_install
+    let result = (|| {
+        let installed = commit_staged_update_for_state(state, plugin_id, &transaction_id)?;
+        finalize_staged_update_for_state(state, plugin_id, &transaction_id)?;
+        Ok(installed)
+    })();
+    if result.is_err() {
+        if let Err(error) = discard_staged_update_for_state(state, plugin_id, &transaction_id) {
+            log::error!("local install recovery deferred to startup: {error}");
+        }
+    }
+    result
+}
+
 fn cache_dir(state: &PluginRuntimeState) -> PathBuf {
     state.plugin_install_dir.join("_marketplace_cache")
 }
@@ -887,6 +910,8 @@ pub fn commit_staged_update_for_state(
     if plugin_dir.exists() {
         fs::rename(&plugin_dir, &previous)?;
     }
+    #[cfg(test)]
+    tests::local_install_checkpoint("moved-out");
     if let Err(error) = fs::rename(&staged_path, &plugin_dir) {
         if previous.exists() {
             fs::rename(&previous, &plugin_dir)?;
@@ -894,6 +919,8 @@ pub fn commit_staged_update_for_state(
         return Err(PluginError::Io(error));
     }
     fs::write(transaction_dir.join("committed"), b"1")?;
+    #[cfg(test)]
+    tests::local_install_checkpoint("promoted");
     Ok(DownloadPayload {
         plugin_id: plugin_id.to_string(),
         version: metadata.version,
@@ -938,6 +965,8 @@ pub fn finalize_staged_update_for_state(
         ));
     }
     fs::write(transaction_dir.join("finalized"), b"1")?;
+    #[cfg(test)]
+    tests::local_install_checkpoint("finalized");
     // Finalized is the durable commit point. Cleanup failure must not tell the
     // caller to roll back an installation which startup recovery will retain.
     if let Err(error) = fs::remove_file(marker) {
@@ -1132,6 +1161,83 @@ pub async fn plugin_invalidate_cache(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    pub(super) fn local_install_checkpoint(phase: &str) {
+        if std::env::var("COGNIA_PLUGIN_INSTALL_PHASE").ok().as_deref() != Some(phase) {
+            return;
+        }
+        let root = PathBuf::from(std::env::var_os("COGNIA_PLUGIN_INSTALL_TEST_ROOT").unwrap());
+        fs::write(root.join("checkpoint"), b"ready").unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn local_install_crash_child() {
+        let Some(root) = std::env::var_os("COGNIA_PLUGIN_INSTALL_TEST_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let state = PluginRuntimeState::new(root.join("installed"));
+        let source = root.join("candidate");
+        let manifest =
+            serde_json::from_slice(&fs::read(source.join("plugin.json")).unwrap()).unwrap();
+        install_local_tree_for_state(&state, &source, &manifest).unwrap();
+    }
+
+    #[test]
+    fn local_install_recovers_after_process_termination_without_changing_user_state() {
+        for phase in ["moved-out", "promoted", "finalized"] {
+            let root = TempDir::new().unwrap();
+            let state = PluginRuntimeState::new(root.path().join("installed"));
+            let old = stage_test_tree(&state, b"old");
+            commit_staged_update_for_state(&state, "demo.market", &old).unwrap();
+            finalize_staged_update_for_state(&state, "demo.market", &old).unwrap();
+            let host = state.plugin_host_state_dir("demo.market");
+            fs::create_dir_all(&host).unwrap();
+            fs::write(host.join("state.json"), b"existing-config-and-permissions").unwrap();
+            let source = root.path().join("candidate");
+            fs::create_dir(&source).unwrap();
+            fs::write(
+                source.join("plugin.json"),
+                r#"{"id":"demo.market","version":"2.0.0","type":"frontend","main":"index.js"}"#,
+            )
+            .unwrap();
+            fs::write(source.join("index.js"), b"new").unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "marketplace::tests::local_install_crash_child",
+                    "--nocapture",
+                ])
+                .env("COGNIA_PLUGIN_INSTALL_TEST_ROOT", root.path())
+                .env("COGNIA_PLUGIN_INSTALL_PHASE", phase)
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !root.path().join("checkpoint").exists() && std::time::Instant::now() < deadline {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let reached = root.path().join("checkpoint").exists();
+            let _ = child.kill();
+            child.wait().unwrap();
+            assert!(reached, "child did not reach {phase}");
+            let restarted = PluginRuntimeState::new(state.plugin_install_dir.clone());
+            assert_eq!(
+                fs::read(restarted.plugin_dir("demo.market").join("index.js")).unwrap(),
+                if phase == "finalized" { b"new" } else { b"old" },
+                "{phase}"
+            );
+            assert_eq!(
+                fs::read(host.join("state.json")).unwrap(),
+                b"existing-config-and-permissions"
+            );
+        }
+    }
 
     fn make_state(tmp: &TempDir) -> PluginRuntimeState {
         PluginRuntimeState::new(PathBuf::from(tmp.path()))

@@ -200,6 +200,9 @@ export const WEB_SECTIONS = Object.freeze(
  * Stage a verified set into `root`. `sections` limits which host copies are
  * written (all by default); the whole set is still verified. Returns the set
  * directory, where it came from, and the sections whose host copy changed.
+ * `beforeWrite` can reject a promotion after comparing current Host inputs;
+ * it is awaited under the writer mutex, after lease checks and before any
+ * copy, with the identity of the buffers admitted by this invocation.
  */
 export async function stagePluginArtifacts({
   root = repoRoot,
@@ -211,6 +214,7 @@ export async function stagePluginArtifacts({
   authoring,
   contractCatalog,
   hold = false,
+  beforeWrite,
 } = {}) {
   root = path.resolve(root)
   const { dir, source } = await resolvePluginArtifactSet({ root, from, env, produce })
@@ -222,7 +226,7 @@ export async function stagePluginArtifacts({
   verifyPluginArtifactContract({ manifest, sections, profile, authoring, contractCatalog })
   const artifactSha256 = sha256(sections.manifestBytes)
   const sectionModes = Object.fromEntries(Object.entries(PLUGIN_ARTIFACT_SECTIONS).map(([name, section]) => [name, new Map([...sections[name].keys()].map((relative) => [relative, manifest.modes[relative ? `${section.set}/${relative}` : section.set]]))]))
-  return withPluginArtifactLock(root, (accessDirectory) => {
+  return withPluginArtifactLock(root, async (accessDirectory) => {
   const active = activePluginArtifactLeases(accessDirectory)
   const needsWrite = Object.entries(PLUGIN_ARTIFACT_SECTIONS).some(([name, section]) => {
     if (!only.includes(name)) return false
@@ -232,6 +236,7 @@ export async function stagePluginArtifacts({
   })
   if (active.some((lease) => lease.artifactSha256 !== artifactSha256) || (active.length && needsWrite))
     throw new Error("artifact_in_use: active compilation or resource copy owns the generated plugin inputs; use an isolated checkout")
+  await beforeWrite?.({ accessDirectory, artifactSha256 })
   // Freeze the exact buffers that passed admission. A subsequent producer or
   // external writer can no longer alter the selected set during compilation.
   const immutableDir = path.join(root, ".cache/plugin-artifact-sets", artifactSha256)

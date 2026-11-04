@@ -76,3 +76,45 @@ test("an unconfirmed compiler family remains guarded after its leader exits norm
     assert.equal(leases[0].unconfirmedFamily, true)
   })
 })
+
+test("a completed Windows job is reaped even when the leader PID has been reused", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-completed-job-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  await withPluginArtifactLock(root, (directory) => {
+    fs.writeFileSync(
+      path.join(directory, "reader-job.json"),
+      JSON.stringify({
+        pid: process.pid,
+        artifactSha256: "a".repeat(64),
+        windowsJob: "Global\\CogniaPluginArtifact-12345678-1234-1234-1234-123456789abc",
+      })
+    )
+    assert.equal(activePluginArtifactLeases(directory, { jobActive: () => false }).length, 0)
+    assert.equal(fs.existsSync(path.join(directory, "reader-job.json")), false)
+  })
+})
+
+test("a Windows job query failure preserves its lease and fails closed", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-job-query-failed-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  await withPluginArtifactLock(root, (directory) => {
+    fs.writeFileSync(
+      path.join(directory, "reader-job.json"),
+      JSON.stringify({
+        pid: process.pid,
+        artifactSha256: "a".repeat(64),
+        windowsJob: "Global\\CogniaPluginArtifact-12345678-1234-1234-1234-123456789abc",
+      })
+    )
+    assert.throws(
+      () =>
+        activePluginArtifactLeases(directory, {
+          jobActive: () => {
+            throw new Error("job query denied")
+          },
+        }),
+      /job query denied/
+    )
+    assert.equal(fs.existsSync(path.join(directory, "reader-job.json")), true)
+  })
+})

@@ -7,9 +7,9 @@
  * that renders plugin content stamps `data-plugin-root="<id>"` on its wrapper,
  * and the stylesheet is wrapped in `@scope ([data-plugin-root="<id>"])`.
  *
- * `@scope` was chosen over rewriting selectors because it needs no CSS parser —
- * the browser applies the bound, so there is no selector syntax we can get
- * wrong. The one thing it cannot hold is the at-rules that *define a name*
+ * Modern engines apply the bound using `@scope`. Older WebViews use their
+ * CSSOM parser to restrict each selector's subject to the same subtree.
+ * The one thing a scope cannot hold is the at-rules that *define a name*
  * rather than style an element: `@keyframes`, `@font-face`, `@property` and
  * `@counter-style` are invalid inside a `@scope` block and would be dropped
  * silently. Since animation is one of the things this feature exists to enable,
@@ -132,9 +132,10 @@ function skipString(css: string, start: number): number {
  * interpolated raw — a manifest id is validated upstream, but a stylesheet that
  * silently mis-scopes because of one stray quote is a bad failure mode.
  */
-export function scopePluginCss(css: string, pluginId: string): string {
+export function scopePluginCss(css: string, pluginId: string, supportsScope = true): string {
   const { hoisted, scoped } = splitHoistedAtRules(css)
   const selector = `[${PLUGIN_ROOT_ATTRIBUTE}="${cssEscapeAttributeValue(pluginId)}"]`
+  if (!supportsScope) return scopePluginCssViaCssom(css, selector)
 
   const parts: string[] = []
   if (hoisted) {
@@ -144,6 +145,97 @@ export function scopePluginCss(css: string, pluginId: string): string {
     parts.push(`@scope (${selector}) {\n${scoped}\n}`)
   }
   return parts.join("\n\n")
+}
+
+/**
+ * Restrict the selector's subject, rather than prefixing an ancestor: the
+ * latter misses a matching plugin root and lets nested sibling selectors
+ * escape. CSSOM handles selector lists, nesting and conditional groups; named
+ * definitions keep their original meaning. The inert sheet never styles Host
+ * elements, even briefly.
+ */
+function scopePluginCssViaCssom(css: string, root: string): string {
+  const sheetElement = document.createElement("style")
+  sheetElement.media = "not all"
+  sheetElement.textContent = css
+  document.head.appendChild(sheetElement)
+  try {
+    const bound = `:where(${root}, ${root} *)`
+    const render = (rule: CSSRule): string => {
+      if (rule.type === CSSRule.STYLE_RULE) {
+        const styleRule = rule as CSSStyleRule
+        // Protect attribute strings and escaped tokens when replacing :scope.
+        const selector = styleRule.selectorText.replace(
+          /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\\.|:scope\b/g,
+          (token) => (token === ":scope" ? `:is(${root})` : token)
+        )
+        const children = Array.from(styleRule.cssRules ?? [])
+          .map(render)
+          .join("\n")
+        return `${boundSelectors(selector, bound)} { ${styleRule.style.cssText}\n${children} }`
+      }
+      // Keyframe selectors (from/to/percentages) are not DOM selectors.
+      if (rule.type === CSSRule.KEYFRAMES_RULE) return rule.cssText
+      if ("cssRules" in rule) {
+        const group = rule as CSSGroupingRule
+        const serialized = rule.cssText
+        let brace = 0
+        while (brace < serialized.length && serialized[brace] !== "{") {
+          brace =
+            serialized[brace] === '"' || serialized[brace] === "'"
+              ? skipString(serialized, brace)
+              : brace + 1
+        }
+        const header = serialized.slice(0, brace)
+        return `${header}{\n${Array.from(group.cssRules).map(render).join("\n")}\n}`
+      }
+      return rule.cssText
+    }
+    if (!sheetElement.sheet) throw new Error("Plugin stylesheet could not be parsed")
+    return Array.from(sheetElement.sheet.cssRules).map(render).join("\n")
+  } finally {
+    sheetElement.remove()
+  }
+}
+
+/** Keep each list member's specificity and place the bound on the element,
+ * before ::before/::after (pseudo-elements cannot be arguments of :is()). */
+function boundSelectors(selector: string, bound: string): string {
+  const selectors: string[] = []
+  let start = 0
+  let depth = 0
+  let pseudoElement = -1
+  const flush = (end: number) => {
+    const insert = pseudoElement < 0 ? end : pseudoElement
+    selectors.push(`${selector.slice(start, insert).trim()}${bound}${selector.slice(insert, end)}`)
+    start = end + 1
+    pseudoElement = -1
+  }
+  for (let index = 0; index < selector.length; index++) {
+    const char = selector[index]
+    if (char === '"' || char === "'") {
+      index = skipString(selector, index) - 1
+      continue
+    }
+    if (char === "\\") {
+      index++
+      continue
+    }
+    if (char === "[" || char === "(") depth++
+    else if (char === "]" || char === ")") depth--
+    else if (depth === 0 && char === ",") flush(index)
+    else if (
+      depth === 0 &&
+      char === ":" &&
+      pseudoElement < 0 &&
+      (selector[index + 1] === ":" ||
+        /^:(before|after|first-line|first-letter)\b/.test(selector.slice(index)))
+    ) {
+      pseudoElement = index
+    }
+  }
+  flush(selector.length)
+  return selectors.join(", ")
 }
 
 function cssEscapeAttributeValue(value: string): string {
@@ -157,7 +249,7 @@ function cssEscapeAttributeValue(value: string): string {
 export function injectPluginStyles(pluginId: string, css: string): void {
   if (typeof document === "undefined") return
 
-  const scoped = scopePluginCss(css, pluginId)
+  const scoped = scopePluginCss(css, pluginId, "CSSScopeRule" in globalThis)
   const existing = document.querySelector<HTMLStyleElement>(
     `style[${PLUGIN_STYLE_ATTRIBUTE}="${CSS.escape(pluginId)}"]`
   )

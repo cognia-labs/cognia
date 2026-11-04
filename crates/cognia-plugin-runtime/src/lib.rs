@@ -248,6 +248,7 @@ impl PluginRuntimeState {
             command_hooks_cache: Arc::new(RwLock::new(None)),
             installed_manifest_cache: Arc::new(RwLock::new(HashMap::new())),
         };
+        backup::recover_restore_transactions_for_state(&state);
         let recovery = marketplace::recover_update_transactions_for_state(&state);
         if recovery.recovered_transactions > 0 || recovery.discarded_transactions > 0 {
             log::info!(

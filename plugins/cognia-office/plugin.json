@@ -2,7 +2,7 @@
   "id": "cognia-office",
   "name": "Cognia Office",
   "nameKey": "manifest.name",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Plugin-owned native XLSX authoring, preview, validation, export, and Lark Sheets synchronization.",
   "descriptionKey": "manifest.description",
   "type": "frontend",

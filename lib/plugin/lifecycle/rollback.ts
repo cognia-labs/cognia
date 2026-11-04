@@ -4,12 +4,12 @@
  * Handles plugin version rollback with state migration support.
  */
 
-import { invoke } from "@tauri-apps/api/core"
 import { getPluginBackupManager, type PluginBackup } from "./backup"
 import { loggers } from "../core/logger"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import { getPluginMarketplace } from "../package/marketplace"
 import { getPluginManager } from "../core/manager"
+import type { PluginGraphReservation } from "../core/lifecycle-coordinator"
 
 // =============================================================================
 // Types
@@ -222,21 +222,25 @@ export class PluginRollbackManager {
       }
     }
 
-    // Step 6: Load plugin
-    steps.push({
-      order: order++,
-      action: "load",
-      description: "Load plugin module",
-      reversible: true,
-    })
+    const status = usePluginStore.getState().plugins[pluginId]?.status
+    const reactivate = ["enabled", "suspended", "enabling"].includes(status ?? "")
+    // Match execution: inactive plugins stay inactive after restoring bytes.
+    if (reactivate || status === "loaded" || status === "loading")
+      steps.push({
+        order: order++,
+        action: "load",
+        description: "Load plugin module",
+        reversible: true,
+      })
 
     // Step 7: Enable plugin
-    steps.push({
-      order: order++,
-      action: "enable",
-      description: "Enable plugin",
-      reversible: true,
-    })
+    if (reactivate)
+      steps.push({
+        order: order++,
+        action: "enable",
+        description: "Enable plugin",
+        reversible: true,
+      })
 
     // Step 8: Verify
     if (this.config.verifyAfterRollback) {
@@ -270,6 +274,9 @@ export class PluginRollbackManager {
     const startTime = Date.now()
     const info = await this.getRollbackInfo(pluginId)
     const fromVersion = info.currentVersion
+    const initialStatus = usePluginStore.getState().plugins[pluginId]?.status
+    const lifecycle = getPluginManager()
+    let reservation: PluginGraphReservation | undefined
     let migrationApplied = false
 
     try {
@@ -286,9 +293,13 @@ export class PluginRollbackManager {
         }
       }
 
-      // Step 2: Disable and unload plugin
-      await invoke("plugin_disable", { pluginId })
-      await invoke("plugin_unload", { pluginId })
+      // The TS manager owns frontend modules, contributions and graph leases.
+      // Native status changes alone leave the old UI and commands alive.
+      reservation = lifecycle.reservePluginRuntimeGraph(pluginId)
+      if (initialStatus === "enabled" || initialStatus === "suspended") {
+        await lifecycle.disablePlugin(pluginId, "rollback")
+      }
+      await lifecycle.unloadPlugin(pluginId)
 
       // Step 3: Restore target version
       const versionInfo = info.availableVersions.find((v) => v.version === targetVersion)
@@ -308,39 +319,35 @@ export class PluginRollbackManager {
         }
       }
 
-      this.projectPluginVersion(pluginId, targetVersion)
       await this.refreshRuntimePlugins()
+      if (!(await this.verifyRollback(pluginId, targetVersion))) {
+        throw new Error("Rollback restored an unexpected plugin version")
+      }
 
       // Step 4: Migrate data if needed
       if (this.config.migrateData) {
         migrationApplied = await this.applyMigration(pluginId, fromVersion, targetVersion)
       }
 
-      // Step 5: Load and enable
-      // `plugin_load(plugin_id, manifest)` declares the manifest required and
-      // refuses one whose `id` disagrees with `plugin_id`. Sending only the id
-      // rejected on the missing argument, so EVERY rollback died here at step
-      // 5 -- after the target version was already restored to disk, leaving the
-      // plugin unloaded rather than rolled back. The store copy is the one
-      // `refreshRuntimePlugins()` just re-read from disk and
-      // `projectPluginVersion` moved to `targetVersion`. Rust persists only
-      // this subset; anything richer stays on the TS side.
-      const restored = usePluginStore.getState().plugins[pluginId]?.manifest
-      if (!restored) {
-        throw new Error(
-          `Rollback restored ${pluginId}@${targetVersion} but no manifest is registered for it`
-        )
+      // Restore the pre-rollback activation state through the same owner as a
+      // normal enable. A disabled package must not acquire running code.
+      if (
+        initialStatus === "enabled" ||
+        initialStatus === "suspended" ||
+        initialStatus === "enabling"
+      ) {
+        await lifecycle.enablePlugin(pluginId)
+        if (initialStatus === "suspended") await lifecycle.suspendPlugin(pluginId, "rollback")
+      } else if (initialStatus === "loaded" || initialStatus === "loading") {
+        await lifecycle.loadPlugin(pluginId)
+      } else if (initialStatus === "disabled") {
+        usePluginStore.setState((state) => ({
+          plugins: {
+            ...state.plugins,
+            [pluginId]: { ...state.plugins[pluginId], status: "disabled" },
+          },
+        }))
       }
-      await invoke("plugin_load", {
-        pluginId,
-        manifest: {
-          id: restored.id,
-          version: restored.version,
-          name: restored.name,
-          description: restored.description,
-        },
-      })
-      await invoke("plugin_enable", { pluginId })
 
       // Step 6: Verify
       if (this.config.verifyAfterRollback) {
@@ -376,6 +383,8 @@ export class PluginRollbackManager {
 
       this.recordRollback(result)
       return result
+    } finally {
+      if (reservation) lifecycle.releasePluginRuntimeGraph(reservation)
     }
   }
 
@@ -459,7 +468,8 @@ export class PluginRollbackManager {
         return false
       }
 
-      let migratedData = { ...existingPlugin.config }
+      // A throwing migration must not mutate nested values in the live config.
+      let migratedData = structuredClone(existingPlugin.config)
 
       if (isDowngrade) {
         // Apply down migrations in reverse order
@@ -492,7 +502,7 @@ export class PluginRollbackManager {
       return true
     } catch (error) {
       loggers.manager.error("[Rollback] Migration failed:", error)
-      return false
+      throw error
     }
   }
 
@@ -502,31 +512,8 @@ export class PluginRollbackManager {
   }
 
   private async refreshRuntimePlugins(): Promise<void> {
-    try {
-      await getPluginManager().scanPlugins()
-      await getPluginManager().syncRuntimeState()
-    } catch (error) {
-      loggers.manager.debug("[Rollback] Runtime refresh skipped:", error)
-    }
-  }
-
-  private projectPluginVersion(pluginId: string, version: string): void {
-    usePluginStore.setState((state) => {
-      const current = state.plugins[pluginId]
-      if (!current) return state
-      return {
-        plugins: {
-          ...state.plugins,
-          [pluginId]: {
-            ...current,
-            manifest: {
-              ...current.manifest,
-              version,
-            },
-          },
-        },
-      }
-    })
+    await getPluginManager().scanPlugins()
+    await getPluginManager().syncRuntimeState()
   }
 
   // ===========================================================================

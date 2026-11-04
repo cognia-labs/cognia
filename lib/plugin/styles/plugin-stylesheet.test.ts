@@ -122,6 +122,37 @@ describe("splitHoistedAtRules", () => {
 })
 
 describe("scopePluginCss", () => {
+  it("contains selectors without @scope on older engines, including the root itself", () => {
+    const out = scopePluginCss(':scope, .badge, [title=":scope"] { color: red }', "demo", false)
+    expect(out).not.toContain("@scope")
+    expect(out).toContain(':where([data-plugin-root="demo"], [data-plugin-root="demo"] *)')
+    expect(out).toContain('[title=":scope"]')
+    expect(out).toContain(':is([data-plugin-root="demo"])')
+  })
+
+  it("keeps conditional rules and animation frames intact in the fallback", () => {
+    const out = scopePluginCss(
+      "@media print { .badge { color: red } } @keyframes k { from { opacity: 0 } }",
+      "demo",
+      false
+    )
+    expect(out).toContain("@media print")
+    expect(out).toContain('.badge:where([data-plugin-root="demo"], [data-plugin-root="demo"] *)')
+    expect(out).toContain("@keyframes k")
+    expect(out).not.toContain(":is(from)")
+  })
+
+  it("keeps list specificity and binds the element before pseudo-elements", () => {
+    const out = scopePluginCss(
+      '.badge, #never { color: red } .badge::before { content: "x" }',
+      "demo",
+      false
+    )
+    expect(out).toContain(".badge:where(")
+    expect(out).toContain("#never:where(")
+    expect(out).toContain("*)::before")
+    expect(out).not.toContain(":is(.badge,")
+  })
   it("binds style rules to the plugin's own root attribute", () => {
     const out = scopePluginCss(".badge { color: red }", "demo")
     expect(out).toContain(`@scope ([${PLUGIN_ROOT_ATTRIBUTE}="demo"])`)
@@ -156,7 +187,7 @@ describe("injectPluginStyles", () => {
     injectPluginStyles("demo", ".a { color: red }")
     const el = document.head.querySelector(`style[${PLUGIN_STYLE_ATTRIBUTE}="demo"]`)
     expect(el).not.toBeNull()
-    expect(el?.textContent).toContain("@scope")
+    expect(el?.textContent).toContain('[data-plugin-root="demo"]')
   })
 
   it("replaces rather than stacks on repeat injection", () => {

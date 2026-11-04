@@ -44,6 +44,9 @@ const CATALOG = {
   },
 }
 
+// Exercise the real adopted catalog so a stale Office artifact cannot pass.
+const OFFICE_CANDIDATE = bundledPluginCatalog().entries["cognia-office"]
+
 function deps(over: Partial<SeedBundledPluginsDeps> = {}) {
   const marker: Record<string, string> = {}
   const installed: string[] = []
@@ -63,6 +66,54 @@ function deps(over: Partial<SeedBundledPluginsDeps> = {}) {
 }
 
 describe("seedBundledPlugins", () => {
+  it("upgrades the ambiguous Office 0.1.0 builtin exactly once to the candidate", async () => {
+    const entry = OFFICE_CANDIDATE
+    const { base, installed, marker } = deps({
+      catalog: { entries: { "cognia-office": entry } },
+      readInstalled: async () => ({ version: "0.1.0", origin: "builtin" }),
+    })
+    marker["cognia-office"] = "0.1.0"
+    expect((await seedBundledPlugins(base)).seeded).toEqual(["cognia-office"])
+    expect(marker["cognia-office"]).toBe(entry.version)
+    expect((await seedBundledPlugins(base)).upToDate).toEqual(["cognia-office"])
+    expect(installed).toHaveLength(1)
+  })
+
+  it.each([
+    { version: "0.1.0", origin: "local" },
+    { version: "0.1.0", origin: "registry" },
+    { version: "99.0.0", origin: "builtin" },
+    undefined,
+  ])("preserves an independent, newer or removed Office installation: %j", async (entry) => {
+    const { base, installed, marker } = deps({
+      catalog: { entries: { "cognia-office": OFFICE_CANDIDATE } },
+      readInstalled: async () => entry,
+    })
+    marker["cognia-office"] = "0.1.0"
+    await seedBundledPlugins(base)
+    expect(installed).toEqual([])
+    expect(marker["cognia-office"]).toBe("0.1.0")
+  })
+
+  it("retries an interrupted Office upgrade without advancing the old marker", async () => {
+    const install = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue(undefined)
+    const entry = OFFICE_CANDIDATE
+    const { base, marker } = deps({
+      catalog: { entries: { "cognia-office": entry } },
+      readInstalled: async () => ({ version: "0.1.0", origin: "builtin" }),
+      installFromDirectory: install,
+    })
+    marker["cognia-office"] = "0.1.0"
+    expect((await seedBundledPlugins(base)).failed["cognia-office"]).toBe("interrupted")
+    expect(marker["cognia-office"]).toBe("0.1.0")
+    expect((await seedBundledPlugins(base)).seeded).toEqual(["cognia-office"])
+    expect(marker["cognia-office"]).toBe(entry.version)
+    expect(install).toHaveBeenCalledTimes(2)
+  })
+
   it("installs a frontend runtime package through the same host registration path", async () => {
     const { base, installed, marker } = deps({
       catalog: {

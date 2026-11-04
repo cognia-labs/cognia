@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { test } from "node:test"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
@@ -120,5 +121,178 @@ test(
         )
       )
     })
+  }
+)
+
+for (const mode of [
+  "normal",
+  "crash",
+  "orphan",
+  "wrapper-crash",
+  "guardian-crash",
+  "custom-preload",
+]) {
+  test(
+    `Windows compiler job recovers after ${mode}`,
+    { skip: process.platform !== "win32", timeout: 60000 },
+    async (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "windows-plugin-job-"))
+      const access = path.join(root, ".cache/plugin-artifact-access")
+      fs.mkdirSync(access, { recursive: true })
+      const artifactSha256 = "a".repeat(64)
+      fs.writeFileSync(path.join(access, "receipt.json"), JSON.stringify({ artifactSha256 }))
+      const ready = path.join(root, "ready.json")
+      const workerReady = path.join(root, "worker-ready")
+      const unexpectedPreload = path.join(root, "unexpected-guardian-preload")
+      const hasWorker = mode === "orphan" || mode === "wrapper-crash"
+      const env = {
+        ...process.env,
+        COGNIA_PLUGIN_COMPILATION_LEASE: JSON.stringify({ root, artifactSha256 }),
+      }
+      if (mode === "custom-preload") {
+        const preload = `import fs from 'node:fs';if(process.argv.some(arg=>arg.endsWith('powershell.exe'))){fs.writeFileSync(${JSON.stringify(unexpectedPreload)},'executed');throw Error('Guardian inherited compiler preload')}`
+        for (const key of Object.keys(env))
+          if (key.toUpperCase() === "NODE_OPTIONS") delete env[key]
+        env.node_options = `--import=data:text/javascript,${encodeURIComponent(preload)}`
+      }
+      const source = `
+      const fs = require('node:fs');
+      let worker;
+      if (${JSON.stringify(hasWorker)}) {
+        worker = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(workerReady)}, 'ready');setInterval(()=>{},1000)`)}], {stdio:'ignore',detached:true});
+        worker.unref();
+      }
+      fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({pid:process.pid,worker:worker?.pid}));
+      if (${JSON.stringify(mode)} === 'normal') process.exit(0);
+      if (${JSON.stringify(mode)} === 'orphan') {
+        const timer = setInterval(()=>{if(fs.existsSync(${JSON.stringify(workerReady)})){clearInterval(timer);process.exit(0)}},20);
+      } else setInterval(()=>{},1000);
+    `
+      const args =
+        mode === "wrapper-crash"
+          ? [
+              "--input-type=module",
+              "-e",
+              `import {runWithPluginArtifacts} from ${JSON.stringify(new URL("./with-plugin-artifacts.mjs", import.meta.url).href)}; await runWithPluginArtifacts({root:${JSON.stringify(root)},args:[process.execPath,'-e',${JSON.stringify(source)}],prepare:async()=>({artifactSha256:${JSON.stringify(artifactSha256)},release(){}})})`,
+            ]
+          : [
+              "--import",
+              new URL("./plugin-artifact-child-lease.mjs", import.meta.url).href,
+              "-e",
+              source,
+            ]
+      const compiler = spawn(process.execPath, args, {
+        stdio: ["ignore", "ignore", "inherit"],
+        env,
+      })
+      const exited = once(compiler, "exit")
+      let workerPid, guardianPid
+      const kill = (pid) => {
+        if (pid) {
+          try {
+            process.kill(pid, "SIGKILL")
+          } catch (error) {
+            if (error.code !== "ESRCH") throw error
+          }
+        }
+      }
+      t.after(() => {
+        if (compiler.exitCode === null && compiler.signalCode === null) compiler.kill("SIGKILL")
+        kill(workerPid)
+        kill(guardianPid)
+        fs.rmSync(root, { recursive: true, force: true })
+      })
+      const deadline = Date.now() + 30000
+      while (!fs.existsSync(ready) || (hasWorker && !fs.existsSync(workerReady))) {
+        if (compiler.exitCode !== null || compiler.signalCode !== null)
+          assert.fail("Compiler exited before Job attachment")
+        if (Date.now() > deadline) assert.fail("Compiler did not start in its Windows Job")
+        await setTimeout(20)
+      }
+      workerPid = JSON.parse(fs.readFileSync(ready, "utf8")).worker
+      const file = fs.readdirSync(access).find((name) => /^reader-.*\.json$/.test(name))
+      const lease = JSON.parse(fs.readFileSync(path.join(access, file), "utf8"))
+      assert.ok(lease.windowsJob)
+      assert.equal(lease.unconfirmedFamily, false)
+      assert.equal(fs.existsSync(unexpectedPreload), false)
+      guardianPid = lease.windowsJobOwner
+      if (mode === "guardian-crash") kill(guardianPid)
+      if (mode === "crash" || mode === "custom-preload" || mode === "wrapper-crash")
+        compiler.kill("SIGKILL")
+      await exited
+      // Windows libuv may terminate the wrapper's entire nested compiler Job.
+      // A zero lease is valid only when that worker is actually confirmed dead.
+      let workerAlive = hasWorker
+      if (mode === "wrapper-crash") {
+        try {
+          process.kill(workerPid, 0)
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error
+          workerAlive = false
+        }
+      }
+      await withPluginArtifactLock(root, (directory) => {
+        const readers = activePluginArtifactLeases(directory)
+        assert.equal(readers.length, workerAlive ? 1 : 0)
+      })
+      if (workerAlive) {
+        process.kill(workerPid, 0)
+        kill(workerPid)
+        workerPid = undefined
+        await withPluginArtifactLock(root, (directory) => {
+          assert.equal(activePluginArtifactLeases(directory).length, 0)
+        })
+      }
+      workerPid = undefined
+      // The guardian may already have exited after observing an empty job.
+      guardianPid = undefined
+    }
+  )
+}
+
+test(
+  "failed Windows guardian attachment prevents application imports",
+  { skip: process.platform !== "win32", timeout: 60000 },
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "windows-plugin-job-failed-"))
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    const access = path.join(root, ".cache/plugin-artifact-access")
+    fs.mkdirSync(access, { recursive: true })
+    const artifactSha256 = "a".repeat(64)
+    fs.writeFileSync(path.join(access, "receipt.json"), JSON.stringify({ artifactSha256 }))
+    const started = path.join(root, "application-imported")
+    const preloadDir = path.join(root, "isolated-preload")
+    fs.mkdirSync(preloadDir)
+    for (const name of ["plugin-artifact-child-lease.mjs", "plugin-artifact-lease.mjs"])
+      fs.copyFileSync(new URL(name, import.meta.url), path.join(preloadDir, name))
+    fs.writeFileSync(
+      path.join(preloadDir, "plugin-artifact-windows-job.ps1"),
+      "param([string]$Mode,[string]$JobName,[int]$OwnerPid)\n[Console]::Error.WriteLine('fixture: attach denied')\nexit 1\n"
+    )
+    const compiler = spawn(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.join(preloadDir, "plugin-artifact-child-lease.mjs")).href,
+        "-e",
+        `require('node:fs').writeFileSync(${JSON.stringify(started)},'started')`,
+      ],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        env: {
+          ...process.env,
+          COGNIA_PLUGIN_COMPILATION_LEASE: JSON.stringify({ root, artifactSha256 }),
+        },
+      }
+    )
+    let diagnostic = ""
+    compiler.stderr.on("data", (chunk) => {
+      diagnostic += chunk
+    })
+    const [code] = await once(compiler, "exit")
+    assert.notEqual(code, 0)
+    assert.match(diagnostic, /Windows artifact job could not attach/)
+    assert.match(diagnostic, /fixture: attach denied/)
+    assert.equal(fs.existsSync(started), false)
   }
 )

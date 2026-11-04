@@ -9,6 +9,7 @@ const cssRequire = createRequire(require.resolve("@tailwindcss/postcss"))
 const postcss = cssRequire("postcss")
 const { Scanner } = cssRequire("@tailwindcss/oxide")
 const { compile } = await import(pathToFileURL(cssRequire.resolve("@tailwindcss/node")))
+const { transform } = createRequire(cssRequire.resolve("@tailwindcss/node"))("lightningcss")
 
 export function createPluginStyleContract(root) {
   const file = path.join(root, "app/globals.css")
@@ -75,5 +76,12 @@ export async function compilePluginUtilityCss({ root, javascript, contract }) {
   sheet.walkDecls((declaration) => {
     declaration.value = substitute(declaration.value)
   })
-  return { css: sheet.toString(), inputs }
+  // The mobile Host still supports iOS 16.0. Lower range media queries and
+  // nesting before an older CSSOM parses the stylesheet for containment.
+  const { code } = transform({
+    filename: "plugin.css",
+    code: Buffer.from(sheet.toString()),
+    targets: { safari: 16 << 16 },
+  })
+  return { css: code.toString(), inputs }
 }

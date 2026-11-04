@@ -1167,7 +1167,7 @@ fn install_inner_blocking(
     let (manifest, plugin_id) = read_manifest_from_zip(&bytes)?;
     validate_expected_plugin_id(expected_plugin_id, &plugin_id)?;
     let target_dir = plugin_state.plugin_dir(&plugin_id);
-    replace_directory_atomically(&target_dir, |staging| {
+    replace_directory_atomically(&plugin_state, &manifest, |staging| {
         extract_zip_into(&bytes, staging)?;
         // A bundle cannot vouch for itself.
         cognia_plugin_runtime::marketplace::discard_supplied_receipt(staging)?;
@@ -1323,7 +1323,7 @@ fn install_from_directory_blocking<P: tauri::Runtime>(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    replace_directory_atomically(&target_dir, |staging| {
+    replace_directory_atomically(&plugin_state, &manifest, |staging| {
         copy_dir_recursive(scratch.path(), staging)?;
         receipt_for_directory_install(staging, &source, &version)?;
         Ok(())
@@ -1349,37 +1349,24 @@ fn receipt_for_directory_install(
         .mint_local_dev_receipt(staging, source, version)
 }
 
-/// Populate a sibling staging directory, then replace the live install with
-/// same-filesystem renames. A failed extraction/copy never mutates the prior
-/// installation, and a failed final rename restores it before returning.
+/// Populate scratch first, then use the runtime's existing durable update
+/// transaction. Startup recovery handles process death between tree renames.
 fn replace_directory_atomically(
-    target: &Path,
+    state: &PluginRuntimeState,
+    manifest: &serde_json::Value,
     populate: impl FnOnce(&Path) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("plugin install target has no parent"))?;
+    let parent = &state.plugin_install_dir;
     std::fs::create_dir_all(parent)?;
     let staging = tempfile::Builder::new()
         .prefix(".cognia-plugin-staging-")
         .tempdir_in(parent)?;
     populate(staging.path())?;
-    let staging_path = staging.keep();
-    let backup = parent.join(format!(".cognia-plugin-backup-{}", uuid::Uuid::now_v7()));
-    let had_existing = target.exists();
-    if had_existing {
-        std::fs::rename(target, &backup)?;
-    }
-    if let Err(error) = std::fs::rename(&staging_path, target) {
-        if had_existing {
-            let _ = std::fs::rename(&backup, target);
-        }
-        let _ = std::fs::remove_dir_all(&staging_path);
-        return Err(error.into());
-    }
-    if had_existing {
-        std::fs::remove_dir_all(backup)?;
-    }
+    cognia_plugin_runtime::marketplace::install_local_tree_for_state(
+        state,
+        staging.path(),
+        manifest,
+    )?;
     Ok(())
 }
 
@@ -1898,7 +1885,8 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("old.txt"), "old").unwrap();
 
-        let result = replace_directory_atomically(&target, |staging| {
+        let state = PluginRuntimeState::new(tmp.path().to_path_buf());
+        let result = replace_directory_atomically(&state, &json!({"id":"demo"}), |staging| {
             std::fs::write(staging.join("partial.txt"), "partial")?;
             anyhow::bail!("rejected archive")
         });

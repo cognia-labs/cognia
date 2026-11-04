@@ -1,6 +1,6 @@
 # 第一方插件拆仓：先闭合产物合同，再迁移稳定基线
 
-状态：P0 已完成，P1 主要修复已在现仓实施；Windows 进程恢复及 P1d 验收未完成，禁止拆仓。未提交或发布。创建：2026-10-30；更新：2026-10-31（Asia/Shanghai）。作者：Codex。范围：插件、SDK 分发、Web/Tauri/Capacitor/CLI 构建与跨仓 CI。深度：Heavy。输入：[就绪度调查](../reports/2026-10-30-plugins-repository-extraction-readiness.md)。相关决策：[ADR-0155](../content/docs/en/adr/0155-plugins-reach-the-host-through-one-door.md)、[ADR-0156](../content/docs/en/adr/0156-every-in-tree-plugin-is-a-third-party-plugin.md)、[ADR-0195](../content/docs/en/adr/0195-a-plugin-writes-to-the-contract-not-around-it.md)。实施结果见 §17。
+状态：P0 已完成，P1 主要修复已在现仓实施；§25 已将当前源码对齐到 Kit `e6ad2db0` / Host `380249a2`，全部 75 个 frontend 包及 1743 个 payload 文件独立比对通过。§24 的 stylesheet 修复已纳入新的 ABI 和产物。当前仍有一条 Host Feishu 凭据脱敏断言失败；P1d 的真实平台/生产资源/账户状态验收及暂缓全局检查未完成，禁止拆仓。尚未拆仓或发布。创建：2026-10-30；更新：2026-11-02（Asia/Shanghai）。作者：Codex。范围：插件、SDK 分发、Web/Tauri/Capacitor/CLI 构建与跨仓 CI。深度：Heavy。输入：[就绪度调查](../reports/2026-10-30-plugins-repository-extraction-readiness.md)。相关决策：[ADR-0155](../content/docs/en/adr/0155-plugins-reach-the-host-through-one-door.md)、[ADR-0156](../content/docs/en/adr/0156-every-in-tree-plugin-is-a-third-party-plugin.md)、[ADR-0195](../content/docs/en/adr/0195-a-plugin-writes-to-the-contract-not-around-it.md)。历史实施见 §17，Windows/Office 修复见 §21，历史冻结证明见 §23，UI/状态修复及边界见 §24，当前 ABI 与独立证明见 §25。
 
 ## 1. 决策：可以推进拆仓，当前禁止直接删除源码
 
@@ -263,18 +263,18 @@ P1 的样式/资源/构建修复会改变产物，必须先在原仓完成各自
 
 ## 13. 验收矩阵必须包含成功、拒绝与恢复
 
-| ID / owner      | Given → When → Then                                                                                                                             | 证据层次                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| T1 / SDK        | fresh plugin clone 无 Host → 安装 K、运行全 exports/声明/helpers → 不访问 sibling/Host alias，无缺依赖                                          | 独立进程与解析输入清单                                           |
-| T2 / 插件工具链 | 本地存在 Pi toolchain、venv 等 → 构建 69 frontend ZIP/默认 artifact → shipping 内容不变且无开发状态；manifest parity 和全部 entry 可加载        | 实际 builder + archive inventory + loader                        |
-| T3 / Host 构建  | artifact hash 正确但 profile/contract/集合/catalog 错 → staging → 写入前失败；Host 输出 hash 不变                                               | negative integration tests                                       |
-| T4 / Host 构建  | warm/cold A，显式 B → 编译 CLI JS/pkg/Bun/brain → 编入的 catalog、receipt、资源都为 B；损坏 B 直接失败                                          | 实际 bundler/layout，另跑已发布形态 CLI smoke                    |
-| T5 / UI         | Host 无插件源码且无旧 public mirror → 加载 documents/modal/timeline → 三个丢失 selector 对应计算样式、响应式/焦点/hover 正常                    | production static export + Playwright screenshot/computed styles |
-| T6 / 资源       | builtin 与 disk 插件 → 展示截图/主题/file icons，渲染 PDF → 无旧路径 404、无身份图标目录误用；worker 成功；越界资源拒绝                         | 真实浏览器/桌面资源请求与渲染                                    |
-| T7 / 产品验证   | 原 B 用户数据/禁用/授权/手装版本 → 升级到拆仓版本、重启/中断恢复 → 状态及优先级保持                                                             | 合成账号配置 + 真实安装/启动流程                                 |
-| T8 / SDK/合同   | Host ABI、style、WIT/profile 或插件来源变动 → 运行跨仓 CI → 选择正确 lane，兼容通过后才允许 pin 更新                                            | consumer CI 与错误组合负测                                       |
-| T9 / Host 构建  | staging 中断/离线缓存，或 A 编译期间以另一有效 B 发起构建 → 重跑/并发请求 → 完整重建或明确拒绝，不混合 A/B、不回退 latest；同集合共享必须无改写 | fault injection + receipt/read-lease 验证                        |
-| T10 / 产品验证  | 已采用 A，新候选失败 → 回退被测试的 Host/K/P/A tuple → 构建及已有用户启动恢复，不反向迁移数据                                                   | 回滚演练                                                         |
+| ID / owner      | Given → When → Then                                                                                                                                        | 证据层次                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| T1 / SDK        | fresh plugin clone 无 Host → 安装 K、运行全 exports/声明/helpers → 不访问 sibling/Host alias，无缺依赖                                                     | 独立进程与解析输入清单                                           |
+| T2 / 插件工具链 | 本地存在 Pi toolchain、venv 等 → 按当前 inventory 构建全部 frontend ZIP/默认 artifact → shipping 内容不变且无开发状态；manifest parity 和全部 entry 可加载 | 实际 builder + archive inventory + loader                        |
+| T3 / Host 构建  | artifact hash 正确但 profile/contract/集合/catalog 错 → staging → 写入前失败；Host 输出 hash 不变                                                          | negative integration tests                                       |
+| T4 / Host 构建  | warm/cold A，显式 B → 编译 CLI JS/pkg/Bun/brain → 编入的 catalog、receipt、资源都为 B；损坏 B 直接失败                                                     | 实际 bundler/layout，另跑已发布形态 CLI smoke                    |
+| T5 / UI         | Host 无插件源码且无旧 public mirror → 加载 documents/modal/timeline → 三个丢失 selector 对应计算样式、响应式/焦点/hover 正常                               | production static export + Playwright screenshot/computed styles |
+| T6 / 资源       | builtin 与 disk 插件 → 展示截图/主题/file icons，渲染 PDF → 无旧路径 404、无身份图标目录误用；worker 成功；越界资源拒绝                                    | 真实浏览器/桌面资源请求与渲染                                    |
+| T7 / 产品验证   | 原 B 用户数据/禁用/授权/手装版本 → 升级到拆仓版本、重启/中断恢复 → 状态及优先级保持                                                                        | 合成账号配置 + 真实安装/启动流程                                 |
+| T8 / SDK/合同   | Host ABI、style、WIT/profile 或插件来源变动 → 运行跨仓 CI → 选择正确 lane，兼容通过后才允许 pin 更新                                                       | consumer CI 与错误组合负测                                       |
+| T9 / Host 构建  | staging 中断/离线缓存，或 A 编译期间以另一有效 B 发起构建 → 重跑/并发请求 → 完整重建或明确拒绝，不混合 A/B、不回退 latest；同集合共享必须无改写            | fault injection + receipt/read-lease 验证                        |
+| T10 / 产品验证  | 已采用 A，新候选失败 → 回退被测试的 Host/K/P/A tuple → 构建及已有用户启动恢复，不反向迁移数据                                                              | 回滚演练                                                         |
 
 平台要求：Web 必须检查 `out/` 的真实静态服务；Tauri 覆盖 macOS/Windows/Linux 构建与安装资源，至少执行各平台受影响加载路径；Capacitor 覆盖 Android/iOS 的 web-only staging 和插件 UI/资源；CLI 覆盖 JS、pkg、Bun 及 server/brain layout，至少在其实际支持的平台运行 smoke。纯 Web 的 Playwright 通过不能替代 WKWebView、WebView、native/Python/Node provisioning。实际不可用平台须保留为未完成验收，不以单元测试代替。
 
@@ -325,6 +325,8 @@ CI 的验收阈值是任一身份/集合/资源/行为错配即失败。对比 B
 
 ## 17. P0–P1 实施记录：2026-10-31，候选基线尚未获准切仓
 
+本节保留 2026-10-31 的历史执行快照，其 Kit、数量、检查结果及“未提交”状态不代表当前版本；后续代码已包含于 `2bc50e4eb0`，最新结果见 §18。
+
 用户已授权“先完成 P0–P1 的前置修复和验证，通过后再拆仓，确保现有功能不回退”。以下改动均在现仓完成；原 `plugins/`、旧 public mirror 和现有安装/数据路径保留，没有创建远程仓库、删除源码、提交或发布。共享工作树同时存在其他任务改动，候选来源按实际 bytes/mode 记录，不能仅以 HEAD 标识。
 
 | 阶段 | 已实施与证据                                                                                                                                                                                                                                                                                                            | 当前边界                                                                                                    |
@@ -364,3 +366,275 @@ pnpm plugin:artifacts:test
 - Windows 的 unconfirmed-family reader 在正常退出和 crash 后均保留，防止未知存活子进程时切换产物；可靠回收仍待普通构建适用的进程族 owner 与真实 Windows 测试。在此之前 Windows 产物切换不能视为保持原有开发体验，不能验收 P1c/P1d。
 
 以上问题解除后，先重新生成并验收稳定 B，再按 P2 开始物理迁移。逐文件相同只证明两种 producer 的交付等价，不等于所有现有功能已无回退。
+
+## 18. 当前 Host artifact 对齐：2026-11-01
+
+本次只处理用户指定的 artifact。当前权威输入已经由其他任务更新为 Kit `85b4ed70f704f730e4e5f9cd948ed0c8bdaeca812aafc4e096d1758d111321ce`、76 个插件（71 frontend）和 60 个 browser builtin；旧 artifact 仍引用 Kit `0cf65d9a`，实际 consumer 以 `authoring identity mismatch` 拒绝。没有回退新增的 Feishu 插件、重写 Kit pin 或更改产品收录。
+
+通过现有 `node scripts/build/stage-plugin-artifacts.mjs` 执行串行 producer 和受锁保护的 staging，得到 artifact `7af7a18e816c93d53a81f382b9718fcc153402f3a9f077a1b58ed56da9c328bf`。本次实际更新 `builtinChunks` 与 `builtinIndex`；其余 section 不变。旧 reader 所属 POSIX process group 已消失，由现有 lease owner 正常回收，没有终止任何并行任务进程。
+
+已验证：
+
+- 当前 K/P/contract 语义准入通过，旧 artifact 仍被拒绝。
+- 1743 个文件在 artifact 和 Host 六个 section 间逐一核对 bytes、实际 mode 和精确成员集合；receipt 和 immutable snapshot 均匹配同一 artifact digest。
+- 将同一真实 artifact 接入一个没有 `plugins/` 的空 Host，producer tripwire 未触发；cold staging 完整写入，warm staging 不改写输出或 mtime。实际 Host 的 warm staging 也没有内容变更。
+- `pnpm plugin:artifacts:test` 49/49 通过；registry/assets/preboot 的 focused Jest 3 suites/27 tests 通过。两处过期的 builtin 测试先复现失败，再补齐 60 个 builtin 与两个 Feishu ID 的预期。
+
+原始证据位于 `.cache/plugin-extraction/2026-11-01-artifact/`，关键结果记录在[同一 ledger](../evidence/2026-10-21-plugin-repo-split-feasibility.md) 的 O69–O71 / V29 / M5。缓存是本地验证材料，不是正式发布。当前没有提交或发布本次增量，也没有启动拆仓。
+
+本节 artifact 增量完成时，没有把 §17 的独立 producer 1736-file 比对重标记为新 Kit 的通过证据：当时新的完整独立证明尚未运行，harness 仍写死 69 个 frontend 包，因此 V25 为当前 tuple 重新打开。该部分随后已在 §19 补齐；全局 gate、Windows 进程族恢复、真实平台、用户状态升级和回滚验收仍保持未完成。
+
+## 19. 当前 Kit 的完整独立构建与 Host 比对：2026-11-01
+
+按用户要求继续验证 Kit `85b4ed70f704f730e4e5f9cd948ed0c8bdaeca812aafc4e096d1758d111321ce`。先用实际 inventory 复现旧脚本的 `71 != 69`，随后复用 `collectExtractionInventory` 从复制后的源码快照推导 frontend 目录/ID 清单；构建结果必须精确匹配该清单，没有把常量简单改成 71，也不允许缺少、重复或额外包静默通过。
+
+现有 harness 新增 `--compare-host`，使用现有 artifact reader/contract owner 做逐文件比较。输入 Kit 必须匹配当前 Host pin，profile 必须匹配当前产品策略；源码、frontend 清单、Kit/profile、harness 和 Host snapshot 在验证中漂移时明确失败。比较使用已经冻结的 Host artifact `7af7a18e`，没有重新生成或覆盖 Host、Kit、profile 或其他并行任务的源码。
+
+实际运行：
+
+```sh
+pnpm plugin:authoring:test --kit .cache/adr0246-authoring-kit --compare-host .cache/plugin-artifact-sets/7af7a18e816c93d53a81f382b9718fcc153402f3a9f077a1b58ed56da9c328bf --keep
+```
+
+独立目录仅含复制的插件源码、实际 Kit tarballs/wheel、固定公共依赖和公共 build tooling；无 Host checkout、SDK source link、`NODE_PATH` 或 Host tsconfig alias。实际通过：
+
+| 验证                            | 结果                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| 全部公开 ESM/CJS exports 和声明 | 59 个 exports；声明以 `skipLibCheck: false` typecheck                     |
+| 插件源码类型检查                | 340 个 TS 文件通过                                                        |
+| 实际 helper suites              | 17 suites / 103 tests 通过                                                |
+| Python wheel                    | 在独立 Python 3.13.14 venv 安装，所有 SDK 模块导入通过                    |
+| 全部 frontend 包                | 71 个 metadata evaluation / ZIP 实际构建通过；逐 archive SHA-256 复核通过 |
+| 默认 artifact 与 Host 比对      | 1743 个路径、raw bytes、实际权限位及完整 76-plugin inventory 完全一致     |
+
+独立 artifact 为 `4aede9ec618acbf4a5eca15872662ca566e47185eceb7652c0ca2512cd992722`；Host artifact 为 `7af7a18e816c93d53a81f382b9718fcc153402f3a9f077a1b58ed56da9c328bf`。二者 source/toolchain provenance 按真实构建记录，manifest 自身 digest 不相等是预期；payload 逐文件相同。新 harness digest 为 `f0a852fd7c582269b1e8331e155b9c600a06d178431b36a077191ac1ccdb2288`。
+
+本轮原始证据位于 `.cache/plugin-extraction/2026-11-01-independent/`：`count-red.log`、`proof.log`、`authoring-proof.json`、`frontend-packages.json`、`payload-equivalence.json`。通用 proof/equivalence JSON 指针更新为当前结果，旧 payload 比对另存 `previous-payload-equivalence.json`。相关 inventory/kit/bootstrap 定向测试 7/7 通过，变更脚本语法、ESLint 和格式检查通过。没有新增 runtime、共享合同或另一个 inventory owner。
+
+Ledger 的 V25/V30 和 M6 已完成；V26/V27/V28 与 X14 保持未完成。包构建与交付等价不等于所有插件已在各平台激活并验证，也不替代 production static export、Windows 进程恢复、用户配置/权限/数据的升级和回滚验收。P1 全部通过前不启动 P2 拆仓。
+
+## 20. 全局 typecheck 与 static-export 修复：2026-11-01
+
+本轮按用户要求先复现当前错误，再修复并验证；§17 的旧失败记录保留为历史证据。全量 `pnpm typecheck` 实际复现 5 条诊断，均位于三个测试夹具：`NativeFrameStream` mock 缺少 `input`、E2B 配置工厂丢失 union narrowing、ACP 的 admission Set 被写成 `unknown`。修复只补齐真实接口和类型，没有修改生产逻辑、移除断言或增加检查抑制。ACP 文件原有的并行修改以本轮开始时的快照为基准保留，本轮仅调整对应 structural type。
+
+`static-export` 的 14 条报告集中于 Codebuff/Crush 的三个独立 Node bridge/helper，其中一条是会擦除的 named type import。核对 owning `tsup` 配置和 native bridge staging 后，13 条运行时 Node imports 使用精确文件/module 豁免，并标记 `nodeOnly`：其他被扫描源码对这些文件的值导入必须失败，既支持相对 `.js` 路径，也使用根 `tsconfig.json` 的 JSONC aliases。两个公开 agent browser 入口实际通过 `esbuild platform:browser` 构建，其输入集合不含这三个 Node 文件。没有修改 bridge 源码或重写 embedded pins。
+
+独立审查先后复现同一行第二条导入、带注释的 `type as` 值绑定、括号动态导入和常量字符串拼接四类漏报，新增回归先红后绿。导入解析改用现有 TypeScript AST，明确区分 erased type 和运行时绑定，并解开静态字符串表达式；不求值任意运行时变量。AST 同时消除了注释中 `require("fs")` 的旧误报，因此移除对应过期豁免。保留对全部 workspace 源码的扫描，没有排除整个 `packages/`。
+
+全量 lint 首次失败仅来自此前 CLI 验证生成的 271 个 `cli/.cache/plugin-extraction-js/` 文件。现有 ESLint 缓存排除从根 `.cache/**` 扩展到 `**/.cache/**`；实际 admission probe 证明根/工作区缓存被忽略，`cli/src/index.ts` 和 gate 源码仍受检查。缓存保留，未删除其他任务的文件，也未放宽源码规则。
+
+| 验证                                                          | 当前结果                                                                 |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `pnpm typecheck`                                              | exit 0；实际运行 root、sidecar、pi-extension 和 sidecar packages 检查    |
+| 三个受影响夹具的 `pnpm test --runInBand --runTestsByPath ...` | 3 suites / 536 tests 全部通过                                            |
+| `node --test scripts/gates/check-static-export.test.mjs`      | 28/28 通过，含 negative fence 和真实 browser entry bundle                |
+| `pnpm lint:static-export`                                     | exit 0；12002 TS 文件、27 条有效豁免、3 个 Node fences；无 stale warning |
+| `pnpm lint`                                                   | 最终 exit 0，无 warning                                                  |
+| 独立只读复核                                                  | 测试类型与 static-export/config 两组复核通过，无剩余本轮阻塞             |
+
+原始证据位于 `.cache/plugin-extraction/2026-11-01-global-checks/`，包括修复前后日志、失败回归、逐文件 source 快照和本轮 scope diff。Ledger 的 V31/V32、M7 完成；V26/V27/V28 与 X14 继续保留。全局 Jest、production build、Windows family recovery、真实平台和既有用户状态的升级/中断/回滚尚未在本轮验收。检查期间磁盘曾返回 `no space left on device`，随后约余 436 MiB；未清理并行任务产物或启动大型构建。
+
+本轮未更改 Kit、profile、插件产物或现有运行时，也未提交、发布或执行拆仓。此前当前 Kit 的 71-package / 1743-file 独立证明继续作为 §19 的分项证据，不能替代尚未完成的 P1d。
+
+## 21. Windows lease 与 Office 版本修复：2026-11-01
+
+用户本轮授权先修复两个定向问题，明确暂缓全局检查，并要求保留并行任务及 P1 验收边界。本节替代前文关于“Windows 尚无普通构建进程族 owner”的当前结论；原记录保留为历史。没有运行全局 Jest/typecheck/lint/build，没有拆仓、提交或发布。
+
+Windows 新编译 lease 在 Node preload 阶段、业务模块导入前挂接到随机 `Global\CogniaPluginArtifact-<uuid>` Job。staging 查询该 Job 的实际 active process count，全部结束才回收，避免把 leader PID 消失或复用当成整组结束。查询失败仍拒绝切换；挂接失败不执行业务入口。
+
+沿用现有 Node lease owner，新增的 `plugin-artifact-windows-job.ps1` 只承担 Windows Job 的 P/Invoke，不能直接放进跨平台 JavaScript；普通 build 不需要预先编译 Rust sandbox runner 或应用其隔离策略。PowerShell 由独立的 detached Node guardian 持有，避免 guardian 被编译器的 libuv Job 自动终止。guardian 死亡会关闭 Job 并终止其持有的编译进程族，不留失去保护的后台编译。环境按大小写不敏感方式移除 `NODE_OPTIONS` 和 lease selector，握手必须匹配随机 Job 名。
+
+独立复核抓到并修复 libuv 父子 Job 生命周期、`Local\` 跨 session 误回收，以及继承 preload 提前输出 ready 的问题。设计依据为 [Windows Job 生命周期](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)、[kernel object namespaces](https://learn.microsoft.com/en-us/windows/win32/termserv/kernel-object-namespaces) 和 [libuv Windows process 实现](https://raw.githubusercontent.com/libuv/libuv/v1.x/src/win/process.c)。真实 wrapper 终止时，Windows/libuv 可能结束整个嵌套 Job；测试只有在 worker 已确认停止时才允许零 lease。真正仍存活的 detached orphan 必须继续持有 lease。
+
+旧格式 `unconfirmedFamily` 没有可靠的历史进程族身份，仍保守拒绝，不按“leader 已退出”自动删除。已存在此类记录的旧 checkout 应先确认相关构建进程族停止，再针对具体记录恢复，或使用隔离 checkout；本轮没有清理用户或并行任务的旧记录。
+
+发布调查通过 GitHub connector 和只读 GitHub CLI/API 完成：`cognia-labs/cognia` 与旧仓库 `MaxQian888/cognia-next` 的当前 Release 均为空，58 个 tag 全为 backup，Release workflow 没有 run；公开 `dev` 分支仍提供 `cognia-office@0.1.0` 源码。结论是没有查到当前官方二进制发布，不能据此排除已删除/私有/手动分发。旧缓存候选与当前旧 artifact 的 Office `dist/index.js` hash 分别为 `a37ea3dd…` 与 `ceec3afd…`，同为 `0.1.0`，所以不再复用该身份。
+
+Office 源 manifest 升为 `0.1.1`，ID、权限、默认值、runtime provisioning 与配置 schema 不变。没有改变生产 seeder：仅旧 builtin 随新版本升级，用户手装、较新和已删除包继续优先；安装失败不推进 marker，下一次重试。新增策略用例先在旧 catalog 上复现失败；候选 fixture 用于隔离并行 Host 输入漂移，实际源码/ZIP 另行核对，不能把 fixture 当作 Host 已采用。
+
+| 定向验证                                                       | 结果                                                                                                                                                               |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Windows 10.0.26200、PowerShell 5.1、Node 26.12.1 Job lifecycle | 15 passed、0 failed、1 个 POSIX 专用用例 skipped；覆盖正常/异常退出、true orphan、wrapper/guardian 终止、lowercase preload 隔离和 attachment denial                |
+| Windows artifact staging 与实际 A-to-B esbuild fixtures        | 17/17 通过，含 cold/warm、相互排斥、写入前语义拒绝与同集合共享                                                                                                     |
+| macOS lease/wrapper/staging                                    | 26 passed、0 failed、7 个 Windows 专用用例 skipped                                                                                                                 |
+| Office seeder 与真实插件入口 Jest                              | 2 suites / 33 tests 通过，含升级一次、手装/较新/删除保留、中断重试及 manifest 版本校验                                                                             |
+| Office standalone ZIP                                          | 实际 `0.1.1`、8 files；archive SHA-256 `302f412a30db07521ff5fe4eb354c890690a587c4069b41a95b8d83ddb268668`，主入口与 runtime entry 完整，独立 reviewer 重新打开核对 |
+
+最终将 lease、wrapper、staging 三组在 Windows 合并复验：32 passed、0 failed、1 POSIX-only skipped；9 个传入源码文件 SHA-256 与本地完全一致，见 `windows-final.log` 和 `windows-source-hashes.json`。
+
+Windows 测试仅写入独立 `%TEMP%/cognia-plugin-lease-…`，使用官方 archive SHA-256 `b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2b4` 校验的临时 Node26。原全局 Node24 和项目工作树未被替换。Windows staging fixtures 只读复用该机已安装的依赖；不是完整产品 build。Office 定向 standalone 构建复用 §19 已安装的固定 Kit 公共依赖；不是新的完整 71-package fresh-install proof。
+
+本轮出现新的并行输入漂移：SDK/contract 的 `catalogSha256` 与 `sdkSourceSha256` 改变，而 Kit pin 仍为 `85b4ed70`。正常 `stage-plugin-artifacts` 在 ABI 检查处拒绝，尚未把 Office `0.1.1` 采用到 Host；Host catalog 仍为 `0.1.0`。未替并行任务重建或更新其 Kit pin，也未手改 generated catalog。§19 的 71-package / 1743-file 结果保留为原 tuple 的历史证明，V25/V29/V30 与 M5/M6 为当前输入重新打开。
+
+原始证据位于 `.cache/plugin-extraction/2026-11-01-lease-office/`：`publication.json`、`abi-drift.json`、`windows-lease-verified.log`、`windows-stage-final.log`、`node-final.log`、`office-red.log`、`office-tests.log`、`office-candidate.json` 和源码快照。V27/V33/V34、M8/M9 的定向范围通过，V35 的 Host 采用仍阻塞；P1d、平台/既有用户状态验收和暂缓的全局检查继续保留。下一步需由并行 SDK 工作形成一致的新 Kit，再正常生成/采用 artifact 并刷新完整独立比对，P1 全部通过前不启动 P2。
+
+## 22. 当前 Kit ABI、Office 采用与完整独立比对：2026-11-01
+
+本节解除 §21 的当前 Kit/Host 采用阻塞。用户要求的 SDK 稳定性复核、新 Kit 构建、Office `0.1.1` 采用、全部 frontend 独立构建及逐文件比对均已通过；P1d 的其余平台、用户状态和暂缓全局验收继续保留，未拆仓、提交或发布。
+
+先对 SDK/contract/UI/GitHub/Python/types 共 1358 个文件两次采样，内容没有漂移。并行引入的 `defineIssueSyncProvider` 及 issue-sync-provider contract 通过 generator parity、4 suites/580 tests；Host API/bridge/context 的 4 suites/517 tests 通过。76 个插件的 author-imports 通过，SDK standalone 仍只保留已登记的 5 处 Host reference，没有新增。本轮未改写 SDK/contract 实现。
+
+最终复核发现 7 个文件与早期采样不同；时间线确认它们在 Kit 构建前已更新，而不是完整 proof 之后的新增漂移。3 个生产文件的实际 hash 均已收录在两份新 Kit 的来源清单中，另 4 个为分发来源清单外的测试文件。重新逐项核对最终 Kit 的 974 个 SDK/contract 相关构建输入，全部与当前源码一致；相关 4 组定向测试另行重跑，证据见 `sdk-final-stability.json` 与 `sdk-final-tests.log`。
+
+通过现有 authoring builder 实际构建 SDK/UI/GitHub tarballs、Python wheel 和公共 tooling，生成候选 Kit `5e8882b4cedf6184a513ce64588915f2c14a8e715a84ef633bff656af3cac2a4`，没有在构建时使用 `--write-pin`；构建后立即核对 7301 个来源输入没有漂移。受现有 writer mutex 保护采用该候选后，另一个已运行的构建任务又将 pin 更新为 `cb656fbb`。检测到这一变化后，没有回写覆盖它，而是核验其全部分发文件 hash、当前 ABI/profile，以及与本轮候选完全相同的 SDK/UI/GitHub archive hash，再将其分发冻结到本轮 `adopted-kit/`，按该 pin 重新生成 Host。
+
+两个 Kit 的 tool/source provenance 不同，不能只凭 hash 不同判断 SDK ABI 不一致。最终采用的 Kit 来自并行构建的 Node `26.5.0`，本轮候选使用 Node `26.12.1`；并行 Kit 的来源记录中 `packages/agent-dsh/src/install.ts` 后续发生修改，已记录为来源快照差异，没有声称 7301 个输入始终与当前工作树一致。最终当前 ABI/profile、实际分发文件和 producer payload 分别验证，不绕过任何 pin 或准入检查。`pin-adoption.json` 保留中间 `5e8882b4` 过程；最终身份以 `selected-kit.json`、`host-adoption.json` 和完整 proof 为准。
+
+| 身份                 | 最终 SHA-256                                                       |
+| -------------------- | ------------------------------------------------------------------ |
+| Kit                  | `cb656fbbadfc86d88b0c42f49049bda8461557f2c354d551ebc2732c72a9df43` |
+| Host artifact        | `a6a07d44594ff433890c1f87a9f60de9a78c71821c88302d32b580066d5b1c87` |
+| Independent artifact | `48929093f1f34e9d4d7cc651f27ca7cbf36744a407ba2ce8c710eddddfd73531` |
+| Proof harness        | `f0a852fd7c582269b1e8331e155b9c600a06d178431b36a077191ac1ccdb2288` |
+
+Host 经现有 `stage-plugin-artifacts.mjs` producer/stager 采用新 artifact；本轮更新 builtin chunks/index 和 desktop payload/catalog，preboot 与 icons 无内容变化。76 个插件、71 frontend、60 browser builtin 收录保持当前产品策略。Office 源 manifest、desktop catalog、实际 native staged manifest、browser resource manifest 和独立 ZIP 全部为 `0.1.1`。Office 升级测试改为读取实际采用的 catalog，移除强制候选版本 fixture，避免旧 Host 产物也能误通过；生产升级策略没有改变。
+
+完整独立构建持有既有 artifact process-family reader lease，输入使用不可变 Host snapshot：
+
+```sh
+COGNIA_PLUGIN_ARTIFACTS=.cache/plugin-artifact-sets/a6a07d44594ff433890c1f87a9f60de9a78c71821c88302d32b580066d5b1c87 node scripts/build/with-plugin-artifacts.mjs -- node scripts/plugin/test-authoring-kit.mjs --kit .cache/plugin-extraction/2026-11-01-kit-refresh/adopted-kit --compare-host .cache/plugin-artifact-sets/a6a07d44594ff433890c1f87a9f60de9a78c71821c88302d32b580066d5b1c87 --keep
+```
+
+独立目录从实际 Kit fresh install，无 Host checkout、workspace link、Host tsconfig alias 或 `NODE_PATH`。包成员继续由冻结源码 inventory 推导，没有写死 69 或 71。实际结果：
+
+| 验证                                         | 结果                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 公开 ESM/CJS exports 与声明                  | 59 个 exports 导入及声明检查通过，`skipLibCheck: false`                                           |
+| 插件 TypeScript                              | 340 个文件通过                                                                                    |
+| 实际 helper suites                           | 17 suites / 103 tests 通过                                                                        |
+| Python wheel                                 | 在新 venv 中通过 Python 3.13.14 模块导入                                                          |
+| 全部 frontend metadata/ZIP                   | 71/71 实际构建通过，71 个 archive hash 复核通过                                                   |
+| Host 与独立 payload                          | 1743 个文件的精确路径集合、原始 bytes、实际 mode、插件 inventory 全部一致                         |
+| 漂移保护                                     | 源码、Host ABI、profile、Kit、harness 和冻结 Host snapshot 均通过                                 |
+| 新 SDK helper                                | ESM/CJS root 与 `api/issues` 的实际 `defineIssueSyncProvider` 导入、identity 和异步 pull 行为通过 |
+| Host staged 输出                             | 1743 个实际文件与 artifact 的 bytes/mode/membership 一致，semantic admission 与 receipt 通过      |
+| 无源码 Host cold/warm                        | 六个 section 完整采用，不调用 producer；warm 无 changed section，文件 mtime 不变                  |
+| Artifact 回归                                | 49/49 通过                                                                                        |
+| 实际 catalog、Office、registry、preboot Jest | 4 suites / 57 tests 通过                                                                          |
+| Authoring/bootstrap/inventory tooling        | 7/7 通过                                                                                          |
+| 定向 lint/format                             | 编辑的测试与生成 JSON 通过；未运行全局 gate                                                       |
+
+独立 wiring auditor 重新读取实际 Kit、两组产物、1743 个文件、Host staged 输出和 71 个 ZIP；独立 test-gap/upgrade auditor 确认实际 catalog 采用、升级用例有效，且 desktop catalog 没有其他同版本不同内容的增量。两组复核均没有新增阻塞。
+
+原始日志、冻结 Kit、proof、inventory 和身份记录位于 `.cache/plugin-extraction/2026-11-01-kit-refresh/`；根目录下 `authoring-proof.json` 与 `payload-equivalence.json` 已刷新为最终 tuple。缓存仅为本地验收材料，不是正式发布。Ledger 的 V25/V29/V30/V35、M5/M6 当前通过；V26/V28 与 X14 保持开放，剩余真实生产页面/资源、最低支持 native engine、支持平台及既有用户配置/权限/手装版本的升级、中断和回滚验收，以及用户暂缓的全局检查，不能由本轮交付等价证明替代。P1 全部通过前不启动 P2。
+
+## 23. Contract 依赖指纹与漂移保护：2026-11-01
+
+用户确认本轮只修复插件 contract 指纹和漂移检查，待并行 backup-destination 输入稳定后刷新 Kit/Host、重跑所有 frontend 包和逐文件比对。全局检查、其他模块及平台/用户状态验收不在本轮范围，P1 全部通过前仍不拆仓。
+
+§22 完成后，并行功能新增 `PluginBackupAPI.registerDestination`、backup destination 类型和 SDK helper。只变更 contract 源码而 catalog/SDK entrypoints 尚未更新时，旧 Kit 缺少新声明，但原 `sdkSourceSha256` 不包含 contract 来源，ABI 和 artifact admission 仍可通过。随后 catalog 与 SDK 文件变化触发现有拒绝；§22 的通过证据只适用于当时冻结的 tuple。
+
+修复复用现有 owner 与 schema 2：`sdkSourceSha256` 追加 `packages/plugin-contract/src` 的生产 TS/JSON 和该 package manifest，覆盖内容修改、文件增删和 exports 变动；测试与 README 不参与该指纹，symlink 仍拒绝。选择完整 contract owner 作为保守边界，因此 contract 内部生产源码变化也要求重建 Kit，没有引入另一套身份协议。Kit builder 同步记录 contract 来源，并比较构建前后的完整 ABI；独立 proof 显式比较 Kit/Host authoring，结束时重新验证整个 Kit 分发。两个新公开 helper 的实际测试通过包根入口执行，不链接回 Host 源码。
+
+四个 contract-only 用例先复现 `Missing expected exception`，修复后全部拒绝旧 pin，另验证 test/docs 不改变身份及 symlink 不能绕过。定向 tooling 15/15；并行改动整理后，SDK/contract 与 Host API/context/module bridge 合并复验为 6 suites/1099 tests 通过。contract generator、76 个插件 author-imports 和 SDK standalone 通过，后者仍仅有已登记的 5 个 Host reference。旧 Kit 的实际 proof 启动和 staging 均被拒绝，staging 拒绝前后的 1743 个文件、pin 与 receipt 字节及 mode 不变；旧实际 SDK 声明消费得到预期的 `TS2339: Property 'registerDestination' does not exist on type 'PluginBackupAPI'`。
+
+前五次在共享工作树中的实际 Kit 构建被来源/ABI 保护中止，涉及并行修改的 registry、生成 i18n、backup scheduler/config，以及 contract/SDK 的格式化。第四次实际触发了新增的 ABI 前后核对。所有失败尝试均未写 pin、未采用 artifact，本任务未修改或豁免这些来源。
+
+随后将完整源码复制到本任务的隔离快照，workspace 依赖指向快照，复用已安装的第三方依赖；Git 使用单独的 index。快照内实际重建 contract 和 Kit，保留全部来源/ABI 检查，得到候选 `ff8ce69b60fc14aebab3f00a42d8057c0dce2d93b52a33278f0de9fbbb897a90`。快照输入在构建内稳定，不要求其他并行任务停止修改原工作树。候选的 ABI/profile 与当前 Host 一致，来源记录明确指向冻结构建输入，没有声称全部 Host 实现与快照始终相同。
+
+采用前 compare-and-swap 发现并行任务已更新 pin 为 `5a8e6cfb`，因此拒绝覆盖。实际找到该 pin 对应的 `.cache/adr0246-p7c/authoring-kit`，核验全部文件 hash、当前 ABI/profile 后冻结到本轮 `adopted-kit/`，保留其 pin。并行 Kit 使用 Node `26.5.0`，隔离候选使用 Node `26.12.1`；两份 SDK 分发只有 `dist/manifest.js` 中一行 AJV JSON 来源路径注释不同，其他 SDK 文件及 UI/GitHub archive 完全一致。最终 proof 使用保留下来的并行 Kit，而非中间候选。
+
+| 身份                 | 最终 SHA-256                                                       |
+| -------------------- | ------------------------------------------------------------------ |
+| Kit                  | `5a8e6cfb9210bfca95ef76f454fae07a535ae6f6c32d28f994d2f46cb6e2700a` |
+| Host artifact        | `64198c6bf05efd840c418c85892fb2101d3c60d2f44cd50c6c0ffaa1b70093f0` |
+| Independent artifact | `84a782052acb79feedca1f52ab8f1f4caf8b5a1a934757b0be71a0d582d71b04` |
+| Proof harness        | `8da7acb029b30c66d900dd99fd48c96c70adadb20e6cda8ba34e40c2a3f6ca15` |
+
+通过正常 producer/stager 刷新 Host 后，完整独立 proof 在已有 process-family reader lease 下执行：
+
+```sh
+COGNIA_PLUGIN_ARTIFACTS=.cache/plugin-artifact-sets/64198c6bf05efd840c418c85892fb2101d3c60d2f44cd50c6c0ffaa1b70093f0 node scripts/build/with-plugin-artifacts.mjs -- node scripts/plugin/test-authoring-kit.mjs --kit .cache/plugin-extraction/2026-11-01-contract-fingerprint/adopted-kit --compare-host .cache/plugin-artifact-sets/64198c6bf05efd840c418c85892fb2101d3c60d2f44cd50c6c0ffaa1b70093f0 --keep
+```
+
+| 当前验证                     | 实际结果                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| SDK 分发                     | 59 个公开 ESM/CJS exports 与声明检查通过，`skipLibCheck: false`                              |
+| 新声明消费                   | 从实际包调用 `PluginBackupAPI.registerDestination`，贡献参数与 registration 返回类型检查通过 |
+| 插件 TypeScript              | 340 个文件通过                                                                               |
+| 公开 helper                  | 19 suites/105 tests 通过，包含两个新 helper 的实际包根入口                                   |
+| Python wheel                 | 新 venv 导入通过                                                                             |
+| Frontend 构建                | inventory 推导的 71/71 metadata/ZIP 实际构建，全部 71 archive hash 通过                      |
+| 当前 Host/独立 payload       | 1743 个文件的路径、原始 bytes、实际 mode 和 inventory 完全一致                               |
+| 前一版 Host 对比             | 相比 §22 的 `a6a07d44`，1743 个 payload 的 bytes/mode 均未变化                               |
+| Host 实际输出                | 六个 section 的实际成员、bytes/mode 与 immutable artifact/receipt 匹配                       |
+| Office                       | source、catalog、native、browser、独立 ZIP 全部为 `0.1.1`                                    |
+| Source-free Host             | 六个 section cold staging 通过，producer 未调用；warm 无变化、mtime 不变                     |
+| Artifact 回归                | 49/49 通过                                                                                   |
+| Office/registry/preboot Jest | 4 suites/57 tests 通过                                                                       |
+
+本轮代码修改只涉及现有 artifact contract 与其测试、authoring builder 和独立 proof；其他变更为本插件任务的文档、验证缓存及正常 artifact 刷新，没有改写并行 backup 功能、全局配置或其他业务模块。完整证据位于 `.cache/plugin-extraction/2026-11-01-contract-fingerprint/`，根 `authoring-proof.json` 与 `payload-equivalence.json` 已指向最终 tuple。V25/V29/V30/V35/V36 与 M5/M6/M10 当前通过；V26/V28、X14 和 P1d 的其余验收保持开放。没有全局 gate、coverage、拆仓、提交或发布。
+
+## 24. 插件 UI/资源和升级、中断、回滚的定向修复（2026-11-02）
+
+用户在只读调查后明确选择按限定范围落地。此次保留并行 SDK、catalog 和其他业务修改，没有更新 Kit/pin/profile/Host artifact，没有执行全局构建、typecheck 或 coverage，也没有访问真实用户目录、提交、发布或拆仓。
+
+### 24.1 已修复的行为
+
+- 插件 stylesheet 保留现代引擎的 `@scope`，缺少 `CSSScopeRule` 时使用浏览器 CSSOM 解析，再为每个选择器主体添加零 specificity 的边界。保留列表成员各自的优先级，边界位于伪元素之前；不影响 keyframes 和条件规则。release utility CSS 使用已有 Lightning CSS 依赖降低到 Safari 16.0 语法，包括 range media queries。没有提高最低系统要求；这不代表已在 iOS 16 实机通过。
+- 手动回滚复用 TS PluginManager 的 graph reservation、停用、卸载、加载及启用入口；恢复禁用/挂起状态；不再改写 manifest 版本自证成功。扫描、目标版本及 config 迁移失败会报告失败；迁移使用深拷贝，抛错不污染原 config。禁用插件的计划也不再显示 load/enable。
+- 普通 unload 清除 live guard、运行时和 session consent，保留持久 WASM preopen 决策；uninstall/revoke-all 仍负责删除持久授权。没有为了回滚重新授予 session/confirm 权限。
+- native backup ID 加入唯一标识并使用 `create_new`，同秒备份不再覆盖。多目录恢复在既有 backup owner 中持久化日志；未提交时恢复旧树，提交后保留新树；恢复中先原子移走待丢弃树，再还原旧树；清理前原子退役到 `.cleanup-*`，支持恢复过程再次中断。
+- ZIP/目录安装改为复用已有 Marketplace stage/commit/finalize 事务及启动恢复；没有引入第二套单插件安装事务。启动先恢复 backup restore，再执行 Marketplace recovery。
+- native snapshot E2E 改为正确的必需 `pluginId`、flat snapshot 和 NotFound 合同。现有 inventory 为空时只证明空 inventory 与 missing-id 行为；未制造一个假的正向安装验收。
+
+### 24.2 已执行的定向验证
+
+| 验证                | 实际结果与边界                                                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 插件 Jest           | 7 suites / 447 tests 通过；覆盖 manager、rollback、stylesheet、Dexie bridge/migration/persistence 及 WASM grant helper                                                                                       |
+| 浏览器与 compiler   | 9 cases 通过；Chromium 153、当前 WebKit 26.6；现代与强制 fallback CSS 的响应式、focus/hover/dark、动画、伪元素、specificity 和外部 sentinel                                                                  |
+| 业务 UI/资源        | 实际 Documents card、Playwright setup modal、SRE timeline 组件源码，加真实 release CSS/ZIP round-trip 资源；builtin/ZIP URL 下图标可解码；真实 PDF worker 在 Tauri CSP 下绘制非空画布且没有 fake-worker 回退 |
+| 持久浏览器          | 同一个测试 profile 关闭浏览器再启动；真实 IndexedDB + `runPluginMigrations` 验证迁移失败原子回退、中断事务回退、成功迁移只执行一次、拒绝已迁移数据的旧版本；合成 retained tables/localStorage 行逐项保持     |
+| Rust source harness | 31 tests 通过；直接 include 当前 backup/contract/contained-path 源码，提取当前 Marketplace 事务函数及定向测试；11 个 restore/recovery/cleanup 终止阶段、3 个 local install 终止阶段；strict Clippy 通过      |
+| 其他定向检查        | 目标文件 ESLint/Prettier、Rust 文件格式通过；Tauri spec discovery 为 2 cases；3 个只读 preflight reviewer 的 actionable finding 已修复                                                                       |
+
+两个新增 browser script 放在既有 `scripts/plugin/*.test.mjs` 入口下：现有 CSS fixture 无法验证业务组件和真实 PDF worker，现有 fake-indexeddb close/reopen 测试无法验证浏览器进程重启。它们没有新增产品 harness 或通用持久化层。截图在 `.cache/plugin-extraction/2026-11-01-ui-state/screenshots/`；日志、源码指纹及 source-harness 适配器在同一 evidence 目录。
+
+### 24.3 继续保留的验收边界
+
+UI 测试直接 bundle 组件源码，未经过 release JS → Host loader → PluginManager 安装链；有限资源请求不代表截图 gallery、theme/file-icon/font 和全部插件资源通过。持久状态测试使用真实迁移内核，但 retained rows 是合成表，不代表真实 CogniaDB、账户权限、批准的 binary、WASM 决策及 SQLite/WAL 的完整升级验收。Rust harness 使用轻量 runtime-state/path adapter，不是完整 crate/Tauri 编译；完整 crate 先受并行 Cargo 下载锁阻塞，随后触发大规模重编译，已停止自己的尝试，保留其他进程。
+
+E2E governance 执行后报告 `tests/e2e/helpers/gestures.ts:1` 的既存 timeout exception 于 2026-10-31 到期；它不属于此次插件改动，未修改或延长期限。真实 Tauri/Capacitor、最低 iOS 16（当前只有 iOS 26.5 simulator）及匹配 production export 均未声称通过。
+
+当前 `readHostAuthoringIdentity()` 仍报 Host authoring kit ABI mismatch，§23 只能作为冻结版本的历史证明。后续需在并行源码稳定后生成匹配的 Host/Kit/profile/artifact，并用隔离用户 profile 驱动完整升级、重启与回退，阶段之间不得 reset DB；不能用包文件回滚替代数据兼容检查或自动反向迁移。V26/V28、X14/X16 与 P1d 继续开放，P1 全部通过前不拆仓。
+
+## 25. 当前 SDK/contract、Kit/Host ABI 与全部 frontend 独立证明（2026-11-02）
+
+本轮范围为用户明确要求的 ABI 刷新和插件定向验证。当前 inventory 为 80 个插件，其中 75 个 frontend、60 个 browser builtins；继续使用 inventory owner 推导包集合，没有恢复 69/71 的固定数量断言。并行 SDK/contract 的生产源码保持稳定，2699 个插件源文件在采用前后重新枚举成员并核对 bytes 和执行位。没有恢复、覆盖或提交其他任务的源码。
+
+SDK/UI 在本任务冻结快照内实际构建；contract build、contract check 和 80 插件 public-import 检查通过。随后并行任务修改 `pnpm-lock.yaml`，使首份候选不再匹配 live ABI，因而没有采用。保留新的锁文件 `ef7a25d1`，复核 25 个 Kit 外部依赖的已安装版本与快照一致，再复用本轮新构建的 SDK/UI 输出重新生成 Kit；GitHub Kit 仍实际构建。一次 pnpm 自动安装改写快照锁文件也被原有来源保护拒绝。全部 Kit 文件与 ABI 检查保持启用。
+
+完整 declaration program 中三个并行 Host/agent 文件继续变化，但只读审查确认它们没有向 SDK 分发引入实现或公开类型，只有两个文档注释提及 Host manager。没有声称整个 Host program 与快照始终相同。Host 通过已有 TypeScript aliases 消费当前 SDK/UI source；其 live 与冻结包的运行时 JS 完全相同，未覆盖 live package dist 中的声明输出。
+
+| 身份                 | 最终 SHA-256                                                       |
+| -------------------- | ------------------------------------------------------------------ |
+| Kit                  | `e6ad2db0f9ab8708bd55e0ab6550d9325c765dbcdac5799194b268e17a36edb5` |
+| Host artifact        | `380249a281f37b771aee2793f5524a24b5eea54b31857f6a7da7940bdf1755ea` |
+| Independent artifact | `e9953fc66d5acaf674ca6eac026f8da6e89d7f11982e12b9df2e064d3d9af222` |
+| Proof harness        | `8da7acb029b30c66d900dd99fd48c96c70adadb20e6cda8ba34e40c2a3f6ca15` |
+
+独立 proof 使用全新的临时项目与实际 Kit archives，没有 Host source alias 或 workspace link。未携带 lockfile 的常规安装因 SheetJS CDN 超时失败，离线模式也拒绝缺失的 URL 解析输入；任务内 DNS 优先级尝试没有消除完整 GET 超时。另行下载的完整 tarball 与当前锁文件的 SHA-512 一致。最终验证仅将匹配 Kit 的锁文件中 `xlsx` URL importer 及已有 package resolutions 作为初始 lock seed，其他直接依赖照常解析，然后执行原 proof 的普通安装和 frozen-lockfile 安装；复用标准 pnpm 内容缓存及其完整性检查。没有修改 proof、依赖 URL/版本、供应链策略或断言。此结果证明独立安装和构建，不证明 CDN 在无缓存新机上的可用性。
+
+采用脚本复审还发现 pin CAS 与 staging 分两次持锁的覆盖窗口。现有 stager 新增可选 `beforeWrite`，在 reader lease 检查后、任何 immutable/mirror 写入前等待 callback 完成。采用脚本在同一个 writer transaction 中绑定 stager 已验证的 buffer digest，核对当前源码、profile、完整插件成员/执行位、旧 pin、旧 receipt、1743 个旧 Host 文件及 proof，再以临时文件 rename 写 pin，并连续持锁完成正常 staging。两条 cold/warm 失败回归先复现缺少 guard 的问题，修复后证明 callback 等待期间其他 writer 被拒绝，拒绝采用不改变并行输出、receipt 或 immutable 集合。最后再次持锁核验 live identity 和实际产物。这是协作 writer 的并发保护，不是多文件断电或 SIGKILL 原子事务。
+
+| 当前验证                     | 实际结果与边界                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 独立 SDK/插件消费            | 59 个公开 ESM/CJS exports、公开声明（`skipLibCheck: false`）、345 个插件 TS 文件通过                                            |
+| 独立 helper/Python           | 19 suites / 105 tests；新 venv wheel 导入通过                                                                                   |
+| Frontend archives            | 75/75 实际构建，完整目录/ID 集合和每个 ZIP hash 通过                                                                            |
+| 独立与 Host payload          | 1743 个路径、原始 bytes、实际 mode、80 插件 inventory 全部相等                                                                  |
+| Live Host                    | 新 pin、ABI/profile、六个 section、immutable set、receipt 和实际 Host 文件匹配                                                  |
+| Office                       | source、desktop catalog、native、browser index/resource、独立 ZIP 均为 `0.1.1`；未修改升级优先级或发布版本                      |
+| Source-free fixture          | 显式 artifact/identity 的 staging API cold 六个 section 通过，producer 调用 0 次；warm 文件和 mtime 不变；不是生产构建/启动验收 |
+| Artifact                     | 51/51，通过新增的两条持锁 promotion 回归                                                                                        |
+| Office/registry/preboot      | 4 suites / 57 tests 通过；真实 fallback CSSOM 的顶层 keyframes、插件 selector 边界与现代 scope 断言均保留                       |
+| SDK/contract/Host public API | 6 suites / 675 tests 通过；另有 11 个 tooling tests 通过                                                                        |
+| Lease/wrapper                | 9 通过、7 个 Windows 平台用例在 macOS 跳过、0 失败；不声称本轮 Windows 实机验收                                                 |
+| 定向质量检查                 | 目标文件 ESLint、Prettier、diff whitespace 和只读 wiring/test-gap 复审通过；未执行全局 gates 或 coverage                        |
+
+相对上一 Host，1702 个文件不变，39 个同路径文件变化，并替换两个 Feishu 内容寻址 chunk。变化来自已授权的 Safari 16 CSS 降级、并行 Feishu 源码和关联 catalog；没有把它们恢复成旧产物。Host registry 原有动画用例假定必须出现 `@scope`，在实际采用 fallback CSS 后失败；修正为按当前 engine 检查，fallback 通过真实 CSSOM 确认顶层 keyframes 与 selector bound，保留现代分支的原断言，未修改产品 CSS 行为或并行新增的 Feishu registry 条目。
+
+**保留的失败与验收边界：** `lib/plugin/core/context.test.ts:4163` 的 `limits the interim Feishu refresh exception after PKCE to host source builtin` 仍失败：测试期望 builtin refresh 凭据明文透传，实际返回脱敏 placeholders。7-suite 探测为 1060 passed / 1 failed；采用后单独复测仍失败。该实现与断言均未被本轮修改，不能直接判定为生产缺陷，也没有为通过验收放宽脱敏策略。需单独确认当前凭据策略后处理。V26/V28、X14/X16、真实生产/native/最低 iOS/已有账户状态验收及暂缓的全局检查保持开放，完整 P1 尚未通过，不拆仓。
+
+证据位于 `.cache/plugin-extraction/2026-11-02-kit-host-refresh/`，汇总为 `verification.json`；`live-verification.json`、`final-independent-proof.json`、`frontend-packages.json` 和 `independent-lock-seed.json` 保留实际身份与安装边界。根 `authoring-proof.json` / `payload-equivalence.json` 已更新为本轮 tuple。本轮没有提交、发布、创建外部仓库或访问真实用户目录。

@@ -246,6 +246,7 @@ export async function buildAuthoringKit({
   if (!outDir) throw new Error("An authoring kit output directory is required")
   root = path.resolve(root)
   outDir = path.resolve(outDir)
+  const initialAuthoring = readHostAuthoringAbi(root)
   const { runtimeEntries } = await import(path.join(root, "packages/plugin-sdk/tsup.config.ts"))
   const sdkEntries = Object.fromEntries(
     Object.entries(runtimeEntries).map(([key, file]) => [
@@ -392,6 +393,7 @@ export async function buildAuthoringKit({
         "-z",
         "--",
         "packages/plugin-sdk",
+        "packages/plugin-contract",
         "packages/plugin-ui",
         "packages/github-bot-kit",
         "plugin-sdk/python",
@@ -435,9 +437,12 @@ export async function buildAuthoringKit({
           sha256(fs.readFileSync(file)),
         ])
     )
+    const authoring = readHostAuthoringAbi(root)
+    if (valueSha256(authoring) !== valueSha256(initialAuthoring))
+      throw new Error("Host authoring ABI changed during Kit construction")
     const manifest = {
       schema: 1,
-      authoring: readHostAuthoringAbi(root),
+      authoring,
       source: {
         revision: execFileSync("git", ["rev-parse", "HEAD"], {
           cwd: root,

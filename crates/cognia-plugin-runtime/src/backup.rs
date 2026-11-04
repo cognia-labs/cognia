@@ -7,14 +7,14 @@
 //! `plugin_backup_delete`'s job.
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "tauri-host")]
 use tauri::State;
 
@@ -65,9 +65,12 @@ pub async fn plugin_backup_create_for_state(
     }
     let backups = ensure_backups_dir(state)?;
     let timestamp = Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let backup_id = format!("{plugin_id}-{timestamp}");
+    let backup_id = format!("{plugin_id}-{timestamp}-{}", uuid::Uuid::now_v7());
     let archive_path = backups.join(format!("{backup_id}.tar.gz"));
-    let archive_file = File::create(&archive_path)?;
+    let archive_file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&archive_path)?;
     let encoder = GzEncoder::new(archive_file, Compression::default());
     let mut builder = tar::Builder::new(encoder);
     if plugin_dir.exists() {
@@ -128,6 +131,9 @@ pub async fn plugin_backup_restore_for_state(
     backup_id: String,
 ) -> Result<()> {
     crate::validate_plugin_id_path_component(&plugin_id)?;
+    let _guard = crate::marketplace::INSTALL_COMMIT_LOCK
+        .lock()
+        .map_err(|_| PluginError::Internal("install commit lock poisoned".into()))?;
     let expected_prefix = format!("{plugin_id}-");
     if !backup_id.starts_with(&expected_prefix)
         || backup_id
@@ -143,7 +149,13 @@ pub async fn plugin_backup_restore_for_state(
         return Err(PluginError::NotFound(format!("backup {backup_id}")));
     }
     fs::create_dir_all(&state.plugin_install_dir)?;
-    let staging = tempfile::tempdir_in(&state.plugin_install_dir)?;
+    let transactions = restore_transactions_dir(state);
+    fs::create_dir_all(&transactions)?;
+    let transaction = tempfile::Builder::new()
+        .prefix("restore-")
+        .tempdir_in(&transactions)?;
+    let extracted = transaction.path().join("extracted");
+    fs::create_dir(&extracted)?;
     let plugin_dir = state.plugin_dir(&plugin_id);
     let host_state_dir = state.plugin_host_state_dir(&plugin_id);
     let archive_file = File::open(&archive_path)?;
@@ -176,40 +188,189 @@ pub async fn plugin_backup_restore_for_state(
             ));
         }
         entry
-            .unpack_in(staging.path())
+            .unpack_in(&extracted)
             .map_err(|e| PluginError::Internal(format!("unpack backup entry: {e}")))?;
     }
 
     let trees = BackupTrees::for_plugin(state, &plugin_id);
-    let staged_plugin = staging.path().join(&plugin_id);
-    let staged_vscode = staging.path().join(VSCODE_INSTALL_ENTRY).join(&plugin_id);
+    let staged_plugin = extracted.join(&plugin_id);
+    let staged_vscode = extracted.join(VSCODE_INSTALL_ENTRY).join(&plugin_id);
     if !staged_plugin.is_dir() && !staged_vscode.is_dir() {
         return Err(PluginError::InvalidArgument(
             "backup does not contain the requested plugin".into(),
         ));
     }
-    // Every tree is replaced by the backup's copy, or removed when the backup
-    // has none, as one transaction: a failure puts every tree back.
-    swap_trees(
-        staging.path(),
-        &[
-            (staged_plugin, plugin_dir),
-            (
-                staging.path().join(HOST_STATE_ENTRY).join(&plugin_id),
-                host_state_dir,
-            ),
-            (staged_vscode, trees.vscode_install),
-            (
-                staging.path().join(VSCODE_STATE_ENTRY).join(&plugin_id),
-                trees.vscode_state,
-            ),
-        ],
-    )
+    let pairs = [
+        (staged_plugin, plugin_dir),
+        (
+            extracted.join(HOST_STATE_ENTRY).join(&plugin_id),
+            host_state_dir,
+        ),
+        (staged_vscode, trees.vscode_install),
+        (
+            extracted.join(VSCODE_STATE_ENTRY).join(&plugin_id),
+            trees.vscode_state,
+        ),
+    ];
+    let journal = RestoreJournal {
+        plugin_id: plugin_id.clone(),
+        originals: pairs.iter().map(|(_, target)| target.exists()).collect(),
+    };
+    let token = transaction
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    for (staged, _) in &pairs {
+        if staged.exists() {
+            fs::write(staged.join(RESTORE_OWNER), &token)?;
+        }
+    }
+    let mut descriptor = File::create(transaction.path().join("restore.json"))?;
+    descriptor.write_all(&serde_json::to_vec(&journal)?)?;
+    descriptor.sync_all()?;
+    // Keep the journal through both error unwinding and hard process death.
+    let scratch = transaction.keep();
+    let promote = (|| -> Result<()> {
+        swap_trees(&scratch, &pairs)?;
+        let mut committed = File::create(scratch.join("committed.tmp"))?;
+        committed.write_all(b"1")?;
+        committed.sync_all()?;
+        fs::rename(scratch.join("committed.tmp"), scratch.join("committed"))?;
+        Ok(())
+    })();
+    if let Err(error) = promote {
+        recover_restore(state, &scratch).map_err(|recovery| {
+            PluginError::Internal(format!("{error}; restore recovery: {recovery}"))
+        })?;
+        return Err(error);
+    }
+    #[cfg(test)]
+    tests::checkpoint("committed", 0);
+    // Cleanup cannot turn a durably committed restore into a reported failure.
+    if let Err(error) = recover_restore(state, &scratch) {
+        log::warn!("plugin restore cleanup deferred: {error}");
+    }
+    Ok(())
 }
 
 const HOST_STATE_ENTRY: &str = ".host-state";
 const VSCODE_INSTALL_ENTRY: &str = ".vscode-extension";
 const VSCODE_STATE_ENTRY: &str = ".vscode-extension-state";
+const RESTORE_OWNER: &str = ".cognia-restore-transaction";
+
+#[derive(Serialize, Deserialize)]
+struct RestoreJournal {
+    plugin_id: String,
+    originals: Vec<bool>,
+}
+
+fn restore_transactions_dir(state: &PluginRuntimeState) -> PathBuf {
+    backups_dir(state).join(".restores")
+}
+
+fn recover_restore(state: &PluginRuntimeState, scratch: &Path) -> Result<()> {
+    if fs::symlink_metadata(scratch)?.file_type().is_symlink() {
+        return Err(PluginError::InvalidArgument(
+            "restore journal cannot be a symlink".into(),
+        ));
+    }
+    let journal: RestoreJournal = serde_json::from_slice(&fs::read(scratch.join("restore.json"))?)?;
+    crate::validate_plugin_id_path_component(&journal.plugin_id)?;
+    let trees = BackupTrees::for_plugin(state, &journal.plugin_id);
+    let targets = [
+        state.plugin_dir(&journal.plugin_id),
+        trees.host_state,
+        trees.vscode_install,
+        trees.vscode_state,
+    ];
+    if journal.originals.len() != targets.len() {
+        return Err(PluginError::InvalidArgument(
+            "invalid restore descriptor".into(),
+        ));
+    }
+    let token = scratch.file_name().unwrap().to_string_lossy();
+    let committed = scratch.join("committed").is_file();
+    for (index, target) in targets.iter().enumerate() {
+        let marker = target.join(RESTORE_OWNER);
+        let owned = fs::read_to_string(&marker).ok().as_deref() == Some(token.as_ref());
+        let previous = scratch.join(format!(".rollback-{index}"));
+        if committed {
+            if owned {
+                fs::remove_file(marker)?;
+            }
+            continue;
+        }
+        if previous.exists() {
+            if target.exists() {
+                if !owned || fs::symlink_metadata(target)?.file_type().is_symlink() {
+                    return Err(PluginError::InvalidArgument(
+                        "refusing to replace unknown tree during restore recovery".into(),
+                    ));
+                }
+                // Never unlink the ownership marker before detaching the
+                // entire promoted tree: recovery itself may be terminated.
+                let discarded = scratch.join(format!("discarded-{index}"));
+                if discarded.exists() {
+                    return Err(PluginError::InvalidArgument(
+                        "restore recovery target already detached".into(),
+                    ));
+                }
+                fs::rename(target, discarded)?;
+                #[cfg(test)]
+                tests::checkpoint("recover-moved-aside", index);
+            }
+            restore_renamed_tree(&previous, target)?;
+        } else if !journal.originals[index] {
+            if target.exists() {
+                if !owned {
+                    return Err(PluginError::InvalidArgument(
+                        "unknown tree at restore target".into(),
+                    ));
+                }
+                fs::rename(target, scratch.join(format!("discarded-{index}")))?;
+            }
+        } else if !target.exists() || owned {
+            return Err(PluginError::Internal(
+                "original restore tree is missing".into(),
+            ));
+        }
+    }
+    // A retired journal is cleanup-only even if deletion is interrupted after
+    // its commit marker/descriptor has already been unlinked.
+    let retired = scratch.with_file_name(format!(".cleanup-{token}"));
+    fs::rename(scratch, &retired)?;
+    #[cfg(test)]
+    tests::checkpoint("cleanup-retired", 0);
+    fs::remove_dir_all(retired)?;
+    Ok(())
+}
+
+/// Called before marketplace recovery, so an interrupted multi-tree restore
+/// first returns to its coherent pre-restore package and host state.
+pub(crate) fn recover_restore_transactions_for_state(state: &PluginRuntimeState) {
+    let Ok(entries) = fs::read_dir(restore_transactions_dir(state)) else {
+        return;
+    };
+    for entry in entries {
+        let result = entry.map_err(PluginError::Io).and_then(|entry| {
+            if entry.file_name().to_string_lossy().starts_with(".cleanup-") {
+                fs::remove_dir_all(entry.path())?;
+                return Ok(());
+            }
+            // Extraction-only transactions never mutated a target. Preserve
+            // descriptor-less leftovers rather than guessing their contents.
+            if !entry.path().join("restore.json").is_file() {
+                return Ok(());
+            }
+            recover_restore(state, &entry.path())
+        });
+        if let Err(error) = result {
+            log::error!("plugin restore recovery failed: {error}");
+        }
+    }
+}
 
 /// The trees beside a plugin's own directory that its backup carries.
 struct BackupTrees {
@@ -236,28 +397,15 @@ impl BackupTrees {
 /// `scratch`, then move each staged tree in. Any failure removes what was
 /// moved in and moves every original back.
 fn swap_trees(scratch: &Path, pairs: &[(std::path::PathBuf, std::path::PathBuf)]) -> Result<()> {
-    let mut moved_out: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
-    let mut moved_in: Vec<std::path::PathBuf> = Vec::new();
-    let undo = |moved_in: &[std::path::PathBuf],
-                moved_out: &[(std::path::PathBuf, std::path::PathBuf)]| {
-        for target in moved_in {
-            let _ = fs::remove_dir_all(target);
-        }
-        for (rollback, target) in moved_out {
-            let _ = restore_renamed_tree(rollback, target);
-        }
-    };
     for (index, (_, target)) in pairs.iter().enumerate() {
         if target.exists() {
             let rollback = scratch.join(format!(".rollback-{index}"));
-            if let Err(error) = fs::rename(target, &rollback) {
-                undo(&moved_in, &moved_out);
-                return Err(PluginError::Io(error));
-            }
-            moved_out.push((rollback, target.clone()));
+            fs::rename(target, &rollback)?;
+            #[cfg(test)]
+            tests::checkpoint("moved-out", index);
         }
     }
-    for (staged, target) in pairs {
+    for (index, (staged, target)) in pairs.iter().enumerate() {
         if !staged.exists() {
             continue;
         }
@@ -265,11 +413,10 @@ fn swap_trees(scratch: &Path, pairs: &[(std::path::PathBuf, std::path::PathBuf)]
             .parent()
             .map_or(Ok(()), fs::create_dir_all)
             .and_then(|()| fs::rename(staged, target));
-        if let Err(error) = result {
-            undo(&moved_in, &moved_out);
-            return Err(PluginError::Io(error));
-        }
-        moved_in.push(target.clone());
+        result?;
+        log::trace!("promoted plugin backup tree {index}");
+        #[cfg(test)]
+        tests::checkpoint("moved-in", index);
     }
     Ok(())
 }
@@ -337,6 +484,117 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    pub(super) fn checkpoint(phase: &str, index: usize) {
+        if std::env::var("COGNIA_PLUGIN_RESTORE_PHASE").ok().as_deref()
+            != Some(&format!("{phase}-{index}"))
+        {
+            return;
+        }
+        let root = PathBuf::from(std::env::var_os("COGNIA_PLUGIN_RESTORE_TEST_ROOT").unwrap());
+        fs::write(root.join("checkpoint"), b"ready").unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_crash_child() {
+        let Some(root) = std::env::var_os("COGNIA_PLUGIN_RESTORE_TEST_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let state = PluginRuntimeState::new(root.join("cognia/plugins"));
+        let backup_id = fs::read_to_string(root.join("backup-id")).unwrap();
+        plugin_backup_restore_for_state(&state, "demo".into(), backup_id)
+            .await
+            .unwrap();
+    }
+
+    fn terminate_restore_at(root: &Path, phase: &str) {
+        let _ = fs::remove_file(root.join("checkpoint"));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backup::tests::restore_crash_child",
+                "--nocapture",
+            ])
+            .env("COGNIA_PLUGIN_RESTORE_TEST_ROOT", root)
+            .env("COGNIA_PLUGIN_RESTORE_PHASE", phase)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !root.join("checkpoint").exists() && std::time::Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let reached = root.join("checkpoint").exists();
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(reached, "child did not reach {phase}");
+    }
+
+    #[tokio::test]
+    async fn startup_recovers_restore_after_process_termination() {
+        for phase in [
+            "moved-out-0",
+            "moved-out-1",
+            "moved-out-2",
+            "moved-out-3",
+            "moved-in-0",
+            "moved-in-1",
+            "moved-in-2",
+            "moved-in-3",
+            "committed-0",
+            "cleanup-retired-0",
+            "recover-moved-aside-0",
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let state = make_state(&tmp);
+            seed_plugin_dir(&state, "demo", "package-a");
+            let host_state = state.plugin_host_state_dir("demo");
+            fs::create_dir_all(&host_state).unwrap();
+            fs::write(host_state.join("settings"), b"state-a").unwrap();
+            let trees = BackupTrees::for_plugin(&state, "demo");
+            for tree in [&trees.vscode_install, &trees.vscode_state] {
+                fs::create_dir_all(tree).unwrap();
+                fs::write(tree.join("value"), b"state-a").unwrap();
+            }
+            let backup = plugin_backup_create_for_state(&state, "demo".into(), None)
+                .await
+                .unwrap();
+            seed_plugin_dir(&state, "demo", "package-b");
+            fs::write(host_state.join("settings"), b"state-b").unwrap();
+            for tree in [&trees.vscode_install, &trees.vscode_state] {
+                fs::write(tree.join("value"), b"state-b").unwrap();
+            }
+            fs::write(tmp.path().join("backup-id"), backup.backup_id).unwrap();
+            if phase == "recover-moved-aside-0" {
+                terminate_restore_at(tmp.path(), "moved-in-0");
+            }
+            terminate_restore_at(tmp.path(), phase);
+            let restarted = PluginRuntimeState::new(state.plugin_install_dir.clone());
+            let committed = matches!(phase, "committed-0" | "cleanup-retired-0");
+            assert_eq!(
+                fs::read_to_string(restarted.plugin_dir("demo").join("manifest.json")).unwrap(),
+                if committed { "package-a" } else { "package-b" },
+                "{phase}"
+            );
+            for (tree, file) in [
+                (&host_state, "settings"),
+                (&trees.vscode_install, "value"),
+                (&trees.vscode_state, "value"),
+            ] {
+                assert_eq!(
+                    fs::read(tree.join(file)).unwrap(),
+                    if committed { b"state-a" } else { b"state-b" },
+                    "{phase}"
+                );
+            }
+        }
+    }
+
     fn make_state(tmp: &TempDir) -> PluginRuntimeState {
         // Nested, so the sibling VS Code roots stay inside the temp dir too.
         let plugins = tmp.path().join("cognia").join("plugins");
@@ -350,6 +608,39 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let mut f = File::create(dir.join("manifest.json")).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn backups_in_the_same_second_never_overwrite_each_other() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        for _ in 0..3 {
+            seed_plugin_dir(&state, "demo", "version-one");
+            let first = plugin_backup_create_for_state(&state, "demo".into(), None)
+                .await
+                .unwrap();
+            let original = fs::read(&first.path).unwrap();
+            seed_plugin_dir(&state, "demo", "version-two");
+            let second = plugin_backup_create_for_state(&state, "demo".into(), None)
+                .await
+                .unwrap();
+            if first.created_at[..19] == second.created_at[..19] {
+                assert_ne!(
+                    first.backup_id, second.backup_id,
+                    "backup ids must be unique within a second"
+                );
+                assert_eq!(fs::read(&first.path).unwrap(), original);
+                plugin_backup_restore_for_state(&state, "demo".into(), first.backup_id)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    fs::read_to_string(state.plugin_dir("demo").join("manifest.json")).unwrap(),
+                    "version-one"
+                );
+                return;
+            }
+        }
+        panic!("could not create two backups in one second");
     }
 
     #[test]
