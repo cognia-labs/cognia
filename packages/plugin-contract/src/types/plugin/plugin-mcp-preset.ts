@@ -10,7 +10,7 @@
  */
 
 import type { McpPresetField } from "../../lib/claude/mcp-presets"
-import type { McpTransport } from "@cognia/agent-config-types"
+import type { McpTransport } from "@cognia/plugin-contract/types/agent-config/index"
 
 export interface PluginMcpServerPresetDef {
   /** Unique id (kebab-case, e.g. "playwright"). */

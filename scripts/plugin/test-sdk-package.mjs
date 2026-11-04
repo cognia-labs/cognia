@@ -16,8 +16,14 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { assertStandaloneDeclaration } from "./generate-author-types.mjs"
 import { assertDeclaredArtifacts } from "../../packages/plugin-sdk/scripts/build-package.mjs"
+import {
+  assertIsolatedWorkspacePackages,
+  installedWorkspacePackagePath,
+  packWorkspaceClosure,
+} from "./packed-workspace.mjs"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+const rootManifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
 const packageRoot = join(repoRoot, "packages/plugin-sdk")
 const catalog = JSON.parse(
   readFileSync(join(repoRoot, "packages/plugin-contract/contract/catalog.json"), "utf8")
@@ -61,11 +67,47 @@ function run(command, args, cwd = repoRoot) {
 }
 
 try {
-  run("pnpm", ["pack", "--pack-destination", workDir], packageRoot)
-  const tarball = readdirSync(workDir)
-    .filter((entry) => entry.endsWith(".tgz"))
-    .map((entry) => join(workDir, entry))[0]
-  if (!tarball) throw new Error("pnpm pack did not create a tarball")
+  const archiveDirectory = join(workDir, "archives")
+  mkdirSync(archiveDirectory)
+  const tarballs = packWorkspaceClosure(repoRoot, "@cognia/plugin-sdk", archiveDirectory)
+  const tarball = tarballs.get("@cognia/plugin-sdk")
+  const peerOverrides = new Map()
+  for (const name of tarballs.keys()) {
+    const manifest = JSON.parse(
+      readFileSync(
+        join(repoRoot, "packages", name.slice("@cognia/".length), "package.json"),
+        "utf8"
+      )
+    )
+    for (const peer of Object.keys(manifest.peerDependencies ?? {})) {
+      if (peer.startsWith("@cognia/") || peerOverrides.has(peer)) continue
+      const source = rootManifest.dependencies?.[peer]
+      if (typeof source === "string" && /^https?:/.test(source)) {
+        // URL-only releases (SheetJS) are not served by the npm registry.
+        // Repack the installed release into this consumer's artifacts instead
+        // of linking it or depending on the upstream CDN during the test.
+        const staging = join(workDir, `peer-${peer.replaceAll("/", "-")}`)
+        cpSync(join(repoRoot, "node_modules", peer), staging, {
+          recursive: true,
+          dereference: true,
+          filter: (file) =>
+            file === join(repoRoot, "node_modules", peer) || !file.includes(`${peer}/node_modules`),
+        })
+        const before = new Set(readdirSync(archiveDirectory))
+        execFileSync("pnpm", ["pack", "--pack-destination", archiveDirectory], {
+          cwd: staging,
+          stdio: "pipe",
+        })
+        const archive = readdirSync(archiveDirectory).find(
+          (file) => file.endsWith(".tgz") && !before.has(file)
+        )
+        if (!archive) throw new Error(`No installed peer tarball produced for ${peer}`)
+        peerOverrides.set(peer, `file:${join(archiveDirectory, archive)}`)
+      } else {
+        peerOverrides.set(peer, installedVersion(peer))
+      }
+    }
+  }
 
   const unpacked = join(workDir, "unpacked")
   mkdirSync(unpacked)
@@ -121,34 +163,24 @@ try {
         private: true,
         packageManager: JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
           .packageManager,
-        // Only this project's own direct edges. The edge that actually matters
-        // — `@cognia/plugin-sdk` -> these three — is rewritten by the
-        // `overrides` in the pnpm-workspace.yaml written below.
-        dependencies: Object.fromEntries(
-          cogniaDependencies.map((name) => [
-            name,
-            `link:${join(repoRoot, "packages", name.slice("@cognia/".length))}`,
-          ])
-        ),
+        dependencies: {},
       },
       null,
       2
     )}\n`
   )
-  // The packed SDK declares all three providers as `"0.0.0"` — a version no
-  // registry serves, since none of them are published. Without an override the
-  // install dies on "@cognia/provider-routing is not in the npm registry":
-  // provider-routing has no direct edge at all, it is reachable only through
-  // the SDK. This used to live in the manifest's `pnpm.overrides`, which pnpm
-  // 10.30 still honours but warns about on every run, and pnpm 11 ignores
-  // outright — at which point the harness would have broken exactly that way.
+  // Unpublished workspace versions resolve only to packed artifacts. No
+  // dependency may borrow source or node_modules from the repository.
   writeFileSync(
     join(consumer, "pnpm-workspace.yaml"),
     [
       "packages: []",
       "overrides:",
-      ...cogniaDependencies.map(
-        (name) => `  "${name}": "link:${join(repoRoot, "packages", name.slice("@cognia/".length))}"`
+      ...[...peerOverrides].map(
+        ([name, version]) => `  ${JSON.stringify(name)}: ${JSON.stringify(version)}`
+      ),
+      ...[...tarballs].map(
+        ([name, archive]) => `  "${name}": ${JSON.stringify(`file:${archive}`)}`
       ),
       "",
     ].join("\n")
@@ -158,6 +190,9 @@ try {
     "pnpm",
     [
       "add",
+      "--no-optional",
+      "--ignore-scripts",
+      "--prefer-offline",
       tarball,
       `react@${installedVersion("react")}`,
       `ai@${installedVersion("ai")}`,
@@ -171,9 +206,16 @@ try {
     ],
     consumer
   )
+  assertIsolatedWorkspacePackages(consumer, tarballs.keys())
   writeFileSync(
     join(consumer, "esm.mjs"),
     [
+      ...Object.entries(packedManifest.exports)
+        .filter(([, conditions]) => typeof conditions === "object" && conditions.import)
+        .map(
+          ([subpath]) =>
+            `await import(${JSON.stringify(`@cognia/plugin-sdk${subpath === "." ? "" : subpath.slice(1)}`)});`
+        ),
       'import { definePlugin } from "@cognia/plugin-sdk";',
       'import { SystemEvents } from "@cognia/plugin-sdk/events";',
       'import { CANONICAL_EXTENSION_POINTS } from "@cognia/plugin-sdk/extensions";',
@@ -193,6 +235,12 @@ try {
   writeFileSync(
     join(consumer, "cjs.cjs"),
     [
+      ...Object.entries(packedManifest.exports)
+        .filter(([, conditions]) => typeof conditions === "object" && conditions.require)
+        .map(
+          ([subpath]) =>
+            `require(${JSON.stringify(`@cognia/plugin-sdk${subpath === "." ? "" : subpath.slice(1)}`)});`
+        ),
       'const { defineTool } = require("@cognia/plugin-sdk/api/tool"); const probe = { name: "x" }; if (defineTool(probe) !== probe) process.exit(1);',
       'const { PLUGIN_CONTRACT_VERSION, PLUGIN_API_NAMESPACE_CONTRACTS, AUTHOR_PLUGIN_POINT_CONTRACTS } = require("@cognia/plugin-sdk/contracts");',
       'const { BaseProtocolAdapter } = require("@cognia/plugin-sdk/api/external-agent-adapter");',
@@ -282,9 +330,8 @@ try {
       "NodeNext",
       "--target",
       "ES2022",
-      // The isolated consumer intentionally links unpublished provider
-      // workspaces. Their peer graph can contain a second physical copy of a
-      // declaration-only dependency (notably ai's global telemetry type).
+      // Peer graphs can contain a second physical copy of a declaration-only
+      // dependency (notably ai's global telemetry type).
       // Check author code against the packed surface without re-validating
       // third-party declaration internals; the real reference-plugin compile
       // below uses the same boundary.
@@ -307,8 +354,14 @@ try {
   // the host source — and would only fail for the first outside author to try.
   const providerTypePaths = {}
   for (const [name, dist] of [
-    ["@cognia/provider-types", join(repoRoot, "packages/provider-types/dist")],
-    ["@cognia/provider-core", join(repoRoot, "packages/provider-core/dist")],
+    [
+      "@cognia/provider-types",
+      join(installedWorkspacePackagePath(consumer, "@cognia/provider-types"), "dist"),
+    ],
+    [
+      "@cognia/provider-core",
+      join(installedWorkspacePackagePath(consumer, "@cognia/provider-core"), "dist"),
+    ],
   ]) {
     if (!existsSync(join(dist, "index.d.ts"))) {
       throw new Error(`${name} has no built declarations at ${dist} — run its build first`)

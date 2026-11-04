@@ -31,17 +31,10 @@ export interface LocalCharacterPackFile {
 export type CharacterPackParseResult =
   { ok: true; file: LocalCharacterPackFile } | { ok: false; error: string }
 
-export function buildOverlayCharacterId(
-  pluginId: string | undefined,
-  packId: string,
-  localId: string
-): string {
-  return `cognia-pack:${pluginId ?? ""}:${packId}:${localId}`
-}
-
-export function isOverlayCharacterId(id: string): boolean {
-  return id.startsWith("cognia-pack:")
-}
+export {
+  buildOverlayCharacterId,
+  isOverlayCharacterId,
+} from "@cognia/plugin-contract/types/plugin/plugin-character-pack"
 
 export function parseLocalPackFile(raw: unknown): CharacterPackParseResult {
   if (!raw || typeof raw !== "object") {

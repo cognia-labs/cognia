@@ -1,7 +1,7 @@
 /**
  * The plugin contract's share of `lib/data/importers/types.ts`, which re-exports these.
  */
-import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
+import type { ChatSession, StoredMessage } from "@cognia/plugin-contract/types/agent-config/index"
 
 /** Formats the host itself knows how to sniff and parse. */
 export type BuiltInChatImportFormat =

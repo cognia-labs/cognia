@@ -23,7 +23,7 @@
  * `{ ns, key }` here because no other manifest field follows that pattern.
  */
 
-import type { Character, SendOptions } from "@cognia/agent-config-types"
+import type { Character, SendOptions } from "@cognia/plugin-contract/types/agent-config/index"
 import type { CharacterPlatformDefaults } from "../connectors/binding"
 import type { TTSProvider } from "@cognia/tts/types"
 import type { PluginRuntimeProfile } from "./plugin"
@@ -184,4 +184,16 @@ export interface PluginCharacterPackDef {
   icon?: { emoji?: string; color?: string }
   /** Free-form tags surfaced in the Settings UI search. */
   tags?: string[]
+}
+
+export function buildOverlayCharacterId(
+  pluginId: string | undefined,
+  packId: string,
+  localId: string
+): string {
+  return `cognia-pack:${pluginId ?? ""}:${packId}:${localId}`
+}
+
+export function isOverlayCharacterId(id: string): boolean {
+  return id.startsWith("cognia-pack:")
 }

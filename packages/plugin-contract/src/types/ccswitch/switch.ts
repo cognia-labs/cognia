@@ -1,6 +1,6 @@
 // CCSwitch interop types — switch planning + active-state projection.
 
-import type { AgentId } from "@cognia/agent-config-types"
+import type { AgentId } from "@cognia/plugin-contract/types/agent-config/index"
 
 import type { CcswitchProvider } from "./provider"
 

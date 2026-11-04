@@ -15,15 +15,8 @@ export type {
   Severity,
 } from "@cognia/security-findings"
 
-export interface SecurityScanRunRecord {
-  runId: string
-  target: string
-  startedAt: number
-  endedAt?: number
-  status: "running" | "done" | "error" | "cancelled"
-  findingsCount: number
-  reportUnreadable?: boolean
-}
+export type { SecurityScanRunRecord } from "@cognia/plugin-contract/lib/plugin/api/security-scans-api"
+import type { SecurityScanRunRecord } from "@cognia/plugin-contract/lib/plugin/api/security-scans-api"
 
 export type SecurityScanExecutionStatus = "running" | "completed" | "failed" | "cancelled"
 

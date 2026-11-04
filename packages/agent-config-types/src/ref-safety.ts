@@ -1,2 +1,2 @@
-// Owned by `@cognia/agent-contracts` (ADR-0217); re-exported for existing importers.
-export * from "@cognia/agent-contracts/ref-safety"
+/** Compatibility entry; shared configuration contracts are owned by plugin-contract. */
+export * from "@cognia/plugin-contract/types/agent-config/ref-safety"

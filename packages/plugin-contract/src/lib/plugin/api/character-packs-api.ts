@@ -1,7 +1,7 @@
 /**
  * The plugin contract's share of `lib/plugin/api/character-packs-api.ts`, which re-exports these.
  */
-import type { PluginCharacterPackDef } from "@cognia/plugin-sdk/api/character-pack"
+import type { PluginCharacterPackDef } from "@cognia/plugin-contract/types/plugin/plugin-character-pack"
 
 export interface PluginCharacterPackRegistration {
   packId: string

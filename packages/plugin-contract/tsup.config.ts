@@ -13,4 +13,9 @@ export default defineConfig({
   target: "es2017",
   // Hooks and modal stores must use the consumer's React dispatcher and state runtime.
   external: [/^@cognia\//, /^react(?:\/|$)/, /^zustand(?:\/|$)/],
+  // These workspaces publish source-first entries. A contract tarball loaded
+  // by plain Node must inline them: Node does not strip TS in node_modules.
+  noExternal: [
+    /^@cognia\/(?:agent-trace|document|logging|primitives|provider-core|provider-embedding|rag|redact|tts|web-search)(?:\/|$)/,
+  ],
 })

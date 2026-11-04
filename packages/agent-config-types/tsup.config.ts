@@ -19,4 +19,7 @@ export default defineConfig({
   clean: true,
   target: "es2022",
   platform: "neutral",
+  // The staged Sidecar contains this package without its workspace node_modules.
+  // Keep these two portable runtime entries self-contained after moving their owner.
+  noExternal: [/^@cognia\/plugin-contract\//],
 })

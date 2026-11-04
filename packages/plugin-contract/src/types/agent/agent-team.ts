@@ -554,7 +554,7 @@ export interface AgentTeamConfig {
    * further-restrict this (writable roots narrow, network tightens, caps lower)
    * via `clampSandboxPolicy`. Only consulted when the sandbox resolves enabled.
    */
-  sandboxPolicy?: import("@cognia/agent-config-types").SandboxResourcePolicy
+  sandboxPolicy?: import("@cognia/plugin-contract/types/agent-config/index").SandboxResourcePolicy
   /** Max result tokens before auto-summarization (context isolation) */
   maxResultTokens?: number
   /** Auto-clean shared memory when team completes */
@@ -1018,7 +1018,7 @@ export interface TeammateConfig {
    * — a teammate can only narrow, never widen. Only meaningful when the sandbox
    * resolves enabled.
    */
-  sandboxPolicy?: import("@cognia/agent-config-types").SandboxResourcePolicy
+  sandboxPolicy?: import("@cognia/plugin-contract/types/agent-config/index").SandboxResourcePolicy
   /**
    * Execution binding for this teammate (ADR-0090 Phase 7): inherit | pinned |
    * pool. Wins the precedence chain (member → run → team default → app
@@ -1444,7 +1444,7 @@ export interface TeamDelegationRecord {
    * Phase 7). Refs/ids only — validated secret-free at build time. Additive:
    * legacy records simply lack it.
    */
-  envelope?: import("@cognia/agent-config-types/handoff-envelope").HandoffEnvelope
+  envelope?: import("@cognia/plugin-contract/types/agent-config/handoff-envelope").HandoffEnvelope
 }
 
 /**

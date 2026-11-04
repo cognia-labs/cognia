@@ -7,7 +7,7 @@ import type {
   MicrovmExecPayload,
   MicrovmResult,
   SandboxRuntimeRef,
-} from "@cognia/plugin-sdk/api/sandbox"
+} from "@cognia/plugin-contract/types/sandbox/runtime"
 
 export interface PluginSandboxAPI {
   /** A typed file path may return undefined when the bound tier uses exec IO. */

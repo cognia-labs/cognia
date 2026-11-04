@@ -2,9 +2,9 @@
  * The plugin contract's share of `packages/plugin-sdk/src/api/agent-turn.ts`, which re-exports these.
  */
 
-import type { SendOptions } from "@cognia/agent-config-types"
-import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
-import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
+import type { SendOptions } from "@cognia/plugin-contract/types/agent-config/index"
+import type { AgentCompositionSelectionV1 } from "@cognia/plugin-contract/types/agent-config/agent-composition"
+import type { AgentCapabilityGrantV1 } from "@cognia/plugin-contract/types/agent-config/agent-capability-grant"
 
 export interface PluginAgentTurnRequest {
   characterId: string

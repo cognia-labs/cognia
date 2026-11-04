@@ -2,7 +2,7 @@ import {
   PLUGIN_API_NAMESPACE_CONTRACTS,
   type PluginApiMethodContract,
   type PluginApiNamespaceContract,
-} from "@cognia/plugin-sdk/contracts"
+} from "@cognia/plugin-contract/contracts/catalog"
 import type { PluginPermission } from "../../../types/plugin"
 
 export type PluginApiRuntime = "frontend" | "hybrid" | "python" | "wasm" | "vscode"

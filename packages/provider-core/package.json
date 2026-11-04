@@ -24,6 +24,11 @@
       "default": "./src/operations/*.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
   "scripts": {
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=16384 tsup",
     "typecheck": "tsc --noEmit"

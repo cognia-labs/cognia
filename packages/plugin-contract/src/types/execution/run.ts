@@ -662,7 +662,7 @@ export interface ExecutionRunInterrupt {
    * permission class that made the tool ask, so a card can say "outbound
    * message" without parsing the title.
    */
-  permissionClass?: import("@cognia/agent-config-types").PermissionClass
+  permissionClass?: import("@cognia/plugin-contract/types/agent-config/index").PermissionClass
   expiresAt: number
   createdAt: number
   resolvedAt?: number

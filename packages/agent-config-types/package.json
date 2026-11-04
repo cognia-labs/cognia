@@ -2,7 +2,7 @@
   "name": "@cognia/agent-config-types",
   "version": "0.0.0",
   "private": true,
-  "description": "Cognia agent configuration type hub: AppSettings / SendOptions / ClaudeEvent and their guards — the repo's widest compile boundary (~750 importers), plus the LSP-config, compression, and pet-settings type leaves it depends on.",
+  "description": "Compatibility entry points for Cognia agent configuration contracts owned by plugin-contract, plus host-specific configuration helpers.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -36,6 +36,7 @@
     "@cognia/agent": "workspace:*",
     "@cognia/agent-contracts": "workspace:*",
     "@cognia/memory": "workspace:*",
+    "@cognia/plugin-contract": "workspace:*",
     "@cognia/provider-types": "workspace:*",
     "@cognia/router-fusion": "workspace:*",
     "@cognia/web-search": "workspace:*"

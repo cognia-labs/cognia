@@ -26,14 +26,14 @@
  * models.dev snapshot.
  */
 
-import type { ChatSession } from "@cognia/agent-config-types"
+import type { ChatSession } from "@cognia/plugin-contract/types/agent-config/index"
 import {
   reasoningTiersFor,
   tiersForSurface,
   type ReasoningSurfaceInput,
   type ReasoningTier,
 } from "@cognia/provider-core/providers/reasoning-tiers"
-import type { SendOptions } from "@cognia/agent-config-types"
+import type { SendOptions } from "@cognia/plugin-contract/types/agent-config/index"
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 

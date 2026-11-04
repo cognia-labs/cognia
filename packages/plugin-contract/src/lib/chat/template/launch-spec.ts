@@ -1,7 +1,10 @@
 /**
  * The plugin contract's share of `lib/chat/template/launch-spec.ts`, which re-exports these.
  */
-import type { ChatSession, SystemPromptPreset } from "@cognia/agent-config-types"
+import type {
+  ChatSession,
+  SystemPromptPreset,
+} from "@cognia/plugin-contract/types/agent-config/index"
 
 /**
  * Which repository a template expects.

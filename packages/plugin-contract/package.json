@@ -37,5 +37,26 @@
   },
   "engines": {
     "node": ">=26.0.0"
+  },
+  "dependencies": {
+    "@cognia/agent": "workspace:*",
+    "@cognia/agent-contracts": "workspace:*",
+    "@cognia/agent-orchestration": "workspace:*",
+    "@cognia/agent-trace": "workspace:*",
+    "@cognia/document": "workspace:*",
+    "@cognia/eval-core": "workspace:*",
+    "@cognia/github-bot-kit": "workspace:*",
+    "@cognia/logging": "workspace:*",
+    "@cognia/memory": "workspace:*",
+    "@cognia/ocr": "workspace:*",
+    "@cognia/primitives": "workspace:*",
+    "@cognia/provider-core": "workspace:*",
+    "@cognia/provider-embedding": "workspace:*",
+    "@cognia/provider-types": "workspace:*",
+    "@cognia/rag": "workspace:*",
+    "@cognia/redact": "workspace:*",
+    "@cognia/router-fusion": "workspace:*",
+    "@cognia/tts": "workspace:*",
+    "@cognia/web-search": "workspace:*"
   }
 }

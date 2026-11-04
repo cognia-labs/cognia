@@ -1,7 +1,10 @@
 /** ADR-0243 phase 1: recorded identity and authority, not an enforcement surface. */
-import type { AgentPermissionMode, UnattendedPermissionProfileV1 } from "@cognia/agent-config-types"
-import { narrowAuthority } from "@cognia/agent-config-types/agent-composition"
-import { narrowPermissionProfile } from "@cognia/agent-config-types/unattended-permission"
+import type {
+  AgentPermissionMode,
+  UnattendedPermissionProfileV1,
+} from "@cognia/plugin-contract/types/agent-config/index"
+import { narrowAuthority } from "@cognia/plugin-contract/types/agent-config/agent-composition"
+import { narrowPermissionProfile } from "@cognia/plugin-contract/types/agent-config/unattended-permission"
 
 export type PrincipalRefV1 =
   | { kind: "local-person"; userId?: string; accountId?: string }

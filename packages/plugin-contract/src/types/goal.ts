@@ -1,4 +1,4 @@
-import type { ResourceRefV1 } from "@cognia/agent-config-types/governance"
+import type { ResourceRefV1 } from "@cognia/plugin-contract/types/agent-config/governance"
 import type { WorkflowDependencyBinding } from "./workflow/deployment"
 
 /**

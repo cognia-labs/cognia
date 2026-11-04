@@ -1,5 +1,5 @@
-import { AUTHORITY_RANK } from "@cognia/agent-config-types/agent-composition"
-import { PERMISSION_CLASSES } from "@cognia/agent-config-types/unattended-permission"
+import { AUTHORITY_RANK } from "@cognia/plugin-contract/types/agent-config/agent-composition"
+import { PERMISSION_CLASSES } from "@cognia/plugin-contract/types/agent-config/unattended-permission"
 import {
   absorbRequester,
   checkActingAuthority,

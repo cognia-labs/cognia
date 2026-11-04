@@ -1,5 +1,5 @@
 import type { PlatformBinding, SessionImAuthority } from "./binding"
-import type { ChatSession } from "@cognia/agent-config-types"
+import type { ChatSession } from "@cognia/plugin-contract/types/agent-config/index"
 
 describe("PlatformBinding", () => {
   it("keeps authority metadata separate from indexed delivery ownership", () => {

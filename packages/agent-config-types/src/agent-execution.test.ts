@@ -17,6 +17,7 @@ import type {
 } from "./agent-execution"
 
 import SDK_SURFACE from "../../../protocol/agent-sdk-surface.json"
+import { AGENT_CAPABILITY_IDS as CANONICAL_AGENT_CAPABILITY_IDS } from "@cognia/agent-contracts/capability-ids"
 
 const validPolicy: AgentExecutionPolicy = {
   executionKind: "agent",
@@ -200,6 +201,7 @@ describe("canonical events and the SDK surface manifest", () => {
 
 describe("capability id registry", () => {
   it("has unique ids and a working narrow guard", () => {
+    expect(AGENT_CAPABILITY_IDS).toBe(CANONICAL_AGENT_CAPABILITY_IDS)
     expect(new Set(AGENT_CAPABILITY_IDS).size).toBe(AGENT_CAPABILITY_IDS.length)
     expect(isAgentCapabilityId("tools.parallel")).toBe(true)
     expect(isAgentCapabilityId("tools.telepathy")).toBe(false)
@@ -226,7 +228,14 @@ describe("capability id registry", () => {
       "startup.prewarm",
     ]
     for (const id of sdkParity) expect(isAgentCapabilityId(id)).toBe(true)
-    expect(AGENT_CAPABILITY_IDS).toHaveLength(40)
+    for (const id of [
+      "extensions.dynamic",
+      "tools.permission-policy",
+      "subagents.context-fork",
+      "subagents.auto-compaction",
+    ])
+      expect(isAgentCapabilityId(id)).toBe(true)
+    expect(AGENT_CAPABILITY_IDS).toHaveLength(44)
   })
 })
 

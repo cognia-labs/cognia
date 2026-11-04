@@ -16,7 +16,7 @@
  * skill-creator / Codex CLI superset format.
  */
 
-import type { SkillCategory } from "@cognia/agent-config-types"
+import type { SkillCategory } from "@cognia/plugin-contract/types/agent-config/index"
 
 export type PluginSkillSource =
   | { kind: "local-folder"; path: string }

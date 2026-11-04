@@ -2,7 +2,7 @@
  * The plugin contract's share of `lib/ai/effort-surface-session.ts`, which re-exports these.
  */
 
-import type { ChatSession } from "@cognia/agent-config-types"
+import type { ChatSession } from "@cognia/plugin-contract/types/agent-config/index"
 
 /**
  * The session columns the ladder reads. The external-agent columns are

@@ -5,7 +5,7 @@ import type {
   CanonicalSession,
   SessionFidelity,
   SessionLossReport,
-} from "@cognia/agent-config-types/canonical-session"
+} from "@cognia/agent-contracts/canonical-session"
 import type { ImportedConversation } from "../data/importers/types"
 
 export interface SessionCodecConversion {

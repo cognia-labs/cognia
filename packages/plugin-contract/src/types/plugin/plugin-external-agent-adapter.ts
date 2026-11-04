@@ -24,7 +24,7 @@
  */
 
 import type { PluginContributionBackend } from "./plugin"
-import type { ExternalAgentCapabilityMatrix } from "@cognia/agent-config-types/external-agent-capability"
+import type { ExternalAgentCapabilityMatrix } from "@cognia/agent-contracts/external-agent-capability"
 
 /**
  * One protocol-adapter contribution inside

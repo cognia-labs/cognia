@@ -1,4 +1,4 @@
-import type { SandboxResourcePolicy } from "@cognia/agent-config-types"
+import type { SandboxResourcePolicy } from "@cognia/plugin-contract/types/agent-config/index"
 
 import type { AcpPermissionMode } from "./external-agent"
 

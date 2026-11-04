@@ -1,10 +1,7 @@
 /**
  * The plugin contract's share of `lib/session-import/types.ts`, which re-exports these.
  */
-import type {
-  CanonicalSession,
-  SessionLossReport,
-} from "@cognia/agent-config-types/canonical-session"
+import type { CanonicalSession, SessionLossReport } from "@cognia/agent-contracts/canonical-session"
 import type { ImportedConversation } from "../data/importers/types"
 import type { VendorRoots } from "../agent-roots/index"
 
@@ -88,8 +85,8 @@ export interface SessionSummary {
   /** Upstream format/runtime version this summary was verified against. */
   sourceVersion?: string
   /** Optional source-derived relationship/lifecycle preview for the picker. */
-  relationKind?: import("@cognia/agent-config-types/canonical-session").CanonicalSessionRelationKind
-  lifecycleStatus?: import("@cognia/agent-config-types/canonical-session").CanonicalSessionLifecycleStatus
+  relationKind?: import("@cognia/agent-contracts/canonical-session").CanonicalSessionRelationKind
+  lifecycleStatus?: import("@cognia/agent-contracts/canonical-session").CanonicalSessionLifecycleStatus
   /**
    * Upstream parent session id when the source records one (Codex's
    * `parent_thread_id`/`forked_from_id`). Lets a scan filter child sessions

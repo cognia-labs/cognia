@@ -94,7 +94,7 @@ export interface PluginAgentRunOptions {
    * applies it inside the send-option resolver, so the agent's tool filter,
    * Restricted Mode and any parent ceiling still clamp it. Tool-rail only.
    */
-  capabilityGrants?: import("@cognia/agent-config-types/agent-capability-grant").AgentCapabilityGrantV1[]
+  capabilityGrants?: import("@cognia/plugin-contract/types/agent-config/agent-capability-grant").AgentCapabilityGrantV1[]
   maxSteps?: number
   temperature?: number
   cwd?: string

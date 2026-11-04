@@ -3,7 +3,10 @@
  * Types for scheduled tasks, cron expressions, and task execution
  */
 
-import type { BuiltinToolsConfig, SendOptions } from "@cognia/agent-config-types"
+import type {
+  BuiltinToolsConfig,
+  SendOptions,
+} from "@cognia/plugin-contract/types/agent-config/index"
 import type { AcpPermissionMode } from "../agent/external-agent"
 import type { GoalConfig } from "../goal"
 import type { TaskExecutionPhase } from "./execution-phases"
@@ -486,7 +489,7 @@ export interface ChatLikeTaskPayload extends Record<string, unknown> {
    * outbound messages, secret use and host configuration ask a person (and
    * park the run until someone answers). Absent means the ceiling.
    */
-  permissionProfile?: import("@cognia/agent-config-types").UnattendedPermissionProfileV1
+  permissionProfile?: import("@cognia/plugin-contract/types/agent-config/index").UnattendedPermissionProfileV1
 }
 
 /** Payload for `agent` task type — a chat-like turn bound to a specific character. */
@@ -555,7 +558,7 @@ export interface GoalTaskPayload extends Record<string, unknown> {
   /** Per-goal config overrides (maxTurns / maxTokens / timeoutMs / judge…). */
   config?: Partial<GoalConfig>
   /** What the goal's unattended turns may do without a person (ADR-0224 A7). */
-  permissionProfile?: import("@cognia/agent-config-types").UnattendedPermissionProfileV1
+  permissionProfile?: import("@cognia/plugin-contract/types/agent-config/index").UnattendedPermissionProfileV1
 }
 
 /**

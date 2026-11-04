@@ -37,7 +37,7 @@ import { UNSIGNED_TRUST, type CharacterPackTrust } from "../character-pack/pack-
 export {
   buildOverlayCharacterId,
   isOverlayCharacterId,
-} from "@cognia/plugin-sdk/api/character-pack"
+} from "@cognia/plugin-contract/types/plugin/plugin-character-pack"
 
 const registry = createValidatingOverlayRegistry<
   PluginCharacterPackDef,

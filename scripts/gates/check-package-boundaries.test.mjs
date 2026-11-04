@@ -9,7 +9,171 @@ import {
   extractModuleReferences,
   findEvalUiBoundaryViolations,
   findPackageBoundaryViolations,
+  findPackageManifestViolations,
+  findAgentHostBoundaryViolations,
 } from "./check-package-boundaries.mjs"
+
+test("requires declarations for runtime exports and type-only package references", (t) => {
+  const { root, write } = fixture(t, "")
+  write(
+    "packages/plugin-contract/package.json",
+    JSON.stringify({ name: "@cognia/plugin-contract" })
+  )
+  write(
+    "packages/plugin-contract/src/index.ts",
+    [
+      'export { normalizeCogniaModelBinding } from "@cognia/agent-contracts/external-agent"',
+      'import type { Model } from "@cognia/provider-types"',
+    ].join("\n")
+  )
+  assert.deepEqual(
+    findPackageManifestViolations(root, ["plugin-contract"]).map(({ target }) => target),
+    ["@cognia/agent-contracts", "@cognia/provider-types"]
+  )
+  write(
+    "packages/plugin-contract/package.json",
+    JSON.stringify({
+      name: "@cognia/plugin-contract",
+      dependencies: {
+        "@cognia/agent-contracts": "workspace:*",
+        "@cognia/provider-types": "workspace:*",
+      },
+    })
+  )
+  assert.deepEqual(findPackageManifestViolations(root, ["plugin-contract"]), [])
+})
+
+test("contract ownership cannot point back to SDK or configuration facades, even through types", (t) => {
+  const { root, write } = fixture(t, "")
+  write(
+    "packages/plugin-contract/package.json",
+    JSON.stringify({
+      name: "@cognia/plugin-contract",
+      dependencies: {
+        "@cognia/plugin-sdk": "workspace:*",
+        "@cognia/agent-config-types": "workspace:*",
+      },
+    })
+  )
+  write(
+    "packages/plugin-contract/src/index.ts",
+    [
+      'export type { Pack } from "@cognia/plugin-sdk/api/character-pack"',
+      'type Options = import("@cognia/agent-config-types").SendOptions',
+    ].join("\n")
+  )
+  assert.deepEqual(
+    findPackageManifestViolations(root, ["plugin-contract"]).map(({ rule }) => rule),
+    ["contract-upper-layer-dependency", "contract-upper-layer-dependency"]
+  )
+})
+
+test("rejects preset/runtime aliases, returned launch recipes and copied CLI vendor helpers", (t) => {
+  const { root, write } = fixture(t, "export const portable = 1")
+  write(
+    "lib/ai/agent/external/manager.ts",
+    'const preset = config.metadata?.preset; if (preset === "kimi") deleted.set(id, Date.now()); if(config.metadata.preset === "kimi") run(); switch(config.runtimeId){case "codex": run()} const runtime = resolve(config); if(runtime === "codex") project()'
+  )
+  write(
+    "lib/ai/agent/external/config/gateway-task.ts",
+    "export function project() { for (const runtime of runtimes) write(runtime) }"
+  )
+  write(
+    "lib/ai/agent/external/config/pi-subagents.ts",
+    "export function detect() { const supported = new Map(); while (enabled()) scan() }"
+  )
+  write(
+    "cli/src/runtime/external/codex-model-catalog.ts",
+    "export function buildCodexModelCatalog() { return JSON.stringify({models:[]}) }"
+  )
+  write(
+    "cli/src/runtime/external/devin-mcp-config.ts",
+    "function parseJsonc(raw) { return JSON.parse(raw) }"
+  )
+  const violations = findAgentHostBoundaryViolations(root)
+  assert.equal(violations.filter((v) => v.rule === "manager-runtime-branch").length, 4)
+  assert.ok(
+    violations.some(
+      (v) => v.file.endsWith("config/gateway-task.ts") && v.rule === "host-runtime-loop"
+    )
+  )
+  assert.ok(
+    violations.some(
+      (v) => v.file.endsWith("config/pi-subagents.ts") && v.rule === "host-runtime-state"
+    )
+  )
+  assert.ok(
+    violations.some(
+      (v) => v.file.endsWith("codex-model-catalog.ts") && v.rule === "native-compatibility-entry"
+    )
+  )
+  assert.ok(violations.some((v) => v.rule === "host-vendor-configuration"))
+})
+
+test("permits bounded Host Pi traversal and package recipe delegation", (t) => {
+  const { root, write } = fixture(t, "export const portable = 1")
+  write(
+    "lib/ai/agent/external/config/pi-subagents.ts",
+    "async function hostDeps() { for (const path of grantedPaths) await host.read(path) }; export const detect = config => core(config, hostDeps)"
+  )
+  write(
+    "lib/ai/agent/external/config/gateway-task.ts",
+    "export const project = input => tools.buildGatewayTaskConfig(input)"
+  )
+  write(
+    "cli/src/runtime/external/codex-model-catalog.ts",
+    'export * from "@cognia/agent-codex/model-catalog"'
+  )
+  assert.deepEqual(findAgentHostBoundaryViolations(root), [])
+})
+
+test("rejects vendor imports, protocol branches and state machines returning to the app", (t) => {
+  const { root, write } = fixture(t, "export const portable = 1")
+  write("packages/agent-example/src/client.ts", "export class Vendor {}")
+  write(
+    "lib/ai/agent/external/manager.ts",
+    'import { Vendor } from "../../../../packages/agent-example/src/client"; if (config.protocol === "example") run()'
+  )
+  write(
+    "lib/ai/agent/external/integrations/new-vendor.ts",
+    "class Daemon { private owners = new Map() }; while (ready()) probe()"
+  )
+  write(
+    "lib/ai/agent/external/lifecycle/service.ts",
+    "class Service { private leases = new Map(); connect() {} }"
+  )
+  write("cli/src/runtime/external/hermes-acp-bridge.ts", "export function run() { return spawn() }")
+  write("cli/src/runtime/external/agent-path.ts", 'export * from "./legacy-path-driver"')
+  const violations = findAgentHostBoundaryViolations(root)
+  assert.ok(violations.some((item) => item.rule === "manager-vendor-import"))
+  assert.ok(violations.some((item) => item.rule === "manager-protocol-branch"))
+  assert.ok(violations.some((item) => item.rule === "host-runtime-state"))
+  assert.ok(violations.some((item) => item.rule === "host-runtime-loop"))
+  assert.ok(violations.some((item) => item.rule === "native-compatibility-entry"))
+  assert.ok(violations.some((item) => item.file.endsWith("agent-path.ts")))
+})
+
+test("accepts Host port assembly and ignores comments, test fixtures and neutral imports", (t) => {
+  const { root, write } = fixture(t, "export const portable = 1")
+  write(
+    "lib/ai/agent/external/manager.ts",
+    'import type { Config } from "@cognia/agent-contracts"; // config.protocol === "vendor"'
+  )
+  write(
+    "lib/ai/agent/external/integrations/acp.ts",
+    "export const create = () => new Client({ processHost: host }); // new Map()"
+  )
+  write("lib/ai/agent/external/integrations/acp.test.ts", "class Fake { owners = new Map() }")
+  write(
+    "lib/ai/agent/external/lifecycle/service.ts",
+    "export class Service extends Core { constructor(host) { super(host) } }"
+  )
+  write(
+    "cli/src/runtime/external/hermes-acp-bridge.ts",
+    'export * from "@cognia/agent-acp/hermes-acp-bridge"'
+  )
+  assert.deepEqual(findAgentHostBoundaryViolations(root), [])
+})
 
 function fixture(t, source) {
   const root = mkdtempSync(join(tmpdir(), "package-boundaries-"))

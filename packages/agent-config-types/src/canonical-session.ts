@@ -1,3 +1,2 @@
-// Owned by `@cognia/agent-contracts` (ADR-0217) so integration packages can
-// emit canonical sessions; re-exported for existing importers.
-export * from "@cognia/agent-contracts/canonical-session"
+/** Compatibility entry; shared configuration contracts are owned by plugin-contract. */
+export * from "@cognia/plugin-contract/types/agent-config/canonical-session"

@@ -1,7 +1,7 @@
 /**
  * The plugin contract's share of `lib/db/session-assets.ts`, which re-exports these.
  */
-import type { AttachmentExtractedContent } from "@cognia/agent-config-types/attachment"
+import type { AttachmentExtractedContent } from "@cognia/plugin-contract/types/agent-config/attachment"
 
 export interface SessionAsset {
   sessionId: string

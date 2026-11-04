@@ -13,12 +13,12 @@ import type {
   AgentAuthority,
   AutonomyLevel,
   EngagementMode,
-} from "@cognia/agent-config-types/agent-composition"
+} from "@cognia/plugin-contract/types/agent-config/agent-composition"
 import type {
   ActionReviewAuthority,
   ActionReviewGrantScope,
   OutboundRecipientGrant,
-} from "@cognia/agent-config-types/action-review"
+} from "@cognia/plugin-contract/types/agent-config/action-review"
 import type { EscalationPolicy } from "../../types/connectors/escalation"
 import type { ItemOwner, ItemProvenance } from "../../types/placement/item-owner"
 import type { OutboundRequest } from "../../types/connectors/outbound"

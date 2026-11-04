@@ -21,7 +21,7 @@ import type {
 import type {
   ExternalAgentCapabilityId,
   ExternalAgentCapabilityLevel,
-} from "@cognia/agent-config-types/external-agent-capability"
+} from "@cognia/agent-contracts/external-agent-capability"
 import type { ExternalAgentChangeEvent } from "./external-agents-changes"
 import type {
   ExternalAgentCredentialSlot,

@@ -11,7 +11,11 @@
 // these subsystems for real, this file is the single point that needs to
 // change — the plugin types stay frozen.
 
-import type { ChatSession, StoredMessage, Skill } from "@cognia/agent-config-types"
+import type {
+  ChatSession,
+  StoredMessage,
+  Skill,
+} from "@cognia/plugin-contract/types/agent-config/index"
 import type { DocumentStructure } from "@cognia/document/types"
 import type { WorkspaceRoot } from "../workspace"
 

@@ -29,8 +29,8 @@ import type {
   AgentAuthority,
   AutonomyLevel,
   EngagementMode,
-} from "@cognia/agent-config-types/agent-composition"
-import type { UnattendedPermissionProfileV1 } from "@cognia/agent-config-types/unattended-permission"
+} from "@cognia/plugin-contract/types/agent-config/agent-composition"
+import type { UnattendedPermissionProfileV1 } from "@cognia/plugin-contract/types/agent-config/unattended-permission"
 
 import type { PluginIconName } from "./plugin-icon"
 
