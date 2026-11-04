@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sha256": "e02ce9625c59688d984cde5b67e9fc7ab8a077cd442e44c22a97a2232fb0f2c2",
+  "sha256": "8f9a0e383a0a57852193e4b94a24cd5e3d05a57cfc15e4d33158e350cb4811da",
   "authoring": {
     "sdkVersion": "0.3.0",
     "uiVersion": "0.2.0",
@@ -10,7 +10,7 @@
     "styleContractSha256": "ae53e5551a4009c0345459ed4cdf25d3a377c6d6ff270f1cd5ae416a9d3b0d2d",
     "compilerContractSha256": "daaee8f417e049fc6a8cdb5b65914bf5c1662bf07017cee148efc3c1f214aaa0",
     "witSha256": "ccd3b60e5c3d6b6163698aa66f460be848e47e452d95124f77ccde92802d77b5",
-    "sdkSourceSha256": "b9e7682f52bff0690155fa4174b0386ad37cbc55d8d7d47b4488376731cef079",
+    "sdkSourceSha256": "84065ee11feb7e51e4bf8ed4fa284404c2e076fc63cf139c7642ff64f5ab9c3b",
     "uiSourceSha256": "f4d206e4e5369e12766797a930e91997c044822472445c8032f3732dbf7d8616",
     "lockfileSha256": "1a88b2732a587348cbc75db9ae20656620e62bfda370435b78743501ee82d0ac",
     "githubKitSourceSha256": "3526f249790a1364f0eaf99f6d5429d5329cf1095ca279068e7a2e6a0b15bf08",
