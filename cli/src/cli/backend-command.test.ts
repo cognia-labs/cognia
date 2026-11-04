@@ -23,6 +23,16 @@ import {
   RUNTIME_ARTIFACTS,
 } from "../runtime/external/dsh-installer"
 
+/**
+ * The runtime artifacts committed with the package. `ops-worker*` is generated
+ * per build target by `scripts/build/stage-dsh-ops-runtime.mjs` (gitignored), so
+ * a fresh checkout does not have it; its staging and source naming are pinned by
+ * `stage-dsh-ops-runtime.test.mjs` and `dsh-installer.test.ts`.
+ */
+const COMMITTED_RUNTIME_ARTIFACTS = RUNTIME_ARTIFACTS.filter(
+  (artifact) => !artifact.startsWith("ops-worker")
+)
+
 function sink() {
   const out: string[] = []
   const err: string[] = []
@@ -134,7 +144,7 @@ describe("resolveRuntimeSourceDir", () => {
     // a confusing "artifact missing" at install time.
     const dir = resolveRuntimeSourceDir(import.meta.url)
     expect(dir).toBe(path.resolve("packages/agent-dsh/runtime"))
-    for (const artifact of RUNTIME_ARTIFACTS) {
+    for (const artifact of COMMITTED_RUNTIME_ARTIFACTS) {
       expect(fs.existsSync(path.join(dir, artifact))).toBe(true)
     }
   })
@@ -164,7 +174,7 @@ describe("install", () => {
     const { ctx, out } = sink()
     const install = jest.fn(async (options: { sourceDir: string }) => {
       // The command must hand the installer the real artifact directory.
-      for (const artifact of RUNTIME_ARTIFACTS) {
+      for (const artifact of COMMITTED_RUNTIME_ARTIFACTS) {
         expect(fs.existsSync(path.join(options.sourceDir, artifact))).toBe(true)
       }
       return {

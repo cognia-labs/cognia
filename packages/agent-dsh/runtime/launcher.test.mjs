@@ -164,9 +164,15 @@ test("uses its host-published process record without creating a child-writable l
       }
     ),
     (error) => {
-      // No upstream package is installed in this unit fixture. Reaching that
-      // boundary proves the host ownership record admitted profile preparation.
-      assert.match(error.stderr, /Cannot find module.*deepseek-ai/)
+      // The fixture runtime home holds no upstream install. Failing on it proves
+      // the host ownership record admitted profile preparation: in the repo the
+      // launcher cannot resolve the upstream package; in the isolated runtime
+      // (CI's deepseek-runtime job) it resolves it beside the launcher and stops
+      // at the fixture's missing `node_modules` instead.
+      assert.match(
+        error.stderr,
+        /Cannot find module.*deepseek-ai|ENOENT[^\n]*deepseek-harness\/node_modules'/
+      )
       return true
     }
   )
