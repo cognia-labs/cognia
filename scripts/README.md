@@ -220,8 +220,11 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `smoke/minimax-acp-smoke.ts`                                       | MiniMax ACP smoke (`packages/agent-acp/README.md`).                                                    |
 | `smoke/opencode-v2-smoke.ts`, `opencode-subagent-models.ts`        | OpenCode v2 API and per-agent models (`docs/research/2026-09-12-opencode-v2-api-audit.md`).            |
 
-When a record above is closed and its harness is no longer worth keeping,
-delete the harness. It stays recoverable from git history.
+A script nothing else references (no command, workflow, import or path in
+code) must also be listed under `manual` in `gates/scripts-layout.json` with
+why; `pnpm audit:scripts-layout` fails otherwise. When a record above is closed
+and its harness is no longer worth keeping, delete the harness. It stays
+recoverable from git history.
 
 ## Conventions
 
@@ -251,7 +254,8 @@ delete the harness. It stays recoverable from git history.
   deep uses `../..`; adjust when nesting deeper.
 - Put a new script in the folder for what it does (build, gate, sync, test,
   smoke, dev, ci), not in a new folder named after its subsystem, and never at
-  the top level. Give it a `package.json` command, or list it under
+  the top level. `pnpm audit:scripts-layout` enforces the folder list and
+  top-level files in `gates/scripts-layout.json`. Give it a `package.json` command, or list it under
   [Run by hand](#run-by-hand) with the record that uses it.
 - One-shot migrations are deleted once they have run. Dated reports and
   working notes belong in `docs/evidence/` or `docs/reports/`, not here.

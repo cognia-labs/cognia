@@ -1,0 +1,91 @@
+{
+  "$comment": "Layout contract for scripts/, enforced by scripts/gates/check-scripts-layout.mjs (pnpm audit:scripts-layout). Add a folder only for a new kind of work, not a new subsystem. List a script under manual only when nothing can call it, with why.",
+  "topLevelFiles": ["README.md", "postinstall.mjs", "tsconfig.audit.json"],
+  "folders": {
+    "bootstrap": "Bash and PowerShell bootstrap agents and presets (product asset)",
+    "build": "predev/prebuild staging, sidecar/CLI/plugin builds, build-time generators",
+    "ci": "CI-only steps: change planning, CI report, Feishu notify, release handoff",
+    "dev": "developer CLIs and on-demand tools",
+    "e2e": "static server for out/ and the E2E governance ledger",
+    "eval": "evaluation, benchmarks and vendor certification",
+    "gates": "read-only gates and audits with their baselines",
+    "i18n": "i18n aggregates, ICU validation, VS Code NLS",
+    "plugin": "plugin SDK/contract build and checks, authoring kit, artifacts",
+    "release": "offline update-catalog signer",
+    "scaffold": "plugin scaffolding and typed config codegen",
+    "smoke": "smoke harnesses against real runtimes and services",
+    "sync": "generators and mirrors that double as drift gates",
+    "tauri": "agent-debug bridge into the real Tauri webview",
+    "test": "Jest / node --test entry points, sharding, coverage"
+  },
+  "manual": [
+    {
+      "path": "scripts/build/build-status-site.mjs",
+      "why": "Builds the status-only static distribution after `pnpm build` (ADR-0211); deployed by hand. CI runs only its test."
+    },
+    {
+      "path": "scripts/dev/move-to-crate.mjs",
+      "why": "Moves Rust modules from src-tauri into a crate without staging in the shared index (ADR-0196)."
+    },
+    {
+      "path": "scripts/eval/benchmarks/code-index-workers.mjs",
+      "why": "Host runtime measurement (docs/evidence/2026-11-03-bun-host-runtime.md)."
+    },
+    {
+      "path": "scripts/eval/benchmarks/host-first-request.mjs",
+      "why": "Host runtime measurement (docs/evidence/2026-11-03-bun-host-runtime.md)."
+    },
+    {
+      "path": "scripts/eval/hte_cem_grader.py",
+      "why": "Grades retained HTE CEM artifacts offline (docs/development/hte-cem-grading.md)."
+    },
+    {
+      "path": "scripts/eval/toolsearch-cache-probe.mjs",
+      "why": "Wire-level tool-search cache experiment; --run calls a model (docs/evidence/2026-10-24-eval-tui-gap-audit.md)."
+    },
+    {
+      "path": "scripts/smoke/antigravity-acp-smoke.ts",
+      "why": "Antigravity CLI support; --live-provider needs GEMINI_API_KEY (docs/evidence/2026-10-24-gemini-antigravity-cli-support-audit.md)."
+    },
+    {
+      "path": "scripts/smoke/builtin-agent-budget-live.ts",
+      "why": "Opt-in live acceptance with real providers (docs/evidence/2026-10-21-builtin-agent-budgets.md)."
+    },
+    {
+      "path": "scripts/smoke/lume-sandbox.mjs",
+      "why": "Lume sandbox smoke on a macOS host (docs/development/lume-sandbox.md)."
+    },
+    {
+      "path": "scripts/smoke/minimax-acp-smoke.ts",
+      "why": "MiniMax ACP smoke (packages/agent-acp/README.md)."
+    },
+    {
+      "path": "scripts/smoke/opencode-subagent-models.ts",
+      "why": "Needs OPENCODE_V1_BIN and OPENCODE_V2_BIN binaries (docs/evidence/2026-10-21-opencode-per-agent-models.md)."
+    },
+    {
+      "path": "scripts/smoke/opencode-v2-smoke.ts",
+      "why": "Runs against an isolated real OpenCode service binary (docs/research/2026-09-12-opencode-v2-api-audit.md)."
+    },
+    {
+      "path": "scripts/smoke/scheduler-tauri.mjs",
+      "why": "Scheduler smoke inside the desktop shell (docs/reports/2026-10-22-scheduled-task-implementation-audit.md)."
+    },
+    {
+      "path": "scripts/smoke/team-eval-live.ts",
+      "why": "Agent Team live evaluation with real models (docs/reports/2026-10-25-team-squad-live-evaluation.md)."
+    },
+    {
+      "path": "scripts/smoke/tui-v41-live.mjs",
+      "why": "TUI v4.1 acceptance in a real PTY (docs/evidence/2026-10-22-tui-v41-acceptance.md)."
+    },
+    {
+      "path": "scripts/sync/generate-live2d-fixtures.mjs",
+      "why": "Regenerates the Live2D compatibility fixtures; pet:compat:test checks them."
+    },
+    {
+      "path": "scripts/tauri/agent-debug-concurrency.mjs",
+      "why": "Real-webview concurrency acceptance for the agent-debug bridge (scripts/tauri/AGENT_DEBUG.md)."
+    }
+  ]
+}

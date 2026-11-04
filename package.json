@@ -260,6 +260,7 @@
     "typecheck:workspaces": "cross-env GOMEMLIMIT=10GiB GOMAXPROCS=2 pnpm --recursive --no-bail --workspace-concurrency=1 --if-present run typecheck",
     "audit:adapter-capabilities": "node scripts/gates/check-adapter-capability-parity.mjs",
     "audit:adr-catalog": "node scripts/gates/check-adr-catalog.mjs",
+    "audit:scripts-layout": "node scripts/gates/check-scripts-layout.mjs",
     "audit:agent-capabilities": "node scripts/build/gen-agent-capabilities.mjs --check && node scripts/gates/check-agent-capabilities.mjs",
     "audit:agent-control-methods": "node scripts/gates/check-agent-control-methods.mjs",
     "audit:agent-host-image": "node scripts/gates/check-agent-host-image.mjs",
