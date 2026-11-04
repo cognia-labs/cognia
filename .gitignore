@@ -289,3 +289,6 @@ packages/agent-host-*/integrity.json
 
 # Plugin extraction build cache.
 /cli/.cache/
+
+# Python SDK build output (setup.py build), not authored here.
+plugin-sdk/python/build/
