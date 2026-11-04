@@ -3939,6 +3939,35 @@ describe("PluginManager", () => {
       expect(getMessageBus().getSubscriptionsBySource("msg-leak")).toHaveLength(0)
     })
 
+    it("unloads runtime authority without deleting durable WASM preopen approvals", async () => {
+      const id = "durable-wasm"
+      const store = {
+        plugins: {
+          [id]: {
+            manifest: { ...createManifest(id), type: "wasm" },
+            status: "disabled",
+            source: "local",
+            path: `/plugins/${id}`,
+            config: {},
+          },
+        } as Record<string, Plugin>,
+        unloadPlugin: jest.fn(async () => undefined),
+        unregisterPluginTool: jest.fn(),
+        unregisterPluginComponent: jest.fn(),
+        unregisterPluginMode: jest.fn(),
+        unregisterPluginCommand: jest.fn(),
+        setPluginError: jest.fn(),
+        setPluginVerificationSnapshot: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      getPermissionGuard().registerPlugin(id, ["storage:read"])
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      await manager.unloadPlugin(id)
+      expect(mockClearWasmCapabilityGrant).not.toHaveBeenCalled()
+      expect(getPermissionGuard().getPluginPermissions(id)).toEqual([])
+      expect(store.unloadPlugin).toHaveBeenCalledWith(id, { viaManager: false })
+    })
+
     it("continues teardown when deactivate() throws (swallow-and-record, W6.2)", async () => {
       const manifest = createManifest("disable-failure")
       const store = {

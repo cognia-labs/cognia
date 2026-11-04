@@ -7,10 +7,31 @@ import {
   larkDocsProvider,
   listDocsProviders,
 } from "./index"
+import * as registry from "./registry"
 
 beforeEach(() => __resetDocsProvidersForTests())
 
 describe("built-in docs providers", () => {
+  it("re-evaluates built-in registration without replacing existing providers", () => {
+    const before = listDocsProviders()
+    const revision = registry.getDocsProvidersRevision()
+    try {
+      jest.doMock("./registry", () => registry)
+      jest.doMock("./providers/lark", () => ({ larkDocsProvider }))
+      jest.doMock("./providers/google", () => ({ googleDocsProvider }))
+      expect(() => {
+        jest.isolateModules(() => jest.requireActual("./index"))
+      }).not.toThrow()
+      expect(listDocsProviders()).toHaveLength(before.length)
+      for (const provider of before) expect(getDocsProvider(provider.id)).toBe(provider)
+      expect(registry.getDocsProvidersRevision()).toBe(revision)
+    } finally {
+      jest.dontMock("./registry")
+      jest.dontMock("./providers/lark")
+      jest.dontMock("./providers/google")
+    }
+  })
+
   it("registers Feishu and Google at module load, so the composer sees them synchronously", () => {
     expect(listDocsProviders().map((provider) => provider.id)).toEqual([
       larkDocsProvider.id,

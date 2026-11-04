@@ -6,7 +6,7 @@
  * cards) must import from here rather than from `./registry` directly.
  */
 
-import { __clearDocsProvidersForTests, registerDocsProvider } from "./registry"
+import { __clearDocsProvidersForTests, getDocsProvider, registerDocsProvider } from "./registry"
 import { larkDocsProvider } from "./providers/lark"
 import { googleDocsProvider } from "./providers/google"
 
@@ -18,8 +18,10 @@ export { larkDocsProvider } from "./providers/lark"
 export { googleDocsProvider } from "./providers/google"
 
 function registerBuiltinDocsProviders(): void {
-  registerDocsProvider(larkDocsProvider)
-  registerDocsProvider(googleDocsProvider)
+  // Preserve registered providers and their active reads across dependency reloads.
+  for (const provider of [larkDocsProvider, googleDocsProvider]) {
+    if (!getDocsProvider(provider.id)) registerDocsProvider(provider)
+  }
 }
 
 /** Test-only: restore the registry to exactly the built-in set. */

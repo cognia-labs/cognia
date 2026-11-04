@@ -15,6 +15,7 @@ import type { GoogleHttpFn } from "./http"
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { GOOGLE_DOCS_SCOPES } from "./config"
 import { __setGoogleProviderDepsForTests, googleDocsProvider } from "./index"
+import * as oauthRegistry from "@/lib/docs-providers/oauth-deep-link"
 
 const ID = "1AbC_dEfGhIjKlMnOpQrStUvWxYz012345"
 let connections: AuthConnectionRow[]
@@ -59,6 +60,20 @@ beforeEach(() => {
   __setGoogleProviderDepsForTests({})
 })
 afterEach(() => __setGoogleProviderDepsForTests({}))
+
+it("re-evaluates the Google provider without registering its OAuth completion twice", () => {
+  const completion = oauthRegistry.getDocsOAuthCompletion("google")
+  expect(completion).toBeDefined()
+  try {
+    jest.doMock("@/lib/docs-providers/oauth-deep-link", () => oauthRegistry)
+    expect(() => {
+      jest.isolateModules(() => jest.requireActual("./index"))
+    }).not.toThrow()
+    expect(oauthRegistry.getDocsOAuthCompletion("google")).toBe(completion)
+  } finally {
+    jest.dontMock("@/lib/docs-providers/oauth-deep-link")
+  }
+})
 
 it("projects only connected Google connections granting all Docs scopes", async () => {
   connections.push(

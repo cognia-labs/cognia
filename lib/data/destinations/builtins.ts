@@ -1,5 +1,9 @@
 /** Built-ins retain their upload/encryption formats and credential owners. */
-import { registerBackupDestination, readBackupDestinationBody } from "./registry"
+import {
+  getBackupDestination,
+  registerBackupDestination,
+  readBackupDestinationBody,
+} from "./registry"
 import { uploadSnapshotToWebDav } from "./webdav"
 import {
   getBackupDestinationsSettings,
@@ -120,9 +124,11 @@ function descriptor(
   }
 }
 
+// A dependency reload can retain the registry. Keep its entries and active uploads.
 for (const [id, label] of [
   ["webdav", "WebDAV"],
   ["github", "GitHub"],
   ["googledrive", "Google Drive"],
-] as const)
-  registerBackupDestination(descriptor(id, label))
+] as const) {
+  if (!getBackupDestination(id)) registerBackupDestination(descriptor(id, label))
+}

@@ -4868,7 +4868,7 @@ export class PluginManager {
 
         // Terminal isolation cleanup — runs on EVERY unload path so a plugin
         // returning to "installed" never leaks permission-guard registration,
-        // i18n bundles, or WASM capability grants. `disablePlugin` already drops
+        // i18n bundles, or live WASM capability grants. `disablePlugin` already drops
         // i18n + revokes grants on the enabled→unload path; these calls are
         // idempotent and additionally cover the loaded→unload / disabled→unload
         // paths (and clear guard tiers + denials, which previously only happened
@@ -4876,7 +4876,9 @@ export class PluginManager {
         getPermissionGuard().unregisterPlugin(pluginId)
         getPluginIPC().unregisterPlugin(pluginId)
         unregisterPluginI18n(pluginId)
-        await clearWasmCapabilityGrant(pluginId)
+        // Durable preopen approvals survive reload/update/rollback. The guard
+        // and runtime above are revoked; uninstall/revoke-all owns deleting
+        // the persisted WASM grant decision.
         getPluginConsentBroker().clearSessionGrantsForPlugin(pluginId)
 
         // Unregister hooks

@@ -28,7 +28,10 @@ import {
   type RemoteDocContent,
   type RemoteDocRef,
 } from "@/lib/docs-providers/types"
-import { registerDocsOAuthCompletion } from "@/lib/docs-providers/oauth-deep-link"
+import {
+  getDocsOAuthCompletion,
+  registerDocsOAuthCompletion,
+} from "@/lib/docs-providers/oauth-deep-link"
 import { completeGoogleDocsAuth } from "./auth"
 import { GOOGLE_DOCS_SCOPES } from "./config"
 import { subscribeGoogleStateChanged } from "./state"
@@ -233,12 +236,14 @@ export const googleDocsProvider: DocsProvider = {
 }
 
 // Registered at module load, next to the provider it completes, so the deep-link
-// router never has to know which providers exist.
-registerDocsOAuthCompletion(GOOGLE_PROVIDER_ID, async (callback) => {
-  await completeGoogleDocsAuth({
-    code: callback.code,
-    state: callback.state,
-    error: callback.error,
-    errorDescription: callback.errorDescription,
+// router never has to know which providers exist. The registry can outlive a reload.
+if (!getDocsOAuthCompletion(GOOGLE_PROVIDER_ID)) {
+  registerDocsOAuthCompletion(GOOGLE_PROVIDER_ID, async (callback) => {
+    await completeGoogleDocsAuth({
+      code: callback.code,
+      state: callback.state,
+      error: callback.error,
+      errorDescription: callback.errorDescription,
+    })
   })
-})
+}
