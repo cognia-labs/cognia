@@ -19,8 +19,8 @@
 //! pathological `AXParent` chain cannot hang the worker thread.
 
 use crate::automation::platform::shared::element_locator::{
-    describe_step, resolve_path, AncestryStep, AppIdentity, ElementLocator, LocatorBackend,
-    LocatorNode, ResolveFailure, WindowIdentity,
+    AncestryStep, AppIdentity, ElementLocator, LocatorBackend, LocatorNode, ResolveFailure,
+    WindowIdentity, describe_step, resolve_action_path, resolve_action_window,
 };
 use crate::automation::types::{AutomationError, Result};
 
@@ -162,9 +162,17 @@ pub fn resolve_locator(locator: &ElementLocator) -> Result<AxElement> {
     // A dead pid yields an application element whose window resolution falls
     // back to the app element itself with no children, so the path walk below
     // fails with NotFound → StaleElement. No separate liveness probe needed.
-    let window_root = AxNode(raw::resolve_window_root(&app));
+    let window_root = resolve_action_window(
+        app.windows()
+            .unwrap_or_default()
+            .into_iter()
+            .map(AxNode)
+            .collect(),
+        &locator.window,
+    )
+    .map_err(|_| AutomationError::StaleElement)?;
 
-    match resolve_path(window_root, &locator.path) {
+    match resolve_action_path(window_root, &locator.path) {
         Ok(node) => Ok(node.0),
         Err(ResolveFailure::NotFound) | Err(ResolveFailure::Ambiguous) => {
             Err(AutomationError::StaleElement)

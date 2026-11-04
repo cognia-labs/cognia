@@ -17,13 +17,13 @@
 //!   `UITransformPattern` for resize; falls through to `set_focus` /
 //!   `Close()` for the operations UIWindowPattern doesn't expose.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use uiautomation::UIElement as UiaElement;
 use uiautomation::patterns::{
     UIExpandCollapsePattern, UIInvokePattern, UIRangeValuePattern, UIScrollItemPattern,
     UISelectionItemPattern, UITogglePattern, UITransformPattern, UIValuePattern, UIWindowPattern,
 };
-use uiautomation::types::{ScrollAmount, WindowVisualState};
-use uiautomation::UIElement as UiaElement;
+use uiautomation::types::{ScrollAmount, UIProperty, WindowVisualState};
 
 use crate::automation::types::*;
 
@@ -33,25 +33,49 @@ use crate::automation::types::*;
 /// a coordinate click), `Err(_)` only for a real backend fault from a
 /// pattern we DID get.
 pub fn try_pattern_click(elt: &UiaElement) -> Result<bool> {
-    if let Ok(p) = elt.get_pattern::<UIInvokePattern>() {
+    if let Some(p) =
+        available_pattern::<UIInvokePattern>(elt, UIProperty::IsInvokePatternAvailable)?
+    {
         p.invoke().map_err(|e| AutomationError::BackendError {
             message: format!("InvokePattern.invoke: {e}"),
         })?;
         return Ok(true);
     }
-    if let Ok(p) = elt.get_pattern::<UITogglePattern>() {
+    if let Some(p) =
+        available_pattern::<UITogglePattern>(elt, UIProperty::IsTogglePatternAvailable)?
+    {
         p.toggle().map_err(|e| AutomationError::BackendError {
             message: format!("TogglePattern.toggle: {e}"),
         })?;
         return Ok(true);
     }
-    if let Ok(p) = elt.get_pattern::<UISelectionItemPattern>() {
+    if let Some(p) = available_pattern::<UISelectionItemPattern>(
+        elt,
+        UIProperty::IsSelectionItemPatternAvailable,
+    )? {
         p.select().map_err(|e| AutomationError::BackendError {
             message: format!("SelectionItemPattern.select: {e}"),
         })?;
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Only an explicit availability=false permits coordinate fallback. Provider
+/// failures while reading availability or retrieving a pattern stay errors.
+pub(super) fn available_pattern<T>(elt: &UiaElement, property: UIProperty) -> Result<Option<T>>
+where
+    T: uiautomation::patterns::UIPattern
+        + TryFrom<windows::core::IUnknown, Error = uiautomation::errors::Error>,
+{
+    let available = elt
+        .get_property_value(property)
+        .and_then(|value| (&value).try_into())
+        .map_err(|error| backend("pattern availability", error));
+    crate::automation::backend::optional_native_pattern(available, || {
+        elt.get_pattern::<T>()
+            .map_err(|error| backend("pattern retrieval", error))
+    })
 }
 
 pub fn dispatch_pattern(elt: &UiaElement, pattern: PatternKind, args: Value) -> Result<Value> {
@@ -115,7 +139,7 @@ pub fn dispatch_pattern(elt: &UiaElement, pattern: PatternKind, args: Value) -> 
                 other => {
                     return Err(AutomationError::BackendError {
                         message: format!("ExpandCollapse: unknown op '{other}'"),
-                    })
+                    });
                 }
             }
             Ok(json!({ "ok": true }))
@@ -179,7 +203,7 @@ pub fn dispatch_pattern(elt: &UiaElement, pattern: PatternKind, args: Value) -> 
                 other => {
                     return Err(AutomationError::BackendError {
                         message: format!("Transform: unknown op '{other}'"),
-                    })
+                    });
                 }
             }
             Ok(json!({ "ok": true }))

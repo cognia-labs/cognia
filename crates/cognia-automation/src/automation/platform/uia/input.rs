@@ -13,10 +13,10 @@ use uiautomation::inputs::{Keyboard, Mouse};
 use uiautomation::types::Point as UiaPoint;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE,
+    GetDoubleClickTime, INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE,
     MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
     MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -89,6 +89,121 @@ pub fn send_chord(chord: &KeyChord) -> Result<()> {
         .map_err(|e| AutomationError::BackendError {
             message: format!("keyboard send_keys failed: {e}"),
         })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GuardedKey {
+    Virtual(windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY),
+    Unicode(u16),
+}
+
+pub fn send_guarded_chord(chord: &KeyChord, guard: impl FnMut() -> Result<()>) -> Result<()> {
+    use crate::automation::platform::shared::keymap::{
+        KeyToken, Modifier, NamedKey, parse_chord, with_held_inputs,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    let tokens = parse_chord(&chord.0).map_err(|error| AutomationError::BackendError {
+        message: error.to_string(),
+    })?;
+    let mut keys = Vec::new();
+    for token in &tokens {
+        let virtual_key = match token {
+            KeyToken::Modifier(modifier) => Some(match modifier {
+                Modifier::Shift => VK_SHIFT,
+                Modifier::Control => VK_CONTROL,
+                Modifier::Alt => VK_MENU,
+                Modifier::Meta => VK_LWIN,
+            }),
+            KeyToken::Named(named) => Some(match named {
+                NamedKey::Enter => VK_RETURN,
+                NamedKey::Tab => VK_TAB,
+                NamedKey::Escape => VK_ESCAPE,
+                NamedKey::Backspace => VK_BACK,
+                NamedKey::Delete => VK_DELETE,
+                NamedKey::Space => VK_SPACE,
+                NamedKey::Home => VK_HOME,
+                NamedKey::End => VK_END,
+                NamedKey::PageUp => VK_PRIOR,
+                NamedKey::PageDown => VK_NEXT,
+                NamedKey::ArrowUp => VK_UP,
+                NamedKey::ArrowDown => VK_DOWN,
+                NamedKey::ArrowLeft => VK_LEFT,
+                NamedKey::ArrowRight => VK_RIGHT,
+                NamedKey::F(number) => VIRTUAL_KEY(VK_F1.0 + u16::from(*number) - 1),
+            }),
+            KeyToken::Char(character) => {
+                if tokens
+                    .iter()
+                    .any(|token| matches!(token, KeyToken::Modifier(_)))
+                {
+                    let unit = u16::try_from(u32::from(*character)).map_err(|error| {
+                        AutomationError::BackendError {
+                            message: error.to_string(),
+                        }
+                    })?;
+                    let mapped = unsafe { VkKeyScanW(unit) };
+                    if mapped == -1 {
+                        return Err(AutomationError::UnsupportedPlatform);
+                    }
+                    for (flag, modifier) in [(1, VK_SHIFT), (2, VK_CONTROL), (4, VK_MENU)] {
+                        let key = GuardedKey::Virtual(modifier);
+                        if (mapped as u16 >> 8) & flag != 0 && !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                    Some(VIRTUAL_KEY(mapped as u16 & 0xff))
+                } else {
+                    let mut buffer = [0; 2];
+                    keys.extend(
+                        character
+                            .encode_utf16(&mut buffer)
+                            .iter()
+                            .copied()
+                            .map(GuardedKey::Unicode),
+                    );
+                    None
+                }
+            }
+        };
+        if let Some(key) = virtual_key {
+            keys.push(GuardedKey::Virtual(key));
+        }
+    }
+    with_held_inputs(
+        &mut (),
+        &keys,
+        guard,
+        |_, key| guarded_key_event(*key, true),
+        |_, key| guarded_key_event(*key, false),
+        |_| Ok(()),
+    )
+}
+
+fn guarded_key_event(key: GuardedKey, down: bool) -> Result<()> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    let (virtual_key, scan, mut flags) = match key {
+        GuardedKey::Virtual(key) => (key, 0, KEYBD_EVENT_FLAGS(0)),
+        GuardedKey::Unicode(unit) => (VIRTUAL_KEY(0), unit, KEYEVENTF_UNICODE),
+    };
+    if !down {
+        flags |= KEYEVENTF_KEYUP;
+    }
+    if matches!(key, GuardedKey::Virtual(key) if [VK_HOME, VK_END, VK_PRIOR, VK_NEXT, VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_DELETE, VK_LWIN].contains(&key))
+    {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    send_input_one(INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: virtual_key,
+                wScan: scan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,7 +302,7 @@ pub fn hold_key(chord: &KeyChord, duration_ms: u32) -> Result<()> {
 // Internal helpers.
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn send_wheel(delta: i32, horizontal: bool) -> Result<()> {
+pub(super) fn send_wheel(delta: i32, horizontal: bool) -> Result<()> {
     let flag: MOUSE_EVENT_FLAGS = if horizontal {
         MOUSEEVENTF_HWHEEL
     } else {

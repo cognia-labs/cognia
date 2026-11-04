@@ -17,7 +17,8 @@ use crate::automation::instruction_pack::{InstructionPack, InstructionPackRegist
 use crate::automation::platform::shared::screenshot as shared_screenshot;
 use crate::automation::platform::shared::tree_shape;
 use crate::automation::types::{
-    DragOpts, ElementInfo, KeyChord, Locator, MouseButton, Point, Rect, Screenshot, ScrollOpts,
+    DragOpts, ElementInfo, ElementRef, KeyChord, Locator, MouseButton, Point, Rect, Screenshot,
+    ScrollOpts,
 };
 
 pub const MODEL_TREE_MAX_NODES: usize = 1_000;
@@ -92,6 +93,8 @@ pub struct CapturedUiState {
     pub session_id: String,
     pub turn_binding: String,
     pub app: ResolvedApplication,
+    #[serde(default)]
+    pub input_focus: Option<ElementRef>,
     pub surface: UiSurface,
     /// The frame the caller will be shown, already scaled to the operator's
     /// budget. `surface.pixel_width` / `pixel_height` describe THIS frame, so
@@ -256,6 +259,8 @@ pub enum ActionTarget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UiAction {
+    /// Deliberate activation, followed by a fresh observation before input.
+    Focus,
     Click {
         #[serde(default)]
         button: Option<MouseButton>,
@@ -414,6 +419,7 @@ struct SessionRecord {
     /// already the captured one, so `zoom` crops `current.screenshot`.
     zoom_source: Option<Screenshot>,
     canonical: Vec<FlatNode>,
+    input_focus: Option<ElementRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -438,6 +444,7 @@ pub(crate) struct PreparedAction {
     pub refetched_from_revision: Option<u64>,
     pub pixel_surface: bool,
     pub turn_binding: String,
+    pub input_focus: Option<ElementRef>,
 }
 
 impl UiSessionManager {
@@ -571,6 +578,7 @@ impl UiSessionManager {
                 current: state.clone(),
                 zoom_source: capture.zoom_source,
                 canonical,
+                input_focus: capture.input_focus,
             },
         );
         self.trim_zoom_sources(&session_id);
@@ -712,6 +720,10 @@ impl UiSessionManager {
             refetched_from_revision,
             pixel_surface: matches!(&request.target, ActionTarget::Pixel { .. }),
             turn_binding: turn_binding.to_string(),
+            input_focus: self
+                .sessions
+                .get(session_id)
+                .and_then(|record| record.input_focus.clone()),
         })
     }
 
@@ -1040,16 +1052,8 @@ fn diff_trees(
     from_revision: u64,
     to_revision: u64,
 ) -> UiTreeDiff {
-    let previous_by_key = previous
-        .nodes
-        .iter()
-        .map(|node| (node_identity(node), node))
-        .collect::<HashMap<_, _>>();
-    let current_by_key = current
-        .nodes
-        .iter()
-        .map(|node| (node_identity(node), node))
-        .collect::<HashMap<_, _>>();
+    let previous_by_key = diff_node_keys(previous);
+    let current_by_key = diff_node_keys(current);
 
     let mut added = current_by_key
         .iter()
@@ -1065,8 +1069,14 @@ fn diff_trees(
         .iter()
         .filter_map(|(key, current_node)| {
             let previous_node = previous_by_key.get(key)?;
-            let before = serde_json::to_value(&previous_node.element).ok()?;
-            let after = serde_json::to_value(&current_node.element).ok()?;
+            let mut before = serde_json::to_value(&previous_node.element).ok()?;
+            let mut after = serde_json::to_value(&current_node.element).ok()?;
+            if let Some(value) = before.as_object_mut() {
+                value.remove("elementRef");
+            }
+            if let Some(value) = after.as_object_mut() {
+                value.remove("elementRef");
+            }
             (before != after).then(|| current_node.element.clone())
         })
         .collect::<Vec<_>>();
@@ -1083,6 +1093,20 @@ fn diff_trees(
     }
 }
 
+fn diff_node_keys(tree: &UiTreeProjection) -> HashMap<String, &UiTreeNode> {
+    let mut occurrences = HashMap::<String, usize>::new();
+    tree.nodes
+        .iter()
+        .map(|node| {
+            let identity = node_identity(node);
+            let ordinal = occurrences.entry(identity.clone()).or_default();
+            let key = format!("{identity}:{ordinal}");
+            *ordinal += 1;
+            (key, node)
+        })
+        .collect()
+}
+
 fn node_identity(node: &UiTreeNode) -> String {
     let element = &node.element;
     let stable = element
@@ -1090,13 +1114,9 @@ fn node_identity(node: &UiTreeNode) -> String {
         .as_ref()
         .map(|id| format!("id:{id}"))
         .unwrap_or_else(|| {
-            format!(
-                "fallback:{}:{}:{}:{}",
-                element.element_ref.0,
-                element.control_type.as_deref().unwrap_or_default(),
-                element.class_name.as_deref().unwrap_or_default(),
-                element.name.as_deref().unwrap_or_default()
-            )
+            // Both AX capture bindings and UIA cache refs rotate on observation.
+            // They identify an action capability, not an observable UI change.
+            format!("fallback:{}", node.handle.fingerprint)
         });
     format!("{}:{stable}", node.parent_index.unwrap_or(usize::MAX))
 }
@@ -1187,6 +1207,7 @@ mod tests {
                     display_name: "Notes".into(),
                     process_id: 42,
                 },
+                input_focus: None,
                 surface: UiSurface {
                     window_id: Some(7),
                     display_id: Some("main".into()),
@@ -1212,8 +1233,8 @@ mod tests {
     }
 
     fn png_shot(w: u32, h: u32) -> Screenshot {
-        use base64::engine::general_purpose;
         use base64::Engine as _;
+        use base64::engine::general_purpose;
         use xcap::image::{self, RgbaImage};
         let img = RgbaImage::new(w, h);
         let mut bytes = std::io::Cursor::new(Vec::new());
@@ -1476,6 +1497,66 @@ mod tests {
             sessions.prepare_action(&request, "turn:test"),
             Err(SessionError::TurnTokenConsumed)
         ));
+    }
+
+    #[test]
+    fn capture_binding_rotation_does_not_publish_a_tree_change() {
+        use crate::automation::platform::shared::element_locator::{
+            AppIdentity, ElementLocator, LocatorBackend,
+        };
+
+        let mut sessions = UiSessionManager::default();
+        let mut locator = ElementLocator::new(
+            LocatorBackend::Macos,
+            AppIdentity {
+                pid: 42,
+                bundle_id: None,
+                process_name: None,
+            },
+        );
+        let mut observed = root("Notes");
+        locator.capture_id = Some("first-native-capture".into());
+        observed.element_ref = ElementRef(locator.encode());
+        sessions
+            .record_state(CapturedUiState::fixture(observed.clone()))
+            .expect("first capture");
+
+        locator.capture_id = Some("second-native-capture".into());
+        observed.element_ref = ElementRef(locator.encode());
+        let second = sessions
+            .record_state(CapturedUiState::fixture(observed))
+            .expect("second capture");
+        let diff = second.diff.expect("comparison to first capture");
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
+        assert!(diff.updated.is_empty());
+    }
+
+    #[test]
+    fn rotating_uia_refs_preserve_duplicate_nodes_and_real_changes() {
+        let mut sessions = UiSessionManager::default();
+        let mut observed = root("Notes");
+        observed.children = Some(vec![root("unnamed-button"), root("unnamed-button")]);
+        sessions
+            .record_state(CapturedUiState::fixture(observed.clone()))
+            .unwrap();
+        observed.element_ref = ElementRef("new-uia-root".into());
+        for (index, child) in observed.children.as_mut().unwrap().iter_mut().enumerate() {
+            child.element_ref = ElementRef(format!("new-uia-{index}"));
+        }
+        let unchanged = sessions
+            .record_state(CapturedUiState::fixture(observed.clone()))
+            .unwrap();
+        let diff = unchanged.diff.unwrap();
+        assert!(diff.added.is_empty() && diff.removed.is_empty() && diff.updated.is_empty());
+        observed.children.as_mut().unwrap()[1].is_enabled = false;
+        let changed = sessions
+            .record_state(CapturedUiState::fixture(observed))
+            .unwrap();
+        let diff = changed.diff.unwrap();
+        assert!(diff.added.is_empty() && diff.removed.is_empty());
+        assert_eq!(diff.updated.len(), 1);
+        assert!(!diff.updated[0].is_enabled);
     }
 
     #[test]

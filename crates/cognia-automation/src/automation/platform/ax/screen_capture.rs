@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::Mutex;
 
 use crate::automation::virtual_display::driver_macos;
@@ -160,9 +160,14 @@ pub(super) fn capture_application_window(
         let mut native = NativeResultGuard(NativeCaptureResult::default());
         let success = unsafe { cognia_sc_stream_capture_latest(stream.native, &mut native.0) };
         if success {
-            verify_owned_capture(key.display_id, key.generation, &native.0)?;
-            driver_macos::validate_session().map_err(screen_off_error)?;
-            return finish_capture(&native.0, true);
+            let capture = verify_owned_capture(key.display_id, key.generation, &native.0)
+                .and_then(|_| verify_window_geometry(key.bounds, &native.0))
+                .and_then(|_| driver_macos::validate_session().map_err(screen_off_error))
+                .and_then(|_| finish_capture(&native.0, true));
+            if capture.is_err() {
+                slot.take();
+            }
+            return capture;
         }
         slot.take();
     }
@@ -193,6 +198,7 @@ pub(super) fn capture_application_window(
         return Err(native_error(&native.0));
     }
     let capture = match verify_owned_capture(key.display_id, key.generation, &native.0)
+        .and_then(|_| verify_window_geometry(key.bounds, &native.0))
         .and_then(|_| finish_capture(&native.0, true))
     {
         Ok(capture) => capture,
@@ -208,6 +214,31 @@ pub(super) fn capture_application_window(
         native: stream,
     });
     Ok(capture)
+}
+
+/// AX exposes the destination rectangle while WindowServer can still be animating.
+/// A stream created from that transient frame must not poison subsequent observations.
+fn verify_window_geometry(expected: Option<Rect>, native: &NativeCaptureResult) -> Result<()> {
+    if let Some(expected) = expected {
+        let actual = Rect {
+            x: round_to_i32(native.logical_x)?,
+            y: round_to_i32(native.logical_y)?,
+            width: round_to_i32(native.logical_width)?,
+            height: round_to_i32(native.logical_height)?,
+        };
+        // A window stream keeps its configured buffer size until it is restarted.
+        // Reject letterboxed/scaled frames after a resize or display-scale change.
+        let scale = native.point_pixel_scale;
+        if expected != actual
+            || !scale.is_finite()
+            || scale <= 0.0
+            || (native.logical_width * scale).round() != f64::from(native.width)
+            || (native.logical_height * scale).round() != f64::from(native.height)
+        {
+            return Err(AutomationError::StaleElement);
+        }
+    }
+    Ok(())
 }
 
 pub fn capture_display(opts: &ScreenshotOpts) -> Result<Screenshot> {
@@ -390,6 +421,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn animated_window_geometry_is_rejected_before_caching_a_stream() {
+        let expected = Rect {
+            x: 60,
+            y: 100,
+            width: 600,
+            height: 392,
+        };
+        let mut native = NativeCaptureResult {
+            width: 1200,
+            height: 784,
+            logical_x: -890.0,
+            logical_y: 100.0,
+            logical_width: 600.0,
+            logical_height: 392.0,
+            point_pixel_scale: 2.0,
+            ..NativeCaptureResult::default()
+        };
+        assert!(matches!(
+            verify_window_geometry(Some(expected), &native),
+            Err(AutomationError::StaleElement)
+        ));
+        assert!(verify_window_geometry(None, &native).is_ok());
+        native.logical_x = 60.0;
+        assert!(verify_window_geometry(Some(expected), &native).is_ok());
+        native.width = 600;
+        assert!(matches!(
+            verify_window_geometry(Some(expected), &native),
+            Err(AutomationError::StaleElement)
+        ));
+    }
+
+    #[test]
     fn virtual_display_capture_never_falls_back_to_another_screen() {
         assert_eq!(select_display(Some(42), 0).unwrap(), 42);
         assert_eq!(select_display(Some(42), 42).unwrap(), 42);
@@ -401,9 +464,11 @@ mod tests {
     #[test]
     fn rejects_non_finite_native_coordinates() {
         let error = round_to_i32(f64::NAN).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("invalid logical window rectangle"));
+        assert!(
+            error
+                .to_string()
+                .contains("invalid logical window rectangle")
+        );
     }
 
     #[test]
@@ -453,9 +518,11 @@ mod tests {
 
         let error = capture_application_window(&active, 42, None, &opts).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("reject region/monitor overrides"));
+        assert!(
+            error
+                .to_string()
+                .contains("reject region/monitor overrides")
+        );
     }
 
     #[test]

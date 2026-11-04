@@ -28,16 +28,18 @@ use std::time::Instant;
 use serde_json::json;
 use tokio::sync::oneshot;
 
-use super::backend::AutomationBackend;
+use super::backend::{
+    ActionTargetContext, AutomationBackend, NativeDeliveryError, TargetActionKind,
+};
 use super::host::{self, AppHandle};
 use super::permission::ScreenshotScalingSettings;
 use super::policy::{self, Decision, HardTargetFacts};
 use super::selection::TextSelectionSnapshot;
 use super::session::{
     ActionEvidence, ActionMethod, ActionPolicyDecision, ActionRequest, ActionResult, ActionStatus,
-    ActionStrategy, AppLocator, CapturedUiState, CoordinateSpace, ElementHandle, ExpandedElements,
-    GetAppStateOptions, PreparedAction, SessionError, UiAction, UiSessionManager, UiStateRevision,
-    UiSurface, UiTreeNode, UiTreeProjectionKind, ZoomedRegion,
+    ActionStrategy, ActionTarget, AppLocator, CapturedUiState, CoordinateSpace, ElementHandle,
+    ExpandedElements, GetAppStateOptions, PreparedAction, SessionError, UiAction, UiSessionManager,
+    UiStateRevision, UiSurface, UiTreeNode, UiTreeProjectionKind, ZoomedRegion,
 };
 use super::types::*;
 
@@ -482,12 +484,35 @@ fn dispatch(
             turn_binding,
             reply,
         } => {
-            let _ = reply.send(perform_session_action(
-                backend,
-                sessions,
-                request,
-                &turn_binding,
-            ));
+            let action_started = Instant::now();
+            let before_revision = match &request.target {
+                ActionTarget::Element { handle } => handle.revision,
+                ActionTarget::Pixel { target } => target.revision,
+            };
+            match std::panic::catch_unwind(AssertUnwindSafe(|| {
+                perform_session_action(backend, sessions, request, &turn_binding)
+            })) {
+                Ok(result) => {
+                    let _ = reply.send(result);
+                }
+                Err(panic) => {
+                    let _ = reply.send(Ok(ActionResult {
+                        status: ActionStatus::Unknown,
+                        method: None,
+                        before_revision,
+                        after_revision: None,
+                        evidence: vec![ActionEvidence {
+                            kind: "workerPanic".into(),
+                            message: "native action interrupted by a panic; inspect effects and observe again before another action".into(),
+                            revision: Some(before_revision),
+                        }],
+                        policy_decision: ActionPolicyDecision { allowed: true, reason: None },
+                        duration_ms: action_started.elapsed().as_millis() as u64,
+                    }));
+                    // Preserve the existing bounded backend-restart path.
+                    std::panic::resume_unwind(panic);
+                }
+            }
         }
         Request::Shutdown => return DispatchControl::Stop,
     }
@@ -779,11 +804,13 @@ fn capture_app_state(
         .as_ref()
         .map(|shot| shot.captured_at)
         .unwrap_or_else(unix_time_millis);
+    let input_focus = backend.input_focus(&app)?;
     let mut state = sessions
         .record_state(CapturedUiState {
             session_id,
             turn_binding,
             app,
+            input_focus,
             zoom_source,
             surface: UiSurface {
                 window_id: application_screenshot
@@ -861,16 +888,18 @@ fn perform_session_action(
         .prepare_action(&request, turn_binding)
         .map_err(map_session_error)?;
     let before_revision = prepared.state.revision;
-    let focus = backend.get_focus()?;
-    let target_url = backend
-        .selection_preflight()
-        .ok()
-        .and_then(|preflight| preflight.source_url);
     if let Decision::Deny { reason } = policy::evaluate_hard_target(HardTargetFacts {
         bundle_id: prepared.state.app.bundle_id.as_deref(),
         process_name: Some(prepared.state.app.display_name.as_str()),
-        window_title: focus.window_title.as_deref(),
-        target_url: target_url.as_deref(),
+        window_title: prepared
+            .state
+            .tree
+            .nodes
+            .first()
+            .and_then(|node| node.element.window_title.as_deref()),
+        // Native validation obtains URL facts from the resolved target, never
+        // an unrelated globally focused application.
+        target_url: None,
     }) {
         let mut evidence = vec![ActionEvidence {
             kind: "policy".into(),
@@ -892,8 +921,7 @@ fn perform_session_action(
         });
     }
 
-    let foreground = focus.process_id == Some(prepared.state.app.process_id);
-    let delivery = deliver_action(backend, &prepared, &request, foreground);
+    let delivery = deliver_action(backend, &prepared, &request);
     let (method, delivery_error) = match delivery {
         Ok(method) => (Some(method), None),
         Err(error) => (None, Some(error)),
@@ -901,12 +929,14 @@ fn perform_session_action(
     if let Some(error) = delivery_error {
         let mut evidence = vec![ActionEvidence {
             kind: "deliveryError".into(),
-            message: error.to_string(),
+            message: error.error.to_string(),
             revision: Some(before_revision),
         }];
         append_refetch_evidence(&prepared, &mut evidence);
         return Ok(ActionResult {
-            status: if matches!(error, AutomationError::PermissionDenied { .. }) {
+            status: if error.may_have_delivered {
+                ActionStatus::Unknown
+            } else if matches!(error.error, AutomationError::PermissionDenied { .. }) {
                 ActionStatus::Refused
             } else {
                 ActionStatus::NotDelivered
@@ -931,6 +961,7 @@ fn perform_session_action(
                     session_id: prepared.state.session_id.clone(),
                     turn_binding: prepared.turn_binding.clone(),
                     app: prepared.state.app.clone(),
+                    input_focus: None,
                     surface: prepared.state.surface.clone(),
                     // The post-action revision carries no frame, so there is
                     // nothing for `zoom` to crop until the caller re-reads.
@@ -949,7 +980,7 @@ fn perform_session_action(
                 !diff.added.is_empty() || !diff.removed.is_empty() || !diff.updated.is_empty()
             });
             (
-                if changed {
+                if changed || matches!(request.action, UiAction::Focus) {
                     ActionStatus::Delivered
                 } else {
                     ActionStatus::Unknown
@@ -1021,23 +1052,65 @@ fn deliver_action(
     backend: &dyn AutomationBackend,
     prepared: &PreparedAction,
     request: &ActionRequest,
-    foreground: bool,
-) -> Result<ActionMethod> {
+) -> std::result::Result<ActionMethod, NativeDeliveryError> {
+    if matches!(request.action, UiAction::Focus) {
+        let target = action_target_context(prepared)?;
+        backend.validate_action_target(&target, TargetActionKind::Focus)?;
+        backend
+            .focus_action_target(&target)
+            .map_err(|error| NativeDeliveryError {
+                error,
+                may_have_delivered: true,
+            })?;
+        return Ok(ActionMethod::Ax);
+    }
     match request.strategy {
-        ActionStrategy::Semantic => deliver_semantic(backend, prepared, &request.action),
-        ActionStrategy::Pixel => {
-            ensure_foreground(foreground)?;
-            deliver_synthetic(backend, prepared, request)
+        ActionStrategy::Semantic => {
+            deliver_semantic(backend, prepared, &request.action).map_err(semantic_delivery_error)
         }
+        ActionStrategy::Pixel => deliver_synthetic(backend, prepared, request),
         ActionStrategy::Auto => match deliver_semantic(backend, prepared, &request.action) {
             Ok(method) => Ok(method),
-            Err(_) if pixel_fallback_is_fresh(prepared) => {
-                ensure_foreground(foreground)?;
+            Err(AutomationError::UnsupportedPlatform) if pixel_fallback_is_fresh(prepared) => {
                 deliver_synthetic(backend, prepared, request)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(semantic_delivery_error(error)),
         },
     }
+}
+
+fn semantic_delivery_error(error: AutomationError) -> NativeDeliveryError {
+    let may_have_delivered = matches!(
+        error,
+        AutomationError::BackendError { .. } | AutomationError::Internal { .. }
+    );
+    NativeDeliveryError {
+        error,
+        may_have_delivered,
+    }
+}
+
+fn action_target_context(prepared: &PreparedAction) -> Result<ActionTargetContext<'_>> {
+    Ok(ActionTargetContext {
+        app: &prepared.state.app,
+        surface: &prepared.state.surface,
+        root: &prepared
+            .state
+            .tree
+            .nodes
+            .first()
+            .ok_or(AutomationError::StaleElement)?
+            .element,
+        element: prepared.element.as_ref(),
+        input_focus: prepared.input_focus.as_ref(),
+        point: prepared.point.or_else(|| {
+            prepared
+                .element
+                .as_ref()
+                .and_then(|e| e.bounding_rect)
+                .map(rect_center)
+        }),
+    })
 }
 
 fn deliver_semantic(
@@ -1045,26 +1118,34 @@ fn deliver_semantic(
     prepared: &PreparedAction,
     action: &UiAction,
 ) -> Result<ActionMethod> {
+    if matches!(
+        action,
+        UiAction::TypeText { .. } | UiAction::PressKey { .. } | UiAction::Drag { .. }
+    ) {
+        return Err(AutomationError::UnsupportedPlatform);
+    }
     let element = prepared
         .element
         .as_ref()
-        .ok_or_else(|| AutomationError::PermissionDenied {
-            reason: "semantic actions require an element handle".into(),
-        })?;
+        .ok_or(AutomationError::UnsupportedPlatform)?;
     let element_ref = element.element_ref.clone();
+    backend.validate_action_target(
+        &action_target_context(prepared)?,
+        TargetActionKind::Semantic,
+    )?;
     match action {
+        UiAction::Focus => return Err(AutomationError::UnsupportedPlatform),
         UiAction::Click { button, count } => backend.click(
             ClickTarget::Element { element_ref },
             ClickOpts {
                 button: *button,
                 count: *count,
                 use_native: Some(true),
+                native_only: true,
                 ..ClickOpts::default()
             },
         )?,
-        UiAction::Scroll { opts } => {
-            backend.scroll(ScrollTarget::Element { element_ref }, *opts)?
-        }
+        UiAction::Scroll { opts } => backend.semantic_scroll(element_ref, *opts)?,
         UiAction::SetValue { value } => {
             backend.invoke_pattern(element_ref, PatternKind::Value, json!({ "value": value }))?;
         }
@@ -1098,59 +1179,24 @@ fn deliver_synthetic(
     backend: &dyn AutomationBackend,
     prepared: &PreparedAction,
     request: &ActionRequest,
-) -> Result<ActionMethod> {
-    let point = prepared.point.or_else(|| {
-        prepared
-            .element
-            .as_ref()
-            .and_then(|element| element.bounding_rect)
-            .map(rect_center)
-    });
-    match &request.action {
-        UiAction::Click { button, count } => {
-            let point = point.ok_or(AutomationError::ElementNotFound)?;
-            backend.click(
-                ClickTarget::Point {
-                    x: point.x,
-                    y: point.y,
-                },
-                ClickOpts {
-                    button: *button,
-                    count: *count,
-                    use_native: Some(false),
-                    ..ClickOpts::default()
-                },
-            )?;
+) -> std::result::Result<ActionMethod, NativeDeliveryError> {
+    let kind = if matches!(
+        request.action,
+        UiAction::TypeText { .. } | UiAction::PressKey { .. }
+    ) {
+        TargetActionKind::Keyboard
+    } else {
+        TargetActionKind::Pointer
+    };
+    backend.validate_action_target(&action_target_context(prepared)?, kind)?;
+    let mut action = request.action.clone();
+    if let UiAction::Drag { to, .. } = &mut action {
+        if prepared.pixel_surface {
+            *to = super::session::pixel_to_global_point(&prepared.state.surface, *to)
+                .map_err(map_session_error)?;
         }
-        UiAction::Drag { to, opts } => {
-            let to = if prepared.pixel_surface {
-                super::session::pixel_to_global_point(&prepared.state.surface, *to)
-                    .map_err(map_session_error)?
-            } else {
-                *to
-            };
-            backend.drag(
-                point.ok_or(AutomationError::ElementNotFound)?,
-                to,
-                opts.clone(),
-            )?;
-        }
-        UiAction::Scroll { opts } => {
-            let point = point.ok_or(AutomationError::ElementNotFound)?;
-            backend.scroll(
-                ScrollTarget::Point {
-                    x: point.x,
-                    y: point.y,
-                },
-                *opts,
-            )?;
-        }
-        UiAction::PressKey { chord } => backend.send_keys(chord)?,
-        UiAction::TypeText { text } => backend.type_text(text, TypeOpts::default())?,
-        UiAction::SetValue { .. }
-        | UiAction::SelectText { .. }
-        | UiAction::SecondaryAction { .. } => return Err(AutomationError::UnsupportedPlatform),
     }
+    backend.deliver_synthetic(&action_target_context(prepared)?, &action)?;
     Ok(ActionMethod::Synthetic)
 }
 
@@ -1182,16 +1228,6 @@ fn pixel_fallback_is_fresh(prepared: &PreparedAction) -> bool {
                 && screenshot.height == prepared.state.surface.pixel_height
                 && unix_time_millis().saturating_sub(prepared.state.captured_at) <= 30_000
         })
-}
-
-fn ensure_foreground(foreground: bool) -> Result<()> {
-    if foreground {
-        Ok(())
-    } else {
-        Err(AutomationError::PermissionDenied {
-            reason: "pixel actions require the target application to be foreground".into(),
-        })
-    }
 }
 
 fn settle_application_tree(
@@ -1228,7 +1264,33 @@ fn settle_application_tree(
 }
 
 fn trees_equal(left: &[ElementInfo], right: &[ElementInfo]) -> bool {
-    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+    let mut pending = vec![(left, right)];
+    while let Some((left, right)) = pending.pop() {
+        if left.len() != right.len() {
+            return false;
+        }
+        for (left, right) in left.iter().zip(right) {
+            // Native bindings rotate on observation; they are authority, not UI state.
+            if left.name != right.name
+                || left.automation_id != right.automation_id
+                || left.control_type != right.control_type
+                || left.class_name != right.class_name
+                || left.bounding_rect != right.bounding_rect
+                || left.is_enabled != right.is_enabled
+                || left.is_focused != right.is_focused
+                || left.process_id != right.process_id
+                || left.process_name != right.process_name
+                || left.window_title != right.window_title
+            {
+                return false;
+            }
+            pending.push((
+                left.children.as_deref().unwrap_or_default(),
+                right.children.as_deref().unwrap_or_default(),
+            ));
+        }
+    }
+    true
 }
 
 /// Helper: send a request and await the reply, mapping channel errors.
@@ -1502,6 +1564,20 @@ impl AutomationHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_settling_ignores_rotating_native_bindings_but_detects_focus_and_geometry() {
+        let backend = StateFixtureBackend::default();
+        let original = backend.get_focus().unwrap();
+        let mut current = original.clone();
+        current.element_ref = ElementRef("new-native-capture".into());
+        assert!(trees_equal(&[original.clone()], &[current.clone()]));
+        current.is_focused = false;
+        assert!(!trees_equal(&[original.clone()], &[current.clone()]));
+        current.is_focused = original.is_focused;
+        current.bounding_rect.as_mut().unwrap().x += 1;
+        assert!(!trees_equal(&[original], &[current]));
+    }
     use crate::automation::backend::StubBackend;
     use crate::automation::session::{
         ActionRequest, ActionStatus, ActionStrategy, ActionTarget, AppLocator, GetAppStateOptions,
@@ -1860,9 +1936,145 @@ mod tests {
         }
     }
 
-    struct StateFixtureBackend;
+    struct FixtureControl {
+        bounds: Rect,
+        focused_window: u64,
+        focused_element: String,
+        deny_semantic: bool,
+        interrupt_after_first: bool,
+        panic_after_first: bool,
+        inputs: Vec<String>,
+    }
+
+    impl Default for FixtureControl {
+        fn default() -> Self {
+            Self {
+                bounds: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 800,
+                    height: 600,
+                },
+                focused_window: 1,
+                focused_element: "notes-window".into(),
+                deny_semantic: false,
+                interrupt_after_first: false,
+                panic_after_first: false,
+                inputs: Vec::new(),
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct StateFixtureBackend {
+        control: Arc<parking_lot::Mutex<FixtureControl>>,
+    }
 
     impl AutomationBackend for StateFixtureBackend {
+        fn deliver_synthetic(
+            &self,
+            target: &ActionTargetContext<'_>,
+            action: &UiAction,
+        ) -> std::result::Result<(), NativeDeliveryError> {
+            let kind = if matches!(
+                action,
+                UiAction::TypeText { .. } | UiAction::PressKey { .. }
+            ) {
+                TargetActionKind::Keyboard
+            } else {
+                TargetActionKind::Pointer
+            };
+            self.validate_action_target(target, kind)?;
+            let mut emitted = false;
+            let result = (|| -> Result<()> {
+                match action {
+                    UiAction::TypeText { text } => self.type_text(text, TypeOpts::default()),
+                    UiAction::PressKey { chord } => self.send_keys(chord),
+                    UiAction::Click { button, count } => {
+                        let point = target.point.ok_or(AutomationError::StaleElement)?;
+                        for _ in 0..count.unwrap_or(1) {
+                            self.validate_action_target(target, kind)?;
+                            emitted = true;
+                            self.click(
+                                ClickTarget::Point {
+                                    x: point.x,
+                                    y: point.y,
+                                },
+                                ClickOpts {
+                                    button: *button,
+                                    ..Default::default()
+                                },
+                            )?;
+                            let mut live = self.control.lock();
+                            if live.interrupt_after_first {
+                                live.focused_window = 2;
+                            }
+                            let panic_after_first = live.panic_after_first;
+                            drop(live);
+                            assert!(!panic_after_first, "fixture panic after delivered input");
+                        }
+                        Ok(())
+                    }
+                    _ => Err(AutomationError::UnsupportedPlatform),
+                }
+            })();
+            result.map_err(|error| NativeDeliveryError {
+                error,
+                may_have_delivered: emitted,
+            })
+        }
+        fn input_focus(
+            &self,
+            _app: &super::super::session::ResolvedApplication,
+        ) -> Result<Option<ElementRef>> {
+            Ok(Some(ElementRef(
+                self.control.lock().focused_element.clone(),
+            )))
+        }
+
+        fn validate_action_target(
+            &self,
+            target: &ActionTargetContext<'_>,
+            kind: TargetActionKind,
+        ) -> Result<()> {
+            let live = self.control.lock();
+            if matches!(kind, TargetActionKind::Pointer | TargetActionKind::Keyboard) {
+                let mut surface = target.surface.clone();
+                surface.logical_bounds = live.bounds;
+                super::super::backend::validate_live_surface(target.surface, &surface)?;
+                if live.focused_window != target.surface.window_id.unwrap_or_default() {
+                    return Err(AutomationError::PermissionDenied {
+                        reason: "window focus changed".into(),
+                    });
+                }
+            }
+            if kind == TargetActionKind::Keyboard {
+                let expected = target
+                    .element
+                    .map(|e| &e.element_ref)
+                    .or(target.input_focus)
+                    .ok_or(AutomationError::StaleElement)?;
+                if expected.0 != live.focused_element {
+                    return Err(AutomationError::PermissionDenied {
+                        reason: "input control changed".into(),
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        fn focus_action_target(&self, target: &ActionTargetContext<'_>) -> Result<()> {
+            let mut live = self.control.lock();
+            live.focused_window = target
+                .surface
+                .window_id
+                .ok_or(AutomationError::StaleElement)?;
+            if let Some(element) = target.element {
+                live.focused_element = element.element_ref.0.clone();
+            }
+            Ok(())
+        }
+
         fn capabilities(&self) -> Capabilities {
             Capabilities {
                 operations: OperationCapabilities::default(),
@@ -1885,23 +2097,26 @@ mod tests {
             }
         }
         fn get_focus(&self) -> Result<ElementInfo> {
+            let control = self.control.lock();
             Ok(ElementInfo {
-                element_ref: ElementRef("notes-window".into()),
+                element_ref: ElementRef(control.focused_element.clone()),
                 name: Some("Notes".into()),
                 automation_id: Some("main-window".into()),
                 control_type: Some("window".into()),
                 class_name: None,
-                bounding_rect: Some(Rect {
-                    x: 0,
-                    y: 0,
-                    width: 800,
-                    height: 600,
-                }),
+                bounding_rect: Some(control.bounds),
                 is_enabled: true,
                 is_focused: true,
                 process_id: Some(42),
                 process_name: Some("Notes".into()),
-                window_title: Some("Notes".into()),
+                window_title: Some(
+                    if control.focused_window == 1 {
+                        "Notes"
+                    } else {
+                        "Sibling"
+                    }
+                    .into(),
+                ),
                 children: None,
             })
         }
@@ -1939,19 +2154,34 @@ mod tests {
                 bytes: "cG5n".into(),
                 width: 1_600,
                 height: 1_200,
-                captured_at: 10,
+                captured_at: unix_time_millis(),
                 format: ImageFormat::Png,
                 source_width: None,
                 source_height: None,
             })
         }
-        fn click(&self, _t: ClickTarget, _o: ClickOpts) -> Result<()> {
+        fn click(&self, target: ClickTarget, opts: ClickOpts) -> Result<()> {
+            let mut control = self.control.lock();
+            if matches!(target, ClickTarget::Element { .. }) && control.deny_semantic {
+                return Err(AutomationError::PermissionDenied {
+                    reason: "target window changed".into(),
+                });
+            }
+            if matches!(target, ClickTarget::Element { .. })
+                && opts.native_only
+                && !super::super::platform::shared::pointer::native_click_eligible(&opts)
+            {
+                return Err(AutomationError::UnsupportedPlatform);
+            }
+            control.inputs.push(format!("click:{target:?}"));
             Ok(())
         }
-        fn type_text(&self, _text: &str, _o: TypeOpts) -> Result<()> {
+        fn type_text(&self, text: &str, _o: TypeOpts) -> Result<()> {
+            self.control.lock().inputs.push(format!("type:{text}"));
             Ok(())
         }
         fn send_keys(&self, _c: &KeyChord) -> Result<()> {
+            self.control.lock().inputs.push("keys".into());
             Ok(())
         }
         fn invoke_pattern(
@@ -1996,7 +2226,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_get_app_state_couples_tree_screenshot_and_fresh_turn_token() {
-        let h = Worker::spawn(|| Box::new(StateFixtureBackend));
+        let h = Worker::spawn(|| Box::new(StateFixtureBackend::default()));
         let state = h
             .get_app_state(
                 "session:worker".into(),
@@ -2028,7 +2258,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_action_consumes_the_revision_token_and_returns_evidence() {
-        let h = Worker::spawn(|| Box::new(StateFixtureBackend));
+        let h = Worker::spawn(|| Box::new(StateFixtureBackend::default()));
         let state = h
             .get_app_state(
                 "session:action".into(),
@@ -2073,6 +2303,251 @@ mod tests {
             .expect_err("turn token must be single-use");
         assert!(matches!(error, AutomationError::PermissionDenied { .. }));
         h.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adversarial_auto_never_falls_back_after_a_semantic_safety_refusal() {
+        let backend = StateFixtureBackend::default();
+        let control = backend.control.clone();
+        let h = Worker::spawn(move || Box::new(backend.clone()));
+        let state = h
+            .get_app_state(
+                "adversarial".into(),
+                "turn".into(),
+                AppLocator::DisplayName {
+                    display_name: "Notes".into(),
+                },
+                GetAppStateOptions::default(),
+                false,
+                ScreenshotScalingSettings {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        control.lock().deny_semantic = true;
+        let result = h
+            .perform_action(
+                ActionRequest {
+                    turn_token: state.turn_token,
+                    target: ActionTarget::Element {
+                        handle: state.tree.nodes[0].handle.clone(),
+                    },
+                    action: UiAction::Click {
+                        button: None,
+                        count: None,
+                    },
+                    strategy: ActionStrategy::Auto,
+                },
+                "turn".into(),
+            )
+            .await
+            .unwrap();
+        h.shutdown().await;
+        assert_eq!(result.status, ActionStatus::Refused);
+        assert!(
+            control.lock().inputs.is_empty(),
+            "a safety refusal must not emit fallback input"
+        );
+    }
+
+    #[tokio::test]
+    async fn adversarial_synthetic_input_refuses_window_geometry_and_focus_drift() {
+        for drift in ["move", "resize", "window", "control", "pixel-control"] {
+            let backend = StateFixtureBackend::default();
+            let control = backend.control.clone();
+            let h = Worker::spawn(move || Box::new(backend.clone()));
+            let state = h
+                .get_app_state(
+                    "adversarial".into(),
+                    "turn".into(),
+                    AppLocator::DisplayName {
+                        display_name: "Notes".into(),
+                    },
+                    GetAppStateOptions::default(),
+                    false,
+                    ScreenshotScalingSettings {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            {
+                let mut live = control.lock();
+                match drift {
+                    "move" => live.bounds.x = -1920,
+                    "resize" => live.bounds.width = 500,
+                    "window" => live.focused_window = 2,
+                    "control" | "pixel-control" => live.focused_element = "other-input".into(),
+                    _ => unreachable!(),
+                }
+            }
+            let target = if drift == "control" {
+                ActionTarget::Element {
+                    handle: state.tree.nodes[0].handle.clone(),
+                }
+            } else {
+                ActionTarget::Pixel {
+                    target: super::super::session::PixelTarget {
+                        session_id: state.session_id.clone(),
+                        lineage_id: state.lineage_id.clone(),
+                        revision: state.revision,
+                        point: Point { x: 100, y: 100 },
+                        screenshot_width: state.surface.pixel_width,
+                        screenshot_height: state.surface.pixel_height,
+                    },
+                }
+            };
+            let action = if drift.ends_with("control") {
+                UiAction::TypeText {
+                    text: "sentinel".into(),
+                }
+            } else {
+                UiAction::Click {
+                    button: None,
+                    count: None,
+                }
+            };
+            let result = h
+                .perform_action(
+                    ActionRequest {
+                        turn_token: state.turn_token,
+                        target,
+                        action,
+                        strategy: ActionStrategy::Pixel,
+                    },
+                    "turn".into(),
+                )
+                .await
+                .unwrap();
+            h.shutdown().await;
+            assert!(
+                matches!(
+                    result.status,
+                    ActionStatus::Refused | ActionStatus::NotDelivered
+                ),
+                "{drift}: {result:?}"
+            );
+            assert!(
+                control.lock().inputs.is_empty(),
+                "{drift} must not emit input"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn adversarial_explicit_focus_requires_reobservation_then_allows_targeted_input() {
+        let backend = StateFixtureBackend::default();
+        let control = backend.control.clone();
+        let h = Worker::spawn(move || Box::new(backend.clone()));
+        let observe = || {
+            h.get_app_state(
+                "focus".into(),
+                "turn".into(),
+                AppLocator::DisplayName {
+                    display_name: "Notes".into(),
+                },
+                GetAppStateOptions::default(),
+                false,
+                ScreenshotScalingSettings {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )
+        };
+        let state = observe().await.unwrap();
+        control.lock().focused_window = 2;
+        let request = ActionRequest {
+            turn_token: state.turn_token,
+            target: ActionTarget::Element {
+                handle: state.tree.nodes[0].handle.clone(),
+            },
+            action: UiAction::Focus,
+            strategy: ActionStrategy::Semantic,
+        };
+        let result = h
+            .perform_action(request.clone(), "turn".into())
+            .await
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Delivered);
+        assert_eq!(control.lock().focused_window, 1);
+        assert!(h.perform_action(request, "turn".into()).await.is_err());
+        let fresh = observe().await.unwrap();
+        let result = h
+            .perform_action(
+                ActionRequest {
+                    turn_token: fresh.turn_token,
+                    target: ActionTarget::Element {
+                        handle: fresh.tree.nodes[0].handle.clone(),
+                    },
+                    action: UiAction::TypeText {
+                        text: "owned".into(),
+                    },
+                    strategy: ActionStrategy::Auto,
+                },
+                "turn".into(),
+            )
+            .await
+            .unwrap();
+        h.shutdown().await;
+        assert_eq!(result.method, Some(ActionMethod::Synthetic));
+        assert_eq!(control.lock().inputs, vec!["type:owned"]);
+    }
+
+    #[tokio::test]
+    async fn adversarial_multiclick_stops_after_the_first_click_changes_window() {
+        for panic_after_first in [false, true] {
+            let backend = StateFixtureBackend::default();
+            let control = backend.control.clone();
+            let h = Worker::spawn(move || Box::new(backend.clone()));
+            let state = h
+                .get_app_state(
+                    "multi".into(),
+                    "turn".into(),
+                    AppLocator::DisplayName {
+                        display_name: "Notes".into(),
+                    },
+                    GetAppStateOptions::default(),
+                    false,
+                    ScreenshotScalingSettings {
+                        enabled: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            control.lock().interrupt_after_first = true;
+            control.lock().panic_after_first = panic_after_first;
+            let result = h
+                .perform_action(
+                    ActionRequest {
+                        turn_token: state.turn_token,
+                        target: ActionTarget::Element {
+                            handle: state.tree.nodes[0].handle.clone(),
+                        },
+                        action: UiAction::Click {
+                            button: None,
+                            count: Some(2),
+                        },
+                        strategy: ActionStrategy::Auto,
+                    },
+                    "turn".into(),
+                )
+                .await
+                .unwrap();
+            h.capabilities()
+                .await
+                .expect("worker remains available after interrupted action");
+            h.shutdown().await;
+            assert_eq!(control.lock().inputs.len(), 1);
+            assert_eq!(
+                result.status,
+                ActionStatus::Unknown,
+                "partial delivery must never be reported as safely not delivered"
+            );
+        }
     }
 
     #[tokio::test]

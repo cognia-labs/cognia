@@ -154,6 +154,12 @@ export const actionTargetSchema = z
 
 export const uiActionSchema = z
   .discriminatedUnion("kind", [
+    z
+      .object({ kind: z.literal("focus") })
+      .describe(
+        "Explicitly activate the observed application/window and focus the target element. " +
+          "Requires a native backend with focus support. Call get_app_state again before typing or clicking."
+      ),
     z.object({
       kind: z.literal("click"),
       button: mouseButtonSchema.optional(),

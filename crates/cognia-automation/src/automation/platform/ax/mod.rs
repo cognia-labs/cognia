@@ -48,8 +48,8 @@ mod raw;
 mod screen_capture;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use enigo::{Direction, Enigo, Keyboard, Mouse, Settings};
@@ -57,13 +57,16 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSWorkspace;
 use once_cell::sync::Lazy;
 
+use crate::automation::backend::{
+    ActionTargetContext, TargetActionKind, validate_live_element, validate_live_surface,
+};
 use crate::automation::backend::{ApplicationScreenshot, AutomationBackend, SelectionPreflight};
 use crate::automation::platform::shared::element_locator;
-use crate::automation::platform::shared::keymap::{parse_chord, KeyToken, Modifier, NamedKey};
+use crate::automation::platform::shared::keymap::{KeyToken, Modifier, NamedKey, parse_chord};
 use crate::automation::platform::shared::screenshot;
 use crate::automation::platform::shared::tree_shape::{self, TreeBudget};
-use crate::automation::selection::{build_text_selection, TextSelectionSnapshot};
-use crate::automation::session::{AppLocator, ResolvedApplication};
+use crate::automation::selection::{TextSelectionSnapshot, build_text_selection};
+use crate::automation::session::{AppLocator, ResolvedApplication, UiSurface};
 use crate::automation::types::*;
 
 use raw::AxElement;
@@ -81,6 +84,58 @@ pub struct AxBackend {
 }
 
 impl AxBackend {
+    fn bound_window(&self, target: &ActionTargetContext<'_>) -> Result<(AxElement, UiSurface)> {
+        let id = target
+            .surface
+            .window_id
+            .ok_or(AutomationError::StaleElement)?;
+        let window = xcap::Window::all()
+            .map_err(|e| AutomationError::BackendError {
+                message: e.to_string(),
+            })?
+            .into_iter()
+            .find(|window| {
+                window.id().ok().map(u64::from) == Some(id)
+                    && window.pid().ok() == Some(target.app.process_id)
+                    && window.is_minimized().ok() == Some(false)
+            })
+            .ok_or(AutomationError::StaleElement)?;
+        let bounds = Rect {
+            x: window.x().map_err(capture_error)?,
+            y: window.y().map_err(capture_error)?,
+            width: i32::try_from(window.width().map_err(capture_error)?).map_err(capture_error)?,
+            height: i32::try_from(window.height().map_err(capture_error)?)
+                .map_err(capture_error)?,
+        };
+        let title = window.title().map_err(capture_error)?;
+        let app = AxElement::application(target.app.process_id);
+        let mut matches = app
+            .windows()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|candidate| {
+                raw::read_rect(candidate) == Some(bounds)
+                    && candidate.title().as_deref() == Some(title.as_str())
+            });
+        let root = matches.next().ok_or(AutomationError::StaleElement)?;
+        if matches.next().is_some() {
+            return Err(AutomationError::StaleElement);
+        }
+        let observed_root = self.resolve_element(&target.root.element_ref)?;
+        if !raw::same_element(&root, &observed_root) {
+            return Err(AutomationError::StaleElement);
+        }
+        let monitor = window.current_monitor().map_err(capture_error)?;
+        let surface = UiSurface {
+            window_id: Some(id),
+            display_id: Some(monitor.id().map_err(capture_error)?.to_string()),
+            logical_bounds: bounds,
+            scale_factor: f64::from(monitor.scale_factor().map_err(capture_error)?),
+            ..target.surface.clone()
+        };
+        Ok((root, surface))
+    }
+
     fn foreground_element_center(&self, element: &AxElement) -> Result<Point> {
         let pid = raw::element_pid(element).ok_or(AutomationError::StaleElement)?;
         let target = raw::read_rect(element).ok_or(AutomationError::StaleElement)?;
@@ -114,7 +169,14 @@ impl AxBackend {
             std::thread::sleep(Duration::from_millis(25));
         }
         let root = raw::resolve_window_root(&app);
-        self.elements.lock().map_err(poisoned)?.clear();
+        // Keep native identities across app observations. Expired bindings
+        // refuse rather than replaying onto a replacement native control.
+        {
+            let mut elements = self.elements.lock().map_err(poisoned)?;
+            if elements.len() > 50_000 {
+                elements.clear();
+            }
+        }
         // The live-handle map stays as a same-process fast path (a ref acted on
         // right after the tree read skips the replay), but it is no longer the
         // ONLY way to resolve a ref: `resolve_element` falls back to replaying
@@ -143,8 +205,17 @@ impl AxBackend {
         // O(nodes x depth) cross-process messages on a 25 000-node budget.
         // The live handles keep their old keys in `self.elements`, keyed by the
         // pointer identity, so both resolution paths stay available.
-        let base = locator::locator_for_window_root(pid, process_name, None);
+        let mut base = locator::locator_for_window_root(pid, process_name, None);
+        base.capture_id = Some(uuid::Uuid::new_v4().to_string());
+        let old_refs = tree_element_refs(&tree);
         element_locator::assign_locators(&mut tree, &base);
+        let new_refs = tree_element_refs(&tree);
+        let mut elements = self.elements.lock().map_err(poisoned)?;
+        for (old, new) in old_refs.into_iter().zip(new_refs) {
+            if let Some(element) = elements.get(&old.0).cloned() {
+                elements.insert(new.0, element);
+            }
+        }
         Ok(vec![tree])
     }
 
@@ -175,12 +246,12 @@ impl AxBackend {
             return Ok(cached);
         }
         match element_locator::ElementLocator::decode(&element_ref.0) {
-            Some(loc) => {
+            Some(loc) if loc.capture_id.is_none() => {
                 let element = locator::resolve_locator(&loc)?;
                 screen_off_element(&element)?;
                 Ok(element)
             }
-            None => Err(AutomationError::StaleElement),
+            _ => Err(AutomationError::StaleElement),
         }
     }
 }
@@ -194,6 +265,303 @@ impl Drop for AxBackend {
 }
 
 impl AutomationBackend for AxBackend {
+    fn input_focus(&self, app: &ResolvedApplication) -> Result<Option<ElementRef>> {
+        let Some(element) = raw::focused_ui_element(&AxElement::application(app.process_id)) else {
+            return Ok(None);
+        };
+        let Some(locator) = locator::locator_for_element(
+            &element,
+            app.process_id,
+            Some(&app.display_name),
+            app.bundle_id.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        let _ = locator;
+        let reference = ElementRef(format!("macos-focus:{}", uuid::Uuid::new_v4()));
+        self.elements
+            .lock()
+            .map_err(poisoned)?
+            .insert(reference.0.clone(), element);
+        Ok(Some(reference))
+    }
+
+    fn validate_action_target(
+        &self,
+        target: &ActionTargetContext<'_>,
+        kind: TargetActionKind,
+    ) -> Result<()> {
+        let (window, live_surface) = self.bound_window(target)?;
+        let element = target
+            .element
+            .map(|expected| {
+                let element = self.resolve_element(&expected.element_ref)?;
+                if !raw::belongs_to_window(&element, &window) {
+                    return Err(AutomationError::StaleElement);
+                }
+                let live = ax_element_to_info(
+                    &element,
+                    Some(target.app.process_id),
+                    Some(&target.app.display_name),
+                );
+                validate_live_element(expected, &live, kind)?;
+                if kind == TargetActionKind::Pointer && expected.bounding_rect != live.bounding_rect
+                {
+                    return Err(AutomationError::StaleElement);
+                }
+                Ok(element)
+            })
+            .transpose()?;
+        let focused = raw::focused_ui_element(&AxElement::application(target.app.process_id));
+        let hit = if kind == TargetActionKind::Pointer {
+            let point = target.point.ok_or(AutomationError::StaleElement)?;
+            let hit = raw::element_at_position(point.x as f32, point.y as f32)
+                .ok_or(AutomationError::StaleElement)?;
+            if !raw::belongs_to_window(&hit, &window)
+                || element
+                    .as_ref()
+                    .is_some_and(|expected| !raw::is_descendant_or_same(&hit, expected))
+            {
+                return Err(AutomationError::PermissionDenied {
+                    reason: "pointer target is occluded by another window or control".into(),
+                });
+            }
+            Some(hit)
+        } else {
+            None
+        };
+        let policy_element = hit.as_ref().or(element.as_ref()).or(focused.as_ref());
+        let live_title = window.title();
+        if let crate::automation::policy::Decision::Deny { reason } =
+            crate::automation::policy::evaluate_hard_target(
+                crate::automation::policy::HardTargetFacts {
+                    bundle_id: target.app.bundle_id.as_deref(),
+                    process_name: Some(&target.app.display_name),
+                    window_title: live_title.as_deref(),
+                    target_url: policy_element.and_then(raw::web_area_url).as_deref(),
+                },
+            )
+        {
+            return Err(AutomationError::PermissionDenied { reason });
+        }
+        if matches!(kind, TargetActionKind::Pointer | TargetActionKind::Keyboard) {
+            validate_live_surface(target.surface, &live_surface)?;
+            if raw::system_wide_focused_pid() != Some(target.app.process_id)
+                || !raw::belongs_to_focused_window(&window, target.app.process_id)
+            {
+                return Err(AutomationError::PermissionDenied {
+                    reason: "synthetic input requires the observed window to remain foreground"
+                        .into(),
+                });
+            }
+        }
+        if kind == TargetActionKind::Keyboard {
+            let expected = match element {
+                Some(element) => element,
+                None => {
+                    self.resolve_element(target.input_focus.ok_or(AutomationError::StaleElement)?)?
+                }
+            };
+            let focused = focused.ok_or(AutomationError::StaleElement)?;
+            if !raw::same_element(&expected, &focused) {
+                return Err(AutomationError::PermissionDenied { reason: "keyboard target is not the observed focused control; focus it explicitly and observe again".into() });
+            }
+        }
+        Ok(())
+    }
+
+    fn focus_action_target(&self, target: &ActionTargetContext<'_>) -> Result<()> {
+        let (window, _) = self.bound_window(target)?;
+        let element = target
+            .element
+            .map(|e| self.resolve_element(&e.element_ref))
+            .transpose()?
+            .unwrap_or_else(|| window.clone());
+        autoreleasepool(|_| {
+            raw::activate_application(&AxElement::application(target.app.process_id)).map_err(
+                |error| AutomationError::BackendError {
+                    message: format!("AXFrontmost failed: {error}"),
+                },
+            )?;
+            raw::perform_action(&window, "AXRaise").map_err(|error| {
+                AutomationError::BackendError {
+                    message: format!("AXRaise failed: {error}"),
+                }
+            })?;
+            if !raw::same_element(&element, &window) {
+                raw::focus_element(&element).map_err(|error| AutomationError::BackendError {
+                    message: format!("AXFocused failed: {error}"),
+                })?;
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if raw::system_wide_focused_pid() == Some(target.app.process_id)
+                    && raw::belongs_to_focused_window(&window, target.app.process_id)
+                    && (raw::same_element(&element, &window)
+                        || raw::focused_ui_element(&AxElement::application(target.app.process_id))
+                            .is_some_and(|focused| raw::same_element(&element, &focused)))
+                {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err(AutomationError::PermissionDenied {
+                        reason: "explicit focus did not settle on the requested window/control"
+                            .into(),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+    }
+
+    fn deliver_synthetic(
+        &self,
+        target: &ActionTargetContext<'_>,
+        action: &crate::automation::session::UiAction,
+    ) -> std::result::Result<(), crate::automation::backend::NativeDeliveryError> {
+        use crate::automation::session::UiAction;
+        let generation = screen_off_input_generation()?;
+        let guard = |context: &ActionTargetContext<'_>, kind| {
+            screen_off_input_continues(generation)?;
+            self.validate_action_target(context, kind)
+        };
+        let mut e = enigo_new()?;
+        let emitted = std::cell::Cell::new(false);
+        let result = (|| -> Result<()> {
+            match action {
+                UiAction::TypeText { text } => {
+                    for character in text.chars() {
+                        guard(target, TargetActionKind::Keyboard)?;
+                        emitted.set(true);
+                        e.text(&character.to_string())
+                            .map_err(input_err("type_text"))?;
+                    }
+                    Ok(())
+                }
+                UiAction::PressKey { chord } => {
+                    let tokens = parse_chord(&chord.0).map_err(capture_error)?;
+                    let keys = tokens
+                        .iter()
+                        .map(|token| match token {
+                            KeyToken::Modifier(modifier) => modifier_to_enigo(*modifier),
+                            KeyToken::Named(named) => named_to_enigo(*named),
+                            KeyToken::Char(character) => enigo::Key::Unicode(*character),
+                        })
+                        .collect::<Vec<_>>();
+                    crate::automation::platform::shared::keymap::with_held_inputs(
+                        &mut e,
+                        &keys,
+                        || guard(target, TargetActionKind::Keyboard),
+                        |e, key| {
+                            emitted.set(true);
+                            e.key(*key, Direction::Press)
+                                .map_err(input_err("key press"))
+                        },
+                        |e, key| {
+                            e.key(*key, Direction::Release)
+                                .map_err(input_err("key release"))
+                        },
+                        |_| Ok(()),
+                    )
+                }
+                UiAction::Click { button, count } => {
+                    let point =
+                        screen_off_point(target.point.ok_or(AutomationError::StaleElement)?)?;
+                    let count = count.unwrap_or(1);
+                    if !(1..=3).contains(&count) {
+                        return Err(AutomationError::BackendError {
+                            message: "click count must be between 1 and 3".into(),
+                        });
+                    }
+                    guard(target, TargetActionKind::Pointer)?;
+                    emitted.set(true);
+                    e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
+                        .map_err(input_err("mouse move"))?;
+                    for index in 0..count {
+                        crate::automation::platform::shared::keymap::with_held_inputs(
+                            &mut e,
+                            &[to_enigo_button(*button)],
+                            || guard(target, TargetActionKind::Pointer),
+                            |e, selected| {
+                                e.button(*selected, Direction::Press)
+                                    .map_err(input_err("mouse press"))
+                            },
+                            |e, selected| {
+                                e.button(*selected, Direction::Release)
+                                    .map_err(input_err("mouse release"))
+                            },
+                            |_| Ok(()),
+                        )?;
+                        if index + 1 < count {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    Ok(())
+                }
+                UiAction::Scroll { opts } => {
+                    let point =
+                        screen_off_point(target.point.ok_or(AutomationError::StaleElement)?)?;
+                    guard(target, TargetActionKind::Pointer)?;
+                    emitted.set(true);
+                    e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
+                        .map_err(input_err("mouse move"))?;
+                    send_scroll(&mut e, opts.clone(), || {
+                        guard(target, TargetActionKind::Pointer)
+                    })
+                }
+                UiAction::Drag { to, opts } => {
+                    let from = target.point.ok_or(AutomationError::StaleElement)?;
+                    crate::automation::platform::shared::pointer::drag(
+                        &mut (e, false),
+                        from,
+                        *to,
+                        opts.clone(),
+                        |(e, held), point| {
+                            let context = ActionTargetContext {
+                                point: Some(point),
+                                element: if *held { None } else { target.element },
+                                ..*target
+                            };
+                            guard(&context, TargetActionKind::Pointer)?;
+                            emitted.set(true);
+                            let point = screen_off_point(point)?;
+                            e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
+                                .map_err(input_err("drag move"))
+                        },
+                        |(e, held), selected, transition| {
+                            if transition == ButtonTransition::Down {
+                                guard(target, TargetActionKind::Pointer)?;
+                                *held = true;
+                            } else if !*held {
+                                return Ok(());
+                            }
+                            let result = e
+                                .button(
+                                    to_enigo_button(Some(selected)),
+                                    if transition == ButtonTransition::Down {
+                                        Direction::Press
+                                    } else {
+                                        Direction::Release
+                                    },
+                                )
+                                .map_err(input_err("drag button"));
+                            if transition == ButtonTransition::Up && result.is_ok() {
+                                *held = false;
+                            }
+                            result
+                        },
+                        std::thread::sleep,
+                    )
+                }
+                _ => Err(AutomationError::UnsupportedPlatform),
+            }
+        })();
+        result.map_err(|error| crate::automation::backend::NativeDeliveryError {
+            error,
+            may_have_delivered: emitted.get(),
+        })
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             operations: OperationCapabilities {
@@ -375,10 +743,23 @@ impl AutomationBackend for AxBackend {
         match target {
             ClickTarget::Element { element_ref } => {
                 let element = self.resolve_element(&element_ref)?;
-                if crate::automation::platform::shared::pointer::native_click_eligible(&opts)
-                    && raw::perform_action(&element, "AXPress").is_ok()
-                {
-                    return Ok(());
+                if crate::automation::platform::shared::pointer::native_click_eligible(&opts) {
+                    match raw::perform_action(&element, "AXPress") {
+                        Ok(()) => return Ok(()),
+                        Err(error)
+                            if opts.native_only
+                                && error
+                                    != objc2_application_services::AXError::ActionUnsupported.0 =>
+                        {
+                            return Err(AutomationError::BackendError {
+                                message: format!("AXPress failed: {error}"),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                if opts.native_only {
+                    return Err(AutomationError::UnsupportedPlatform);
                 }
                 let center = self.foreground_element_center(&element)?;
                 self.click(
@@ -582,19 +963,7 @@ impl AutomationBackend for AxBackend {
         let point = screen_off_point(point)?;
         e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
             .map_err(input_err("scroll.move"))?;
-        // enigo's `scroll(amount, axis)` uses notch-sized increments (positive
-        // = forward / down). Our wire format is wheel units (120 per notch).
-        let notches_y = crate::automation::platform::shared::pointer::wheel_notches(opts.dy);
-        let notches_x = crate::automation::platform::shared::pointer::wheel_notches(opts.dx);
-        if notches_y != 0 {
-            e.scroll(notches_y, enigo::Axis::Vertical)
-                .map_err(input_err("scroll.vertical"))?;
-        }
-        if notches_x != 0 {
-            e.scroll(notches_x, enigo::Axis::Horizontal)
-                .map_err(input_err("scroll.horizontal"))?;
-        }
-        Ok(())
+        send_scroll(&mut e, opts, || Ok(()))
     }
 
     fn hold_key(&self, chord: &KeyChord, duration_ms: u32) -> Result<()> {
@@ -757,6 +1126,24 @@ impl AutomationBackend for AxBackend {
 /// a fraction of a frame rather than the AX default of 6 seconds.
 const PREFLIGHT_TIMEOUT_SECONDS: f32 = 0.25;
 
+fn capture_error(error: impl std::fmt::Display) -> AutomationError {
+    AutomationError::BackendError {
+        message: error.to_string(),
+    }
+}
+
+fn tree_element_refs(tree: &ElementInfo) -> Vec<ElementRef> {
+    let mut refs = Vec::new();
+    let mut stack = vec![tree];
+    while let Some(node) = stack.pop() {
+        refs.push(node.element_ref.clone());
+        if let Some(children) = &node.children {
+            stack.extend(children.iter().rev());
+        }
+    }
+    refs
+}
+
 fn screen_off_point(point: Point) -> Result<Point> {
     crate::automation::virtual_display::driver_macos::validate_point(point).map_err(|e| {
         AutomationError::BackendError {
@@ -851,6 +1238,24 @@ fn input_err(label: &'static str) -> impl Fn(enigo::InputError) -> AutomationErr
     move |e| AutomationError::BackendError {
         message: format!("{label}: {e}"),
     }
+}
+
+// The wire contract uses wheel units (120 per notch); Enigo takes notches.
+fn send_scroll(e: &mut impl Mouse, opts: ScrollOpts, guard: impl Fn() -> Result<()>) -> Result<()> {
+    for (delta, axis) in [
+        (opts.dy, enigo::Axis::Vertical),
+        (opts.dx, enigo::Axis::Horizontal),
+    ] {
+        if delta != 0 {
+            guard()?;
+            e.scroll(
+                crate::automation::platform::shared::pointer::wheel_notches(delta),
+                axis,
+            )
+            .map_err(input_err("scroll"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Press modifiers, fire / hold the main key, release modifiers. When
@@ -1268,6 +1673,73 @@ fn focused_to_element_info(snap: &FocusedSnapshot) -> ElementInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scroll_adapter_receives_notches_and_stops_on_guard_denial() {
+        use super::*;
+        #[derive(Default)]
+        struct Recorder(Vec<(i32, enigo::Axis)>);
+        impl Mouse for Recorder {
+            fn button(&mut self, _: enigo::Button, _: Direction) -> enigo::InputResult<()> {
+                unreachable!()
+            }
+            fn move_mouse(
+                &mut self,
+                _: i32,
+                _: i32,
+                _: enigo::Coordinate,
+            ) -> enigo::InputResult<()> {
+                unreachable!()
+            }
+            fn scroll(&mut self, length: i32, axis: enigo::Axis) -> enigo::InputResult<()> {
+                self.0.push((length, axis));
+                Ok(())
+            }
+            fn main_display(&self) -> enigo::InputResult<(i32, i32)> {
+                unreachable!()
+            }
+            fn location(&self) -> enigo::InputResult<(i32, i32)> {
+                unreachable!()
+            }
+        }
+        let mut recorder = Recorder::default();
+        for dy in [120, 1, -120] {
+            send_scroll(&mut recorder, ScrollOpts { dx: 0, dy }, || Ok(())).unwrap();
+        }
+        assert_eq!(
+            recorder.0,
+            vec![
+                (1, enigo::Axis::Vertical),
+                (1, enigo::Axis::Vertical),
+                (-1, enigo::Axis::Vertical)
+            ]
+        );
+        let before = recorder.0.len();
+        assert!(
+            send_scroll(&mut recorder, ScrollOpts { dx: 120, dy: 120 }, || Err(
+                AutomationError::StaleElement
+            ))
+            .is_err()
+        );
+        assert_eq!(recorder.0.len(), before);
+    }
+
+    #[test]
+    fn evicted_native_capture_binding_is_never_replayed() {
+        let backend = AxBackend::default();
+        let mut locator = element_locator::ElementLocator::new(
+            element_locator::LocatorBackend::Macos,
+            element_locator::AppIdentity {
+                pid: 999_999,
+                bundle_id: None,
+                process_name: None,
+            },
+        );
+        locator.capture_id = Some("expired-capture".into());
+        assert!(matches!(
+            backend.resolve_element(&ElementRef(locator.encode())),
+            Err(AutomationError::StaleElement)
+        ));
+    }
     #[test]
     fn virtual_display_releasing_a_button_is_never_gated() {
         assert!(super::transition_is_gated(ButtonTransition::Down));

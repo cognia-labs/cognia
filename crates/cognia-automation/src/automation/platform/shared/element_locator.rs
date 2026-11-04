@@ -104,6 +104,9 @@ pub struct AncestryStep {
 /// A re-resolvable element locator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ElementLocator {
+    /// Native capture identities cannot be replayed after their retained handle expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
     pub version: u8,
     pub backend: LocatorBackend,
     pub app: AppIdentity,
@@ -117,6 +120,7 @@ pub struct ElementLocator {
 impl ElementLocator {
     pub fn new(backend: LocatorBackend, app: AppIdentity) -> Self {
         Self {
+            capture_id: None,
             version: LOCATOR_VERSION,
             backend,
             app,
@@ -194,6 +198,14 @@ pub enum ResolveFailure {
 ///      ordinal that now points at a different kind of node refuses instead of
 ///      returning a wrong element.
 pub fn resolve_step<N: LocatorNode>(parent: &N, step: &AncestryStep) -> Result<N, ResolveFailure> {
+    resolve_step_with(parent, step, false)
+}
+
+fn resolve_step_with<N: LocatorNode>(
+    parent: &N,
+    step: &AncestryStep,
+    strict: bool,
+) -> Result<N, ResolveFailure> {
     let children = parent.children();
 
     // (1) Identifier — strongest, and never overridden by a weaker signal.
@@ -234,6 +246,9 @@ pub fn resolve_step<N: LocatorNode>(parent: &N, step: &AncestryStep) -> Result<N
                 .expect("index in range"));
         }
         if named.len() > 1 {
+            if strict {
+                return Err(ResolveFailure::Ambiguous);
+            }
             // Several identically-named siblings — fall through to the ordinal,
             // but only among the named ones, so a stable ordinal still works
             // for e.g. three "Delete" buttons in a list.
@@ -243,11 +258,17 @@ pub fn resolve_step<N: LocatorNode>(parent: &N, step: &AncestryStep) -> Result<N
                 None => Err(ResolveFailure::Ambiguous),
             };
         }
+        if strict {
+            return Err(ResolveFailure::NotFound);
+        }
         // No name match: the label changed. Fall through to the ordinal, which
         // is validated against role/subrole below.
     }
 
     // (3) Ordinal among role/subrole matches.
+    if strict && shape_matches.len() != 1 {
+        return Err(ResolveFailure::Ambiguous);
+    }
     let idx = step.ordinal as usize;
     match shape_matches.into_iter().nth(idx) {
         Some(node) => Ok(node),
@@ -262,6 +283,35 @@ pub fn resolve_path<N: LocatorNode>(root: N, path: &[AncestryStep]) -> Result<N,
         current = resolve_step(&current, step)?;
     }
     Ok(current)
+}
+
+/// Mutations may not replace a missing named control or guess among siblings.
+pub fn resolve_action_path<N: LocatorNode>(
+    root: N,
+    path: &[AncestryStep],
+) -> Result<N, ResolveFailure> {
+    let mut current = root;
+    for step in path {
+        current = resolve_step_with(&current, step, true)?;
+    }
+    Ok(current)
+}
+
+pub fn resolve_action_window<N: LocatorNode>(
+    windows: Vec<N>,
+    identity: &WindowIdentity,
+) -> Result<N, ResolveFailure> {
+    let mut matches = windows.into_iter().filter(|window| {
+        identity
+            .title
+            .as_deref()
+            .is_none_or(|title| window.name().as_deref() == Some(title))
+    });
+    let window = matches.next().ok_or(ResolveFailure::NotFound)?;
+    if matches.next().is_some() {
+        return Err(ResolveFailure::Ambiguous);
+    }
+    Ok(window)
 }
 
 /// Build the ancestry step describing `child` as seen from `parent`.
@@ -562,6 +612,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn action_replay_never_substitutes_a_renamed_or_ambiguous_control() {
+        let original = Fake::new("window").kids(vec![
+            Fake::new("button").name("Alpha"),
+            Fake::new("button").name("Beta"),
+        ]);
+        let step = describe_step(&original, 1).unwrap();
+        let replaced = Fake::new("window").kids(vec![
+            Fake::new("button").name("Alpha"),
+            Fake::new("button").name("Delete"),
+        ]);
+        assert_eq!(
+            resolve_action_path(replaced, &[step]),
+            Err(ResolveFailure::NotFound)
+        );
+        let duplicate = Fake::new("window").kids(vec![
+            Fake::new("button").name("Save"),
+            Fake::new("button").name("Save"),
+        ]);
+        let step = describe_step(&duplicate, 1).unwrap();
+        assert_eq!(
+            resolve_action_path(duplicate, &[step]),
+            Err(ResolveFailure::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn action_window_replay_honors_recorded_identity_and_refuses_ambiguity() {
+        let windows = vec![Fake::new("window").name("A"), Fake::new("window").name("B")];
+        let identity = WindowIdentity {
+            title: Some("A".into()),
+            ordinal: None,
+        };
+        assert_eq!(
+            resolve_action_window(windows.clone(), &identity)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            resolve_action_window(vec![windows[1].clone()], &identity),
+            Err(ResolveFailure::NotFound)
+        );
+        assert_eq!(
+            resolve_action_window(vec![windows[0].clone(), windows[0].clone()], &identity),
+            Err(ResolveFailure::Ambiguous)
+        );
+        assert_eq!(
+            resolve_action_window(windows, &WindowIdentity::default()),
+            Err(ResolveFailure::Ambiguous)
+        );
+    }
+
     // ── encoding ────────────────────────────────────────────────────────────
 
     #[test]
@@ -756,9 +860,9 @@ mod tests {
 
     #[test]
     fn an_unrecorded_field_matches_anything() {
-        let parent = Fake::new("AXWindow").kids(vec![Fake::new("AXButton")
-            .subrole("AXSomething")
-            .name("Go")]);
+        let parent = Fake::new("AXWindow").kids(vec![
+            Fake::new("AXButton").subrole("AXSomething").name("Go"),
+        ]);
         let step = AncestryStep {
             name: Some("Go".into()),
             ..Default::default()

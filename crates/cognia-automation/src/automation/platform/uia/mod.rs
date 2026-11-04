@@ -5,10 +5,13 @@
 //! from that thread — the trait being `Send + !Sync` is enforced naturally
 //! because `UIAutomation` is `Send` but not `Sync`.
 
-use uiautomation::types::TreeScope;
 use uiautomation::UIAutomation;
+use uiautomation::types::TreeScope;
 
-use crate::automation::backend::{ApplicationScreenshot, AutomationBackend, SelectionPreflight};
+use crate::automation::backend::{
+    ActionTargetContext, ApplicationScreenshot, AutomationBackend, SelectionPreflight,
+    TargetActionKind, validate_live_element, validate_live_surface,
+};
 use crate::automation::platform::shared::tree_shape::{self, TreeBudget};
 use crate::automation::session::{AppLocator, ResolvedApplication};
 use crate::automation::types::*;
@@ -21,8 +24,8 @@ mod pattern;
 mod text_selection;
 
 use crate::automation::platform::shared::screenshot;
-use crate::automation::selection::{build_text_selection, TextSelectionSnapshot};
-use element::{element_info, ElementCache};
+use crate::automation::selection::{TextSelectionSnapshot, build_text_selection};
+use element::{ElementCache, element_info};
 
 pub struct UiaBackend {
     automation: UIAutomation,
@@ -31,6 +34,55 @@ pub struct UiaBackend {
 }
 
 impl UiaBackend {
+    fn is_descendant(
+        &self,
+        element: &uiautomation::UIElement,
+        ancestor: &uiautomation::UIElement,
+    ) -> Result<bool> {
+        let walker = self
+            .automation
+            .get_control_view_walker()
+            .map_err(native_error)?;
+        let mut current = element.clone();
+        for _ in 0..64 {
+            if self
+                .automation
+                .compare_elements(&current, ancestor)
+                .map_err(native_error)?
+            {
+                return Ok(true);
+            }
+            let Ok(parent) = walker.get_parent(&current) else {
+                break;
+            };
+            current = parent;
+        }
+        Ok(false)
+    }
+
+    fn target_document_url(&self, element: &uiautomation::UIElement) -> Option<String> {
+        let walker = self.automation.get_control_view_walker().ok()?;
+        let mut current = element.clone();
+        for _ in 0..64 {
+            if current
+                .get_control_type()
+                .ok()
+                .is_some_and(|kind| format!("{kind:?}") == "Document")
+            {
+                if let Some(value) = current
+                    .get_pattern::<uiautomation::patterns::UIValuePattern>()
+                    .ok()
+                    .and_then(|pattern| pattern.get_value().ok())
+                {
+                    if url::Url::parse(&value).is_ok() {
+                        return Some(value);
+                    }
+                }
+            }
+            current = walker.get_parent(&current).ok()?;
+        }
+        None
+    }
     fn application_window(
         &self,
         app: &ResolvedApplication,
@@ -60,7 +112,7 @@ impl UiaBackend {
     }
 
     fn require_foreground_element(&self, element: &uiautomation::UIElement) -> Result<()> {
-        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+        use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetForegroundWindow};
         if element.is_offscreen().unwrap_or(true) {
             return Err(AutomationError::StaleElement);
         }
@@ -130,12 +182,12 @@ impl UiaBackend {
 }
 
 fn process_path(pid: u32) -> Option<String> {
-    use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
     };
+    use windows::core::PWSTR;
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buffer = vec![0_u16; 32_768];
@@ -176,6 +228,355 @@ fn web_document_url(control_type: Option<&str>, value: &str) -> Option<String> {
 }
 
 impl AutomationBackend for UiaBackend {
+    fn semantic_scroll(&self, element: ElementRef, opts: ScrollOpts) -> Result<()> {
+        let element = self
+            .cache
+            .get(&element)
+            .ok_or(AutomationError::StaleElement)?;
+        if let Some(pattern) = pattern::available_pattern::<uiautomation::patterns::UIScrollPattern>(
+            &element,
+            uiautomation::types::UIProperty::IsScrollPatternAvailable,
+        )? {
+            let (horizontal, vertical) = pattern::scroll_amounts(opts);
+            return pattern.scroll(horizontal, vertical).map_err(native_error);
+        }
+        if opts.dy != 0 {
+            if let Some(pattern) =
+                pattern::available_pattern::<uiautomation::patterns::UIScrollItemPattern>(
+                    &element,
+                    uiautomation::types::UIProperty::IsScrollItemPatternAvailable,
+                )?
+            {
+                return pattern.scroll_into_view().map_err(native_error);
+            }
+        }
+        Err(AutomationError::UnsupportedPlatform)
+    }
+
+    fn deliver_synthetic(
+        &self,
+        target: &ActionTargetContext<'_>,
+        action: &crate::automation::session::UiAction,
+    ) -> std::result::Result<(), crate::automation::backend::NativeDeliveryError> {
+        use crate::automation::session::UiAction;
+        let guard =
+            |context: &ActionTargetContext<'_>, kind| self.validate_action_target(context, kind);
+        let emitted = std::cell::Cell::new(false);
+        let result = (|| -> Result<()> {
+            match action {
+                UiAction::TypeText { text } => {
+                    for character in text.chars() {
+                        guard(target, TargetActionKind::Keyboard)?;
+                        emitted.set(true);
+                        input::type_text(&character.to_string(), None)?;
+                    }
+                    Ok(())
+                }
+                UiAction::PressKey { chord } => input::send_guarded_chord(chord, || {
+                    guard(target, TargetActionKind::Keyboard)?;
+                    emitted.set(true);
+                    Ok(())
+                }),
+                UiAction::Click { button, count } => {
+                    let point = target.point.ok_or(AutomationError::StaleElement)?;
+                    let count = count.unwrap_or(1);
+                    if !(1..=3).contains(&count) {
+                        return Err(AutomationError::BackendError {
+                            message: "click count must be between 1 and 3".into(),
+                        });
+                    }
+                    guard(target, TargetActionKind::Pointer)?;
+                    emitted.set(true);
+                    input::move_to(point.x, point.y)?;
+                    for index in 0..count {
+                        let selected = button.unwrap_or(MouseButton::Left);
+                        crate::automation::platform::shared::keymap::with_held_inputs(
+                            &mut (),
+                            &[selected],
+                            || guard(target, TargetActionKind::Pointer),
+                            |_, selected| input::button(*selected, ButtonTransition::Down),
+                            |_, selected| input::button(*selected, ButtonTransition::Up),
+                            |_| Ok(()),
+                        )?;
+                        if index + 1 < count {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    }
+                    Ok(())
+                }
+                UiAction::Scroll { opts } => {
+                    let point = target.point.ok_or(AutomationError::StaleElement)?;
+                    guard(target, TargetActionKind::Pointer)?;
+                    emitted.set(true);
+                    input::move_to(point.x, point.y)?;
+                    for (delta, horizontal) in [(opts.dy, false), (opts.dx, true)] {
+                        if delta != 0 {
+                            guard(target, TargetActionKind::Pointer)?;
+                            input::send_wheel(delta, horizontal)?;
+                        }
+                    }
+                    Ok(())
+                }
+                UiAction::Drag { to, opts } => {
+                    let from = target.point.ok_or(AutomationError::StaleElement)?;
+                    crate::automation::platform::shared::pointer::drag(
+                        &mut false,
+                        from,
+                        *to,
+                        opts.clone(),
+                        |held, point| {
+                            let context = ActionTargetContext {
+                                point: Some(point),
+                                element: if *held { None } else { target.element },
+                                ..*target
+                            };
+                            guard(&context, TargetActionKind::Pointer)?;
+                            emitted.set(true);
+                            input::move_to(point.x, point.y)
+                        },
+                        |held, button, transition| {
+                            if transition == ButtonTransition::Down {
+                                guard(target, TargetActionKind::Pointer)?;
+                                *held = true;
+                            } else if !*held {
+                                return Ok(());
+                            }
+                            let result = input::button(button, transition);
+                            if transition == ButtonTransition::Up && result.is_ok() {
+                                *held = false;
+                            }
+                            result
+                        },
+                        std::thread::sleep,
+                    )
+                }
+                _ => Err(AutomationError::UnsupportedPlatform),
+            }
+        })();
+        result.map_err(|error| crate::automation::backend::NativeDeliveryError {
+            error,
+            may_have_delivered: emitted.get(),
+        })
+    }
+    fn input_focus(&self, app: &ResolvedApplication) -> Result<Option<ElementRef>> {
+        let element = self
+            .automation
+            .get_focused_element()
+            .map_err(native_error)?;
+        Ok((element.get_process_id().ok() == Some(app.process_id))
+            .then(|| element_info(&self.cache, &element).element_ref))
+    }
+
+    fn validate_action_target(
+        &self,
+        target: &ActionTargetContext<'_>,
+        kind: TargetActionKind,
+    ) -> Result<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GA_ROOT, GetAncestor, GetForegroundWindow, WindowFromPoint,
+        };
+        let id = u32::try_from(
+            target
+                .surface
+                .window_id
+                .ok_or(AutomationError::StaleElement)?,
+        )
+        .map_err(native_error)?;
+        let window = self.application_window(target.app, Some(id))?;
+        let hwnd = windows::Win32::Foundation::HWND(id as usize as *mut std::ffi::c_void);
+        let root = self
+            .automation
+            .element_from_handle(hwnd.into())
+            .map_err(native_error)?;
+        let observed = self
+            .cache
+            .get(&target.root.element_ref)
+            .ok_or(AutomationError::StaleElement)?;
+        if !self
+            .automation
+            .compare_elements(&root, &observed)
+            .map_err(native_error)?
+        {
+            return Err(AutomationError::StaleElement);
+        }
+        if let Some(expected) = target.element {
+            let element = self
+                .cache
+                .get(&expected.element_ref)
+                .ok_or(AutomationError::StaleElement)?;
+            let live = element_info(&self.cache, &element);
+            validate_live_element(expected, &live, kind)?;
+            let walker = self
+                .automation
+                .get_control_view_walker()
+                .map_err(native_error)?;
+            let mut current = element.clone();
+            let mut belongs = false;
+            for _ in 0..64 {
+                if self
+                    .automation
+                    .compare_elements(&current, &root)
+                    .map_err(native_error)?
+                {
+                    belongs = true;
+                    break;
+                }
+                let Ok(parent) = walker.get_parent(&current) else {
+                    break;
+                };
+                current = parent;
+            }
+            if !belongs
+                || (kind == TargetActionKind::Pointer
+                    && expected.bounding_rect != live.bounding_rect)
+            {
+                return Err(AutomationError::StaleElement);
+            }
+        }
+        if matches!(kind, TargetActionKind::Pointer | TargetActionKind::Keyboard) {
+            let surface = crate::automation::session::UiSurface {
+                logical_bounds: Rect {
+                    x: window.x().map_err(native_error)?,
+                    y: window.y().map_err(native_error)?,
+                    width: i32::try_from(window.width().map_err(native_error)?)
+                        .map_err(native_error)?,
+                    height: i32::try_from(window.height().map_err(native_error)?)
+                        .map_err(native_error)?,
+                },
+                display_id: Some(
+                    window
+                        .current_monitor()
+                        .map_err(native_error)?
+                        .id()
+                        .map_err(native_error)?
+                        .to_string(),
+                ),
+                scale_factor: 1.0,
+                ..target.surface.clone()
+            };
+            validate_live_surface(target.surface, &surface)?;
+            if unsafe { GetAncestor(GetForegroundWindow(), GA_ROOT) } != hwnd {
+                return Err(AutomationError::PermissionDenied {
+                    reason: "synthetic input requires the observed window to remain foreground"
+                        .into(),
+                });
+            }
+        }
+        if kind == TargetActionKind::Keyboard {
+            let expected = target
+                .element
+                .map(|e| &e.element_ref)
+                .or(target.input_focus)
+                .ok_or(AutomationError::StaleElement)?;
+            let element = self
+                .cache
+                .get(expected)
+                .ok_or(AutomationError::StaleElement)?;
+            let focused = self
+                .automation
+                .get_focused_element()
+                .map_err(native_error)?;
+            if !self
+                .automation
+                .compare_elements(&element, &focused)
+                .map_err(native_error)?
+            {
+                return Err(AutomationError::PermissionDenied { reason: "keyboard target is not the observed focused control; focus it explicitly and observe again".into() });
+            }
+        } else if kind == TargetActionKind::Pointer {
+            let point = target.point.ok_or(AutomationError::StaleElement)?;
+            let hit = unsafe {
+                WindowFromPoint(windows::Win32::Foundation::POINT {
+                    x: point.x,
+                    y: point.y,
+                })
+            };
+            if unsafe { GetAncestor(hit, GA_ROOT) } != hwnd {
+                return Err(AutomationError::PermissionDenied {
+                    reason: "pointer target is occluded by another window".into(),
+                });
+            }
+        }
+        let policy_element = if kind == TargetActionKind::Pointer {
+            let point = target.point.ok_or(AutomationError::StaleElement)?;
+            let hit = self
+                .automation
+                .element_from_point(uiautomation::types::Point::new(point.x, point.y))
+                .map_err(native_error)?;
+            if !self.is_descendant(&hit, &root)? {
+                return Err(AutomationError::StaleElement);
+            }
+            if let Some(expected) = target.element {
+                let element = self
+                    .cache
+                    .get(&expected.element_ref)
+                    .ok_or(AutomationError::StaleElement)?;
+                if !self.is_descendant(&hit, &element)? {
+                    return Err(AutomationError::PermissionDenied {
+                        reason: "pointer target is occluded by another control".into(),
+                    });
+                }
+            }
+            hit
+        } else if let Some(expected) = target.element {
+            self.cache
+                .get(&expected.element_ref)
+                .ok_or(AutomationError::StaleElement)?
+        } else {
+            self.automation
+                .get_focused_element()
+                .map_err(native_error)?
+        };
+        let title = window.title().map_err(native_error)?;
+        let source_url = self.target_document_url(&policy_element);
+        if let crate::automation::policy::Decision::Deny { reason } =
+            crate::automation::policy::evaluate_hard_target(
+                crate::automation::policy::HardTargetFacts {
+                    bundle_id: target.app.bundle_id.as_deref(),
+                    process_name: Some(&target.app.display_name),
+                    window_title: Some(&title),
+                    target_url: source_url.as_deref(),
+                },
+            )
+        {
+            return Err(AutomationError::PermissionDenied { reason });
+        }
+        Ok(())
+    }
+
+    fn focus_action_target(&self, target: &ActionTargetContext<'_>) -> Result<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+        let id = u32::try_from(
+            target
+                .surface
+                .window_id
+                .ok_or(AutomationError::StaleElement)?,
+        )
+        .map_err(native_error)?;
+        self.application_window(target.app, Some(id))?;
+        let hwnd = windows::Win32::Foundation::HWND(id as usize as *mut std::ffi::c_void);
+        if !unsafe { SetForegroundWindow(hwnd) }.as_bool() {
+            return Err(AutomationError::PermissionDenied {
+                reason: "Windows refused explicit application activation".into(),
+            });
+        }
+        let reference = target
+            .element
+            .map(|e| &e.element_ref)
+            .unwrap_or(&target.root.element_ref);
+        let element = self
+            .cache
+            .get(reference)
+            .ok_or(AutomationError::StaleElement)?;
+        element.set_focus().map_err(native_error)?;
+        if unsafe { GetForegroundWindow() } != hwnd {
+            return Err(AutomationError::PermissionDenied {
+                reason: "explicit focus did not select the requested window".into(),
+            });
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             operations: OperationCapabilities {
@@ -463,12 +864,17 @@ impl AutomationBackend for UiaBackend {
                     // center.
                     let use_native = opts.use_native.unwrap_or(true);
                     if use_native {
-                        if let Ok(true) = pattern::try_pattern_click(&elt) {
-                            return Ok(());
+                        match pattern::try_pattern_click(&elt) {
+                            Ok(true) => return Ok(()),
+                            Err(error) if opts.native_only => return Err(native_error(error)),
+                            _ => {}
                         }
                     }
                 }
 
+                if opts.native_only {
+                    return Err(AutomationError::UnsupportedPlatform);
+                }
                 // Multi-click or pattern miss: coordinate click at the
                 // element's bounding-rect center, repeated `count` times with
                 // OS double-click cadence.

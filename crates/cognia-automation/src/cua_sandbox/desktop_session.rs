@@ -558,6 +558,7 @@ impl CuaSandboxRegistry {
                 session_id,
                 turn_binding,
                 app: desktop_application(id),
+                input_focus: None,
                 surface: UiSurface {
                     window_id: None,
                     display_id: Some(id.into()),
@@ -816,6 +817,15 @@ pub(crate) fn button_name(button: MouseButton) -> &'static str {
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn remote_desktop_refuses_native_focus_before_input_dispatch() {
+        for point in [None, Some(Point { x: 20, y: 20 })] {
+            assert!(matches!(
+                validate_action(point, &UiAction::Focus),
+                Err(AutomationError::UnsupportedPlatform)
+            ));
+        }
+    }
     #[test]
     fn retained_lume_work_allows_agent_continuation_but_requires_stop_before_human_control() {
         let mut desktop = RemoteDesktop { retained_execution_group: true, ..Default::default() };

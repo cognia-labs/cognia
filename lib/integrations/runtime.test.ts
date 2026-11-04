@@ -1,3 +1,11 @@
+jest.mock("@/lib/external-services/sync/runtime", () => ({
+  installExternalSyncRuntime: jest.fn(() => jest.fn()),
+}))
+jest.mock("@/lib/external-services/sync/renewal", () => ({
+  syncExternalSyncRenewalSchedule: jest.fn(async () => {}),
+}))
+import { installExternalSyncRuntime } from "@/lib/external-services/sync/runtime"
+import { syncExternalSyncRenewalSchedule } from "@/lib/external-services/sync/renewal"
 import { startIntegrationRuntime } from "./runtime"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import { startLarkHostAuth } from "@/lib/connectors/adapters/lark/host-auth"
@@ -65,6 +73,8 @@ describe("Integration runtime", () => {
     const dispose = await startIntegrationRuntime()
     expect(drainIntegrationActionJobs).toHaveBeenCalledTimes(1)
     expect(pruneIntegrationRetention).toHaveBeenCalledTimes(1)
+    expect(installExternalSyncRuntime).toHaveBeenCalled()
+    expect(syncExternalSyncRenewalSchedule).toHaveBeenCalled()
     expect(installIntegrationIngressRuntime).toHaveBeenCalledTimes(1)
     expect(registerGithubIntegrationAuthProviders).toHaveBeenCalledTimes(1)
     expect(startLarkHostAuth).toHaveBeenCalled()
@@ -80,6 +90,7 @@ describe("Integration runtime", () => {
     dispose()
     jest.advanceTimersByTime(24 * 60 * 60 * 1000)
     expect(pruneIntegrationRetention).toHaveBeenCalledTimes(1)
+    expect(jest.mocked(installExternalSyncRuntime).mock.results.at(-1)!.value).toHaveBeenCalled()
     expect(disposeIngress).toHaveBeenCalledTimes(1)
     expect(disposeGithubAuth).toHaveBeenCalledTimes(1)
     expect(jest.mocked(startLarkHostAuth).mock.results.at(-1)!.value).toHaveBeenCalled()

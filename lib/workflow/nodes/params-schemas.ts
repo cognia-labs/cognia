@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod"
+import { uiActionSchema } from "@/lib/automation/action-schemas"
 import { CONNECTOR_SYSTEM_EVENT_KINDS } from "@/types/connectors/event"
 import {
   DELEGATE_DELIVERY_CHOICES,
@@ -1290,43 +1291,7 @@ const DesktopActionTarget = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("element"), handle: DesktopElementHandle }),
   z.object({ kind: z.literal("pixel"), target: DesktopPixelTarget }),
 ])
-const DesktopUiAction = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("click"),
-    button: z.enum(["left", "right", "middle"]).optional(),
-    count: numberRange(1, 3).optional(),
-  }),
-  z.object({
-    kind: z.literal("drag"),
-    to: DesktopPoint,
-    opts: z
-      .object({
-        button: z.enum(["left", "right", "middle"]).optional(),
-        durationMs: numberRange(0).optional(),
-        steps: numberRange(1).optional(),
-      })
-      .optional(),
-  }),
-  z.object({
-    kind: z.literal("scroll"),
-    opts: z
-      .object({
-        dx: z.number().optional(),
-        dy: z.number().optional(),
-        amount: z.number().optional(),
-      })
-      .optional(),
-  }),
-  z.object({ kind: z.literal("pressKey"), chord: z.array(z.string()).length(1) }),
-  z.object({ kind: z.literal("typeText"), text: z.string() }),
-  z.object({ kind: z.literal("setValue"), value: z.string() }),
-  z.object({
-    kind: z.literal("selectText"),
-    start: numberRange(0),
-    end: numberRange(0),
-  }),
-  z.object({ kind: z.literal("secondaryAction"), name: requiredString("required") }),
-])
+const DesktopUiAction = uiActionSchema
 
 const DesktopListAppsParams = z.object({})
 const DesktopGetAppStateParams = z.object({

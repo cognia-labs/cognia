@@ -29,12 +29,12 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use objc2_application_services::{
-    kAXTrustedCheckOptionPrompt, AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-    AXUIElement, AXValue, AXValueType,
+    AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElement, AXValue, AXValueType,
+    kAXTrustedCheckOptionPrompt,
 };
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFIndex, CFNumber, CFRange, CFRetained, CFString, CFType,
-    CGPoint, CGRect, CGSize, CFURL,
+    CFURL, CGPoint, CGRect, CGSize,
 };
 
 use crate::automation::types::Rect;
@@ -268,6 +268,16 @@ pub fn set_string_value(el: &AxElement, attribute: &str, value: &str) -> Result<
     ax_result(unsafe { el.0.set_attribute_value(&attribute, &value) })
 }
 
+pub fn focus_element(el: &AxElement) -> Result<(), i32> {
+    let attribute = CFString::from_str("AXFocused");
+    ax_result(unsafe { el.0.set_attribute_value(&attribute, CFBoolean::new(true)) })
+}
+
+pub fn activate_application(el: &AxElement) -> Result<(), i32> {
+    let attribute = CFString::from_str("AXFrontmost");
+    ax_result(unsafe { el.0.set_attribute_value(&attribute, CFBoolean::new(true)) })
+}
+
 /// Wrap a `CFRange` as the `AXValue` AX expects for range attributes and
 /// parameters.
 fn range_value(range: CFRange) -> Option<CFRetained<AXValue>> {
@@ -387,7 +397,7 @@ pub fn system_wide_focused_pid() -> Option<u32> {
 /// Owning process of an element.
 pub fn element_pid(element: &AxElement) -> Option<u32> {
     let mut pid: i32 = 0; // `pid_t` is `i32` on Darwin.
-                          // SAFETY: `pid` is a valid out-parameter.
+    // SAFETY: `pid` is a valid out-parameter.
     let error = unsafe { element.0.pid(NonNull::from(&mut pid)) };
     (error == AXError::Success && pid > 0).then_some(pid as u32)
 }
@@ -480,12 +490,34 @@ pub fn belongs_to_focused_window(element: &AxElement, pid: u32) -> bool {
     let Some(focused) = focused_window(&AxElement::application(pid)) else {
         return false;
     };
+    belongs_to_window(element, &focused)
+}
+
+pub fn same_element(left: &AxElement, right: &AxElement) -> bool {
+    objc2_core_foundation::CFEqual(
+        Some(AsRef::<CFType>::as_ref(&*left.0)),
+        Some(AsRef::<CFType>::as_ref(&*right.0)),
+    )
+}
+
+pub fn is_descendant_or_same(element: &AxElement, ancestor: &AxElement) -> bool {
     let mut current = element.clone();
     for _ in 0..64 {
-        if objc2_core_foundation::CFEqual(
-            Some(AsRef::<CFType>::as_ref(&*current.0)),
-            Some(AsRef::<CFType>::as_ref(&*focused.0)),
-        ) {
+        if same_element(&current, ancestor) {
+            return true;
+        }
+        let Some(parent) = parent(&current) else {
+            return false;
+        };
+        current = parent;
+    }
+    false
+}
+
+pub fn belongs_to_window(element: &AxElement, window: &AxElement) -> bool {
+    let mut current = element.clone();
+    for _ in 0..64 {
+        if same_element(&current, window) {
             return true;
         }
         let Some(parent) = current
@@ -692,6 +724,9 @@ mod tests {
         let app = AxElement::application(std::process::id());
         assert_eq!(app.clone().identity(), app.identity());
         assert_ne!(AxElement::system_wide().identity(), app.identity());
+        assert!(same_element(&app, &app.clone()));
+        assert!(!same_element(&app, &AxElement::system_wide()));
+        assert!(is_descendant_or_same(&app, &app));
     }
 
     #[test]
@@ -707,5 +742,7 @@ mod tests {
         assert_eq!(read_rect(&app), None);
         assert_eq!(read_bool(&app, "AXEnabled"), None);
         assert_eq!(resolve_window_root(&app).identity(), app.identity());
+        assert!(focus_element(&app).is_err());
+        assert!(activate_application(&app).is_err());
     }
 }

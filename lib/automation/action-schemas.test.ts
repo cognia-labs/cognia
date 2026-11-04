@@ -85,6 +85,9 @@ function zodVariants(schema: typeof uiActionSchema | typeof actionTargetSchema):
 }
 
 describe("action schema ⇄ Rust parity", () => {
+  it("accepts explicit focus with the same revision/token envelope as input", () => {
+    expect(uiActionSchema.parse({ kind: "focus" })).toEqual({ kind: "focus" })
+  })
   it("covers exactly the Rust UiAction variants", () => {
     const rust = rustEnumVariants(rustSource(), "UiAction").map(camel)
     expect(zodVariants(uiActionSchema).sort()).toEqual(rust.sort())

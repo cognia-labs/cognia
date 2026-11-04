@@ -63,28 +63,31 @@ pub fn drag<A>(
         Duration::from_millis(u64::from(opts.duration_ms.unwrap_or(150)) / u64::from(steps));
     let selected = opts.button.unwrap_or(MouseButton::Left);
     move_to(adapter, from)?;
-    button(adapter, selected, ButtonTransition::Down)?;
-    let result = (|| {
-        for step in 1..=steps {
-            let t = f64::from(step) / f64::from(steps);
-            move_to(
-                adapter,
-                Point {
-                    x: (f64::from(from.x) + (f64::from(to.x) - f64::from(from.x)) * t).round()
-                        as i32,
-                    y: (f64::from(from.y) + (f64::from(to.y) - f64::from(from.y)) * t).round()
-                        as i32,
-                },
-            )?;
-            if !delay.is_zero() {
-                sleep(delay);
+    super::keymap::with_held_inputs(
+        &mut (adapter, &mut button),
+        &[selected],
+        || Ok(()),
+        |(adapter, button), selected| button(adapter, *selected, ButtonTransition::Down),
+        |(adapter, button), selected| button(adapter, *selected, ButtonTransition::Up),
+        |(adapter, _)| {
+            for step in 1..=steps {
+                let t = f64::from(step) / f64::from(steps);
+                move_to(
+                    adapter,
+                    Point {
+                        x: (f64::from(from.x) + (f64::from(to.x) - f64::from(from.x)) * t).round()
+                            as i32,
+                        y: (f64::from(from.y) + (f64::from(to.y) - f64::from(from.y)) * t).round()
+                            as i32,
+                    },
+                )?;
+                if !delay.is_zero() {
+                    sleep(delay);
+                }
             }
-        }
-        Ok(())
-    })();
-    // Always release after a failed move; preserve the original error.
-    let released = button(adapter, selected, ButtonTransition::Up);
-    result.and(released)
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
@@ -146,10 +149,11 @@ mod tests {
             [
                 wheel_notches(0),
                 wheel_notches(1),
+                wheel_notches(120),
                 wheel_notches(-119),
                 wheel_notches(240)
             ],
-            [0, 1, -1, 2]
+            [0, 1, 1, -1, 2]
         );
     }
     #[test]

@@ -411,6 +411,26 @@ describe("published tool schemas", () => {
     expect(schema).toContain("element")
     expect(schema).toContain("pixel")
     expect(schema).toContain("screenshotWidth")
+    expect(schema).toContain('"focus"')
+    expect(schema).toContain("Call get_app_state again")
+  })
+
+  it("routes deliberate focus through the gated revision-bound action API", async () => {
+    const tool = await getTool("perform_action")
+    const request = {
+      turnToken: "once",
+      target: {
+        kind: "element",
+        handle: { sessionId: "s", lineageId: "l", revision: 1, index: 0, fingerprint: "f" },
+      },
+      action: { kind: "focus" },
+      strategy: "semantic",
+    }
+    await tool.execute({ request }, { config: {}, sessionId: "chat", messageId: "turn" })
+    expect(mockedAutomation.performAction).toHaveBeenCalledWith(request, {
+      sessionId: "chat",
+      messageId: "turn",
+    })
   })
 
   it("gives query_elements a real locator schema", async () => {

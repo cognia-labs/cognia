@@ -7,7 +7,7 @@
 //! Windows, owns the COM apartment).
 
 use super::selection::TextSelectionSnapshot;
-use super::session::{AppLocator, ResolvedApplication};
+use super::session::{AppLocator, ResolvedApplication, UiAction, UiSurface};
 use super::types::*;
 
 #[derive(Debug, Clone)]
@@ -27,6 +27,82 @@ pub struct ApplicationWindow {
     pub process_id: u32,
     pub focused: bool,
     pub minimized: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetActionKind {
+    Semantic,
+    Pointer,
+    Keyboard,
+    Focus,
+}
+
+#[derive(Debug)]
+pub struct NativeDeliveryError {
+    pub error: AutomationError,
+    pub may_have_delivered: bool,
+}
+
+impl From<AutomationError> for NativeDeliveryError {
+    fn from(error: AutomationError) -> Self {
+        Self {
+            error,
+            may_have_delivered: false,
+        }
+    }
+}
+
+/// Host-held observation to validate immediately before native delivery.
+#[derive(Clone, Copy)]
+pub struct ActionTargetContext<'a> {
+    pub app: &'a ResolvedApplication,
+    pub surface: &'a UiSurface,
+    pub root: &'a ElementInfo,
+    pub element: Option<&'a ElementInfo>,
+    pub input_focus: Option<&'a ElementRef>,
+    pub point: Option<Point>,
+}
+
+pub fn validate_live_surface(observed: &UiSurface, live: &UiSurface) -> Result<()> {
+    if observed.window_id.is_none()
+        || observed.window_id != live.window_id
+        || observed.display_id != live.display_id
+        || observed.logical_bounds != live.logical_bounds
+        || !observed.scale_factor.is_finite()
+        || (observed.scale_factor - live.scale_factor).abs() > 0.01
+    {
+        return Err(AutomationError::StaleElement);
+    }
+    Ok(())
+}
+
+/// Native adapters must first prove exact retained OS-element identity.
+pub fn validate_live_element(
+    observed: &ElementInfo,
+    live: &ElementInfo,
+    kind: TargetActionKind,
+) -> Result<()> {
+    if observed.process_id != live.process_id
+        // AX may expose an edit control's mutable value as its display name.
+        || (kind != TargetActionKind::Keyboard && observed.name != live.name)
+        || observed.automation_id != live.automation_id
+        || observed.control_type != live.control_type
+        || observed.class_name != live.class_name
+    {
+        return Err(AutomationError::StaleElement);
+    }
+    Ok(())
+}
+
+pub fn optional_native_pattern<T>(
+    available: Result<bool>,
+    read: impl FnOnce() -> Result<T>,
+) -> Result<Option<T>> {
+    if available? {
+        read().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn select_application_window(
@@ -56,6 +132,29 @@ pub fn select_application_window(
 pub trait AutomationBackend {
     fn capabilities(&self) -> Capabilities;
     fn get_focus(&self) -> Result<ElementInfo>;
+    fn input_focus(&self, _app: &ResolvedApplication) -> Result<Option<ElementRef>> {
+        Ok(None)
+    }
+    fn validate_action_target(
+        &self,
+        _target: &ActionTargetContext<'_>,
+        _kind: TargetActionKind,
+    ) -> Result<()> {
+        Err(AutomationError::UnsupportedPlatform)
+    }
+    fn focus_action_target(&self, _target: &ActionTargetContext<'_>) -> Result<()> {
+        Err(AutomationError::UnsupportedPlatform)
+    }
+    fn deliver_synthetic(
+        &self,
+        _target: &ActionTargetContext<'_>,
+        _action: &UiAction,
+    ) -> std::result::Result<(), NativeDeliveryError> {
+        Err(AutomationError::UnsupportedPlatform.into())
+    }
+    fn semantic_scroll(&self, _element: ElementRef, _opts: ScrollOpts) -> Result<()> {
+        Err(AutomationError::UnsupportedPlatform)
+    }
     fn list_applications(&self) -> Result<Vec<ResolvedApplication>> {
         let focus = self.get_focus()?;
         Ok(vec![ResolvedApplication {
@@ -313,6 +412,30 @@ impl AutomationBackend for StubBackend {
 mod tests {
     use super::*;
 
+    #[test]
+    fn optional_pattern_preserves_provider_denials_instead_of_authorizing_fallback() {
+        let denied = || AutomationError::PermissionDenied {
+            reason: "provider denied".into(),
+        };
+        assert!(matches!(
+            optional_native_pattern::<()>(Err(denied()), || panic!("getter must not run")),
+            Err(AutomationError::PermissionDenied { .. })
+        ));
+        assert!(matches!(
+            optional_native_pattern::<()>(Ok(true), || Err(denied())),
+            Err(AutomationError::PermissionDenied { .. })
+        ));
+        assert_eq!(
+            optional_native_pattern(Ok(false), || panic!("unsupported getter must not run"))
+                .unwrap(),
+            None::<()>
+        );
+        assert_eq!(
+            optional_native_pattern(Ok(true), || Ok(42)).unwrap(),
+            Some(42)
+        );
+    }
+
     /// A backend that can capture a monitor and report focus, so the default
     /// `screenshot_application` can actually run. Everything else is
     /// unsupported — this exists only to pin the coordinate space.
@@ -438,6 +561,58 @@ mod tests {
             path: None,
             display_name: "Fake".into(),
             process_id: 42,
+        }
+    }
+
+    #[test]
+    fn keyboard_validation_allows_value_names_to_change_but_keeps_native_metadata() {
+        let mut observed = element_info(Some(42), None);
+        observed.name = Some("seed".into());
+        let mut live = observed.clone();
+        live.name = Some("seed-双".into());
+        assert!(validate_live_element(&observed, &live, TargetActionKind::Keyboard).is_ok());
+        assert!(validate_live_element(&observed, &live, TargetActionKind::Pointer).is_err());
+        live.process_id = Some(43);
+        assert!(validate_live_element(&observed, &live, TargetActionKind::Keyboard).is_err());
+        live.process_id = observed.process_id;
+        live.automation_id = Some("replacement".into());
+        assert!(validate_live_element(&observed, &live, TargetActionKind::Keyboard).is_err());
+    }
+
+    #[test]
+    fn live_surface_validation_refuses_topology_and_geometry_drift() {
+        let observed = UiSurface {
+            window_id: Some(7),
+            display_id: Some("left".into()),
+            logical_bounds: Rect {
+                x: -1920,
+                y: 20,
+                width: 800,
+                height: 600,
+            },
+            pixel_width: 1600,
+            pixel_height: 1200,
+            scale_factor: 2.0,
+            coordinate_space: super::super::session::CoordinateSpace::ScreenshotPixels,
+        };
+        assert!(validate_live_surface(&observed, &observed).is_ok());
+        for change in ["window", "display", "move", "resize", "scale"] {
+            let mut live = observed.clone();
+            match change {
+                "window" => live.window_id = Some(8),
+                "display" => live.display_id = Some("right".into()),
+                "move" => live.logical_bounds.x = 20,
+                "resize" => live.logical_bounds.width = 900,
+                "scale" => live.scale_factor = 1.0,
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    validate_live_surface(&observed, &live),
+                    Err(AutomationError::StaleElement)
+                ),
+                "{change}"
+            );
         }
     }
 

@@ -821,7 +821,7 @@ describe("action: Desktop automation schemas", () => {
         request: {
           turnToken: "turn-1",
           target: { kind: "element", handle },
-          action: { kind: "pressKey", chord: ["cmd+s"] },
+          action: { kind: "pressKey", chord: "cmd+s" },
           strategy: "semantic",
         },
       }).success
@@ -854,6 +854,20 @@ describe("action: Desktop automation schemas", () => {
           action: { kind: "click" },
           strategy: "auto",
         },
+      }).success
+    ).toBe(false)
+  })
+
+  it("routes explicit focus and refuses the obsolete key-chord tuple", () => {
+    const request = { turnToken: "turn", target: { kind: "element", handle }, strategy: "semantic" }
+    expect(
+      PARAMS_SCHEMAS["action.desktop.performAction"].safeParse({
+        request: { ...request, action: { kind: "focus" } },
+      }).success
+    ).toBe(true)
+    expect(
+      PARAMS_SCHEMAS["action.desktop.performAction"].safeParse({
+        request: { ...request, action: { kind: "pressKey", chord: ["cmd+s"] } },
       }).success
     ).toBe(false)
   })

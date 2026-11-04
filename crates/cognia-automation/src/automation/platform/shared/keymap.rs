@@ -88,6 +88,58 @@ impl std::fmt::Display for ChordParseError {
 
 impl std::error::Error for ChordParseError {}
 
+/// Guard every key-down and release all attempted keys on error or unwind.
+/// Native adapters map parsed keys first, so layout errors precede all input.
+pub fn with_held_inputs<A, K: Clone>(
+    adapter: &mut A,
+    keys: &[K],
+    mut guard: impl FnMut() -> crate::automation::types::Result<()>,
+    mut press: impl FnMut(&mut A, &K) -> crate::automation::types::Result<()>,
+    release: impl FnMut(&mut A, &K) -> crate::automation::types::Result<()>,
+    operation: impl FnOnce(&mut A) -> crate::automation::types::Result<()>,
+) -> crate::automation::types::Result<()> {
+    struct Held<'a, A, K, R: FnMut(&mut A, &K) -> crate::automation::types::Result<()>> {
+        adapter: &'a mut A,
+        keys: Vec<K>,
+        release: R,
+    }
+    impl<A, K, R: FnMut(&mut A, &K) -> crate::automation::types::Result<()>> Drop
+        for Held<'_, A, K, R>
+    {
+        fn drop(&mut self) {
+            for key in self.keys.iter().rev() {
+                let _ = (self.release)(self.adapter, key);
+            }
+        }
+    }
+    let mut held = Held {
+        adapter,
+        keys: Vec::new(),
+        release,
+    };
+    let result = (|| {
+        for key in keys {
+            guard()?;
+            held.keys.push(key.clone());
+            press(held.adapter, key)?;
+        }
+        operation(held.adapter)
+    })();
+    let mut cleanup = Ok(());
+    let mut failed = Vec::new();
+    while let Some(key) = held.keys.pop() {
+        if let Err(error) = (held.release)(held.adapter, &key) {
+            if cleanup.is_ok() {
+                cleanup = Err(error);
+            }
+            failed.push(key);
+        }
+    }
+    // Drop makes a final best-effort retry if release itself failed.
+    held.keys = failed;
+    result.and(cleanup)
+}
+
 /// Parse a `+`-joined chord into an IR. Returns the modifiers first
 /// (sorted by `Modifier` declaration order — shift, control, alt, meta
 /// — so the result is deterministic regardless of the operator's
@@ -213,16 +265,89 @@ fn parse_named(token: &str) -> Option<NamedKey> {
 fn parse_function_key(lower: &str) -> Option<u8> {
     let rest = lower.strip_prefix('f')?;
     let n: u8 = rest.parse().ok()?;
-    if (1..=24).contains(&n) {
-        Some(n)
-    } else {
-        None
-    }
+    if (1..=24).contains(&n) { Some(n) } else { None }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_input_guard_stops_on_focus_drift_and_releases_modifiers() {
+        let mut events = Vec::new();
+        let mut checks = 0;
+        let result = with_held_inputs(
+            &mut events,
+            &['C', 's'],
+            || {
+                checks += 1;
+                if checks == 2 {
+                    Err(crate::automation::types::AutomationError::StaleElement)
+                } else {
+                    Ok(())
+                }
+            },
+            |events, key| {
+                events.push(format!("down:{key}"));
+                Ok(())
+            },
+            |events, key| {
+                events.push(format!("up:{key}"));
+                Ok(())
+            },
+            |_| Ok(()),
+        );
+        assert!(result.is_err());
+        assert_eq!(events, ["down:C", "up:C"]);
+    }
+
+    #[test]
+    fn failed_native_press_releases_every_attempted_input() {
+        let mut events = Vec::new();
+        let result = with_held_inputs(
+            &mut events,
+            &['C', 's'],
+            || Ok(()),
+            |events, key| {
+                events.push(format!("down:{key}"));
+                if *key == 's' {
+                    Err(crate::automation::types::AutomationError::StaleElement)
+                } else {
+                    Ok(())
+                }
+            },
+            |events, key| {
+                events.push(format!("up:{key}"));
+                Ok(())
+            },
+            |_| Ok(()),
+        );
+        assert!(result.is_err());
+        assert_eq!(events, ["down:C", "down:s", "up:s", "up:C"]);
+    }
+
+    #[test]
+    fn unwinding_during_a_gesture_releases_held_input() {
+        let mut events = Vec::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_held_inputs(
+                &mut events,
+                &['M'],
+                || Ok(()),
+                |events, key| {
+                    events.push(format!("down:{key}"));
+                    Ok(())
+                },
+                |events, key| {
+                    events.push(format!("up:{key}"));
+                    Ok(())
+                },
+                |_| panic!("injected gesture failure"),
+            );
+        }));
+        assert!(result.is_err());
+        assert_eq!(events, ["down:M", "up:M"]);
+    }
 
     #[test]
     fn single_character_parses_as_char() {

@@ -31,9 +31,6 @@ typedef struct CogniaSCStreamHandle {
     void *stream;
     void *collector;
     uint32_t window_id;
-    uint32_t display_id;
-    CGRect logical_frame;
-    double point_pixel_scale;
 } CogniaSCStreamHandle;
 
 @interface CogniaSCFrameCollector : NSObject <SCStreamOutput, SCStreamDelegate> {
@@ -41,6 +38,9 @@ typedef struct CogniaSCStreamHandle {
     dispatch_semaphore_t _frame_ready;
     CIContext *_context;
     CGImageRef _latest_image;
+    CGRect _latest_screen_rect;
+    double _latest_scale;
+    bool _has_frame_geometry;
     NSError *_stream_error;
     uint64_t _generation;
 }
@@ -50,6 +50,8 @@ typedef struct CogniaSCStreamHandle {
 - (uint64_t)currentGeneration;
 - (CGImageRef)copyImageAfterGeneration:(uint64_t)generation
                                timeout:(dispatch_time_t)timeout
+                            screenRect:(CGRect *)screen_rect
+                                 scale:(double *)scale
                                  error:(NSError **)error CF_RETURNS_RETAINED;
 
 @end
@@ -91,10 +93,18 @@ typedef struct CogniaSCStreamHandle {
 
 - (CGImageRef)copyImageAfterGeneration:(uint64_t)generation
                                timeout:(dispatch_time_t)timeout
+                            screenRect:(CGRect *)screen_rect
+                                 scale:(double *)scale
                                  error:(NSError **)error {
     while (true) {
         @synchronized(self) {
             if (_generation > generation && _latest_image != NULL) {
+                if ((screen_rect != NULL || scale != NULL) && !_has_frame_geometry) {
+                    if (error != NULL) *error = [NSError errorWithDomain:@"CogniaScreenCapture" code:1 userInfo:@{NSLocalizedDescriptionKey: @"ScreenCaptureKit frame is missing valid screenRect/scale metadata"}];
+                    return NULL;
+                }
+                if (screen_rect != NULL) *screen_rect = _latest_screen_rect;
+                if (scale != NULL) *scale = _latest_scale;
                 return CGImageRetain(_latest_image);
             }
             if (_stream_error != nil) {
@@ -137,11 +147,23 @@ typedef struct CogniaSCStreamHandle {
     if (image == NULL) {
         return;
     }
+    CGRect screen_rect = CGRectNull;
+    id rectangle = info[SCStreamFrameInfoScreenRect];
+    NSNumber *scale = info[SCStreamFrameInfoScaleFactor];
+    bool has_geometry = [rectangle isKindOfClass:NSDictionary.class] &&
+        CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)rectangle, &screen_rect) &&
+        [scale isKindOfClass:NSNumber.class] && isfinite(scale.doubleValue) && scale.doubleValue > 0 &&
+        isfinite(screen_rect.origin.x) && isfinite(screen_rect.origin.y) &&
+        isfinite(screen_rect.size.width) && isfinite(screen_rect.size.height) &&
+        screen_rect.size.width > 0 && screen_rect.size.height > 0;
     @synchronized(self) {
         if (_latest_image != NULL) {
             CGImageRelease(_latest_image);
         }
         _latest_image = image;
+        _latest_screen_rect = screen_rect;
+        _latest_scale = has_geometry ? scale.doubleValue : 0.0;
+        _has_frame_geometry = has_geometry;
         _generation += 1;
     }
     dispatch_semaphore_signal(_frame_ready);
@@ -189,6 +211,24 @@ static double cognia_intersection_area(CGRect lhs, CGRect rhs) {
         return 0.0;
     }
     return intersection.size.width * intersection.size.height;
+}
+
+static uint32_t cognia_sc_display_for_rect(CGRect frame) {
+    uint32_t count = 0;
+    if (CGGetActiveDisplayList(0, NULL, &count) != kCGErrorSuccess || count == 0) return 0;
+    uint32_t capacity = count;
+    CGDirectDisplayID *displays = calloc(capacity, sizeof(*displays));
+    if (displays == NULL) return 0;
+    uint32_t selected = 0;
+    double largest = 0;
+    if (CGGetActiveDisplayList(capacity, displays, &count) == kCGErrorSuccess && count <= capacity) {
+        for (uint32_t index = 0; index < count; index++) {
+            double overlap = cognia_intersection_area(frame, CGDisplayBounds(displays[index]));
+            if (overlap > largest) { largest = overlap; selected = displays[index]; }
+        }
+    }
+    free(displays);
+    return selected;
 }
 
 static NSData *cognia_png_data_from_image(CGImageRef image) {
@@ -295,7 +335,7 @@ static bool cognia_capture_filter(SCContentFilter *filter,
         [stream startCaptureWithCompletionHandler:^(NSError *error) { startError = error; dispatch_semaphore_signal(started); }];
         BOOL ready = dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0;
         NSError *frameError = nil;
-        CGImageRef image = ready && startError == nil ? [collector copyImageAfterGeneration:0 timeout:dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC) error:&frameError] : NULL;
+        CGImageRef image = ready && startError == nil ? [collector copyImageAfterGeneration:0 timeout:dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC) screenRect:NULL scale:NULL error:&frameError] : NULL;
         bool stored = image != NULL && cognia_sc_store_image(image, window_id, display_id, logical_frame, scale, result);
         if (image != NULL) CGImageRelease(image);
         [stream stopCaptureWithCompletionHandler:nil];
@@ -459,16 +499,6 @@ void *cognia_sc_stream_start_window(int32_t process_id,
         SCContentFilter *filter =
             [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
 
-        uint32_t display_id = 0;
-        double largest_display_overlap = 0.0;
-        for (SCDisplay *display in shareable_content.displays) {
-            double overlap = cognia_intersection_area(selected.frame, display.frame);
-            if (overlap > largest_display_overlap) {
-                largest_display_overlap = overlap;
-                display_id = display.displayID;
-            }
-        }
-        const double scale = MAX((double)filter.pointPixelScale, 1.0);
         SCStreamConfiguration *configuration =
             cognia_sc_configuration(filter, selected.frame, false, CGRectZero);
         CogniaSCFrameCollector *collector =
@@ -508,11 +538,15 @@ void *cognia_sc_stream_start_window(int32_t process_id,
         }
 
         NSError *frame_error = nil;
+        CGRect frame_rect = CGRectNull;
+        double frame_scale = 0;
         CGImageRef first_image = [collector
             copyImageAfterGeneration:0
                              timeout:dispatch_time(
                                          DISPATCH_TIME_NOW,
                                          5 * NSEC_PER_SEC)
+                          screenRect:&frame_rect
+                               scale:&frame_scale
                                error:&frame_error];
         if (first_image == NULL) {
             cognia_sc_set_error(
@@ -525,9 +559,9 @@ void *cognia_sc_stream_start_window(int32_t process_id,
         bool stored = cognia_sc_store_image(
             first_image,
             selected.windowID,
-            display_id,
-            selected.frame,
-            scale,
+            cognia_sc_display_for_rect(frame_rect),
+            frame_rect,
+            frame_scale,
             result);
         CGImageRelease(first_image);
         if (!stored) {
@@ -544,9 +578,6 @@ void *cognia_sc_stream_start_window(int32_t process_id,
         handle->stream = (__bridge_retained void *)stream;
         handle->collector = (__bridge_retained void *)collector;
         handle->window_id = selected.windowID;
-        handle->display_id = display_id;
-        handle->logical_frame = selected.frame;
-        handle->point_pixel_scale = scale;
         return handle;
     }
 }
@@ -563,11 +594,15 @@ bool cognia_sc_stream_capture_latest(void *opaque_stream,
             (__bridge CogniaSCFrameCollector *)handle->collector;
         uint64_t generation = collector.currentGeneration;
         NSError *frame_error = nil;
+        CGRect frame_rect = CGRectNull;
+        double frame_scale = 0;
         CGImageRef image = [collector
             copyImageAfterGeneration:generation
                              timeout:dispatch_time(
                                          DISPATCH_TIME_NOW,
                                          5 * NSEC_PER_SEC)
+                          screenRect:&frame_rect
+                               scale:&frame_scale
                                error:&frame_error];
         if (image == NULL) {
             cognia_sc_set_error(
@@ -579,9 +614,9 @@ bool cognia_sc_stream_capture_latest(void *opaque_stream,
         bool stored = cognia_sc_store_image(
             image,
             handle->window_id,
-            handle->display_id,
-            handle->logical_frame,
-            handle->point_pixel_scale,
+            cognia_sc_display_for_rect(frame_rect),
+            frame_rect,
+            frame_scale,
             result);
         CGImageRelease(image);
         return stored;

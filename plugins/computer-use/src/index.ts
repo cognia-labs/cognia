@@ -254,6 +254,9 @@ const SURFACE_GUIDANCE =
   "(3) mcp__playwright__* → arbitrary PUBLIC websites (headless, reliable cross-origin). (4) web_fetch / " +
   "web_search → read-only page content, no interaction. Prefer DOM (browser_*) over pixels when the " +
   "target is a web page you control; prefer app-session Computer Use for native apps. " +
+  "To switch to an observed native app/window or change the input control, use perform_action " +
+  "with action {kind:'focus'} and an element handle, then call get_app_state again. Focus is explicit; " +
+  "typing never silently changes focus. A focus/geometry refusal requires a new observation. " +
   "Within Computer Use, target elements by handle rather than pixels wherever query_elements can " +
   "find them — handles survive layout shifts and are delivered through the accessibility API. " +
   "When a control is too small to identify confidently, zoom into that region and read it again " +

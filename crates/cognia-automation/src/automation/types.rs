@@ -220,6 +220,9 @@ pub enum ClickTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClickOpts {
+    /// Internal canonical delivery must not synthesize inside a semantic call.
+    #[serde(skip)]
+    pub native_only: bool,
     pub button: Option<MouseButton>,
     pub double: Option<bool>,
     pub modifier: Option<KeyChord>,
