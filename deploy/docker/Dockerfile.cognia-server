@@ -383,7 +383,7 @@ COPY --from=codeserver-preload /opt/cognia/code-server /opt/cognia/code-server
 COPY --from=plugin-node-runtime /usr/local/bin/node /opt/cognia/plugin-node/bin/node
 # Smoke stub agent (ADR-0059 D6): admitted by SpawnPolicy ONLY when
 # COGNIA_SMOKE_AGENT=1 is set on the server — inert otherwise.
-COPY scripts/smoke/stub-acp-agent.mjs /opt/cognia/smoke/stub-acp-agent.mjs
+COPY scripts/smoke/fixtures/stub-acp-agent.mjs /opt/cognia/smoke/stub-acp-agent.mjs
 
 # NODE_ENV=production disables $COGNIA_PI_EXTENSION_PATH (see
 # piExtensionOverrideAllowed): in a shipped image that variable would swap out

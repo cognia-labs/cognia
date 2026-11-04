@@ -40,6 +40,10 @@
       "why": "Grades retained HTE CEM artifacts offline (docs/development/hte-cem-grading.md)."
     },
     {
+      "path": "scripts/eval/team-eval-live.ts",
+      "why": "Agent Team live evaluation with real models (docs/reports/2026-10-25-team-squad-live-evaluation.md)."
+    },
+    {
       "path": "scripts/eval/toolsearch-cache-probe.mjs",
       "why": "Wire-level tool-search cache experiment; --run calls a model (docs/evidence/2026-10-24-eval-tui-gap-audit.md)."
     },
@@ -62,14 +66,6 @@
     {
       "path": "scripts/smoke/scheduler-tauri.mjs",
       "why": "Scheduler smoke inside the desktop shell (docs/reports/2026-10-22-scheduled-task-implementation-audit.md)."
-    },
-    {
-      "path": "scripts/smoke/team-eval-live.ts",
-      "why": "Agent Team live evaluation with real models (docs/reports/2026-10-25-team-squad-live-evaluation.md)."
-    },
-    {
-      "path": "scripts/smoke/tui-v41-live.mjs",
-      "why": "TUI v4.1 acceptance in a real PTY (docs/evidence/2026-10-22-tui-v41-acceptance.md)."
     },
     {
       "path": "scripts/sync/generate-live2d-fixtures.mjs",

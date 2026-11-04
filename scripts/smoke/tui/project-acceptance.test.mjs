@@ -9,10 +9,10 @@ import {
   projectSnapshot,
   startTaskboard,
   researchSourcePages,
-} from "./tui-project-acceptance.mjs"
+} from "./project-acceptance.mjs"
 
 test("research corpus contains distinct payloads and non-overlapping original source lines", () => {
-  const repo = path.resolve(import.meta.dirname, "../..")
+  const repo = path.resolve(import.meta.dirname, "../../..")
   const pages = researchSourcePages(repo, 38)
   assert.equal(pages.length, 38)
   assert.equal(new Set(pages.map((page) => page.codeHash)).size, 38)

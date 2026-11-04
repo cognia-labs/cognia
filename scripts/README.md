@@ -131,6 +131,11 @@ processes send each subagent to the model its Cognia slot names, against the
 loopback fixture model in `agents/fixture-model.ts` (set `OPENCODE_V1_BIN` and
 `OPENCODE_V2_BIN`); `pnpm smoke:opencode-v2` runs the OpenCode V2 service and
 adapter checks against the same kind of fixture.
+`tui/` is the real-PTY TUI acceptance (`pnpm smoke:tui-live [phase]`, against
+one local model; `docs/evidence/2026-10-22-tui-v41-acceptance.md`) with its
+evidence and project-acceptance helpers. `fixtures/` holds what other smokes
+run: the stub ACP agent the Compose smokes start inside the server image,
+the cloud-docs and desktop-automation fixtures.
 Vendor smokes not yet moved run through `build-and-run-smoke.mjs`
 (`pnpm smoke:external-parity --<lane>`). `im-live/` is the live
 IM bot smoke (`pnpm im:*`). Live harnesses against real services:
@@ -150,7 +155,8 @@ Developer CLIs: `tauri.mjs` (the `tauri dev` feature set), `headless.mjs` and
 `clean-app-databases.mjs` (`pnpm clean:db`), `ensure-cognia-cli.mjs` (predev),
 `im-test-target.mjs`, `workspace-runtime.mjs`, `agent-proxy.mjs`,
 `analyze-next-trace.mjs`, `fetch-live2d-corpus.mjs` (`pnpm pet:corpus:fetch`),
-`capture-pwa-screenshots.mjs` (`pnpm screenshots:pwa`) and `move-to-crate.mjs`
+`capture-pwa-screenshots.mjs` (`pnpm screenshots:pwa`), `logto-seed.mjs`
+(`pnpm logto:seed`, seeds the local Logto stack in `deploy/compose/LOGTO.md`) and `move-to-crate.mjs`
 (shared-tree-safe Rust module moves, ADR-0196). `headless.mjs` is the reference for a new CLI (see
 [Conventions](#conventions)).
 
@@ -202,7 +208,8 @@ CI: `.github/workflows/bootstrap-scripts.yml`.
 ### `eval/`
 
 MultiAgentBench (`docs/development/multiagentbench.md`), the HTE CEM grader
-(`docs/development/hte-cem-grading.md`), the tool-search cache probe and the
+(`docs/development/hte-cem-grading.md`), the tool-search cache probe, the Agent
+Team live evaluation (`team-eval-live.ts`) and the
 plugin eval runner (`plugin-eval.ts`, `pnpm plugin:eval`). `benchmarks/` holds
 the Host runtime benchmarks and `certify/` the billable vendor certification
 (ADR-0090 Phase 5). Most need provider keys or spend money; read the header
@@ -230,8 +237,7 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `smoke/lark-live-smoke.mts`                                        | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
 | `smoke/lume-sandbox.mjs`                                           | Lume sandbox smoke (`docs/development/lume-sandbox.md`).                                               |
 | `smoke/scheduler-tauri.mjs`                                        | Scheduler smoke in the desktop shell.                                                                  |
-| `smoke/tui-v41-live.mjs`                                           | TUI v4.1 acceptance (`docs/evidence/2026-10-22-tui-v41-acceptance.md`).                                |
-| `smoke/team-eval-live.ts`                                          | Agent Team live evaluation (`docs/reports/2026-10-25-team-squad-live-evaluation.md`).                  |
+| `eval/team-eval-live.ts`                                           | Agent Team live evaluation (`docs/reports/2026-10-25-team-squad-live-evaluation.md`).                  |
 | `smoke/builtin-agent-budget-live.ts`                               | Built-in agent budgets (`docs/evidence/2026-10-21-builtin-agent-budgets.md`).                          |
 | `smoke/{antigravity-acp,gemini-history}-smoke.ts`                  | Gemini / Antigravity CLI support (`docs/evidence/2026-10-24-gemini-antigravity-cli-support-audit.md`). |
 | `smoke/minimax-acp-smoke.ts`                                       | MiniMax ACP smoke (`packages/agent-acp/README.md`).                                                    |
@@ -304,6 +310,13 @@ old paths; this table maps them.
 | `smoke/qoder-acp-smoke.ts`                | `pnpm smoke:agent qoder` (`smoke/agents/vendors/qoder.ts`)                         |
 | `smoke/pi-subagent-models.ts`             | `pnpm smoke:subagent-models pi` (`smoke/agents/subagent-models/pi.ts`)             |
 | `smoke/opencode-subagent-models.ts`       | `pnpm smoke:subagent-models opencode` (`smoke/agents/subagent-models/opencode.ts`) |
+| `smoke/acp-live.mjs`                      | `pnpm smoke:agent <runtime> --live`                                                |
+| `smoke/team-eval-live.ts`                 | `eval/team-eval-live.ts`                                                           |
+| `smoke/logto-seed.mjs`                    | `dev/logto-seed.mjs`                                                               |
+| `smoke/stub-acp-agent.mjs`                | `smoke/fixtures/stub-acp-agent.mjs`                                                |
+| `smoke/tui-v41-live.mjs`                  | `smoke/tui/live.mjs` (`pnpm smoke:tui-live`)                                       |
+| `smoke/tui-live-evidence.mjs`             | `smoke/tui/live-evidence.mjs`                                                      |
+| `smoke/tui-project-acceptance.mjs`        | `smoke/tui/project-acceptance.mjs`                                                 |
 
 ## Known layout debt
 

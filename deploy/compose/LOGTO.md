@@ -388,7 +388,7 @@ loopback-only console; its personal authenticator has not been enrolled.
 
 ### Compatibility fixes verified against the running image
 
-`scripts/smoke/logto-seed.mjs` now binds API scopes to organization roles,
+`scripts/dev/logto-seed.mjs` now binds API scopes to organization roles,
 accepts plain-text `201 Created` responses from relation endpoints, configures
 refresh-token issuance/rotation, and omits secret values from dry-run logs.
 The seeder preserves existing redirect URIs and unrelated client metadata.

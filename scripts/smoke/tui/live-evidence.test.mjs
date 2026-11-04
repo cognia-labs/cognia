@@ -16,7 +16,7 @@ import {
   completedInferenceEvidence,
   createSourceReadObserver,
   sourceFindingEvidence,
-} from "./tui-live-evidence.mjs"
+} from "./live-evidence.mjs"
 
 test("only structurally identified summary cancellation can replace a completed stream", () => {
   const messages = [

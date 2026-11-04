@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-/** Real PTY acceptance, isolated state, one explicitly selected local model. */
+/** Real PTY acceptance, isolated state, one explicitly selected local model.
+ * Run: pnpm smoke:tui-live [phase] (default "core"); see the COGNIA_TUI_LIVE_*
+ * variables below and docs/evidence/2026-10-22-tui-v41-acceptance.md.
+ */
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
@@ -8,8 +11,8 @@ import { createHash, randomBytes } from "node:crypto"
 import { execFileSync, spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { loadSupport, typeRendered } from "../test/cli-conversation-real.mjs"
-import { createLiveStreamCompat } from "./builtin-agent-live-stream-compat.mjs"
+import { loadSupport, typeRendered } from "../../test/cli-conversation-real.mjs"
+import { createLiveStreamCompat } from "../builtin-agent-live-stream-compat.mjs"
 import {
   INVENTORY_V1,
   INVENTORY_V2,
@@ -19,7 +22,7 @@ import {
   projectEnv,
   projectSnapshot,
   researchSourcePages,
-} from "./tui-project-acceptance.mjs"
+} from "./project-acceptance.mjs"
 import {
   completedSubagentResult,
   freshCommandResult,
@@ -37,9 +40,9 @@ import {
   completedInferenceEvidence,
   createSourceReadObserver,
   sourceFindingEvidence,
-} from "./tui-live-evidence.mjs"
+} from "./live-evidence.mjs"
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const root = path.resolve(
   process.env.COGNIA_TUI_LIVE_DIR || path.join(repo, ".cache/tui-v41-2026-10-22/run-1")
 )
