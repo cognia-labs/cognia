@@ -108,6 +108,6 @@ Wave-4 的 PWA 层停在"技术上可安装"：manifest 与 Serwist worker 已�
 - `app/sw.ts` 预缓存 `public/offline.html`（revision 取应用版本号，每次发版重新预缓存），并为 `destination: "document"` 注册 Serwist `fallbacks` 条目。离线时未缓存的导航现在得到双语离线页，而非浏览器错误页——后者在 `standalone` 窗口中没有退路。
 - `PwaBadgeInitializer` 挂在 gate 之内（需要解锁后的 Dexie），在 `display-mode: standalone` 下将移动端未读会话数镜像到 `navigator.setAppBadge`。
 - 遥测：`app` 类别下新增 `app.pwa.install.shown|accepted|dismissed` 与 `app.pwa.installed`。`app/layout.tsx` 的 metadata 修正为 Cognia 品牌文案，并补齐 `appleWebApp` 与 `themeColor` viewport 项。
-- 截图素材由 `pnpm screenshots:pwa`（`scripts/screenshots/capture-pwa-screenshots.mjs`）基于 `NEXT_PUBLIC_E2E=1` 静态导出、用一次性 E2E 账户生成——绝不含真实用户数据。
+- 截图素材由 `pnpm screenshots:pwa`（`scripts/dev/capture-pwa-screenshots.mjs`）基于 `NEXT_PUBLIC_E2E=1` 静态导出、用一次性 E2E 账户生成——绝不含真实用户数据。
 
 定位不变：已安装的 PWA 是 headless 部署的客户端（`web-standalone` 宿主档案）。它不会获得 sidecar、文件系统、MCP 或 connector 运行时能力——卡片文案已写明。Web Push 仍不在范围内（需要 VAPID 密钥与服务端订阅存储）。`window-controls-overlay` 标题栏复用是刻意的后续项，不属于本次交付。Tauri SW 注册验证仍是上方列出的待完成事项。

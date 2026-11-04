@@ -25,7 +25,7 @@
  *
  * Usage:
  *   pnpm screenshots:pwa
- *   node scripts/screenshots/capture-pwa-screenshots.mjs [--only wide|narrow]
+ *   node scripts/dev/capture-pwa-screenshots.mjs [--only wide|narrow]
  */
 
 import { mkdirSync } from "node:fs"

@@ -125,7 +125,7 @@ export const EXEMPTIONS = {
   "test:coverage:changed": "incremental coverage — owned by test.yml",
   "tauri:frontend:check":
     "requires the Next.js static export and runs immediately after pnpm build in test.yml",
-  "pet:corpus:test": "subset of pet:compat:test, which runs scripts/pet/*.test.mjs",
+  "pet:corpus:test": "subset of pet:compat:test, which also runs the Live2D fixture test",
   "audit:workspace-attribution:baseline":
     "writer — updates the ratchet baseline; audit:workspace-attribution is the blocking check",
   "test:coverage:merge":

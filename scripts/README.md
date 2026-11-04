@@ -44,9 +44,7 @@ scripts/
   benchmarks/     Host/sidecar JS runtime and code-index benchmarks
   certify/        billable vendor certification and bundle rollback (ADR-0090)
   plugin-eval/    plugin eval runner
-  pet/            Live2D corpus fetch
   router-fusion/  Router + Fusion live smoke (ADR-0188)
-  screenshots/    PWA manifest screenshot capture
 ```
 
 Top-level files:
@@ -131,8 +129,9 @@ Developer CLIs: `tauri.mjs` (the `tauri dev` feature set), `headless.mjs` and
 `web-headless.mjs` (headless Host for browser development), `free-port.mjs`,
 `clean-app-databases.mjs` (`pnpm clean:db`), `ensure-cognia-cli.mjs` (predev),
 `im-test-target.mjs`, `workspace-runtime.mjs`, `agent-proxy.mjs`,
-`analyze-next-trace.mjs` and `move-to-crate.mjs` (shared-tree-safe Rust module
-moves, ADR-0196). `headless.mjs` is the reference for a new CLI (see
+`analyze-next-trace.mjs`, `fetch-live2d-corpus.mjs` (`pnpm pet:corpus:fetch`),
+`capture-pwa-screenshots.mjs` (`pnpm screenshots:pwa`) and `move-to-crate.mjs`
+(shared-tree-safe Rust module moves, ADR-0196). `headless.mjs` is the reference for a new CLI (see
 [Conventions](#conventions)).
 
 ### `ci/`
@@ -191,8 +190,7 @@ header first.
 
 ### Single-purpose folders
 
-`pet/` (Live2D corpus), `router-fusion/` (live smoke), `screenshots/`
-(PWA screenshots).
+`router-fusion/` (live smoke).
 
 ## Run by hand
 
@@ -271,6 +269,8 @@ old paths; this table maps them.
 | `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`         |
 | `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`      |
 | `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs` |
+| `pet/fetch-live2d-corpus.mjs`             | `dev/fetch-live2d-corpus.mjs`       |
+| `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`   |
 
 ## Known layout debt
 
@@ -283,7 +283,7 @@ new scripts and do not copy these patterns:
 - Live smokes outside `smoke/`: `router-fusion/live-smoke.mjs` and the
   top-level `lark-*.mts`.
 - Evaluation split across `eval/`, `benchmarks/`, `certify/` and
-  `plugin-eval/`; single-file folder `screenshots/`.
+  `plugin-eval/`.
 - `bootstrap/` is a product asset: `lib/project-environment/bootstrap-presets.ts`
   imports `bootstrap/presets.json`, the only app import from `scripts/`.
 - `gates/convergence/*.md` are working notes of the in-flight convergence
