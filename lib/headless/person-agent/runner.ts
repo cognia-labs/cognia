@@ -21,6 +21,13 @@
  *    Elicitations and interactive questions are declined; a member device
  *    cannot answer them in a partition.
  *
+ * Every turn holds an execution-broker lease from admission until it settles,
+ * as every other agent run in a brain does. That is how the brain's `ai-turn`
+ * ceiling bounds member turns, and how the run count the brain reports to the
+ * Host sees one running: the Host keeps the brain up while it is non-zero. A
+ * turn the ceiling would hold back is accepted and waits, like a message
+ * queued behind a running turn, so the HostState dispatcher never blocks.
+ *
  * The process stays up between turns, so the agent keeps its own session and
  * workspace context, and is reaped after {@link PERSON_AGENT_IDLE_MS} idle, on
  * a model or agent change, and when the Host stops it. A fresh process for a
@@ -37,6 +44,8 @@ import type {
 import type { UIMessage } from "ai"
 import type { ChatSession, SendContent } from "@cognia/agent-config-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
+import type { ExecutionBroker } from "@/lib/execution/broker"
+import type { ExecutionLeaseRequest } from "@/lib/execution/types"
 import type { PersonProcessPlane } from "./process-plane"
 import {
   createTranscriptLiveEncoder,
@@ -101,6 +110,11 @@ export interface PersonAgentManager {
 export interface PersonAgentRunnerDeps {
   plane: PersonProcessPlane
   manager: PersonAgentManager
+  /**
+   * The brain's execution broker. Each turn holds one of its leases until it
+   * settles; a broker-side cancel stops the turn.
+   */
+  broker: Pick<ExecutionBroker, "acquire" | "admissionBlocker">
   /** `person_agent_lease_prepare`. */
   prepareLease(input: {
     runtimeId: string
@@ -255,6 +269,15 @@ export interface PersonAgentRunner {
   liveAgent(sessionId: string): { agentId: string; runtimeId: string; model: string } | undefined
 }
 
+function leaseRequest(request: PersonAgentTurnRequest): ExecutionLeaseRequest {
+  return {
+    kind: "chat",
+    label: `Member agent turn ${request.session.id.slice(0, 8)}`,
+    sessionId: request.session.id,
+    providerId: request.provider,
+  }
+}
+
 export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgentRunner {
   const live = new Map<string, LiveAgent>()
   const starting = new Map<string, Promise<LiveAgent>>()
@@ -406,7 +429,7 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
     agent: LiveAgent,
     stream: AsyncIterator<ExternalAgentEvent>,
     turn: ActiveTurn
-  ): Promise<void> {
+  ): Promise<PersonAgentSettleOutcome> {
     const sessionId = request.session.id
     const turnId = `${request.actionId}`
     let sequence = 3
@@ -605,6 +628,22 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
     )
     if (agent.dead || hostReason) await close(sessionId)
     else if (live.get(sessionId) === agent) armIdle(sessionId, agent)
+    return outcome
+  }
+
+  async function abortTurn(sessionId: string): Promise<boolean> {
+    const agent = live.get(sessionId)
+    if (!agent?.turn) return false
+    agent.turn.aborted = true
+    if (agent.nativeSessionId) {
+      await deps.manager.cancel(agent.agentId, agent.nativeSessionId)
+    } else {
+      // The prompt has not reached a session yet; stopping the process is
+      // the only way to stop it.
+      agent.dead = true
+      await deps.manager.removeAgent(agent.agentId).catch(() => undefined)
+    }
+    return true
   }
 
   function track(sessionId: string, settled: Promise<void>) {
@@ -619,13 +658,50 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
 
   /**
    * Start one turn: resolves once the prompt is streaming, carrying the
-   * promise of its settlement. Throws when it never started; nothing is settled then.
+   * promise of its settlement. Throws when it never started; nothing is settled
+   * then. The broker lease spans both, and is released when the turn settles.
    */
   async function begin(
     request: PersonAgentTurnRequest,
     prompt: ReturnType<typeof personAgentPrompt>,
     accepted: boolean
   ): Promise<{ settled: Promise<void> }> {
+    const sessionId = request.session.id
+    const lease = await deps.broker.acquire(leaseRequest(request))
+    let started: { settled: Promise<PersonAgentSettleOutcome> }
+    try {
+      started = await beginAdmitted(request, prompt, accepted)
+    } catch (error) {
+      lease.release("error")
+      throw error
+    }
+    const cancel = () => {
+      void abortTurn(sessionId).catch((error) =>
+        deps.log("warn", `person agent turn cancel failed: ${String(error)}`)
+      )
+    }
+    if (lease.signal.aborted) cancel()
+    else lease.signal.addEventListener("abort", cancel, { once: true })
+    return {
+      settled: started.settled.then(
+        (outcome) => {
+          lease.signal.removeEventListener("abort", cancel)
+          lease.release(outcome === "failed" ? "error" : "ok")
+        },
+        (error) => {
+          lease.signal.removeEventListener("abort", cancel)
+          lease.release("error")
+          throw error
+        }
+      ),
+    }
+  }
+
+  async function beginAdmitted(
+    request: PersonAgentTurnRequest,
+    prompt: ReturnType<typeof personAgentPrompt>,
+    accepted: boolean
+  ): Promise<{ settled: Promise<PersonAgentSettleOutcome> }> {
     const sessionId = request.session.id
     const agent = await agentFor(request)
     const turn: ActiveTurn = { actionId: request.actionId, aborted: false }
@@ -675,12 +751,12 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       const sessionId = request.session.id
       const prompt = personAgentPrompt(request.prompt)
       const previous = tails.get(sessionId)
-      if (!previous) {
+      if (!previous && deps.broker.admissionBlocker(leaseRequest(request)) === null) {
         track(sessionId, (await begin(request, prompt, false)).settled)
         return
       }
-      // A turn is running: this message waits for it, as the sidecar's own
-      // queue does, and is delivered when that turn settles.
+      // A turn is running, or the brain is at its ceiling: this message waits,
+      // as the sidecar's own queue does, and is delivered when it is admitted.
       await project(
         envelope(sessionId, request.actionId, 0, {
           kind: "queue",
@@ -691,7 +767,7 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       )
       track(
         sessionId,
-        previous.then(async () => {
+        (previous ?? Promise.resolve()).then(async () => {
           try {
             await (
               await begin(request, prompt, true)
@@ -713,20 +789,7 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       )
     },
 
-    async abort(sessionId) {
-      const agent = live.get(sessionId)
-      if (!agent?.turn) return false
-      agent.turn.aborted = true
-      if (agent.nativeSessionId) {
-        await deps.manager.cancel(agent.agentId, agent.nativeSessionId)
-      } else {
-        // The prompt has not reached a session yet; stopping the process is
-        // the only way to stop it.
-        agent.dead = true
-        await deps.manager.removeAgent(agent.agentId).catch(() => undefined)
-      }
-      return true
-    },
+    abort: abortTurn,
 
     close,
 

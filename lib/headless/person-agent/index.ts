@@ -14,6 +14,7 @@ import { cogniaGatewayRuntime } from "@/lib/ai/agent/external/config/gateway-tas
 import { createAgentFromPreset } from "@/lib/ai/agent/external/config/presets"
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import { publishHostEvent } from "@/lib/companion/host-event-publisher"
+import { getExecutionBroker } from "@/lib/execution/broker"
 import { TRANSCRIPT_LIVE_TOPIC } from "@/lib/chat/transcript/live-frames"
 import { pickPermissionOptionId } from "@/lib/ai/agent/external/session/chat-decision-bridge"
 import type { AcpPermissionOption } from "@/types/agent/external-agent"
@@ -89,6 +90,8 @@ export async function installPersonAgents(
   const installed = createPersonAgentRunner({
     plane,
     manager: deps.manager,
+    // The brain's one broker: its run count is what the brain reports to the Host.
+    broker: getExecutionBroker(),
     prepareLease: (input) =>
       deps.transport.call<PersonAgentLease>("person_agent_lease_prepare", { ...input }),
     launchFor: personAgentLaunch,

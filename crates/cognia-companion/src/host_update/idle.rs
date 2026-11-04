@@ -52,10 +52,17 @@ pub fn brain_runs(
     if !connected {
         return Some(0);
     }
-    let fresh_within = 3 * ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64;
-    activity
-        .filter(|report| now_ms - report.reported_at_ms <= fresh_within)
-        .map(|report| report.active_runs)
+    activity.and_then(|report| report.fresh_runs(now_ms))
+}
+
+/// The member agent turns running in every connected person brain. Unknown
+/// while any of them has not reported recently, as for the operator brain:
+/// a member's turn outlives the request that started it, so nothing else on
+/// the Host counts it.
+pub fn person_runs(reports: &[Option<ws_bridge::BrainActivity>], now_ms: i64) -> Option<u32> {
+    reports.iter().try_fold(0u32, |total, report| {
+        report.and_then(|report| report.fresh_runs(now_ms)).map(|runs| total.saturating_add(runs))
+    })
 }
 
 /// The live counts of this process.
@@ -91,7 +98,9 @@ impl IdleProbe for LiveIdleProbe {
                 ws_bridge::bridge_ready(),
                 ws_bridge::brain_activity(),
                 now_ms,
-            ),
+            )
+            .zip(person_runs(&ws_bridge::person_activities(), now_ms))
+            .map(|(brain, persons)| brain.saturating_add(persons)),
             jobs: (self.jobs)(),
             worker_slots: crate::ws_worker::busy_worker_slots(),
             mutations: u32::try_from(crate::server::active_mutations()).unwrap_or(u32::MAX),
@@ -178,6 +187,19 @@ mod tests {
         ] {
             assert!(!busy.is_idle(), "{busy:?}");
         }
+    }
+
+    #[test]
+    fn member_turns_count_as_runs_and_a_quiet_person_brain_is_unknown() {
+        let heartbeat = ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64;
+        assert_eq!(person_runs(&[], 10_000), Some(0));
+        assert_eq!(
+            person_runs(&[activity(2, 10_000), activity(0, 10_000), activity(1, 9_000)], 10_000),
+            Some(3)
+        );
+        // Connected but not yet reported, or gone quiet: the count is unknown.
+        assert_eq!(person_runs(&[activity(1, 10_000), None], 10_000), None);
+        assert_eq!(person_runs(&[activity(0, 0)], 4 * heartbeat), None);
     }
 
     #[test]

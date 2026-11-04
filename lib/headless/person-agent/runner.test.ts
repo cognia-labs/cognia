@@ -1,5 +1,6 @@
 import type { ExternalAgentEvent } from "@/types/agent/external-agent"
 import type { TranscriptLiveFrame } from "@/lib/chat/transcript/live-frames"
+import { ExecutionBroker } from "@/lib/execution/broker"
 import { createPersonProcessPlane, type PersonPlaneTransport } from "./process-plane"
 import {
   createPersonAgentRunner,
@@ -35,7 +36,10 @@ function scripted(events: ExternalAgentEvent[]) {
   }
 }
 
-function harness(options: { holdLast?: boolean } = {}) {
+function harness(options: { holdLast?: boolean; turnLimit?: number } = {}) {
+  const broker = new ExecutionBroker(
+    options.turnLimit === undefined ? {} : { limits: { "ai-turn": options.turnLimit } }
+  )
   const transportHandlers = new Map<string, Array<(payload: unknown) => void>>()
   const transport = {
     call: jest.fn(async () => null),
@@ -73,6 +77,7 @@ function harness(options: { holdLast?: boolean } = {}) {
   const deps: PersonAgentRunnerDeps = {
     plane,
     manager,
+    broker,
     prepareLease: jest.fn(async () => ({ ticketId: "t", secret: "lease-secret", expiresAtMs: 1 })),
     launchFor: (runtimeId) =>
       runtimeId === "claude-agent-acp"
@@ -143,6 +148,7 @@ function harness(options: { holdLast?: boolean } = {}) {
   return {
     runner,
     deps,
+    broker,
     manager,
     turns,
     timers,
@@ -290,7 +296,11 @@ describe("person agent runner", () => {
     const tokenUsage = { promptTokens: 40, completionTokens: 9, totalTokens: 49 }
     h.turns.push(
       scripted([
-        event({ type: "message_delta", sessionId: "native-1", delta: { type: "text", text: "hi" } }),
+        event({
+          type: "message_delta",
+          sessionId: "native-1",
+          delta: { type: "text", text: "hi" },
+        }),
         event({ type: "done", sessionId: "native-1", success: true, tokenUsage, durationMs: 1200 }),
       ])
     )
@@ -691,5 +701,87 @@ describe("personAgentPrompt", () => {
         { type: "image", source: { type: "base64", data: "AAA", mediaType: "image/png" } },
       ],
     })
+  })
+})
+
+describe("person agent runner execution-broker lease", () => {
+  it("holds a lease for exactly as long as the turn runs", async () => {
+    const h = harness({ holdLast: true })
+    const turn = replyTurn()
+    h.turns.push(turn)
+    await h.runner.startTurn(request())
+    await flush()
+    // The brain reports this count to the Host, which keeps the brain up for it.
+    expect(h.broker.countRunning()).toBe(1)
+    expect(h.broker.list()).toEqual([
+      expect.objectContaining({ kind: "chat", sessionId: "s1", providerId: "anthropic" }),
+    ])
+    turn.release()
+    await drain()
+    expect(h.settled).toEqual([expect.objectContaining({ actionId: "a1", outcome: "completed" })])
+    expect(h.broker.countRunning()).toBe(0)
+  })
+
+  it("releases the lease when the turn never starts", async () => {
+    const h = harness()
+    await expect(h.runner.startTurn(request({ runtimeId: "not-bundled" }))).rejects.toMatchObject({
+      code: "org_agent_not_allowed",
+    })
+    expect(h.broker.countRunning()).toBe(0)
+    expect(h.broker.list()).toEqual([])
+  })
+
+  it("accepts a turn the ceiling holds back without blocking, and starts it when room frees", async () => {
+    const h = harness({ holdLast: true, turnLimit: 1 })
+    const first = replyTurn("one")
+    const second = replyTurn("two")
+    h.turns.push(first, second)
+    await h.runner.startTurn(request())
+    await flush()
+    // Another conversation's turn: the dispatcher gets control back at once.
+    await h.runner.startTurn(request({ session: { id: "s2" }, actionId: "a2", messageId: "m2" }))
+    await flush()
+    expect(h.manager.executeStreaming).toHaveBeenCalledTimes(1)
+    expect(h.envelopes).toContainEqual(
+      expect.objectContaining({
+        eventId: "person-agent:a2:0",
+        event: expect.objectContaining({ kind: "queue", phase: "accepted" }),
+      })
+    )
+    first.release()
+    await drain()
+    expect(h.manager.executeStreaming).toHaveBeenCalledTimes(2)
+    expect(h.broker.countRunning()).toBe(1)
+    expect(h.envelopes).toContainEqual(
+      expect.objectContaining({
+        eventId: "person-agent:a2:1",
+        event: expect.objectContaining({ kind: "queue", phase: "delivered" }),
+      })
+    )
+    second.release()
+    await drain()
+    expect(h.settled.map((entry) => [entry.actionId, entry.outcome])).toEqual([
+      ["a1", "completed"],
+      ["a2", "completed"],
+    ])
+    expect(h.broker.countRunning()).toBe(0)
+  })
+
+  it("stops the turn when the broker cancels its lease", async () => {
+    const h = harness({ holdLast: true })
+    const turn = replyTurn()
+    h.turns.push(turn)
+    await h.runner.startTurn(request())
+    await flush()
+    expect(h.broker.cancelBySession("s1")).toBe(1)
+    await flush()
+    expect(h.manager.cancel).toHaveBeenCalledWith(
+      expect.stringMatching(/^person-agent-/),
+      "native-1"
+    )
+    turn.release()
+    await drain()
+    expect(h.settled).toEqual([expect.objectContaining({ actionId: "a1", outcome: "cancelled" })])
+    expect(h.broker.countRunning()).toBe(0)
   })
 })

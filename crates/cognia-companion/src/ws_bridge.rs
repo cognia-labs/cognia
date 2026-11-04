@@ -348,6 +348,8 @@ struct PersonBridges {
 struct BridgeSlot {
     person: Option<Arc<PersonBridges>>,
     rss_bytes: u64,
+    /// This connection's last activity report; `None` until its first pong.
+    activity: Option<BrainActivity>,
     transport: Arc<SocketBridgeTransport>,
     /// Signals the owning socket task to shut down (single-connection
     /// replacement: the new connection closes the old).
@@ -512,6 +514,15 @@ pub struct BrainActivity {
     pub reported_at_ms: i64,
 }
 
+impl BrainActivity {
+    /// The reported run count while the report is fresh (three heartbeats),
+    /// `None` once a connected brain has gone quiet and the count is unknown.
+    pub fn fresh_runs(&self, now_ms: i64) -> Option<u32> {
+        let fresh_within = 3 * BRAIN_HEARTBEAT.as_millis() as i64;
+        (now_ms - self.reported_at_ms <= fresh_within).then_some(self.active_runs)
+    }
+}
+
 /// The brain's last activity report, `None` while no brain is connected or it
 /// has not reported yet. Reports arrive with each heartbeat pong.
 pub fn brain_activity() -> Option<BrainActivity> {
@@ -566,6 +577,7 @@ fn install_socket_bridge(
                 sync: super::sync_bridge::SyncBridge::new(),
             })),
             rss_bytes: 0,
+            activity: None,
             transport,
             shutdown,
             hello,
@@ -609,6 +621,16 @@ pub fn disconnect_account(account_id: &str) {
 
 pub fn account_connected(account_id: &str) -> bool { SOCKET_BRIDGE.read().contains_key(account_id) }
 pub fn account_rss_bytes(account_id: &str) -> u64 { SOCKET_BRIDGE.read().get(account_id).map_or(0, |slot| slot.rss_bytes) }
+/// A connected brain's last activity report, by account. A person brain's runs
+/// are its member agent turns, which outlive the request that started them.
+pub fn account_activity(account_id: &str) -> Option<BrainActivity> {
+    SOCKET_BRIDGE.read().get(account_id).and_then(|slot| slot.activity)
+}
+/// Every connected person brain's last activity report, `None` for one that
+/// has not reported since it connected.
+pub fn person_activities() -> Vec<Option<BrainActivity>> {
+    SOCKET_BRIDGE.read().values().filter(|slot| slot.person.is_some()).map(|slot| slot.activity).collect()
+}
 pub fn send_account_token_refresh(account_id: &str, token: String) -> Result<(), String> {
     let slots = SOCKET_BRIDGE.read();
     let slot = slots.get(account_id).ok_or("no connected brain")?;
@@ -1207,6 +1229,9 @@ fn handle_brain_frame(
             let mut slots = SOCKET_BRIDGE.write();
             let Some(slot) = slots.get_mut(account_id).filter(|slot| slot.transport.conn_id == transport.conn_id) else { return; };
             slot.rss_bytes = rss_bytes;
+            if let Some(runs) = active_runs {
+                slot.activity = Some(BrainActivity { active_runs: runs, reported_at_ms: now_ms() });
+            }
             if slot.person.is_some() { return; }
             BRAIN_RSS_BYTES.store(rss_bytes, Ordering::SeqCst);
             BRAIN_LAST_FLUSH_AT.store(last_flush_at, Ordering::SeqCst);
@@ -1800,6 +1825,13 @@ pub mod test_support {
             None => super::reset_brain_gauges(None),
         }
     }
+
+    /// Pretend the connected brain of `account_id` reported `runs` at `at_ms`.
+    pub fn report_account_activity_for_testing(account_id: &str, runs: u32, at_ms: i64) {
+        if let Some(slot) = SOCKET_BRIDGE.write().get_mut(account_id) {
+            slot.activity = Some(super::BrainActivity { active_runs: runs, reported_at_ms: at_ms });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1829,6 +1861,17 @@ mod tests {
 
     const SECRET: &[u8] = b"test-secret-32-bytes-exactly____";
     const ACCOUNT_ID: &str = "local_acct_a";
+
+    #[tokio::test]
+    async fn accepted_generation_survives_coalesced_hello_and_disconnect() {
+        let _guard = lock_slot().await;
+        test_support::clear_socket_for_testing();
+        let before = accepted_brain_generation();
+        let _socket = test_support::install_socket_for_testing(&test_state());
+        test_support::clear_socket_for_testing();
+        assert!(!bridge_ready());
+        assert_eq!(accepted_brain_generation(), before + 1);
+    }
 
     fn test_state() -> SharedState {
         Arc::new(CompanionState {
@@ -2675,6 +2718,39 @@ mod tests {
         wait_disconnected().await;
         assert_eq!(brain_rss_bytes(), 0);
         assert_eq!(brain_activity(), None);
+    }
+
+    #[tokio::test]
+    async fn a_person_brain_pong_records_its_own_runs_not_the_operator_gauge() {
+        let _guard = lock_slot().await;
+        test_support::clear_socket_for_testing();
+        let state = test_state();
+        let _person = test_support::install_person_socket_for_testing(&state, "pb_runs");
+        assert_eq!(account_activity("pb_runs"), None, "no report before the first pong");
+        assert_eq!(person_activities(), vec![None]);
+        let transport = SOCKET_BRIDGE.read().get("pb_runs").unwrap().transport.clone();
+        let pong = json!({
+            "v": BRIDGE_PROTOCOL_VERSION, "type": "pong", "ts": 1, "rssBytes": 5, "lastFlushAt": 0, "activeRuns": 3
+        })
+        .to_string();
+        handle_brain_frame(&state, &pong, &transport, "pb_runs");
+        let report = account_activity("pb_runs").expect("reported");
+        assert_eq!(report.active_runs, 3);
+        assert_eq!(person_activities(), vec![Some(report)]);
+        // A member's turns are not the operator brain's runs.
+        assert_eq!(brain_activity(), None);
+        assert_eq!(account_rss_bytes("pb_runs"), 5);
+        test_support::clear_socket_for_testing();
+        assert_eq!(account_activity("pb_runs"), None);
+    }
+
+    #[test]
+    fn an_activity_report_goes_stale_after_three_heartbeats() {
+        let report = BrainActivity { active_runs: 2, reported_at_ms: 1_000 };
+        let window = 3 * BRAIN_HEARTBEAT.as_millis() as i64;
+        assert_eq!(report.fresh_runs(1_000), Some(2));
+        assert_eq!(report.fresh_runs(1_000 + window), Some(2));
+        assert_eq!(report.fresh_runs(1_000 + window + 1), None);
     }
 
     #[tokio::test]

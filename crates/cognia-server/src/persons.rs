@@ -11,7 +11,19 @@ const CONTENT_KEY_SERVICE: &str = "com.cognia.account-content";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Metadata { org: String, user: String, #[serde(default)] data_generation: Option<String> }
-struct Usage { in_flight: AtomicUsize, last_used_ms: AtomicI64 }
+struct Usage {
+    in_flight: AtomicUsize,
+    last_used_ms: AtomicI64,
+    /// When the brain last reported a run of its own (not persisted). A member
+    /// agent turn outlives the request that started it, so `in_flight` alone
+    /// would let the reaper or an eviction stop the brain mid-turn.
+    last_busy_ms: AtomicI64,
+}
+impl Usage {
+    fn last_active_ms(&self) -> i64 {
+        self.last_used_ms.load(Ordering::SeqCst).max(self.last_busy_ms.load(Ordering::SeqCst))
+    }
+}
 struct RequestGuard(Arc<Usage>, PersonReceiptScope);
 impl PersonRequest for RequestGuard { fn receipt_scope(&self) -> PersonReceiptScope { self.1.clone() } }
 impl Drop for RequestGuard {
@@ -58,6 +70,12 @@ pub struct Fleet {
     records_root: parking_lot::Mutex<Option<std::path::PathBuf>>,
 }
 fn now_ms() -> i64 { chrono::Utc::now().timestamp_millis() }
+/// Whether the account's brain says it is running something: its member agent
+/// turns hold execution-broker leases, and the count rides each heartbeat pong.
+/// A report gone stale reads as not running, so a hung brain is still reaped.
+fn reports_runs(account_id: &str, now: i64) -> bool {
+    ws_bridge::account_activity(account_id).and_then(|report| report.fresh_runs(now)).is_some_and(|runs| runs > 0)
+}
 fn positive_env(name: &str, default: u64) -> Result<u64, String> {
     match std::env::var(name) {
         Ok(value) => value.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| format!("{name} must be a positive integer")),
@@ -118,7 +136,7 @@ impl Fleet {
         Ok(fleet)
     }
     fn entry(person: PersonPartition, last: i64) -> Entry {
-        Entry { person, usage: Arc::new(Usage { in_flight: AtomicUsize::new(0), last_used_ms: AtomicI64::new(last) }), supervisor: None, task: None, persisted_last_used_ms: last }
+        Entry { person, usage: Arc::new(Usage { in_flight: AtomicUsize::new(0), last_used_ms: AtomicI64::new(last), last_busy_ms: AtomicI64::new(0) }), supervisor: None, task: None, persisted_last_used_ms: last }
     }
     pub fn start_idle_reaper(self: &Arc<Self>) -> JoinHandle<()> {
         let fleet = Arc::downgrade(self);
@@ -159,10 +177,15 @@ impl Fleet {
     async fn reap(&self) {
         let mut entries = self.entries.lock().await;
         for entry in entries.values_mut() {
-            let last = entry.usage.last_used_ms.load(Ordering::SeqCst);
             self.persist_usage(entry);
+            let now = now_ms();
+            if entry.task.is_some() && reports_runs(&entry.person.account_id, now) {
+                // Idle time counts from the end of the brain's last run.
+                entry.usage.last_busy_ms.store(now, Ordering::SeqCst);
+                continue;
+            }
             if entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
-                && now_ms().saturating_sub(last) as u128 >= self.idle.as_millis() { self.stop_entry(entry).await; }
+                && now.saturating_sub(entry.usage.last_active_ms()) as u128 >= self.idle.as_millis() { self.stop_entry(entry).await; }
         }
         self.refresh(&entries);
     }
@@ -197,8 +220,10 @@ impl PersonBrainFleet for Fleet {
                     if entry.task.is_some() { self.stop_entry(entry).await; }
                 }
                 if entries.values().filter(|entry| entry.task.is_some()).count() >= self.maximum {
-                    let oldest = entries.iter().filter(|(_, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0)
-                        .min_by_key(|(_, entry)| entry.usage.last_used_ms.load(Ordering::SeqCst)).map(|(key, _)| key.clone());
+                    let now = now_ms();
+                    let oldest = entries.iter().filter(|(key, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
+                            && !reports_runs(key, now))
+                        .min_by_key(|(_, entry)| entry.usage.last_active_ms()).map(|(key, _)| key.clone());
                     let Some(oldest) = oldest else { return Err("person_brain_capacity"); };
                     self.stop_entry(entries.get_mut(&oldest).expect("selected entry")).await;
                 }
@@ -427,6 +452,35 @@ mod tests {
         fleet.reap().await;
         assert!(!ws_bridge::account_connected(&b.account_id));
         fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fleet_keeps_a_brain_up_while_it_reports_member_turns() {
+        use cognia_companion::ws_bridge::test_support::report_account_activity_for_testing;
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
+        let a = person("busy-a"); let b = person("busy-b");
+        let _a_socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        // The turn's request returned; the turn runs on in the brain.
+        drop(fleet.acquire(&a).await.unwrap());
+        report_account_activity_for_testing(&a.account_id, 1, now_ms());
+        fleet.entries.lock().await.get(&a.account_id).unwrap().usage.last_used_ms.store(0, Ordering::SeqCst);
+        fleet.reap().await;
+        assert!(ws_bridge::account_connected(&a.account_id), "the reaper stopped a brain mid-turn");
+        let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
+        assert!(matches!(fleet.acquire(&b).await, Err("person_brain_capacity")), "eviction stopped a brain mid-turn");
+        assert!(ws_bridge::account_connected(&a.account_id));
+        // The turn ended: idle time counts from then, not from the last request.
+        report_account_activity_for_testing(&a.account_id, 0, now_ms());
+        fleet.reap().await;
+        assert!(ws_bridge::account_connected(&a.account_id));
+        // A report gone stale is not a reason to keep a brain: it may be hung.
+        let stale = now_ms() - 4 * ws_bridge::BRAIN_HEARTBEAT.as_millis() as i64;
+        report_account_activity_for_testing(&a.account_id, 1, stale);
+        let request = fleet.acquire(&b).await.unwrap();
+        assert!(!ws_bridge::account_connected(&a.account_id));
+        assert!(ws_bridge::account_connected(&b.account_id));
+        drop(request); fleet.shutdown().await;
     }
 
     #[tokio::test]
