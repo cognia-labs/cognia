@@ -3,7 +3,7 @@
 //! this module owns keys, capacity, process lifetime and operator purge.
 use std::{collections::BTreeMap, sync::{Arc, atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering}}, time::Duration};
 use cognia_companion::{person_partition::{PersonPartition, PersonBrainAuthority, PersonBrainFleet, PersonBrainStatus, PersonReceiptScope, PersonRequest}, ws_bridge, SharedState};
-use tokio::{sync::Mutex, task::JoinHandle};
+use tokio::{sync::{watch, Mutex}, task::JoinHandle};
 use crate::brain::{BrainConfig, BrainSupervisor};
 
 const METADATA_SERVICE: &str = "com.cognia.person-brains";
@@ -38,18 +38,46 @@ struct Entry {
     supervisor: Option<Arc<BrainSupervisor>>,
     task: Option<JoinHandle<()>>,
     persisted_last_used_ms: i64,
+    /// Flips to `true` once a stopped brain's process has been joined. Until
+    /// then its data directory and socket slot are still its own.
+    stopped: Option<watch::Receiver<bool>>,
+    /// Set while an operator purge removes this person; nothing starts them.
+    purging: Arc<AtomicBool>,
 }
 impl Entry {
-    async fn stop(&mut self) {
-        if let Some(supervisor) = &self.supervisor { supervisor.shutdown(); }
-        // Keep the handle in the entry while awaiting it. Cancellation leaves
-        // a stopping entry that the next lifecycle operation can finish joining.
-        if let Some(task) = self.task.as_mut() { let _ = task.await; }
-        self.task = None;
-        self.supervisor = None;
-        ws_bridge::disconnect_account(&self.person.account_id);
+    /// Signal the brain to stop and join it in the background, so no caller
+    /// waits for a child process while holding the fleet's lock. The returned
+    /// receiver turns `true` when the brain is gone.
+    fn begin_stop(&mut self) -> Option<watch::Receiver<bool>> {
+        if let Some(supervisor) = self.supervisor.take() { supervisor.shutdown(); }
+        if let Some(task) = self.task.take() {
+            let (done, stopped) = watch::channel(false);
+            let account = self.person.account_id.clone();
+            tokio::spawn(async move {
+                let _ = task.await;
+                ws_bridge::disconnect_account(&account);
+                let _ = done.send(true);
+            });
+            self.stopped = Some(stopped);
+        }
+        self.pending_stop()
     }
+    /// The stop still in progress, if any.
+    fn pending_stop(&self) -> Option<watch::Receiver<bool>> {
+        self.stopped.as_ref().filter(|stopped| !*stopped.borrow()).cloned()
+    }
+    /// Whether this entry still holds a brain: running, or stopping.
+    fn occupies_slot(&self) -> bool { self.task.is_some() || self.pending_stop().is_some() }
 }
+async fn wait_stopped(stopped: Option<watch::Receiver<bool>>) {
+    // A joiner that went away with the runtime has nothing left to wait for.
+    if let Some(mut stopped) = stopped { let _ = stopped.wait_for(|done| *done).await; }
+}
+/// Clears a purge's marker however the purge ends, including cancellation.
+struct PurgeMarker(Arc<AtomicBool>);
+impl Drop for PurgeMarker { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
+/// What one locked pass of `acquire` decided.
+enum Admission { Ready(RequestGuard), Wait(watch::Receiver<bool>) }
 
 pub struct Fleet {
     template: BrainConfig,
@@ -136,7 +164,8 @@ impl Fleet {
         Ok(fleet)
     }
     fn entry(person: PersonPartition, last: i64) -> Entry {
-        Entry { person, usage: Arc::new(Usage { in_flight: AtomicUsize::new(0), last_used_ms: AtomicI64::new(last), last_busy_ms: AtomicI64::new(0) }), supervisor: None, task: None, persisted_last_used_ms: last }
+        Entry { person, usage: Arc::new(Usage { in_flight: AtomicUsize::new(0), last_used_ms: AtomicI64::new(last), last_busy_ms: AtomicI64::new(0) }), supervisor: None, task: None, persisted_last_used_ms: last,
+            stopped: None, purging: Arc::new(AtomicBool::new(false)) }
     }
     pub fn start_idle_reaper(self: &Arc<Self>) -> JoinHandle<()> {
         let fleet = Arc::downgrade(self);
@@ -159,9 +188,11 @@ impl Fleet {
             rss_bytes: ws_bridge::account_rss_bytes(&entry.person.account_id),
         }).collect();
     }
-    async fn stop_entry(&self, entry: &mut Entry) {
+    /// Revoke the brain's bridge authority now and begin stopping it; await
+    /// the result with [`wait_stopped`] after releasing the lock.
+    fn stop_entry(&self, entry: &mut Entry) -> Option<watch::Receiver<bool>> {
         if let Some(authority) = self.active_accounts.write().remove(&entry.person.account_id) { authority.stop(); }
-        entry.stop().await;
+        entry.begin_stop()
     }
 
     fn persist_usage(&self, entry: &mut Entry) {
@@ -175,19 +206,24 @@ impl Fleet {
     }
 
     async fn reap(&self) {
-        let mut entries = self.entries.lock().await;
-        for entry in entries.values_mut() {
-            self.persist_usage(entry);
-            let now = now_ms();
-            if entry.task.is_some() && reports_runs(&entry.person.account_id, now) {
-                // Idle time counts from the end of the brain's last run.
-                entry.usage.last_busy_ms.store(now, Ordering::SeqCst);
-                continue;
+        let stopping: Vec<_> = {
+            let mut entries = self.entries.lock().await;
+            let mut stopping = Vec::new();
+            for entry in entries.values_mut() {
+                self.persist_usage(entry);
+                let now = now_ms();
+                if entry.task.is_some() && reports_runs(&entry.person.account_id, now) {
+                    // Idle time counts from the end of the brain's last run.
+                    entry.usage.last_busy_ms.store(now, Ordering::SeqCst);
+                    continue;
+                }
+                if entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
+                    && now.saturating_sub(entry.usage.last_active_ms()) as u128 >= self.idle.as_millis() { stopping.push(self.stop_entry(entry)); }
             }
-            if entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
-                && now.saturating_sub(entry.usage.last_active_ms()) as u128 >= self.idle.as_millis() { self.stop_entry(entry).await; }
-        }
-        self.refresh(&entries);
+            self.refresh(&entries);
+            stopping
+        };
+        for stopped in stopping { wait_stopped(stopped).await; }
     }
     pub async fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
@@ -201,8 +237,67 @@ impl Fleet {
             tokio::time::sleep(Duration::from_millis(25)).await;
             entries = self.entries.lock().await;
         }
-        for entry in entries.values_mut() { self.persist_usage(entry); self.stop_entry(entry).await; }
+        let mut stopping = Vec::new();
+        for entry in entries.values_mut() { self.persist_usage(entry); stopping.push(self.stop_entry(entry)); }
         self.refresh(&entries);
+        drop(entries);
+        for stopped in stopping { wait_stopped(stopped).await; }
+    }
+
+    /// One pass of `acquire` under the fleet lock. It never waits: a brain
+    /// that must stop first is signalled here and awaited by the caller with
+    /// the lock released, after which the pass runs again on fresh state.
+    fn admit_locked(&self, entries: &mut BTreeMap<String, Entry>, person: &PersonPartition) -> Result<Admission, &'static str> {
+        if let Some(entry) = entries.get(&person.account_id) {
+            if entry.purging.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+            // The person's previous brain is still going; its data is in use.
+            if let Some(stopped) = entry.pending_stop() { return Ok(Admission::Wait(stopped)); }
+        }
+        let running = entries.get(&person.account_id).is_some_and(|entry| entry.task.is_some()
+            && entry.supervisor.as_ref().is_some_and(|sup| !sup.is_stopping()));
+        if !running {
+            if let Some(entry) = entries.get_mut(&person.account_id) {
+                if entry.task.is_some() {
+                    if let Some(stopped) = self.stop_entry(entry) { return Ok(Admission::Wait(stopped)); }
+                }
+            }
+            if entries.values().filter(|entry| entry.occupies_slot()).count() >= self.maximum {
+                let now = now_ms();
+                let oldest = entries.iter().filter(|(key, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
+                        && !reports_runs(key, now))
+                    .min_by_key(|(_, entry)| entry.usage.last_active_ms()).map(|(key, _)| key.clone());
+                // A brain that is already stopping frees its slot soon.
+                let stopped = match oldest {
+                    Some(oldest) => self.stop_entry(entries.get_mut(&oldest).expect("selected entry")),
+                    None => entries.values().find_map(Entry::pending_stop),
+                };
+                return stopped.map(Admission::Wait).ok_or("person_brain_capacity");
+            }
+            let root = self.template.data_dir.join("persons").join(&person.account_id);
+            std::fs::create_dir_all(&root).map_err(|_| "person_brain_unavailable")?;
+            let key_existed = cognia_secrets::secret_store::get(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?.is_some();
+            let key = cognia_companion_rpc::headless::get_or_create_account_content_key(&person.account_id).map_err(|_| "person_brain_unavailable")?;
+            let receipt_scope = if key_existed { self.data_scopes.read().get(&person.account_id).cloned() } else { None }
+                .unwrap_or_else(|| PersonReceiptScope { account_id: person.account_id.clone(), data_generation: uuid::Uuid::new_v4().to_string() });
+            let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()) }).map_err(|_| "person_brain_unavailable")?;
+            cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")?;
+            self.data_scopes.write().insert(person.account_id.clone(), receipt_scope);
+            let mut config = self.template.clone();
+            config.account_id = person.account_id.clone(); config.account_content_key = key; config.data_dir = root;
+            let supervisor = BrainSupervisor::new_person(config, self.state.clone());
+            self.people.write().insert(person.account_id.clone(), person.clone());
+            self.active_accounts.write().insert(person.account_id.clone(), supervisor.person_authority().expect("person supervisor authority"));
+            let task = supervisor.start();
+            let entry = entries.entry(person.account_id.clone()).or_insert_with(|| Self::entry(person.clone(), now_ms()));
+            entry.supervisor = Some(supervisor); entry.task = Some(task); entry.stopped = None;
+            entry.persisted_last_used_ms = 0;
+        }
+        let entry = entries.get(&person.account_id).expect("started entry");
+        entry.usage.in_flight.fetch_add(1, Ordering::SeqCst);
+        entry.usage.last_used_ms.store(now_ms(), Ordering::SeqCst);
+        let guard = RequestGuard(entry.usage.clone(), self.data_scopes.read().get(&person.account_id).expect("persisted person data generation").clone());
+        self.refresh(entries);
+        Ok(Admission::Ready(guard))
     }
 }
 
@@ -210,48 +305,16 @@ impl Fleet {
 impl PersonBrainFleet for Fleet {
     async fn acquire(&self, person: &PersonPartition) -> Result<Box<dyn PersonRequest>, &'static str> {
         if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
-        let guard = {
-            let mut entries = self.entries.lock().await;
-            if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
-            let running = entries.get(&person.account_id).is_some_and(|entry| entry.task.is_some()
-                && entry.supervisor.as_ref().is_some_and(|sup| !sup.is_stopping()));
-            if !running {
-                if let Some(entry) = entries.get_mut(&person.account_id) {
-                    if entry.task.is_some() { self.stop_entry(entry).await; }
+        let guard = loop {
+            let stopped = {
+                let mut entries = self.entries.lock().await;
+                if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+                match self.admit_locked(&mut entries, person)? {
+                    Admission::Ready(guard) => break guard,
+                    Admission::Wait(stopped) => stopped,
                 }
-                if entries.values().filter(|entry| entry.task.is_some()).count() >= self.maximum {
-                    let now = now_ms();
-                    let oldest = entries.iter().filter(|(key, entry)| entry.task.is_some() && entry.usage.in_flight.load(Ordering::SeqCst) == 0
-                            && !reports_runs(key, now))
-                        .min_by_key(|(_, entry)| entry.usage.last_active_ms()).map(|(key, _)| key.clone());
-                    let Some(oldest) = oldest else { return Err("person_brain_capacity"); };
-                    self.stop_entry(entries.get_mut(&oldest).expect("selected entry")).await;
-                }
-                let root = self.template.data_dir.join("persons").join(&person.account_id);
-                std::fs::create_dir_all(&root).map_err(|_| "person_brain_unavailable")?;
-                let key_existed = cognia_secrets::secret_store::get(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?.is_some();
-                let key = cognia_companion_rpc::headless::get_or_create_account_content_key(&person.account_id).map_err(|_| "person_brain_unavailable")?;
-                let receipt_scope = if key_existed { self.data_scopes.read().get(&person.account_id).cloned() } else { None }
-                    .unwrap_or_else(|| PersonReceiptScope { account_id: person.account_id.clone(), data_generation: uuid::Uuid::new_v4().to_string() });
-                let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()) }).map_err(|_| "person_brain_unavailable")?;
-                cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")?;
-                self.data_scopes.write().insert(person.account_id.clone(), receipt_scope);
-                let mut config = self.template.clone();
-                config.account_id = person.account_id.clone(); config.account_content_key = key; config.data_dir = root;
-                let supervisor = BrainSupervisor::new_person(config, self.state.clone());
-                self.people.write().insert(person.account_id.clone(), person.clone());
-                self.active_accounts.write().insert(person.account_id.clone(), supervisor.person_authority().expect("person supervisor authority"));
-                let task = supervisor.start();
-                let entry = entries.entry(person.account_id.clone()).or_insert_with(|| Self::entry(person.clone(), now_ms()));
-                entry.supervisor = Some(supervisor); entry.task = Some(task);
-                entry.persisted_last_used_ms = 0;
-            }
-            let entry = entries.get(&person.account_id).expect("started entry");
-            entry.usage.in_flight.fetch_add(1, Ordering::SeqCst);
-            entry.usage.last_used_ms.store(now_ms(), Ordering::SeqCst);
-            let guard = RequestGuard(entry.usage.clone(), self.data_scopes.read().get(&person.account_id).expect("persisted person data generation").clone());
-            self.refresh(&entries);
-            guard
+            };
+            wait_stopped(Some(stopped)).await;
         };
         let deadline = tokio::time::Instant::now() + self.template.ready_timeout;
         loop {
@@ -294,11 +357,45 @@ impl PersonBrainFleet for Fleet {
     }
     async fn purge(&self, person: &PersonPartition) -> Result<(), &'static str> {
         let _person_execution = cognia_companion::host_surface_gate::person_execution_lock(&person.account_id).lock_owned().await;
+        // The marker, not the fleet lock, keeps this person from starting while
+        // their data goes: the rest of the fleet keeps serving meanwhile.
+        let (marker, stopped) = {
+            let mut entries = self.entries.lock().await;
+            if entries.get(&person.account_id).is_some_and(|entry| entry.usage.in_flight.load(Ordering::SeqCst) != 0) {
+                return Err("person_brain_busy");
+            }
+            // Purges of one person are serialized by its execution lock.
+            let entry = entries.entry(person.account_id.clone()).or_insert_with(|| Self::entry(person.clone(), 0));
+            entry.purging.store(true, Ordering::SeqCst);
+            (PurgeMarker(entry.purging.clone()), self.stop_entry(entry))
+        };
+        wait_stopped(stopped).await;
+        let result = self.purge_stopped(person).await;
         let mut entries = self.entries.lock().await;
-        if let Some(entry) = entries.get_mut(&person.account_id) {
-            if entry.usage.in_flight.load(Ordering::SeqCst) != 0 { return Err("person_brain_busy"); }
-            self.stop_entry(entry).await;
+        if result.is_ok() {
+            entries.remove(&person.account_id);
+            self.people.write().remove(&person.account_id);
+            self.data_scopes.write().remove(&person.account_id);
+        } else if entries.get(&person.account_id).is_some_and(|entry| entry.task.is_none() && entry.stopped.is_none()
+            && !self.people.read().contains_key(&person.account_id)) {
+            // A placeholder for a person the fleet never knew.
+            entries.remove(&person.account_id);
         }
+        drop(marker);
+        self.refresh(&entries);
+        drop(entries);
+        if result.is_ok() {
+            cognia_companion::audit::record_async("person_partition_purge", "local-operator", "service", "allow",
+                serde_json::json!({ "accountId": person.account_id })).await;
+        }
+        result
+    }
+}
+
+impl Fleet {
+    /// The purge's data removal, with the person's brain already stopped and
+    /// their purge marker set.
+    async fn purge_stopped(&self, person: &PersonPartition) -> Result<(), &'static str> {
         let records = self.execution_records_root();
         let stopped = cognia_companion::host_surface_gate::person_stop_execution(records.as_deref(), person,
             self.person_exec.as_ref(), Duration::from_secs(10)).await.map_err(|code| {
@@ -323,12 +420,6 @@ impl PersonBrainFleet for Fleet {
             Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}, Err(_) => return Err("person_brain_unavailable"),
         }
         cognia_secrets::secret_store::delete(METADATA_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?;
-        entries.remove(&person.account_id);
-        self.people.write().remove(&person.account_id);
-        self.data_scopes.write().remove(&person.account_id);
-        self.refresh(&entries);
-        cognia_companion::audit::record_async("person_partition_purge", "local-operator", "service", "allow",
-            serde_json::json!({ "accountId": person.account_id })).await;
         Ok(())
     }
 }
@@ -481,6 +572,74 @@ mod tests {
         assert!(!ws_bridge::account_connected(&a.account_id));
         assert!(ws_bridge::account_connected(&b.account_id));
         drop(request); fleet.shutdown().await;
+    }
+
+    /// An entry whose brain process exits only when the returned sender fires.
+    async fn slow_to_stop(fleet: &Fleet, person: &PersonPartition) -> tokio::sync::oneshot::Sender<()> {
+        let (exit, exited) = tokio::sync::oneshot::channel::<()>();
+        let mut entry = Fleet::entry(person.clone(), 0);
+        entry.task = Some(tokio::spawn(async move { let _ = exited.await; }));
+        fleet.people.write().insert(person.account_id.clone(), person.clone());
+        fleet.entries.lock().await.insert(person.account_id.clone(), entry);
+        exit
+    }
+
+    #[tokio::test]
+    async fn fleet_stops_brains_without_holding_its_lock() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let a = person("slow-stop-a"); let b = person("slow-stop-b");
+        let exit = slow_to_stop(&fleet, &a).await;
+        // The reaper stops the idle brain and waits for its process...
+        let reaping = { let fleet = fleet.clone(); tokio::spawn(async move { fleet.reap().await }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!reaping.is_finished());
+        // ...while every other member is still served.
+        let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
+        let b_request = tokio::time::timeout(Duration::from_secs(5), fleet.acquire(&b)).await
+            .expect("another member waited on a stopping brain").unwrap();
+        // The same member waits for their old brain: its data is still in use.
+        let _a_socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        let a_attempt = { let fleet = fleet.clone(); let a = a.clone(); tokio::spawn(async move { fleet.acquire(&a).await.map(drop) }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!a_attempt.is_finished());
+        assert!(fleet.entries.lock().await.get(&a.account_id).unwrap().task.is_none(), "a second brain started over the first");
+        exit.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), reaping).await.unwrap().unwrap();
+        // Joining the old brain disconnected its slot; the restarted one reconnects.
+        let _a_socket = install_person_socket_for_testing(&fleet.state, &a.account_id);
+        tokio::time::timeout(Duration::from_secs(5), a_attempt).await.unwrap().unwrap().unwrap();
+        drop(b_request); fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_purge_holds_only_its_own_person_while_their_brain_stops() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let a = person("slow-purge-a"); let b = person("slow-purge-b");
+        std::fs::create_dir_all(temp.path().join("persons").join(&a.account_id)).unwrap();
+        let exit = slow_to_stop(&fleet, &a).await;
+        let purging = { let fleet = fleet.clone(); let a = a.clone(); tokio::spawn(async move { fleet.purge(&a).await }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!purging.is_finished());
+        // Nothing restarts the member being removed...
+        assert_eq!(fleet.acquire(&a).await.err(), Some("person_brain_unavailable"));
+        // ...and nobody else waits for the purge.
+        let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
+        drop(tokio::time::timeout(Duration::from_secs(5), fleet.acquire(&b)).await.unwrap().unwrap());
+        exit.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(15), purging).await.unwrap().unwrap().unwrap();
+        assert!(fleet.entries.lock().await.get(&a.account_id).is_none());
+        assert!(fleet.person(&a.account_id).is_none());
+        assert!(!temp.path().join("persons").join(&a.account_id).exists());
+        // A cancelled purge leaves no marker behind.
+        let c = person("slow-purge-c");
+        let exit = slow_to_stop(&fleet, &c).await;
+        let cancelled = { let fleet = fleet.clone(); let c = c.clone(); tokio::spawn(async move { fleet.purge(&c).await }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancelled.abort(); let _ = cancelled.await;
+        assert!(!fleet.entries.lock().await.get(&c.account_id).unwrap().purging.load(Ordering::SeqCst));
+        drop(exit); fleet.shutdown().await;
     }
 
     #[tokio::test]
