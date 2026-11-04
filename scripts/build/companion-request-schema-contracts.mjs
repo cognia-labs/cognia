@@ -212,6 +212,7 @@ const taskExecutionConfig = z.object({
 })
 
 const taskNotification = z.object({
+  dueReminder: z.boolean().optional(),
   onStart: z.boolean().optional(),
   onComplete: z.boolean().optional(),
   onError: z.boolean().optional(),
@@ -229,8 +230,11 @@ const taskCreator = z.object({
 
 const taskPayload = z.record(z.string(), z.unknown())
 const createScheduledTaskInput = z.object({
+  id: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
+  projectId: z.string().min(1).optional(),
+  workspaceResolved: z.boolean().optional(),
   type: scheduledTaskType,
   trigger: taskTrigger,
   payload: taskPayload.optional(),
@@ -246,6 +250,7 @@ const createScheduledTaskInput = z.object({
 const updateScheduledTaskInput = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
+  projectId: z.string().min(1).nullable().optional(),
   trigger: taskTrigger.optional(),
   payload: taskPayload.optional(),
   config: taskExecutionConfig.optional(),
@@ -257,7 +262,7 @@ const updateScheduledTaskInput = z.object({
   onFailureTaskIds: stringArray.optional(),
 })
 
-const scheduledTask = createScheduledTaskInput.extend({
+const scheduledTask = createScheduledTaskInput.omit({ workspaceResolved: true }).extend({
   id: z.string().min(1),
   config: taskExecutionConfig.extend({
     timeout: z.number().int().positive(),
@@ -282,6 +287,7 @@ const scheduledTask = createScheduledTaskInput.extend({
   lastTerminalReason: z.string().optional(),
   lastTerminalAt: z.string().optional(),
   consecutiveFailures: z.number().int().nonnegative().optional(),
+  humanRevision: z.number().int().nonnegative().optional(),
   // The owning workspace travels; the importing host refuses the task when it
   // has no such workspace (ADR-0224).
   projectId: z.string().min(1).optional(),
@@ -988,6 +994,7 @@ const schemas = {
         status: scheduledTaskStatus.optional(),
         tags: stringArray.optional(),
         search: z.string().optional(),
+        projectId: z.string().min(1).optional(),
       })
       .optional(),
   }),

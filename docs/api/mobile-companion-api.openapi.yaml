@@ -121527,11 +121527,19 @@ paths:
                 input:
                   type: object
                   properties:
+                    id:
+                      type: string
+                      minLength: 1
                     name:
                       type: string
                       minLength: 1
                     description:
                       type: string
+                    projectId:
+                      type: string
+                      minLength: 1
+                    workspaceResolved:
+                      type: boolean
                     type:
                       type: string
                       enum:
@@ -121728,6 +121736,8 @@ paths:
                     notification:
                       type: object
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:
@@ -122733,11 +122743,17 @@ paths:
                       items:
                         type: object
                         properties:
+                          id:
+                            type: string
+                            minLength: 1
                           name:
                             type: string
                             minLength: 1
                           description:
                             type: string
+                          projectId:
+                            type: string
+                            minLength: 1
                           type:
                             type: string
                             enum:
@@ -122939,6 +122955,8 @@ paths:
                           notification:
                             type: object
                             properties:
+                              dueReminder:
+                                type: boolean
                               onStart:
                                 type: boolean
                               onComplete:
@@ -123003,9 +123021,6 @@ paths:
                             type: array
                             items:
                               type: string
-                          id:
-                            type: string
-                            minLength: 1
                           status:
                             type: string
                             enum:
@@ -123045,9 +123060,10 @@ paths:
                             type: integer
                             minimum: 0
                             maximum: 9007199254740991
-                          projectId:
-                            type: string
-                            minLength: 1
+                          humanRevision:
+                            type: integer
+                            minimum: 0
+                            maximum: 9007199254740991
                           promotion:
                             type: object
                             propertyNames:
@@ -123067,12 +123083,12 @@ paths:
                             additionalProperties: {}
                             example: {}
                         required:
+                          - id
                           - name
                           - type
                           - trigger
                           - config
                           - notification
-                          - id
                           - status
                           - runCount
                           - successCount
@@ -123358,6 +123374,9 @@ paths:
                         type: string
                     search:
                       type: string
+                    projectId:
+                      type: string
+                      minLength: 1
                   additionalProperties: false
               additionalProperties: false
       responses:
@@ -124659,6 +124678,11 @@ paths:
                       type: string
                     description:
                       type: string
+                    projectId:
+                      anyOf:
+                        - type: string
+                          minLength: 1
+                        - type: "null"
                     trigger:
                       oneOf:
                         - type: object
@@ -124813,6 +124837,8 @@ paths:
                     notification:
                       type: object
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:

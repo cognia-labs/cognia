@@ -12,6 +12,7 @@
 
 import type { AppSettings, ChatSession, UtilityModelConfig } from "@cognia/agent-config-types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
+import { getBuiltInProviderDefaultBaseURL } from "@cognia/provider-types/built-in-provider-catalog"
 import {
   buildRendererLlmClient,
   type BuildRendererLlmClientArgs,
@@ -53,6 +54,16 @@ export function inferCheapModel(
   appSettings: AppSettings | null | undefined
 ): string | undefined {
   const providerId = session?.providerOverride ?? appSettings?.defaultProvider ?? "anthropic"
+  const baseURL = appSettings?.providerSettings?.[providerId]?.baseURL
+  const normalize = (url: string) => url.trim().replace(/\/+$/, "")
+  // A relay can expose a restricted catalog. Public-provider cheap model ids
+  // are not evidence that this endpoint offers them; inherit its chosen model.
+  if (
+    baseURL &&
+    normalize(baseURL) !== normalize(getBuiltInProviderDefaultBaseURL(providerId) ?? "")
+  ) {
+    return undefined
+  }
   return UTILITY_CHEAP_MODELS[providerId]
 }
 

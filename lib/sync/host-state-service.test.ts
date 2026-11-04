@@ -212,6 +212,86 @@ describe("HostStateService", () => {
     __resetDbForTesting()
   })
 
+  it("hydrates one owned utility channel without replacing the shared Host sync", async () => {
+    const { hydrateHostStateSession } = await import("./host-state-service")
+    const state = createEmptyHostStateSession(channel, "session-1")
+    const snapshot = {
+      channel,
+      hostId,
+      hostGeneration: 4,
+      cutHostSeq: 8,
+      revision: state.revision,
+      digest: hostStateDigest(state),
+      state,
+    }
+    const call = jest.fn(async () => snapshot)
+    const offeredBefore = hostStateActionOffered("session.create", scope.runtimeTargetId)
+    await hydrateHostStateSession({
+      transport: { call, subscribe: jest.fn() } as unknown as Transport,
+      ...scope,
+      sessionId: "session-1",
+      assertCurrent: () => {},
+    })
+    expect(call).toHaveBeenCalledWith("host_state_snapshot", { ...scope, channel })
+    expect((await getDb().hostStateChannels.get(channel))?.hostGeneration).toBe(4)
+    expect(hostStateActionOffered("session.create", scope.runtimeTargetId)).toBe(offeredBefore)
+  })
+
+  it("rejects late utility snapshots after the device or target changes", async () => {
+    const { hydrateHostStateSession } = await import("./host-state-service")
+    let current = true
+    const state = createEmptyHostStateSession(channel, "session-1")
+    const call = jest.fn(async () => {
+      current = false
+      return {
+        channel,
+        hostId,
+        hostGeneration: 4,
+        cutHostSeq: 8,
+        revision: state.revision,
+        digest: hostStateDigest(state),
+        state,
+      }
+    })
+    await expect(
+      hydrateHostStateSession({
+        transport: { call } as unknown as Transport,
+        ...scope,
+        sessionId: "session-1",
+        assertCurrent: () => {
+          if (!current) throw new Error("Host changed")
+        },
+      })
+    ).rejects.toThrow("Host changed")
+    expect(await getDb().hostStateChannels.get(channel)).toBeUndefined()
+  })
+
+  it("refuses a different session channel in a utility snapshot", async () => {
+    const { hydrateHostStateSession } = await import("./host-state-service")
+    const state = createEmptyHostStateSession(
+      sessionStateChannel(scope.runtimeTargetId, "other-session"),
+      "other-session"
+    )
+    const call = jest.fn(async () => ({
+      channel: state.channel,
+      hostId,
+      hostGeneration: 4,
+      cutHostSeq: 8,
+      revision: state.revision,
+      digest: hostStateDigest(state),
+      state,
+    }))
+    await expect(
+      hydrateHostStateSession({
+        transport: { call } as unknown as Transport,
+        ...scope,
+        sessionId: "session-1",
+        assertCurrent: () => {},
+      })
+    ).rejects.toThrow("host_state_snapshot_malformed")
+    expect(await getDb().hostStateChannels.get(channel)).toBeUndefined()
+  })
+
   it("marks new rows hydrated from a Host index without relabeling existing local sessions", async () => {
     const indexChannel = sessionIndexChannel(scope.runtimeTargetId)
     const state = {

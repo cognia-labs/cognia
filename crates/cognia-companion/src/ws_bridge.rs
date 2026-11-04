@@ -362,6 +362,12 @@ struct BridgeSlot {
 }
 
 static CONN_COUNTER: AtomicU64 = AtomicU64::new(1);
+// Unlike READY, this survives a hello immediately followed by disconnect.
+static ACCEPTED_BRAIN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn accepted_brain_generation() -> u64 {
+    ACCEPTED_BRAIN_GENERATION.load(Ordering::SeqCst)
+}
 
 static SOCKET_BRIDGE: Lazy<RwLock<HashMap<String, BridgeSlot>>> = Lazy::new(|| RwLock::new(HashMap::new()));
 
@@ -567,6 +573,7 @@ fn install_socket_bridge(
             .any(|capability| capability == "runtime-health")
             .then_some(false);
         if !person { reset_brain_gauges(bootstrapped); }
+        if !person { ACCEPTED_BRAIN_GENERATION.fetch_add(1, Ordering::SeqCst); }
         let old_key = if person { Some(hello.account_id.clone()) }
             else { slot.iter().find(|(_, slot)| slot.person.is_none()).map(|(account, _)| account.clone()) };
         let old = old_key.and_then(|key| slot.remove(&key));

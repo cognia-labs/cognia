@@ -2193,19 +2193,20 @@ fn stream_events_once(
                     )
                     .with_exit(6)
                 })?;
-                match frame.get("type").and_then(Value::as_str) {
-                    Some("ping") => {
-                        socket
-                            .send(Message::Text(r#"{"type":"pong"}"#.into()))
-                            .map_err(|_| {
-                                HostFailure::transport(
-                                    "event_pong_failed",
-                                    "could not reply to event heartbeat",
-                                )
-                            })?;
-                    }
-                    Some("resync_required") => {
-                        return Err(
+                for frame in expand_event_frames(frame)? {
+                    match frame.get("type").and_then(Value::as_str) {
+                        Some("ping") => {
+                            socket
+                                .send(Message::Text(r#"{"type":"pong"}"#.into()))
+                                .map_err(|_| {
+                                    HostFailure::transport(
+                                        "event_pong_failed",
+                                        "could not reply to event heartbeat",
+                                    )
+                                })?;
+                        }
+                        Some("resync_required") => {
+                            return Err(
                             HostFailure::new(
                                 "resync",
                                 "resync_required",
@@ -2217,19 +2218,19 @@ fn stream_events_once(
                                 "lastSeen": last_seq,
                             })),
                         );
-                    }
-                    Some(event_type) => {
-                        if let Some(seq) = frame.get("seq").and_then(Value::as_u64) {
-                            last_seq = Some(seq);
                         }
-                        if filters.is_empty() || filters.contains(event_type) {
-                            let line = match query {
-                                None => serde_json::to_string(&frame)
-                                    .unwrap_or_else(|_| frame.to_string()),
-                                Some(expression) => {
-                                    let selected =
-                                        crate::shared::json_path::project(&frame, expression)
-                                            .map_err(|message| {
+                        Some(event_type) => {
+                            if let Some(seq) = frame.get("seq").and_then(Value::as_u64) {
+                                last_seq = Some(seq);
+                            }
+                            if filters.is_empty() || filters.contains(event_type) {
+                                let line = match query {
+                                    None => serde_json::to_string(&frame)
+                                        .unwrap_or_else(|_| frame.to_string()),
+                                    Some(expression) => {
+                                        let selected =
+                                            crate::shared::json_path::project(&frame, expression)
+                                                .map_err(|message| {
                                                 HostFailure::new(
                                                     "server",
                                                     "event_projection_failed",
@@ -2237,18 +2238,19 @@ fn stream_events_once(
                                                 )
                                                 .with_exit(6)
                                             })?;
-                                    serde_json::to_string(&selected)
-                                        .unwrap_or_else(|_| selected.to_string())
+                                        serde_json::to_string(&selected)
+                                            .unwrap_or_else(|_| selected.to_string())
+                                    }
+                                };
+                                println!("{line}");
+                                count += 1;
+                                if remaining.is_some_and(|limit| count >= limit) {
+                                    return Ok(StreamResult::LimitReached { last_seq, count });
                                 }
-                            };
-                            println!("{line}");
-                            count += 1;
-                            if remaining.is_some_and(|limit| count >= limit) {
-                                return Ok(StreamResult::LimitReached { last_seq, count });
                             }
                         }
+                        None => {}
                     }
-                    None => {}
                 }
             }
             Ok(Message::Ping(data)) => {
@@ -2263,6 +2265,21 @@ fn stream_events_once(
     }
     let _ = socket.close(None);
     Ok(StreamResult::Stopped)
+}
+
+fn expand_event_frames(frame: Value) -> std::result::Result<Vec<Value>, HostFailure> {
+    if frame.get("type").and_then(Value::as_str) != Some("event_batch") {
+        return Ok(vec![frame]);
+    }
+    match frame.get("frames") {
+        Some(Value::Array(frames)) => Ok(frames.clone()),
+        _ => Err(HostFailure::new(
+            "server",
+            "invalid_event_frame",
+            "Headless event batch must contain a frames array",
+        )
+        .with_exit(6)),
+    }
 }
 
 fn connect_loopback(host: &str, port: u16) -> std::result::Result<TcpStream, HostFailure> {
@@ -3043,6 +3060,48 @@ mod tests {
         let error = read_data(Some(&format!("@{}", oversized_path.display())))
             .expect_err("oversized request");
         assert_eq!(error.code, "request_body_too_large");
+    }
+
+    #[test]
+    fn event_batches_expand_before_filtering_and_counting() {
+        let first =
+            json!({"type": "claude://message", "seq": 41, "payload": {"type": "assistant"}});
+        let second = json!({"type": "claude://message", "seq": 42, "payload": {"type": "result"}});
+        let frames = expand_event_frames(json!({
+            "type": "event_batch", "channel": "claude://message", "seq_from": 41, "seq_to": 42,
+            "frames": [first.clone(), second.clone()]
+        }))
+        .unwrap();
+        let filters = HashSet::from(["claude://message"]);
+        let selected: Vec<_> = frames
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| filters.contains(kind))
+            })
+            .collect();
+        assert_eq!(selected, vec![&first, &second]);
+        assert_eq!(selected.last().unwrap()["seq"], 42);
+    }
+
+    #[test]
+    fn single_events_remain_unchanged() {
+        let event = json!({"type": "claude://message", "seq": 5, "payload": {"type": "assistant"}});
+        assert_eq!(expand_event_frames(event.clone()).unwrap(), vec![event]);
+    }
+
+    #[test]
+    fn malformed_event_batches_fail_without_reconnecting() {
+        for frame in [
+            json!({"type": "event_batch"}),
+            json!({"type": "event_batch", "frames": "invalid"}),
+        ] {
+            let error = expand_event_frames(frame).unwrap_err();
+            assert_eq!(error.code, "invalid_event_frame");
+            assert!(!is_retryable_stream_failure(&error));
+        }
     }
 
     #[test]

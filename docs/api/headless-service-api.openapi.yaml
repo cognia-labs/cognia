@@ -6518,6 +6518,9 @@ paths:
                     type:
                       - integer
                       - "null"
+                  processGroupRunning:
+                    type: boolean
+                    description: Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty.
                   startedAtMs:
                     type: integer
                   endedAtMs:
@@ -6805,6 +6808,9 @@ paths:
                           type:
                             - integer
                             - "null"
+                        processGroupRunning:
+                          type: boolean
+                          description: Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty.
                         startedAtMs:
                           type: integer
                         endedAtMs:
@@ -6820,6 +6826,10 @@ paths:
                             - string
                             - "null"
                       additionalProperties: false
+                  originSessionId:
+                    type: string
+                    description: "Present only for an includeOrigin read: the origin session whose jobs (including promoted ones) this list
+                      covers."
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
@@ -7247,6 +7257,9 @@ paths:
                     type:
                       - integer
                       - "null"
+                  processGroupRunning:
+                    type: boolean
+                    description: Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty.
                   startedAtMs:
                     type: integer
                   endedAtMs:
@@ -7518,6 +7531,9 @@ paths:
                     type:
                       - integer
                       - "null"
+                  processGroupRunning:
+                    type: boolean
+                    description: Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty.
                   startedAtMs:
                     type: integer
                   endedAtMs:
@@ -27289,13 +27305,17 @@ paths:
             application/json:
               schema:
                 type: object
-                x-cognia-wire-source: crate::claude::commands::SidecarStatus — derives Serialize with NO rename_all, and has exactly one
-                  field.
+                x-cognia-wire-source: cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry,
+                  optional for older hosts.
                 required:
                   - ready
                 properties:
                   ready:
                     type: boolean
+                  liveSessionIds:
+                    type: array
+                    items:
+                      type: string
                 additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
@@ -164698,6 +164718,38 @@ paths:
                             type: string
                           data: {}
                         additionalProperties: false
+                    phases:
+                      type: array
+                      items:
+                        type: object
+                        x-cognia-wire-source: types/scheduler TaskExecutionPhase
+                        required:
+                          - name
+                          - startOffsetMs
+                          - durationMs
+                        properties:
+                          name:
+                            type: string
+                            enum:
+                              - fire-delay
+                              - executor-load
+                              - session
+                              - send-options
+                              - workspace-lease
+                              - environment-setup
+                              - first-response
+                              - turn
+                          startOffsetMs:
+                            type: number
+                          durationMs:
+                            type: number
+                            minimum: 0
+                          outcome:
+                            type: string
+                            enum:
+                              - reused
+                              - joined
+                        additionalProperties: false
                   additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
@@ -165231,11 +165283,19 @@ paths:
                 input:
                   type: object
                   properties:
+                    id:
+                      type: string
+                      minLength: 1
                     name:
                       type: string
                       minLength: 1
                     description:
                       type: string
+                    projectId:
+                      type: string
+                      minLength: 1
+                    workspaceResolved:
+                      type: boolean
                     type:
                       type: string
                       enum:
@@ -165432,6 +165492,8 @@ paths:
                     notification:
                       type: object
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:
@@ -165526,6 +165588,69 @@ paths:
                 properties:
                   id:
                     type: string
+                  projectId:
+                    type: string
+                  humanRevision:
+                    type: integer
+                    minimum: 0
+                  owner:
+                    oneOf:
+                      - type: object
+                        properties:
+                          kind:
+                            const: this-device
+                          reason:
+                            type: string
+                            enum:
+                              - manual
+                              - machine-bound
+                          pinnedAt:
+                            type: number
+                        required:
+                          - kind
+                          - reason
+                          - pinnedAt
+                        additionalProperties: false
+                      - type: object
+                        properties:
+                          kind:
+                            const: remote-host
+                          hostId:
+                            type: string
+                          hostLabel:
+                            type: string
+                          remoteItemId:
+                            type: string
+                          operationId:
+                            type: string
+                          movedAt:
+                            type: number
+                        required:
+                          - kind
+                          - hostId
+                          - hostLabel
+                          - remoteItemId
+                          - operationId
+                          - movedAt
+                        additionalProperties: false
+                  provenance:
+                    type: object
+                    properties:
+                      kind:
+                        type: string
+                        enum:
+                          - import
+                          - migration
+                      at:
+                        type: number
+                      sourceLabel:
+                        type: string
+                      operationId:
+                        type: string
+                    required:
+                      - kind
+                      - at
+                    additionalProperties: false
                   name:
                     type: string
                   description:
@@ -165658,6 +165783,8 @@ paths:
                       - onComplete
                       - onError
                     properties:
+                      dueReminder:
+                        type: boolean
                       onStart:
                         type: boolean
                       onComplete:
@@ -166318,6 +166445,69 @@ paths:
                       properties:
                         id:
                           type: string
+                        projectId:
+                          type: string
+                        humanRevision:
+                          type: integer
+                          minimum: 0
+                        owner:
+                          oneOf:
+                            - type: object
+                              properties:
+                                kind:
+                                  const: this-device
+                                reason:
+                                  type: string
+                                  enum:
+                                    - manual
+                                    - machine-bound
+                                pinnedAt:
+                                  type: number
+                              required:
+                                - kind
+                                - reason
+                                - pinnedAt
+                              additionalProperties: false
+                            - type: object
+                              properties:
+                                kind:
+                                  const: remote-host
+                                hostId:
+                                  type: string
+                                hostLabel:
+                                  type: string
+                                remoteItemId:
+                                  type: string
+                                operationId:
+                                  type: string
+                                movedAt:
+                                  type: number
+                              required:
+                                - kind
+                                - hostId
+                                - hostLabel
+                                - remoteItemId
+                                - operationId
+                                - movedAt
+                              additionalProperties: false
+                        provenance:
+                          type: object
+                          properties:
+                            kind:
+                              type: string
+                              enum:
+                                - import
+                                - migration
+                            at:
+                              type: number
+                            sourceLabel:
+                              type: string
+                            operationId:
+                              type: string
+                          required:
+                            - kind
+                            - at
+                          additionalProperties: false
                         name:
                           type: string
                         description:
@@ -166450,6 +166640,8 @@ paths:
                             - onComplete
                             - onError
                           properties:
+                            dueReminder:
+                              type: boolean
                             onStart:
                               type: boolean
                             onComplete:
@@ -166752,6 +166944,69 @@ paths:
                     properties:
                       id:
                         type: string
+                      projectId:
+                        type: string
+                      humanRevision:
+                        type: integer
+                        minimum: 0
+                      owner:
+                        oneOf:
+                          - type: object
+                            properties:
+                              kind:
+                                const: this-device
+                              reason:
+                                type: string
+                                enum:
+                                  - manual
+                                  - machine-bound
+                              pinnedAt:
+                                type: number
+                            required:
+                              - kind
+                              - reason
+                              - pinnedAt
+                            additionalProperties: false
+                          - type: object
+                            properties:
+                              kind:
+                                const: remote-host
+                              hostId:
+                                type: string
+                              hostLabel:
+                                type: string
+                              remoteItemId:
+                                type: string
+                              operationId:
+                                type: string
+                              movedAt:
+                                type: number
+                            required:
+                              - kind
+                              - hostId
+                              - hostLabel
+                              - remoteItemId
+                              - operationId
+                              - movedAt
+                            additionalProperties: false
+                      provenance:
+                        type: object
+                        properties:
+                          kind:
+                            type: string
+                            enum:
+                              - import
+                              - migration
+                          at:
+                            type: number
+                          sourceLabel:
+                            type: string
+                          operationId:
+                            type: string
+                        required:
+                          - kind
+                          - at
+                        additionalProperties: false
                       name:
                         type: string
                       description:
@@ -166884,6 +167139,8 @@ paths:
                           - onComplete
                           - onError
                         properties:
+                          dueReminder:
+                            type: boolean
                           onStart:
                             type: boolean
                           onComplete:
@@ -167169,11 +167426,17 @@ paths:
                       items:
                         type: object
                         properties:
+                          id:
+                            type: string
+                            minLength: 1
                           name:
                             type: string
                             minLength: 1
                           description:
                             type: string
+                          projectId:
+                            type: string
+                            minLength: 1
                           type:
                             type: string
                             enum:
@@ -167375,6 +167638,8 @@ paths:
                           notification:
                             type: object
                             properties:
+                              dueReminder:
+                                type: boolean
                               onStart:
                                 type: boolean
                               onComplete:
@@ -167439,9 +167704,6 @@ paths:
                             type: array
                             items:
                               type: string
-                          id:
-                            type: string
-                            minLength: 1
                           status:
                             type: string
                             enum:
@@ -167481,9 +167743,10 @@ paths:
                             type: integer
                             minimum: 0
                             maximum: 9007199254740991
-                          projectId:
-                            type: string
-                            minLength: 1
+                          humanRevision:
+                            type: integer
+                            minimum: 0
+                            maximum: 9007199254740991
                           promotion:
                             type: object
                             propertyNames:
@@ -167503,12 +167766,12 @@ paths:
                             additionalProperties: {}
                             example: {}
                         required:
+                          - id
                           - name
                           - type
                           - trigger
                           - config
                           - notification
-                          - id
                           - status
                           - runCount
                           - successCount
@@ -167791,6 +168054,9 @@ paths:
                         type: string
                     search:
                       type: string
+                    projectId:
+                      type: string
+                      minLength: 1
                   additionalProperties: false
               additionalProperties: false
       responses:
@@ -167821,6 +168087,69 @@ paths:
                   properties:
                     id:
                       type: string
+                    projectId:
+                      type: string
+                    humanRevision:
+                      type: integer
+                      minimum: 0
+                    owner:
+                      oneOf:
+                        - type: object
+                          properties:
+                            kind:
+                              const: this-device
+                            reason:
+                              type: string
+                              enum:
+                                - manual
+                                - machine-bound
+                            pinnedAt:
+                              type: number
+                          required:
+                            - kind
+                            - reason
+                            - pinnedAt
+                          additionalProperties: false
+                        - type: object
+                          properties:
+                            kind:
+                              const: remote-host
+                            hostId:
+                              type: string
+                            hostLabel:
+                              type: string
+                            remoteItemId:
+                              type: string
+                            operationId:
+                              type: string
+                            movedAt:
+                              type: number
+                          required:
+                            - kind
+                            - hostId
+                            - hostLabel
+                            - remoteItemId
+                            - operationId
+                            - movedAt
+                          additionalProperties: false
+                    provenance:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - import
+                            - migration
+                        at:
+                          type: number
+                        sourceLabel:
+                          type: string
+                        operationId:
+                          type: string
+                      required:
+                        - kind
+                        - at
+                      additionalProperties: false
                     name:
                       type: string
                     description:
@@ -167953,6 +168282,8 @@ paths:
                         - onComplete
                         - onError
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:
@@ -168722,6 +169053,38 @@ paths:
                               type: string
                             data: {}
                           additionalProperties: false
+                      phases:
+                        type: array
+                        items:
+                          type: object
+                          x-cognia-wire-source: types/scheduler TaskExecutionPhase
+                          required:
+                            - name
+                            - startOffsetMs
+                            - durationMs
+                          properties:
+                            name:
+                              type: string
+                              enum:
+                                - fire-delay
+                                - executor-load
+                                - session
+                                - send-options
+                                - workspace-lease
+                                - environment-setup
+                                - first-response
+                                - turn
+                            startOffsetMs:
+                              type: number
+                            durationMs:
+                              type: number
+                              minimum: 0
+                            outcome:
+                              type: string
+                              enum:
+                                - reused
+                                - joined
+                          additionalProperties: false
                     additionalProperties: false
                   - type: "null"
         "202":
@@ -169030,6 +169393,38 @@ paths:
                           message:
                             type: string
                           data: {}
+                        additionalProperties: false
+                    phases:
+                      type: array
+                      items:
+                        type: object
+                        x-cognia-wire-source: types/scheduler TaskExecutionPhase
+                        required:
+                          - name
+                          - startOffsetMs
+                          - durationMs
+                        properties:
+                          name:
+                            type: string
+                            enum:
+                              - fire-delay
+                              - executor-load
+                              - session
+                              - send-options
+                              - workspace-lease
+                              - environment-setup
+                              - first-response
+                              - turn
+                          startOffsetMs:
+                            type: number
+                          durationMs:
+                            type: number
+                            minimum: 0
+                          outcome:
+                            type: string
+                            enum:
+                              - reused
+                              - joined
                         additionalProperties: false
                   additionalProperties: false
         "202":
@@ -169409,6 +169804,69 @@ paths:
                   properties:
                     id:
                       type: string
+                    projectId:
+                      type: string
+                    humanRevision:
+                      type: integer
+                      minimum: 0
+                    owner:
+                      oneOf:
+                        - type: object
+                          properties:
+                            kind:
+                              const: this-device
+                            reason:
+                              type: string
+                              enum:
+                                - manual
+                                - machine-bound
+                            pinnedAt:
+                              type: number
+                          required:
+                            - kind
+                            - reason
+                            - pinnedAt
+                          additionalProperties: false
+                        - type: object
+                          properties:
+                            kind:
+                              const: remote-host
+                            hostId:
+                              type: string
+                            hostLabel:
+                              type: string
+                            remoteItemId:
+                              type: string
+                            operationId:
+                              type: string
+                            movedAt:
+                              type: number
+                          required:
+                            - kind
+                            - hostId
+                            - hostLabel
+                            - remoteItemId
+                            - operationId
+                            - movedAt
+                          additionalProperties: false
+                    provenance:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - import
+                            - migration
+                        at:
+                          type: number
+                        sourceLabel:
+                          type: string
+                        operationId:
+                          type: string
+                      required:
+                        - kind
+                        - at
+                      additionalProperties: false
                     name:
                       type: string
                     description:
@@ -169541,6 +169999,8 @@ paths:
                         - onComplete
                         - onError
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:
@@ -169821,6 +170281,11 @@ paths:
                       type: string
                     description:
                       type: string
+                    projectId:
+                      anyOf:
+                        - type: string
+                          minLength: 1
+                        - type: "null"
                     trigger:
                       oneOf:
                         - type: object
@@ -169975,6 +170440,8 @@ paths:
                     notification:
                       type: object
                       properties:
+                        dueReminder:
+                          type: boolean
                         onStart:
                           type: boolean
                         onComplete:
@@ -170060,6 +170527,69 @@ paths:
                     properties:
                       id:
                         type: string
+                      projectId:
+                        type: string
+                      humanRevision:
+                        type: integer
+                        minimum: 0
+                      owner:
+                        oneOf:
+                          - type: object
+                            properties:
+                              kind:
+                                const: this-device
+                              reason:
+                                type: string
+                                enum:
+                                  - manual
+                                  - machine-bound
+                              pinnedAt:
+                                type: number
+                            required:
+                              - kind
+                              - reason
+                              - pinnedAt
+                            additionalProperties: false
+                          - type: object
+                            properties:
+                              kind:
+                                const: remote-host
+                              hostId:
+                                type: string
+                              hostLabel:
+                                type: string
+                              remoteItemId:
+                                type: string
+                              operationId:
+                                type: string
+                              movedAt:
+                                type: number
+                            required:
+                              - kind
+                              - hostId
+                              - hostLabel
+                              - remoteItemId
+                              - operationId
+                              - movedAt
+                            additionalProperties: false
+                      provenance:
+                        type: object
+                        properties:
+                          kind:
+                            type: string
+                            enum:
+                              - import
+                              - migration
+                          at:
+                            type: number
+                          sourceLabel:
+                            type: string
+                          operationId:
+                            type: string
+                        required:
+                          - kind
+                          - at
+                        additionalProperties: false
                       name:
                         type: string
                       description:
@@ -170192,6 +170722,8 @@ paths:
                           - onComplete
                           - onError
                         properties:
+                          dueReminder:
+                            type: boolean
                           onStart:
                             type: boolean
                           onComplete:

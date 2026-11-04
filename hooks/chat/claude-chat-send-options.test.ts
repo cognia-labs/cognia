@@ -13,6 +13,17 @@ import { listMessages } from "@/lib/db/messages"
 import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
 import { getDb } from "@/lib/db/schema"
 import { sessionControl } from "@/lib/claude/ipc"
+import { isHeadlessHost } from "@/lib/platform/detect"
+import { getSettings } from "@/lib/db/settings"
+
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isHeadlessHost: jest.fn(() => false),
+}))
+jest.mock("@/lib/db/settings", () => ({
+  ...jest.requireActual("@/lib/db/settings"),
+  getSettings: jest.fn(),
+}))
 
 jest.mock("@/lib/claude/ipc", () => ({ sessionControl: jest.fn() }))
 
@@ -464,6 +475,39 @@ describe("Claude chat send-option seam", () => {
       projects: [PROJECT_A, PROJECT_B],
       activeProjectId: "proj-a",
     } as never)
+  })
+
+  it("reads durable provider configuration for headless paired turns", async () => {
+    const settings = {
+      defaultProvider: "openai",
+      providerSettings: {
+        openai: { enabled: true, baseURL: "http://127.0.0.1:8787/v1", apiFlavor: "chat" },
+      },
+    }
+    jest.mocked(isHeadlessHost).mockReturnValue(true)
+    jest.mocked(getSettings).mockResolvedValue(settings as never)
+    try {
+      await buildSendOptions({ id: "s1" } as never, "hello")
+      expect(resolveSendOptions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ appSettings: settings })
+      )
+    } finally {
+      jest.mocked(isHeadlessHost).mockReturnValue(false)
+    }
+  })
+
+  it("fails closed when durable headless settings cannot be read", async () => {
+    jest.mocked(resolveSendOptions).mockClear()
+    jest.mocked(isHeadlessHost).mockReturnValue(true)
+    jest.mocked(getSettings).mockRejectedValue(new Error("settings unavailable"))
+    try {
+      await expect(buildSendOptions({ id: "s1" } as never, "hello")).rejects.toThrow(
+        "settings unavailable"
+      )
+      expect(resolveSendOptions).not.toHaveBeenCalled()
+    } finally {
+      jest.mocked(isHeadlessHost).mockReturnValue(false)
+    }
   })
 
   it("exports the send-option resolver", () => {

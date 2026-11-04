@@ -192,6 +192,10 @@ export class TranscriptRuntimeRecoveryError extends Error {
 
 type PromptDelivery = {
   commandId?: string
+  /** Renderer admission cancellation; never serialized to the host. */
+  signal?: AbortSignal
+  /** Synchronous notification at the irreversible transport boundary. */
+  onDispatch?: () => void
   /** Renderer-only validation, inside local transcript admission's lock. */
   beforeSend?: () => Promise<void>
   /**
@@ -217,6 +221,7 @@ export async function sendPrompt(
   options?: SendOptions,
   delivery?: PromptDelivery
 ): Promise<void> {
+  delivery?.signal?.throwIfAborted()
   // Bind the existing turn/attempt wire to the canonical host run before dispatch.
   if (options?.turnId) {
     const [
@@ -328,11 +333,14 @@ async function sendPromptToTransport(
     assertSafeModelInput(prompt)
     if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
   }
-  // Sends carrying a frozen execution spec use the canonical command (same
-  // impl body Rust-side; the alias split feeds the Phase 9 telemetry).
+  // Paired Hosts expose current SendOptions through the canonical command.
+  // The legacy claude_send contract predates tool surfaces and model budgets.
+  // Local legacy sends retain their existing alias and transcript admission.
   const messageId = route.pairedHost ? delivery?.messageId : undefined
   const command =
-    options?.execution || delivery?.commandId || messageId ? "agent_send" : "claude_send"
+    route.pairedHost || options?.execution || delivery?.commandId || messageId
+      ? "agent_send"
+      : "claude_send"
   // Router + Fusion's routing inputs are renderer-only (a reseal reads them
   // from the cached or frozen options); the host never needs the prompt twice.
   let wireOptions = options
@@ -340,6 +348,10 @@ async function sendPromptToTransport(
     const { routerFusionRouting: _renderOnly, ...rest } = options
     wireOptions = rest
   }
+  // No await between this check and dispatch: cancelled admission cannot
+  // lazily restart the Rust sidecar after its capture has declared it stopped.
+  delivery?.signal?.throwIfAborted()
+  delivery?.onDispatch?.()
   await transport.call(command, {
     sessionId,
     prompt,
@@ -1201,6 +1213,20 @@ export async function closeSession(
 
 export async function getSidecarStatus(): Promise<{ ready: boolean }> {
   return transport.call<{ ready: boolean }>("claude_sidecar_status")
+}
+
+/** Rust-owned turn registry; missing support, web mode and errors are unknown. */
+export async function getLiveSidecarSessionIds(): Promise<ReadonlySet<string> | undefined> {
+  if (detectHostProfile() !== "desktop" || isRemoteHostActive()) return undefined
+  try {
+    const status = await transport.call<{ liveSessionIds?: unknown }>("agent_status")
+    const ids = status?.liveSessionIds
+    return Array.isArray(ids) && ids.every((id) => typeof id === "string")
+      ? new Set(ids as string[])
+      : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Start the desktop Agent Host and resolve after its ready handshake. */

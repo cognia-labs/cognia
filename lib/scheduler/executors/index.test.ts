@@ -794,6 +794,149 @@ describe("executeChatTask", () => {
     expect(result.success).toBe(true)
   })
 
+  it("captures wrapped SDK terminal events and assistant text", async () => {
+    onClaudeMessageMock.mockImplementationOnce(async (cb) => {
+      setTimeout(() => {
+        const turnId = (sendPromptMock.mock.calls[0]?.[2] as { turnId: string }).turnId
+        cb({
+          type: "event",
+          sessionId: "session-created",
+          turnId: "stale-turn",
+          event: { type: "result", is_error: true, result: "stale" },
+        })
+        cb({
+          type: "event",
+          sessionId: "foreign",
+          turnId,
+          event: { type: "result", is_error: true, result: "foreign" },
+        })
+        cb({
+          type: "event",
+          sessionId: "session-created",
+          turnId,
+          event: {
+            type: "assistant",
+            message: { content: [{ type: "text", text: "WRAPPED_OK" }] },
+          },
+        })
+        cb({
+          type: "event",
+          sessionId: "session-created",
+          turnId,
+          event: { type: "result", subtype: "success", is_error: false },
+        })
+      }, 0)
+      return () => undefined
+    })
+    const result = await executeChatTask(
+      makeTask({ payload: { prompt: "hi" } }),
+      makeExecution(),
+      AbortSignal.timeout(200)
+    )
+    expect(result.success).toBe(true)
+    expect(result.output).toEqual(
+      expect.objectContaining({
+        text: "WRAPPED_OK",
+        last: expect.objectContaining({ type: "result", subtype: "success" }),
+      })
+    )
+  })
+
+  it("fails a wrapped SDK error result without waiting for task timeout", async () => {
+    onClaudeMessageMock.mockImplementationOnce(async (cb) => {
+      setTimeout(
+        () =>
+          cb({
+            type: "event",
+            sessionId: "session-created",
+            event: {
+              type: "result",
+              subtype: "error_during_execution",
+              is_error: true,
+              result: "upstream failed",
+            },
+          }),
+        0
+      )
+      return () => undefined
+    })
+    const result = await executeChatTask(
+      makeTask({ payload: { prompt: "hi" } }),
+      makeExecution(),
+      AbortSignal.timeout(200)
+    )
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("upstream failed")
+  })
+
+  it("honors workingState for a non-Git scheduled workspace", async () => {
+    const executionContext = {
+      location: "local" as const,
+      projectId: "project-1",
+      projectRoot: "/scratch",
+      execution: {
+        mode: "local" as const,
+        base: { kind: "workingState" as const },
+        roots: [{ logicalRootId: "primary", role: "primary" as const, aliasPath: "/scratch" }],
+      },
+      taskWorkspace: { taskId: "task-workspace:session-1", workspaceKey: "session-1" },
+    }
+    const leasedRun = {
+      taskId: "scheduled:task-1:physical-root",
+      runId: "scheduled:execution-1:physical-root",
+      parentRunId: null,
+      agentId: "scheduler",
+      agentKind: "scheduled-chat",
+      base: { kind: "workingState" },
+      workspaceKey: "lease-workspace",
+      executionRunId: "execution-1",
+      traceId: "trace-1",
+      turnId: "bundle-turn-1",
+      attemptId: "a1",
+      providerAttemptId: null,
+      surface: "scheduler",
+      trackingPolicy: { generatedOutputRoots: [], autoDetect: true },
+    }
+    openWorkspaceBundleTurnLeaseMock.mockResolvedValueOnce({
+      run: leasedRun,
+      primaryAlias: "/bundle/primary",
+      additionalAliases: [],
+      settle: settleTaskWorkspaceMock,
+    })
+    emitTerminalResult()
+    const result = await executeChatTask(
+      makeTask({ payload: { prompt: "hi", executionContext } }),
+      makeExecution(),
+      makeSignal()
+    )
+    expect(acquireWorkspaceBundleMock).toHaveBeenCalledWith(
+      expect.objectContaining({ base: { kind: "workingState" } })
+    )
+    expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "primary",
+      expect.objectContaining({ base: { kind: "workingState" } })
+    )
+    expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "primary",
+      expect.objectContaining({ sessionId: "session-created" })
+    )
+    expect(sendPromptMock).toHaveBeenCalledWith(
+      "session-created",
+      "hi",
+      expect.objectContaining({
+        taskWorkspace: {
+          ...leasedRun,
+          workspaceRoot: "/bundle/primary",
+          parentRunId: undefined,
+          providerAttemptId: undefined,
+        },
+      })
+    )
+    expect(result.success).toBe(true)
+  })
+
   it("fails closed when a scheduled managed worktree cannot be acquired", async () => {
     acquireWorkspaceBundleMock.mockRejectedValueOnce(new Error("registry unavailable"))
     const result = await executeChatTask(

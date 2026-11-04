@@ -47,7 +47,10 @@ import {
   getManagedWorkspace,
   WorkspacePortLeaseError,
 } from "./client"
-import { getSession } from "@/lib/db/sessions"
+import { getSession, updateSession } from "@/lib/db/sessions"
+import { createHostManagedWorkspaceFiles } from "./managed-workspace-host-files"
+
+jest.mock("./managed-workspace-host-files", () => ({ createHostManagedWorkspaceFiles: jest.fn() }))
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { sha256Hex } from "@/lib/share/hash"
@@ -852,5 +855,19 @@ describe("headless session scratch workspace", () => {
     } as never)
     await archiveSessionScratchWorkspace(fx.row.id)
     expect(archiveManagedWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe("paired Host materialization", () => {
+  it("wires the Host filesystem into the production materialization path", async () => {
+    const fx = fixture()
+    jest.mocked(getSession).mockResolvedValue(fx.row)
+    jest.mocked(createHostManagedWorkspaceFiles).mockResolvedValue(fx.deps)
+    jest.mocked(updateSession).mockResolvedValue(undefined as never)
+    const context = await materializeManagedWorkspace("session-1")
+    expect(createHostManagedWorkspaceFiles).toHaveBeenCalled()
+    expect(context.managedWorkspace?.availability).toBe("available")
+    expect(context.managedWorkspace?.localRoot).toContain("managed-workspace_session-1")
+    expect(updateSession).toHaveBeenCalledWith("session-1", { executionContext: context })
   })
 })

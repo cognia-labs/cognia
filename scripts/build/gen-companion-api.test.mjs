@@ -1715,3 +1715,73 @@ test("WeChat runtime schemas preserve admitted replay and atomic credential revi
   assert.equal(validateSnapshot(null), true)
   assert.equal(validateSnapshot({ value: "fixture" }), false)
 })
+
+
+test("scheduled task notification accepts dueReminder without opening unknown fields", () => {
+  const responses = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
+  const ajv = new Ajv2020({ strict: false })
+  const output = ajv.compile({ ...responses.$defs.TaskNotificationConfig, $defs: responses.$defs })
+  const input = ajv.compile(buildCompanionRequestSchemaContracts().get("scheduled_task_create").properties.input.properties.notification)
+  const base = { onStart: false, onComplete: false, onError: true }
+  for (const dueReminder of [true, false]) {
+    assert.equal(output({ ...base, dueReminder }), true, JSON.stringify(output.errors))
+    assert.equal(input({ ...base, dueReminder }), true, JSON.stringify(input.errors))
+  }
+  assert.equal(output(base), true)
+  assert.equal(output({ ...base, dueReminder: "false" }), false)
+  assert.equal(input({ ...base, dueReminder: "false" }), false)
+  assert.equal(output({ ...base, unknown: true }), false)
+  assert.equal(input({ ...base, unknown: true }), false)
+})
+
+
+test("scheduled task run results accept typed execution phases", () => {
+  const responses = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
+  const validate = new Ajv2020({ strict: false }).compile({ ...responses.commands.scheduled_task_run_now, $defs: responses.$defs })
+  const base = { id: "run", taskId: "task", taskName: "smoke", taskType: "chat", status: "completed", retryAttempt: 0, startedAt: "2026-11-04T00:00:00Z", logs: [] }
+  const phase = { name: "fire-delay", startOffsetMs: -15, durationMs: 15 }
+  assert.equal(validate({ ...base, phases: [phase, { name: "environment-setup", startOffsetMs: 0, durationMs: 1.5, outcome: "reused" }] }), true, JSON.stringify(validate.errors))
+  assert.equal(validate(base), true, JSON.stringify(validate.errors))
+  for (const invalid of [{ ...phase, name: "unknown" }, { ...phase, durationMs: -1 }, { ...phase, durationMs: "15" }, { ...phase, outcome: "skipped" }, { ...phase, extra: true }]) {
+    assert.equal(validate({ ...base, phases: [invalid] }), false, JSON.stringify(invalid))
+  }
+  assert.equal(validate({ ...base, unknown: true }), false)
+})
+
+
+test("scheduled task requests preserve explicit workspace attribution", () => {
+  const schemas = buildCompanionRequestSchemaContracts()
+  const ajv = new Ajv2020({ strict: false })
+  const create = ajv.compile(schemas.get("scheduled_task_create"))
+  const update = ajv.compile(schemas.get("scheduled_task_update"))
+  const base = { name: "smoke", type: "chat", trigger: { type: "event", eventType: "smoke" } }
+  assert.equal(create({ input: { ...base, projectId: "project-default", workspaceResolved: true } }), true, JSON.stringify(create.errors))
+  assert.equal(create({ input: { ...base, workspaceResolved: true } }), true)
+  assert.equal(update({ taskId: "task", input: { projectId: "project-default" } }), true)
+  assert.equal(update({ taskId: "task", input: { projectId: null } }), true)
+  for (const extra of [{ projectId: "" }, { projectId: null }, { workspaceResolved: "true" }, { unknown: true }]) {
+    assert.equal(create({ input: { ...base, ...extra } }), false, JSON.stringify(extra))
+  }
+  assert.equal(update({ taskId: "task", input: { projectId: "" } }), false)
+})
+
+
+test("scheduled task wire results preserve workspace and ownership metadata", () => {
+  const responses = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
+  const validate = new Ajv2020({ strict: false }).compile({ ...responses.commands.scheduled_task_create, $defs: responses.$defs })
+  const base = { id: "task", name: "smoke", type: "chat", trigger: { type: "event", eventType: "smoke" }, config: { timeout: 1000, maxRetries: 0, retryDelay: 0, runMissedOnStartup: false }, notification: { onStart: false, onComplete: false, onError: false }, status: "active", runCount: 0, successCount: 0, failureCount: 0, createdAt: "2026-11-04T00:00:00Z", updatedAt: "2026-11-04T00:00:00Z" }
+  const owners = [{ kind: "this-device", reason: "manual", pinnedAt: 10 }, { kind: "remote-host", hostId: "host", hostLabel: "Dev", remoteItemId: "remote-task", operationId: "operation", movedAt: 10 }]
+  for (const owner of owners) {
+    assert.equal(validate({ ...base, projectId: "project-default", humanRevision: 2, owner, provenance: { kind: "migration", at: 10, sourceLabel: "Dev", operationId: "operation" } }), true, JSON.stringify(validate.errors))
+  }
+  assert.equal(validate(base), true)
+  for (const extra of [{ projectId: 1 }, { humanRevision: -1 }, { humanRevision: 1.5 }, { owner: { kind: "this-device", reason: "invalid", pinnedAt: 10 } }, { provenance: { kind: "import", at: "10" } }, { workspaceResolved: true }, { unknown: true }]) {
+    assert.equal(validate({ ...base, ...extra }), false, JSON.stringify(extra))
+  }
+  const schemas = buildCompanionRequestSchemaContracts()
+  const list = new Ajv2020({ strict: false }).compile(schemas.get("scheduled_task_list"))
+  const create = new Ajv2020({ strict: false }).compile(schemas.get("scheduled_task_create"))
+  assert.equal(list({ filter: { projectId: "project-default" } }), true)
+  assert.equal(list({ filter: { projectId: "" } }), false)
+  assert.equal(create({ input: { name: "smoke", id: "task", type: "chat", trigger: base.trigger } }), true)
+})

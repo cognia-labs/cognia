@@ -170,7 +170,9 @@ async function openScheduledWritableBundle(
   task: ScheduledTask,
   execution: TaskExecution,
   sourceRoot: string,
-  agentKind: string
+  agentKind: string,
+  base: NonNullable<BeginTaskWorkspaceTurn["base"]> = { kind: "remoteDefault" },
+  sessionId: string = task.id
 ) {
   const primaryLogicalRootId = "primary"
   // A scheduled run gets a fresh worktree with no `node_modules` every time it
@@ -181,7 +183,7 @@ async function openScheduledWritableBundle(
     ownerType: "scheduled",
     ownerRef: task.id,
     environmentKind: "managed",
-    base: { kind: "remoteDefault" },
+    base,
     roots: [
       {
         logicalRootId: primaryLogicalRootId,
@@ -193,7 +195,7 @@ async function openScheduledWritableBundle(
   })
   const lease = await openWorkspaceBundleTurnLease(bundle, primaryLogicalRootId, {
     taskId: `scheduled:${task.id}`,
-    sessionId: task.id,
+    sessionId,
     runId: `scheduled:${execution.id}:${agentKind}`,
     executionRunId: execution.id,
     turnId: execution.id,
@@ -202,7 +204,7 @@ async function openScheduledWritableBundle(
     agentId: "scheduler",
     agentKind,
     workspaceRoot: sourceRoot,
-    base: { kind: "remoteDefault" },
+    base,
   })
   if (!lease) throw new Error("Scheduled Registry Bundle Turn is unavailable")
   return lease
@@ -859,7 +861,9 @@ async function runChatPrompt(
               task,
               execution,
               boundWorkspaceRoot!,
-              "scheduled-chat"
+              "scheduled-chat",
+              canonicalExecution?.base,
+              sessionId
             ).catch(() => null)
       )
     : null
@@ -867,17 +871,31 @@ async function runChatPrompt(
     return { success: false, error: "Scheduled workspace isolation is unavailable" }
   }
   if (taskLease) {
+    // The Registry scopes task/run ids per physical root. Reuse its complete
+    // identity when the native host attaches the agent to the acquired turn.
+    const run = taskLease.run
+    const hostedTurn: Omit<BeginTaskWorkspaceTurn, "sessionId"> = {
+      taskId: run.taskId,
+      runId: run.runId,
+      parentRunId: run.parentRunId ?? undefined,
+      workspaceRoot: taskLease.primaryAlias,
+      base: run.base,
+      agentId: run.agentId,
+      agentKind: run.agentKind,
+      workspaceKey: run.workspaceKey ?? undefined,
+      executionRunId: run.executionRunId ?? undefined,
+      traceId: run.traceId ?? undefined,
+      turnId: run.turnId ?? undefined,
+      attemptId: run.attemptId ?? undefined,
+      providerAttemptId: run.providerAttemptId ?? undefined,
+      surface: run.surface ?? undefined,
+      trackingPolicy: run.trackingPolicy,
+    }
     finalOptions = {
       ...finalOptions,
       cwd: taskLease.primaryAlias,
       additionalDirectories: taskLease.additionalAliases,
-      taskWorkspace: {
-        taskId: executionContext!.taskWorkspace.taskId,
-        runId: taskLease.run.runId,
-        workspaceRoot: boundWorkspaceRoot!,
-        agentId: "scheduler",
-        agentKind: "scheduled-chat",
-      },
+      taskWorkspace: hostedTurn,
     }
   }
   // Last rewrite of cwd / additionalDirectories above: confinement follows it.
@@ -936,6 +954,7 @@ async function runChatPrompt(
   // 5. Subscribe FIRST, then send. The sidecar may emit `result` before the
   // returned promise is awaited if we don't.
   const collected: unknown[] = []
+  let assistantText = ""
   let resolveOnce: (value: ChatExecutionResult) => void = () => undefined
   const finished = new Promise<ChatExecutionResult>((resolve) => {
     resolveOnce = resolve
@@ -981,9 +1000,22 @@ async function runChatPrompt(
     ) {
       return
     }
+    if ("turnId" in evt && evt.turnId && evt.turnId !== finalOptions.turnId) return
     if (promptSentAt !== null && firstEventAt === null) firstEventAt = Date.now()
     collected.push(evt)
-    const evtType = (evt as { type?: string }).type
+    const message = evt.type === "event" ? evt.event : evt
+    const evtType = message.type
+    if (evtType === "assistant") {
+      const content = (message as { message?: { content?: unknown } }).message?.content
+      if (Array.isArray(content)) {
+        const text = content
+          .filter((block) => block?.type === "text" && typeof block.text === "string")
+          .map((block) => block.text)
+          .join("")
+        if (text) assistantText = text
+      }
+      return
+    }
     if (evtType === "permission_request") {
       const request = evt as Partial<PermissionRequestEvent>
       if (request.requestId && request.toolName) {
@@ -1042,6 +1074,15 @@ async function runChatPrompt(
       return
     }
     if (evtType === "result") {
+      const result = message as { is_error?: boolean; result?: string; subtype?: string }
+      if (result.is_error) {
+        resolveOnce({
+          success: false,
+          error: result.result ?? `Agent turn failed (${result.subtype ?? "error"})`,
+          output: { sessionId, events: collected.length, last: message },
+        })
+        return
+      }
       // Only a turn that was actually refused something waits on a person. A
       // restricted run that asked for nothing did its (read-only) work and
       // completes, so a read-only schedule in a workspace nobody has trusted
@@ -1056,7 +1097,7 @@ async function runChatPrompt(
           output: {
             sessionId,
             events: collected.length,
-            last: evt,
+            last: message,
             status: "needs_approval",
             needsApproval: [...permissions.denials],
             ...workspaceTrustOutput(workspaceTrust),
@@ -1069,7 +1110,8 @@ async function runChatPrompt(
         output: {
           sessionId,
           events: collected.length,
-          last: evt,
+          last: message,
+          ...(result.result || assistantText ? { text: result.result || assistantText } : {}),
           ...workspaceTrustOutput(workspaceTrust),
         },
       })

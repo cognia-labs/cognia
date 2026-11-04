@@ -69,6 +69,7 @@ import {
   ensureSidecarReady,
   compactSession,
   getSidecarStatus,
+  getLiveSidecarSessionIds,
   hasApiKey,
   interruptSession,
   listSessions,
@@ -548,6 +549,11 @@ describe("normalizeRewindFilesResult", () => {
 })
 
 describe("web-mode rejection", () => {
+  it("leaves host liveness unknown in web mode", async () => {
+    setTauri(false)
+    await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
+    expect(callSpy).not.toHaveBeenCalled()
+  })
   it("transport-routed wrappers reject with the WebStub error when no spy is attached", async () => {
     setTauri(false)
     callSpy.mockRestore()
@@ -567,6 +573,74 @@ describe("web-mode rejection", () => {
     expect(typeof unlisten).toBe("function")
     expect(handler).not.toHaveBeenCalled()
   })
+})
+
+describe("host-owned sidecar liveness", () => {
+  it.each([["live"], []] as string[][])("reads active sessions from Rust: %j", async (...ids) => {
+    callSpy.mockResolvedValue({ ready: true, liveSessionIds: ids })
+    await expect(getLiveSidecarSessionIds()).resolves.toEqual(new Set(ids))
+    expect(callSpy).toHaveBeenCalledWith("agent_status")
+  })
+  it.each([{}, { ready: true }, { liveSessionIds: [123] }])(
+    "treats missing or invalid support as unknown: %j",
+    async (status) => {
+      callSpy.mockResolvedValue(status)
+      await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
+    }
+  )
+  it("treats host errors as unknown", async () => {
+    callSpy.mockRejectedValue(new Error("host disconnected"))
+    await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
+  })
+})
+
+describe("cancellable prompt admission", () => {
+  it.each(["lock", "beforeSend"] as const)(
+    "cannot dispatch after cancellation during %s",
+    async (phase) => {
+      const abort = new AbortController()
+      let release!: () => void
+      let entered!: () => void
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      if (phase === "lock")
+        mockWithTranscriptRuntimeLock.mockImplementationOnce(async (_session, operation) => {
+          entered()
+          await gate
+          return (operation as () => Promise<unknown>)()
+        })
+      const onDispatch = jest.fn()
+      const send = sendPrompt(
+        "session",
+        "work",
+        {},
+        {
+          signal: abort.signal,
+          onDispatch,
+          ...(phase === "beforeSend"
+            ? {
+                transcriptRuntime: "host-owned" as const,
+                beforeSend: async () => {
+                  entered()
+                  await gate
+                },
+              }
+            : {}),
+        }
+      )
+      const rejected = expect(send).rejects.toThrow()
+      await waiting
+      abort.abort()
+      release()
+      await rejected
+      expect(onDispatch).not.toHaveBeenCalled()
+      expect(callSpy).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe("Claude session commands", () => {
@@ -1518,9 +1592,32 @@ describe("remote transcript authority", () => {
     expect(mockPrepareTranscriptRuntimeSend).not.toHaveBeenCalled()
     expect(mockWithTranscriptRuntimeLock).not.toHaveBeenCalled()
     expect(callSpy).toHaveBeenCalledWith(
-      "claude_send",
+      "agent_send",
       expect.objectContaining({ options: { transcriptInvalidationId: "host-generation" } })
     )
+  })
+
+  it("uses the canonical Host send for a tool-free utility without an execution spec", async () => {
+    const options = {
+      provider: "openai",
+      model: "private-model",
+      toolSurface: "none" as const,
+      allowedTools: [],
+      compaction: { enabled: false },
+      modelParams: { maxOutputTokens: 16, maxRetries: 0 },
+      providerCredentials: {
+        apiKey: "test-key",
+        baseURL: "http://127.0.0.1:8787/v1",
+        apiFlavor: "chat" as const,
+      },
+    }
+    await sendPrompt("utility-owned", "Reply with OK.", options)
+    expect(callSpy).toHaveBeenCalledWith("agent_send", {
+      sessionId: "utility-owned",
+      prompt: "Reply with OK.",
+      options,
+    })
+    expect(mockPrepareTranscriptRuntimeSend).not.toHaveBeenCalled()
   })
 
   it("names the user message on a paired send so the host keeps the same row", async () => {

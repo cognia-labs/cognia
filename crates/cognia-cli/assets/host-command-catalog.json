@@ -3278,6 +3278,10 @@
               "null"
             ]
           },
+          "processGroupRunning": {
+            "type": "boolean",
+            "description": "Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty."
+          },
           "startedAtMs": {
             "type": "integer"
           },
@@ -3488,6 +3492,10 @@
                     "null"
                   ]
                 },
+                "processGroupRunning": {
+                  "type": "boolean",
+                  "description": "Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty."
+                },
                 "startedAtMs": {
                   "type": "integer"
                 },
@@ -3512,6 +3520,10 @@
               },
               "additionalProperties": false
             }
+          },
+          "originSessionId": {
+            "type": "string",
+            "description": "Present only for an includeOrigin read: the origin session whose jobs (including promoted ones) this list covers."
           }
         },
         "additionalProperties": false
@@ -3705,6 +3717,10 @@
               "null"
             ]
           },
+          "processGroupRunning": {
+            "type": "boolean",
+            "description": "Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty."
+          },
           "startedAtMs": {
             "type": "integer"
           },
@@ -3884,6 +3900,10 @@
               "integer",
               "null"
             ]
+          },
+          "processGroupRunning": {
+            "type": "boolean",
+            "description": "Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty."
           },
           "startedAtMs": {
             "type": "integer"
@@ -13581,13 +13601,19 @@
       "outputSchemaSource": "contract",
       "outputSchema": {
         "type": "object",
-        "x-cognia-wire-source": "crate::claude::commands::SidecarStatus — derives Serialize with NO rename_all, and has exactly one field.",
+        "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry, optional for older hosts.",
         "required": [
           "ready"
         ],
         "properties": {
           "ready": {
             "type": "boolean"
+          },
+          "liveSessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -75035,6 +75061,48 @@
                 },
                 "additionalProperties": false
               }
+            },
+            "phases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "x-cognia-wire-source": "types/scheduler TaskExecutionPhase",
+                "required": [
+                  "name",
+                  "startOffsetMs",
+                  "durationMs"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "enum": [
+                      "fire-delay",
+                      "executor-load",
+                      "session",
+                      "send-options",
+                      "workspace-lease",
+                      "environment-setup",
+                      "first-response",
+                      "turn"
+                    ]
+                  },
+                  "startOffsetMs": {
+                    "type": "number"
+                  },
+                  "durationMs": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "reused",
+                      "joined"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
             }
           },
           "additionalProperties": false
@@ -75176,12 +75244,23 @@
           "input": {
             "type": "object",
             "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
               "name": {
                 "type": "string",
                 "minLength": 1
               },
               "description": {
                 "type": "string"
+              },
+              "projectId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "workspaceResolved": {
+                "type": "boolean"
               },
               "type": {
                 "type": "string",
@@ -75441,6 +75520,9 @@
               "notification": {
                 "type": "object",
                 "properties": {
+                  "dueReminder": {
+                    "type": "boolean"
+                  },
                   "onStart": {
                     "type": "boolean"
                   },
@@ -75565,6 +75647,99 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "humanRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "this-device"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "machine-bound"
+                    ]
+                  },
+                  "pinnedAt": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason",
+                  "pinnedAt"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "remote-host"
+                  },
+                  "hostId": {
+                    "type": "string"
+                  },
+                  "hostLabel": {
+                    "type": "string"
+                  },
+                  "remoteItemId": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  },
+                  "movedAt": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "hostId",
+                  "hostLabel",
+                  "remoteItemId",
+                  "operationId",
+                  "movedAt"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "import",
+                  "migration"
+                ]
+              },
+              "at": {
+                "type": "number"
+              },
+              "sourceLabel": {
+                "type": "string"
+              },
+              "operationId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "additionalProperties": false
           },
           "name": {
             "type": "string"
@@ -75733,6 +75908,9 @@
               "onError"
             ],
             "properties": {
+              "dueReminder": {
+                "type": "boolean"
+              },
               "onStart": {
                 "type": "boolean"
               },
@@ -76040,6 +76218,99 @@
                 "id": {
                   "type": "string"
                 },
+                "projectId": {
+                  "type": "string"
+                },
+                "humanRevision": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "owner": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "this-device"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "manual",
+                            "machine-bound"
+                          ]
+                        },
+                        "pinnedAt": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "reason",
+                        "pinnedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "remote-host"
+                        },
+                        "hostId": {
+                          "type": "string"
+                        },
+                        "hostLabel": {
+                          "type": "string"
+                        },
+                        "remoteItemId": {
+                          "type": "string"
+                        },
+                        "operationId": {
+                          "type": "string"
+                        },
+                        "movedAt": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "hostId",
+                        "hostLabel",
+                        "remoteItemId",
+                        "operationId",
+                        "movedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "provenance": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "import",
+                        "migration"
+                      ]
+                    },
+                    "at": {
+                      "type": "number"
+                    },
+                    "sourceLabel": {
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "at"
+                  ],
+                  "additionalProperties": false
+                },
                 "name": {
                   "type": "string"
                 },
@@ -76207,6 +76478,9 @@
                     "onError"
                   ],
                   "properties": {
+                    "dueReminder": {
+                      "type": "boolean"
+                    },
                     "onStart": {
                       "type": "boolean"
                     },
@@ -76428,6 +76702,99 @@
               "id": {
                 "type": "string"
               },
+              "projectId": {
+                "type": "string"
+              },
+              "humanRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "owner": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "this-device"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "manual",
+                          "machine-bound"
+                        ]
+                      },
+                      "pinnedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "reason",
+                      "pinnedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "remote-host"
+                      },
+                      "hostId": {
+                        "type": "string"
+                      },
+                      "hostLabel": {
+                        "type": "string"
+                      },
+                      "remoteItemId": {
+                        "type": "string"
+                      },
+                      "operationId": {
+                        "type": "string"
+                      },
+                      "movedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "hostId",
+                      "hostLabel",
+                      "remoteItemId",
+                      "operationId",
+                      "movedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "import",
+                      "migration"
+                    ]
+                  },
+                  "at": {
+                    "type": "number"
+                  },
+                  "sourceLabel": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
               "name": {
                 "type": "string"
               },
@@ -76595,6 +76962,9 @@
                   "onError"
                 ],
                 "properties": {
+                  "dueReminder": {
+                    "type": "boolean"
+                  },
                   "onStart": {
                     "type": "boolean"
                   },
@@ -76798,12 +77168,20 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
                     "name": {
                       "type": "string",
                       "minLength": 1
                     },
                     "description": {
                       "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string",
+                      "minLength": 1
                     },
                     "type": {
                       "type": "string",
@@ -77069,6 +77447,9 @@
                     "notification": {
                       "type": "object",
                       "properties": {
+                        "dueReminder": {
+                          "type": "boolean"
+                        },
                         "onStart": {
                           "type": "boolean"
                         },
@@ -77162,10 +77543,6 @@
                         "type": "string"
                       }
                     },
-                    "id": {
-                      "type": "string",
-                      "minLength": 1
-                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -77218,9 +77595,10 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
-                    "projectId": {
-                      "type": "string",
-                      "minLength": 1
+                    "humanRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     },
                     "promotion": {
                       "type": "object",
@@ -77248,12 +77626,12 @@
                     }
                   },
                   "required": [
+                    "id",
                     "name",
                     "type",
                     "trigger",
                     "config",
                     "notification",
-                    "id",
                     "status",
                     "runCount",
                     "successCount",
@@ -77431,6 +77809,10 @@
               },
               "search": {
                 "type": "string"
+              },
+              "projectId": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "additionalProperties": false
@@ -77462,6 +77844,99 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "projectId": {
+              "type": "string"
+            },
+            "humanRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "owner": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "this-device"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "manual",
+                        "machine-bound"
+                      ]
+                    },
+                    "pinnedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "reason",
+                    "pinnedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "remote-host"
+                    },
+                    "hostId": {
+                      "type": "string"
+                    },
+                    "hostLabel": {
+                      "type": "string"
+                    },
+                    "remoteItemId": {
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "movedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "hostId",
+                    "hostLabel",
+                    "remoteItemId",
+                    "operationId",
+                    "movedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "provenance": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "import",
+                    "migration"
+                  ]
+                },
+                "at": {
+                  "type": "number"
+                },
+                "sourceLabel": {
+                  "type": "string"
+                },
+                "operationId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "at"
+              ],
+              "additionalProperties": false
             },
             "name": {
               "type": "string"
@@ -77630,6 +78105,9 @@
                 "onError"
               ],
               "properties": {
+                "dueReminder": {
+                  "type": "boolean"
+                },
                 "onStart": {
                   "type": "boolean"
                 },
@@ -78067,6 +78545,48 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "phases": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "x-cognia-wire-source": "types/scheduler TaskExecutionPhase",
+                  "required": [
+                    "name",
+                    "startOffsetMs",
+                    "durationMs"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "fire-delay",
+                        "executor-load",
+                        "session",
+                        "send-options",
+                        "workspace-lease",
+                        "environment-setup",
+                        "first-response",
+                        "turn"
+                      ]
+                    },
+                    "startOffsetMs": {
+                      "type": "number"
+                    },
+                    "durationMs": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "reused",
+                        "joined"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
               }
             },
             "additionalProperties": false
@@ -78275,6 +78795,48 @@
                 },
                 "additionalProperties": false
               }
+            },
+            "phases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "x-cognia-wire-source": "types/scheduler TaskExecutionPhase",
+                "required": [
+                  "name",
+                  "startOffsetMs",
+                  "durationMs"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "enum": [
+                      "fire-delay",
+                      "executor-load",
+                      "session",
+                      "send-options",
+                      "workspace-lease",
+                      "environment-setup",
+                      "first-response",
+                      "turn"
+                    ]
+                  },
+                  "startOffsetMs": {
+                    "type": "number"
+                  },
+                  "durationMs": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "reused",
+                      "joined"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
             }
           },
           "additionalProperties": false
@@ -78392,6 +78954,99 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "projectId": {
+              "type": "string"
+            },
+            "humanRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "owner": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "this-device"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "manual",
+                        "machine-bound"
+                      ]
+                    },
+                    "pinnedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "reason",
+                    "pinnedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "remote-host"
+                    },
+                    "hostId": {
+                      "type": "string"
+                    },
+                    "hostLabel": {
+                      "type": "string"
+                    },
+                    "remoteItemId": {
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "movedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "hostId",
+                    "hostLabel",
+                    "remoteItemId",
+                    "operationId",
+                    "movedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "provenance": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "import",
+                    "migration"
+                  ]
+                },
+                "at": {
+                  "type": "number"
+                },
+                "sourceLabel": {
+                  "type": "string"
+                },
+                "operationId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "at"
+              ],
+              "additionalProperties": false
             },
             "name": {
               "type": "string"
@@ -78560,6 +79215,9 @@
                 "onError"
               ],
               "properties": {
+                "dueReminder": {
+                  "type": "boolean"
+                },
                 "onStart": {
                   "type": "boolean"
                 },
@@ -78755,6 +79413,17 @@
               },
               "description": {
                 "type": "string"
+              },
+              "projectId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "trigger": {
                 "oneOf": [
@@ -78970,6 +79639,9 @@
               "notification": {
                 "type": "object",
                 "properties": {
+                  "dueReminder": {
+                    "type": "boolean"
+                  },
                   "onStart": {
                     "type": "boolean"
                   },
@@ -79081,6 +79753,99 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "humanRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "owner": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "this-device"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "manual",
+                          "machine-bound"
+                        ]
+                      },
+                      "pinnedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "reason",
+                      "pinnedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "remote-host"
+                      },
+                      "hostId": {
+                        "type": "string"
+                      },
+                      "hostLabel": {
+                        "type": "string"
+                      },
+                      "remoteItemId": {
+                        "type": "string"
+                      },
+                      "operationId": {
+                        "type": "string"
+                      },
+                      "movedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "hostId",
+                      "hostLabel",
+                      "remoteItemId",
+                      "operationId",
+                      "movedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "provenance": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "import",
+                      "migration"
+                    ]
+                  },
+                  "at": {
+                    "type": "number"
+                  },
+                  "sourceLabel": {
+                    "type": "string"
+                  },
+                  "operationId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "at"
+                ],
+                "additionalProperties": false
               },
               "name": {
                 "type": "string"
@@ -79249,6 +80014,9 @@
                   "onError"
                 ],
                 "properties": {
+                  "dueReminder": {
+                    "type": "boolean"
+                  },
                   "onStart": {
                     "type": "boolean"
                   },
@@ -110598,5 +111366,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "d00b6532f763564be5e833a2d01ab52a3d144af3cfd7199b8568b000489eb50f"
+  "catalogHash": "25d4532c74b95679bc92acf2b37d1bb5d3dd88032d80011e829950e3e82d42f8"
 }

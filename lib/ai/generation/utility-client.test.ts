@@ -198,3 +198,21 @@ describe("buildUtilityLlmClient ledger attribution", () => {
     })
   })
 })
+
+it("does not invent a cheap public model for an OpenAI-compatible relay", () => {
+  const settings = appSettings({
+    defaultProvider: "openai",
+    providerSettings: {
+      openai: {
+        apiKey: "relay-key",
+        baseURL: "http://127.0.0.1:8787/v1",
+        defaultModel: "gpt-5.6-luna",
+      },
+    },
+  })
+  expect(inferCheapModel(null, settings)).toBeUndefined()
+  buildUtilityLlmClient({ session: null, appSettings: settings, featureId: "composer-followups" })
+  expect(createLlmClientMock).toHaveBeenCalledWith(
+    expect.objectContaining({ model: "gpt-5.6-luna" })
+  )
+})

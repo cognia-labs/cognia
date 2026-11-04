@@ -32,6 +32,8 @@ import type { Character, ChatSession, SendOptions } from "@cognia/agent-config-t
 import type { AgentRuntimeRef } from "@/lib/ai/agent/runtime-catalog/types"
 import { selectComposerEphemeralSkillIds, selectVisibleMessages, useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
+import { getSettings } from "@/lib/db/settings"
+import { isHeadlessHost } from "@/lib/platform/detect"
 import { runtimeRefForSession } from "@/stores/agent/agent-runtime-store"
 import { isTauri } from "@/lib/tauri"
 import { renderWorkingSetForCompaction } from "@/lib/chat/working-set"
@@ -348,7 +350,8 @@ export async function buildSendOptions(
   /** An addressed turn's lane and persona. See {@link TurnSendOverrides}. */
   overrides?: TurnSendOverrides
 ): Promise<SendOptions> {
-  const appSettings = useSettingsStore.getState().settings
+  // The Headless brain has no renderer to hydrate the settings store.
+  const appSettings = isHeadlessHost() ? await getSettings() : useSettingsStore.getState().settings
   const runtimeRef = overrides?.runtimeRef ?? runtimeRefForSession(session?.id)
   const externalRuntimeId =
     runtimeRef.kind === "external"

@@ -8,12 +8,12 @@ use std::process::Command;
 
 use crate::cli::HostSkillScope;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use super::embedded_skill_description;
-use super::{EmbeddedSkill, HostFailure, EMBEDDED_SKILLS};
+use super::{EMBEDDED_SKILLS, EmbeddedSkill, HostFailure};
 
 const MANIFEST_FILE: &str = ".cognia-host-manifest.json";
 const MANIFEST_OWNER: &str = "cognia-host";
@@ -153,7 +153,7 @@ fn validate_install_root(root: &Path) -> std::result::Result<(), HostFailure> {
                     "inspect Agent Skills destination",
                     path,
                     error,
-                ))
+                ));
             }
         }
     }
@@ -203,7 +203,7 @@ fn install_at_root(scope: HostSkillScope, root: &Path) -> std::result::Result<Va
                     "remove stale managed skill file",
                     &path,
                     error,
-                ))
+                ));
             }
         }
     }
@@ -357,7 +357,7 @@ fn build_install_plan(
                     "inspect installed skill file",
                     &path,
                     error,
-                ))
+                ));
             }
         }
     }
@@ -389,7 +389,7 @@ fn build_install_plan(
                     "inspect stale managed skill file",
                     &path,
                     error,
-                ))
+                ));
             }
         }
     }
@@ -430,7 +430,7 @@ fn collect_existing_managed_files(
                     "inspect managed skill directory",
                     &absolute,
                     error,
-                ))
+                ));
             }
         };
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -821,11 +821,13 @@ mod tests {
         );
 
         let output = install_at_root(HostSkillScope::Project, &root).expect("managed upgrade");
-        assert!(output["updated"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "cognia-host/SKILL.md"));
+        assert!(
+            output["updated"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path == "cognia-host/SKILL.md")
+        );
         assert_eq!(output["removed"], json!(["cognia-host-retired/SKILL.md"]));
         assert_eq!(
             fs::read_to_string(old_core).unwrap(),
@@ -843,11 +845,13 @@ mod tests {
         fs::write(&core, EMBEDDED_SKILLS[0].content).expect("partial install");
 
         let output = install_at_root(HostSkillScope::Project, &root).expect("recover install");
-        assert!(output["unchanged"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "cognia-host/SKILL.md"));
+        assert!(
+            output["unchanged"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path == "cognia-host/SKILL.md")
+        );
         assert!(root.join(MANIFEST_FILE).is_file());
     }
 
@@ -995,7 +999,9 @@ mod tests {
             );
             assert_eq!(
                 frontmatter_value(skill.content, "compatibility"),
-                Some("Requires the cognia CLI; RPC calls require a same-host cognia-server Headless endpoint."),
+                Some(
+                    "Requires the cognia CLI; RPC calls require a same-host cognia-server Headless endpoint."
+                ),
                 "compatibility: {}",
                 skill.name
             );

@@ -1,3 +1,14 @@
+const mockPairedHost = jest.fn(() => false)
+const mockCreateHostLlmClient = jest.fn(() => ({ complete: jest.fn() }))
+jest.mock(
+  "./host-llm-client",
+  () => ({
+    shouldUseHostLlmClient: () => mockPairedHost(),
+    createHostLlmClient: (...args: unknown[]) => mockCreateHostLlmClient(...(args as [])),
+  }),
+  { virtual: true }
+)
+
 const mockCreateLlmClient = jest.fn((..._args: unknown[]) => ({ complete: jest.fn() }))
 
 jest.mock("@/lib/twin/distill/llm", () => ({
@@ -42,6 +53,8 @@ function makeSession(over: Record<string, unknown> = {}): ChatSession {
 describe("buildRendererLlmClient", () => {
   beforeEach(() => {
     mockCreateLlmClient.mockClear()
+    mockPairedHost.mockReturnValue(false)
+    mockCreateHostLlmClient.mockClear()
   })
 
   it("[ACC:OFF-01] hands back the client it built while Router + Fusion is off", () => {
@@ -353,4 +366,38 @@ describe("buildRendererLlmClient", () => {
     arg = mockCreateLlmClient.mock.calls.at(-1)?.[0] as unknown as { model?: string }
     expect(arg.model).toBe("slow-alias")
   })
+})
+
+it("routes paired utility calls through Host with the exact resolved credentials", () => {
+  mockPairedHost.mockReturnValue(true)
+  const client = buildRendererLlmClient({
+    session: makeSession(),
+    featureId: "composer-followups",
+    appSettings: makeSettings({
+      defaultProvider: "openai",
+      providerSettings: {
+        openai: {
+          enabled: true,
+          apiKey: "private-test-key",
+          baseURL: "http://127.0.0.1:8787/v1",
+          defaultModel: "gpt-5.6-luna",
+          apiFlavor: "chat",
+          customHeaders: { "X-Tenant": "one" },
+        },
+      },
+    }),
+  })
+  expect(client).not.toBeNull()
+  expect(mockCreateLlmClient).not.toHaveBeenCalled()
+  expect(mockCreateHostLlmClient).toHaveBeenCalledWith(
+    expect.objectContaining({
+      providerId: "openai",
+      model: "gpt-5.6-luna",
+      apiKey: "private-test-key",
+      baseURL: "http://127.0.0.1:8787/v1",
+      apiFlavor: "chat",
+      headers: { "X-Tenant": "one" },
+    }),
+    "composer-followups"
+  )
 })

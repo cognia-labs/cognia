@@ -2104,6 +2104,10 @@
           "items": {
             "$ref": "#/$defs/BackgroundJobRecord"
           }
+        },
+        "originSessionId": {
+          "type": "string",
+          "description": "Present only for an includeOrigin read: the origin session whose jobs (including promoted ones) this list covers."
         }
       },
       "additionalProperties": false
@@ -2186,6 +2190,10 @@
         },
         "pid": {
           "type": ["integer", "null"]
+        },
+        "processGroupRunning": {
+          "type": "boolean",
+          "description": "Liveness of the Host-created process group, independent of leader exit. False confirms the group is empty."
         },
         "startedAtMs": {
           "type": "integer"
@@ -6705,6 +6713,79 @@
         "id": {
           "type": "string"
         },
+        "projectId": {
+          "type": "string"
+        },
+        "humanRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "this-device"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": ["manual", "machine-bound"]
+                },
+                "pinnedAt": {
+                  "type": "number"
+                }
+              },
+              "required": ["kind", "reason", "pinnedAt"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "remote-host"
+                },
+                "hostId": {
+                  "type": "string"
+                },
+                "hostLabel": {
+                  "type": "string"
+                },
+                "remoteItemId": {
+                  "type": "string"
+                },
+                "operationId": {
+                  "type": "string"
+                },
+                "movedAt": {
+                  "type": "number"
+                }
+              },
+              "required": ["kind", "hostId", "hostLabel", "remoteItemId", "operationId", "movedAt"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["import", "migration"]
+            },
+            "at": {
+              "type": "number"
+            },
+            "sourceLabel": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            }
+          },
+          "required": ["kind", "at"],
+          "additionalProperties": false
+        },
         "name": {
           "type": "string"
         },
@@ -7128,11 +7209,17 @@
     },
     "SidecarStatus": {
       "type": "object",
-      "x-cognia-wire-source": "crate::claude::commands::SidecarStatus \u2014 derives Serialize with NO rename_all, and has exactly one field.",
+      "x-cognia-wire-source": "cognia_sidecar::commands::SidecarStatus; liveSessionIds is the Rust-owned active turn registry, optional for older hosts.",
       "required": ["ready"],
       "properties": {
         "ready": {
           "type": "boolean"
+        },
+        "liveSessionIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -7290,7 +7377,37 @@
           "items": {
             "$ref": "#/$defs/TaskExecutionLog"
           }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskExecutionPhase"
+          }
         }
+      },
+      "additionalProperties": false
+    },
+    "TaskExecutionPhase": {
+      "type": "object",
+      "x-cognia-wire-source": "types/scheduler TaskExecutionPhase",
+      "required": ["name", "startOffsetMs", "durationMs"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "fire-delay",
+            "executor-load",
+            "session",
+            "send-options",
+            "workspace-lease",
+            "environment-setup",
+            "first-response",
+            "turn"
+          ]
+        },
+        "startOffsetMs": { "type": "number" },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "outcome": { "type": "string", "enum": ["reused", "joined"] }
       },
       "additionalProperties": false
     },
@@ -7399,6 +7516,9 @@
       "x-cognia-wire-source": "types/scheduler TaskNotificationConfig",
       "required": ["onStart", "onComplete", "onError"],
       "properties": {
+        "dueReminder": {
+          "type": "boolean"
+        },
         "onStart": {
           "type": "boolean"
         },

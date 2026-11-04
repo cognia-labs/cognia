@@ -98,10 +98,20 @@ jest.mock("@/lib/share/hash", () => ({
 import { notifySubscriptionChanged } from "@/lib/subscription/core/subscription-events"
 import { getBuiltInProviderReadiness } from "@cognia/provider-core/providers/readiness"
 
+const mockHostRoute = jest.fn(() => false)
+const hostProbe = jest
+  .fn()
+  .mockResolvedValue({ success: true, outcome: "verified", authoritative: true })
+jest.mock("@/lib/ai/host-llm-client", () => ({ shouldUseHostLlmClient: () => mockHostRoute() }))
+jest.mock("@/lib/ai/providers/host-connection", () => ({
+  testHostProviderConnection: (...args: unknown[]) => hostProbe(...args),
+}))
+
 import { useProviderSettings } from "./use-provider-settings"
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockHostRoute.mockReturnValue(false)
   subscriptionCredential.mockReset()
   discoverLocalProviderModels.mockReset()
   // Reset store fixture between tests
@@ -1033,4 +1043,59 @@ it("does not reread vault credentials for unrelated settings changes", async () 
       expect.objectContaining({ defaultAccountIds: { codex: "replacement-account" } })
     )
   )
+})
+
+it("uses Host for paired provider Test without fetching from the browser", async () => {
+  mockHostRoute.mockReturnValue(true)
+  settingsState.settings!.providerSettings.openai.defaultModel = "gpt-5.6-luna"
+  const { result } = renderHook(() => useProviderSettings())
+  await act(async () => {
+    await result.current.testProvider("openai")
+  })
+  expect(hostProbe).toHaveBeenCalledWith(
+    "openai",
+    expect.objectContaining({ apiKey: "k1", defaultModel: "gpt-5.6-luna" })
+  )
+  expect(testProviderConnection).not.toHaveBeenCalled()
+  expect(testCustomProviderConnectionByProtocol).not.toHaveBeenCalled()
+})
+it("uses Host for paired custom provider Test", async () => {
+  mockHostRoute.mockReturnValue(true)
+  const { result } = renderHook(() => useProviderSettings())
+  await act(async () => {
+    await result.current.testCustomProvider("cp1")
+  })
+  expect(hostProbe).toHaveBeenCalledWith(
+    "cp1",
+    expect.objectContaining({ apiKey: "ck", protocol: "openai" })
+  )
+  expect(testCustomProviderConnectionByProtocol).not.toHaveBeenCalled()
+})
+
+it("does not persist a probe result into a different Host context", async () => {
+  const { setActiveRuntimeTargetContext, clearActiveRuntimeTargetContext } =
+    await import("@/lib/runtime/runtime-target-context")
+  setActiveRuntimeTargetContext("account-one", "host-one")
+  mockHostRoute.mockReturnValue(true)
+  let settle!: (value: unknown) => void
+  hostProbe.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve
+      })
+  )
+  const { result } = renderHook(() => useProviderSettings())
+  let pending!: ReturnType<typeof result.current.testProvider>
+  await act(async () => {
+    pending = result.current.testProvider("openai")
+  })
+  await waitFor(() => expect(hostProbe).toHaveBeenCalled())
+  settingsState.setProviderConfig.mockClear()
+  await act(async () => {
+    setActiveRuntimeTargetContext("account-two", "host-two")
+    settle({ success: true, outcome: "verified" })
+    expect(await pending).toBeNull()
+  })
+  expect(settingsState.setProviderConfig).not.toHaveBeenCalled()
+  clearActiveRuntimeTargetContext()
 })

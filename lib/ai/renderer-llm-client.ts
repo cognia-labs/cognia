@@ -30,6 +30,7 @@ import { resolveAppDefaultModel } from "./app-default-model"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
 import { isRoutingPlaceholderModel } from "./routing/auto-model-resolution"
 import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
+import { createHostLlmClient, shouldUseHostLlmClient } from "./host-llm-client"
 
 export interface BuildRendererLlmClientArgs {
   session: ChatSession | null | undefined
@@ -147,7 +148,9 @@ export function buildRendererLlmClient({
   // executor for them, so utility features degrade gracefully to null.
   if (!isRendererExecutableProtocol(resolution.protocol)) return null
 
-  const client = createLlmClient(llmConfigOf(resolution, model))
+  const client = shouldUseHostLlmClient()
+    ? createHostLlmClient({ ...resolution, model }, featureId)
+    : createLlmClient(llmConfigOf(resolution, model))
   // Every feature on this rail goes through one seam, so D27 ("every LLM
   // generation is reserved and settled") holds for all of them at once. Off —
   // the default — this hands `client` straight back.

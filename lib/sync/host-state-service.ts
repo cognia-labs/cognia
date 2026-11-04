@@ -752,6 +752,41 @@ export interface InstalledHostStateSync {
   stop(): void
 }
 
+/** Confirm one non-visible conversation before sending a scoped Host intent. */
+export async function hydrateHostStateSession(options: {
+  transport: Transport
+  accountId: string
+  runtimeTargetId: string
+  sessionId: string
+  assertCurrent: () => void
+}): Promise<void> {
+  const { assertCurrent } = options
+  assertCurrent()
+  const database = getDb()
+  const check = () => {
+    assertCurrent()
+    if (getDb() !== database) throw new Error("host_state_sync_stopped")
+  }
+  const channel = sessionStateChannel(options.runtimeTargetId, options.sessionId)
+  const snapshot = await options.transport.call<HostStateSnapshot>("host_state_snapshot", {
+    accountId: options.accountId,
+    runtimeTargetId: options.runtimeTargetId,
+    channel,
+  })
+  check()
+  if (!isHostStateSnapshot(snapshot) || snapshot.channel !== channel) {
+    throw new Error("host_state_snapshot_malformed")
+  }
+  await persistConfirmedState(
+    snapshot.state,
+    snapshot.hostId,
+    snapshot.hostGeneration,
+    snapshot.cutHostSeq,
+    check
+  )
+  check()
+}
+
 /**
  * Existing-Transport client bootstrap. It subscribes before snapshotting,
  * buffers the shared carrier stream, then applies only events newer than the

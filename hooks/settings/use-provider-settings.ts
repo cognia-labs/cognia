@@ -30,6 +30,9 @@ import {
   getActiveCredential,
 } from "@cognia/provider-core/providers/completeness"
 import { testAndDiscoverBedrock } from "@/lib/ai/providers/bedrock-connection"
+import { shouldUseHostLlmClient } from "@/lib/ai/host-llm-client"
+import { testHostProviderConnection } from "@/lib/ai/providers/host-connection"
+import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
 
 import { resolveSubscriptionProviderCredential } from "@/lib/claude/provider-attempt-options"
 import { subscribeSubscriptionChanged } from "@/lib/subscription/core/subscription-events"
@@ -436,8 +439,10 @@ export function useProviderSettings(): UseProviderSettingsResult {
           : undefined)
       if (!cfg) return null
       const testedRevision = subscriptionRevision.current
+      const testedScope = getRuntimeTargetScopeKey()
       const testedConfig = buildProviderVerificationFingerprint(cfg)
       const isCurrent = () =>
+        getRuntimeTargetScopeKey() === testedScope &&
         subscriptionRevision.current === testedRevision &&
         buildProviderVerificationFingerprint(
           latestSettings.current?.providerSettings?.[id] ?? (providerSettings[id] ? undefined : cfg)
@@ -450,10 +455,18 @@ export function useProviderSettings(): UseProviderSettingsResult {
           settings,
           subscriptionApiIds.includes(id)
         )
-        if (!connectionConfigs) return null
+        if (!connectionConfigs || !isCurrent()) return null
         const { effectiveCfg, verificationCfg } = connectionConfigs
         let result: ApiTestResult
-        if (id === "bedrock") {
+        if (id !== "bedrock" && shouldUseHostLlmClient()) {
+          const definition = subscriptionDefinitions.find((entry) => entry.id === id)
+          result = await testHostProviderConnection(id, {
+            ...effectiveCfg,
+            apiKey: getActiveCredential(effectiveCfg),
+            protocol: definition?.protocol,
+            defaultModel: effectiveCfg.defaultModel ?? definition?.models?.[0],
+          })
+        } else if (id === "bedrock") {
           const bedrockResult = await testAndDiscoverBedrock(cfg)
           if (bedrockResult.models) {
             await setProviderConfig(id, {
@@ -550,8 +563,10 @@ export function useProviderSettings(): UseProviderSettingsResult {
       const cp = customProviders[id]
       if (!cp) return null
       const testedRevision = subscriptionRevision.current
+      const testedScope = getRuntimeTargetScopeKey()
       const testedConfig = buildProviderVerificationFingerprint(cp)
       const isCurrent = () =>
+        getRuntimeTargetScopeKey() === testedScope &&
         subscriptionRevision.current === testedRevision &&
         buildProviderVerificationFingerprint(
           latestSettings.current?.customProviders?.find((provider) => provider.id === id)
@@ -564,15 +579,21 @@ export function useProviderSettings(): UseProviderSettingsResult {
           settings,
           Boolean(cp.subscription)
         )
-        if (!connectionConfigs) return null
+        if (!connectionConfigs || !isCurrent()) return null
         const { effectiveCfg, verificationCfg } = connectionConfigs
-        const result = await testCustomProviderConnectionByProtocol(
-          effectiveCfg.baseURL,
-          getActiveCredential(effectiveCfg),
-          effectiveCfg.apiProtocol ?? "openai",
-          effectiveCfg.defaultModel,
-          effectiveCfg.customHeaders
-        )
+        const result = shouldUseHostLlmClient()
+          ? await testHostProviderConnection(id, {
+              ...effectiveCfg,
+              apiKey: getActiveCredential(effectiveCfg),
+              protocol: effectiveCfg.apiProtocol ?? "openai",
+            })
+          : await testCustomProviderConnectionByProtocol(
+              effectiveCfg.baseURL,
+              getActiveCredential(effectiveCfg),
+              effectiveCfg.apiProtocol ?? "openai",
+              effectiveCfg.defaultModel,
+              effectiveCfg.customHeaders
+            )
         const outcome = result.success ? "success" : "error"
         const verificationPatch: Partial<CustomProviderSettings> = result.success
           ? {
