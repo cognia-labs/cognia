@@ -56,6 +56,7 @@ only the paths behind them change.
   README will instead say that generators feeding the build live in `build/`.
 
 - **`bootstrap/`** is phase 3: the app reads `bootstrap/presets.json` at runtime.
+  Done on 2026-11-04: moved to `crates/cognia-bootstrap-agent/standalone/`.
 - **`gates/convergence/*.md`** belong to the convergence refactor that has not
   merged yet.
 - **Historical records** (`docs/evidence`, `docs/reports`, `docs/plans`,

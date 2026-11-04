@@ -1,4 +1,4 @@
-import catalog from "@/scripts/bootstrap/presets.json"
+import catalog from "@/crates/cognia-bootstrap-agent/standalone/presets.json"
 import type {
   ProjectEnvironmentBootstrapAgent,
   ProjectEnvironmentBootstrapModelOptions,

@@ -49,20 +49,20 @@ test("repo paths in any spelling resolve to the tracked script", () => {
   const tracked = new Set([
     "scripts/build/a.mjs",
     "scripts/ci/b.mjs",
-    "scripts/bootstrap/presets.json",
+    "scripts/sync/presets.json",
     "scripts/smoke/c.ts",
   ])
   const text = [
     `"x": "node scripts/build/a.mjs --check"`,
     `const re = /^scripts\\/ci\\/b\\.mjs$/`,
-    `import catalog from "@/scripts/bootstrap/presets.json"`,
+    `import catalog from "@/scripts/sync/presets.json"`,
     `await import("../../../scripts/smoke/c")`,
   ].join("\n")
   assert.deepEqual([...referencedScripts("package.json", text, tracked)].sort(), [
-    "scripts/bootstrap/presets.json",
     "scripts/build/a.mjs",
     "scripts/ci/b.mjs",
     "scripts/smoke/c.ts",
+    "scripts/sync/presets.json",
   ])
   assert.deepEqual(
     [...referencedScripts(".github/x.yml", "run: $ROOT/scripts/build/a.mjs", tracked)],

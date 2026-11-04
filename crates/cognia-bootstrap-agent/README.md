@@ -9,7 +9,7 @@ conversation sessions. See the
 for exact compatibility and deliberate safety differences.
 
 Independent Bash and PowerShell implementations are also available in
-[`scripts/bootstrap`](../../scripts/bootstrap/README.md). They run directly from
+[`standalone/`](./standalone/README.md). They run directly from
 their interpreters without this executable and can be selected in Cognia's
 Bootstrap Agent environment settings.
 

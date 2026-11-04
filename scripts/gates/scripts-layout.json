@@ -2,7 +2,6 @@
   "$comment": "Layout contract for scripts/, enforced by scripts/gates/check-scripts-layout.mjs (pnpm audit:scripts-layout). Add a folder only for a new kind of work, not a new subsystem. List a script under manual only when nothing can call it, with why.",
   "topLevelFiles": ["README.md", "postinstall.mjs", "tsconfig.audit.json"],
   "folders": {
-    "bootstrap": "Bash and PowerShell bootstrap agents and presets (product asset)",
     "build": "predev/prebuild staging, sidecar/CLI/plugin builds, build-time generators",
     "ci": "CI-only steps: change planning, CI report, Feishu notify, release handoff",
     "dev": "developer CLIs and on-demand tools",

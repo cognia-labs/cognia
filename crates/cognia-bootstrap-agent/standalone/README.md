@@ -9,7 +9,7 @@ repository. Neither invokes the Cognia executable, Node, Tauri or a server.
 | `cognia-bootstrap.ps1` | PowerShell 7.4+ on Windows/macOS/Linux                              | PowerShell               |
 
 The shared version-1 JSON configuration and `configure`, `run`, `chat`, `init`
-commands follow the [native Agent contract](../../crates/cognia-bootstrap-agent/README.md).
+commands follow the [native Agent contract](../README.md).
 Provider IDs, URLs, authentication, headers, request parameters, persona,
 tool grants, context policy and execution budgets remain customizable.
 The provider must expose an OpenAI Chat Completions compatible API.
@@ -19,13 +19,13 @@ The provider must expose an OpenAI Chat Completions compatible API.
 From the repository root:
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh configure --output bootstrap.json
-bash scripts/bootstrap/cognia-bootstrap.sh chat --config bootstrap.json --cwd "$PWD"
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh configure --output bootstrap.json
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh chat --config bootstrap.json --cwd "$PWD"
 
-printf '%s' 'Inspect this workspace' | bash scripts/bootstrap/cognia-bootstrap.sh \
+printf '%s' 'Inspect this workspace' | bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh \
   run --config bootstrap.json --task -
 
-bash scripts/bootstrap/cognia-bootstrap.sh run --config bootstrap.json \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh run --config bootstrap.json \
   --model your-model-id --base-url https://your-compatible-provider.example/v1 \
   --set 'model.temperature=0.2'
 ```
@@ -42,13 +42,13 @@ coreutils on Linux.
 Use `pwsh` (PowerShell 7), including on Windows:
 
 ```powershell
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 configure --output bootstrap.json
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 chat --config bootstrap.json --cwd .
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 configure --output bootstrap.json
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 chat --config bootstrap.json --cwd .
 
-'Inspect this workspace' | pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 `
+'Inspect this workspace' | pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 `
   run --config bootstrap.json --task -
 
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 run --config bootstrap.json `
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 run --config bootstrap.json `
   --model your-model-id --base-url https://your-compatible-provider.example/v1 `
   --set 'model.temperature=0.2'
 ```
@@ -80,22 +80,22 @@ shell and editor operations. These are starting configurations, not permission
 sandboxes. All generated fields remain editable.
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh presets
-bash scripts/bootstrap/cognia-bootstrap.sh configure --provider deepseek --preset coding \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh presets
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh configure --provider deepseek --preset coding \
   --non-interactive --output bootstrap.json
 # Supply DEEPSEEK_API_KEY through your environment.
-bash scripts/bootstrap/cognia-bootstrap.sh doctor --config bootstrap.json
-bash scripts/bootstrap/cognia-bootstrap.sh models --config bootstrap.json
-bash scripts/bootstrap/cognia-bootstrap.sh chat --config bootstrap.json
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh doctor --config bootstrap.json
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh models --config bootstrap.json
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh chat --config bootstrap.json
 ```
 
 ```powershell
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 configure `
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 configure `
   --provider deepseek --preset coding --non-interactive --output bootstrap.json
 # Supply DEEPSEEK_API_KEY through your environment.
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 doctor --config bootstrap.json
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 models --config bootstrap.json
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 chat --config bootstrap.json
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 doctor --config bootstrap.json
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 models --config bootstrap.json
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 chat --config bootstrap.json
 ```
 
 Provider presets are based on the providers' OpenAI-compatible endpoints:
@@ -109,8 +109,8 @@ Ollama and LM Studio use `local-model` as a placeholder and no authentication by
 default. Select an installed model before starting:
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh models --provider ollama
-bash scripts/bootstrap/cognia-bootstrap.sh chat --provider ollama --model YOUR_INSTALLED_MODEL --preset chat
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh models --provider ollama
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh chat --provider ollama --model YOUR_INSTALLED_MODEL --preset chat
 ```
 
 Any other compatible provider can be configured with `--base-url`, `--model`,
@@ -139,7 +139,7 @@ A custom preset is a partial v1 JSON configuration. For example, save this as
 ```
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh configure --provider deepseek --preset coding \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh configure --provider deepseek --preset coding \
   --preset-file team-preset.json --model deepseek-flash --set 'limits.maxSteps=32' \
   --non-interactive --output bootstrap.json
 ```
@@ -163,9 +163,9 @@ Applying a recipe only writes configuration. Installation starts with an explici
 `init` invocation:
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh configure --provider deepseek --recipe node-pnpm \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh configure --provider deepseek --recipe node-pnpm \
   --non-interactive --output bootstrap.json
-bash scripts/bootstrap/cognia-bootstrap.sh init --config bootstrap.json --cwd "$PWD" \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh init --config bootstrap.json --cwd "$PWD" \
   --state .bootstrap-state.json
 ```
 
@@ -186,13 +186,13 @@ Reapply a recipe after changing the execution shell to update its check commands
 The examples demonstrate deterministic setup without a model request:
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh init \
-  --config scripts/bootstrap/example.bash.json --cwd "$PWD" --state .bootstrap-state.json
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh init \
+  --config crates/cognia-bootstrap-agent/standalone/example.bash.json --cwd "$PWD" --state .bootstrap-state.json
 ```
 
 ```powershell
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 init `
-  --config ./scripts/bootstrap/example.powershell.json --cwd . --state .bootstrap-state.json
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 init `
+  --config ./crates/cognia-bootstrap-agent/standalone/example.powershell.json --cwd . --state .bootstrap-state.json
 ```
 
 Replace `setupCommand` and `checks` with your actual installation and verification
@@ -226,12 +226,12 @@ Use `--task-file` for a reusable task and repeat `--context-file` to supply
 reference material without enabling workspace tools:
 
 ```bash
-bash scripts/bootstrap/cognia-bootstrap.sh chat --config bootstrap.json \
+bash crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh chat --config bootstrap.json \
   --task-file task.txt --context-file requirements.md --context-file "design notes.txt"
 ```
 
 ```powershell
-pwsh -NoProfile -File ./scripts/bootstrap/cognia-bootstrap.ps1 chat --config bootstrap.json `
+pwsh -NoProfile -File ./crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1 chat --config bootstrap.json `
   --task-file task.txt --context-file requirements.md --context-file "design notes.txt"
 ```
 
@@ -298,10 +298,10 @@ shells. Python is used only by this development test harness, never by either
 Agent runtime:
 
 ```bash
-python3 scripts/bootstrap/standalone.test.py --runtime bash
-python3 scripts/bootstrap/standalone.test.py --runtime powershell
-python3 scripts/bootstrap/bash-runtime.test.py
-python3 scripts/bootstrap/powershell-runtime.test.py
+python3 crates/cognia-bootstrap-agent/standalone/standalone.test.py --runtime bash
+python3 crates/cognia-bootstrap-agent/standalone/standalone.test.py --runtime powershell
+python3 crates/cognia-bootstrap-agent/standalone/bash-runtime.test.py
+python3 crates/cognia-bootstrap-agent/standalone/powershell-runtime.test.py
 # Set COGNIA_TEST_PWSH to an explicit pwsh executable if it is not on PATH.
 ```
 
@@ -314,7 +314,7 @@ The workflow in `.github/workflows/bootstrap-scripts.yml` runs Bash and PowerShe
 on Linux and PowerShell on Windows. Local verification uses macOS ARM, Bash
 3.2.57 and PowerShell 7.6.6 with both a synthetic HTTP provider and authenticated
 DeepSeek `deepseek-flash`. Windows/Linux execution has not been verified locally.
-The [live validation report](../../docs/reports/2026-10-01-bootstrap-live-validation.md) records eight passing
+The [live validation report](../../../docs/reports/2026-10-01-bootstrap-live-validation.md) records eight passing
 scenarios, two repaired defects and an unresolved earlier privacy-gate block.
 
 Verified on 2026-10-01 after the preset expansion: Bash's full boundary suite
@@ -322,10 +322,10 @@ passed 67/67 tests (including 50 shared contracts); PowerShell passed 50/50
 shared and 10/10 specific contracts. Seven Cognia integration suites passed
 202/202 tests. The final authenticated preset flow passed 14/14 checks, including
 real editor/shell calls and pnpm initialization/reuse. See the
-[preset validation report](../../docs/reports/2026-10-01-bootstrap-preset-validation.md) for source hashes,
+[preset validation report](../../../docs/reports/2026-10-01-bootstrap-preset-validation.md) for source hashes,
 measurements, repaired privacy false positives and repository-wide gate limits.
 
 The 2026-10-02 file/session expansion passed 10/10 acceptance checks with copied
 scripts and DeepSeek, including credential-free local commands and cross-runtime
-transcript resumption. See the [file/session validation report](../../docs/reports/2026-10-02-bootstrap-file-session-validation.md)
+transcript resumption. See the [file/session validation report](../../../docs/reports/2026-10-02-bootstrap-file-session-validation.md)
 for final source hashes, regression results and evidence boundaries.

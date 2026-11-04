@@ -40,7 +40,6 @@ scripts/
     artifacts/    plugin artifact producers
   scaffold/       plugin scaffolding and typed config codegen
   tauri/          agent-debug bridge into the real Tauri webview (see AGENT_DEBUG.md)
-  bootstrap/      cross-platform project bootstrap scripts and presets (product asset)
   eval/           MultiAgentBench, HTE CEM grader, tool-search probe, plugin eval (plugin-eval.ts)
     benchmarks/   Host/sidecar JS runtime and code-index benchmarks
     certify/      billable vendor certification and bundle rollback (ADR-0090)
@@ -197,14 +196,6 @@ codegen. Tests: `pnpm scripts:test:plugin`.
 The agent-debug bridge that evaluates and captures inside the real desktop
 webview. Read [AGENT_DEBUG.md](./tauri/AGENT_DEBUG.md) before using it.
 
-### `bootstrap/`
-
-The `cognia-bootstrap.sh` / `.ps1` project bootstrap scripts and
-`presets.json`, which the app reads at runtime. Contract in
-[preset-contract.md](./bootstrap/preset-contract.md), usage in
-[README.md](./bootstrap/README.md), validation reports in `docs/reports/`.
-CI: `.github/workflows/bootstrap-scripts.yml`.
-
 ### `eval/`
 
 MultiAgentBench (`docs/development/multiagentbench.md`), the HTE CEM grader
@@ -317,6 +308,7 @@ old paths; this table maps them.
 | `smoke/tui-v41-live.mjs`                  | `smoke/tui/live.mjs` (`pnpm smoke:tui-live`)                                       |
 | `smoke/tui-live-evidence.mjs`             | `smoke/tui/live-evidence.mjs`                                                      |
 | `smoke/tui-project-acceptance.mjs`        | `smoke/tui/project-acceptance.mjs`                                                 |
+| `bootstrap/*`                             | `crates/cognia-bootstrap-agent/standalone/*` (repo root, not `scripts/`)           |
 
 ## Known layout debt
 
@@ -330,7 +322,5 @@ new scripts and do not copy these patterns:
   their outputs embed the generator path and the CI lane rules, cache keys and
   Android fingerprint select on `scripts/build/`; `plugin/generate-*.mjs` stay
   with the plugin tooling.
-- `bootstrap/` is a product asset: `lib/project-environment/bootstrap-presets.ts`
-  imports `bootstrap/presets.json`, the only app import from `scripts/`.
 - `gates/convergence/*.md` are working notes of the in-flight convergence
   refactor; they move to `docs/evidence/` when that work merges.

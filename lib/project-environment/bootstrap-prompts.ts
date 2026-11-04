@@ -41,8 +41,8 @@ const SHARED = {
 /** Source files the definitions mirror, for the parity test. */
 export const BOOTSTRAP_PROMPT_SOURCES: Readonly<Record<BootstrapRuntime, string>> = {
   native: "crates/cognia-bootstrap-agent/src/runner.rs",
-  bash: "scripts/bootstrap/cognia-bootstrap.sh",
-  powershell: "scripts/bootstrap/cognia-bootstrap.ps1",
+  bash: "crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh",
+  powershell: "crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.ps1",
 }
 
 export const BOOTSTRAP_SYSTEM_PROMPTS: Readonly<Record<BootstrapRuntime, PromptDefinitionV1>> = {

@@ -3,12 +3,12 @@ name: Standalone bootstrap scripts
 on:
   pull_request:
     paths:
-      - scripts/bootstrap/**
+      - crates/cognia-bootstrap-agent/standalone/**
       - .github/workflows/bootstrap-scripts.yml
   push:
     branches: [master, dev]
     paths:
-      - scripts/bootstrap/**
+      - crates/cognia-bootstrap-agent/standalone/**
       - .github/workflows/bootstrap-scripts.yml
   workflow_dispatch:
 
@@ -36,13 +36,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Exercise standalone runtime against local model server
-        run: python scripts/bootstrap/standalone.test.py --runtime ${{ matrix.runtime }}
+        run: python crates/cognia-bootstrap-agent/standalone/standalone.test.py --runtime ${{ matrix.runtime }}
       - name: Check Bash syntax and focused runtime contracts
         if: matrix.runtime == 'bash'
         run: |
-          bash -n scripts/bootstrap/cognia-bootstrap.sh
-          shellcheck scripts/bootstrap/cognia-bootstrap.sh
-          python scripts/bootstrap/bash-runtime.test.py
+          bash -n crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh
+          shellcheck crates/cognia-bootstrap-agent/standalone/cognia-bootstrap.sh
+          python crates/cognia-bootstrap-agent/standalone/bash-runtime.test.py
       - name: Check PowerShell-specific runtime contracts
         if: matrix.runtime == 'powershell'
-        run: python scripts/bootstrap/powershell-runtime.test.py
+        run: python crates/cognia-bootstrap-agent/standalone/powershell-runtime.test.py
