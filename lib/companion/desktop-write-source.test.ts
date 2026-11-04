@@ -811,6 +811,7 @@ describe("dispatchCommand: connector_send", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].role).toBe("user")
     expect(rows[0].parts).toEqual([{ type: "text", text: "hello" }])
+    expect(rows[0].metadata?.personalMarkVersion).toBe(1)
   })
 
   it("joins multiple segments with newlines", async () => {

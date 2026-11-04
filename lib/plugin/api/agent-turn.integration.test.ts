@@ -28,6 +28,7 @@ jest.mock("@/lib/claude/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(),
 }))
 jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
   sessionControl: async () => null,
   closeSession: jest.fn(async () => {}),
 }))
@@ -92,10 +93,11 @@ it.each([false, true])(
         active++
         maximumActive = Math.max(maximumActive, active)
         try {
-          await cap?.beforeSend?.()
           const prepared = await prepareTranscriptRuntimeSend(id, options!, {
             currentMessageId: cap?.currentMessageId,
           })
+          // Match IPC: preparation can advance the generation before dispatch records it.
+          await cap?.beforeSend?.()
           histories.push(prepared.initialConversation)
           if (prompt === "First") {
             enteredFirst()
@@ -276,11 +278,11 @@ it("reuses the logical user row after failure, excludes it from rebuilt history,
   const histories: SendOptions["initialConversation"][] = []
   let calls = 0
   jest.mocked(runAndCaptureAssistantReply).mockImplementation(async (id, prompt, options, cap) => {
-    await cap?.beforeSend?.()
     attempts.push(options!.turnId!)
     const prepared = await prepareTranscriptRuntimeSend(id, options!, {
       currentMessageId: cap?.currentMessageId,
     })
+    await cap?.beforeSend?.()
     histories.push(prepared.initialConversation)
     expect(prompt).toBe(request.prompt)
     if (++calls === 1) throw new Error("engine failed after send")
@@ -519,12 +521,13 @@ it("rebuilds AI-SDK history from durable topic rows after runtime loss, excludin
     expect(hasCaptureResponder({ type: "event", sessionId: id, turnId: options?.turnId })).toBe(
       true
     )
+    const sendOptions = await prepareTranscriptRuntimeSend(id, options!)
     await cap?.beforeSend?.()
     expect((await resolveRunActingIdentity(id))?.trigger).toBe("external-event")
     await expect(assertLarkActingIdentity("lark-1", { sessionId: id })).rejects.toThrow(
       /phases 4 and 5/i
     )
-    prepared.push(await prepareTranscriptRuntimeSend(id, options!))
+    prepared.push(sendOptions)
     await cap?.onSdkSessionId?.(`sdk-${id}`)
     return {
       text: `Reply ${prepared.length}`,
@@ -1025,3 +1028,36 @@ it.each(["missing", "changed"])(
     expect(runAndCaptureAssistantReply).toHaveBeenCalledTimes(1)
   }
 )
+
+it("persists Host run marks on captured plugin turns and keeps a later unmarked run independent", async () => {
+  jest.mocked(resolveSendOptions).mockResolvedValue({ cwd: "/repo" })
+  let turn = 0
+  jest.mocked(runAndCaptureAssistantReply).mockImplementation(async (id) => {
+    const runs = await getDb().executionRuns.where("sessionId").equals(id).toArray()
+    const current = runs.find((run) => run.status === "running")!
+    if (turn++ === 0)
+      await getDb().executionRuns.update(current.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }],
+      })
+    return {
+      text: "captured answer",
+      messageId: `marked-capture-${turn}`,
+      a2uiSurfaces: {},
+      a2uiSurfaceOrder: [],
+    }
+  })
+  const first = await runPluginAgentTurn(request, {
+    grantSource: { kind: "plugin", id: "marked-plugin" },
+  })
+  await runPluginAgentTurn(
+    { ...request, sessionId: first.sessionId },
+    { grantSource: { kind: "plugin", id: "marked-plugin" } }
+  )
+  const rows = await listMessages(first.sessionId)
+  expect(rows.find((row) => row.id === "marked-capture-1")?.metadata).toMatchObject({
+    personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }],
+  })
+  expect(rows.find((row) => row.id === "marked-capture-2")?.metadata).not.toHaveProperty(
+    "personalMarks"
+  )
+})

@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  bindPersonalMessageRun: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageRun
+  ),
+  bindPersonalMessageChanges: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageChanges
+  ),
+}))
+import * as personalMarks from "@/lib/execution/personal-marks"
 /**
  * The room runner against fakes: no store, no Dexie, no React (ADR-0177).
  *
@@ -432,6 +442,7 @@ const textOf = (m: Msg) =>
 describe("a linear turn", () => {
   it("records each member before its first send and closes the entry afterwards", async () => {
     const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    const binding = jest.mocked(personalMarks.bindPersonalMessageChanges).mockClear()
     const start = jest.fn(async () => "member-run")
     const finish = jest.fn(async () => undefined)
     w.deps.execution.startMemberRun = start
@@ -440,6 +451,8 @@ describe("a linear turn", () => {
     await w.runner.send("question", { sessionId: ROOM })
     expect(start).toHaveBeenCalledTimes(1)
     expect(finish).toHaveBeenCalledWith("member-run", false)
+    expect(binding).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), "member-run")
+    binding.mockClear()
   })
   it("retries a member with the selected fallback model and recomputed execution limits", async () => {
     const w = createWorld({ team: { members: [{ characterId: "a" }] } })
@@ -1647,4 +1660,38 @@ describe("multi-device turn admission", () => {
     expect(w.db.get(ROOM) ?? []).toHaveLength(0)
     w.runner.dispose()
   })
+})
+
+it("persists a marked room member's output through the canonical message writer", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { getDb } = await import("@/lib/db/schema")
+  const messages = await import("@/lib/db/messages")
+  const { startToolExecutionRun, finishToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  try {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    w.deps.execution.startMemberRun = async (sub) => {
+      const run = await startToolExecutionRun(sub, {
+        localAuthorization:
+          LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      })
+      expect(
+        await admitPersonalCredential({ executionRunId: run.id }, { source: "mcp-oauth" })
+      ).toMatchObject({ ok: true })
+      return run.id
+    }
+    w.deps.execution.finishMemberRun = finishToolExecutionRun
+    w.deps.db.persistMessages = messages.persistMessages
+    w.replyWith("a", "private room result")
+    await w.runner.send("question", { sessionId: ROOM })
+    const rows = await getDb().messages.where("sessionId").equals(ROOM).toArray()
+    expect(rows.find((row) => row.role === "assistant")?.metadata).toMatchObject({
+      personalMarks: [expect.objectContaining({ source: "mcp-oauth" })],
+    })
+  } finally {
+    await fixture.dispose()
+  }
 })

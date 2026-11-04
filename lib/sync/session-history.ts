@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 
 import { normalizeStoredMessageMedia } from "@/lib/chat/media/normalize-message-media"
@@ -454,6 +455,14 @@ async function persistHistoryPage(rows: StoredMessage[], assertCurrent: () => vo
     const oldRefs = await db.messageMediaRefs.where("messageId").anyOf(messageIds).toArray()
     assertCurrent()
     for (const ref of oldRefs) orphanCandidates.add(ref.hash)
+    const previousRows = await db.messages.bulkGet(messageIds)
+    normalized.forEach((message, index) => {
+      message.metadata = preservePersonalMarkMetadata(
+        message.metadata,
+        previousRows[index]?.metadata,
+        { rowExists: !!previousRows[index] }
+      )
+    })
     await db.messages.bulkPut(normalized)
     await db.messageMediaRefs.where("messageId").anyOf(messageIds).delete()
     const replacementRefs = normalized.flatMap((message) =>

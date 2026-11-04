@@ -3,6 +3,7 @@ import {
   projectRemoteDocumentData,
   rememberRemoteDocument,
   stagedRemoteDocument,
+  remoteDocumentPersonalMarks,
 } from "./remote-document"
 
 const provenance = {
@@ -17,6 +18,20 @@ const provenance = {
   fetchedAt: 1,
   completeness: { status: "complete" },
 }
+
+it("marks staged personal document attachments as local-person and deduplicates their reads", () => {
+  expect(
+    remoteDocumentPersonalMarks([
+      { remoteDocument: provenance },
+      { remoteDocument: { ...provenance, fetchedAt: 2, person: { kind: "service" } } },
+      { remoteDocument: { ...provenance, providerId: "lark", url: "" } },
+      { remoteDocument: null },
+    ])
+  ).toEqual([
+    { person: { kind: "local-person" }, source: "google-docs", markedAt: 1 },
+    { person: { kind: "local-person" }, source: "lark-user", markedAt: 1 },
+  ])
+})
 
 it("binds intake provenance to File identity, never to a filename", () => {
   const file = new File(["body"], "Plan.md")

@@ -4592,3 +4592,20 @@ describe("HostState Agent RPC dispatcher", () => {
     }
   )
 })
+
+it("keeps personal marks when projecting a confirmed HostState transcript row", async () => {
+  const { rowToUIMessage } = await import("@/lib/db/messages")
+  const personalMarks = [{ person: { kind: "local-person" }, source: "mcp-oauth", markedAt: 10 }]
+  const row = {
+    id: "host-marked",
+    sessionId: "host-session",
+    role: "assistant",
+    parts: [],
+    createdAt: 10,
+    metadata: { personalMarks, hostState: { actionId: "action" } },
+  } as const
+  expect(rowToUIMessage(row as never).metadata).toMatchObject({
+    personalMarks,
+    hostState: { actionId: "action" },
+  })
+})

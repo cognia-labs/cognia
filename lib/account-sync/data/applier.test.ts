@@ -267,3 +267,115 @@ describe("applyBatches", () => {
     closeAll(devices)
   })
 })
+
+it("does not lose personal marks to a newer offline reaction metadata update", async () => {
+  const { a, devices, depsFor, at, fromB, batch } = await setup()
+  try {
+    const personalMarks = [
+      { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
+    ]
+    await a.db.messages.put({
+      id: "marked",
+      sessionId: "s",
+      role: "assistant",
+      parts: [],
+      metadata: { personalMarks, personalMarkVersion: 1 },
+      createdAt: 1,
+    })
+    await a.db.syncFieldClocks.put({
+      table: "messages",
+      rowId: "marked",
+      fields: { metadata: at(7000) },
+    })
+    const op = await fromB({
+      t: "messages",
+      id: "marked",
+      k: "upsert",
+      f: { metadata: [{ reactions: [{ emoji: "ok" }] }, at(8000)] },
+    })
+    await applyBatches(await depsFor(), [batch([op])])
+    expect((await a.db.messages.get("marked"))?.metadata).toEqual({
+      personalMarks,
+      personalMarkVersion: 1,
+      reactions: [{ emoji: "ok" }],
+    })
+  } finally {
+    closeAll(devices)
+  }
+})
+
+it("joins personal marks even when their metadata clock loses to a newer local reaction", async () => {
+  const { a, devices, depsFor, at, fromB, batch } = await setup()
+  try {
+    await a.db.messages.put({
+      id: "joined",
+      sessionId: "s",
+      role: "assistant",
+      parts: [],
+      metadata: { reactions: [{ emoji: "newer", actorIds: ["local"] }] },
+      createdAt: 1,
+    })
+    await a.db.syncFieldClocks.put({
+      table: "messages",
+      rowId: "joined",
+      fields: { metadata: at(8000) },
+    })
+    const personalMarks = [
+      { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
+    ]
+    const op = await fromB({
+      t: "messages",
+      id: "joined",
+      k: "upsert",
+      f: { metadata: [{ personalMarks, personalMarkVersion: 1 }, at(7000)] },
+    })
+    await applyBatches(await depsFor(), [batch([op])])
+    expect((await a.db.messages.get("joined"))?.metadata).toEqual({
+      personalMarks,
+      reactions: [{ emoji: "newer", actorIds: ["local"] }],
+    })
+  } finally {
+    closeAll(devices)
+  }
+})
+
+it.each([undefined, { note: "legacy" }])(
+  "keeps existing legacy classification and carries a new synced version (%j)",
+  async (metadata) => {
+    const { a, devices, depsFor, at, fromB, batch } = await setup()
+    try {
+      await a.db.messages.put({
+        id: "legacy-synced-version",
+        sessionId: "s",
+        role: "assistant",
+        parts: [],
+        createdAt: 1,
+        metadata,
+      })
+      await a.db.syncFieldClocks.put({
+        table: "messages",
+        rowId: "legacy-synced-version",
+        fields: { metadata: at(7000) },
+      })
+      const existing = await fromB({
+        t: "messages",
+        id: "legacy-synced-version",
+        k: "upsert",
+        f: { metadata: [{ personalMarkVersion: 1 }, at(8000)] },
+      })
+      const fresh = await fromB({
+        t: "messages",
+        id: "new-synced-version",
+        k: "upsert",
+        f: { metadata: [{ personalMarkVersion: 1 }, at(8000)] },
+      })
+      await applyBatches(await depsFor(), [batch([existing, fresh])])
+      expect((await a.db.messages.get("legacy-synced-version"))?.metadata ?? {}).not.toHaveProperty(
+        "personalMarkVersion"
+      )
+      expect((await a.db.messages.get("new-synced-version"))?.metadata?.personalMarkVersion).toBe(1)
+    } finally {
+      closeAll(devices)
+    }
+  }
+)

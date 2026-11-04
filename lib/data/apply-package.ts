@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 // Applies a `BackupPackageV3` to the local Dexie database under one of three
 // merge strategies:
 //   - skip:      keep the local row, drop the import row (default; safest)
@@ -1019,6 +1020,9 @@ export async function applyBackupPackage(
             ...message,
             id,
             sessionId: sessionMapping.get(message.sessionId) ?? message.sessionId,
+            metadata: preservePersonalMarkMetadata(message.metadata, existing?.metadata, {
+              rowExists: !!existing && id === message.id,
+            }),
           }
           await applyCollection<StoredMessage>({
             rows: [row],

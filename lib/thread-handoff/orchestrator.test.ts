@@ -620,3 +620,35 @@ describe("remote Host recovery failures", () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 })
+
+it("keeps legacy connector provenance when preparing a canonical handoff offer", async () => {
+  const binding = {
+    platform: "lark" as const,
+    adapterId: "handoff-adapter",
+    conversationKey: "chat",
+    conversationRef: { platform: "lark" as const, adapterId: "handoff-adapter" },
+  }
+  await getDb().adapterInstances.put({
+    id: "handoff-adapter",
+    type: "lark",
+    settings: { connectedUser: { openId: "owner" } },
+  } as never)
+  const frame = await buildThreadHandoffOffer(
+    { ...session, platformBinding: binding },
+    { hostRef: "cloud", kind: "cloud" },
+    1000,
+    {
+      messages: [
+        {
+          id: "old",
+          role: "assistant",
+          parts: [{ type: "text", text: "private" }],
+          metadata: { createdAt: 10 },
+        },
+      ],
+      deployments: [],
+    }
+  )
+  expect(JSON.stringify(frame)).toContain('"personalMarks"')
+  expect(JSON.stringify(frame)).toContain('"remoteUserId":"owner"')
+})

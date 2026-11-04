@@ -1,5 +1,7 @@
 "use client"
 
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+
 /**
  * Desktop-side counterpart of the Rust
  * `companion::desktop_messages_bridge` (mobile completeness Phase 2).
@@ -670,7 +672,11 @@ export async function readMessagesPage(
   // clients never call this full-message API; legacy clients cannot resolve a
   // content-addressed ref, so expand only this bounded wire page.
   const rows = await Promise.all(
-    candidates.slice(0, pageSize).map((row) => expandLegacyMediaRefs(toWireMessage(row)))
+    candidates
+      .slice(0, pageSize)
+      .map(async (row) =>
+        expandLegacyMediaRefs(toWireMessage(await personalMessageForCopy(getDb(), row, session)))
+      )
   )
   const end = start + rows.length
   return {
@@ -921,7 +927,7 @@ export async function readTranscriptTurnMessages(
   let approximateBytes = 2
   for (const row of allRows.slice(position, position + limit + 1)) {
     if (page.length >= limit) break
-    const message = toTranscriptMessage(row)
+    const message = toTranscriptMessage(await personalMessageForCopy(getDb(), row))
     const messageBytes = new TextEncoder().encode(JSON.stringify(message)).byteLength + 1
     if (page.length > 0 && approximateBytes + messageBytes > TRANSCRIPT_DETAIL_PAGE_BYTE_LIMIT)
       break

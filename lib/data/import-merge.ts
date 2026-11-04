@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 // Guarded persistence for external-agent session imports (ADR-0062 fidelity
 // upgrade). A naive `bulkPut` replaces the whole `ChatSession` row, which — on
 // a RE-import of a session the user already continued in Cognia — would wipe
@@ -298,6 +299,14 @@ export async function applyImportedMerged(
         const messageIds = messageRows.map((message) => message.id)
         const oldRefs = await db.messageMediaRefs.where("messageId").anyOf(messageIds).toArray()
         for (const ref of oldRefs) orphanCandidates.add(ref.hash)
+        const previousRows = await db.messages.bulkGet(messageIds)
+        messageRows.forEach((message, index) => {
+          message.metadata = preservePersonalMarkMetadata(
+            message.metadata,
+            previousRows[index]?.metadata,
+            { rowExists: !!previousRows[index] }
+          )
+        })
         await db.messages.bulkPut(messageRows)
         await db.messageMediaRefs.where("messageId").anyOf(messageIds).delete()
         const replacementRefs = messageRows.flatMap((message) =>

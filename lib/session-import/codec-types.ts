@@ -163,6 +163,14 @@ export function conversationToCanonical(
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
       ...(typeof metadata?.model === "string" ? { model: metadata.model } : {}),
       ...(usage ? { usage } : {}),
+      ...(metadata?.personalMarks || metadata?.personalMarkVersion === 1
+        ? {
+            metadata: {
+              ...(metadata.personalMarks ? { personalMarks: metadata.personalMarks } : {}),
+              ...(metadata.personalMarkVersion === 1 ? { personalMarkVersion: 1 } : {}),
+            },
+          }
+        : {}),
       ...(typeof message.metadata?.createdAt === "string"
         ? { at: message.metadata.createdAt as string }
         : {}),

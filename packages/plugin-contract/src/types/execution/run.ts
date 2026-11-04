@@ -1,7 +1,7 @@
 /** Stable execution semantics shared by agent turns, workflows, and IM presenters. */
 
 import type { ConversationDeliveryTarget } from "../connectors/event"
-import type { ActingIdentityV1, RunAuthorityV1 } from "./acting-identity"
+import type { ActingIdentityV1, PersonalMarkV1, RunAuthorityV1 } from "./acting-identity"
 export * from "./acting-identity"
 
 export type ExecutionRunKind =
@@ -148,6 +148,7 @@ export type RunEventType =
   | "projection.degraded"
   | "usage.reported"
   | "authority.observed"
+  | "personal.marked"
 
 export type RunStepStatus =
   "pending" | "in_progress" | "completed" | "failed" | "skipped" | "blocked"
@@ -388,6 +389,8 @@ export interface ExecutionRun {
   id: string
   /** ADR-0243 phase 1: recorded only; existing credential selection is unchanged. */
   actingIdentity?: ActingIdentityV1
+  /** Unindexed, run-scoped personal-data provenance (ADR-0243 phase 2A-1). */
+  personalMarks?: PersonalMarkV1[]
   /** ADR-0243 phase 1: recorded only; existing runtime ceilings remain authoritative. */
   authority?: RunAuthorityV1
   /** Verified owning Host for ADR-0233 acceptance projections and canonical deletion. */

@@ -1,4 +1,16 @@
 /** @jest-environment jsdom */
+import "fake-indexeddb/auto"
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  bindPersonalMessageRun: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageRun
+  ),
+  bindPersonalMessageChanges: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageChanges
+  ),
+}))
+
+import * as personalMarks from "@/lib/execution/personal-marks"
 const mockAcknowledgeTranscriptRuntime = jest.fn(async (..._args: unknown[]) => {})
 const mockProjectSdkMessage = jest.fn(async (..._args: unknown[]) => {})
 const mockReadSession = jest.fn((...args: unknown[]) =>
@@ -185,6 +197,7 @@ describe("connector ingress during chat streaming", () => {
   it.each([true, false])(
     "pins Host attempt identity for sealed reply hooks (correlated=%s)",
     async (correlated) => {
+      const binding = jest.mocked(personalMarks.bindPersonalMessageChanges).mockClear()
       const post = jest.mocked(dispatchPostChatReceive).mockClear()
       const receive = jest.mocked(dispatchOnAssistantMessage).mockClear()
       const turnId = `reply-${correlated}`
@@ -219,6 +232,11 @@ describe("connector ingress during chat streaming", () => {
             getExecutionHandle: () => undefined,
           }
         )
+        expect(binding).toHaveBeenCalledWith(
+          expect.any(Array),
+          expect.any(Array),
+          correlated ? "exact-host-run" : undefined
+        )
         const execution = { sessionId, executionRunId: correlated ? "exact-host-run" : "" }
         expect(post).toHaveBeenCalledWith(expect.any(Object), execution)
         expect(receive).toHaveBeenCalledWith(
@@ -226,6 +244,7 @@ describe("connector ingress during chat streaming", () => {
           execution
         )
       } finally {
+        binding.mockClear()
         registry.clear()
       }
     }
@@ -1603,3 +1622,98 @@ describe("Auto mode and per-call tools (ADR-0201)", () => {
     expect(respond.mock.calls[0][0]).toBe("deny")
   })
 })
+
+it.each([false, true])(
+  "persists Host personal marks on desktop/connector assistant and tool rows (connector=%s)",
+  async (connector) => {
+    const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+    const { getDb } = await import("@/lib/db/schema")
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    const fixture = createDbTestFixture()
+    await fixture.initialize()
+    const sessionId = `marked-event-${connector}`
+    const registry = new SessionCoalescingRegistry({
+      onCommit: (id, messages) => useChatStore.getState().replaceSessionMessages(id, messages),
+      onPersist: () => {},
+      persistDelayMs: 0,
+    })
+    const previousPersist = mockPersistMessages.getMockImplementation()!
+    mockPersistMessages.mockImplementation(jest.requireActual("@/lib/db/messages").persistMessages)
+    try {
+      await getDb().sessions.put({
+        id: sessionId,
+        title: "Marked",
+        kind: "direct",
+        createdAt: 1,
+        updatedAt: 1,
+        ...(connector
+          ? {
+              platformBinding: {
+                platform: "lark",
+                adapterId: "adapter",
+                conversationKey: "chat",
+                conversationRef: { platform: "lark", adapterId: "adapter" },
+              },
+            }
+          : {}),
+      })
+      const run = await startToolExecutionRun(sessionId, {
+        localAuthorization:
+          LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+      })
+      expect(
+        await admitPersonalCredential({ executionRunId: run.id }, { source: "google-docs" })
+      ).toMatchObject({ ok: true })
+      bindToolCallRun(sessionId, run.id, run.id, "attempt")
+      useChatStore.getState().clear()
+      useChatStore.getState().setActiveSession(sessionId)
+      useChatStore.getState().setLastSend(sessionId, {
+        content: "question",
+        options: { turnId: run.id },
+        attemptIndex: 0,
+      })
+      const reply = {
+        id: `private-${connector}`,
+        role: "assistant",
+        parts: [
+          { type: "text", text: "private answer" },
+          {
+            type: "dynamic-tool",
+            toolName: "read",
+            toolCallId: "read",
+            state: "output-available",
+            input: {},
+            output: "private tool result",
+          },
+        ],
+      }
+      applySdkEventMock.mockReturnValueOnce({ messages: [reply], turnComplete: true })
+      await handleEvent(
+        {
+          type: "event",
+          sessionId,
+          turnId: run.id,
+          attemptId: "attempt",
+          event: { type: "result" },
+        } as never,
+        { current: sessionId },
+        { current: [] },
+        { current: new Map() },
+        { current: new Map() },
+        { current: null },
+        { messagesMirrorRef: { current: new Map() }, registry, getExecutionHandle: () => undefined }
+      )
+      expect((await getDb().messages.get(reply.id))?.metadata).toMatchObject({
+        personalMarks: [expect.objectContaining({ source: "google-docs" })],
+        ...(connector ? { personalMarkVersion: 1 } : {}),
+      })
+    } finally {
+      registry.clear()
+      mockPersistMessages.mockImplementation(previousPersist)
+      useChatStore.getState().clear()
+      await fixture.dispose()
+    }
+  }
+)

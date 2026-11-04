@@ -1,3 +1,19 @@
+import "fake-indexeddb/auto"
+jest.mock("./runner", () => ({
+  ...jest.requireActual("./runner"),
+  createPersonAgentRunner: jest.fn(jest.requireActual("./runner").createPersonAgentRunner),
+}))
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  bindPersonalMessageRun: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageRun
+  ),
+  bindPersonalMessageChanges: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageChanges
+  ),
+}))
+import * as personalMarks from "@/lib/execution/personal-marks"
+import * as personRunner from "./runner"
 jest.mock("@/lib/db/messages", () => ({
   listMessages: jest.fn(async () => [
     { id: "m0", role: "user", parts: [{ type: "text", text: "earlier" }] },
@@ -80,4 +96,74 @@ describe("person agent wiring", () => {
     ).rejects.toThrow(/already installed/)
     await first()
   })
+})
+
+it("binds headless person-agent writes to the Host action run", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  let captured: personRunner.PersonAgentRunnerDeps | undefined
+  const original = jest.requireActual<typeof import("./runner")>("./runner").createPersonAgentRunner
+  const factory = jest.mocked(personRunner.createPersonAgentRunner).mockImplementation((deps) => {
+    captured = deps
+    return original(deps)
+  })
+  const binding = jest.mocked(personalMarks.bindPersonalMessageRun).mockClear()
+  const stop = await installPersonAgents({ transport: transport(), manager, log: () => undefined })
+  try {
+    await captured!.writeMessage("s1", {
+      id: "assistant-action-marks",
+      role: "assistant",
+      parts: [{ type: "text", text: "private" }],
+    })
+    expect(binding).toHaveBeenCalledWith("assistant-action-marks", "hoststate:action-marks")
+  } finally {
+    await stop()
+    factory.mockImplementation(original)
+    binding.mockClear()
+    await fixture.dispose()
+  }
+})
+
+it("persists the headless person-agent reply with its Host-held run marks", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { getDb } = await import("@/lib/db/schema")
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+  const writer = jest.mocked((await import("@/lib/db/messages")).commitMessageDelta)
+  const previous = writer.getMockImplementation()!
+  writer.mockImplementation(jest.requireActual("@/lib/db/messages").commitMessageDelta)
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  let captured: personRunner.PersonAgentRunnerDeps | undefined
+  const original = jest.requireActual<typeof import("./runner")>("./runner").createPersonAgentRunner
+  jest.mocked(personRunner.createPersonAgentRunner).mockImplementation((deps) => {
+    captured = deps
+    return original(deps)
+  })
+  const stop = await installPersonAgents({ transport: transport(), manager, log: () => undefined })
+  try {
+    const run = await startToolExecutionRun("s1", {
+      runId: "hoststate:persist-marks",
+      localAuthorization:
+        LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+    })
+    expect(
+      await admitPersonalCredential({ executionRunId: run.id }, { source: "mcp-oauth" })
+    ).toMatchObject({ ok: true })
+    await captured!.writeMessage("s1", {
+      id: "assistant-persist-marks",
+      role: "assistant",
+      parts: [{ type: "text", text: "private" }],
+    })
+    expect((await getDb().messages.get("assistant-persist-marks"))?.metadata).toMatchObject({
+      personalMarks: [expect.objectContaining({ source: "mcp-oauth" })],
+    })
+  } finally {
+    await stop()
+    writer.mockImplementation(previous)
+    jest.mocked(personRunner.createPersonAgentRunner).mockImplementation(original)
+    await fixture.dispose()
+  }
 })

@@ -551,3 +551,56 @@ it("re-parses captured message provenance before encrypting account-sync payload
     closeAll(devices)
   }
 })
+
+it("materializes legacy connector marks on the encrypted outgoing copy without rewriting the row", async () => {
+  const { a, devices, deps, pushed, open } = await setup()
+  try {
+    await a.db.sessions.put(
+      session("legacy", {
+        platformBinding: { platform: "lark", adapterId: "adapter", conversationKey: "chat" },
+      })
+    )
+    await a.db.adapterInstances.put({
+      id: "adapter",
+      type: "lark",
+      settings: { connectedUser: { openId: "owner" } },
+    } as never)
+    await a.db.messages.put({
+      id: "legacy-message",
+      sessionId: "legacy",
+      role: "assistant",
+      parts: [],
+      createdAt: 10,
+    })
+    await pushOutbox(deps())
+    const payloads = await Promise.all(pushed.flat().map(open))
+    const message = payloads.find(
+      (payload) => payload.t === "messages" && payload.id === "legacy-message"
+    )!
+    expect(message).toMatchObject({
+      k: "upsert",
+      f: {
+        metadata: [
+          {
+            personalMarks: [
+              {
+                person: {
+                  kind: "platform",
+                  platform: "lark",
+                  adapterId: "adapter",
+                  remoteUserId: "owner",
+                },
+                source: "lark-user",
+                markedAt: 10,
+              },
+            ],
+          },
+          expect.any(String),
+        ],
+      },
+    })
+    expect((await a.db.messages.get("legacy-message"))?.metadata).toBeUndefined()
+  } finally {
+    closeAll(devices)
+  }
+})

@@ -1,3 +1,4 @@
+import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 /**
  * The room runner: character-team orchestration with no React in it
  * (ADR-0177, batch 1).
@@ -1478,7 +1479,10 @@ export class RoomRunner {
     let executionFailed = true
     try {
       executionRunId = await deps.execution.startMemberRun?.(sub)
-      if (executionRunId) opts = { ...opts, turnId: executionRunId }
+      if (executionRunId) {
+        opts = { ...opts, turnId: executionRunId }
+        ctx.options = { ...ctx.options, turnId: executionRunId }
+      }
       do {
         const done = new Promise<void>((resolve, reject) => {
           this.resolvers.set(sub, { resolve, reject })
@@ -1710,6 +1714,7 @@ export class RoomRunner {
           }
         }
 
+        bindPersonalMessageChanges(teamMsgs, nextMessages, ctx?.options.turnId)
         if (nextMessages === teamMsgs) return
 
         if (

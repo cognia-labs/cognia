@@ -83,7 +83,11 @@ export async function sendManualReplyRemotely(
       parts: parts.length > 0 ? parts : [{ type: "text", text: "" }],
       // The host stamps `outboundJobId` on its authoritative copy; until that
       // syncs down the mirror only carries the relay key so the pill can wait.
-      metadata: { ...input.messageMetadata, relayIdempotencyKey: input.idempotencyKey },
+      metadata: {
+        ...input.messageMetadata,
+        relayIdempotencyKey: input.idempotencyKey,
+        personalMarkVersion: 1,
+      },
       createdAt: Date.now(),
     }
     await db.messages.put(row)

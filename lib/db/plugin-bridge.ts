@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 /**
  * Plugin-facing Dexie bridge.
  *
@@ -156,9 +157,21 @@ export const messageRepository = {
   },
 
   async create(sessionId: string, message: UIMessage): Promise<UIMessage> {
-    assertSessionWritable(await getDb().sessions.get(sessionId), "send-message")
+    const session = await getDb().sessions.get(sessionId)
+    assertSessionWritable(session, "send-message")
     const row = pluginToStored(sessionId, message)
-    await getDb().messages.put(row)
+    const db = getDb()
+    await db.transaction("rw", db.messages, async () => {
+      const existing = await db.messages.get(row.id)
+      const incoming = { ...row.metadata }
+      delete incoming.personalMarkVersion
+      row.metadata = preservePersonalMarkMetadata(incoming, existing?.metadata, {
+        rowExists: !!existing,
+      })
+      if (!existing && session?.platformBinding)
+        row.metadata = { ...row.metadata, personalMarkVersion: 1 }
+      await db.messages.put(row)
+    })
     markSessionDirty(sessionId)
     invalidatePersistSnapshot(sessionId)
     void emitMessageEvent("added", { sessionId, messageId: message.id })
@@ -171,11 +184,6 @@ export const messageRepository = {
     if (!existing) return
     assertSessionWritable(await dexie.sessions.get(existing.sessionId), "send-message")
 
-    const meta: Record<string, unknown> = { ...(existing.metadata ?? {}) }
-    if (updates.attachments !== undefined) meta.attachments = updates.attachments
-    if (updates.tokens !== undefined) meta.tokens = updates.tokens
-    if (updates.branchId !== undefined) meta.branchId = updates.branchId
-
     const patch: Partial<StoredMessage> = {}
     if (updates.role !== undefined) patch.role = updates.role
     if (updates.parts !== undefined) {
@@ -185,9 +193,19 @@ export const messageRepository = {
     }
     if (updates.senderId !== undefined) patch.senderId = updates.senderId
     if (updates.senderKind !== undefined) patch.senderKind = updates.senderKind
-    if (Object.keys(meta).length > 0) {
-      patch.metadata = meta
-    }
+    const persistUpdate = () =>
+      dexie.transaction("rw", dexie.messages, async () => {
+        // Invalidation can await the engine. Keep provenance added by another
+        // writer during that wait by reading it in the final write transaction.
+        const current = await dexie.messages.get(messageId)
+        if (!current || current.sessionId !== existing.sessionId) return
+        const meta: Record<string, unknown> = { ...current.metadata }
+        if (updates.attachments !== undefined) meta.attachments = updates.attachments
+        if (updates.tokens !== undefined) meta.tokens = updates.tokens
+        if (updates.branchId !== undefined) meta.branchId = updates.branchId
+        patch.metadata = preservePersonalMarkMetadata(meta, current.metadata, { rowExists: true })
+        await dexie.messages.update(messageId, patch)
+      })
 
     if (
       updates.role !== undefined ||
@@ -196,10 +214,10 @@ export const messageRepository = {
     ) {
       await withTranscriptRuntimeLock(existing.sessionId, async () => {
         await invalidateTranscriptRuntime(existing.sessionId)
-        await dexie.messages.update(messageId, patch as Partial<StoredMessage>)
+        await persistUpdate()
       })
     } else {
-      await dexie.messages.update(messageId, patch as Partial<StoredMessage>)
+      await persistUpdate()
     }
     invalidatePersistSnapshot(existing.sessionId)
     void emitMessageEvent("updated", {

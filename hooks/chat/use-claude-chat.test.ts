@@ -6,6 +6,13 @@
  * — that handler is exercised indirectly via `send` / `respondToApproval`.
  */
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  bindPersonalMessageRun: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageRun
+  ),
+}))
 
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 jest.mock("@/lib/chat/lifecycle-events", () => ({ publishChatLifecycleEvent: jest.fn() }))
@@ -1132,6 +1139,7 @@ jest.setTimeout(30_000)
 // across fixture resets: a synthetic old refusal must not consume a new run.
 let fixtureRunEpoch = 0
 beforeEach(async () => {
+  jest.mocked(bindPersonalMessageRun).mockClear()
   // A previous test's Stop deliberately retains admission until the engine
   // confirms. Fixture teardown models process exit before recycling session ids.
   for (const [callback] of onClaudeMessageMock.mock.calls) callback({ type: "sidecar_exited" })
@@ -2884,6 +2892,13 @@ describe("useClaudeChat — actions", () => {
       })
     )
     const finalMessages = persistMessagesMock.mock.calls.at(-1)?.[1]
+    const directRun = jest.requireMock("@/lib/execution/direct-chat-run")
+      .startDirectChatExecutionRun as jest.Mock
+    expect(directRun.mock.calls.at(-1)?.[0].runId).toEqual(expect.any(String))
+    expect(bindPersonalMessageRun).toHaveBeenCalledWith(
+      recordExternalAgentUsageMock.mock.calls[0][0].messageId,
+      directRun.mock.calls.at(-1)?.[0].runId
+    )
     expect(finalMessages.at(-1)).toMatchObject({
       id: recordExternalAgentUsageMock.mock.calls[0][0].messageId,
       metadata: { usage: { inputTokens: 267000, outputTokens: 11 } },
@@ -11450,7 +11465,11 @@ describe("durable background result admission", () => {
     await flush()
     await act(async () => {
       await result.current.send("background output", undefined, {
-        backgroundDelivery: { id: "background-delivery-test", onAccepted },
+        backgroundDelivery: {
+          id: "background-delivery-test",
+          onAccepted,
+          personalRunIds: ["execution:job:private-child"],
+        },
         throwOnError: true,
       })
     })
@@ -11461,6 +11480,9 @@ describe("durable background result admission", () => {
       })
     )
     expect(onAccepted).toHaveBeenCalledTimes(1)
+    expect(bindPersonalMessageRun).toHaveBeenCalledWith("background-delivery-test", [
+      "execution:job:private-child",
+    ])
     expect(sendPromptMock).toHaveBeenCalledTimes(1)
     // The delivered result is an automation's row, never the person's
     // instruction (ADR-0239).

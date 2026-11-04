@@ -223,7 +223,7 @@ export type SendFn = (
     sharedRequest?: { messageId: string; queueItemId: string; takeover?: boolean }
     skipUserAppend?: boolean
     throwOnError?: boolean
-    backgroundDelivery?: { id: string; onAccepted: () => void }
+    backgroundDelivery?: { id: string; onAccepted: () => void; personalRunIds?: readonly string[] }
     bypassDelegation?: boolean
     sessionId?: string
     steerDrain?: boolean

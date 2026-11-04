@@ -176,6 +176,10 @@ describe("HostState durable store", () => {
         role: "assistant" as const,
         text: "Result",
         reasoning: "Reason",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 8 }],
+          personalMarkVersion: 1,
+        },
         parts: [
           {
             type: "file" as const,
@@ -248,6 +252,10 @@ describe("HostState durable store", () => {
       now: 1,
     })
     const message = await getDb().messages.get("imported:turn")
+    expect(message?.metadata).toMatchObject({
+      personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 8 }],
+      personalMarkVersion: 1,
+    })
     expect(message?.parts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "reasoning", text: "Reason" }),

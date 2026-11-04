@@ -66,6 +66,8 @@ export interface CanonicalTurn {
   /** ISO timestamp when the source recorded one. */
   at?: string
   usage?: CanonicalTurnUsage
+  /** Portable message provenance; carries no credential or execution authority. */
+  metadata?: Record<string, unknown>
 }
 
 export interface CanonicalPermissionEvent {
@@ -293,6 +295,10 @@ export function computeSequenceDigest(turns: readonly CanonicalTurn[]): string {
       feed("\u001b")
       feed(stableJson(turn.parts))
     }
+    if (turn.metadata) {
+      feed("\u001a")
+      feed(stableJson(turn.metadata))
+    }
     for (const call of turn.toolCalls ?? []) {
       feed("")
       feed(call.toolName)
@@ -382,6 +388,11 @@ export function validateCanonicalSession(value: unknown): string[] {
         errors.push(`turns[${i}].role is invalid`)
       }
       if (turn && typeof turn.text !== "string") errors.push(`turns[${i}].text must be a string`)
+      if (
+        turn?.metadata !== undefined &&
+        (!turn.metadata || typeof turn.metadata !== "object" || Array.isArray(turn.metadata))
+      )
+        errors.push(`turns[${i}].metadata must be an object`)
     }
     if (
       session.header &&

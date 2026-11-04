@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 /**
  * Import a transcript handed off from the standalone CLI into a desktop chat
  * session the user can continue.
@@ -80,7 +81,20 @@ export function canonicalTurnToHandoffMessage(turn: CanonicalTurn): HandoffMessa
           }
     )
   }
-  return { id: turn.turnId, role: turn.role, content: turn.text, parts }
+  return {
+    id: turn.turnId,
+    role: turn.role,
+    content: turn.text,
+    parts,
+    ...(turn.metadata
+      ? {
+          metadata: {
+            ...(turn.metadata.personalMarks ? { personalMarks: turn.metadata.personalMarks } : {}),
+            ...(turn.metadata.personalMarkVersion === 1 ? { personalMarkVersion: 1 } : {}),
+          },
+        }
+      : {}),
+  }
 }
 
 export interface ImportHandoffParams {
@@ -309,6 +323,12 @@ export async function importHandoffSession(params: ImportHandoffParams): Promise
       )
       if (params.handoffLock) session.handoffLock = params.handoffLock
       await db.transaction("rw", db.sessions, db.messages, db.messageMediaRefs, async () => {
+        const previousRows = await db.messages.bulkGet(rows.map((row) => row.id))
+        rows.forEach((row, index) => {
+          row.metadata = preservePersonalMarkMetadata(row.metadata, previousRows[index]?.metadata, {
+            rowExists: !!previousRows[index],
+          })
+        })
         await db.sessions.put(session)
         await db.messages.where("sessionId").equals(sessionId).delete()
         await db.messageMediaRefs.where("sessionId").equals(sessionId).delete()

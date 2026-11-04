@@ -4,11 +4,32 @@ import {
   absorbRequester,
   checkActingAuthority,
   meetRunAuthority,
+  mergePersonalMarks,
+  preservePersonalMarkMetadata,
+  samePerson,
   type ActingIdentityV1,
   type PrincipalRefV1,
   type RunAuthorityV1,
   type TenantTokenPurposeV1,
 } from "./acting-identity"
+
+it("merges personal marks by person and source, retaining the earliest read without mutation", () => {
+  const person = { kind: "platform" as const, platform: "lark", adapterId: "a", remoteUserId: "u" }
+  const first = [{ person, source: "lark-user", markedAt: 20 }]
+  const marks = mergePersonalMarks(first, [
+    { person: { ...person, unionId: "enriched" }, source: "lark-user", markedAt: 10 },
+    { person, source: "google-docs", markedAt: 30 },
+    { person: { kind: "local-person" }, source: "google-docs", markedAt: 40 },
+  ])
+  expect(marks.map((mark) => mark.markedAt)).toEqual([10, 30, 40])
+  expect(first[0].markedAt).toBe(20)
+  expect(mergePersonalMarks(undefined, undefined)).toEqual([])
+  expect(samePerson(person, { ...person, principalId: "p" })).toBe(true)
+  expect(samePerson(person, { ...person, adapterId: "other" })).toBe(false)
+  expect(samePerson({ kind: "local-person" }, { kind: "local-person", accountId: "other" })).toBe(
+    false
+  )
+})
 
 const identity: ActingIdentityV1 = {
   schemaVersion: 1,
@@ -205,4 +226,40 @@ it("keeps tenant-token purposes separate from credential lanes and authority", (
   // @ts-expect-error A credential lane is not a tenant-token purpose.
   const lane: TenantTokenPurposeV1 = "delegated"
   expect(purposes).not.toContain(lane)
+})
+
+it("preserves marks when newer metadata replaces other fields", () => {
+  const personalMarks = [
+    { person: { kind: "local-person" as const }, source: "google-docs", markedAt: 10 },
+  ]
+  expect(
+    preservePersonalMarkMetadata(
+      { reactions: ["new"] },
+      { personalMarks, personalMarkVersion: 1, obsolete: true },
+      { rowExists: true }
+    )
+  ).toEqual({ personalMarks, personalMarkVersion: 1, reactions: ["new"] })
+})
+
+it.each([undefined, {}, { note: "legacy" }])(
+  "does not accept a version on an existing legacy row (%j)",
+  (previous) => {
+    expect(
+      preservePersonalMarkMetadata({ personalMarkVersion: 1, note: "updated" }, previous, {
+        rowExists: true,
+      })
+    ).toEqual({ note: "updated" })
+  }
+)
+it("accepts a trusted new copy's version but keeps an existing row's own version", () => {
+  expect(
+    preservePersonalMarkMetadata({ personalMarkVersion: 1 }, undefined, { rowExists: false })
+  ).toEqual({ personalMarkVersion: 1 })
+  expect(
+    preservePersonalMarkMetadata(
+      { personalMarkVersion: undefined },
+      { personalMarkVersion: 1 },
+      { rowExists: true }
+    )
+  ).toEqual({ personalMarkVersion: 1 })
 })

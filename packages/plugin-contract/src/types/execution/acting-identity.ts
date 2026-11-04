@@ -44,6 +44,54 @@ export interface ActingIdentityV1 {
   authorityRevision: number
 }
 
+/** Recorded personal-data provenance. This mark does not itself grant authority. */
+export interface PersonalMarkV1 {
+  person: PrincipalRefV1
+  source: string
+  markedAt: number
+}
+
+/** Transport identity is stable across optional platform identity enrichment. */
+export function samePerson(a: PrincipalRefV1, b: PrincipalRefV1): boolean {
+  return principalKey(a) === principalKey(b)
+}
+
+export function mergePersonalMarks(
+  ...groups: readonly (readonly PersonalMarkV1[] | undefined)[]
+): PersonalMarkV1[] {
+  const merged = new Map<string, PersonalMarkV1>()
+  for (const marks of groups) {
+    for (const mark of marks ?? []) {
+      const key = JSON.stringify([principalKey(mark.person), mark.source])
+      const previous = merged.get(key)
+      if (!previous || mark.markedAt < previous.markedAt) merged.set(key, mark)
+    }
+  }
+  return [...merged.values()]
+}
+
+/** Marks are monotonic; an existing row alone owns its legacy-classification version.
+ * A new row may carry a version only when its caller supplies trusted copy metadata.
+ */
+export function preservePersonalMarkMetadata(
+  incoming: Record<string, unknown> | undefined,
+  previous: Record<string, unknown> | undefined,
+  state: { rowExists: boolean }
+): Record<string, unknown> | undefined {
+  const marks = mergePersonalMarks(
+    previous?.personalMarks as PersonalMarkV1[] | undefined,
+    incoming?.personalMarks as PersonalMarkV1[] | undefined
+  )
+  const metadata = { ...incoming }
+  if (state.rowExists) {
+    delete metadata.personalMarkVersion
+    if (previous && Object.prototype.hasOwnProperty.call(previous, "personalMarkVersion"))
+      metadata.personalMarkVersion = previous.personalMarkVersion
+  }
+  if (marks.length) metadata.personalMarks = marks
+  return Object.keys(metadata).length ? metadata : undefined
+}
+
 export interface RunAuthorityV1 {
   schemaVersion: 1
   permissionMode?: AgentPermissionMode

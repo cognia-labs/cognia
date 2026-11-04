@@ -1,3 +1,4 @@
+import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
@@ -16,6 +17,20 @@ export function syncMessages(transport: Transport, cursor: SyncCursor): Promise<
     {
       table: "messages",
       getTable: () => getDb().messages,
+      applyRows: async (rows, assertCurrent) => {
+        const db = getDb()
+        await db.transaction("rw", db.messages, async () => {
+          const previous = await db.messages.bulkGet(rows.map((row) => row.id))
+          assertCurrent()
+          const merged = rows.map((row, index) => ({
+            ...row,
+            metadata: preservePersonalMarkMetadata(row.metadata, previous[index]?.metadata, {
+              rowExists: !!previous[index],
+            }),
+          }))
+          await db.messages.bulkPut(merged)
+        })
+      },
     },
     transport,
     cursor

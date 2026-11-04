@@ -1,3 +1,4 @@
+import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 /**
  * Wiring for a member partition's sandboxed agents (P6e).
  *
@@ -99,7 +100,13 @@ export async function installPersonAgents(
       renderTranscript(
         (await listMessages(sessionId)).filter((message) => !excluded.includes(message.id))
       ),
-    writeMessage: (sessionId, message) => commitMessageDelta(sessionId, { upserts: [message] }),
+    writeMessage: (sessionId, message) => {
+      const actionId = message.id.startsWith("assistant-")
+        ? message.id.slice("assistant-".length)
+        : undefined
+      if (actionId) bindPersonalMessageRun(message.id, hostStateRunId(actionId))
+      return commitMessageDelta(sessionId, { upserts: [message] })
+    },
     removeMessage: (sessionId, messageId) =>
       commitMessageDelta(sessionId, { deleteIds: [messageId] }),
     // By the turn's own run id: a message queued behind it is a newer open

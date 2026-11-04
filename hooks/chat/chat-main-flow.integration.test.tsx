@@ -88,6 +88,7 @@ const approveToolMock = jest.fn().mockResolvedValue(undefined)
 const toolResultDecisionMock = jest.fn().mockResolvedValue(undefined)
 
 jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
   closeSession: jest.fn().mockResolvedValue(undefined),
   interruptSession: jest.fn().mockResolvedValue(undefined),

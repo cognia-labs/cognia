@@ -2542,6 +2542,7 @@ async function connectorSend(payload: Record<string, unknown>): Promise<{ messag
     role: "user",
     parts: [{ type: "text", text }],
     createdAt: Date.now(),
+    metadata: { personalMarkVersion: 1 },
   }
   await getDb().messages.add(row)
   markSessionDirty(sessionId)

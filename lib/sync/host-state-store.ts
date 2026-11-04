@@ -1092,6 +1092,8 @@ async function persistBusinessProjection(
         sessionId: action.sessionId!,
         role: turn.role,
         parts: canonicalTurnToHandoffMessage(turn).parts!,
+        metadata: canonicalTurnToHandoffMessage(turn).metadata as
+          Record<string, unknown> | undefined,
         createdAt: now + index,
       }))
       const seedTranscript = canonical.turns

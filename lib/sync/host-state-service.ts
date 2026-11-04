@@ -455,7 +455,11 @@ export function createAgentRpcHostStateDispatcher(
                 prompt.manifest
               )
               const existing = await getDb().messages.get(action.action.messageId)
-              if (existing?.sessionId === sessionId) message.metadata = existing.metadata
+              if (existing?.sessionId === sessionId)
+                message.metadata = {
+                  ...existing.metadata,
+                  ...(message.metadata as Record<string, unknown> | undefined),
+                }
               await commitMessageDelta(sessionId, { upserts: [message] })
             }
             const { withTranscriptRuntimeLock } =
@@ -474,6 +478,9 @@ export function createAgentRpcHostStateDispatcher(
                 })
                 if (receipt) {
                   await workSubmissionAdapter.bindHostStateChatTurnContext(action, prepared)
+                  const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+                  prepared.turnId ??= receipt.turnId
+                  bindToolCallRun(sessionId, prepared.turnId, receipt.runId)
                 }
                 await sendPrompt(sessionId, prompt.content, prepared, {
                   commandId: refreshed ? `${action.actionId}:ticket-refresh` : action.actionId,

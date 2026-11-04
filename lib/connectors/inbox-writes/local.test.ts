@@ -171,6 +171,7 @@ describe("sendManualReplyLocally", () => {
     expect(message?.role).toBe("user")
     expect(message?.parts).toEqual([{ type: "text", text: "on it" }])
     expect(message?.metadata?.outboundJobId).toBe(result.jobId)
+    expect(message?.metadata?.personalMarkVersion).toBe(1)
     expect(invalidateMock).toHaveBeenCalledWith("messages", KEY)
   })
 
@@ -259,6 +260,7 @@ describe("sendManualReplyLocally", () => {
     expect(result.messageId).toBe("client-msg-1")
     expect(await getDb().messages.count()).toBe(1)
     expect((await getDb().messages.get("client-msg-1"))?.metadata?.outboundJobId).toBe(result.jobId)
+    expect((await getDb().messages.get("client-msg-1"))?.metadata?.personalMarkVersion).toBe(1)
   })
 
   it("threads replyTo and threadId into the outbound request", async () => {

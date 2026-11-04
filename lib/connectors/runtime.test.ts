@@ -1331,7 +1331,9 @@ describe("installRuntime — ai-run (happy path)", () => {
       },
       { selfId: 100000, chatId: 200001, messageType: "private" }
     )!
-    expect((await insertInboundMessage(event, "snow-history-roles", 10)).role).toBe("assistant")
+    const inserted = await insertInboundMessage(event, "snow-history-roles", 10)
+    expect(inserted.role).toBe("assistant")
+    expect(inserted.metadata?.personalMarkVersion).toBe(1)
     expect(
       (
         await insertInboundMessage(

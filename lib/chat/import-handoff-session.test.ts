@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { conversationToCanonical } from "@/lib/session-import/codec-types"
 import { importHandoffSession, canonicalTurnToHandoffMessage } from "./import-handoff-session"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -364,3 +365,89 @@ describe("importHandoffSession", () => {
     ).rejects.toThrow(/sessionId is required/)
   })
 })
+
+it("preserves personal marks and the connector marking version through handoff import", async () => {
+  const personalMarks = [{ person: { kind: "local-person" }, source: "mcp-oauth", markedAt: 7 }]
+  await importHandoffSession({
+    sessionId: "marked-handoff",
+    handoffSource: "thread-handoff",
+    messages: [
+      {
+        id: "m",
+        role: "assistant",
+        content: "private",
+        metadata: { personalMarks, personalMarkVersion: 1 },
+      },
+    ],
+  })
+  await importHandoffSession({
+    sessionId: "marked-handoff",
+    handoffSource: "thread-handoff",
+    messages: [{ id: "m", role: "assistant", content: "stale copy" }],
+  })
+  expect((await listMessages("marked-handoff"))[0].metadata).toMatchObject({
+    personalMarks,
+    personalMarkVersion: 1,
+  })
+})
+
+it("preserves personal marks through the real source canonicalization and target handoff converters", async () => {
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 8 }]
+  const converted = conversationToCanonical(
+    {
+      session: {
+        id: "handoff-source",
+        title: "Private",
+        kind: "direct",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      messages: [
+        {
+          id: "source-message",
+          sessionId: "handoff-source",
+          role: "assistant",
+          parts: [{ type: "text", text: "private answer" }],
+          createdAt: 1,
+          metadata: { personalMarks, personalMarkVersion: 1 },
+        },
+      ],
+    },
+    { sourceRuntime: "cognia", importFidelity: "structured" }
+  )
+  await importHandoffSession({
+    sessionId: "canonical-marked-target",
+    handoffSource: "thread-handoff",
+    messages: converted.session.turns.map(canonicalTurnToHandoffMessage),
+  })
+  expect((await listMessages("canonical-marked-target"))[0].metadata).toMatchObject({
+    personalMarks,
+    personalMarkVersion: 1,
+  })
+})
+
+it.each([undefined, { note: "legacy" }])(
+  "keeps an existing handoff row's legacy classification (%j)",
+  async (metadata) => {
+    await importHandoffSession({
+      sessionId: "legacy-handoff-version",
+      handoffSource: "thread-handoff",
+      messages: [{ id: "m", role: "assistant", content: "old" }],
+    })
+    const [row] = await getDb()
+      .messages.where("sessionId")
+      .equals("legacy-handoff-version")
+      .toArray()
+    await getDb().messages.update(row.id, { metadata })
+    await importHandoffSession({
+      sessionId: "legacy-handoff-version",
+      handoffSource: "thread-handoff",
+      messages: [
+        { id: "m", role: "assistant", content: "edited", metadata: { personalMarkVersion: 1 } },
+      ],
+    })
+    expect((await getDb().messages.get(row.id))?.metadata ?? {}).not.toHaveProperty(
+      "personalMarkVersion"
+    )
+  }
+)

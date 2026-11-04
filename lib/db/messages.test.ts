@@ -2177,3 +2177,87 @@ it("publishes only actual committed message deletions and explicit session clear
     stop()
   }
 })
+
+it("retains personal marks and the marking version across stale full, delta and streaming metadata", async () => {
+  await getDb().sessions.put({
+    id: "marked-session",
+    title: "Bound",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: {
+      platform: "lark",
+      adapterId: "a",
+      conversationKey: "c",
+      conversationRef: { platform: "lark", adapterId: "a" },
+    },
+  })
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 4 }]
+  const message: UIMessage = {
+    id: "marked-stale",
+    role: "assistant",
+    parts: [{ type: "text", text: "private" }],
+    metadata: { personalMarks, personalMarkVersion: 1 },
+  }
+  await commitMessageDelta("marked-session", { upserts: [message] })
+  const stale = { ...message, metadata: { note: "stale" } }
+  await persistMessages("marked-session", [stale])
+  await commitMessageDelta("marked-session", { upserts: [{ ...stale }] })
+  await persistStreamingMessages("marked-session", [{ ...stale }])
+  expect((await getDb().messages.get(message.id))?.metadata).toMatchObject({
+    personalMarks,
+    personalMarkVersion: 1,
+    note: "stale",
+  })
+})
+
+it.each([undefined, { note: "legacy" }])(
+  "does not let full/delta/streaming writes promote a legacy row (%j)",
+  async (metadata) => {
+    const db = getDb()
+    const row = {
+      id: "legacy-version",
+      sessionId: "legacy-version-session",
+      role: "assistant" as const,
+      parts: [{ type: "text" as const, text: "old" }],
+      createdAt: 1,
+      metadata,
+    }
+    await db.messages.put(row)
+    for (const persist of [
+      persistMessages,
+      async (id: string, messages: UIMessage[]) => commitMessageDelta(id, { upserts: messages }),
+      persistStreamingMessages,
+    ]) {
+      const incoming: UIMessage = {
+        id: row.id,
+        role: "assistant",
+        parts: [{ type: "text", text: "edited" }],
+        metadata: { personalMarkVersion: 1 },
+      }
+      await persist(row.sessionId, [incoming])
+      expect((await db.messages.get(row.id))?.metadata ?? {}).not.toHaveProperty(
+        "personalMarkVersion"
+      )
+    }
+  }
+)
+it.each([
+  persistMessages,
+  async (id: string, messages: UIMessage[]) => commitMessageDelta(id, { upserts: messages }),
+])("versions new bound rows using the Host rule", async (persist) => {
+  const db = getDb()
+  await db.sessions.put({
+    id: "new-bound",
+    title: "Bound",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: {
+      platform: "lark",
+      adapterId: "a",
+      conversationKey: "c",
+      conversationRef: { platform: "lark", adapterId: "a" },
+    },
+  })
+  await persist("new-bound", [msg("new-bound-row", "assistant", "new")])
+  expect((await db.messages.get("new-bound-row"))?.metadata?.personalMarkVersion).toBe(1)
+})

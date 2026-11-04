@@ -2000,3 +2000,33 @@ it("projects automation state without cancellation receipts or credentials", () 
   } as never)
   expect(delivery.cancelledAt).toBe(42)
 })
+
+it("preserves effective legacy personal marks on paired sync copies", async () => {
+  await getDb().sessions.put({
+    id: "legacy-sync",
+    title: "Legacy",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: {
+      platform: "lark",
+      adapterId: "sync-adapter",
+      conversationKey: "chat",
+      conversationRef: { platform: "lark", adapterId: "sync-adapter" },
+    },
+  })
+  await getDb().adapterInstances.put({
+    id: "sync-adapter",
+    type: "lark",
+    settings: { connectedUser: { openId: "owner" } },
+  } as never)
+  await getDb().messages.put({
+    id: "legacy-sync-message",
+    sessionId: "legacy-sync",
+    role: "assistant",
+    parts: [],
+    createdAt: 10,
+  })
+  const delta = await readDexieDelta("messages", 0)
+  expect(JSON.stringify(delta)).toContain('"remoteUserId":"owner"')
+  expect((await getDb().messages.get("legacy-sync-message"))?.metadata).toBeUndefined()
+})

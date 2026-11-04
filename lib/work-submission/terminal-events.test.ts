@@ -8,10 +8,7 @@ import {
   startWorkSubmissionTerminalEvents,
 } from "./terminal-events"
 import type { Unsubscribe } from "./outbox-runner"
-import {
-  __resetClaimedTurnUsageForTesting,
-  claimTurnUsage,
-} from "@/lib/usage/claimed-turn-usage"
+import { __resetClaimedTurnUsageForTesting, claimTurnUsage } from "@/lib/usage/claimed-turn-usage"
 
 async function flushEvents(): Promise<void> {
   for (let tick = 0; tick < 5; tick += 1) await Promise.resolve()
@@ -491,9 +488,9 @@ it("writes a real reply and terminal settlement only into the person account dat
       terminalOutcome: "completed",
     })
     // The member's usage lands beside the member's transcript.
-    expect(await getDb().sessionUsage.where("sessionId").equals("person-session").toArray()).toEqual(
-      [expect.objectContaining({ inputTokens: 12, outputTokens: 7 })]
-    )
+    expect(
+      await getDb().sessionUsage.where("sessionId").equals("person-session").toArray()
+    ).toEqual([expect.objectContaining({ inputTokens: 12, outputTokens: 7 })])
     activateAccountDatabase("pb_other_chat_test", "local-host")
     activateAccountContentCipher(
       await AccountContentCipher.createForTesting("pb_other_chat_test", getDb().name)
@@ -579,5 +576,84 @@ it("frees a member's queued tool-less turns when the sidecar exits", async () =>
   } finally {
     stop()
     initializePersonChat("brain", {})
+  }
+})
+
+it("persists marked assistant and tool-bearing output on the headless HostState event path", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { getDb } = await import("@/lib/db/schema")
+  const { startToolExecutionRun, bindToolCallRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  let stop = () => {}
+  try {
+    const run = await startToolExecutionRun("headless-marked", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+    })
+    expect(
+      await admitPersonalCredential({ executionRunId: run.id }, { source: "google-docs" })
+    ).toMatchObject({ ok: true })
+    bindToolCallRun("headless-marked", run.id, run.id, "attempt")
+    let handler: ((event: ClaudeEvent) => void) | undefined
+    let settled!: () => void
+    let failed!: (error: unknown) => void
+    const done = new Promise<void>((resolve, reject) => {
+      settled = resolve
+      failed = reject
+    })
+    stop = startWorkSubmissionTerminalEvents({
+      subscribe: async (next) => {
+        handler = next
+        return () => {}
+      },
+      hasOpenSubmission: async () => true,
+      applyEvent: (messages) => ({
+        messages: [
+          ...messages,
+          {
+            id: "headless-private-reply",
+            role: "assistant",
+            parts: [
+              { type: "text", text: "private result" },
+              {
+                type: "dynamic-tool",
+                toolName: "read",
+                toolCallId: "read-private",
+                state: "output-available",
+                input: {},
+                output: "private tool result",
+              },
+            ],
+          },
+        ],
+      }),
+      settleSession: async (_sessionId, input) => {
+        await input.writeTranscript?.()
+        settled()
+        return true
+      },
+      onError: failed,
+    })
+    await Promise.resolve()
+    handler?.({
+      type: "event",
+      sessionId: "headless-marked",
+      turnId: run.id,
+      attemptId: "attempt",
+      event: { type: "assistant" },
+    } as never)
+    handler?.({ type: "session_ended", sessionId: "headless-marked" })
+    await done
+    expect((await getDb().messages.get("headless-private-reply"))?.metadata).toMatchObject({
+      personalMarks: [
+        expect.objectContaining({ person: { kind: "local-person" }, source: "google-docs" }),
+      ],
+    })
+  } finally {
+    stop()
+    await fixture.dispose()
   }
 })

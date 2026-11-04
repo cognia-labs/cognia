@@ -885,3 +885,14 @@ it.each(["schedule", "service"] as const)(
     ).toMatchObject({ ok: false })
   }
 )
+
+it("inherits a marked parent's provenance without transferring taint to a later root", () => {
+  const personalMarks = [
+    { person: { kind: "local-person" as const }, source: "mcp-oauth", markedAt: 5 },
+  ]
+  const parent = { ...seed(), personalMarks }
+  const child = recordedRunMetadata("child", { runId: "new-child", parent })
+  expect(child.personalMarks).toEqual(personalMarks)
+  expect(child.personalMarks).not.toBe(personalMarks)
+  expect(recordedRunMetadata("local", { runId: "later-root" }).personalMarks).toBeUndefined()
+})

@@ -1192,7 +1192,12 @@ describe("transcript bridge projections", () => {
         createdAt: 2,
         senderId: "agent",
         senderKind: "assistant",
-        metadata: { branchGroupId: "group", branchIndex: 1 },
+        metadata: {
+          branchGroupId: "group",
+          branchIndex: 1,
+          personalMarks: [{ person: { kind: "local-person" }, source: "mcp-oauth", markedAt: 5 }],
+          personalMarkVersion: 1,
+        },
       },
       { id: "next", sessionId: "s1", turnKey: "explicit", role: "user", parts: [], createdAt: 3 },
     ] as never[])
@@ -1206,7 +1211,11 @@ describe("transcript bridge projections", () => {
     expect(page.messages[1]).toMatchObject({
       senderId: "agent",
       senderKind: "assistant",
-      metadata: { branchGroupId: "group" },
+      metadata: {
+        branchGroupId: "group",
+        personalMarks: [{ person: { kind: "local-person" }, source: "mcp-oauth", markedAt: 5 }],
+        personalMarkVersion: 1,
+      },
     })
     const timeline = await readTranscriptTimeline({ sessionId: "s1" })
     expect(timeline.items[0]).toMatchObject({
@@ -1655,4 +1664,43 @@ it("sanitizes provenance in paired-device message pages and turn details", async
     expect(row.parts[0]).toHaveProperty("remoteDocument", cloudProvenance)
     expect(JSON.stringify(row)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
   }
+})
+
+it("materializes legacy personal provenance in paired message-history pages without backfill", async () => {
+  await getDb().sessions.update("s1", {
+    platformBinding: {
+      platform: "lark",
+      adapterId: "legacy-adapter",
+      conversationKey: "chat",
+      conversationRef: { platform: "lark", adapterId: "legacy-adapter" },
+    },
+  })
+  await getDb().adapterInstances.put({
+    id: "legacy-adapter",
+    type: "lark",
+    settings: { connectedUser: { openId: "owner" } },
+  } as never)
+  await getDb().messages.put({
+    id: "legacy-paired",
+    sessionId: "s1",
+    role: "assistant",
+    parts: [],
+    createdAt: 10,
+  })
+  const page = await readMessagesPage("s1")
+  expect(page.rows.find((row) => row.id === "legacy-paired")?.metadata).toMatchObject({
+    personalMarks: [
+      {
+        person: {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "legacy-adapter",
+          remoteUserId: "owner",
+        },
+        source: "lark-user",
+        markedAt: 10,
+      },
+    ],
+  })
+  expect((await getDb().messages.get("legacy-paired"))?.metadata).toBeUndefined()
 })

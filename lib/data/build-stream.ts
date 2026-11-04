@@ -1,3 +1,4 @@
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import {
   exportAuthoredContent,
@@ -236,8 +237,12 @@ export async function* buildBackupSections(
       },
       (row) => portableSessionReferences(row, authoredMembership)
     )
-    yield* tableSections("messages", db.messages, iterate, (row) =>
-      portableSessionIds.has(row.sessionId)
+    yield* tableSections(
+      "messages",
+      db.messages,
+      iterate,
+      (row) => portableSessionIds.has(row.sessionId),
+      (row) => personalMessageForCopy(db, row)
     )
     yield* tableSections("sessionState", db.sessionState, iterate, (row) =>
       portableSessionIds.has(row.sessionId)
@@ -348,14 +353,14 @@ async function* tableSections<T, TKey>(
   table: PagedReadable<T, TKey>,
   iterate: <TRow, TPrimaryKey>(source: PagedReadable<TRow, TPrimaryKey>) => AsyncIterable<TRow[]>,
   filter?: RowFilter<T>,
-  transform?: (row: T) => T
+  transform?: (row: T) => T | Promise<T>
 ): AsyncIterable<BackupStreamSection> {
   let emitted = false
   for await (const page of iterate(table)) {
     const rows: T[] = []
     for (const row of page) {
       if (!filter || (await filter(row))) {
-        const projected = transform ? transform(row) : row
+        const projected = transform ? await transform(row) : row
         rows.push(section === "messages" ? projectRemoteDocumentData(projected, true) : projected)
       }
     }

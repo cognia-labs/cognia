@@ -9,6 +9,8 @@ import { recordResultUsage } from "@/lib/db/session-usage"
 import { getSession } from "@/lib/db/sessions"
 import { listWorkSubmissions } from "@/lib/db/work-submissions"
 import { isTurnUsageClaimed } from "@/lib/usage/claimed-turn-usage"
+import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
+import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 
 import { settleChatTurnForSession } from "./chat-adapter"
 import { settleWorkSubmission } from "./service"
@@ -188,6 +190,12 @@ export function startWorkSubmissionTerminalEvents(
         }
         const current = mirrors.get(event.sessionId) ?? (await loadMirror(event.sessionId))
         const applied = project(current, event.event)
+        const frame = event as ClaudeEvent & { turnId?: string; attemptId?: string }
+        bindPersonalMessageChanges(
+          current,
+          applied.messages,
+          toolCallExecutionRunId(event.sessionId, frame.turnId, frame.attemptId)
+        )
         mirrors.set(event.sessionId, applied.messages)
         if (applied.result) {
           const turnId = (event as { turnId?: unknown }).turnId

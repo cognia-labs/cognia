@@ -224,7 +224,11 @@ function buildReplyMessage(input: ManualReplyInput, jobId?: string): StoredMessa
     sessionId: input.sessionId,
     role: "user",
     parts: parts.length > 0 ? parts : [{ type: "text", text: "" }],
-    metadata: { ...input.messageMetadata, ...(jobId ? { outboundJobId: jobId } : {}) },
+    metadata: {
+      ...input.messageMetadata,
+      ...(jobId ? { outboundJobId: jobId } : {}),
+      personalMarkVersion: 1,
+    },
     createdAt: now,
   }
   return row

@@ -558,3 +558,25 @@ it("gates the full external side-chat prompt while leaving the typed transcript 
   expect(turn.prompt).not.toContain("jane@example.com")
   expect(typed[0].text).toContain("jane@example.com")
 })
+
+it("uses the Host user-message constructor for staged personal attachment marks", () => {
+  const { makeUserMessage } = jest.requireActual("@/lib/claude/adapter")
+  const message = makeUserMessage([{ type: "text", text: "document body" }], "controller-doc", [
+    {
+      kind: "text",
+      remoteDocument: {
+        v: 1,
+        providerId: "google",
+        resourceKind: "doc",
+        resourceId: "abcdefghijklmnop1234",
+        url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+        title: "Private",
+        fetchedAt: 12,
+        completeness: { status: "complete" },
+      },
+    },
+  ])
+  expect(message.metadata?.personalMarks).toEqual([
+    { person: { kind: "local-person" }, source: "google-docs", markedAt: 12 },
+  ])
+})

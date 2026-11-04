@@ -1,5 +1,7 @@
 "use client"
 
+import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+
 import {
   acquireSessionTurnLease,
   beginSessionStop,
@@ -1620,7 +1622,11 @@ export function useClaudeChat() {
         /** Continue the latest interrupted user turn on the runtime that handled it. */
         continuationOf?: string
         /** Stable journal batch identity, reserved before automatic result delivery. */
-        backgroundDelivery?: { id: string; onAccepted: () => void }
+        backgroundDelivery?: {
+          id: string
+          onAccepted: () => void
+          personalRunIds?: readonly string[]
+        }
         /**
          * An automation, not the person, is sending this turn. Stamped on the
          * user row as `metadata.automatedTurn` so it never counts as the
@@ -2951,6 +2957,8 @@ export function useClaudeChat() {
       // Base off this session's own slice — never the focused projection.
       const previousMessages = store.getState().sessions[sessionId]?.messages ?? []
       let userMsg = makeUserMessage(effectiveContent, frozenTurnId, turnManifest)
+      if (callOptions?.backgroundDelivery?.personalRunIds)
+        bindPersonalMessageRun(userMsg.id, callOptions.backgroundDelivery.personalRunIds)
       userMsg = {
         ...userMsg,
         metadata: {
@@ -4768,6 +4776,7 @@ export function useClaudeChat() {
           }
         }
         const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        bindPersonalMessageRun(assistantId, executionRunId)
         const handleExternalFailure = async (message: string, error?: Error): Promise<void> => {
           // Before the fallback re-issues this turn on the sidecar: the
           // external agent is gone, so its card is dead and would sit in front
@@ -6562,25 +6571,28 @@ export function useClaudeChat() {
   // channel, and drain pending results whenever a session (re)opens idle —
   // covers relaunches (journaled pending rows) and panes closed at settle.
   useEffect(() => {
-    return registerBackgroundReplaySend(async (framedText, sessionId, deliveryId) => {
-      let accepted = false
-      try {
-        await sendRef.current?.(framedText, undefined, {
-          sessionId,
-          throwOnError: true,
-          backgroundDelivery: {
-            id: deliveryId,
-            onAccepted: () => {
-              accepted = true
+    return registerBackgroundReplaySend(
+      async (framedText, sessionId, deliveryId, personalRunIds) => {
+        let accepted = false
+        try {
+          await sendRef.current?.(framedText, undefined, {
+            sessionId,
+            throwOnError: true,
+            backgroundDelivery: {
+              id: deliveryId,
+              personalRunIds,
+              onAccepted: () => {
+                accepted = true
+              },
             },
-          },
-        })
-      } catch {
-        // Durable acceptance owns retries once committed, even if dispatch
-        // subsequently fails. Before acceptance the journal remains pending.
+          })
+        } catch {
+          // Durable acceptance owns retries once committed, even if dispatch
+          // subsequently fails. Before acceptance the journal remains pending.
+        }
+        return accepted
       }
-      return accepted
-    })
+    )
   }, [])
 
   // Same bridge for surfaces that answer the agent with an ordinary user

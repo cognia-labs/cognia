@@ -367,14 +367,15 @@ export function recordedRunMetadata(
   trigger: RunTriggerV1,
   options: {
     runId?: string
-    parent?: Pick<ExecutionRun, "actingIdentity" | "authority"> & Partial<Pick<ExecutionRun, "id">>
+    parent?: Pick<ExecutionRun, "actingIdentity" | "authority" | "personalMarks"> &
+      Partial<Pick<ExecutionRun, "id">>
     requesters?: PrincipalRefV1[]
     actingPrincipal?: PrincipalRefV1
     authorizingPrincipal?: PrincipalRefV1
     eventActors?: PrincipalRefV1[]
     authority?: RunAuthorityV1
   } = {}
-): Pick<ExecutionRun, "actingIdentity" | "authority"> {
+): Pick<ExecutionRun, "actingIdentity" | "authority" | "personalMarks"> {
   const { parent } = options
   const parentIdentity = parent?.actingIdentity
   // Older parents have no explicit root. Anchor new copies to that parent so
@@ -402,7 +403,11 @@ export function recordedRunMetadata(
       ? meetRunAuthority(parent.authority, options.authority)
       : parent.authority
     : options.authority
-  return { actingIdentity, ...(authority ? { authority } : {}) }
+  return {
+    actingIdentity,
+    ...(authority ? { authority } : {}),
+    ...(parent?.personalMarks?.length ? { personalMarks: [...parent.personalMarks] } : {}),
+  }
 }
 
 export function authorityFromPermissionCeiling(

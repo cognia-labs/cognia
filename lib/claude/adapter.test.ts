@@ -2965,3 +2965,24 @@ it("persists remote document provenance on a sent file part without retrieval au
   })
   expect(JSON.stringify(message)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
 })
+
+it("persists a local-person mark on a user message attaching a staged personal document", () => {
+  const result = makeUserMessage([{ type: "text", text: "attached contents" }], "cloud-marked", [
+    {
+      kind: "text",
+      remoteDocument: {
+        v: 1,
+        providerId: "google",
+        resourceKind: "doc",
+        resourceId: "abcdefghijklmnop1234",
+        url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+        title: "Private",
+        fetchedAt: 10,
+        completeness: { status: "complete" },
+      },
+    },
+  ] as never)
+  expect(result.metadata).toMatchObject({
+    personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }],
+  })
+})

@@ -26,6 +26,7 @@ import {
   deliveryEntryFromJournal,
   formatElapsed,
   frameBackgroundResults,
+  backgroundResultRunIds,
   type BackgroundResultDeliveryEntry,
 } from "@/lib/background-tasks/completion-delivery"
 import { computeStableDigest } from "@/lib/ai/agent/execution/fingerprint"
@@ -35,7 +36,8 @@ import { isSessionOpen, sessionStatusOf } from "./steer-runtime"
 export type BackgroundReplaySend = (
   framedText: string,
   sessionId: string,
-  deliveryId: string
+  deliveryId: string,
+  personalRunIds?: readonly string[]
 ) => Promise<boolean>
 
 /** Localized notification copy, supplied by the registering component. */
@@ -154,10 +156,14 @@ export async function attemptBackgroundResultDelivery(sessionId: string): Promis
     )
     if (!batch) return
     const runIds = new Set(batch.runIds)
+    const { jobExecutionRunId } = await import("@/lib/execution/job-bridge")
     const accepted = await send(
       frameBackgroundResults(entries.filter((entry) => runIds.has(entry.runId))),
       sessionId,
-      batch.deliveryId
+      batch.deliveryId,
+      backgroundResultRunIds(entries.filter((entry) => runIds.has(entry.runId))).map(
+        jobExecutionRunId
+      )
     )
     if (!accepted) return
     // Only remove the batch acknowledged by this receipt; another completion

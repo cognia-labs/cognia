@@ -16,9 +16,19 @@ import {
   resolveRunActingIdentity,
 } from "@/lib/execution/acting-authority"
 
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+
 export interface VerifiedLarkUserAuthorization {
   accessToken: string
   authorizationEpoch: string
+}
+
+const authorizationPeople = new WeakMap<VerifiedLarkUserAuthorization, PrincipalRefV1>()
+/** Only the Host verification that issued this exact token snapshot can name its person. */
+export function verifiedLarkAuthorizationPerson(
+  authorization: VerifiedLarkUserAuthorization
+): PrincipalRefV1 | undefined {
+  return authorizationPeople.get(authorization)
 }
 
 export class LarkActingIdentityError extends Error {
@@ -158,7 +168,18 @@ export async function verifyLarkImOwnerAuthorization(
     } else if (snapshot.accountLabel !== (ownerName || owner.openId)) {
       throw refusal(ownerName)
     }
-    return { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
+    const authorization = {
+      accessToken: snapshot.accessToken,
+      authorizationEpoch: snapshot.authorizationEpoch,
+    }
+    authorizationPeople.set(authorization, {
+      kind: "platform",
+      platform: "lark",
+      adapterId,
+      remoteUserId: owner.openId,
+      ...(typeof owner.unionId === "string" ? { unionId: owner.unionId } : {}),
+    })
+    return authorization
   } catch (err) {
     if (err instanceof LarkActingIdentityError) throw err
     throw refusal()

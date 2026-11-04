@@ -424,3 +424,28 @@ it("aborts source and outbox writes if a clock-side mutation fails even when the
     db.close()
   }
 })
+
+it("captures personal marks in synced message metadata without projecting away the key", async () => {
+  const db = await freshDb()
+  try {
+    await arm(db)
+    const personalMarks = [
+      { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
+    ]
+    await db.messages.put({
+      id: "marked",
+      sessionId: "s",
+      role: "assistant",
+      parts: [],
+      metadata: { personalMarks, personalMarkVersion: 1 },
+      createdAt: 10,
+    })
+    expect((await db.accountSyncOutbox.get(["messages", "marked"]))?.fields).toContain("metadata")
+    expect((await db.messages.get("marked"))?.metadata).toEqual({
+      personalMarks,
+      personalMarkVersion: 1,
+    })
+  } finally {
+    db.close()
+  }
+})

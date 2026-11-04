@@ -1,3 +1,4 @@
+import { backgroundResultRunIds } from "./completion-delivery"
 import {
   BACKGROUND_RESULT_TEXT_CAP,
   deliveryEntryFromJournal,
@@ -144,4 +145,16 @@ describe("frameResumePrompt", () => {
         "Follow-up:\nfix issue 2"
     )
   })
+})
+
+it("carries Host journal identities beside framed results deterministically", () => {
+  const entries = ["b", "a", "b"].map((runId) => ({
+    runId,
+    subagentId: runId,
+    status: "done" as const,
+    startedAt: 1,
+    settledAt: 2,
+    text: "result",
+  })) as Parameters<typeof backgroundResultRunIds>[0]
+  expect(backgroundResultRunIds(entries)).toEqual(["a", "b"])
 })

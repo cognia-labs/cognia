@@ -3,6 +3,38 @@ import {
   parseRemoteDocumentProvenance,
   type RemoteDocumentProvenanceV1,
 } from "@/lib/docs-providers/document-provenance"
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+
+/** Host attachment construction conservatively marks every staged cloud read.
+ * Local staging uses LOCAL_PERSON_RUN; portable copies retain the same taint.
+ * A supplied provenance record can only over-mark, never name another person.
+ */
+export function remoteDocumentPersonalMarks(
+  entries: readonly { remoteDocument?: unknown }[] | undefined
+): PersonalMarkV1[] {
+  return mergePersonalMarks(
+    (entries ?? []).flatMap((entry) => {
+      const provenance = parseRemoteDocumentProvenance(entry.remoteDocument)
+      return provenance
+        ? [
+            {
+              person: { kind: "local-person" as const },
+              source:
+                provenance.providerId === "google"
+                  ? "google-docs"
+                  : provenance.providerId === "lark"
+                    ? "lark-user"
+                    : "integration-user",
+              markedAt: provenance.fetchedAt,
+            },
+          ]
+        : []
+    })
+  )
+}
 
 export const REMOTE_DOC_PART_KEY = "remoteDocument"
 const incoming = new WeakMap<File, RemoteDocumentProvenanceV1>()

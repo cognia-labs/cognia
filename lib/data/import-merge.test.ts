@@ -501,3 +501,30 @@ describe("frozen-source divergence (ADR-0062)", () => {
     expect((await getDb().sessions.get("import:codex:d6"))?.importDiverged).toBe(true)
   })
 })
+
+it("preserves imported personal message marks", async () => {
+  const conv = makeConv("import:marked")
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }]
+  conv.messages[0].metadata = { personalMarks, personalMarkVersion: 1 }
+  await applyImportedMerged([conv])
+  const stale = makeConv("import:marked")
+  await applyImportedMerged([stale])
+  expect((await getDb().messages.get(conv.messages[0].id))?.metadata).toEqual({
+    personalMarks,
+    personalMarkVersion: 1,
+  })
+})
+
+it.each([undefined, { note: "legacy" }])(
+  "does not promote an existing legacy row during import (%j)",
+  async (metadata) => {
+    const conv = makeConv("import:legacy-version")
+    await applyImportedMerged([conv])
+    await getDb().messages.update(conv.messages[0].id, { metadata })
+    conv.messages[0].metadata = { personalMarkVersion: 1 }
+    await applyImportedMerged([conv])
+    expect((await getDb().messages.get(conv.messages[0].id))?.metadata ?? {}).not.toHaveProperty(
+      "personalMarkVersion"
+    )
+  }
+)

@@ -1087,6 +1087,7 @@ async function insertInboundMessageWithRevision(
       if (inboundMutationRevision) {
         row.metadata = { ...row.metadata, inboundMutationRevision }
       }
+      row.metadata = { ...row.metadata, personalMarkVersion: 1 }
       await db.messages.add(row)
       if (mutation) {
         await db.connectorInboundJobs.update(mutation.id, {

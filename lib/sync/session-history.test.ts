@@ -43,6 +43,74 @@ function flush(): Promise<void> {
 }
 
 describe("hydrateSessionHistory", () => {
+  it.each([undefined, { note: "legacy" }])(
+    "does not promote an existing legacy history row (%j)",
+    async (metadata) => {
+      const row = {
+        id: "legacy-history-version",
+        sessionId: "legacy-history-session",
+        role: "assistant" as const,
+        parts: [],
+        createdAt: 1,
+      }
+      await getDb().messages.put({ ...row, metadata })
+      const hydration = await hydrateSessionHistory(
+        createTransport(
+          jest.fn().mockResolvedValue({
+            rows: [
+              { ...row, metadata: { personalMarkVersion: 1 } },
+              { ...row, id: "new-history-version", metadata: { personalMarkVersion: 1 } },
+            ],
+            total: 2,
+          })
+        ),
+        row.sessionId
+      )
+      expect(hydration).toMatchObject({ applied: 2, mode: "legacy" })
+      expect((await getDb().messages.get(row.id))?.metadata ?? {}).not.toHaveProperty(
+        "personalMarkVersion"
+      )
+      expect(
+        (await getDb().messages.get("new-history-version"))?.metadata?.personalMarkVersion
+      ).toBe(1)
+    }
+  )
+
+  it("retains personal marks across a stale history-page overwrite", async () => {
+    const personalMarks = [
+      { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
+    ]
+    await getDb().messages.put({
+      id: "marked-history",
+      sessionId: "marked-session",
+      role: "assistant",
+      parts: [],
+      createdAt: 1,
+      metadata: { personalMarks, personalMarkVersion: 1 },
+    })
+    await hydrateSessionHistory(
+      createTransport(
+        jest.fn().mockResolvedValue({
+          rows: [
+            {
+              id: "marked-history",
+              sessionId: "marked-session",
+              role: "assistant",
+              parts: [],
+              createdAt: 1,
+            },
+          ],
+          total: 1,
+        })
+      ),
+      "marked-session"
+    )
+    expect((await getDb().messages.get("marked-history"))?.metadata).toEqual({
+      personalMarks,
+      personalMarkVersion: 1,
+    })
+  })
+
   beforeEach(async () => {
     __resetHydratedSessionHistoryForTests()
     clearActiveRuntimeTargetContext()
@@ -352,6 +420,10 @@ describe("hydrateSessionHistory", () => {
       role: "user" as const,
       parts: [{ type: "text" as const, text: String(i) }],
       createdAt: i + 1,
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 1 }],
+        personalMarkVersion: 1,
+      },
     }))
     const call = jest.fn(async (_name: string, args?: Record<string, unknown>) => {
       const offset = Number(args?.offset ?? 0)
@@ -368,6 +440,7 @@ describe("hydrateSessionHistory", () => {
     const outcome = await hydrateSessionHistory(transport, "s1", { pageSize: 2 })
 
     expect(outcome).toEqual({ applied: 5, total: 5, mode: "legacy" })
+    expect((await getDb().messages.get("m0"))?.metadata).toEqual(rows[0].metadata)
     expect(call.mock.calls.map(([, args]) => args)).toEqual([
       { session_id: "s1", limit: 2, offset: 0 },
       { session_id: "s1", limit: 2, offset: 2 },

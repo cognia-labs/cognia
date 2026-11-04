@@ -1,3 +1,8 @@
+import {
+  mergePersonalMarks,
+  preservePersonalMarkMetadata,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
 /**
  * Applying pulled ops (protocol §9).
  *
@@ -180,10 +185,28 @@ async function applyRecord(db: CogniaDB, payload: OpPayload, now: number): Promi
   }
   const result = mergeUpsert(row !== undefined, clocks, known)
   const { unknown, changed } = mergeUnknown(held?.unknown, unknownIn)
-  if (result.kind === "write") {
-    await store.put(rowWith(result.created ? { id: payload.id } : row!, result.fields))
+  const next =
+    result.kind === "write"
+      ? rowWith(result.created ? { id: payload.id } : row!, result.fields)
+      : row
+  let joinedMarks = false
+  if (table === "messages" && next) {
+    const winner = next.metadata as Record<string, unknown> | undefined
+    const incoming = known.metadata?.[0] as Record<string, unknown> | undefined
+    const marks = mergePersonalMarks(
+      winner?.personalMarks as PersonalMarkV1[] | undefined,
+      incoming?.personalMarks as PersonalMarkV1[] | undefined
+    )
+    const metadata = preservePersonalMarkMetadata(
+      marks.length ? { ...winner, personalMarks: marks } : winner,
+      row?.metadata as Record<string, unknown> | undefined,
+      { rowExists: row !== undefined }
+    )
+    joinedMarks = JSON.stringify(metadata) !== JSON.stringify(winner)
+    next.metadata = metadata
   }
-  if (result.kind === "write" || changed) {
+  if (next && (result.kind === "write" || joinedMarks)) await store.put(next)
+  if (result.kind === "write" || changed || joinedMarks) {
     const base = result.kind === "write" ? result.clocks : (clocks ?? { fields: {} })
     await db.syncFieldClocks.put({
       ...base,
@@ -191,8 +214,9 @@ async function applyRecord(db: CogniaDB, payload: OpPayload, now: number): Promi
       rowId: payload.id,
       ...(unknown && Object.keys(unknown).length > 0 ? { unknown } : {}),
     })
+    if (joinedMarks) await markResend(db, table, payload.id, now)
   }
-  return result.kind === "write"
+  return result.kind === "write" || joinedMarks
 }
 
 async function applySetting(db: CogniaDB, payload: OpPayload, now: number): Promise<boolean> {

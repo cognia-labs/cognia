@@ -312,6 +312,7 @@ export async function enqueueOutboundMany(
                       metadata: {
                         ...input.localMessage.metadata,
                         outboundJobId: created[index].id,
+                        personalMarkVersion: 1,
                       },
                     },
                   ]

@@ -270,3 +270,20 @@ describe("validateCanonicalSession", () => {
     )
   })
 })
+
+it("binds personal provenance to the canonical sequence digest without changing old turns", () => {
+  const session = validSession()
+  const before = computeSequenceDigest(session.turns)
+  session.turns[0].metadata = {
+    personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }],
+    personalMarkVersion: 1,
+  }
+  expect(computeSequenceDigest(session.turns)).not.toBe(before)
+  expect(validateCanonicalSession(session)).toContain(
+    "header.sequenceDigest disagrees with the turn sequence"
+  )
+  session.header.sequenceDigest = computeSequenceDigest(session.turns)
+  expect(validateCanonicalSession(session)).toEqual([])
+  session.turns[0].metadata = [] as never
+  expect(validateCanonicalSession(session)).toContain("turns[0].metadata must be an object")
+})

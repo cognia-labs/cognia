@@ -83,6 +83,7 @@ describe("sendManualReplyRemotely", () => {
     // The host stamps `outboundJobId`; until it syncs down the mirror only
     // carries the relay key so the delivery pill knows to keep waiting.
     expect(mirror?.metadata?.relayIdempotencyKey).toBe("idem-1")
+    expect(mirror?.metadata?.personalMarkVersion).toBe(1)
     expect(mirror?.metadata?.outboundJobId).toBeUndefined()
   })
 

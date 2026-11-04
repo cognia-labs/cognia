@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  bindPersonalMessageRun: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageRun
+  ),
+  bindPersonalMessageChanges: jest.fn(
+    jest.requireActual("@/lib/execution/personal-marks").bindPersonalMessageChanges
+  ),
+}))
+import * as personalMarks from "@/lib/execution/personal-marks"
 /** @jest-environment jsdom */
 /**
  * What matters here is caller-owned session reuse and the permission posture:
@@ -683,4 +693,15 @@ describe("durable unattended transcript", () => {
     expect(commitMessageDelta).toHaveBeenCalledTimes(1)
     expect(acknowledgeTranscriptRuntime).not.toHaveBeenCalled()
   })
+})
+
+it("binds every captured plugin assistant/tool message to its Host execution before persistence", async () => {
+  const binding = jest.mocked(personalMarks.bindPersonalMessageRun).mockClear()
+  try {
+    await runTurn(base)
+    expect(binding).toHaveBeenCalledWith("m1", "entry-run")
+    expect(commitMessageDelta).toHaveBeenCalledTimes(2)
+  } finally {
+    binding.mockClear()
+  }
 })

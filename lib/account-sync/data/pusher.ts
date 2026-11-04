@@ -1,3 +1,5 @@
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+import type { StoredMessage } from "@cognia/agent-config-types"
 /**
  * Pushing this device's changes (protocol §7.3).
  *
@@ -129,7 +131,11 @@ function payloadFor(
  * with a clock from before or after it (the pull lane may be applying meanwhile).
  */
 function readOutgoing(db: CogniaDB, entries: AccountSyncOutboxRow[]): Promise<(Outgoing | null)[]> {
-  const stores = [...SYNCED_TABLES.map((table) => db.table(table)), db.syncFieldClocks]
+  const stores = [
+    ...SYNCED_TABLES.map((table) => db.table(table)),
+    db.syncFieldClocks,
+    db.adapterInstances,
+  ]
   return db.transaction("r", stores, () => readOutgoingIn(db, entries))
 }
 
@@ -151,12 +157,27 @@ async function readOutgoingIn(
     const found = (await db.table(table).bulkGet(ids)) as (Record<string, unknown> | undefined)[]
     ids.forEach((id, index) => rows.set(`${table}\u0000${id}`, found[index]))
   }
-  return entries.map((entry, index) => {
-    const row =
+  const outgoing: (Outgoing | null)[] = []
+  for (const [index, entry] of entries.entries()) {
+    let row =
       entry.table === "settings" ? settingsRow : rows.get(`${entry.table}\u0000${entry.rowId}`)
+    let copiedLegacy = false
+    if (entry.table === "messages" && row) {
+      const portable = (await personalMessageForCopy(
+        db,
+        row as unknown as StoredMessage
+      )) as unknown as Record<string, unknown>
+      copiedLegacy = portable !== row
+      row = portable
+    }
     const payload = payloadFor(entry, row, clocks[index])
-    return payload ? { entry, payload } : null
-  })
+    if (copiedLegacy && payload?.k === "upsert" && row?.metadata && !payload.f.metadata) {
+      const clock = maxHlc(Object.values(payload.f).map(([, at]) => at))
+      if (clock) payload.f.metadata = [row.metadata, clock]
+    }
+    outgoing.push(payload ? { entry, payload } : null)
+  }
+  return outgoing
 }
 
 function opClock(payload: OpPayload): { ms: number; c: number } {

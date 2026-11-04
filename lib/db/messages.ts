@@ -1,3 +1,4 @@
+import { personalMessageMetadata, isPendingPersonalMetadata } from "@/lib/execution/personal-marks"
 import { tombstoneAgentTurnOperations } from "./shared-run-journal"
 import { measureOperation } from "@/lib/perf/operation-performance"
 import type { UIMessage } from "ai"
@@ -644,6 +645,17 @@ async function replaceSessionTranscriptNow(
                     row.metadata,
                     previousById.get(row.id)?.metadata
                   )
+                  const markedMetadata = personalMessageMetadata(
+                    row.id,
+                    row.metadata,
+                    previousById.get(row.id)?.metadata,
+                    { rowExists: previousById.has(row.id) }
+                  )
+                  row.metadata = isPendingPersonalMetadata(markedMetadata)
+                    ? await Dexie.waitFor(markedMetadata)
+                    : markedMetadata
+                  if (!existingIds.has(row.id) && currentSession?.platformBinding)
+                    row.metadata = { ...row.metadata, personalMarkVersion: 1 }
                   preserveInboundRevision(row, previousById.get(row.id))
                   row.workingSetSnapshot = existingIds.has(row.id)
                     ? previousById.get(row.id)?.workingSetSnapshot
@@ -874,9 +886,23 @@ async function commitMessageDeltaNow(
               ? meta.createdAt
               : now + index),
         }
+        // Mark bound rows below, while retaining the ordinary synchronous row map.
         preserveInboundRevision(row, existingById.get(id))
         return row
       })
+      for (const row of rows) {
+        const markedMetadata = personalMessageMetadata(
+          row.id,
+          row.metadata,
+          existingById.get(row.id)?.metadata,
+          { rowExists: existingById.has(row.id) }
+        )
+        row.metadata = isPendingPersonalMetadata(markedMetadata)
+          ? await Dexie.waitFor(markedMetadata)
+          : markedMetadata
+        if (!existingById.has(row.id) && currentSession?.platformBinding)
+          row.metadata = { ...row.metadata, personalMarkVersion: 1 }
+      }
 
       const requestedDeleteIds = [...new Set(deleteIds)].filter((id) => !upsertIds.includes(id))
       const existingDeletes = await db.messages.bulkGet(requestedDeleteIds)
@@ -1050,6 +1076,12 @@ async function persistStreamingMessagesNow(
         senderKind,
         metadata: mergeChatTurnMetadata(stripHoistedMeta(meta), existing.metadata),
       }
+      const markedMetadata = personalMessageMetadata(row.id, row.metadata, existing.metadata, {
+        rowExists: true,
+      })
+      row.metadata = isPendingPersonalMetadata(markedMetadata)
+        ? await Dexie.waitFor(markedMetadata)
+        : markedMetadata
       preserveInboundRevision(row, existing)
       await db.messages.put(row)
       const replacementRefs = messageMediaRefRows(last.id, sessionId, row.parts)
@@ -1306,7 +1338,15 @@ async function updateMessageMetadataNow(
     assertSessionWritable(await db.sessions.get(sessionId), "metadata")
     const row = await db.messages.get(messageId)
     if (!row || row.sessionId !== sessionId) return
-    const merged = stripHoistedMeta({ ...(row.metadata ?? {}), ...patch })
+    const markedMetadata = personalMessageMetadata(
+      messageId,
+      stripHoistedMeta({ ...(row.metadata ?? {}), ...patch }),
+      row.metadata,
+      { rowExists: true }
+    )
+    const merged = isPendingPersonalMetadata(markedMetadata)
+      ? await Dexie.waitFor(markedMetadata)
+      : markedMetadata
     await db.messages.update(messageId, { metadata: merged })
     revision = await bumpTranscriptRevision(db, sessionId)
   })

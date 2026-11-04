@@ -1,3 +1,4 @@
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
 import type { UIMessage } from "ai"
 import type { CanonicalSession } from "@cognia/agent-config-types/canonical-session"
 import { computeSequenceDigest } from "@cognia/agent-config-types/canonical-session"
@@ -111,7 +112,26 @@ export async function buildThreadHandoffOffer(
     dependencies.messages ? Promise.resolve(dependencies.messages) : listMessages(session.id),
     dependencies.deployments ? Promise.resolve(dependencies.deployments) : listDeploymentProfiles(),
   ])
-  const normalized = await Promise.all(messages.map(normalizeMessageMedia))
+  const normalized = await Promise.all(
+    messages.map(async (message) => {
+      const normalized = await normalizeMessageMedia(message)
+      const portable = await personalMessageForCopy(
+        getDb(),
+        {
+          ...normalized,
+          metadata: normalized.metadata as Record<string, unknown> | undefined,
+          sessionId: session.id,
+          createdAt:
+            typeof (normalized.metadata as { createdAt?: unknown } | undefined)?.createdAt ===
+            "number"
+              ? (normalized.metadata as { createdAt: number }).createdAt
+              : now,
+        },
+        session
+      )
+      return portable
+    })
+  )
   const conversion = conversationToCanonical(
     {
       session,

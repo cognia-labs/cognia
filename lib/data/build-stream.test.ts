@@ -159,7 +159,6 @@ describe("buildBackupStream", () => {
             includeApiKey: false,
             includePlugins: false,
             includeMemories: false,
-            includeLocalStorage: false,
           },
           { pageSize: 2, maxChunkBytes: 16_384, storage: null }
         )
@@ -290,7 +289,6 @@ describe("buildBackupStream", () => {
             includeApiKey: false,
             includeCoreData: false,
             includePlugins: false,
-            includeLocalStorage: false,
           },
           { pageSize: 1 }
         )
@@ -370,4 +368,113 @@ it("backs up citation-bearing messages with sanitized provenance", async () => {
   expect(JSON.stringify(row)).not.toMatch(
     /private-account|authorizationEpoch|accountBinding|connectionRef|identityKey|private-connection|private-identity/
   )
+})
+
+it("round-trips personal message marks through backup streaming and restore", async () => {
+  const { applyBackupPackage } = await import("./apply-package")
+  const db = getDb()
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }]
+  await db.sessions.put({
+    id: "marked-backup",
+    title: "Private",
+    kind: "direct",
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  await db.messages.put({
+    id: "marked-backup-message",
+    sessionId: "marked-backup",
+    role: "assistant",
+    parts: [{ type: "text", text: "private" }],
+    metadata: { personalMarks, personalMarkVersion: 1 },
+    createdAt: 10,
+  })
+  const payload: Record<string, unknown[]> = {}
+  for await (const event of readBackupStream(
+    buildBackupStream(
+      { includeSessions: true, includeApiKey: false, includeLocalStorage: false },
+      { storage: null }
+    )
+  )) {
+    if (event.kind === "chunk")
+      payload[event.section] = [...(payload[event.section] ?? []), ...event.rows]
+  }
+  await db.messages.delete("marked-backup-message")
+  const transcriptPayload = { sessions: payload.sessions, messages: payload.messages }
+  await applyBackupPackage(
+    {
+      version: "3.0",
+      manifest: {
+        version: "3.0",
+        schemaVersion: 3,
+        traceId: "marks",
+        exportedAt: "2026-11-04T00:00:00.000Z",
+        appVersion: "0.1.0",
+        backend: "web-dexie",
+        integrity: { algorithm: "SHA-256", checksum: "" },
+      },
+      payload: transcriptPayload as never,
+    },
+    {
+      mergeStrategy: "overwrite",
+      includeSessions: true,
+      includeApiKey: false,
+    }
+  )
+  expect((await db.messages.get("marked-backup-message"))?.metadata).toEqual({
+    personalMarks,
+    personalMarkVersion: 1,
+  })
+})
+
+it("exports an explicit legacy personal mark without rewriting connector history", async () => {
+  const db = getDb()
+  await db.sessions.put({
+    id: "legacy-backup",
+    title: "Legacy",
+    createdAt: 1,
+    updatedAt: 1,
+    platformBinding: {
+      platform: "lark",
+      adapterId: "backup-adapter",
+      conversationKey: "chat",
+      conversationRef: { platform: "lark", adapterId: "backup-adapter" },
+    },
+  })
+  await db.adapterInstances.put({
+    id: "backup-adapter",
+    type: "lark",
+    settings: { connectedUser: { openId: "owner" } },
+  } as never)
+  await db.messages.put({
+    id: "legacy-backup-message",
+    sessionId: "legacy-backup",
+    role: "assistant",
+    parts: [],
+    createdAt: 10,
+  })
+  let copy: unknown
+  for await (const page of buildBackupSections(
+    { includeSessions: true, includeApiKey: false, includeLocalStorage: false },
+    { storage: null }
+  ))
+    if (page.section === "messages")
+      copy = page.rows.find((row) => (row as { id: string }).id === "legacy-backup-message") ?? copy
+  expect(copy).toMatchObject({
+    metadata: {
+      personalMarks: [
+        {
+          person: {
+            kind: "platform",
+            platform: "lark",
+            adapterId: "backup-adapter",
+            remoteUserId: "owner",
+          },
+          source: "lark-user",
+          markedAt: 10,
+        },
+      ],
+    },
+  })
+  expect((await db.messages.get("legacy-backup-message"))?.metadata).toBeUndefined()
 })

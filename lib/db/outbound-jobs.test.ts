@@ -1711,7 +1711,7 @@ describe("atomic manual transcript", () => {
       const job = await enqueueOutbound(input)
       expect(await db.messages.get(localMessage.id)).toMatchObject({
         ...localMessage,
-        metadata: { ...localMessage.metadata, outboundJobId: job.id },
+        metadata: { ...localMessage.metadata, outboundJobId: job.id, personalMarkVersion: 1 },
       })
       expect(wake).toHaveBeenCalledTimes(1)
     } finally {

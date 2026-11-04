@@ -1,5 +1,7 @@
 "use client"
 
+import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
+
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 
 import { hasCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
@@ -1187,6 +1189,11 @@ export async function handleEvent(
         turnComplete,
         result: sdkResult,
       } = applySdkEvent(current, env.event)
+      bindPersonalMessageChanges(
+        current,
+        appliedMessages,
+        toolCallExecutionRunId(sessionId, frame.turnId, frame.attemptId)
+      )
       const deleteIds = current
         .filter((message) => !appliedMessages.some((kept) => kept.id === message.id))
         .map((message) => message.id)

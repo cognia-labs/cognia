@@ -1,5 +1,7 @@
 "use client"
 
+import { personalMessageForCopy } from "@/lib/execution/personal-marks"
+
 /**
  * Desktop-side counterpart of the Rust `companion::sync_bridge`
  * (M4.7 / #51).
@@ -344,7 +346,13 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
     // history on demand.
     const newest = await index.reverse().limit(MESSAGES_PAGE_SIZE).toArray()
     newest.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-    return finalizeDelta("messages", newest, since, false, (row) => row.createdAt)
+    return finalizeDelta(
+      "messages",
+      await Promise.all(newest.map((row) => personalMessageForCopy(getDb(), row))),
+      since,
+      false,
+      (row) => row.createdAt
+    )
   }
 
   // Incremental pulls still drain every newly-created row after the durable
@@ -369,7 +377,13 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
       await getDb().messages.where("[createdAt+id]").above([boundary, Dexie.maxKey]).first()
     )
   }
-  return finalizeDelta("messages", page, since, hasMore, (row) => row.createdAt)
+  return finalizeDelta(
+    "messages",
+    await Promise.all(page.map((row) => personalMessageForCopy(getDb(), row))),
+    since,
+    hasMore,
+    (row) => row.createdAt
+  )
 }
 
 interface PagedSyncCursor {
@@ -519,6 +533,10 @@ async function readCursorDelta(
     hasMore = page.length > RUN_PAGE_SIZE
     rows = page.slice(0, RUN_PAGE_SIZE).map(projectRunForSync)
   }
+  if (table === "messages")
+    rows = await Promise.all(
+      (rows as unknown as StoredMessage[]).map((row) => personalMessageForCopy(db, row))
+    )
   const deleted = await readTombstonesSince(table, cursor.deletedAt)
   const last = rows.at(-1)
   const next: PagedSyncCursor = {

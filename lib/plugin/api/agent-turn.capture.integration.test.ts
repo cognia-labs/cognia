@@ -56,6 +56,7 @@ jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async () => ({ cwd: "/repo", provider: "anthropic" })),
 }))
 jest.mock("@/lib/claude/ipc", () => ({
+  ...jest.requireActual("@/lib/claude/ipc"),
   onClaudeMessage: jest.fn(),
   sendPrompt: jest.fn(),
   closeSession: jest.fn(async () => {}),
@@ -550,6 +551,11 @@ it.each(["anthropic", "openai"])(
         resumeSessionId: "opaque-runtime",
       })
       expect(JSON.stringify(next)).not.toContain("secret")
+      if (provider === "openai") {
+        expect(next.initialConversation).toBeDefined()
+        expect(next.expectedRuntimeSessionId).toBeUndefined()
+        expect(next.transcriptInvalidationId).toEqual(expect.any(String))
+      }
       if (transformed) expect(JSON.stringify(next)).toContain("public")
     }
   }

@@ -428,3 +428,20 @@ it("drops provenance in canonical projections that do not carry citations", () =
     /remoteDocument|private-account|authorizationEpoch|accountBinding/
   )
 })
+
+it("keeps only portable personal provenance in canonical handoff turns", () => {
+  const source = conversation()
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }]
+  source.messages[1].metadata = {
+    ...source.messages[1].metadata,
+    personalMarks,
+    personalMarkVersion: 1,
+    token: "must-not-copy",
+  }
+  const converted = conversationToCanonical(source, {
+    sourceRuntime: "cognia",
+    importFidelity: "structured",
+  })
+  expect(converted.session.turns[1].metadata).toEqual({ personalMarks, personalMarkVersion: 1 })
+  expect(validateCanonicalSession(converted.session)).toEqual([])
+})

@@ -35,6 +35,23 @@ describe("execution run journal", () => {
     __resetDbForTesting()
   })
 
+  it("records personal marks as private observations without changing terminal projections", async () => {
+    const { startToolExecutionRun, finishToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    const run = await startToolExecutionRun("personal-audit")
+    await finishToolExecutionRun(run.id)
+    const before = await getExecutionRun(run.id)
+    const event = await runEventJournal.append(
+      run.id,
+      semanticRunEvent("personal.marked", {
+        mark: { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
+      })
+    )
+    expect(event).toMatchObject({ type: "personal.marked", visibility: "private", seq: 0 })
+    expect(await getExecutionRun(run.id)).toEqual(before)
+    expect(await listVisibleExecutionRunEvents(run.id)).not.toContainEqual(event)
+  })
+
   it("settles a job once and rolls its journal back with the owner's transaction", async () => {
     const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
     await startJobExecutionRun("outbound:test")

@@ -1,3 +1,4 @@
+import type { SendFn } from "./claude-chat-turn-tasks"
 const getSessionMock = jest.fn()
 const updateSessionMock = jest.fn()
 jest.mock("@/lib/db/sessions", () => ({
@@ -82,4 +83,19 @@ describe("a refused automated continuation", () => {
       process.off("unhandledRejection", unhandled)
     }
   })
+})
+
+it("carries Host background run references through the shared send contract", async () => {
+  const accept = jest.fn()
+  const send: SendFn = async (_content, _options, call) => {
+    accept(call?.backgroundDelivery?.personalRunIds)
+  }
+  await send("framed", undefined, {
+    backgroundDelivery: {
+      id: "delivery",
+      onAccepted: () => {},
+      personalRunIds: ["execution:job:child"],
+    },
+  })
+  expect(accept).toHaveBeenCalledWith(["execution:job:child"])
 })

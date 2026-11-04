@@ -1,3 +1,7 @@
+import { markPersonalCredential } from "@/lib/execution/personal-marks"
+jest.mock("@/lib/execution/personal-marks", () => ({
+  markPersonalCredential: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/i18n/runtime-translator", () => ({
   currentLocale: jest.fn(async () => "en"),
 }))
@@ -89,6 +93,12 @@ it("allows the connected owner, including an available matching unionId", async 
     accessToken: "owner-token",
     authorizationEpoch: "auth-owner",
   })
+  expect(markPersonalCredential).toHaveBeenCalledWith(
+    expect.any(Object),
+    expect.any(Object),
+    { kind: "local-person" },
+    "lark-user"
+  )
   expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(1)
   expect(resolveBuiltInSkillTurnActors).toHaveBeenCalledWith("chat", "a1", "s1")
 })
@@ -555,4 +565,30 @@ it("checks a delivered run's persisted requesters after live inbound jobs finish
   })
   delivered.actingIdentity.requesters[0].remoteUserId = "non-owner"
   await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("sender_not_token_owner")
+})
+
+it("marks an IM-owner admission with the verified platform person rather than a local label", async () => {
+  const imRun = {
+    ...localRun,
+    actingIdentity: {
+      ...localRun.actingIdentity,
+      trigger: "requester",
+      authorizingPrincipal: undefined,
+    },
+  }
+  runGet.mockImplementation(async (id) => (id === localRun.id ? imRun : undefined))
+  jest.mocked(listExecutionRuns).mockResolvedValue([imRun] as never)
+  await assertLarkActingIdentity("a1", { sessionId: "s1" })
+  expect(markPersonalCredential).toHaveBeenLastCalledWith(
+    expect.any(Object),
+    expect.any(Object),
+    {
+      kind: "platform",
+      platform: "lark",
+      adapterId: "a1",
+      remoteUserId: "owner",
+      unionId: "union-owner",
+    },
+    "lark-user"
+  )
 })

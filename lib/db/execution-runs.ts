@@ -346,6 +346,23 @@ function appendInsideTransaction(
     if (!run) throw new Error(`Execution run not found: ${runId}`)
     return db.executionRunEvents.get(id).then((duplicate) => {
       if (duplicate) return duplicate
+      // Like authority observations, provenance is private audit data outside
+      // the executable sequence. It must not republish a card or move even a
+      // completed ancestor in the UI while its background child reads.
+      if (input.type === "personal.marked") {
+        const event: RunEvent = {
+          id,
+          runId,
+          seq: 0,
+          ts: input.ts,
+          type: input.type,
+          visibility: "private",
+          payload: redactPayload(input.payload),
+          ...(run.projectId ? { projectId: run.projectId } : {}),
+          ...(input.sourceEventId ? { sourceEventId: input.sourceEventId } : {}),
+        }
+        return db.executionRunEvents.add(event).then(() => event)
+      }
       if (["completed", "failed", "cancelled"].includes(run.status)) {
         throw new Error(`Execution run is terminal: ${runId}`)
       }

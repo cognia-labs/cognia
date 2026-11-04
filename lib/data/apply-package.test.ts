@@ -2161,3 +2161,56 @@ describe("recorded browser flows", () => {
     expect(names).toEqual(["Imported", "Local"])
   })
 })
+
+it("retains known personal marks when an older backup overwrites a message", async () => {
+  const db = getDb()
+  const personalMarks = [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 10 }]
+  await db.messages.put({
+    id: "marked-restore",
+    sessionId: "s",
+    role: "assistant",
+    parts: [],
+    createdAt: 1,
+    metadata: { personalMarks, personalMarkVersion: 1 },
+  })
+  await applyBackupPackage(
+    pkg({
+      messages: [
+        { id: "marked-restore", sessionId: "s", role: "assistant", parts: [], createdAt: 1 },
+      ],
+    }),
+    { mergeStrategy: "overwrite", includeSessions: true, includeApiKey: false }
+  )
+  expect((await db.messages.get("marked-restore"))?.metadata).toEqual({
+    personalMarks,
+    personalMarkVersion: 1,
+  })
+})
+
+it.each([undefined, { note: "legacy" }])(
+  "accepts a new backup row's version without promoting an existing legacy row (%j)",
+  async (metadata) => {
+    const db = getDb()
+    const row = {
+      id: "legacy-backup-version",
+      sessionId: "s",
+      role: "assistant" as const,
+      parts: [],
+      createdAt: 1,
+    }
+    await db.messages.put({ ...row, metadata })
+    await applyBackupPackage(
+      pkg({
+        messages: [
+          { ...row, metadata: { personalMarkVersion: 1 } },
+          { ...row, id: "new-backup-version", metadata: { personalMarkVersion: 1 } },
+        ],
+      }),
+      { mergeStrategy: "overwrite", includeSessions: true, includeApiKey: false }
+    )
+    expect((await db.messages.get(row.id))?.metadata ?? {}).not.toHaveProperty(
+      "personalMarkVersion"
+    )
+    expect((await db.messages.get("new-backup-version"))?.metadata?.personalMarkVersion).toBe(1)
+  }
+)

@@ -59,6 +59,13 @@ export function frameBackgroundResults(entries: readonly BackgroundResultDeliver
     .join("\n\n")
 }
 
+/** Host journal identities travel beside the framed text, never inside model output. */
+export function backgroundResultRunIds(
+  entries: readonly BackgroundResultDeliveryEntry[]
+): string[] {
+  return [...new Set(entries.map((entry) => entry.runId))].sort()
+}
+
 /**
  * Build a delivery entry from a settled journal row (or the equivalent settle
  * payload). Returns `null` for non-terminal rows. Error rows keep the salvaged

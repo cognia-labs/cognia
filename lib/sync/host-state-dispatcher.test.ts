@@ -1,3 +1,9 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  bindToolCallRun: jest.fn(jest.requireActual("@/lib/execution/acting-authority").bindToolCallRun),
+}))
+import { acceptHostStateChatTurn } from "@/lib/work-submission/host-adapter"
+import * as actingAuthority from "@/lib/execution/acting-authority"
 /**
  * The Agent RPC HostState dispatcher, in isolation from the ledger.
  *
@@ -106,4 +112,19 @@ it("refuses a host-owned (remote) runtime pick the same way", async () => {
   )
   expect(prepareTranscriptRuntimeSendMock).not.toHaveBeenCalled()
   expect(sendPromptMock).not.toHaveBeenCalled()
+})
+
+it("pins HostState assistant persistence to the exact accepted Host run", async () => {
+  jest.mocked(acceptHostStateChatTurn).mockResolvedValueOnce({
+    runId: "hoststate:action-1",
+    turnId: "hoststate:action-1",
+    submissionId: "work:1",
+  } as never)
+  const binding = jest.mocked(actingAuthority.bindToolCallRun).mockClear()
+  try {
+    await createAgentRpcHostStateDispatcher()(enqueue("s-marked"))
+    expect(binding).toHaveBeenCalledWith("s-marked", "hoststate:action-1", "hoststate:action-1")
+  } finally {
+    binding.mockClear()
+  }
 })

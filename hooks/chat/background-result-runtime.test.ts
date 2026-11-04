@@ -78,7 +78,8 @@ describe("onBackgroundRunSettled", () => {
     await flush()
 
     expect(send).toHaveBeenCalledTimes(1)
-    const [framed, sessionId] = send.mock.calls[0]
+    const [framed, sessionId, , personalRunIds] = send.mock.calls[0]
+    expect(personalRunIds).toEqual(["execution:job:run-1"])
     expect(sessionId).toBe("chat-1")
     expect(framed).toContain("[background task update]")
     expect(framed).toContain('Subagent "explore" (runId run-1)')

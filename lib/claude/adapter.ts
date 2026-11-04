@@ -1,7 +1,10 @@
 // Translates SDKMessage events from the Claude Agent SDK (via the sidecar)
 // into UIMessage parts in the shape AI SDK Elements expect.
 
-import { REMOTE_DOC_PART_KEY } from "@/lib/chat/attachments/remote-document"
+import {
+  REMOTE_DOC_PART_KEY,
+  remoteDocumentPersonalMarks,
+} from "@/lib/chat/attachments/remote-document"
 import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
 import type { UIMessage } from "ai"
 import type {
@@ -1508,6 +1511,9 @@ export function makeUserMessage(
     id: messageId,
     role: "user",
     parts,
+    ...(remoteDocumentPersonalMarks(manifest).length
+      ? { metadata: { personalMarks: remoteDocumentPersonalMarks(manifest) } }
+      : {}),
   }
 }
 

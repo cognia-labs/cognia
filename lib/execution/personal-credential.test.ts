@@ -1,3 +1,5 @@
+jest.mock("./personal-marks", () => ({ markPersonalCredential: jest.fn(async () => undefined) }))
+import { markPersonalCredential } from "./personal-marks"
 /** @jest-environment node */
 jest.mock("./acting-authority", () => ({
   LOCAL_PERSON_RUN: Symbol("host-local-person-run"),
@@ -5,6 +7,7 @@ jest.mock("./acting-authority", () => ({
 }))
 jest.mock("@/lib/skills/built-in/lark/acting-identity", () => ({
   verifyLarkImOwnerAuthorization: jest.fn(),
+  verifiedLarkAuthorizationPerson: (authorization: { person?: unknown }) => authorization.person,
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsLarkUserAuth: jest.fn(),
@@ -83,9 +86,11 @@ it("resolves an explicit sessionless execution without inventing a session", asy
 })
 it("keeps the IM owner exception exclusive to Lark", async () => {
   resolve.mockResolvedValue({ ...local, trigger: "requester" } as never)
-  jest
-    .mocked(verifyLarkImOwnerAuthorization)
-    .mockResolvedValue({ accessToken: "owner", authorizationEpoch: "e" })
+  jest.mocked(verifyLarkImOwnerAuthorization).mockResolvedValue({
+    accessToken: "owner",
+    authorizationEpoch: "e",
+    person: { kind: "platform", platform: "lark", adapterId: "a", remoteUserId: "owner" },
+  } as never)
   const ctx = { sessionId: "s", executionRunId: "r", larkContext: { sessionId: "s" } }
   expect(await admitPersonalCredential(ctx, { source: "lark-user", person: "a" })).toMatchObject({
     ok: true,
@@ -151,4 +156,32 @@ it("admits Drive backup OAuth only with a verified personal root or Host UI proo
   await expect(
     admitPersonalCredential({ executionRunId: "scheduled" }, { source: "google-drive-backup" })
   ).resolves.toMatchObject({ ok: false })
+})
+
+it("refuses every successful run admission if its personal mark cannot commit", async () => {
+  resolve.mockResolvedValue(local as never)
+  jest.mocked(markPersonalCredential).mockRejectedValueOnce(new Error("disk write failed"))
+  expect(
+    await admitPersonalCredential({ executionRunId: "r" }, { source: "google-docs" })
+  ).toMatchObject({ ok: false, reason: "mark-unavailable" })
+  expect(markPersonalCredential).toHaveBeenCalledWith(
+    { executionRunId: "r" },
+    local,
+    { kind: "local-person" },
+    "google-docs"
+  )
+})
+
+it("also records a direct Host action when its session resolves to a run", async () => {
+  resolve.mockResolvedValue(local as never)
+  const context = { sessionId: "s", localAuthorization: LOCAL_PERSON_RUN } as const
+  expect(await admitPersonalCredential(context, { source: "google-docs" })).toMatchObject({
+    ok: true,
+  })
+  expect(markPersonalCredential).toHaveBeenCalledWith(
+    context,
+    local,
+    { kind: "local-person" },
+    "google-docs"
+  )
 })

@@ -1,3 +1,4 @@
+import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 /**
  * A synchronous, tool-enabled agent turn, run headlessly on a plugin's behalf.
  *
@@ -771,6 +772,7 @@ export async function runPluginAgentTurn(
           }))
           // Hash/decode/store media before acquiring the final transcript transaction.
           // The writer consumes these prepared parts without reopening asset stores.
+          for (const message of transcript) bindPersonalMessageRun(message.id, entry?.id)
           const prepared = await prepareMessageDelta(sessionId, { upserts: transcript })
           if (getDb() !== turnDb)
             throw new PluginAgentTurnError("runPluginAgentTurn: database changed")
