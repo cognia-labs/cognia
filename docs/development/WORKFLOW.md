@@ -14,6 +14,38 @@ Skills are invoked with the `Skill` tool (or `/name`); sub-agents with the
 
 ---
 
+## Optional named local URLs with Portless
+
+Install [Portless](https://github.com/vercel-labs/portless) globally, then start
+its proxy once. On macOS, the unprivileged mode serves HTTP on port 80 and
+accepts only loopback clients without requesting an administrator password:
+
+```bash
+npm install --global portless
+portless proxy start --unprivileged
+pnpm dev:portless                 # http://cognia.localhost
+pnpm docs:dev:portless            # http://docs.cognia.localhost (separate terminal)
+```
+
+The app command runs the existing `predev` preparation and retains the plugin
+artifact lease wrapper. Both servers use Portless's assigned `PORT` instead
+of a fixed port. Linked git worktrees receive a branch prefix automatically,
+such as `http://fix-ui.cognia.localhost`.
+
+`pnpm dev`, `pnpm docs:dev`, and Tauri keep their existing fixed-port flow.
+Use the explicit commands above rather than bare `portless` at this workspace
+root, which would discover and launch other workspace development scripts.
+
+Portless remembers the proxy mode and starts it again when an app needs it.
+Inspect it with `portless list` or `portless doctor`; stop it with
+`portless proxy stop`. For trusted HTTPS, stop the proxy and run
+`portless proxy start --https` from an interactive terminal, completing its
+administrator and certificate trust prompts. The same app commands then
+serve `https://cognia.localhost` and `https://docs.cognia.localhost`. Safari
+may additionally require `portless hosts sync` from that terminal.
+
+---
+
 ## The pipeline (canonical, full-feature path)
 
 | #   | Stage                          | Enter when…                             | Reuse (skill / agent / gate)                                                                                                             | Output                                                              |
