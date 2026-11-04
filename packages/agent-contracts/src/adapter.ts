@@ -197,6 +197,13 @@ export interface ExternalAgentAdapterCore {
   createSession(options?: SessionCreateOptions): Promise<ExternalAgentSession>
   /** Close an existing session. */
   closeSession(sessionId: string): Promise<void>
+  /**
+   * Independent Host process evidence, including terminals created by the
+   * session. Turn completion alone is never this proof. Absent means unknown.
+   */
+  confirmSessionProcessesStopped?(sessionId: string): Promise<boolean>
+  /** Close process admission, kill hosted children and verify them stopped. */
+  stopSessionProcesses?(sessionId: string): Promise<void>
   /** Send a prompt and stream the agent's events. */
   prompt(
     sessionId: string,

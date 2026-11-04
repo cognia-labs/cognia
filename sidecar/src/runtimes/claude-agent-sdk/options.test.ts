@@ -138,6 +138,8 @@ test("native PostToolUse starts LSP with host ports before the first tool reques
   const hostCalls: string[] = []
   const hostRpc = {
     async call(method: string, params?: unknown) {
+      if (method === "jobs.killOwnedBy") return { killed: [] }
+      if (method === "jobs.list") return { jobs: [] }
       hostCalls.push(method)
       assert.equal(method, "workspace.portEnv")
       assert.deepEqual(params, { cwd: fs.realpathSync(root) })

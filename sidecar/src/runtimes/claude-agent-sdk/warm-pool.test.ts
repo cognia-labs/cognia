@@ -12,11 +12,22 @@ import {
   warmFingerprint,
   DEFAULT_WARM_CAPACITY,
 } from "./warm-pool.ts"
+import { createClaudeProcessTracker } from "./runtime-policy.ts"
 
 const send = (overrides: Record<string, unknown> = {}): SendOptions => ({
   execution: { hostRef: "desktop-sidecar", runtimeAdapter: "claude-agent-sdk" },
   cwd: "/w",
   ...overrides,
+})
+
+test("session-owned process tracking callbacks cannot be pooled across executors", async () => {
+  const tracker = createClaudeProcessTracker()
+  const { pool: warm, spawned } = pool()
+  const options = tracker.options({})
+  assert.match((await warm.prewarm(send(), options))!, /session-bound callback/)
+  assert.equal(warm.claim(send(), options), null)
+  assert.equal(spawned.length, 0)
+  await tracker.waitForExit()
 })
 
 test("Namespace consent and retry deadlines cannot be bypassed through warm startup or claims", async () => {

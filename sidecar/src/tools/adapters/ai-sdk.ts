@@ -336,6 +336,8 @@ export function buildAiSdkTools({
   sendOptions,
   emit,
   sessionId,
+  processSignal,
+  groupProofSupported,
   pendingApprovals,
   pendingPluginToolCalls,
   lspResolver,
@@ -351,6 +353,8 @@ export function buildAiSdkTools({
   sendOptions: AiSdkToolSendOptions
   emit: (frame: Record<string, unknown>) => void
   sessionId: string
+  processSignal?: AbortSignal | undefined
+  groupProofSupported?: boolean | undefined
   pendingApprovals?: Map<string, PendingApproval> | undefined
   pendingPluginToolCalls?: PendingPluginToolCalls | undefined
   lspResolver?: LazyLspResolver | null | undefined
@@ -465,6 +469,8 @@ export function buildAiSdkTools({
     bgShells,
     hostRpc,
     sessionId,
+    processSignal,
+    groupProofSupported,
     taskStore,
     model: sendOptions.model,
     provider: sendOptions.provider,

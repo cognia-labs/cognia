@@ -12,6 +12,21 @@ test("collectCogniaToolDefs returns [] for missing / empty enabled", () => {
   assert.deepEqual(collectCogniaToolDefs({ enabled: {} }), [])
 })
 
+test("disposed session tools cannot start a late terminal process", async () => {
+  const { createToolSessionContext } = await import("../session.ts")
+  const context = createToolSessionContext({ sessionId: "disposed", sendOptions: {} })
+  const defs = collectCogniaToolDefs({ enabled: { terminalRepl: true }, ...context.toolContext() })
+  await context.disposeProcesses()
+  const result = await findTool(defs, "terminal_repl_spawn").handler({
+    shell: "/bin/sh",
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+  })
+  assert.equal(result.isError, true)
+  assert.match(firstText(result), /session is closing/)
+})
+
 test("collectCogniaToolDefs returns well-shaped defs for an enabled category", () => {
   const defs = collectCogniaToolDefs({ enabled: { git: true } })
   assert.ok(defs.length > 0)

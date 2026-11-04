@@ -8,6 +8,36 @@ import { createAiSdkToolSearchController } from "./ai-sdk-tool-search.ts"
 import { createSessionTaskStore } from "../state/tasks.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
 import { createVerificationBudget } from "../../shared/verification-budget.ts"
+import { createReadTracker } from "../state/read-tracker.ts"
+
+test("production AI SDK tools preserve closed process admission for Bash and PTY", async () => {
+  const closed = new AbortController()
+  closed.abort()
+  const tools = build({
+    sessionId: "closed-tools",
+    processSignal: closed.signal,
+    groupProofSupported: false,
+    readTracker: createReadTracker(),
+    emit() {},
+    sendOptions: {
+      builtinTools: { coreFiles: true, terminalRepl: true },
+      permissionMode: "bypassPermissions",
+    },
+  })
+  await assert.rejects(
+    tools.bash!.execute({ command: "echo should-never-run" }),
+    /interrupted|cancelled|aborted/
+  )
+  await assert.rejects(
+    tools.terminal_repl_spawn!.execute({
+      shell: "/bin/sh",
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    }),
+    /session is closing/
+  )
+})
 
 /** An AI SDK tool as these tests call it: execute without options, toModelOutput with the output alone. */
 interface TestAiTool {

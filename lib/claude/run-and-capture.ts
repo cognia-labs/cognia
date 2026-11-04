@@ -558,6 +558,15 @@ export interface RunAndCaptureOptions {
    * throwing callback is swallowed. Default `undefined` → no events emitted.
    */
   onEvent?: (event: CaptureStreamEvent) => void
+  /**
+   * Called at the sidecar send boundary with independent executor stop evidence.
+   * Resolves for a disposed runtime session/process, or a
+   * rejected send that never handed the turn to the sidecar.
+   * Survives capture timeout/abort cleanup; a rejected capture is not stop proof.
+   */
+  onExecutorStarted?: (stopped: Promise<void>) => void
+  /** A send receipt was received; observers may query its owning registry. This is not stop proof. */
+  onExecutorAccepted?: (sessionId: string) => void
   /** Lossless canonical stream. Takes precedence over onEvent for canonical
    * delivery; onEvent remains the legacy transport fallback. */
   onCanonicalEvent?: (event: CanonicalAgentEvent) => void
@@ -974,6 +983,30 @@ async function captureAssistantReplyCore(
     let interruptDrainHandle: ReturnType<typeof setTimeout> | null = null
     let settled = false
     let promptSent = false
+    const admission = new AbortController()
+    let sendDispatched = false
+    let sendAccepted = false
+    let sendRejected = false
+    let disposedDuringSend = false
+    let executorStopped = false
+    let resolveExecutorStop: (() => void) | undefined
+    const executorStop = cap?.onExecutorStarted
+      ? new Promise<void>((resolve) => {
+          resolveExecutorStop = resolve
+        })
+      : undefined
+    const confirmExecutorStop = () => {
+      executorStopped = true
+      resolveExecutorStop?.()
+      if (settled) {
+        try {
+          unlisten?.()
+        } catch {
+          /* idempotent unlisten — swallow secondary errors */
+        }
+        unlisten = null
+      }
+    }
     const releaseResponder = registerCaptureResponder(
       sessionId,
       turnId,
@@ -1321,14 +1354,19 @@ async function captureAssistantReplyCore(
     const cleanup = () => {
       if (settled) return
       settled = true
+      admission.abort()
       releaseResponder()
       endCapturedTurn()
-      try {
-        unlisten?.()
-      } catch {
-        /* idempotent unlisten — swallow secondary errors */
+      // Opt-in durable callers retain only the terminal observer after capture
+      // rejects. Interrupt IPC and the bounded capture drain are not proof.
+      if (!executorStop || !promptSent || executorStopped) {
+        try {
+          unlisten?.()
+        } catch {
+          /* idempotent unlisten — swallow secondary errors */
+        }
+        unlisten = null
       }
-      unlisten = null
       try {
         envelopeUnlisten?.()
       } catch {
@@ -1463,6 +1501,27 @@ async function captureAssistantReplyCore(
     //     channel itself, but subscribing first removes any window of
     //     ambiguity.
     const onEvent = (evt: ClaudeEvent): void => {
+      if (executorStop && promptSent && !executorStopped) {
+        const terminal = evt as { type: string; sessionId?: string; turnId?: string }
+        if (
+          (terminal.type === "sidecar_exited" && !sendDispatched) ||
+          (terminal.sessionId === sessionId &&
+            terminal.type === "session_disposed" &&
+            terminal.turnId === turnId)
+        ) {
+          if (!sendDispatched) {
+            // Cancellation is synchronous and the IPC checks it immediately
+            // before dispatch. Only then is "never started" a valid proof.
+            admission.abort()
+            confirmExecutorStop()
+          } else if (sendAccepted || (sendRejected && terminal.type === "session_disposed")) {
+            confirmExecutorStop()
+          } else if (terminal.type === "session_disposed") {
+            disposedDuringSend = true
+          }
+        }
+      }
+      if (settled) return
       // Filter to events for our session id. `usage_headers` and the
       // generic `log` / `ready` envelopes have no sessionId — skip them.
       if (evt.type === "ready" || evt.type === "log" || evt.type === "usage_headers") {
@@ -2107,24 +2166,51 @@ async function captureAssistantReplyCore(
         // Now fire the actual send. If it throws synchronously the
         // catch below cleans up; if it rejects async we still clean up
         // via the same path.
+        if (executorStop) cap?.onExecutorStarted?.(executorStop)
         promptSent = true
         sendPrompt(
           sessionId,
           prompt,
           { ...(options ?? {}), turnId },
-          cap?.transcriptRuntime || cap?.beforeSend || cap?.currentMessageId
-            ? {
-                ...(cap.transcriptRuntime ? { transcriptRuntime: cap.transcriptRuntime } : {}),
-                ...(cap.beforeSend ? { beforeSend: cap.beforeSend } : {}),
-                ...(cap.currentMessageId ? { messageId: cap.currentMessageId } : {}),
-              }
-            : undefined
-        ).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err)
-          finishErr(new RunAndCaptureError(`sendPrompt failed: ${message}`, "send_failed"))
-        })
+          {
+            signal: admission.signal,
+            onDispatch: () => {
+              sendDispatched = true
+            },
+            ...(cap?.transcriptRuntime ? { transcriptRuntime: cap.transcriptRuntime } : {}),
+            ...(cap?.beforeSend ? { beforeSend: cap.beforeSend } : {}),
+            ...(cap?.currentMessageId ? { messageId: cap.currentMessageId } : {}),
+          }
+        )
+          .then(() => {
+            sendAccepted = true
+            sendDispatched = true
+            if (disposedDuringSend) confirmExecutorStop()
+            try {
+              cap?.onExecutorAccepted?.(sessionId)
+            } catch {
+              /* registry observation is best-effort, never stop proof */
+            }
+          })
+          .catch((err: unknown) => {
+            sendRejected = true
+            // Only pre-dispatch rejection proves the turn never started. A
+            // lost transport response can leave an accepted executor running.
+            if (!sendDispatched) {
+              promptSent = false
+              confirmExecutorStop()
+            } else if (disposedDuringSend) confirmExecutorStop()
+            const message = err instanceof Error ? err.message : String(err)
+            finishErr(new RunAndCaptureError(`sendPrompt failed: ${message}`, "send_failed"))
+          })
       })
       .catch((err: unknown) => {
+        // A transport can also throw synchronously after the dispatch boundary.
+        sendRejected = true
+        if (!sendDispatched) {
+          promptSent = false
+          confirmExecutorStop()
+        } else if (disposedDuringSend) confirmExecutorStop()
         const message = err instanceof Error ? err.message : String(err)
         finishErr(
           new RunAndCaptureError(`failed to subscribe to claude events: ${message}`, "send_failed")

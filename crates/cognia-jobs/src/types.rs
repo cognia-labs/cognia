@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// Who owns a job, and therefore what kills it.
+/// Lifetime ownership and ordinary teardown policy. Durable child dispatches
+/// additionally require explicit origin-session disposal to prove stop.
 ///
 /// This is the whole reason the supervisor exists: a scheduled task's chat
 /// session is torn down the moment its turn settles, so a job bound to that
@@ -25,7 +26,9 @@ pub enum JobOwner {
     /// Lives until the owning scheduled task fires again or is deleted.
     #[serde(rename_all = "camelCase")]
     ScheduledTask { task_id: String },
-    /// Survives every session. Reaped at app exit or after
+    /// Survives ordinary session disposal. For a durable child dispatch, an
+    /// explicit origin-session stop still reaps it before proving stop.
+    /// Otherwise reaped at app exit or after
     /// [`crate::limits::DETACHED_JOB_TTL`], whichever comes first. Requires
     /// explicit `detach: true` plus approval — never the default.
     App,
@@ -92,6 +95,15 @@ impl JobStatus {
             _ => None,
         }
     }
+}
+
+/// Immutable attribution, independent of the job's mutable lifetime owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct JobOrigin {
+    pub session_id: String,
+    pub child_run_id: Option<String>,
+    pub dispatch_epoch: Option<u64>,
 }
 
 /// Request to start a background job.

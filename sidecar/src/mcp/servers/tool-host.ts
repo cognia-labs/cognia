@@ -58,6 +58,7 @@ interface Lease {
   expiry?: ReturnType<typeof setTimeout>
   closing?: Promise<void>
   toolSession?: ToolSessionContext
+  executionAdmitted?: boolean
   emit?: (event: HostFrame) => void
 }
 export interface ToolHostInput {
@@ -148,6 +149,8 @@ export function createToolHostManager({
   buildTools = buildAiSdkTools,
 }: ToolHostOptions) {
   const leases = new Map<string, Lease>()
+  // Final owner outcome contains no process IDs; repeated stop cannot erase unknown.
+  const retired = new Map<string, { owner: string; stopped: Promise<void> }>()
   const calls = new AsyncLocalStorage<{ roundTrips: [PendingMap, string][]; input: unknown }>()
   const schemas = new AjvJsonSchemaValidator()
 
@@ -162,7 +165,8 @@ export function createToolHostManager({
       throw new Error("tool host requires a lease id and owner session id")
     }
     const lease = leases.get(input.leaseId)
-    if (lease && lease.owner !== input.ownerSessionId) throw new Error("tool host owner mismatch")
+    const owner = lease?.owner ?? retired.get(input.leaseId)?.owner
+    if (owner && owner !== input.ownerSessionId) throw new Error("tool host owner mismatch")
     return lease
   }
 
@@ -224,7 +228,7 @@ export function createToolHostManager({
     })
   }
 
-  async function destroy(lease: Lease): Promise<void> {
+  async function destroy(lease: Lease, closeAdmission = true): Promise<void> {
     if (lease.closing) return lease.closing
     pause(lease)
     clearTimeout(lease.expiry)
@@ -244,7 +248,13 @@ export function createToolHostManager({
       lease.server.closeAllConnections()
       await new Promise<void>((resolve) => lease.server.close(() => resolve()))
       await lease.toolSession?.dispose()
+      if (await lease.toolSession?.hasLiveProcesses())
+        throw new Error("tool host TOOL process disposal unconfirmed")
     })()
+    // Rejected registration/catalog preparation never admitted execution. It
+    // releases resources but leaves the caller free to correct and retry.
+    if (closeAdmission || lease.executionAdmitted)
+      retired.set(lease.id, { owner: lease.owner, stopped: lease.closing })
     return lease.closing
   }
 
@@ -309,6 +319,7 @@ export function createToolHostManager({
       const definition = lease.tools[endpoint]?.[request.params.name]
       if (lease.paused || lease.closing) throw new Error("Cognia tool host is paused")
       if (!definition) throw new Error("Tool is not available in this Cognia session")
+      lease.executionAdmitted = true
       touch(lease)
       const controller = new AbortController()
       const generation = lease.generation
@@ -421,6 +432,8 @@ export function createToolHostManager({
   function start(input: ToolHostInput): Promise<ToolHostDescriptor | { leaseId: string }>
   async function start(input: ToolHostInput): Promise<ToolHostDescriptor | { leaseId: string }> {
     let lease = identity(input)
+    if (retired.has(input.leaseId))
+      throw new Error("Cognia tool host lease has expired (admission closed)")
     if (input.deferSandbox && !input.sandboxAgentId)
       throw new Error("Deferred tool host requires a sandbox agent")
     if (input.renew) {
@@ -612,11 +625,12 @@ export function createToolHostManager({
             sessionId: active.owner,
             leaseId: active.id,
             generation,
-            event,
+            // Process ownership is the lease; renderer round trips still use
+            // the chat owner in both the envelope and the nested event.
+            event: { ...event, sessionId: active.owner },
           })
         },
         ...active.toolSession.toolContext(),
-        sessionId: active.owner,
         pendingApprovals: active.approvals,
         pendingPluginToolCalls: active.plugins,
       }
@@ -675,7 +689,7 @@ export function createToolHostManager({
         })),
       }
     } catch (error) {
-      await destroy(active)
+      await destroy(active, false)
       throw error
     } finally {
       active.starting = false
@@ -684,11 +698,15 @@ export function createToolHostManager({
 
   async function stop(input: ToolHostInput) {
     const lease = identity(input)
-    if (!lease) return { stopped: true }
+    if (!lease) {
+      await retired.get(input.leaseId)?.stopped
+      return { stopped: true }
+    }
     if (input.pause) {
       pause(lease)
       touch(lease)
     } else await destroy(lease)
+    // Only the lease's Bash/jobs/PTY TOOL groups are covered, not MCP/helpers.
     return { stopped: true }
   }
 
@@ -721,5 +739,10 @@ export function createToolHostManager({
     return { accepted: true }
   }
 
-  return { start, stop, reply, close: () => Promise.all([...leases.values()].map(destroy)) }
+  return {
+    start,
+    stop,
+    reply,
+    close: () => Promise.all([...leases.values()].map((lease) => destroy(lease))),
+  }
 }

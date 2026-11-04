@@ -3,6 +3,7 @@ import type { ToolHostEvent, ToolHostOptions, ToolHostInput } from "./tool-host.
 import test from "node:test"
 import assert from "node:assert/strict"
 import net from "node:net"
+import http from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -26,6 +27,28 @@ const options = {
       },
     },
   ],
+}
+
+// These owner/evidence tests do not use HTTP. Keep them runnable when the
+// sandbox denies loopback bind; the transport tests below still use real IO.
+function withoutListener(t: TestContext) {
+  t.mock.method(http.Server.prototype, "listen", function (this: http.Server, ...args: unknown[]) {
+    queueMicrotask(() => (args.at(-1) as () => void)())
+    return this
+  })
+  t.mock.method(http.Server.prototype, "address", () => ({
+    address: "127.0.0.1",
+    family: "IPv4",
+    port: 1,
+  }))
+  t.mock.method(
+    http.Server.prototype,
+    "close",
+    function (this: http.Server, callback?: () => void) {
+      queueMicrotask(() => callback?.())
+      return this
+    }
+  )
 }
 
 test("pending sandbox tools preserve their endpoint before any agent exists and revoke on close", async (t) => {
@@ -458,9 +481,17 @@ test("the authenticated MCP boundary checks final results and errors using the c
 })
 
 test("round trips approval and plugin execution with exact owner scope", async (t) => {
-  const { host, client, event } = await setup(t)
+  let processOwner: string | undefined
+  const { host, client, event } = await setup(t, {
+    buildTools: (input) => {
+      processOwner = input.sessionId
+      return buildAiSdkTools(input)
+    },
+  })
+  assert.equal(processOwner, identity.leaseId)
   const pending = (await client()).callTool({ name: "echo", arguments: { value: "hello" } })
   const permission = await event("permission_request")
+  assert.equal(permission.sessionId, identity.ownerSessionId)
   assert.throws(
     () =>
       host.reply({
@@ -486,6 +517,7 @@ test("round trips approval and plugin execution with exact owner scope", async (
     { accepted: true }
   )
   const plugin = await event("plugin_tool_exec")
+  assert.equal(plugin.sessionId, identity.ownerSessionId)
   assert.deepEqual(plugin.args, { value: "reviewed" })
   host.reply({
     ...identity,
@@ -500,6 +532,70 @@ test("round trips approval and plugin execution with exact owner scope", async (
       .accepted,
     false
   )
+})
+
+test("a retired tool host retains unconfirmed disposal on every repeated stop", async (t) => {
+  withoutListener(t)
+  let registry: Parameters<typeof buildAiSdkTools>[0]["bgShells"]
+  const { host } = await setup(t, {
+    hostRpc: {
+      call: async (method) => {
+        if (method === "jobs.spawn") return { id: "unconfirmed-job", startedAtMs: 1 }
+        if (method === "jobs.killOwnedBy") return { killed: ["unconfirmed-job"] }
+        if (method === "jobs.list")
+          return {
+            jobs: [
+              {
+                id: "unconfirmed-job",
+                startedAtMs: 1,
+                status: "running",
+                processGroupRunning: true,
+              },
+            ],
+          }
+        throw new Error(`unexpected ${method}`)
+      },
+    },
+    buildTools: (input) => {
+      registry = input.bgShells
+      return buildAiSdkTools(input)
+    },
+  })
+  assert.ok(registry)
+  await registry.spawnBackground({ command: "work", shell: "sh", shellArgs: [] })
+  for (let stop = 0; stop < 2; stop++)
+    await assert.rejects(host.stop(identity), /live background processes/)
+  await assert.rejects(host.start({ ...identity, renew: true }), /expired/)
+})
+
+test("lease-owned tools keep permission and plugin callbacks routed to the chat owner", async (t) => {
+  withoutListener(t)
+  let pluginTools: ReturnType<typeof buildAiSdkTools> | undefined
+  const { host, event } = await setup(t, {
+    buildTools: (input) => {
+      assert.equal(input.sessionId, identity.leaseId)
+      const tools = buildAiSdkTools(input)
+      if (tools.echo) pluginTools = tools
+      return tools
+    },
+  })
+  assert.ok(pluginTools?.echo)
+  const pending = pluginTools.echo.execute!(
+    { value: "hello" },
+    { toolCallId: "owner-test", messages: [], context: {} }
+  )
+  const permission = await event("permission_request")
+  assert.equal(permission.sessionId, identity.ownerSessionId)
+  host.reply({
+    ...identity,
+    kind: "permission",
+    id: permission.requestId,
+    result: { behavior: "allow" },
+  })
+  const plugin = await event("plugin_tool_exec")
+  assert.equal(plugin.sessionId, identity.ownerSessionId)
+  host.reply({ ...identity, kind: "plugin", id: plugin.toolUseId, result: { result: "done" } })
+  assert.equal(await pending, "done")
 })
 
 test("pause cancels pending approval, preserves endpoint, and enforces changed manifest on resume", async (t) => {

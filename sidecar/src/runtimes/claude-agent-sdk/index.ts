@@ -38,6 +38,7 @@ import { ensureClaudeRuntimePolicyCompatibility } from "./executable.ts"
 import { readApprovalTtlMs } from "../../policy/permission/permission-classes.ts"
 import {
   createProtectedClaudeQuery,
+  createClaudeProcessTracker,
   nestedNamespaceRequested,
   requestNestedNamespaceConsent,
   unattendedRetryPolicy,
@@ -135,11 +136,20 @@ export function dispatchAnthropic(
   let drainRuntimePending = (_reason: string) => {}
   const prewarmEnabled =
     !protectedInvocation && sendOptions.claudeAgentSdk?.prewarm?.enabled === true
+  const processTracker = createClaudeProcessTracker()
+  let waitForProcessExit = () => processTracker.waitForExit()
   const spawnQuery = () => {
     const claimed = prewarmEnabled ? pool.claim(sendOptions, options) : null
-    return claimed
-      ? claimed.query(inputStream.iterable)
-      : (runtime.query ?? query)({ prompt: inputStream.iterable, options })
+    if (claimed) {
+      const q = claimed.query(inputStream.iterable)
+      // A custom pool without exit evidence must fail closed.
+      waitForProcessExit = () => q.waitForProcessExit?.() ?? new Promise<void>(() => {})
+      return q
+    }
+    return (runtime.query ?? query)({
+      prompt: inputStream.iterable,
+      options: processTracker.options(options),
+    })
   }
   // Consent cannot run inside dispatch's synchronous registration window. The
   // lazy query starts after the host stores this returned session, and neither
@@ -267,6 +277,7 @@ export function dispatchAnthropic(
     state,
     mcpStderrSink,
     toolSession,
+    waitForProcessExit: () => waitForProcessExit(),
   })
   return Object.assign(session, {
     reloadExtensions: createClaudeExtensionReloader(q, sendOptions, () => loadedPlugins),

@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::types::{
-    JobError, JobOwner, JobRecord, JobStatus, MonitorRecord, MonitorStatus, Result,
+    JobError, JobOrigin, JobOwner, JobRecord, JobStatus, MonitorRecord, MonitorStatus, Result,
 };
 
 fn map_sql_err(err: rusqlite::Error) -> JobError {
@@ -48,6 +48,16 @@ CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_kind, owner_id);
 -- Drives LRU eviction of log files: oldest finished job goes first.
 CREATE INDEX IF NOT EXISTS idx_jobs_ended_at ON jobs(ended_at_ms);
 
+-- Attribution survives owner promotion and Host/sidecar restarts. Separate
+-- from the public job record so lifetime ownership keeps its existing API.
+CREATE TABLE IF NOT EXISTS job_origins (
+    job_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    child_run_id TEXT,
+    dispatch_epoch INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_job_origins_session ON job_origins(session_id);
+
 -- Monitors: "wake me when X happens". Persisted for the same reason jobs are —
 -- an async watch has to survive a restart, be visible to a remote client, and
 -- work on a headless host.
@@ -70,6 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_monitors_owner ON monitors(owner_kind, owner_id);
 
 pub struct JobStore {
     conn: Mutex<Connection>,
+    #[cfg(test)]
+    fail_next_insert: std::sync::atomic::AtomicBool,
 }
 
 impl JobStore {
@@ -81,6 +93,8 @@ impl JobStore {
         conn.execute_batch(SCHEMA).map_err(map_sql_err)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            #[cfg(test)]
+            fail_next_insert: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -90,12 +104,37 @@ impl JobStore {
         conn.execute_batch(SCHEMA).map_err(map_sql_err)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            #[cfg(test)]
+            fail_next_insert: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
+    pub(crate) fn origin_session(&self, job_id: &str) -> Result<Option<String>> {
+        self.conn.lock().query_row("SELECT session_id FROM job_origins WHERE job_id = ?1", [job_id], |row| row.get(0))
+            .optional().map_err(map_sql_err)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_insert(&self) {
+        self.fail_next_insert.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn insert(&self, rec: &JobRecord) -> Result<()> {
-        let conn = self.conn.lock();
-        conn.execute(
+        self.insert_with_origin(rec, None)
+    }
+
+    pub(crate) fn insert_with_origin(
+        &self,
+        rec: &JobRecord,
+        origin: Option<&JobOrigin>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_next_insert.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(JobError::Store("injected journal write failure".into()));
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(map_sql_err)?;
+        tx.execute(
             r#"
             INSERT INTO jobs (
                 id, command, cwd, owner_kind, owner_id, status, exit_code, pid,
@@ -120,7 +159,30 @@ impl JobStore {
             ],
         )
         .map_err(map_sql_err)?;
+        if let Some(origin) = origin {
+            tx.execute(
+                "INSERT INTO job_origins (job_id, session_id, child_run_id, dispatch_epoch) VALUES (?1, ?2, ?3, ?4)",
+                params![rec.id, origin.session_id, origin.child_run_id, origin.dispatch_epoch],
+            ).map_err(map_sql_err)?;
+        }
+        tx.commit().map_err(map_sql_err)?;
         Ok(())
+    }
+
+    /// Include promoted jobs, and legacy session-owned rows without attribution.
+    pub(crate) fn list_by_origin_session(&self, session_id: &str) -> Result<Vec<JobRecord>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT jobs.* FROM jobs LEFT JOIN job_origins ON jobs.id = job_origins.job_id
+             WHERE job_origins.session_id = ?1 OR (job_origins.job_id IS NULL AND jobs.owner_kind = 'session' AND jobs.owner_id = ?1)
+             ORDER BY jobs.started_at_ms DESC",
+        ).map_err(map_sql_err)?;
+        let rows = stmt
+            .query_map(params![session_id], row_to_job)
+            .map_err(map_sql_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql_err)?;
+        Ok(rows)
     }
 
     /// Record a terminal transition. Idempotent: re-settling an already-terminal
@@ -258,9 +320,13 @@ impl JobStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock();
-        conn.execute("DELETE FROM jobs WHERE id = ?1", params![id])
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(map_sql_err)?;
+        tx.execute("DELETE FROM job_origins WHERE job_id = ?1", params![id])
             .map_err(map_sql_err)?;
+        tx.execute("DELETE FROM jobs WHERE id = ?1", params![id])
+            .map_err(map_sql_err)?;
+        tx.commit().map_err(map_sql_err)?;
         Ok(())
     }
 
@@ -506,6 +572,32 @@ mod tests {
         JobOwner::Session {
             session_id: id.into(),
         }
+    }
+
+    #[test]
+    fn origin_survives_reopen_independently_of_app_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.sqlite");
+        let record = rec("detached", JobOwner::App, JobStatus::Running, 1);
+        let origin = JobOrigin {
+            session_id: "origin".into(),
+            child_run_id: Some("child".into()),
+            dispatch_epoch: Some(7),
+        };
+        {
+            let store = JobStore::new(path.clone()).unwrap();
+            store.insert_with_origin(&record, Some(&origin)).unwrap();
+        }
+        let reopened = JobStore::new(path).unwrap();
+        assert!(reopened
+            .list_by_owner(&session("origin"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            reopened.list_by_origin_session("origin").unwrap()[0].id,
+            "detached"
+        );
+        assert!(reopened.list_by_origin_session("other").unwrap().is_empty());
     }
 
     #[test]

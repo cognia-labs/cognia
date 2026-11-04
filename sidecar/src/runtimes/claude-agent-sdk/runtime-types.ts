@@ -24,6 +24,7 @@ export interface RuntimeEvent {
 export interface RuntimeQuery extends AsyncIterable<RuntimeEvent> {
   interrupt(): unknown
   close?(): void
+  waitForProcessExit?(): Promise<void>
   reconnectMcpServer?(name: string): Promise<void>
   reloadPlugins?: Query["reloadPlugins"]
 }
@@ -81,4 +82,5 @@ export interface PumpContext extends BaseContext {
   state: { outstandingPrompts: number }
   mcpStderrSink: ReturnType<typeof createStderrLogSink>
   toolSession: ToolSessionContext
+  waitForProcessExit(): Promise<void>
 }

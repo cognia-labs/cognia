@@ -105,12 +105,48 @@ test("spawnBackground sends the session owner and returns the host record", asyn
   assert.deepEqual(nth(calls, 0).params.args, ["-c", "pnpm dev"])
 })
 
-test("detach promotes the job to app ownership so it outlives the session", async () => {
+test("detach promotes lifetime ownership but retains its immutable dispatch origin", async () => {
   const { hostRpc, calls } = fakeHost({ "jobs.spawn": () => ({ id: "job-1", startedAtMs: 1 }) })
-  const reg = createHostBgShellRegistry({ hostRpc, sessionId: "s1" })
+  const reg = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "s1",
+    processOrigin: { childRunId: "child", dispatchEpoch: 4 },
+  })
 
   await reg.spawnBackground({ command: "x", shell: "sh", shellArgs: [], cwd: "/", detach: true })
   assert.deepEqual(nth(calls, 0).params.owner, { kind: "app" })
+  assert.deepEqual(nth(calls, 0).params.origin, {
+    sessionId: "s1",
+    childRunId: "child",
+    dispatchEpoch: 4,
+  })
+})
+
+test("jobs with terminal leaders stay live until the Host confirms their groups empty", async () => {
+  let groupRunning = true
+  const { hostRpc } = fakeHost({
+    "jobs.spawn": () => ({ id: "job", startedAtMs: 1 }),
+    "jobs.list": () => ({
+      originSessionId: "origin",
+      jobs: [{ id: "job", status: "exited", processGroupRunning: groupRunning, startedAtMs: 1 }],
+    }),
+    "jobs.killOwnedBy": () => {
+      groupRunning = false
+      return { killed: ["job"] }
+    },
+  })
+  const registry = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "origin",
+    processOrigin: { childRunId: "child", dispatchEpoch: 1 },
+  })
+  await registry.spawnBackground({ command: "sleep 60 & exit 0", shell: "sh", shellArgs: [] })
+  assert.equal((await registry.list())[0]?.status, "exited")
+  assert.equal(await registry.hasRunningProcesses(), false)
+  assert.equal(await registry.hasLiveProcesses(), true)
+  await registry.killAll()
+  assert.equal((await registry.list())[0]?.status, "exited")
+  assert.equal(await registry.hasLiveProcesses(), false)
 })
 
 test("read advances the cursor so the next read returns only new bytes", async () => {
@@ -249,26 +285,68 @@ test("kill reports a host rejection rather than pretending it worked", async () 
   assert.match(reasonOf(await reg.kill("job-9")), /owned by another session/)
 })
 
-test("killAll reaps only session-owned jobs, leaving detached ones alive", async () => {
-  const { hostRpc, calls } = fakeHost({ "jobs.killOwnedBy": () => ({ killed: ["job-1"] }) })
-  const reg = createHostBgShellRegistry({ hostRpc, sessionId: "s1" })
+test("killAll explicitly includes origin-tagged detached jobs", async () => {
+  const { hostRpc, calls } = fakeHost({
+    "jobs.spawn": () => ({ id: "job-1", startedAtMs: 1 }),
+    "jobs.killOwnedBy": () => ({ killed: ["job-1"] }),
+  })
+  const reg = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "s1",
+    processOrigin: { childRunId: "child", dispatchEpoch: 1 },
+  })
 
+  await reg.spawnBackground({ command: "work", shell: "sh", shellArgs: [], detach: true })
   await reg.killAll()
-  assert.deepEqual(nth(calls, 0).params.owner, { kind: "session", sessionId: "s1" })
+  assert.deepEqual(nth(calls, 1).params, {
+    owner: { kind: "session", sessionId: "s1" },
+    includeOrigin: true,
+  })
 })
 
 test("killAll swallows host failures so teardown never throws", async () => {
   const { hostRpc } = fakeHost({
+    "jobs.spawn": () => ({ id: "job-1", startedAtMs: 1 }),
     "jobs.killOwnedBy": () => {
       throw new Error("host gone")
     },
   })
   const reg = createHostBgShellRegistry({ hostRpc, sessionId: "s1" })
+  await reg.spawnBackground({ command: "work", shell: "sh", shellArgs: [] })
   await reg.killAll()
 })
 
-test("list maps host records onto the legacy row shape", async () => {
-  const { hostRpc } = fakeHost({
+test("teardown drains an admitted spawn and refuses late background tools", async () => {
+  let accept!: () => void
+  const admission = new Promise<void>((resolve) => {
+    accept = resolve
+  })
+  const { hostRpc, calls } = fakeHost({
+    "jobs.spawn": async () => {
+      await admission
+      return { id: "job", startedAtMs: 1 }
+    },
+    "jobs.killOwnedBy": () => ({ killed: ["job"] }),
+  })
+  const registry = createHostBgShellRegistry({ hostRpc, sessionId: "closing" })
+  const options = { command: "work", shell: "/bin/sh", shellArgs: ["-c", "work"] }
+  const spawning = registry.spawnBackground(options)
+  const disposing = registry.killAll()
+  await assert.rejects(registry.spawnBackground(options), /registry is closing/)
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["jobs.spawn"]
+  )
+  accept()
+  await Promise.all([spawning, disposing])
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["jobs.spawn", "jobs.killOwnedBy"]
+  )
+})
+
+test("ordinary list keeps its owner-only scope and legacy row shape", async () => {
+  const { hostRpc, calls } = fakeHost({
     "jobs.list": () => ({
       jobs: [
         {
@@ -276,6 +354,7 @@ test("list maps host records onto the legacy row shape", async () => {
           command: "pnpm dev",
           cwd: "/repo",
           status: "exited",
+          processGroupRunning: false,
           exitCode: 0,
           startedAtMs: 1_000,
           endedAtMs: 3_000,
@@ -294,13 +373,14 @@ test("list maps host records onto the legacy row shape", async () => {
   assert.equal(row.exitCode, 0)
   assert.equal(row.durationMs, 2_000)
   assert.equal(row.cwd, "/repo")
+  assert.deepEqual(nth(calls, 0).params, { owner: { kind: "session", sessionId: "s1" } })
 })
 
-test("list reports a terminal status distinct from the legacy running/exited pair", async () => {
-  // `interrupted` (app crashed) and `killed` are both "exited" to old callers,
-  // but the richer value is what the Job Center needs.
+test("unknown group liveness stays live while retaining the leader's terminal status", async () => {
+  // An interrupted leader supplies no process-group proof.
   const { hostRpc } = fakeHost({
     "jobs.list": () => ({
+      originSessionId: "s1",
       jobs: [
         { id: "j", command: "x", cwd: "/", status: "interrupted", startedAtMs: 1, endedAtMs: 2 },
       ],
@@ -326,6 +406,22 @@ test("list surfaces a host failure instead of reporting zero shells", async () =
   })
   const reg = createHostBgShellRegistry({ hostRpc, sessionId: "s1" })
   await assert.rejects(() => reg.list(), /host gone/)
+})
+
+test("an owner-only Host response cannot prove that promoted processes stopped", async () => {
+  const { hostRpc } = fakeHost({
+    "jobs.spawn": () => ({ id: "detached", startedAtMs: 1 }),
+    "jobs.killOwnedBy": () => ({ killed: [] }),
+    "jobs.list": () => ({ jobs: [] }),
+  })
+  const registry = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "origin",
+    processOrigin: { childRunId: "child", dispatchEpoch: 1 },
+  })
+  await registry.spawnBackground({ command: "work", shell: "sh", shellArgs: [], detach: true })
+  await registry.killAll()
+  await assert.rejects(registry.list(), /authoritative origin jobs list/)
 })
 
 test("explicit sidecar host uses local jobs despite an RPC object", async () => {
@@ -359,4 +455,25 @@ test("explicit sidecar host uses local jobs despite an RPC object", async () => 
   } finally {
     await registry.killAll()
   }
+})
+
+test("Windows-shaped Host lifecycle exits without converting an acknowledgement into proof", async () => {
+  const { hostRpc } = fakeHost({
+    "jobs.spawn": () => ({ id: "job", startedAtMs: 1 }),
+    "jobs.list": () => ({
+      originSessionId: "origin",
+      jobs: [{ id: "job", status: "exited", processGroupRunning: false, startedAtMs: 1 }],
+    }),
+    "jobs.killOwnedBy": () => ({ killed: [] }),
+  })
+  const registry = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "origin",
+    groupProofSupported: false,
+  })
+  await registry.spawnBackground({ command: "exit 0", shell: "sh", shellArgs: [] })
+  assert.equal((await registry.list())[0]?.status, "exited")
+  assert.equal(await registry.hasRunningProcesses(), false)
+  await registry.killAll()
+  assert.equal(await registry.hasLiveProcesses(), true)
 })

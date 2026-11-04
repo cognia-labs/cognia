@@ -7,6 +7,7 @@ const mockNative = {
   })),
   acpTerminalWrite: jest.fn(async () => undefined),
   acpTerminalKill: jest.fn(async () => undefined),
+  acpTerminalIsRunning: jest.fn(async () => false),
   acpTerminalRelease: jest.fn(async () => undefined),
   acpTerminalWaitForExit: jest.fn(async () => ({ exitStatus: { exitCode: 0, signal: null } })),
   cleanupSessionTerminals: jest.fn(async () => undefined),
@@ -16,6 +17,7 @@ jest.mock("@/lib/native/external-agent", () => ({
   acpTerminalOutput: (...a: unknown[]) => mockNative.acpTerminalOutput(...(a as [])),
   acpTerminalWrite: (...a: unknown[]) => mockNative.acpTerminalWrite(...(a as [])),
   acpTerminalKill: (...a: unknown[]) => mockNative.acpTerminalKill(...(a as [])),
+  acpTerminalIsRunning: (...a: unknown[]) => mockNative.acpTerminalIsRunning(...(a as [])),
   acpTerminalRelease: (...a: unknown[]) => mockNative.acpTerminalRelease(...(a as [])),
   acpTerminalWaitForExit: (...a: unknown[]) => mockNative.acpTerminalWaitForExit(...(a as [])),
   cleanupSessionTerminals: (...a: unknown[]) => mockNative.cleanupSessionTerminals(...(a as [])),
@@ -44,12 +46,14 @@ describe("createNativeTerminalHost", () => {
     await host.output("t1", 5)
     await host.write("t1", "x")
     await host.kill("t1")
+    await expect(host.isRunning?.("t1")).resolves.toBe(false)
     await host.release("t1")
     await host.waitForExit("t1", 100)
     await host.closeSession("s")
     expect(mockNative.acpTerminalOutput).toHaveBeenCalledWith("t1", 5)
     expect(mockNative.acpTerminalWrite).toHaveBeenCalledWith("t1", "x")
     expect(mockNative.acpTerminalKill).toHaveBeenCalledWith("t1")
+    expect(mockNative.acpTerminalIsRunning).toHaveBeenCalledWith("t1", true)
     expect(mockNative.acpTerminalRelease).toHaveBeenCalledWith("t1")
     expect(mockNative.acpTerminalWaitForExit).toHaveBeenCalledWith("t1", 100)
     expect(mockNative.cleanupSessionTerminals).toHaveBeenCalledWith("s")

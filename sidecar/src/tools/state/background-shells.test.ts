@@ -1,4 +1,4 @@
-import { test } from "node:test"
+import { test, type TestContext } from "node:test"
 import assert from "node:assert/strict"
 import os from "node:os"
 
@@ -6,6 +6,62 @@ import { createBgShellRegistry, MAX_RING_BYTES } from "./background-shells.ts"
 import type { BgShellRegistry, ReadResult, SpawnBackgroundOptions } from "./background-shells.ts"
 
 const isWin = process.platform === "win32"
+
+function fixtureRegistry(t: TestContext, options?: Parameters<typeof createBgShellRegistry>[0]) {
+  const registry = createBgShellRegistry(options)
+  const children: ReturnType<BgShellRegistry["spawnBackground"]>[] = []
+  const spawn = registry.spawnBackground.bind(registry)
+  registry.spawnBackground = (options) => {
+    const entry = spawn(options)
+    children.push(entry)
+    return entry
+  }
+  t.after(async () => {
+    for (const { child, pid } of children) {
+      // Only a still-owned leader authorizes the fixture group signal.
+      if (pid && child.exitCode === null && child.signalCode === null && !isWin) {
+        try {
+          process.kill(-pid, "SIGKILL")
+        } catch {
+          /* already gone */
+        }
+      }
+      child.kill("SIGKILL")
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+    }
+    await registry.killAll().catch(() => {})
+  })
+  return registry
+}
+
+test(
+  "background leader exit loses signal authority and retains unconfirmed owner state",
+  { skip: isWin },
+  async (t) => {
+    const registry = fixtureRegistry(t)
+    const entry = registry.spawnBackground(inv("sleep 20 </dev/null >/dev/null 2>&1 & echo $!"))
+    try {
+      await waitExit(registry, entry.id)
+      assert.equal(entry.status, "exited")
+      assert.equal(registry.list()[0]?.status, "exited")
+      assert.equal(registry.hasLiveProcesses?.(), true)
+      await assert.rejects(registry.killAll(), /cleanup failed/)
+      assert.deepEqual(registry.list(), [], "process-level entries retire")
+      assert.equal(registry.hasLiveProcesses?.(), true, "owner retains unconfirmed result")
+    } finally {
+      const descendant = Number(entry.buffer.trim())
+      if (descendant > 0) {
+        try {
+          process.kill(descendant, "SIGKILL")
+        } catch {
+          /* exited */
+        }
+      }
+      await registry.killAll().catch(() => {})
+    }
+  }
+)
 
 type ReadOk = Extract<ReadResult, { ok: true }>
 
@@ -23,7 +79,7 @@ function inv(command: string): SpawnBackgroundOptions {
 }
 
 /** Poll read() until the shell exits or the deadline passes. */
-async function waitExit(reg: BgShellRegistry, id: string, timeoutMs = 5000): Promise<ReadOk> {
+async function waitExit(reg: BgShellRegistry, id: string, timeoutMs = 10_000): Promise<ReadOk> {
   const deadline = Date.now() + timeoutMs
   let last: ReadOk = { ok: true, data: "", status: "running", exitCode: null }
   let acc = ""
@@ -39,8 +95,15 @@ async function waitExit(reg: BgShellRegistry, id: string, timeoutMs = 5000): Pro
   return { ...last, data: acc }
 }
 
-test("spawnBackground captures output and reports exit", async () => {
-  const reg = createBgShellRegistry()
+async function waitStatusExit(reg: BgShellRegistry, id: string) {
+  const deadline = Date.now() + 10_000
+  while (reg.list().find((shell) => shell.id === id)?.status !== "exited" && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(reg.list().find((shell) => shell.id === id)?.status, "exited")
+}
+
+test("spawnBackground captures output and reports exit", async (t) => {
+  const reg = fixtureRegistry(t)
   const entry = reg.spawnBackground(inv("echo bg-shell-ok"))
   assert.ok(entry.id)
   assert.equal(entry.pid, entry.child.pid)
@@ -53,8 +116,8 @@ test("spawnBackground captures output and reports exit", async () => {
   assert.match(r.data, /bg-shell-ok/)
 })
 
-test("read is a non-destructive incremental delta (cursor advances)", async () => {
-  const reg = createBgShellRegistry()
+test("read is a non-destructive incremental delta (cursor advances)", async (t) => {
+  const reg = fixtureRegistry(t)
   const entry = reg.spawnBackground(inv("echo first-line"))
   await waitExit(reg, entry.id)
   // Buffer fully drained by waitExit; a fresh read yields no new output.
@@ -63,46 +126,42 @@ test("read is a non-destructive incremental delta (cursor advances)", async () =
   assert.equal(again.status, "exited")
 })
 
-test("read supports a regex line filter", async () => {
-  const reg = createBgShellRegistry()
+test("read supports a regex line filter", async (t) => {
+  const reg = fixtureRegistry(t)
   const cmd = isWin ? "echo keep-me && echo drop-this" : "printf 'keep-me\\ndrop-this\\n'"
   const entry = reg.spawnBackground(inv(cmd))
   // Wait for exit WITHOUT reading, so one filtered read sees all the output.
-  while (reg.list().find((shell) => shell.id === entry.id)?.status !== "exited") {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
+  await waitStatusExit(reg, entry.id)
   const r = expectOk(reg.read(entry.id, { filter: "^keep" }))
   assert.match(r.data, /keep-me/)
   assert.doesNotMatch(r.data, /drop-this/)
 })
 
-test("an invalid filter regex is ignored and the raw delta returned", async () => {
-  const reg = createBgShellRegistry()
+test("an invalid filter regex is ignored and the raw delta returned", async (t) => {
+  const reg = fixtureRegistry(t)
   const entry = reg.spawnBackground(inv("echo raw-output"))
-  while (reg.list().find((shell) => shell.id === entry.id)?.status !== "exited") {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
+  await waitStatusExit(reg, entry.id)
   assert.match(expectOk(reg.read(entry.id, { filter: "(" })).data, /raw-output/)
 })
 
-test("read returns not_found for an unknown id", () => {
-  const reg = createBgShellRegistry()
+test("read returns not_found for an unknown id", (t) => {
+  const reg = fixtureRegistry(t)
   assert.deepEqual(reg.read("nope"), { ok: false, reason: "not_found" })
 })
 
-test("waitForOutput long-polls until new output arrives", async () => {
-  const reg = createBgShellRegistry()
+test("waitForOutput long-polls until new output arrives", async (t) => {
+  const reg = fixtureRegistry(t)
   const cmd = isWin ? "ping -n 2 127.0.0.1 >nul && echo later" : "sleep 0.1; echo later"
   const entry = reg.spawnBackground(inv(cmd))
   const started = Date.now()
-  const result = expectOk(await reg.waitForOutput(entry.id, { waitMs: 2000 }))
+  const result = expectOk(await reg.waitForOutput(entry.id, { waitMs: 10_000 }))
   assert.match(result.data, /later/)
   assert.ok(Date.now() - started >= 50)
   await reg.killAll()
 })
 
-test("waitForOutput returns after its deadline when a process stays quiet", async () => {
-  const reg = createBgShellRegistry()
+test("waitForOutput returns after its deadline when a process stays quiet", async (t) => {
+  const reg = fixtureRegistry(t)
   const cmd = isWin ? "ping -n 3 127.0.0.1 >nul" : "sleep 2"
   const entry = reg.spawnBackground(inv(cmd))
   const started = Date.now()
@@ -113,20 +172,18 @@ test("waitForOutput returns after its deadline when a process stays quiet", asyn
   await reg.killAll()
 })
 
-test("read maxChars preserves unread output for the next call", async () => {
-  const reg = createBgShellRegistry()
+test("read maxChars preserves unread output for the next call", async (t) => {
+  const reg = fixtureRegistry(t)
   const entry = reg.spawnBackground(inv(isWin ? "echo 1234567890" : "printf 1234567890"))
-  while (reg.list().find((shell) => shell.id === entry.id)?.status !== "exited") {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
+  await waitStatusExit(reg, entry.id)
   const first = expectOk(reg.read(entry.id, { maxChars: 4 }))
   const second = expectOk(reg.read(entry.id, { maxChars: 20 }))
   assert.equal(first.data, "1234")
   assert.match(second.data, /^567890/)
 })
 
-test("list exposes command lifecycle details for inventory tools", async () => {
-  const reg = createBgShellRegistry()
+test("list exposes command lifecycle details for inventory tools", async (t) => {
+  const reg = fixtureRegistry(t)
   const entry = reg.spawnBackground(inv(isWin ? "ping -n 3 127.0.0.1 >nul" : "sleep 2"))
   const [listed] = reg.list()
   assert.ok(listed)
@@ -138,8 +195,8 @@ test("list exposes command lifecycle details for inventory tools", async () => {
   await reg.killAll()
 })
 
-test("kill terminates a long-running shell; idempotent", async () => {
-  const reg = createBgShellRegistry()
+test("kill terminates a long-running shell; idempotent", async (t) => {
+  const reg = fixtureRegistry(t)
   const longCmd = isWin ? "ping -n 30 127.0.0.1 >nul" : "sleep 30"
   const entry = reg.spawnBackground(inv(longCmd))
   const k = reg.kill(entry.id)
@@ -152,13 +209,13 @@ test("kill terminates a long-running shell; idempotent", async () => {
   assert.equal(expectOk(reg.read(entry.id)).status, "exited")
 })
 
-test("kill returns not_found for an unknown id", () => {
-  const reg = createBgShellRegistry()
+test("kill returns not_found for an unknown id", (t) => {
+  const reg = fixtureRegistry(t)
   assert.equal(reg.kill("nope").ok, false)
 })
 
-test("killAll stops survivors and clears the registry", async () => {
-  const reg = createBgShellRegistry()
+test("killAll stops survivors and clears the registry", async (t) => {
+  const reg = fixtureRegistry(t)
   const longCmd = isWin ? "ping -n 30 127.0.0.1 >nul" : "sleep 30"
   reg.spawnBackground(inv(longCmd))
   reg.spawnBackground(inv(longCmd))
@@ -170,26 +227,33 @@ test("killAll stops survivors and clears the registry", async () => {
 test(
   "killAll waits for cooperative cleanup and reaps a SIGTERM-resistant writer",
   { skip: process.platform === "win32" },
-  async () => {
+  async (t) => {
     for (const cooperative of [true, false]) {
-      const reg = createBgShellRegistry()
+      const reg = fixtureRegistry(t)
       const script = `process.on('SIGTERM',()=>{${cooperative ? "setTimeout(()=>process.exit(0),120)" : ""}});console.log('READY');setInterval(()=>{},100);`
       const command = `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`
       const entry = reg.spawnBackground(inv(command))
-      await reg.waitForOutput(entry.id, { waitMs: 2_000 })
-      assert.match(entry.buffer, /READY/)
-      const started = Date.now()
-      await reg.killAll()
-      assert.equal(entry.status, "exited", "cleanup must await actual process closure")
-      assert.throws(() => process.kill(entry.pid!, 0), { code: "ESRCH" })
-      assert.ok(Date.now() - started >= (cooperative ? 100 : 900))
-      await reg.killAll()
+      try {
+        await reg.waitForOutput(entry.id, { waitMs: 10_000 })
+        assert.match(entry.buffer, /READY/)
+        const started = Date.now()
+        await reg.killAll()
+        assert.equal(entry.status, "exited", "cleanup must await actual process closure")
+        assert.throws(() => process.kill(entry.pid!, 0), { code: "ESRCH" })
+        assert.ok(Date.now() - started >= (cooperative ? 100 : 900))
+        await reg.killAll()
+      } finally {
+        entry.child.kill("SIGKILL")
+        entry.child.stdout?.destroy()
+        entry.child.stderr?.destroy()
+        await reg.killAll().catch(() => {})
+      }
     }
   }
 )
 
-test("ring buffer is bounded — a single read never exceeds the cap", async () => {
-  const reg = createBgShellRegistry()
+test("ring buffer is bounded — a single read never exceeds the cap", async (t) => {
+  const reg = fixtureRegistry(t)
   // Emit well over the 256 KB cap, then poll status WITHOUT draining so the
   // whole surviving buffer is still present for one bound-checking read.
   const big = isWin
@@ -206,4 +270,17 @@ test("ring buffer is bounded — a single read never exceeds the cap", async () 
   assert.ok(r.data.length <= MAX_RING_BYTES, `delta ${r.data.length} > cap ${MAX_RING_BYTES}`)
   // It produced far more than the cap, so the buffer must have been trimmed.
   assert.ok(r.data.length >= MAX_RING_BYTES - 1024)
+})
+
+test("Windows-shaped background lifecycle exits while proof remains unavailable", async (t) => {
+  const registry = fixtureRegistry(t, { groupProofSupported: false })
+  for (let i = 0; i < 3; i++) {
+    const entry = registry.spawnBackground(inv("exit 0"))
+    assert.equal((await waitExit(registry, entry.id)).status, "exited")
+    assert.equal(registry.list().find((row) => row.id === entry.id)?.status, "exited")
+  }
+  assert.equal(registry.hasLiveProcesses?.(), true)
+  await registry.killAll()
+  assert.deepEqual(registry.list(), [])
+  assert.equal(registry.hasLiveProcesses?.(), true)
 })

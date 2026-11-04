@@ -37,6 +37,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
 import { randomUUID } from "node:crypto"
+import { createProcessGroup, type ProcessGroup } from "../../state/process-group.ts"
 import { z } from "zod"
 
 import { toolError, toolText } from "../../kernel/result.ts"
@@ -55,6 +56,8 @@ export interface PtyExit {
 
 /** The slice of node-pty's `IPty` this module drives. */
 export interface PtyProcess {
+  /** node-pty's Unix forkpty leader also identifies its new process group. */
+  pid?: number | undefined
   write(data: string): void
   resize?(cols: number, rows: number): void
   kill(signal?: string): void
@@ -102,9 +105,14 @@ interface ReplSession {
   agentId: string
   shell: string
   pty: PtyProcess
+  processGroupId: number | undefined
+  groupProofSupported: boolean
+  group: ProcessGroup
   buffer: Buffer
   truncated: boolean
   exited: boolean
+  processExited: boolean
+  closed: Promise<void>
   exitCode: number | null
   createdAt: number
   lastActivityAt: number
@@ -112,8 +120,10 @@ interface ReplSession {
 
 /** The host session the tools are bound to; model input cannot override it. */
 export interface TerminalReplContext {
+  groupProofSupported?: boolean | undefined
   sessionId?: string | undefined
   builtinProcessSandbox?: ProcessSandboxScope | undefined
+  processSignal?: AbortSignal | undefined
 }
 
 /** Per-session in-memory state. */
@@ -317,6 +327,7 @@ const sessionIdParam = z.string().min(1).describe("The sessionId returned by ter
 /** `extra` is a {@link TerminalReplContext}, or the SDK tool context for the static tools. */
 async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {}) {
   const ctx = (extra ?? {}) as TerminalReplContext
+  if (ctx.processSignal?.aborted) return toolError("session is closing", "terminal_repl_spawn")
   reapIdleSessions()
   if (!fs.existsSync(args.cwd)) {
     return toolError(`cwd does not exist: ${args.cwd}`, "terminal_repl_spawn")
@@ -338,6 +349,8 @@ async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {})
 
   let pty: PtyProcess
   try {
+    const portEnv = await resolveProcessPortEnv(args.cwd)
+    ctx.processSignal?.throwIfAborted()
     const target = sandboxedProcessTarget(
       args.shell,
       args.args ?? [],
@@ -349,12 +362,7 @@ async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {})
       cols: args.cols,
       rows: args.rows,
       cwd: args.cwd,
-      env: sandboxedProcessEnv(
-        process.env,
-        ctx.builtinProcessSandbox,
-        args.env,
-        await resolveProcessPortEnv(args.cwd)
-      ),
+      env: sandboxedProcessEnv(process.env, ctx.builtinProcessSandbox, args.env, portEnv),
     })
   } catch (err) {
     return toolError(
@@ -365,18 +373,29 @@ async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {})
 
   const id = randomUUID()
   const now = Date.now()
+  let resolveExit!: () => void
+  const closed = new Promise<void>((resolve) => {
+    resolveExit = resolve
+  })
   const session: ReplSession = {
     id,
     agentId: args.agentId,
     shell: args.shell,
     pty,
+    processGroupId: pty.pid,
+    groupProofSupported:
+      (ctx.groupProofSupported ?? process.platform !== "win32") && Boolean(pty.pid),
+    group: createProcessGroup(pty.pid, ctx.groupProofSupported),
     buffer: Buffer.alloc(0),
     truncated: false,
     exited: false,
+    processExited: false,
+    closed,
     exitCode: null,
     createdAt: now,
     lastActivityAt: now,
   }
+  if (!session.groupProofSupported) unconfirmedTerminalSessions.add(session.agentId)
   sessions.set(id, session)
 
   pty.onData((data: string | Buffer) => {
@@ -386,6 +405,9 @@ async function execSpawn(args: ToolArgs<typeof spawnShape>, extra: unknown = {})
   })
   pty.onExit?.(({ exitCode, signal }: PtyExit) => {
     session.exited = true
+    session.processExited = true
+    session.group.leaderExited()
+    resolveExit()
     session.exitCode = typeof exitCode === "number" ? exitCode : null
     // Track signal in the buffer footer so callers reading after exit
     // see a hint as to why the REPL died.
@@ -545,16 +567,87 @@ export function createTerminalReplTools(ctx: TerminalReplContext = {}) {
   }))
 }
 
-export function disposeTerminalRepls(agentId: string): void {
+const unconfirmedTerminalSessions = new Set<string>()
+
+export function hasRunningSessionTerminalRepls(agentId: string): boolean {
+  return [...sessions.values()].some(
+    (session) => session.agentId === agentId && !session.processExited
+  )
+}
+
+export async function disposeTerminalRepls(agentId: string): Promise<void> {
+  const pending: Promise<void>[] = []
   for (const [id, session] of sessions) {
     if (session.agentId !== agentId) continue
+    pending.push(
+      (async () => {
+        const start = Date.now()
+        let escalated = false
+        signalTerminalGroup(session, "SIGTERM")
+        while (
+          session.groupProofSupported ? terminalGroupIsLive(session) : !session.processExited
+        ) {
+          if (!escalated && Date.now() - start >= 1_000) {
+            signalTerminalGroup(session, "SIGKILL")
+            escalated = true
+          }
+          if (Date.now() - start >= 2_000)
+            throw new Error(`terminal ${id} process group did not exit`)
+          if (!session.processExited)
+            await Promise.race([
+              session.closed,
+              new Promise<void>((resolve) => setTimeout(resolve, 10)),
+            ])
+          else await new Promise<void>((resolve) => setTimeout(resolve, 10))
+        }
+        sessions.delete(id)
+      })()
+    )
+  }
+  const results = await Promise.allSettled(pending)
+  const failures = results.filter((result) => result.status === "rejected")
+  if (failures.length)
+    throw new AggregateError(
+      failures.map((result) => result.reason),
+      "terminal cleanup unconfirmed"
+    )
+}
+
+function signalTerminalGroup(session: ReplSession, signal: NodeJS.Signals): void {
+  if (!terminalGroupIsLive(session)) return
+  session.group.signal(signal)
+  if (!session.processExited) {
     try {
-      session.pty.kill()
+      session.pty.kill(signal)
     } catch {
-      /* already exited */
+      /* verify independently */
     }
+  }
+}
+
+function terminalGroupIsLive(session: ReplSession): boolean {
+  return session.group.isLive()
+}
+
+/** Neither a kill request nor a PTY leader exit proves its group empty. */
+export function hasSessionTerminalRepls(agentId: string): boolean {
+  return (
+    unconfirmedTerminalSessions.has(agentId) ||
+    [...sessions.values()].some(
+      (session) => session.agentId === agentId && terminalGroupIsLive(session)
+    )
+  )
+}
+
+export function retireTerminalRepls(agentId: string): boolean {
+  let confirmed = !unconfirmedTerminalSessions.has(agentId)
+  for (const [id, session] of sessions) {
+    if (session.agentId !== agentId) continue
+    if (!session.group.retire()) confirmed = false
     sessions.delete(id)
   }
+  unconfirmedTerminalSessions.delete(agentId)
+  return confirmed
 }
 
 // Test-only helpers — used by `index.test.ts`.
@@ -563,7 +656,10 @@ export const __testExports = {
   execWrite,
   execRead,
   execKill,
-  reset: () => sessions.clear(),
+  reset: () => {
+    sessions.clear()
+    unconfirmedTerminalSessions.clear()
+  },
   sessions,
   reapIdleSessions,
   IDLE_TIMEOUT_MS,

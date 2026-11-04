@@ -10,26 +10,28 @@
 //!    scheduled task outlives the chat turn that created it.
 //!
 //! Locking discipline: `parking_lot` mutexes are taken, cloned out of, and
-//! released — never held across an `.await`. Live child handles live inside
-//! their own waiter task rather than behind a shared lock, so kill and wait
-//! never contend.
+//! released — never held across an `.await`. Group handles retain their Child
+//! under a short lock; lifecycle observation never reaps the pinned leader.
+//! Final teardown revokes signal authority before retiring the group.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 
 use crate::limits::{MAX_JOBS_GLOBAL, MAX_JOBS_PER_SESSION, MAX_LOG_BYTES_GLOBAL};
 use crate::output::JobOutput;
 use crate::store::JobStore;
 use crate::types::{
-    now_ms, JobError, JobExit, JobOutputSlice, JobOwner, JobRecord, JobStatus, Result,
+    now_ms, JobError, JobExit, JobOrigin, JobOutputSlice, JobOwner, JobRecord, JobStatus, Result,
     SpawnJobRequest,
 };
 
@@ -50,7 +52,6 @@ struct LiveJob {
     /// Fires whenever output lands or the job settles — drives long-polling
     /// without a sleep loop.
     notify: Arc<Notify>,
-    kill_tx: mpsc::Sender<()>,
     killed: Arc<AtomicBool>,
 }
 
@@ -60,21 +61,170 @@ struct LiveJob {
 /// and to wake any registered `Monitor`.
 pub type ExitListener = Arc<dyn Fn(JobExit) + Send + Sync>;
 
+// WNOWAIT observes lifecycle without reaping: the Child pins pid/pgid until
+// final teardown. Signals and retirement are serialized under the group lock.
+struct JobGroup {
+    child: tokio::process::Child,
+    pid: Option<u32>,
+    owned: bool,
+    empty: bool,
+    exit: Option<std::process::ExitStatus>,
+}
+impl JobGroup {
+    fn observe(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        if self.exit.is_some() {
+            return Ok(self.exit);
+        }
+        #[cfg(unix)]
+        let status = if self.owned {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let pid = self
+                .pid
+                .ok_or_else(|| std::io::Error::other("missing child identity"))?;
+            if unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                )
+            } == -1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if unsafe { info.si_pid() } == 0 {
+                None
+            } else {
+                let code = unsafe { info.si_status() };
+                Some(std::process::ExitStatus::from_raw(
+                    if info.si_code == libc::CLD_EXITED {
+                        code << 8
+                    } else {
+                        code
+                    },
+                ))
+            }
+        } else {
+            self.child.try_wait()?
+        };
+        #[cfg(not(unix))]
+        let status = self.child.try_wait()?;
+        self.exit = status;
+        Ok(status)
+    }
+    fn probe(&mut self) -> bool {
+        if self.empty {
+            return false;
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            if unsafe { libc::kill(-(pid as i32), 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                self.pid = None;
+                self.owned = false;
+                self.empty = true;
+                return false;
+            }
+        }
+        true
+    }
+    fn signal_with(&mut self, signal: i32, send: impl FnOnce(u32, i32)) {
+        if self.owned && self.probe() {
+            if let Some(pid) = self.pid {
+                send(pid, signal);
+            }
+        }
+    }
+    fn signal(&mut self, signal: i32) {
+        #[cfg(unix)]
+        self.signal_with(signal, |pid, signal| unsafe {
+            libc::kill(-(pid as i32), signal);
+        });
+        #[cfg(not(unix))]
+        {
+            let _ = signal;
+            if self.owned {
+                let _ = self.child.start_kill();
+            }
+        }
+    }
+    fn retire(&mut self) {
+        // Final best effort while the leader still pins ownership. Outstanding
+        // waiter/kill handles lose signal authority before the owner retires.
+        #[cfg(unix)]
+        self.signal(libc::SIGKILL);
+        #[cfg(not(unix))]
+        self.signal(9);
+        self.reap_for_teardown();
+        self.owned = false;
+        self.pid = None;
+    }
+
+    fn reap_for_teardown(&mut self) {
+        if self.observe().ok().flatten().is_some() {
+            // Final teardown handoff: no signal can use this identity again.
+            self.owned = false;
+            let _ = self.child.try_wait();
+        }
+    }
+}
+
+impl Drop for JobGroup {
+    fn drop(&mut self) {
+        self.signal(9);
+    }
+}
+
 pub struct JobSupervisor {
     store: Arc<JobStore>,
     log_dir: PathBuf,
     /// Shared with each job's waiter task, which removes the entry once the
     /// job is settled and its output has drained.
     live: Arc<Mutex<HashMap<String, Arc<LiveJob>>>>,
+    process_groups: Arc<Mutex<HashMap<String, Arc<Mutex<JobGroup>>>>>,
+    origins: Mutex<HashMap<String, JobOrigin>>,
+    pending_records: Mutex<HashMap<String, JobRecord>>,
+    // Owner-level proof, with no retained signalable identity after retirement.
+    session_proofs: Mutex<HashMap<String, bool>>,
+    admission: tokio::sync::RwLock<()>,
+    closed_sessions: Mutex<HashSet<String>>,
+    owner_proofs: Mutex<HashMap<String, bool>>,
+    all_closed: AtomicBool,
+    group_proof_supported: bool,
     exit_listeners: Mutex<Vec<ExitListener>>,
+}
+
+impl Drop for JobSupervisor {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        for group in self.process_groups.lock().values() { group.lock().signal(libc::SIGKILL); }
+    }
 }
 
 impl JobSupervisor {
     pub fn new(store: Arc<JobStore>, log_dir: PathBuf) -> Self {
+        Self::with_group_proof(store, log_dir, cfg!(unix))
+    }
+
+    fn with_group_proof(
+        store: Arc<JobStore>,
+        log_dir: PathBuf,
+        group_proof_supported: bool,
+    ) -> Self {
         Self {
             store,
             log_dir,
             live: Arc::new(Mutex::new(HashMap::new())),
+            process_groups: Arc::new(Mutex::new(HashMap::new())),
+            origins: Mutex::new(HashMap::new()),
+            pending_records: Mutex::new(HashMap::new()),
+            session_proofs: Mutex::new(HashMap::new()),
+            admission: tokio::sync::RwLock::new(()),
+            closed_sessions: Mutex::new(HashSet::new()),
+            owner_proofs: Mutex::new(HashMap::new()),
+            all_closed: AtomicBool::new(false),
+            group_proof_supported,
             exit_listeners: Mutex::new(Vec::new()),
         }
     }
@@ -97,12 +247,14 @@ impl JobSupervisor {
     /// as busy: a host updates itself only when it knows nothing is running
     /// (ADR-0224 A10).
     pub fn running_count(&self) -> usize {
-        self.store.count_running(None).unwrap_or(usize::MAX)
+        self.list(None)
+            .map(|jobs| jobs.iter().filter(|job| self.job_is_live(job)).count())
+            .unwrap_or(usize::MAX)
     }
 
     /// Enforce the per-owner and global concurrency caps.
     fn check_capacity(&self, owner: &JobOwner) -> Result<()> {
-        if self.store.count_running(None)? >= MAX_JOBS_GLOBAL {
+        if self.running_count() >= MAX_JOBS_GLOBAL {
             return Err(JobError::LimitReached(format!(
                 "at most {MAX_JOBS_GLOBAL} background jobs may run at once on this host"
             )));
@@ -110,7 +262,12 @@ impl JobSupervisor {
         // Only session-owned work is capped per owner; scheduled tasks and
         // app-owned jobs are already gated by the scheduler and by approval.
         if matches!(owner, JobOwner::Session { .. })
-            && self.store.count_running(Some(owner))? >= MAX_JOBS_PER_SESSION
+            && self
+                .list(Some(owner))?
+                .iter()
+                .filter(|job| self.job_is_live(job))
+                .count()
+                >= MAX_JOBS_PER_SESSION
         {
             return Err(JobError::LimitReached(format!(
                 "at most {MAX_JOBS_PER_SESSION} background jobs may run at once in one session; \
@@ -122,6 +279,43 @@ impl JobSupervisor {
 
     /// Start a background job. Returns as soon as the child is spawned.
     pub async fn spawn(&self, req: SpawnJobRequest) -> Result<JobRecord> {
+        self.spawn_with_origin(req, None).await
+    }
+
+    pub(crate) async fn spawn_with_origin(
+        &self,
+        req: SpawnJobRequest,
+        origin: Option<JobOrigin>,
+    ) -> Result<JobRecord> {
+        let _admission = self.admission.read().await;
+        // Legacy session-owned jobs have the same admission owner even without
+        // explicit attempt metadata (detached jobs keep their explicit origin).
+        let origin = origin.or_else(|| match &req.owner {
+            JobOwner::Session { session_id } => Some(JobOrigin {
+                session_id: session_id.clone(),
+                child_run_id: None,
+                dispatch_epoch: None,
+            }),
+            _ => None,
+        });
+        let owner_closed = match &req.owner {
+            JobOwner::Session { session_id } => {
+                self.closed_sessions.lock().contains(session_id)
+                    || self.session_proofs.lock().contains_key(session_id)
+                    || self.owner_proofs.lock().contains_key(session_id)
+            }
+            _ => false,
+        };
+        if owner_closed
+            || self.all_closed.load(Ordering::SeqCst)
+            || origin.as_ref().is_some_and(|origin| {
+                self.closed_sessions.lock().contains(&origin.session_id)
+                    || self.session_proofs.lock().contains_key(&origin.session_id)
+                    || self.owner_proofs.lock().contains_key(&origin.session_id)
+            })
+        {
+            return Err(JobError::Store("job origin admission is closed".into()));
+        }
         self.check_capacity(&req.owner)?;
         self.enforce_log_budget();
 
@@ -146,7 +340,7 @@ impl JobSupervisor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(false);
 
         #[cfg(windows)]
         {
@@ -169,7 +363,9 @@ impl JobSupervisor {
             cmd.pre_exec(|| {
                 if libc::setsid() == -1 {
                     // Already a group leader on the rare path — fall back.
-                    libc::setpgid(0, 0);
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
@@ -194,19 +390,24 @@ impl JobSupervisor {
             dropped_output_bytes: 0,
             label: req.label.clone(),
         };
-        self.store.insert(&record)?;
+        // Register before any fallible journal write. Failed persistence cannot
+        // erase an admitted group's origin and produce an authoritative empty.
+        if let Some(origin) = &origin {
+            self.origins.lock().insert(id.clone(), origin.clone());
+        }
+        self.pending_records
+            .lock()
+            .insert(id.clone(), record.clone());
 
         let output = Arc::new(Mutex::new(output));
         let notify = Arc::new(Notify::new());
         let killed = Arc::new(AtomicBool::new(false));
-        let (kill_tx, mut kill_rx) = mpsc::channel::<()>(1);
 
         self.live.lock().insert(
             id.clone(),
             Arc::new(LiveJob {
                 output: Arc::clone(&output),
                 notify: Arc::clone(&notify),
-                kill_tx,
                 killed: Arc::clone(&killed),
             }),
         );
@@ -237,6 +438,48 @@ impl JobSupervisor {
             }));
         }
 
+        let group = Arc::new(Mutex::new(JobGroup {
+            child,
+            pid,
+            owned: true,
+            empty: false,
+            exit: None,
+        }));
+        self.process_groups.lock().insert(id.clone(), group.clone());
+        if let Err(error) = self.store.insert_with_origin(&record, origin.as_ref()) {
+            #[cfg(unix)]
+            group.lock().signal(libc::SIGKILL);
+            #[cfg(not(unix))]
+            {
+                let _ = group.lock().child.start_kill();
+            }
+            let deadline = Instant::now() + Duration::from_millis(1_500);
+            loop {
+                group.lock().reap_for_teardown();
+                if !group.lock().probe() || Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            if let Some(origin) = &origin {
+                self.session_proofs
+                    .lock()
+                    .insert(origin.session_id.clone(), false);
+            }
+            // Failed persistence remains unconfirmed even if rollback cleanup
+            // succeeds: no durable acceptance record exists for this attempt.
+            group.lock().retire();
+            self.process_groups.lock().remove(&id);
+            self.pending_records.lock().remove(&id);
+            self.origins.lock().remove(&id);
+            self.live.lock().remove(&id);
+            for pump in pumps {
+                pump.abort();
+            }
+            return Err(error);
+        }
+        self.pending_records.lock().remove(&id);
+
         // Waiter: owns the `Child`, so kill and wait never contend on a lock.
         let store = Arc::clone(&self.store);
         let waiter_id = id.clone();
@@ -245,23 +488,24 @@ impl JobSupervisor {
         let waiter_owner = req.owner.clone();
         let waiter_killed = Arc::clone(&killed);
         let waiter_live = Arc::clone(&self.live);
+        let waiter_groups = Arc::clone(&self.process_groups);
+        let group_proof_supported = self.group_proof_supported;
         let listeners = self.exit_listeners.lock().clone();
         tokio::spawn(async move {
-            let status = tokio::select! {
-                res = child.wait() => res.ok(),
-                _ = kill_rx.recv() => {
-                    waiter_killed.store(true, Ordering::SeqCst);
-                    kill_tree(pid).await;
-                    // Give the group a moment on SIGTERM, then escalate.
-                    match tokio::time::timeout(KILL_ESCALATION, child.wait()).await {
-                        Ok(res) => res.ok(),
-                        Err(_) => {
-                            force_kill_tree(pid).await;
-                            child.wait().await.ok()
-                        }
-                    }
+            let status = loop {
+                match group.lock().observe() {
+                    Ok(Some(status)) => break Some(status),
+                    Err(_) => break None,
+                    Ok(None) => {}
                 }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             };
+            // Windows retains the journal origin as an unconfirmed session proof,
+            // not an ever-growing set of dead process identities.
+            if !group_proof_supported {
+                group.lock().reap_for_teardown();
+                waiter_groups.lock().remove(&waiter_id);
+            }
 
             let ended_at_ms = now_ms();
             let was_killed = waiter_killed.load(Ordering::SeqCst);
@@ -406,20 +650,79 @@ impl JobSupervisor {
                 return Err(JobError::Forbidden(job_id.to_string()));
             }
         }
-        if record.status.is_terminal() {
+        if !self.job_is_live(&record) {
             return Ok(record);
         }
+        self.stop_job(&record, false).await
+    }
+
+    async fn stop_job(&self, record: &JobRecord, require_group_proof: bool) -> Result<JobRecord> {
+        let job_id = &record.id;
         let live = self.live.lock().get(job_id).cloned();
-        if let Some(job) = live {
-            job.killed.store(true, Ordering::SeqCst);
-            // Bounded channel of 1: a second kill while one is in flight is a
-            // no-op, which is exactly the idempotency we want.
-            let _ = job.kill_tx.try_send(());
-        } else {
-            // No live state (e.g. after a reconcile) — settle the row so the
-            // caller does not see a permanently "running" ghost.
-            self.store
-                .settle(job_id, JobStatus::Killed, None, now_ms())?;
+        let group = self
+            .process_groups
+            .lock()
+            .get(job_id)
+            .cloned()
+            .ok_or_else(|| JobError::Store(format!("job {job_id} process identity is unknown")))?;
+        if group.lock().observe().ok().flatten().is_none() {
+            if let Some(job) = &live {
+                job.killed.store(true, Ordering::SeqCst);
+            }
+        }
+        #[cfg(unix)]
+        group.lock().signal(libc::SIGTERM);
+        #[cfg(not(unix))]
+        {
+            group.lock().signal(9);
+        }
+        let start = Instant::now();
+        let mut escalated = false;
+        loop {
+            if self.group_proof_supported {
+                if self.process_group_running(job_id) == Some(false) {
+                    break;
+                }
+            } else if group.lock().observe().ok().flatten().is_some() {
+                break;
+            }
+            if !escalated && start.elapsed() >= KILL_ESCALATION {
+                #[cfg(unix)]
+                group.lock().signal(libc::SIGKILL);
+                escalated = true;
+            }
+            if escalated {
+                group.lock().reap_for_teardown();
+            }
+            if start.elapsed() >= KILL_ESCALATION + Duration::from_millis(500) {
+                return Err(JobError::Store(format!(
+                    "job {job_id} process group stop unconfirmed"
+                )));
+            }
+            if !require_group_proof
+                && !self.group_proof_supported
+                && group.lock().observe().ok().flatten().is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Publish the leader's lifecycle verdict before returning group proof;
+        // the independent waiter can still be scheduled after this query.
+        if let Some(status) = group.lock().observe().ok().flatten() {
+            let killed = live
+                .as_ref()
+                .is_some_and(|job| job.killed.load(Ordering::SeqCst));
+            self.store.settle(
+                job_id,
+                if killed {
+                    JobStatus::Killed
+                } else {
+                    JobStatus::Exited
+                },
+                if killed { None } else { status.code() },
+                now_ms(),
+            )?;
         }
         self.store
             .get(job_id)?
@@ -428,31 +731,173 @@ impl JobSupervisor {
 
     /// Kill every job belonging to `owner`. Returns the ids killed.
     pub async fn kill_owned_by(&self, owner: &JobOwner) -> Result<Vec<String>> {
-        let ids: Vec<String> = self
-            .store
-            .list_by_owner(owner)?
-            .into_iter()
-            .filter(|r| !r.status.is_terminal())
-            .map(|r| r.id)
-            .collect();
-        for id in &ids {
-            let _ = self.kill(id, None).await;
+        let _admission = self.admission.write().await;
+        let records = self.store.list_by_owner(owner)?;
+        let mut stopped = Vec::new();
+        let mut errors = Vec::new();
+        if let JobOwner::Session { session_id } = owner {
+            if self.session_proofs.lock().get(session_id) == Some(&false) {
+                errors.push("origin journal admission was unconfirmed".into());
+            }
         }
-        Ok(ids)
+        for record in &records {
+            if self.job_is_live(record) || self.process_group_running(&record.id) == Some(true) {
+                match self.stop_job(record, self.group_proof_supported).await {
+                    Ok(_) => stopped.push(record.id.clone()),
+                    Err(error) => errors.push(error.to_string()),
+                }
+            }
+            if self.process_group_running(&record.id) != Some(false) {
+                errors.push(format!("job {} process group stop unconfirmed", record.id));
+            }
+        }
+        // Ordinary session disposal excludes app-promoted jobs. Fold only this
+        // owner's result; origin disposal still covers its promoted groups.
+        if let JobOwner::Session { session_id } = owner {
+            self.owner_proofs
+                .lock()
+                .insert(session_id.clone(), errors.is_empty());
+            for record in &records {
+                if let Some(group) = self.process_groups.lock().remove(&record.id) {
+                    group.lock().retire();
+                }
+                self.origins.lock().remove(&record.id);
+                self.pending_records.lock().remove(&record.id);
+            }
+        }
+        if errors.is_empty() {
+            Ok(stopped)
+        } else {
+            Err(JobError::Store(errors.join("; ")))
+        }
+    }
+
+    pub(crate) fn list_by_origin_session(&self, session_id: &str) -> Result<Vec<JobRecord>> {
+        if self.session_proofs.lock().get(session_id) == Some(&false) {
+            return Err(JobError::Store("origin session stop unconfirmed".into()));
+        }
+        self.origin_records(session_id)
+    }
+
+    fn origin_records(&self, session_id: &str) -> Result<Vec<JobRecord>> {
+        let mut records = self.store.list_by_origin_session(session_id)?;
+        for (id, origin) in self.origins.lock().iter() {
+            if origin.session_id == session_id && !records.iter().any(|r| &r.id == id) {
+                if let Some(record) = self.pending_records.lock().get(id) {
+                    records.push(record.clone());
+                }
+            }
+        }
+        Ok(records)
+    }
+
+    pub(crate) async fn kill_origin_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let _admission = self.admission.write().await;
+        if !self.closed_sessions.lock().insert(session_id.to_string()) {
+            return if self.session_proofs.lock().get(session_id) == Some(&true) {
+                Ok(Vec::new())
+            } else {
+                Err(JobError::Store("origin session stop unconfirmed".into()))
+            };
+        }
+        let previously_uncertain = self.session_proofs.lock().get(session_id) == Some(&false);
+        // A failed journal insert poisons proof, but must not skip cleanup of
+        // other jobs already admitted for this origin.
+        // The write barrier closed admission before this authoritative snapshot.
+        self.session_proofs
+            .lock()
+            .insert(session_id.to_string(), false);
+        let records = match self.origin_records(session_id) {
+            Ok(records) => records,
+            Err(error) => {
+                // A failed journal read cannot reopen admission or strand
+                // signalable identities outside the retired owner's record.
+                let ids: Vec<_> = self
+                    .origins
+                    .lock()
+                    .iter()
+                    .filter(|(_, origin)| origin.session_id == session_id)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in ids {
+                    if let Some(group) = self.process_groups.lock().remove(&id) {
+                        group.lock().retire();
+                    }
+                    self.origins.lock().remove(&id);
+                    self.pending_records.lock().remove(&id);
+                }
+                return Err(error);
+            }
+        };
+        let mut stopped = Vec::new();
+        let mut errors = Vec::new();
+        if previously_uncertain {
+            errors.push("origin journal admission was unconfirmed".into());
+        }
+        for record in &records {
+            let proof = self.process_group_running(&record.id);
+            if self.job_is_live(&record) || proof == Some(true) {
+                match self.stop_job(&record, self.group_proof_supported).await {
+                    Ok(_) => stopped.push(record.id.clone()),
+                    Err(error) => errors.push(error.to_string()),
+                }
+            }
+            if self.process_group_running(&record.id) != Some(false) {
+                errors.push(format!("job {} process group stop unconfirmed", record.id));
+            }
+        }
+        let confirmed = errors.is_empty();
+        self.session_proofs
+            .lock()
+            .insert(session_id.to_string(), confirmed);
+        let mut ids: Vec<_> = records.iter().map(|record| record.id.clone()).collect();
+        ids.extend(
+            self.origins
+                .lock()
+                .iter()
+                .filter(|(_, origin)| origin.session_id == session_id)
+                .map(|(id, _)| id.clone()),
+        );
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            if let Some(group) = self.process_groups.lock().remove(&id) {
+                group.lock().retire();
+            }
+            self.origins.lock().remove(&id);
+            self.pending_records.lock().remove(&id);
+        }
+        if !confirmed {
+            return Err(JobError::Store(errors.join("; ")));
+        }
+        Ok(stopped)
     }
 
     /// Kill everything. Called at app exit so no job becomes an orphan daemon.
     pub async fn shutdown(&self) -> Result<Vec<String>> {
-        let ids: Vec<String> = self
-            .store
-            .list_running()?
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        for id in &ids {
-            let _ = self.kill(id, None).await;
+        let _admission = self.admission.write().await;
+        self.all_closed.store(true, Ordering::SeqCst);
+        let records = self.store.list_all()?;
+        let mut stopped = Vec::new();
+        let mut errors = Vec::new();
+        for record in records {
+            if self.process_groups.lock().contains_key(&record.id) {
+                match self.stop_job(&record, self.group_proof_supported).await {
+                    Ok(_) => stopped.push(record.id.clone()),
+                    Err(error) => errors.push(error.to_string()),
+                }
+            }
         }
-        Ok(ids)
+        for (_, group) in self.process_groups.lock().drain() {
+            group.lock().retire();
+        }
+        self.origins.lock().clear();
+        self.pending_records.lock().clear();
+        if errors.is_empty() {
+            Ok(stopped)
+        } else {
+            Err(JobError::Store(errors.join("; ")))
+        }
     }
 
     pub fn get(&self, job_id: &str) -> Result<Option<JobRecord>> {
@@ -487,9 +932,40 @@ impl JobSupervisor {
 
     pub fn list(&self, owner: Option<&JobOwner>) -> Result<Vec<JobRecord>> {
         match owner {
+            Some(JobOwner::Session { session_id })
+                if self.session_proofs.lock().get(session_id) == Some(&false)
+                    || self.owner_proofs.lock().get(session_id) == Some(&false) =>
+            {
+                Err(JobError::Store("owner process stop unconfirmed".into()))
+            }
             Some(o) => self.store.list_by_owner(o),
             None => self.store.list_all(),
         }
+    }
+
+    /// None means ownership was lost, not that a former group's exit was seen.
+    pub(crate) fn process_group_running(&self, job_id: &str) -> Option<bool> {
+        if !self.group_proof_supported {
+            return None;
+        }
+        if let Some(group) = self.process_groups.lock().get(job_id).cloned() {
+            return Some(group.lock().probe());
+        }
+        if let Some(session) = self.store.origin_session(job_id).ok().flatten() {
+            if self.session_proofs.lock().get(&session) == Some(&true) {
+                return Some(false);
+            }
+        }
+        if let JobOwner::Session { session_id } = self.store.get(job_id).ok().flatten()?.owner {
+            if self.owner_proofs.lock().get(&session_id) == Some(&true) {
+                return Some(false);
+            }
+        }
+        None
+    }
+
+    fn job_is_live(&self, record: &JobRecord) -> bool {
+        !record.status.is_terminal()
     }
 
     /// Evict oldest-finished jobs' logs until the global disk budget holds.
@@ -545,35 +1021,6 @@ async fn pump<R: AsyncReadExt + Unpin>(
 }
 
 /// SIGTERM the whole process group (negated pid).
-async fn kill_tree(pid: Option<u32>) {
-    let Some(pid) = pid else { return };
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
-    }
-    #[cfg(windows)]
-    {
-        // No process-group signal on Windows; `taskkill /T` walks the tree.
-        let _ = tokio::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-    }
-}
-
-/// SIGKILL the whole process group after the escalation window.
-async fn force_kill_tree(pid: Option<u32>) {
-    let Some(pid) = pid else { return };
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    kill_tree(Some(pid)).await;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,6 +1036,136 @@ mod tests {
         JobOwner::Session {
             session_id: id.into(),
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_journal_failure_never_returns_authoritative_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(JobStore::new_in_memory().unwrap());
+        let sup = JobSupervisor::new(store.clone(), dir.path().join("logs"));
+        let sibling = sup
+            .spawn_with_origin(
+                sh("exec sleep 60", JobOwner::App),
+                Some(JobOrigin {
+                    session_id: "failed-origin".into(),
+                    child_run_id: Some("child".into()),
+                    dispatch_epoch: Some(1),
+                }),
+            )
+            .await
+            .unwrap();
+        let sibling_group = sup.process_groups.lock()[&sibling.id].clone();
+        store.fail_next_insert();
+        let result = sup
+            .spawn_with_origin(
+                sh("sleep 60 & exit 0", JobOwner::App),
+                Some(JobOrigin {
+                    session_id: "failed-origin".into(),
+                    child_run_id: Some("child".into()),
+                    dispatch_epoch: Some(1),
+                }),
+            )
+            .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("journal write failure"));
+        assert!(sup.list_by_origin_session("failed-origin").is_err());
+        assert!(sup.kill_origin_session("failed-origin").await.is_err());
+        assert!(
+            sibling_group.lock().observe().unwrap().is_some(),
+            "journal failure must not skip admitted siblings"
+        );
+        assert!(!sibling_group.lock().owned);
+        sibling_group
+            .lock()
+            .signal_with(libc::SIGKILL, |_, _| panic!("retired identity signalled"));
+        assert!(sup.process_groups.lock().is_empty());
+        assert!(sup.origins.lock().is_empty());
+        assert!(sup.pending_records.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_owner_retirement_cannot_signal_reused_identity() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let job = sup
+            .spawn_with_origin(
+                sh("sleep 60", JobOwner::App),
+                Some(JobOrigin {
+                    session_id: "owner".into(),
+                    child_run_id: None,
+                    dispatch_epoch: Some(1),
+                }),
+            )
+            .await
+            .unwrap();
+        let group = sup.process_groups.lock()[&job.id].clone();
+        sup.kill_origin_session("owner").await.unwrap();
+        assert!(!group.lock().owned);
+        group
+            .lock()
+            .signal_with(libc::SIGKILL, |_, _| panic!("retired pgid signalled"));
+        assert!(sup.process_groups.lock().is_empty());
+        assert!(sup.origins.lock().is_empty());
+        assert_eq!(sup.process_group_running(&job.id), Some(false));
+        assert!(
+            sup.spawn(sh("exit 0", session("owner"))).await.is_err(),
+            "legacy owner cannot reopen retired admission"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_legacy_owner_retirement_clears_process_entries() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let job = sup
+            .spawn(sh("exec sleep 60", session("legacy")))
+            .await
+            .unwrap();
+        sup.kill_owned_by(&session("legacy")).await.unwrap();
+        assert!(sup.process_groups.lock().is_empty());
+        assert!(sup.origins.lock().is_empty());
+        assert_eq!(sup.process_group_running(&job.id), Some(false));
+        assert!(sup.spawn(sh("exit 0", session("legacy"))).await.is_err());
+        assert!(
+            sup.spawn_with_origin(
+                sh("exit 0", session("legacy")),
+                Some(JobOrigin {
+                    session_id: "different-origin".into(),
+                    child_run_id: None,
+                    dispatch_epoch: None,
+                })
+            )
+            .await
+            .is_err(),
+            "explicit origin cannot reopen a retired owner"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_unconfirmed_retirement_fences_outstanding_handles() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let job = sup
+            .spawn(sh("exec sleep 60", session("uncertain")))
+            .await
+            .unwrap();
+        let group = sup.process_groups.lock()[&job.id].clone();
+        // Lose proof support while keeping a real, unreaped fixture leader.
+        // Retirement itself is exercised independently of a successful reap.
+        group.lock().retire();
+        assert!(!group.lock().owned);
+        group
+            .lock()
+            .signal_with(libc::SIGKILL, |_, _| panic!("retired identity signalled"));
+        assert!(sup.kill_origin_session("uncertain").await.is_err());
+        assert!(sup.process_groups.lock().is_empty());
+        assert!(sup.origins.lock().is_empty());
     }
 
     #[cfg(unix)]
@@ -608,6 +1185,156 @@ mod tests {
             windows_verbatim_arguments: false,
             label: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_windows_strategy_settles_lifecycle_without_process_group_proof() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(JobStore::new(dir.path().join("jobs.db")).unwrap());
+        let sup = JobSupervisor::with_group_proof(store, dir.path().join("logs"), false);
+        for _ in 0..(MAX_JOBS_PER_SESSION + 2) {
+            let job = sup
+                .spawn_with_origin(
+                    sh("exit 0", session("windows")),
+                    Some(JobOrigin {
+                        session_id: "windows".into(),
+                        child_run_id: None,
+                        dispatch_epoch: None,
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(await_settled(&sup, &job.id).await.status, JobStatus::Exited);
+            assert_eq!(sup.running_count(), 0);
+            assert_eq!(sup.process_group_running(&job.id), None);
+            assert!(sup.kill(&job.id, None).await.unwrap().status.is_terminal());
+        }
+        assert!(sup.process_groups.lock().is_empty());
+        assert!(sup
+            .list_by_origin_session("windows")
+            .unwrap()
+            .iter()
+            .all(|job| job.status == JobStatus::Exited));
+        assert!(sup.kill_origin_session("windows").await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_origin_disposal_reaps_groups_after_leader_exit_and_pipe_drain() {
+        for command in [
+            "sleep 60 & exit 0",
+            "sleep 60 </dev/null >/dev/null 2>&1 & exit 0",
+        ] {
+            let dir = TempDir::new().unwrap();
+            let sup = supervisor(&dir);
+            let job = sup
+                .spawn_with_origin(
+                    sh(command, JobOwner::App),
+                    Some(JobOrigin {
+                        session_id: "origin".into(),
+                        child_run_id: Some("child".into()),
+                        dispatch_epoch: Some(1),
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(await_settled(&sup, &job.id).await.status, JobStatus::Exited);
+            assert_eq!(sup.process_group_running(&job.id), Some(true));
+            assert_eq!(sup.running_count(), 0);
+            if command.contains("/dev/null") {
+                await_live_dropped(&sup, &job.id).await;
+                assert_eq!(sup.process_group_running(&job.id), Some(true));
+            }
+            assert_eq!(
+                sup.kill_origin_session("origin").await.unwrap(),
+                vec![job.id.clone()]
+            );
+            assert_eq!(sup.process_group_running(&job.id), Some(false));
+            assert_eq!(sup.running_count(), 0);
+        }
+    }
+
+    /// Lifetime promotion never changes which session must dispose the job.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn origin_disposal_reaps_promoted_jobs_without_reaching_other_sessions() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let detached = sup
+            .spawn_with_origin(
+                sh("sleep 60", JobOwner::App),
+                Some(JobOrigin {
+                    session_id: "origin".into(),
+                    child_run_id: Some("child".into()),
+                    dispatch_epoch: Some(3),
+                }),
+            )
+            .await
+            .unwrap();
+        let sibling = sup
+            .spawn_with_origin(
+                sh("sleep 60", JobOwner::App),
+                Some(JobOrigin {
+                    session_id: "sibling".into(),
+                    child_run_id: None,
+                    dispatch_epoch: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sup.list_by_origin_session("origin").unwrap()[0].status,
+            JobStatus::Running
+        );
+        assert_eq!(
+            sup.kill_origin_session("origin").await.unwrap(),
+            vec![detached.id.clone()]
+        );
+        assert_eq!(
+            await_settled(&sup, &detached.id).await.status,
+            JobStatus::Killed
+        );
+        assert!(sup
+            .list_by_origin_session("origin")
+            .unwrap()
+            .iter()
+            .all(|job| job.status.is_terminal()));
+        assert_eq!(
+            sup.get(&sibling.id).unwrap().unwrap().status,
+            JobStatus::Running
+        );
+        sup.kill_origin_session("sibling").await.unwrap();
+        await_settled(&sup, &sibling.id).await;
+    }
+
+    #[tokio::test]
+    async fn stop_proof_lost_origin_process_ownership_never_proves_stop() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(JobStore::new_in_memory().unwrap());
+        let record: JobRecord = serde_json::from_value(serde_json::json!({
+            "id": "lost", "command": "work", "cwd": "/", "owner": { "kind": "app" },
+            "status": "interrupted", "pid": null, "exitCode": null, "startedAtMs": 1,
+            "endedAtMs": 2, "totalOutputBytes": 0, "droppedOutputBytes": 0, "label": null
+        }))
+        .unwrap();
+        store
+            .insert_with_origin(
+                &record,
+                Some(&JobOrigin {
+                    session_id: "origin".into(),
+                    child_run_id: None,
+                    dispatch_epoch: None,
+                }),
+            )
+            .unwrap();
+        let sup = JobSupervisor::new(store, dir.path().join("logs"));
+        assert_eq!(
+            sup.list_by_origin_session("origin").unwrap()[0].status,
+            JobStatus::Interrupted
+        );
+        assert!(sup.kill_origin_session("origin").await.is_err());
+        assert!(sup.list_by_origin_session("other").unwrap().is_empty());
     }
 
     /// Poll the store until the job settles or the budget runs out.

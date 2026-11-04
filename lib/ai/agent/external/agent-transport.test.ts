@@ -7,6 +7,16 @@ const invokeMock = jest.fn()
 const listenMock = jest.fn()
 const transportCall = jest.fn()
 const transportSubscribe = jest.fn()
+const terminalListMock = jest.fn(async (_requireGroupProof?: boolean) => [] as string[])
+const terminalRunningMock = jest.fn(async (_id: string, _requireGroupProof?: boolean) => false)
+const terminalOutputMock = jest.fn(async () => ({
+  exitStatus: { exitCode: 0 as number | null, signal: null as string | null },
+}))
+jest.mock("@/lib/native/external-agent", () => ({
+  acpTerminalList: (proof?: boolean) => terminalListMock(proof),
+  acpTerminalIsRunning: (id: string, proof?: boolean) => terminalRunningMock(id, proof),
+  acpTerminalOutput: () => terminalOutputMock(),
+}))
 
 // Lazy wrappers: jest hoists the mock factories above the const declarations.
 jest.mock("@tauri-apps/api/core", () => ({
@@ -37,6 +47,8 @@ import {
   agentReadBinaryFile,
   agentListFiles,
   getAcpHostCapabilities,
+  getLiveExternalAgentProcessIds,
+  isKnownLocalExternalAgentProcess,
   runsExternalAgentProcessesLocally,
   supportsAgentFs,
   supportsAgentTerminal,
@@ -74,6 +86,78 @@ afterEach(() => {
   delete g.__COGNIA_HEADLESS__
   delete g.window
   jest.clearAllMocks()
+  terminalListMock.mockResolvedValue([])
+  terminalRunningMock.mockResolvedValue(false)
+  terminalOutputMock.mockResolvedValue({ exitStatus: { exitCode: 0, signal: null } })
+})
+
+it("does not infer stop from an empty agent registry while an ACP terminal survives", async () => {
+  setTauri(true)
+  invokeMock.mockResolvedValue([])
+  terminalListMock.mockResolvedValue(["orphan"])
+  terminalRunningMock.mockResolvedValue(true)
+  await expect(getLiveExternalAgentProcessIds()).resolves.toEqual(new Set(["terminal:orphan"]))
+  expect(terminalListMock).toHaveBeenCalledWith(true)
+  expect(terminalRunningMock).toHaveBeenCalledWith("orphan", true)
+  terminalRunningMock.mockResolvedValue(false)
+  await expect(getLiveExternalAgentProcessIds()).resolves.toEqual(new Set())
+  terminalRunningMock.mockRejectedValueOnce(new Error("group proof unavailable"))
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+  terminalListMock.mockRejectedValueOnce(new Error("unreadable"))
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+})
+
+it.each([["surviving-process"], []] as string[][])(
+  "queries Rust's external process registry after renderer reload: %j",
+  async (...ids) => {
+    setTauri(true)
+    invokeMock.mockResolvedValueOnce(ids)
+    await expect(getLiveExternalAgentProcessIds()).resolves.toEqual(new Set(ids))
+    expect(invokeMock).toHaveBeenCalledWith("list_external_agents", {})
+    expect(transportCall).not.toHaveBeenCalled()
+  }
+)
+
+it.each([undefined, {}, [123]])("leaves an invalid process registry unknown: %j", async (ids) => {
+  setTauri(true)
+  invokeMock.mockResolvedValueOnce(ids)
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+})
+
+it("leaves process liveness unknown when the owning host query fails", async () => {
+  setTauri(true)
+  invokeMock.mockRejectedValueOnce(new Error("Host unavailable"))
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+})
+
+it("does not substitute a paired Host's registry for local external processes", async () => {
+  setTauri(true)
+  const call = jest.fn()
+  setActiveRemoteTransport({ call, subscribe: jest.fn() } as unknown as Transport)
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+  expect(call).not.toHaveBeenCalled()
+  expect(invokeMock).not.toHaveBeenCalled()
+})
+
+it("leaves process liveness unknown without a process host", async () => {
+  await expect(getLiveExternalAgentProcessIds()).resolves.toBeUndefined()
+  expect(invokeMock).not.toHaveBeenCalled()
+  expect(transportCall).not.toHaveBeenCalled()
+})
+
+it("records local ownership at the actual spawn boundary and retains its origin across Host switches", async () => {
+  setTauri(true)
+  expect(isKnownLocalExternalAgentProcess("local-agent")).toBe(false)
+  invokeMock.mockResolvedValueOnce("local-agent")
+  await agentInvoke("spawn_external_agent", { config: { id: "local-agent" } })
+  expect(isKnownLocalExternalAgentProcess("local-agent")).toBe(true)
+  const call = jest.fn().mockResolvedValue("remote-agent")
+  setActiveRemoteTransport({ call, subscribe: jest.fn() } as unknown as Transport)
+  await agentInvoke("spawn_external_agent", { config: { id: "remote-agent" } })
+  expect(isKnownLocalExternalAgentProcess("remote-agent")).toBe(false)
+  expect(isKnownLocalExternalAgentProcess("local-agent")).toBe(true)
+  __resetAgentProcessHostsForTests()
+  expect(isKnownLocalExternalAgentProcess("local-agent")).toBe(false)
 })
 
 it("routes binary attachments and manifest discovery through the confined host filesystem", async () => {

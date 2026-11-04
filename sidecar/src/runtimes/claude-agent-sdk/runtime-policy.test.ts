@@ -1,7 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import {
   createProtectedClaudeQuery,
+  createClaudeProcessTracker,
   nestedNamespaceRequested,
   requestNestedNamespaceConsent,
   unattendedRetryPolicy,
@@ -10,6 +12,19 @@ import type { PendingApproval } from "../../policy/permission/approval.ts"
 import type { RuntimeQuery } from "./runtime-types.ts"
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+async function withinSpawnBudget(pending: Promise<void>) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("CLI spawn/close exceeded 10 s")), 10_000)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 const idle = (): RuntimeQuery => ({
   async *[Symbol.asyncIterator]() {
     await new Promise(() => {})
@@ -17,6 +32,71 @@ const idle = (): RuntimeQuery => ({
   },
   interrupt() {},
   close() {},
+})
+
+test(
+  "CLI close with a surviving same-group descendant is not disposal evidence",
+  {
+    skip: process.platform === "win32",
+  },
+  async () => {
+    const tracker = createClaudeProcessTracker()
+    const child = tracker.options({}).spawnClaudeCodeProcess!({
+      command: "/bin/sh",
+      args: ["-c", "sleep 60 </dev/null >/dev/null 2>&1 & echo $!"],
+      env: process.env,
+      signal: new AbortController().signal,
+    }) as ChildProcessWithoutNullStreams
+    let output = ""
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString()
+    })
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()))
+    try {
+      await withinSpawnBudget(closed)
+      assert.ok(Number(output.trim()) > 0)
+      process.kill(Number(output.trim()), 0)
+      await assert.rejects(tracker.waitForExit(), /group.*unconfirmed/)
+      await assert.rejects(tracker.waitForExit(), /group.*unconfirmed/)
+    } finally {
+      child.kill("SIGKILL")
+      if (Number(output.trim()) > 0) {
+        try {
+          process.kill(Number(output.trim()), "SIGKILL")
+        } catch {
+          /* already exited */
+        }
+      }
+      await withinSpawnBudget(closed)
+    }
+  }
+)
+
+test("CLI process exit evidence waits for the actual child and seals late spawns", async () => {
+  const tracker = createClaudeProcessTracker()
+  const options = tracker.options({})
+  const spawnOptions = {
+    command: process.execPath,
+    args: ["-e", "setInterval(() => {}, 1000)"],
+    env: process.env,
+    signal: new AbortController().signal,
+  }
+  const child = options.spawnClaudeCodeProcess!(spawnOptions)
+  let stopped = false
+  const proof = tracker.waitForExit().then(() => {
+    stopped = true
+  })
+  try {
+    await flush()
+    assert.equal(stopped, false)
+    assert.throws(() => options.spawnClaudeCodeProcess!(spawnOptions), /already disposed/)
+  } finally {
+    child.kill("SIGTERM")
+    if (process.platform === "win32")
+      await assert.rejects(withinSpawnBudget(proof), /group.*unconfirmed/)
+    else await withinSpawnBudget(proof)
+  }
+  assert.equal(stopped, process.platform !== "win32")
 })
 
 test("namespace admission requires Linux and an enabled fail-closed sandbox", () => {

@@ -64,8 +64,12 @@ export interface InstalledExternalAgentTerminalPlane {
   sessionTerminals(sessionId: string): Promise<string[]>
   killSessionTerminals(sessionId: string): Promise<void>
   isRunning(terminalId: string): Promise<boolean>
+  /** Optional group proof; legacy leader-only liveness cannot prove stop. */
+  isGroupRunning?(terminalId: string): Promise<boolean>
   info(terminalId: string): Promise<TerminalInfo>
   list(): Promise<string[]>
+  /** Includes released groups and session markers whose stop proof is unavailable. */
+  listForStopProof?(): Promise<string[]>
 }
 
 /** The plugin event hooks an external-agent run dispatches (System A). */

@@ -11,6 +11,7 @@ import type { AgentTerminalHost } from "@cognia/agent-contracts/host"
 import {
   acpTerminalCreate,
   acpTerminalKill,
+  acpTerminalIsRunning,
   acpTerminalOutput,
   acpTerminalRelease,
   acpTerminalWaitForExit,
@@ -37,6 +38,7 @@ export function createNativeTerminalHost(): AgentTerminalHost {
     output: (terminalId, outputByteLimit) => acpTerminalOutput(terminalId, outputByteLimit),
     write: (terminalId, data) => acpTerminalWrite(terminalId, data),
     kill: (terminalId) => acpTerminalKill(terminalId),
+    isRunning: (terminalId) => acpTerminalIsRunning(terminalId, true),
     release: (terminalId) => acpTerminalRelease(terminalId),
     waitForExit: (terminalId, timeoutMs) => acpTerminalWaitForExit(terminalId, timeoutMs),
     closeSession: (sessionId) => cleanupSessionTerminals(sessionId),

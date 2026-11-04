@@ -744,6 +744,7 @@ export function dispatchAiSdk({
   }
 
   let idleCompaction: Promise<void> | null = null
+  const executorId = randomUUID()
 
   async function runTurn() {
     // A user send can arrive while an idle manual compaction is awaiting its
@@ -753,6 +754,7 @@ export function dispatchAiSdk({
     // Clear any leftover interrupt from a previous turn so this turn streams.
     cancelled = false
     active = true
+    emit({ type: "executor_started", sessionId, executorId })
     // Cached native/MCP permission gates retain these options objects. Their
     // caller binding belongs to the current send, including an absent context
     // for a Host-originated turn, rather than the session's first generation.
@@ -1482,7 +1484,11 @@ export function dispatchAiSdk({
               )
               if (!cancelled) continue
             }
-          } else if (retryable && transportRetries < MAX_TRANSPORT_RETRIES) {
+          } else if (
+            retryable &&
+            modelParams.maxRetries !== 0 &&
+            transportRetries < MAX_TRANSPORT_RETRIES
+          ) {
             transportRetries += 1
             const { retryAfterMs } = extractHttpErrorMeta(streamError)
             await new Promise((resolve) =>
@@ -1794,6 +1800,14 @@ export function dispatchAiSdk({
       }
     } finally {
       await settleTurnCompaction()
+      // A power hint only; the Host keeps executor liveness until disposal.
+      let backgroundProcessesRunning = true
+      try {
+        backgroundProcessesRunning = await toolSession.hasRunningProcesses()
+      } catch {
+        // An unreadable process registry must not look idle.
+      }
+      emit({ type: "turn_settled", sessionId, executorId, backgroundProcessesRunning })
       turnLedgerGate = null
       active = false
       activeAbortController = null
@@ -1821,10 +1835,20 @@ export function dispatchAiSdk({
       log("error", `ai-sdk dispatch loop failed: ${errorToMessage(err)}`)
     })
     .finally(async () => {
-      // Session loop ended (input closed or fatal error) — kill any background
-      // shells the agent left running so none outlive the session.
+      // Session loop ended: reap owned jobs, or every origin-tagged job for
+      // durable children. Ordinary app-owned detached jobs outlive disposal.
       invalidateCompaction()
-      await toolSession.disposeProcesses()
+      try {
+        await toolSession.disposeProcesses()
+        if (await toolSession.hasLiveProcesses())
+          throw new Error("session process group stop unconfirmed")
+        // Parent-visible proof, unlike the host-internal session_closed signal.
+        // WP1 proves Cognia Bash/jobs/PTY TOOL groups; MCP/hooks/LSP and
+        // other helper processes are deferred (ADR-0244).
+        emit({ type: "session_disposed", sessionId, executorId })
+      } catch (error) {
+        log("error", `ai-sdk runtime disposal unconfirmed: ${errorToMessage(error)}`)
+      }
       // Signal the host to retire this multi-turn session entry. Per-turn
       // `session_ended` events keep the session alive (so context accumulates);
       // this fires exactly once, when the loop genuinely ends.

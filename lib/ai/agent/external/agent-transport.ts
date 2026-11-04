@@ -62,6 +62,11 @@ export function __resetAgentProcessHostsForTests(): void {
   processHosts.clear()
 }
 
+/** Positive ownership recorded at the actual process dispatch, never inferred from a preset. */
+export function isKnownLocalExternalAgentProcess(processId: string): boolean {
+  return processHosts.has(processId) && processHosts.get(processId) === null
+}
+
 function localProcessTarget(): boolean {
   return !getActiveRemoteTransport() && (isTauri() || isHeadlessHost())
 }
@@ -104,6 +109,36 @@ export function runsExternalAgentProcessesLocally(): boolean {
   const installed = installedPlane()
   if (installed) return installed.runsExternalAgentProcessesLocally()
   return localProcessTarget()
+}
+
+/**
+ * Host process registries survive renderer reloads; configuration lists do not
+ * prove liveness. Includes `terminal:<id>` for ACP children; use this snapshot
+ * for quiescence, not as process-control handles.
+ */
+export async function getLiveExternalAgentProcessIds(): Promise<ReadonlySet<string> | undefined> {
+  if (!runsExternalAgentProcessesLocally()) return undefined
+  try {
+    const ids = await agentInvoke<unknown>("list_external_agents", {})
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) return undefined
+    const live = new Set(ids as string[])
+    // The external process table does not own ACP terminal/create children.
+    // Recovery after a renderer reload must read that Host registry as well.
+    if (supportsAgentTerminal()) {
+      const { acpTerminalList, acpTerminalIsRunning } = await import("@/lib/native/external-agent")
+      const terminals: unknown = await acpTerminalList(true)
+      if (!Array.isArray(terminals) || !terminals.every((id) => typeof id === "string"))
+        return undefined
+      for (const id of terminals as string[]) {
+        const running: unknown = await acpTerminalIsRunning(id, true)
+        if (typeof running !== "boolean") return undefined
+        if (running) live.add(`terminal:${id}`)
+      }
+    }
+    return live
+  } catch {
+    return undefined
+  }
 }
 
 /** Whether the ACP fs capability (read/write text file) is available. */

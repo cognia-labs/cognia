@@ -50,6 +50,8 @@ export interface HostJobRecord {
   command?: string
   cwd?: string
   status?: string
+  /** Leader status is independent of the Host-created group's liveness. */
+  processGroupRunning?: boolean
   exitCode?: number | null
   startedAtMs: number
   endedAtMs?: number | null
@@ -58,7 +60,7 @@ export interface HostJobRecord {
 }
 
 export interface HostSpawnOptions extends SpawnBackgroundOptions {
-  /** Promote the job to app ownership so it outlives the session. */
+  /** Outlive ordinary session disposal. A durable processOrigin still binds it to child teardown. */
   detach?: boolean | undefined
   label?: string | null | undefined
 }
@@ -103,6 +105,8 @@ export interface HostBgShellRow {
 }
 
 export interface HostBgShellRegistry {
+  /** Durable child attribution opts into origin-wide stop proof, including detached jobs. */
+  readonly processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
   spawnBackground(opts: HostSpawnOptions): Promise<HostJobRecord>
   read(id: string, opts?: HostReadOptions): Promise<HostReadResult>
   waitForOutput(
@@ -113,6 +117,8 @@ export interface HostBgShellRegistry {
   killByPid(pid: number): Promise<HostKillByPidResult>
   killAll(): Promise<void>
   list(): Promise<HostBgShellRow[]>
+  hasRunningProcesses(): Promise<boolean>
+  hasLiveProcesses(): Promise<boolean>
 }
 
 /** Either registry a session may hold; callers await every method. */
@@ -144,21 +150,39 @@ export function applyLineFilter(text: string, filter: string | undefined): strin
 export function createHostBgShellRegistry({
   hostRpc,
   sessionId,
+  processOrigin,
+  groupProofSupported = process.platform !== "win32",
 }: {
   hostRpc: HostRpcCaller
   sessionId: string
+  processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
+  groupProofSupported?: boolean | undefined
 }): HostBgShellRegistry {
   /** shellId → next unread absolute byte offset. */
   const cursors = new Map<string, number>()
   /** shellId → the command line, for `list` output before the host answers. */
   const known = new Set<string>()
+  let closing = false
+  // Set before the RPC: a lost spawn response may still have admitted a job.
+  let admittedSpawn = false
+  const pendingSpawns = new Set<Promise<HostJobRecord>>()
 
   const sessionOwner: JobOwner = { kind: "session", sessionId }
   /** `detach` promotes a job past the session that started it. */
   const ownerFor = (detach: boolean | undefined): JobOwner =>
     detach ? { kind: "app" } : sessionOwner
 
-  async function spawnBackground({
+  function spawnBackground(options: HostSpawnOptions): Promise<HostJobRecord> {
+    if (closing) return Promise.reject(new Error("background shell registry is closing"))
+    admittedSpawn = true
+    const pending = spawnAccepted(options)
+    pendingSpawns.add(pending)
+    return pending.finally(() => {
+      pendingSpawns.delete(pending)
+    })
+  }
+
+  async function spawnAccepted({
     command,
     shell,
     shellArgs,
@@ -175,6 +199,7 @@ export function createHostBgShellRegistry({
       cwd,
       env: env ? { ...env } : {},
       owner: ownerFor(detach),
+      origin: { sessionId, ...processOrigin },
       windowsVerbatimArguments: Boolean(isWin),
       label: label ?? null,
     })) as HostJobRecord
@@ -300,13 +325,20 @@ export function createHostBgShellRegistry({
   }
 
   /**
-   * Session teardown. Only reaps SESSION-owned jobs — a `detach`ed job is
-   * app-owned precisely so it survives this, and a scheduled task's job belongs
-   * to the task, not to the chat turn that happened to start it.
+   * Ordinary disposal reaps session-owned jobs. Durable children must also
+   * reap promoted jobs by origin before their executor can prove stop.
    */
   async function killAll(): Promise<void> {
+    closing = true
+    // A spawn already sent to the Host can complete after teardown starts.
+    // Reap only after those admissions settle, and refuse every later spawn.
+    await Promise.allSettled([...pendingSpawns])
+    if (!admittedSpawn) return
     try {
-      await hostRpc.call("jobs.killOwnedBy", { owner: sessionOwner })
+      await hostRpc.call("jobs.killOwnedBy", {
+        owner: sessionOwner,
+        ...(processOrigin ? { includeOrigin: true } : {}),
+      })
     } catch {
       // Best-effort: the host also reaps session-owned jobs on its own grace
       // timer, and everything is killed at app exit regardless.
@@ -316,18 +348,59 @@ export function createHostBgShellRegistry({
   }
 
   async function list(): Promise<HostBgShellRow[]> {
+    return (await listInScope(Boolean(processOrigin))).map(toListRow)
+  }
+
+  async function listInScope(includeOrigin: boolean): Promise<HostJobRecord[]> {
+    // Admission is owned exclusively by this registry. Once closed, absence
+    // of even an attempted spawn is a local proof, independent of Host health.
+    if (closing && !admittedSpawn) return []
     // Deliberately NOT catch-and-return-[]. An empty array is a factual claim
     // ("this session has no background shells") and swallowing an RPC failure
     // — a 30 s host timeout, a closed channel — made "we could not ask" look
     // identical to "there are none". `list_shells` surfaces the throw as a
     // tool error instead.
-    const { jobs } = (await hostRpc.call("jobs.list", { owner: sessionOwner })) as {
+    const { jobs, originSessionId } = (await hostRpc.call("jobs.list", {
+      owner: sessionOwner,
+      ...(includeOrigin ? { includeOrigin: true } : {}),
+    })) as {
       jobs?: HostJobRecord[] | null
+      originSessionId?: string
     }
-    return (jobs ?? []).map(toListRow)
+    if (
+      (includeOrigin && originSessionId !== sessionId) ||
+      !Array.isArray(jobs) ||
+      jobs.some(
+        (job) =>
+          !["running", "exited", "killed", "interrupted", "failed"].includes(job.status ?? "")
+      )
+    )
+      throw new Error(
+        `Host did not return an authoritative ${includeOrigin ? "origin " : ""}jobs list`
+      )
+    return jobs
   }
 
-  return { spawnBackground, read, waitForOutput, kill, killByPid, killAll, list }
+  return {
+    processOrigin,
+    spawnBackground,
+    read,
+    waitForOutput,
+    kill,
+    killByPid,
+    killAll,
+    list,
+    async hasRunningProcesses() {
+      return admittedSpawn && (await listInScope(true)).some((job) => job.status === "running")
+    },
+    async hasLiveProcesses() {
+      if (!admittedSpawn) return false
+      if (!groupProofSupported) return true
+      return (await listInScope(Boolean(processOrigin))).some(
+        (job) => job.status !== "failed" && job.processGroupRunning !== false
+      )
+    },
+  }
 }
 
 function clampChunk(maxChars: number | undefined): number {
@@ -373,12 +446,16 @@ export function createSessionBgShellRegistry({
   hostRpc,
   sessionId,
   backgroundProcessHost,
+  processOrigin,
+  groupProofSupported = process.platform !== "win32",
 }: {
   hostRpc?: HostRpcCaller | null | undefined
   sessionId: string
   backgroundProcessHost?: string | undefined
+  processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
+  groupProofSupported?: boolean | undefined
 }): SessionBgShellRegistry {
   return hostRpc && backgroundProcessHost !== "sidecar"
-    ? createHostBgShellRegistry({ hostRpc, sessionId })
-    : createBgShellRegistry()
+    ? createHostBgShellRegistry({ hostRpc, sessionId, processOrigin, groupProofSupported })
+    : createBgShellRegistry({ groupProofSupported })
 }

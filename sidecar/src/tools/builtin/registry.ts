@@ -54,6 +54,8 @@ export interface CollectToolDefsOptions {
   builtinProcessSandbox?: ProcessSandboxScope | undefined
   hostRpc?: HostRpcCaller | null | undefined
   sessionId?: string | undefined
+  processSignal?: AbortSignal | undefined
+  groupProofSupported?: boolean | undefined
   model?: string | undefined
   provider?: string | undefined
   /**
@@ -110,8 +112,13 @@ const CATEGORIES = [
   category({
     id: "terminalRepl",
     isEnabled: ({ enabled }) => Boolean(enabled?.terminalRepl),
-    tools: ({ builtinProcessSandbox, sessionId }) =>
-      createTerminalReplTools({ builtinProcessSandbox, sessionId }),
+    tools: ({ builtinProcessSandbox, sessionId, processSignal, groupProofSupported }) =>
+      createTerminalReplTools({
+        builtinProcessSandbox,
+        sessionId,
+        processSignal,
+        groupProofSupported,
+      }),
   }),
   category({
     id: "astGrep",

@@ -34,6 +34,8 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 
    Tool results, a closed connection, a lease that expired on a worker without `worker-self-fence-v1`, or silence are not proof.
 
+   "Idle" covers every process started on the child's behalf, not only the turn: foreground commands, background jobs (including ones promoted with `detach`) and terminals an external agent opened. The unit is the process group the Host created. A group counts as stopped only when it is empty, so a leader that exited while its descendants still run is not proof. A local executor gives an acknowledged stop the same way: by disposing its session and confirming those groups empty.
+
 4. **A worker fences itself.** A `worker-self-fence-v1` worker holds each child's lease epoch locally. Before every tool call it checks that its last successful renewal is within the lease TTL. When renewal fails or the control channel is lost, it stops starting tools, aborts the turn within the grace, and records the abort for the next contact. The grace is declared in the manifest and measured before it becomes a release gate.
 
 5. **The lease has a fencing epoch.** Every claim increments a monotonic `dispatchEpoch` on the child. Renew, settle, event advance and result projection compare the epoch, not only the lease id; a write from an older epoch is rejected and recorded. A reclaim never reuses an expired lease's identity.
@@ -57,6 +59,9 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 
 - Tool-level idempotency keys. Arbitrary tool side effects cannot be deduplicated generically, so they are not a basis for recovery here.
 - Forced takeover of an unconfirmed child.
+- Processes that leave their process group (`setsid`, a double fork) fall outside the proof in decision 3. Only a sandboxed workspace (ADR-0182/0183) contains them, just as file-tool limits do not contain a shell (ADR-0245).
+- Per-session accounting of helper processes. Stop proof covers the process groups that Cognia's tool surfaces create: foreground commands, background shells and Host jobs, terminal REPLs, terminals an external agent opens, and the Claude Code CLI. It does not yet cover stdio MCP servers, command hooks, language servers and installers, the shared exec helper behind git/rg/AST tools, `run_code`, or the children an external agent CLI starts by itself. Bringing them in needs one per-session spawn seam that every subprocess goes through. That is planned as its own work package.
+- Windows process trees. Without a Job Object, a reaped leader cannot show that its tree is empty, so a local executor on Windows never produces stop proof: its stops stay `stop_unconfirmed`. Lifecycle (status, release, limits) still follows the leader.
 - Grace and propagation numbers. They are measured on the macOS ↔ Linux box rig before any is written into a release gate.
 
 ## Alternatives considered

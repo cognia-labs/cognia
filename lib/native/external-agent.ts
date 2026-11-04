@@ -227,10 +227,21 @@ export async function acpTerminalKillSessionTerminals(sessionId: string): Promis
   return invoke<void>("acp_terminal_kill_session_terminals", { sessionId })
 }
 
-export async function acpTerminalIsRunning(terminalId: string): Promise<boolean> {
+export async function acpTerminalIsRunning(
+  terminalId: string,
+  requireGroupProof = false
+): Promise<boolean> {
   const installed = installedTerminals()
-  if (installed) return installed.isRunning(terminalId)
-  return invoke<boolean>("acp_terminal_is_running", { terminalId })
+  if (installed) {
+    if (!requireGroupProof) return installed.isRunning(terminalId)
+    if (!installed.isGroupRunning)
+      throw new Error("Installed terminal Host cannot confirm process group liveness")
+    return installed.isGroupRunning(terminalId)
+  }
+  return invoke<boolean>("acp_terminal_is_running", {
+    terminalId,
+    ...(requireGroupProof ? { forStopProof: true } : {}),
+  })
 }
 
 export async function acpTerminalGetInfo(terminalId: string): Promise<TerminalInfo> {
@@ -239,10 +250,17 @@ export async function acpTerminalGetInfo(terminalId: string): Promise<TerminalIn
   return invoke<TerminalInfo>("acp_terminal_get_info", { terminalId })
 }
 
-export async function acpTerminalList(): Promise<string[]> {
+export async function acpTerminalList(requireGroupProof = false): Promise<string[]> {
   const installed = installedTerminals()
-  if (installed) return installed.list()
-  return invoke<string[]>("acp_terminal_list")
+  if (installed) {
+    if (!requireGroupProof) return installed.list()
+    if (!installed.listForStopProof)
+      throw new Error("Terminal Host cannot enumerate process group ownership")
+    return installed.listForStopProof()
+  }
+  return requireGroupProof
+    ? invoke<string[]>("acp_terminal_list", { forStopProof: true })
+    : invoke<string[]>("acp_terminal_list")
 }
 
 // ============================================================================

@@ -1,6 +1,7 @@
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
 import type { RuntimeQuery } from "./runtime-types.ts"
+import { createClaudeProcessTracker } from "./runtime-policy.ts"
 // Warm-subprocess pool for `startup()` (ADR-0090 plan Stage 4).
 //
 // `startup({ options, initializeTimeoutMs })` spawns a Claude Code subprocess
@@ -303,7 +304,16 @@ export function warmPool(deps: Pick<WarmPoolDeps, "log"> = {}) {
     sharedPool = createWarmPool({
       startup: async (params) => {
         const { startup } = await import("@anthropic-ai/claude-agent-sdk")
-        return startup(params)
+        const processes = createClaudeProcessTracker()
+        const warm = await startup({ ...params, options: processes.options(params.options) })
+        return {
+          close: () => warm.close(),
+          query(prompt) {
+            return Object.assign(warm.query(prompt), {
+              waitForProcessExit: () => processes.waitForExit(),
+            })
+          },
+        }
       },
       log: deps.log,
     })

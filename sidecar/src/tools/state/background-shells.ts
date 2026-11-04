@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { trackChildProcessGroup, type ProcessGroup } from "./process-group.ts"
 
 import { pickStreamDecoder } from "../../platform/process/console-decode.ts"
 
@@ -77,12 +78,18 @@ export interface BgShellRegistry {
   kill(id: string, signal?: NodeJS.Signals | number): KillResult
   killByPid(pid: number): KillByPidResult
   killAll(): Promise<void>
+  hasLiveProcesses?(): boolean
   list(): BgShellSummary[]
 }
 
 /** Create a fresh per-session background-shell registry. */
-export function createBgShellRegistry(): BgShellRegistry {
+export function createBgShellRegistry({
+  groupProofSupported = process.platform !== "win32",
+}: { groupProofSupported?: boolean } = {}): BgShellRegistry {
   const shells = new Map<string, BgShellEntry>()
+  let proofUnavailable = false
+  const groups = new Map<string, ProcessGroup>()
+  let closing = false
   let disposing: Promise<void> | undefined
 
   function spawnBackground({
@@ -93,7 +100,7 @@ export function createBgShellRegistry(): BgShellRegistry {
     isWin,
     env,
   }: SpawnBackgroundOptions): BgShellEntry {
-    if (disposing) throw new Error("background shell registry is closing")
+    if (closing) throw new Error("background shell registry is closing")
     const id = randomUUID()
     const child = spawn(shell, shellArgs, {
       cwd,
@@ -119,6 +126,8 @@ export function createBgShellRegistry(): BgShellRegistry {
       cwd,
       waiters: new Set(),
     }
+    groups.set(id, trackChildProcessGroup(child, groupProofSupported))
+    if (!groupProofSupported) proofUnavailable = true
     const notifyWaiters = () => {
       for (const wake of [...entry.waiters]) wake()
     }
@@ -156,6 +165,12 @@ export function createBgShellRegistry(): BgShellRegistry {
         entry.endedAt = Date.now()
         notifyWaiters()
       }
+    })
+    child.on("exit", (code) => {
+      entry.status = "exited"
+      entry.exitCode = code
+      entry.endedAt = Date.now()
+      notifyWaiters()
     })
     child.on("close", (code) => {
       if (decoder) cap(decoder.decode())
@@ -221,8 +236,17 @@ export function createBgShellRegistry(): BgShellRegistry {
   }
 
   function signalEntry(entry: BgShellEntry, signal: NodeJS.Signals | number = "SIGTERM") {
-    if (process.platform !== "win32" && entry.child.pid) process.kill(-entry.child.pid, signal)
-    else entry.child.kill(signal)
+    if (process.platform !== "win32") {
+      groups.get(entry.id)?.signal(signal)
+    } else if (entry.pid && entry.status === "running")
+      spawn("taskkill", ["/PID", String(entry.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      }).on("error", () => {})
+  }
+
+  function groupIsLive(entry: BgShellEntry): boolean {
+    return groups.get(entry.id)?.isLive() ?? true
   }
 
   function killByPid(pid: number): KillByPidResult {
@@ -235,7 +259,7 @@ export function createBgShellRegistry(): BgShellRegistry {
   function kill(id: string, signal?: NodeJS.Signals | number): KillResult {
     const entry = shells.get(id)
     if (!entry) return { ok: false, reason: "not_found" }
-    if (entry.status !== "exited") {
+    if (entry.status === "running") {
       try {
         signalEntry(entry, signal)
       } catch {
@@ -247,43 +271,38 @@ export function createBgShellRegistry(): BgShellRegistry {
 
   function killAll(): Promise<void> {
     if (disposing) return disposing
-    const pending = [...shells.values()]
-      .filter((entry) => entry.status !== "exited")
-      .map(
-        (entry) =>
-          new Promise<void>((resolve, reject) => {
-            let timer: ReturnType<typeof setTimeout>
-            const finish = (error?: Error) => {
-              clearTimeout(timer)
-              entry.child.removeListener("close", closed)
-              if (error) reject(error)
-              else resolve()
-            }
-            const closed = () => finish()
-            entry.child.once("close", closed)
-            timer = setTimeout(() => {
-              try {
-                signalEntry(entry, "SIGKILL")
-              } catch {
-                /* process may already be reaping */
-              }
-              timer = setTimeout(
-                () => finish(new Error(`background shell ${entry.id} did not exit`)),
-                1_000
-              )
-            }, 1_000)
-            try {
-              signalEntry(entry)
-            } catch {
-              // The group may already be exiting while its close event is
-              // queued. Only that event proves cleanup; the deadline still
-              // rejects if signalling genuinely failed to terminate it.
-            }
-          })
-      )
-    shells.clear()
+    closing = true
+    const pending = [...shells.values()].map(async (entry) => {
+      const pending = () => (groupProofSupported ? groupIsLive(entry) : entry.status === "running")
+      const start = Date.now()
+      let escalated = false
+      try {
+        if (pending()) signalEntry(entry)
+      } catch {
+        /* verify below */
+      }
+      while (pending()) {
+        if (!escalated && Date.now() - start >= 1_000) {
+          try {
+            signalEntry(entry, "SIGKILL")
+          } catch {
+            /* verify below */
+          }
+          escalated = true
+        }
+        if (Date.now() - start >= 2_000)
+          throw new Error(`background shell ${entry.id} process group did not exit`)
+        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+      }
+      shells.delete(entry.id)
+      groups.delete(entry.id)
+    })
     disposing = Promise.allSettled(pending).then((results) => {
       const errors = results.filter((result) => result.status === "rejected")
+      // Fold unknown into this registry's owner record, then retire all pgids.
+      for (const group of groups.values()) if (!group.retire()) proofUnavailable = true
+      groups.clear()
+      shells.clear()
       if (errors.length)
         throw new AggregateError(
           errors.map((result) => result.reason),
@@ -306,5 +325,14 @@ export function createBgShellRegistry(): BgShellRegistry {
     }))
   }
 
-  return { spawnBackground, read, waitForOutput, kill, killByPid, killAll, list }
+  return {
+    spawnBackground,
+    read,
+    waitForOutput,
+    kill,
+    killByPid,
+    killAll,
+    list,
+    hasLiveProcesses: () => proofUnavailable || [...shells.values()].some(groupIsLive),
+  }
 }

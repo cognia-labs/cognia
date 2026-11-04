@@ -20,6 +20,224 @@ function makeFakeStream(
   })
 }
 
+test(
+  "foreground shell exit with surviving descendants keeps session disposal unconfirmed",
+  {
+    skip: process.platform === "win32",
+  },
+  async () => {
+    const { events, emit } = captureEmit()
+    let descendantPid = 0
+    const session = startSession({
+      provider: "openai",
+      sessionId: "foreground-child",
+      firstPrompt: "work",
+      sendOptions: {
+        model: "gpt-test",
+        providerCredentials: { apiKey: "k", protocol: "openai" },
+        builtinTools: { coreFiles: true },
+        permissionMode: "bypassPermissions",
+      },
+      emit,
+      log() {},
+      streamText: (raw) => ({
+        fullStream: (async function* () {
+          const output = await streamArgs(raw).tools.bash!.execute(
+            { command: "sleep 20 </dev/null >/dev/null 2>&1 & echo $!" },
+            { toolCallId: "foreground", messages: [] }
+          )
+          assert.ok(typeof output === "string")
+          descendantPid = Number(output.trim())
+          yield { type: "text-delta", text: "done" }
+        })(),
+      }),
+    })
+    try {
+      await waitForEvent(events, (event) => event.type === "turn_settled")
+      assert.ok(descendantPid > 0)
+      process.kill(descendantPid, 0)
+      assert.equal(
+        events.find((event) => event.type === "turn_settled")?.backgroundProcessesRunning,
+        false
+      )
+      assert.equal(
+        events.some((event) => event.type === "session_disposed"),
+        false
+      )
+    } finally {
+      session.closeInput()
+      await session.closed
+      if (descendantPid > 0) {
+        try {
+          process.kill(descendantPid, "SIGKILL")
+        } catch {
+          /* exited */
+        }
+      }
+    }
+    assert.equal(events.filter((event) => event.type === "session_disposed").length, 0)
+  }
+)
+
+test("turn end and interrupt leave background jobs live; close proves disposal only after reaping", async () => {
+  const { events, emit } = captureEmit()
+  let disposed!: () => void
+  const disposal = new Promise<void>((resolve) => {
+    disposed = resolve
+  })
+  let live = true
+  let kills = 0
+  const session = startSession({
+    provider: "openai",
+    sessionId: "background-child",
+    firstPrompt: "work",
+    sendOptions: {
+      model: "gpt-test",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      builtinTools: { coreFiles: true },
+      permissionMode: "bypassPermissions",
+      processOrigin: { childRunId: "child", dispatchEpoch: 1 },
+    },
+    emit,
+    log() {},
+    hostRpc: {
+      async call(method, rawParams) {
+        const params = rawParams as Record<string, unknown>
+        if (method === "workspace.portEnv") return {}
+        if (method === "jobs.spawn") {
+          assert.deepEqual(params.owner, { kind: "app" })
+          assert.deepEqual(params.origin, {
+            sessionId: "background-child",
+            childRunId: "child",
+            dispatchEpoch: 1,
+          })
+          return { id: "background-job", startedAtMs: 1, status: "running" }
+        }
+        if (method === "jobs.killOwnedBy") {
+          assert.equal(params.includeOrigin, true)
+          kills++
+          await disposal
+          live = false
+          return { killed: ["background-job"] }
+        }
+        if (method === "jobs.list")
+          return {
+            originSessionId: "background-child",
+            jobs: live ? [{ id: "background-job", status: "running", startedAtMs: 1 }] : [],
+          }
+        throw new Error(`Unexpected RPC ${method}`)
+      },
+    },
+    streamText: (raw) => ({
+      fullStream: (async function* () {
+        const output = await streamArgs(raw).tools.bash!.execute(
+          { command: "sleep 60", run_in_background: true, detach: true },
+          { toolCallId: "background", messages: [] }
+        )
+        assert.match(JSON.stringify(output), /background shell started/)
+        yield { type: "text-delta", text: "done" }
+      })(),
+    }),
+  })
+  await waitForEvent(events, (event) => event.type === "session_ended")
+  assert.equal(events.find((event) => event.type === "session_ended")?.error, undefined)
+  await session.q.interrupt()
+  assert.equal(kills, 0)
+  assert.equal(live, true)
+  assert.equal(
+    events.some((event) => event.type === "session_disposed"),
+    false
+  )
+  session.closeInput()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(kills, 1)
+  assert.equal(
+    events.some((event) => event.type === "session_disposed"),
+    false
+  )
+  disposed()
+  await session.closed
+  assert.equal(live, false)
+  assert.equal(events.filter((event) => event.type === "session_disposed").length, 1)
+})
+
+test("a detached job survives ordinary disposal and prevents durable proof until stopped", async () => {
+  for (const durable of [false, true]) {
+    const { events, emit } = captureEmit()
+    let job:
+      | { id: string; status: string; startedAtMs: number; owner: unknown; origin: unknown }
+      | undefined
+    const session = startSession({
+      provider: "openai",
+      sessionId: "detached-live",
+      firstPrompt: "work",
+      sendOptions: {
+        model: "gpt-test",
+        providerCredentials: { apiKey: "k", protocol: "openai" },
+        builtinTools: { coreFiles: true },
+        permissionMode: "bypassPermissions",
+        ...(durable ? { processOrigin: { childRunId: "child", dispatchEpoch: 1 } } : {}),
+      },
+      emit,
+      log() {},
+      hostRpc: {
+        async call(method, rawParams) {
+          const params = rawParams as Record<string, unknown>
+          if (method === "workspace.portEnv") return {}
+          if (method === "jobs.spawn") {
+            job = {
+              id: "detached",
+              status: "running",
+              startedAtMs: 1,
+              owner: params.owner,
+              origin: params.origin,
+            }
+            return job
+          }
+          if (method === "jobs.killOwnedBy") return { killed: [] }
+          if (method === "jobs.list") {
+            // Model the Host's owner/origin distinction. App-owned work disappears
+            // from owner-only queries even though its process is still running.
+            return {
+              originSessionId: "detached-live",
+              jobs: params.includeOrigin && job ? [job] : [],
+            }
+          }
+          throw new Error(`Unexpected RPC ${method}`)
+        },
+      },
+      streamText: (raw) => ({
+        fullStream: (async function* () {
+          const output = await streamArgs(raw).tools.bash!.execute(
+            { command: "sleep 60", run_in_background: true, detach: true },
+            { toolCallId: "background", messages: [] }
+          )
+          assert.match(
+            JSON.stringify(output),
+            durable
+              ? /explicit disposal of this session still stops it/
+              : /It will keep running after this session ends, until the app exits/
+          )
+          yield { type: "text-delta", text: "done" }
+        })(),
+      }),
+    })
+    await waitForEvent(events, (event) => event.type === "session_ended")
+    assert.equal(events.find((event) => event.type === "session_ended")?.error, undefined)
+    session.closeInput()
+    await session.closed
+    assert.equal(job?.status, "running")
+    assert.deepEqual(job?.origin, {
+      sessionId: "detached-live",
+      ...(durable ? { childRunId: "child", dispatchEpoch: 1 } : {}),
+    })
+    assert.equal(
+      events.some((event) => event.type === "session_disposed"),
+      !durable
+    )
+  }
+})
+
 test("a semantic denial cannot become a transport retry or later provider dispatch", async () => {
   const { events, emit } = captureEmit()
   let guardCalls = 0
@@ -5147,3 +5365,43 @@ for (const action of ["interrupt", "close"] as const)
       session.closeInput()
     }
   })
+
+test("dispatchAiSdk honors an explicit zero retry budget before any output", async () => {
+  const { events, emit } = captureEmit()
+  let calls = 0
+  const alwaysStalls = () => {
+    calls += 1
+    return {
+      fullStream: (async function* () {
+        await new Promise(() => {}) // never produces an event
+      })(),
+      usage: Promise.resolve({}),
+      response: Promise.resolve({ id: `r${calls}`, messages: [] }),
+      steps: Promise.resolve([{}]),
+    }
+  }
+  dispatchAiSdk({
+    provider: "openai",
+    sessionId: "s1",
+    firstPrompt: "hi",
+    sendOptions: {
+      model: "gpt-4o-mini",
+      modelParams: { maxRetries: 0 },
+      providerCredentials: { apiKey: "sk", protocol: "openai" },
+    },
+    emit,
+    log: () => {},
+    streamText: alwaysStalls,
+    streamIdleTimeoutMs: 30,
+  })
+  await new Promise<void>((resolve) => {
+    const tick = () => {
+      if (events.some((e) => e.type === "session_ended")) return resolve()
+      setTimeout(tick, 10)
+    }
+    tick()
+  })
+  assert.equal(calls, 1, "an explicitly metered request must never be retried")
+  const ended = events.find((e) => e.type === "session_ended")
+  assert.match(ended!.error, /no events for 30ms/)
+})

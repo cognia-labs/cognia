@@ -97,14 +97,16 @@ A person delegates work from one device to a workspace on another of their devic
 
 ## Residual risks
 
-| ID  | Residual                                                                                                             | From                   | Why still open                           | Next action                        | Status |
-| --- | -------------------------------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------- | ---------------------------------- | ------ |
-| X1  | Recovery double execution is proven only at mechanism level                                                          | R1, V2                 | No real two-worker run yet               | M1a rig run                        | open   |
-| X2  | Windows path prefixes in containment are not exercised                                                               | V3                     | macOS-only tests                         | Windows CI or VM run before GA     | open   |
-| X3  | A run that started on this machine cannot be cancelled while a remote Host is selected (refused with `host-changed`) | V7                     | Fix scope kept narrow                    | Fold into M1a target pinning       | closed |
-| X4  | Fence grace and propagation numbers unknown                                                                          | Q1                     | Not measured                             | Measure on the rig                 | open   |
-| X6  | Path checks and filesystem mutations are check-then-use; a concurrent local symlink swap can still race them         | R2, adversarial review | Needs fd-relative I/O (openat / cap-std) | Track with ADR-0245 implementation | open   |
-| X5  | Keeping a switched-away run live may not fit the management channel                                                  | Q2                     | Not traced                               | Spike in M1a                       | open   |
+| ID  | Residual                                                                                                              | From                      | Why still open                           | Next action                                | Status |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------- | ------------------------------------------ | ------ |
+| X1  | Recovery double execution is proven only at mechanism level                                                           | R1, V2                    | No real two-worker run yet               | M1a rig run                                | open   |
+| X2  | Windows path prefixes in containment are not exercised                                                                | V3                        | macOS-only tests                         | Windows CI or VM run before GA             | open   |
+| X3  | A run that started on this machine cannot be cancelled while a remote Host is selected (refused with `host-changed`)  | V7                        | Fix scope kept narrow                    | Fold into M1a target pinning               | closed |
+| X4  | Fence grace and propagation numbers unknown                                                                           | Q1                        | Not measured                             | Measure on the rig                         | open   |
+| X6  | Path checks and filesystem mutations are check-then-use; a concurrent local symlink swap can still race them          | R2, adversarial review    | Needs fd-relative I/O (openat / cap-std) | Track with ADR-0245 implementation         | open   |
+| X5  | Keeping a switched-away run live may not fit the management channel                                                   | Q2                        | Not traced                               | Spike in M1a                               | open   |
+| X7  | Stop proof stops at the process group; a descendant that leaves it (setsid, double fork) can outlive a confirmed stop | R1, WP1 review round 10   | Unenforceable without OS containment     | ADR-0244 Not done; sandbox (ADR-0182/0183) | open   |
+| X8  | Stop proof does not yet cover helper processes (stdio MCP, hooks, LSP, exec helpers, run_code, external CLI children) | WP1 review round 13 sweep | Needs one per-session spawn seam         | Plan WP9 (after M1a)                       | open   |
 
 ## Outcome
 

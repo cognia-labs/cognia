@@ -15,6 +15,9 @@ import {
   terminalReplTools,
   createTerminalReplTools,
   disposeTerminalRepls,
+  retireTerminalRepls,
+  hasSessionTerminalRepls,
+  hasRunningSessionTerminalRepls,
   __testExports,
   __setNodePtyForTesting,
   createBunPtyModule,
@@ -49,6 +52,7 @@ interface ReplOutput {
 
 /** A fake PTY handle, with the test's recording fields. */
 interface FakePtyHandle {
+  pid: number
   shell: string
   args: string[]
   opts: PtySpawnOptions
@@ -66,6 +70,20 @@ interface FakePtyHandle {
 
 type FakePtyModule = PtyModule & { __ptys: FakePtyHandle[] }
 
+test("wake snapshots require a PTY exit callback, not a kill request", async () => {
+  const fake = makeFakePty()
+  __setNodePtyForTesting(fake)
+  await execSpawn({ agentId: "wake", shell: "/bin/bash", cwd: tmpdir, cols: 80, rows: 24 })
+  assert.equal(hasSessionTerminalRepls("wake"), true)
+  assert.equal(hasSessionTerminalRepls("other"), false)
+  const session = [...sessions.values()].find((entry) => entry.agentId === "wake")!
+  session.exited = true
+  assert.equal(hasSessionTerminalRepls("wake"), true)
+  fake.__ptys[0]!.exitListener?.({ exitCode: 0 })
+  assert.equal(hasSessionTerminalRepls("wake"), process.platform === "win32")
+  await disposeTerminalRepls("wake")
+})
+
 /** Build a minimal node-pty-shaped mock that the tool can drive. */
 function makeFakePty({ failSpawn = false }: { failSpawn?: boolean } = {}): FakePtyModule {
   const ptys: FakePtyHandle[] = []
@@ -73,6 +91,7 @@ function makeFakePty({ failSpawn = false }: { failSpawn?: boolean } = {}): FakeP
     spawn: (shell, args, opts) => {
       if (failSpawn) throw new Error("spawn refused by host")
       const ptyHandle: FakePtyHandle = {
+        pid: 2_147_483_647,
         shell,
         args,
         opts,
@@ -116,7 +135,13 @@ test.before(() => {
 test.after(() => {
   fs.rmSync(tmpdir, { recursive: true, force: true })
 })
-test.beforeEach(() => {
+test.beforeEach((t) => {
+  if ("mock" in t)
+    t.mock.method(process, "kill", (pid: number, _signal?: NodeJS.Signals | number) => {
+      assert.equal(pid, -2_147_483_647)
+      if ([...sessions.values()].some((session) => !session.processExited)) return true
+      throw Object.assign(new Error("fake group empty"), { code: "ESRCH" })
+    })
   reset()
   __setNodePtyForTesting(makeFakePty())
 })
@@ -429,10 +454,72 @@ test("session-bound PTYs use sandbox argv, prevent forged ownership, and dispose
   const other = createTerminalReplTools({ sessionId: "owner2" })
   const denied = await other[1]!.handler({ agentId: "owner1", sessionId, data: "echo unsafe\n" })
   assert.equal(denied.isError, true)
-  disposeTerminalRepls("owner1")
+  await disposeTerminalRepls("owner1")
   assert.equal(fake.__ptys[0]!.killed, true)
   assert.equal(sessions.has(sessionId), false)
 })
+
+test("session disposal waits for PTY exit rather than the kill request", async () => {
+  reset()
+  const fake = makeFakePty()
+  __setNodePtyForTesting(fake)
+  const result = await execSpawn({
+    agentId: "owner",
+    shell: "/bin/sh",
+    cwd: os.tmpdir(),
+    cols: 80,
+    rows: 24,
+  })
+  assert.equal(result.isError, undefined)
+  const child = fake.__ptys[0]!
+  child.kill = () => {
+    child.killed = true
+  }
+  const { sessionId } = firstJson<ReplOutput>(result)
+  await execKill({ agentId: "owner", sessionId })
+  assert.equal(sessions.get(sessionId)!.exited, true)
+  let stopped = false
+  const proof = disposeTerminalRepls("owner").then(() => {
+    stopped = true
+  })
+  await Promise.resolve()
+  assert.equal(child.killed, true)
+  assert.equal(stopped, false)
+  child.exitListener?.({ exitCode: 0, signal: null })
+  await proof
+  assert.equal(stopped, true)
+})
+
+test(
+  "PTY leader exit leaves a live group owned until disposal verifies it empty",
+  {
+    skip: process.platform === "win32",
+  },
+  async (t) => {
+    const fake = makeFakePty()
+    __setNodePtyForTesting(fake)
+    await execSpawn({
+      agentId: "descendants",
+      shell: "/bin/sh",
+      cwd: os.tmpdir(),
+      cols: 80,
+      rows: 24,
+    })
+    const child = fake.__ptys[0]!
+    let signals = 0
+    t.mock.method(process, "kill", (pid: number, signal: number | NodeJS.Signals) => {
+      assert.equal(pid, -child.pid)
+      if (signal !== 0) signals++
+      return true // Includes a possible recycled pgid: never authorizes signalling.
+    })
+    child.exitListener?.({ exitCode: 0 })
+    assert.equal(hasSessionTerminalRepls("descendants"), true)
+    await assert.rejects(disposeTerminalRepls("descendants"), /cleanup unconfirmed/)
+    assert.equal(signals, 0)
+    assert.equal(retireTerminalRepls("descendants"), false)
+    assert.equal(sessions.size, 0)
+  }
+)
 
 // ── packaged node-pty helper ──────────────────────────────────────────
 
@@ -505,4 +592,20 @@ test("REPL trusted ports override model env and host errors refuse PTY creation"
   assert.equal(refused.isError, true)
   assert.match(firstText(refused), /lease exhausted/)
   assert.equal(fake.__ptys.length, 1)
+})
+
+test("Windows-shaped REPL lifecycle releases while session proof remains unavailable", async () => {
+  const fake = makeFakePty()
+  __setNodePtyForTesting(fake)
+  const tools = createTerminalReplTools({ sessionId: "windows-repl", groupProofSupported: false })
+  await tools[0]!.handler({ shell: "/bin/sh", cwd: tmpdir, cols: 80, rows: 24 })
+  assert.equal(hasRunningSessionTerminalRepls("windows-repl"), true)
+  fake.__ptys[0]!.exitListener?.({ exitCode: 0 })
+  assert.equal(hasRunningSessionTerminalRepls("windows-repl"), false)
+  await disposeTerminalRepls("windows-repl")
+  assert.equal(
+    [...sessions.values()].some((session) => session.agentId === "windows-repl"),
+    false
+  )
+  assert.equal(hasSessionTerminalRepls("windows-repl"), true)
 })

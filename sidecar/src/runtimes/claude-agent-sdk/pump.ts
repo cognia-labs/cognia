@@ -1,4 +1,5 @@
 import type { PumpContext } from "./runtime-types.ts"
+import { randomUUID } from "node:crypto"
 
 import { PLUGIN_TOOLS_SERVER_NAME } from "../../policy/tool-catalog/names.ts"
 
@@ -20,8 +21,11 @@ export function startAnthropicPump({
   state,
   mcpStderrSink,
   toolSession,
+  waitForProcessExit,
 }: PumpContext) {
   const closeInput = session.closeInput
+  const executorId = randomUUID()
+  emit({ type: "executor_started", sessionId, executorId })
   // Pipe SDK events to the parent. Captures the SDK-issued session id on the
   // first event that carries one (powers resume continuity).
   let sdkSessionIdSeen = false
@@ -32,6 +36,7 @@ export function startAnthropicPump({
   // three exits below is reached first (the `result` frame, the iterator
   // draining, or a throw).
   let turnEnded = false
+  let liveSdkTasks = new Set<string>()
   const endTurn = (event: Record<string, unknown>) => {
     if (turnEnded) return
     turnEnded = true
@@ -50,6 +55,13 @@ export function startAnthropicPump({
           })
         }
         mcpAutoReconnect.onEvent(evt)
+        // The SDK's level signal covers native background Bash and Task jobs.
+        // Keep observing after result until input EOF reaps those jobs.
+        if (evt.type === "system" && evt.subtype === "background_tasks_changed") {
+          const tasks = evt.tasks
+          if (Array.isArray(tasks))
+            liveSdkTasks = new Set(tasks.map((task) => String(task.task_id)))
+        }
         emit({
           type: "event",
           sessionId,
@@ -84,7 +96,6 @@ export function startAnthropicPump({
           // an Anthropic session on every `session_ended`), so close the input
           // and let the subprocess exit instead of idling until teardown.
           closeInput()
-          break
         }
       }
       // Reached when the iterator drained without a `result` frame (input
@@ -114,8 +125,21 @@ export function startAnthropicPump({
       // Close the per-session LSP servers and code-graph store + file watcher.
       toolSession.disposeResolvers()
 
-      // Kill any background shells the agent left running this session.
-      void toolSession.disposeProcesses()
+      // Closing a Query can precede the CLI's real exit, and SDK-native Bash /
+      // Task jobs are separate from Cognia's tool-session process registry.
+      q.close?.()
+      try {
+        await Promise.all([waitForProcessExit(), toolSession.disposeProcesses()])
+        if (await toolSession.hasLiveProcesses())
+          throw new Error("session process group stop unconfirmed")
+        if (liveSdkTasks.size > 0)
+          throw new Error("Claude runtime still reports live background tasks")
+        // WP1 proves the Claude CLI and Cognia Bash/jobs/PTY TOOL groups;
+        // MCP/hooks/LSP and other helper processes are deferred (ADR-0244).
+        emit({ type: "session_disposed", sessionId, executorId })
+      } catch (error) {
+        log("error", `Claude runtime disposal unconfirmed: ${String(error)}`)
+      }
     }
   })()
 }

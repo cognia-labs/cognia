@@ -1,10 +1,17 @@
-import { test } from "node:test"
+import { test, beforeEach, type TestContext } from "node:test"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
+import type { ChildProcess, spawn } from "node:child_process"
 import assert from "node:assert/strict"
 import os from "node:os"
 import fsp from "node:fs/promises"
 
 import {
-  createBashTool,
+  createBashTool as rawCreateBashTool,
+  hasSessionForegroundGroups,
+  hasSessionForegroundProcesses,
+  disposeForegroundGroups,
+  retireForegroundGroups,
   createBashOutputTool,
   createKillShellTool,
   createListShellsTool,
@@ -16,11 +23,39 @@ import {
   MAX_TIMEOUT_MS,
 } from "./bash.ts"
 import { findDangerousShellFragment } from "../../../policy/shell/ast-scan.ts"
-import { createBgShellRegistry } from "../../state/background-shells.ts"
+import { createBgShellRegistry as rawCreateBgShellRegistry } from "../../state/background-shells.ts"
+import { createHostBgShellRegistry } from "../../state/host-background-shells.ts"
 import { resolveShellDescriptor, activeShellDescriptor } from "../../../platform/process/shell.ts"
 import type { SessionBgShellRegistry } from "../../state/host-background-shells.ts"
 import { asCallable } from "../../../../test-support/tool-result.ts"
 import type { CallableTool } from "../../../../test-support/tool-result.ts"
+
+let fixtureContext: TestContext
+let fixtureSequence = 0
+beforeEach((t) => {
+  fixtureContext = t as TestContext
+})
+function createBashTool(options: Parameters<typeof rawCreateBashTool>[0]) {
+  const sessionId = options.sessionId ?? `bash-fixture-${++fixtureSequence}`
+  const controller = new AbortController()
+  fixtureContext.after(async () => {
+    controller.abort()
+    await disposeForegroundGroups(sessionId).catch(() => undefined)
+    retireForegroundGroups(sessionId)
+  })
+  return rawCreateBashTool({
+    ...options,
+    sessionId,
+    processSignal: options.processSignal
+      ? AbortSignal.any([controller.signal, options.processSignal])
+      : controller.signal,
+  })
+}
+function createBgShellRegistry(...args: Parameters<typeof rawCreateBgShellRegistry>) {
+  const registry = rawCreateBgShellRegistry(...args)
+  fixtureContext.after(() => registry.killAll().catch(() => undefined))
+  return registry
+}
 
 // Pin a deterministic shell for command-executing tests: cmd.exe on Windows
 // (lookup returns null → no PowerShell), /bin/sh elsewhere. This keeps the
@@ -42,7 +77,7 @@ async function pollUntil(
   outputTool: CallableTool,
   shellId: string | null,
   predicate: (text: string, all: string) => boolean,
-  timeoutMs = 5000
+  timeoutMs = 10_000
 ) {
   const deadline = Date.now() + timeoutMs
   let acc = ""
@@ -150,6 +185,32 @@ test("bash does NOT intercept an interactive command in background mode", async 
   assert.equal(res.isError, true)
   assert.match(textOf(res), /background execution is not available/)
   assert.doesNotMatch(textOf(res), /interactive and needs a TTY/)
+})
+
+test("bash detach describes the session's ordinary or durable lifetime", async () => {
+  for (const durable of [false, true]) {
+    const bgShells = createHostBgShellRegistry({
+      sessionId: "session",
+      ...(durable ? { processOrigin: { childRunId: "child", dispatchEpoch: 1 } } : {}),
+      hostRpc: {
+        async call() {
+          return { id: "dev-server", status: "running" }
+        },
+      },
+    })
+    const tool = asCallable(createBashTool({ cwd: os.tmpdir(), shell: legacyShell, bgShells }))
+    const result = await tool.handler(
+      { command: "pnpm dev", run_in_background: true, detach: true },
+      {}
+    )
+    assert.ok(!result.isError, textOf(result))
+    assert.match(
+      textOf(result),
+      durable
+        ? /explicit disposal of this session still stops it/
+        : /It will keep running after this session ends, until the app exits\./
+    )
+  }
 })
 
 test("bash still runs a normal command whose argument merely mentions an editor", async () => {
@@ -533,6 +594,77 @@ function processAlive(pid: number): boolean {
 }
 
 test(
+  "delayed callbacks from a reaped Bash child never signal a reused PID's new owner",
+  {
+    skip: process.platform === "win32",
+  },
+  async (t) => {
+    const fakeChild = () =>
+      Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: null as number | null,
+        signalCode: null,
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: () => assert.fail("raw child signal"),
+      })
+    const old = fakeChild(),
+      fresh = fakeChild()
+    let empty = false
+    const signals: (NodeJS.Signals | number | undefined)[] = []
+    t.mock.method(process, "kill", (_pid: number, signal?: NodeJS.Signals | number) => {
+      if (empty) throw Object.assign(new Error("gone"), { code: "ESRCH" })
+      if (signal) signals.push(signal)
+      return true
+    })
+    const children = [old, fresh]
+    const spawnProcess = (() => children.shift() as unknown as ChildProcess) as typeof spawn
+    const controller = new AbortController()
+    const oldTool = asCallable(createBashTool({ sessionId: "old-pid", spawnProcess }))
+    const newTool = asCallable(createBashTool({ sessionId: "new-pid", spawnProcess }))
+    let oldRun: Promise<unknown> | undefined, newRun: Promise<unknown> | undefined
+    try {
+      oldRun = oldTool.handler({ command: "old" }, { signal: controller.signal })
+      const deadline = Date.now() + 10_000
+      while (children.length === 2 && Date.now() < deadline) await new Promise(setImmediate)
+      assert.equal(children.length, 1)
+      old.exitCode = 0
+      empty = true
+      old.emit("exit", 0, null)
+      empty = false
+      newRun = newTool.handler({ command: "fresh" }, {})
+      while (children.length && Date.now() < deadline) await new Promise(setImmediate)
+      assert.equal(children.length, 0)
+      controller.abort()
+      old.emit("close", 0, null)
+      await oldRun
+      assert.deepEqual(signals, [])
+      assert.equal(hasSessionForegroundGroups("new-pid"), true)
+      fresh.exitCode = 0
+      empty = true
+      fresh.emit("exit", 0, null)
+      fresh.emit("close", 0, null)
+      await newRun
+    } finally {
+      empty = true
+      controller.abort()
+      for (const child of [old, fresh]) {
+        child.exitCode = 0
+        child.emit("exit", 0, null)
+        child.emit("close", 0, null)
+        child.stdin.destroy()
+        child.stdout.destroy()
+        child.stderr.destroy()
+      }
+      await Promise.allSettled([oldRun, newRun])
+      retireForegroundGroups("old-pid")
+      retireForegroundGroups("new-pid")
+    }
+  }
+)
+
+test(
   "bash stops the command and the processes it started when the call is interrupted",
   { skip: process.platform === "win32" },
   async () => {
@@ -543,10 +675,10 @@ test(
     const worker = `${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 60000)" ${JSON.stringify(pidFile)}; true`
     const tool = asCallable(createBashTool({ cwd: dir, shell: legacyShell }))
     const controller = new AbortController()
+    let workerPid = 0
     try {
       const pending = tool.handler({ command: worker }, { signal: controller.signal })
-      const deadline = Date.now() + 5000
-      let workerPid = 0
+      const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
         const raw = await fsp.readFile(pidFile, "utf-8").catch(() => "")
         if (raw) {
@@ -563,6 +695,14 @@ test(
       assert.doesNotMatch(textOf(res), /terminated by signal/)
       assert.equal(processAlive(workerPid), false, "worker survived the interrupt")
     } finally {
+      controller.abort()
+      if (workerPid) {
+        try {
+          process.kill(workerPid, "SIGKILL")
+        } catch {
+          /* exited */
+        }
+      }
       await fsp.rm(dir, { recursive: true, force: true })
     }
   }
@@ -602,3 +742,49 @@ test(
     }
   }
 )
+
+for (const groupProofSupported of [true, false]) {
+  test(
+    `foreground lifecycle settles independently of group proof (${groupProofSupported})`,
+    { skip: process.platform === "win32" },
+    async () => {
+      const sessionId = `bash-proof-${groupProofSupported}`
+      const tool = asCallable(
+        createBashTool({ cwd: os.tmpdir(), shell: legacyShell, sessionId, groupProofSupported })
+      )
+      let descendant: number | undefined
+      try {
+        const result = await tool.handler(
+          {
+            command: groupProofSupported
+              ? "sleep 20 </dev/null >/dev/null 2>&1 & echo $!"
+              : "exit 0",
+          },
+          {}
+        )
+        if (groupProofSupported) descendant = Number(textOf(result).trim())
+        assert.ok(!result.isError, textOf(result))
+        assert.equal(hasSessionForegroundProcesses(sessionId), false)
+        assert.equal(hasSessionForegroundGroups(sessionId), true)
+        if (groupProofSupported)
+          await assert.rejects(disposeForegroundGroups(sessionId), /live foreground/)
+        else await disposeForegroundGroups(sessionId)
+        assert.equal(retireForegroundGroups(sessionId), false)
+        assert.equal(
+          hasSessionForegroundGroups(sessionId),
+          false,
+          "global process bookkeeping retired"
+        )
+      } finally {
+        if (descendant) {
+          try {
+            process.kill(descendant, "SIGKILL")
+          } catch {
+            /* exited */
+          }
+        }
+        retireForegroundGroups(sessionId)
+      }
+    }
+  )
+}

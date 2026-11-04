@@ -30,5 +30,7 @@ export interface CoreFileToolContext {
   builtinProcessSandbox?: ProcessSandboxScope | undefined
   /** The host round-trip `Monitor` registers its durable watches through. */
   hostRpc?: HostRpcCaller | null | undefined
+  processSignal?: AbortSignal | undefined
+  groupProofSupported?: boolean | undefined
   sessionId?: string | undefined
 }

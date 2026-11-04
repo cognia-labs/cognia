@@ -13,7 +13,10 @@ import {
   retryFromInner,
   type CaptureStreamEvent,
 } from "./run-and-capture"
-import { hasCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
+import {
+  hasCaptureResponder,
+  __resetApprovalRegistryForTesting,
+} from "@/lib/connectors/hitl/approval-registry"
 import {
   __resetCapturedTurnsForTesting,
   capturedTurnOf,
@@ -92,15 +95,22 @@ beforeEach(() => {
   // Interceptor registrations are module-global; leaking one turns every
   // later test in this file into a middleware test.
   __resetInterceptorRegistryForTesting()
+  __resetApprovalRegistryForTesting()
+  __resetCapturedTurnsForTesting()
   captured = null
   preToolUseMock.mockReset().mockResolvedValue({ action: "allow" })
   postToolUseMock.mockReset().mockResolvedValue({})
-  sendPromptMock.mockClear()
+  // A cancelled pre-send case can leave a one-shot implementation unused.
+  // Reset its queue so the next proof test cannot inherit another send's fate.
+  sendPromptMock.mockReset().mockResolvedValue(undefined)
   interruptSessionMock.mockClear()
   approveToolMock.mockClear()
   toolResultDecisionMock.mockClear()
   unlistenMock.mockClear()
-  onClaudeMessageMock.mockClear()
+  onClaudeMessageMock.mockReset().mockImplementation(async (handler) => {
+    captured = handler
+    return unlistenMock
+  })
   __resetChatMiddlewareRegistryForTesting()
   __resetChatMiddlewareFlagForTesting()
 })
@@ -111,6 +121,15 @@ async function flushUntilSubscribed(): Promise<void> {
   for (let i = 0; i < 100 && !captured; i++) {
     await Promise.resolve()
   }
+}
+
+async function waitForCapturePhase(phase: Promise<void>, capture: Promise<unknown>): Promise<void> {
+  await Promise.race([
+    phase,
+    capture.then(() => {
+      throw new Error("Capture completed before mocked IPC admission")
+    }),
+  ])
 }
 
 // Drain a handful of microtasks — used after subscription to let the
@@ -128,6 +147,8 @@ const fire = (evt: ClaudeEvent) => {
 }
 
 const SESSION = "ses_test"
+const sessionDisposed = (turnId: string): ClaudeEvent =>
+  ({ type: "session_disposed", sessionId: SESSION, turnId }) as unknown as ClaudeEvent
 
 const assistantEvent = (text: string, opts?: { uuid?: string; messageId?: string }): ClaudeEvent =>
   ({
@@ -291,7 +312,45 @@ describe("runAndCaptureAssistantReply", () => {
     fire(assistantEvent("done"))
     fire(sessionEnded())
     await promise
-    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", expect.anything(), { beforeSend })
+    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", expect.anything(), {
+      beforeSend,
+      signal: expect.any(AbortSignal),
+      onDispatch: expect.any(Function),
+    })
+  })
+  it("observes an accepted send without treating the receipt as executor stop proof", async () => {
+    const accepted = jest.fn()
+    let stopped = false
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "work",
+      { turnId: "accepted-turn" },
+      {
+        timeoutMs: 1_000,
+        onExecutorAccepted: accepted,
+        onExecutorStarted: (proof) => {
+          void proof.then(() => {
+            stopped = true
+          })
+        },
+      }
+    )
+    await flushUntilSubscribed()
+    await flushMicrotasks(50)
+    expect(accepted).toHaveBeenCalledWith(SESSION)
+    expect(stopped).toBe(false)
+    fire(assistantEvent("done"))
+    fire({ ...sessionEnded(), turnId: "accepted-turn" } as ClaudeEvent)
+    await capture
+    // A turn can finish while its background tools are still writing.
+    expect(stopped).toBe(false)
+    fire({
+      type: "session_disposed",
+      sessionId: SESSION,
+      turnId: "accepted-turn",
+    } as unknown as ClaudeEvent)
+    await flushMicrotasks()
+    expect(stopped).toBe(true)
   })
   it("resolves with assembled text from the assistant event", async () => {
     const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
@@ -307,7 +366,15 @@ describe("runAndCaptureAssistantReply", () => {
     expect(sendPromptMock).toHaveBeenCalledTimes(1)
     // Every send is stamped with a turn id — the sidecar echoes it back so a
     // capture can tell its own events from a previous turn's leftovers.
-    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", { turnId: expect.any(String) })
+    expect(sendPromptMock).toHaveBeenCalledWith(
+      SESSION,
+      "hi",
+      { turnId: expect.any(String) },
+      {
+        signal: expect.any(AbortSignal),
+        onDispatch: expect.any(Function),
+      }
+    )
     expect(unlistenMock).toHaveBeenCalledTimes(1)
   })
 
@@ -323,7 +390,15 @@ describe("runAndCaptureAssistantReply", () => {
     fire(assistantEvent("done"))
     fire(sessionEnded())
     await promise
-    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", { turnId: "turn-frozen" })
+    expect(sendPromptMock).toHaveBeenCalledWith(
+      SESSION,
+      "hi",
+      { turnId: "turn-frozen" },
+      {
+        signal: expect.any(AbortSignal),
+        onDispatch: expect.any(Function),
+      }
+    )
   })
 
   it("forwards a host-owned transcript so the send skips the app's transcript preparation", async () => {
@@ -340,7 +415,11 @@ describe("runAndCaptureAssistantReply", () => {
       SESSION,
       "hi",
       { turnId: expect.any(String) },
-      { transcriptRuntime: "host-owned" }
+      {
+        transcriptRuntime: "host-owned",
+        signal: expect.any(AbortSignal),
+        onDispatch: expect.any(Function),
+      }
     )
   })
 
@@ -1422,7 +1501,10 @@ describe("runAndCaptureAssistantReply", () => {
     fire(assistantEvent("hello"))
     fire(sessionEnded())
     await promise
-    expect(sendPromptMock).toHaveBeenCalledWith(expect.anything(), "rewritten", expect.anything())
+    expect(sendPromptMock).toHaveBeenCalledWith(expect.anything(), "rewritten", expect.anything(), {
+      signal: expect.any(AbortSignal),
+      onDispatch: expect.any(Function),
+    })
   })
 
   it("keeps a structured prompt intact when the chain did not touch the messages", async () => {
@@ -1435,7 +1517,10 @@ describe("runAndCaptureAssistantReply", () => {
     fire(sessionEnded())
     await promise
     // The prompt is untouched; only the declared option override lands.
-    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", expect.anything())
+    expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", expect.anything(), {
+      signal: expect.any(AbortSignal),
+      onDispatch: expect.any(Function),
+    })
   })
 
   it("skips the whole chain when no interceptor is registered on either point", async () => {
@@ -3047,6 +3132,489 @@ describe("runAndCaptureAssistantReply", () => {
       { authority: "system" }
     )
   })
+})
+
+describe("durable local executor stop evidence", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  it.each(["send-timeout", "capture-timeout", "sync-throw", "ended-before-timeout"] as const)(
+    "keeps a dispatched send unconfirmed after %s unless its turn ends",
+    async (mode) => {
+      const { createDurableTeamCoordinator } =
+        await import("@/lib/ai/agent/team/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
+      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const { transport } = await import("@/lib/tauri")
+      const coordinator = createDurableTeamCoordinator()
+      const team = {
+        id: "lost-response-team",
+        leadId: "lead",
+        task: "Finish",
+        config: {
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as import("@/types/agent/agent-team").AgentTeam
+      const runId = `lost-response-${mode}`
+      await coordinator.prepareRun(team, runId)
+      const dispatch = await beginDurableDispatch({
+        coordinator,
+        team,
+        runId,
+        teammateId: "mate",
+        taskId: "task",
+        access: "read",
+        repositoryId: "primary",
+        runtime: "claude",
+      })
+      let rejectSend!: (error: Error) => void
+      let onDispatch!: () => void
+      const sending = new Promise<void>((resolve) => {
+        onDispatch = resolve
+      })
+      const call = jest.spyOn(transport, "call").mockImplementationOnce(() => {
+        // Model a Host that has accepted and started the turn, but whose
+        // response never reaches CompanionTransport.
+        onDispatch()
+        return new Promise<void>((_resolve, reject) => {
+          rejectSend = reject
+        })
+      })
+      const lostResponse = new Error("CompanionTransport request timed out")
+      sendPromptMock.mockImplementationOnce((session, prompt, options, delivery) => {
+        if (mode === "sync-throw") {
+          const sendDelivery = delivery as NonNullable<Parameters<typeof ipc.sendPrompt>[3]>
+          sendDelivery.onDispatch?.()
+          onDispatch()
+          throw lostResponse
+        }
+        return ipc.sendPrompt(
+          session,
+          prompt as string,
+          options as Parameters<typeof ipc.sendPrompt>[2],
+          delivery as Parameters<typeof ipc.sendPrompt>[3]
+        )
+      })
+      let stopped = false
+      let proof!: Promise<void>
+      const accepted = jest.fn()
+      try {
+        const capture = dispatch.run(() =>
+          runAndCaptureAssistantReply(
+            SESSION,
+            "work",
+            { turnId: "lost-response-turn" },
+            {
+              execution: { skip: true },
+              transcriptRuntime: "host-owned",
+              onExecutorAccepted: accepted,
+              timeoutMs: ["capture-timeout", "ended-before-timeout"].includes(mode) ? 25 : 1_000,
+              onExecutorStarted: (pending) => {
+                proof = pending
+                dispatch.trackLocalStop(pending)
+                void pending.then(() => {
+                  stopped = true
+                })
+              },
+            }
+          )
+        )
+        const rejected = expect(capture).rejects.toMatchObject({
+          code: ["capture-timeout", "ended-before-timeout"].includes(mode)
+            ? "session_error"
+            : "send_failed",
+        })
+        await waitForCapturePhase(sending, capture)
+        if (["capture-timeout", "ended-before-timeout"].includes(mode)) await rejected
+        if (mode === "ended-before-timeout")
+          fire({ ...sessionEnded(), turnId: "lost-response-turn" } as ClaudeEvent)
+        rejectSend?.(lostResponse)
+        await rejected
+        await flushMicrotasks(50)
+        expect(accepted).not.toHaveBeenCalled()
+        expect(stopped).toBe(false)
+        await dispatch.fail(lostResponse)
+        {
+          expect(unlistenMock).not.toHaveBeenCalled()
+          expect((await coordinator.store.getChild(dispatch.childRunId))?.stop?.state).toBe(
+            "unconfirmed"
+          )
+          await expect(coordinator.assessTaskRecovery(runId, "task")).resolves.toMatchObject({
+            eligible: false,
+            reason: "stop_unconfirmed",
+          })
+          await expect(coordinator.retryChild(dispatch.childRunId)).rejects.toThrow(
+            "stop_unconfirmed"
+          )
+          fire({ ...sessionEnded(), turnId: "another-turn" } as ClaudeEvent)
+          await flushMicrotasks()
+          expect(stopped).toBe(false)
+          fire({ ...sessionEnded(), turnId: "lost-response-turn" } as ClaudeEvent)
+          await flushMicrotasks()
+          expect(stopped).toBe(false)
+          fire(sessionDisposed("lost-response-turn"))
+        }
+        await proof
+        const deadline = Date.now() + 2_000
+        while ((await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch !== 1) {
+          if (Date.now() > deadline) throw new Error("Executor evidence did not settle the child")
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        expect(unlistenMock).toHaveBeenCalledTimes(1)
+        await expect(coordinator.assessTaskRecovery(runId, "task")).resolves.toEqual({
+          eligible: true,
+        })
+      } finally {
+        rejectSend?.(lostResponse)
+        fire(sessionDisposed("lost-response-turn"))
+        call.mockRestore()
+      }
+    }
+  )
+
+  it.each(["before-receipt", "after-receipt"] as const)(
+    "does not prove an in-flight native send stopped on exit; waits for runtime disposal %s",
+    async (end) => {
+      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const { transport } = await import("@/lib/tauri")
+      let accept!: () => void
+      let dispatched!: () => void
+      const sending = new Promise<void>((resolve) => {
+        dispatched = resolve
+      })
+      const receipt = new Promise<void>((resolve) => {
+        accept = resolve
+      })
+      const call = jest.spyOn(transport, "call").mockImplementationOnce(() => {
+        dispatched()
+        return receipt
+      })
+      sendPromptMock.mockImplementationOnce((session, prompt, options, delivery) =>
+        ipc.sendPrompt(
+          session,
+          prompt as string,
+          options as Parameters<typeof ipc.sendPrompt>[2],
+          delivery as Parameters<typeof ipc.sendPrompt>[3]
+        )
+      )
+      let stopped = false
+      let proof!: Promise<void>
+      try {
+        const capture = runAndCaptureAssistantReply(
+          SESSION,
+          "work",
+          { turnId: "pending-native-turn" },
+          {
+            execution: { skip: true },
+            transcriptRuntime: "host-owned",
+            timeoutMs: 1_000,
+            onExecutorStarted: (pending) => {
+              proof = pending
+              void pending.then(() => {
+                stopped = true
+              })
+            },
+          }
+        )
+        const rejected = expect(capture).rejects.toMatchObject({ code: "sidecar_exited" })
+        await waitForCapturePhase(sending, capture)
+        fire({ type: "sidecar_exited" } as ClaudeEvent)
+        await rejected
+        await flushMicrotasks()
+        expect(stopped).toBe(false)
+        fire({ ...sessionEnded(), turnId: "another-turn" } as ClaudeEvent)
+        if (end === "before-receipt") fire(sessionDisposed("pending-native-turn"))
+        await flushMicrotasks()
+        expect(stopped).toBe(false)
+        accept()
+        await flushMicrotasks(50)
+        if (end === "after-receipt") {
+          expect(stopped).toBe(false)
+          fire(sessionDisposed("pending-native-turn"))
+        }
+        await proof
+        expect(stopped).toBe(true)
+      } finally {
+        accept()
+        call.mockRestore()
+      }
+    }
+  )
+
+  it("cancels pending admission before proving a pre-acceptance sidecar exit", async () => {
+    const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+    const { transport } = await import("@/lib/tauri")
+    let release!: () => void
+    let entered!: () => void
+    const admitting = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let stopped!: Promise<void>
+    sendPromptMock.mockImplementationOnce((session, prompt, options, delivery) =>
+      ipc.sendPrompt(
+        session,
+        prompt as string,
+        options as Parameters<typeof ipc.sendPrompt>[2],
+        delivery as Parameters<typeof ipc.sendPrompt>[3]
+      )
+    )
+    const call = jest.spyOn(transport, "call").mockResolvedValue(undefined)
+    try {
+      const capture = runAndCaptureAssistantReply(SESSION, "work", undefined, {
+        execution: { skip: true },
+        transcriptRuntime: "host-owned",
+        timeoutMs: 1_000,
+        beforeSend: async () => {
+          entered()
+          await gate
+        },
+        onExecutorStarted: (proof) => {
+          stopped = proof
+        },
+      })
+      const rejected = expect(capture).rejects.toMatchObject({ code: "sidecar_exited" })
+      await waitForCapturePhase(admitting, capture)
+      fire({ type: "sidecar_exited" } as ClaudeEvent)
+      await rejected
+      await stopped
+      release()
+      // Let the real IPC admission finish after the stop proof was observed.
+      await flushMicrotasks(50)
+      expect(call).not.toHaveBeenCalledWith("claude_send", expect.anything())
+      expect(call).not.toHaveBeenCalledWith("agent_send", expect.anything())
+    } finally {
+      release?.()
+      call.mockRestore()
+    }
+  })
+
+  it.each(["transcript", "beforeSend", "PII", "sidecar-start", "sync"] as const)(
+    "releases a never-started %s send and permits recovery without terminal events",
+    async (phase) => {
+      const { createDurableTeamCoordinator } =
+        await import("@/lib/ai/agent/team/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
+      const { controlDurableRun } = await import("@/lib/ai/agent/team/durable/durable-control")
+      const { transport } = await import("@/lib/tauri")
+      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const coordinator = createDurableTeamCoordinator()
+      const team = {
+        id: "never-started-team",
+        leadId: "lead",
+        task: "Finish",
+        config: {
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as import("@/types/agent/agent-team").AgentTeam
+      const runId = `never-started-${phase}`
+      await coordinator.prepareRun(team, runId)
+      const dispatch = await beginDurableDispatch({
+        coordinator,
+        team,
+        runId,
+        teammateId: "mate",
+        taskId: "task",
+        access: "read",
+        repositoryId: "primary",
+      })
+      const call = jest
+        .spyOn(transport, "call")
+        .mockRejectedValue(new Error("sidecar start failed"))
+      sendPromptMock.mockImplementationOnce((sessionId, prompt, options, delivery) => {
+        if (phase === "sync") throw new Error("send rejected synchronously")
+        return ipc.sendPrompt(
+          sessionId,
+          prompt as Parameters<typeof ipc.sendPrompt>[1],
+          options as Parameters<typeof ipc.sendPrompt>[2],
+          {
+            ...(delivery as Parameters<typeof ipc.sendPrompt>[3]),
+            ...(phase === "transcript" ? { transcriptRuntime: "frozen" as const } : {}),
+          }
+        )
+      })
+      try {
+        await expect(
+          dispatch.run(() =>
+            runAndCaptureAssistantReply(
+              SESSION,
+              phase === "PII" ? "Contact alice@example.com" : "work",
+              undefined,
+              {
+                execution: { skip: true },
+                timeoutMs: 1_000,
+                transcriptRuntime: "host-owned",
+                ...(phase === "beforeSend" || phase === "sidecar-start"
+                  ? {
+                      beforeSend: async () => {
+                        if (phase === "sidecar-start") return void (await ipc.ensureSidecarReady())
+                        throw new Error("source revision changed")
+                      },
+                    }
+                  : {}),
+                onExecutorStarted: dispatch.trackLocalStop,
+              }
+            )
+          )
+        ).rejects.toMatchObject({
+          code: "send_failed",
+          message: expect.stringContaining(
+            {
+              transcript: "frozen_transcript_session_missing",
+              beforeSend: "source revision changed",
+              PII: "prompt rejected by the renderer PII gate",
+              "sidecar-start": "sidecar start failed",
+              sync: "send rejected synchronously",
+            }[phase]
+          ),
+        })
+        expect(unlistenMock).toHaveBeenCalledTimes(1)
+        expect(call).toHaveBeenCalledTimes(phase === "sidecar-start" ? 1 : 0)
+        await dispatch.fail(new Error("send failed before acceptance"))
+        await expect(coordinator.assessTaskRecovery(runId, "task")).resolves.toEqual({
+          eligible: true,
+        })
+        await expect(coordinator.retryChild(dispatch.childRunId)).resolves.toMatchObject({
+          status: "queued",
+        })
+        await expect(controlDurableRun(runId, "stop", { coordinator })).resolves.toBeUndefined()
+        expect(await coordinator.store.getRun(runId)).toMatchObject({ status: "cancelled" })
+        const { createSquadRunRecords } =
+          await import("@/lib/ai/agent/team/squad/squad-run-records")
+        await expect(
+          createSquadRunRecords({
+            runId: `${runId}-replacement`,
+            teamId: team.id,
+            objective: team.task,
+            origin: "chat",
+            startedAt: Date.now(),
+            parentRunId: `execution:team:${runId}`,
+          })
+        ).resolves.toMatchObject({ created: true })
+      } finally {
+        call.mockRestore()
+      }
+    }
+  )
+
+  it("releases stop evidence when a pending send rejects after capture has timed out", async () => {
+    let rejectSend!: (error: Error) => void
+    sendPromptMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectSend = reject
+        })
+    )
+    let stopped!: Promise<void>
+    const capture = runAndCaptureAssistantReply(SESSION, "work", undefined, {
+      execution: { skip: true },
+      timeoutMs: 25,
+      onExecutorStarted: (proof) => {
+        stopped = proof
+      },
+    })
+    await expect(capture).rejects.toMatchObject({ code: "session_error" })
+    expect(unlistenMock).not.toHaveBeenCalled()
+    rejectSend(new Error("sidecar did not start"))
+    await stopped
+    expect(unlistenMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["timeout", "abort", "exit", "closed"] as const)(
+    "keeps recovery blocked after capture %s until the executor ends",
+    async (mode) => {
+      const { createDurableTeamCoordinator } =
+        await import("@/lib/ai/agent/team/durable/durable-runtime")
+      const { beginDurableDispatch } = await import("@/lib/ai/agent/team/durable/durable-dispatch")
+      const coordinator = createDurableTeamCoordinator()
+      const team = {
+        id: "stop-evidence-team",
+        leadId: "lead",
+        task: "Finish",
+        config: {
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as import("@/types/agent/agent-team").AgentTeam
+      const runId = `capture-stop-${mode}`
+      await coordinator.prepareRun(team, runId)
+      const dispatch = await beginDurableDispatch({
+        coordinator,
+        team,
+        runId,
+        teammateId: "mate",
+        taskId: "task",
+        access: "read",
+        repositoryId: "primary",
+      })
+      const controller = new AbortController()
+      let sent!: () => void
+      const sending = new Promise<void>((resolve) => {
+        sent = resolve
+      })
+      sendPromptMock.mockImplementationOnce(async () => {
+        sent()
+      })
+      const capture = dispatch.run(() =>
+        runAndCaptureAssistantReply(SESSION, "work", undefined, {
+          execution: { skip: true },
+          timeoutMs: mode === "timeout" ? 100 : 0,
+          signal: controller.signal,
+          onExecutorStarted: dispatch.trackLocalStop,
+        })
+      )
+      const rejected = expect(capture).rejects.toBeInstanceOf(RunAndCaptureError)
+      await waitForCapturePhase(sending, capture)
+      if (mode !== "timeout") controller.abort()
+      await rejected
+      expect((await coordinator.store.getChild(dispatch.childRunId))?.stop?.state).toBe(
+        "unconfirmed"
+      )
+      await dispatch.fail(new Error("capture rejected"))
+      expect(await coordinator.store.getChild(dispatch.childRunId)).toMatchObject({
+        status: "needs_input",
+        stop: { state: "unconfirmed" },
+      })
+      expect((await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch).toBeUndefined()
+      await expect(coordinator.assessTaskRecovery(runId, "task")).resolves.toMatchObject({
+        eligible: false,
+        reason: "stop_unconfirmed",
+      })
+      await expect(coordinator.retryChild(dispatch.childRunId)).rejects.toThrow("stop_unconfirmed")
+      const turnId = (sendPromptMock.mock.calls.at(-1)?.[2] as { turnId: string }).turnId
+      fire({ type: "session_ended", sessionId: "other-session", turnId })
+      fire({ type: "session_ended", sessionId: SESSION, turnId: "old-turn" })
+      await flushMicrotasks()
+      expect((await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch).toBeUndefined()
+      fire({ type: "session_ended", sessionId: SESSION, turnId })
+      await flushMicrotasks(50)
+      expect((await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch).toBeUndefined()
+      if (mode === "exit") {
+        fire({ type: "sidecar_exited" })
+        await flushMicrotasks(50)
+        // Host-owned background jobs can survive the sidecar process itself.
+        expect(
+          (await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch
+        ).toBeUndefined()
+      }
+      fire(sessionDisposed(turnId))
+      const deadline = Date.now() + 2_000
+      while ((await coordinator.store.getChild(dispatch.childRunId))?.settledEpoch !== 1) {
+        if (Date.now() > deadline) throw new Error("Executor evidence did not settle the child")
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      expect(unlistenMock).toHaveBeenCalledTimes(1)
+      await expect(coordinator.assessTaskRecovery(runId, "task")).resolves.toEqual({
+        eligible: true,
+      })
+      await expect(coordinator.retryChild(dispatch.childRunId)).resolves.toMatchObject({
+        status: "queued",
+      })
+    }
+  )
 })
 
 describe("connector permission attribution", () => {

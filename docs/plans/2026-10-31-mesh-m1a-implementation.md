@@ -178,6 +178,13 @@ M1a 结束时，跨设备运行满足：
   - 芯片在键盘和读屏下可用，中英文案齐全。
   - 浏览器预览验证（Tauri stub 方案）。
 
+### WP9 按会话的进程记账（M1a 之后）
+
+- **来源**：WP1 第 13 轮对抗审查清查后，用户决定 WP1 只覆盖工具面创建的进程组（前台命令、后台 shell 与 Host 任务、终端 REPL、外部 Agent 打开的终端、Claude Code CLI）。辅助进程留到本工作包，见 ADR-0244 "未完成" 和台账 X8。
+- **Scope**：sidecar 新增唯一的按会话 spawn 接缝。stdio MCP 服务、命令钩子、LSP 与安装器、`sidecar/src/platform/process/exec.ts`（git/rg/AST 等）、`run_code`/webclone，以及外部 Agent CLI（Codex、OpenCode、Pi、Aider、DSH、ACP 守护进程）的子进程都改走它。
+- **内容**：每次 spawn 都登记会话、进程组身份和准入状态。会话关闭时先关准入，再按组清理，并以 ESRCH 确认。停止证明扩展到这些进程组；无法证明的仍为未确认。
+- **验收**：每类 spawn 一条"后代存活 → 未确认，清理后 → 证明"的测试；新增 spawn 点不经接缝即被门禁拒绝。
+
 ### WP8 真实环境验收与测量
 
 - **Scope**：不改产品代码；脚本放在 `scripts/smoke/`（如需要），证据写入台账。
@@ -190,6 +197,7 @@ M1a 结束时，跨设备运行满足：
 WP1 → WP2a → WP2b → WP3 → WP4 → WP5
 WP6（独立）  WP7（独立）
 全部 → WP8
+WP9（M1a 之后，依赖 WP1）
 ```
 
 仓库同一时间只允许一个 Codex implement 作业，因此串行执行。顺序为 WP1、WP2a、WP2b、WP3、WP4、WP6、WP5、WP7、WP8：WP6 放在 UI 之前，因为它关闭的是正确性缺口。

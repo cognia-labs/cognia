@@ -55,6 +55,17 @@ beforeEach(() => {
 })
 
 describe("external-agent commands", () => {
+  it("requests group proof separately from leader liveness", async () => {
+    mockedInvoke.mockResolvedValue(false)
+    await acpTerminalList(true)
+    expect(mockedInvoke).toHaveBeenCalledWith("acp_terminal_list", { forStopProof: true })
+    await acpTerminalIsRunning("terminal", true)
+    expect(mockedInvoke).toHaveBeenCalledWith("acp_terminal_is_running", {
+      terminalId: "terminal",
+      forStopProof: true,
+    })
+  })
+
   it("forwards sandbox policy unchanged and refuses malformed policies", async () => {
     const cfg = {
       id: "a",
@@ -652,6 +663,21 @@ describe("native listener cleanup", () => {
 })
 
 describe("installed external-agent host (ADR-0217)", () => {
+  it("refuses leader-only liveness as group proof and uses an explicit group probe", async () => {
+    const { host, terminals } = installedHost()
+    const uninstall = installExternalAgentHost(host)
+    try {
+      await expect(acpTerminalIsRunning("t1")).resolves.toBe(false)
+      await expect(acpTerminalIsRunning("t1", true)).rejects.toThrow(/cannot confirm process group/)
+      const groupProbe = jest.fn(async () => true)
+      ;(host.terminals as InstalledExternalAgentHost["terminals"]).isGroupRunning = groupProbe
+      await expect(acpTerminalIsRunning("t1", true)).resolves.toBe(true)
+      expect(groupProbe).toHaveBeenCalledWith("t1")
+      expect(terminals.isRunning).toHaveBeenCalledTimes(1)
+    } finally {
+      uninstall()
+    }
+  })
   function installedHost() {
     const exitStatus = { exitCode: 0, signal: null }
     const processPlane = {

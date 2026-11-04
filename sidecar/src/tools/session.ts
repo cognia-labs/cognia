@@ -6,17 +6,33 @@ import { makeLazyCodeGraphResolver } from "../services/code-graph/lazy-resolver.
 import { createReadTracker } from "./state/read-tracker.ts"
 import { createSessionTaskStore } from "./state/tasks.ts"
 import { createSessionBgShellRegistry } from "./state/host-background-shells.ts"
-import { disposeTerminalRepls } from "./builtin/terminal-repl/index.ts"
+import {
+  disposeTerminalRepls,
+  retireTerminalRepls,
+  hasSessionTerminalRepls,
+  hasRunningSessionTerminalRepls,
+} from "./builtin/terminal-repl/index.ts"
+import {
+  disposeForegroundGroups,
+  retireForegroundGroups,
+  hasSessionForegroundGroups,
+  hasSessionForegroundProcesses,
+} from "./builtin/core-files/bash.ts"
 import type { HostRpcCaller } from "./state/host-background-shells.ts"
+import { randomUUID } from "node:crypto"
 
 export type ToolSessionSendOptions = Parameters<typeof makeLazyLspResolver>[0]["sendOptions"] &
   Parameters<typeof makeLazyCodeGraphResolver>[0]["sendOptions"] & {
     backgroundProcessHost?: string | undefined
+    processOrigin?: { childRunId: string; dispatchEpoch: number } | undefined
   }
 
 export interface ToolSessionOptions {
   sendOptions: ToolSessionSendOptions
   sessionId: string
+  /** Process/admission identity of this executor, never a reusable chat id. */
+  executorId?: string
+  groupProofSupported?: boolean
   hostRpc?: HostRpcCaller | null | undefined
   log?: (level: "info" | "warn" | "error", message: string) => void
 }
@@ -31,20 +47,31 @@ const factories = {
 }
 
 export function createToolSessionContext(
-  { sendOptions, sessionId, hostRpc, log = () => {} }: ToolSessionOptions,
+  {
+    sendOptions,
+    executorId = randomUUID(),
+    hostRpc,
+    groupProofSupported = process.platform !== "win32",
+    log = () => {},
+  }: ToolSessionOptions,
   dependencies: typeof factories = factories
 ) {
+  const sessionId = executorId
   const readTracker = dependencies.createReadTracker()
   const taskStore = dependencies.createSessionTaskStore()
   const bgShells = dependencies.createSessionBgShellRegistry({
     hostRpc,
     sessionId,
+    groupProofSupported,
     backgroundProcessHost: sendOptions.backgroundProcessHost,
+    processOrigin: sendOptions.processOrigin,
   })
   let lsp = dependencies.makeLazyLspResolver({ sendOptions, log })
   let codeGraph = dependencies.makeLazyCodeGraphResolver({ sendOptions, log })
   let resolversDisposed = false
   let processesDisposed: Promise<void> | undefined
+  let processProofUnconfirmed = false
+  const processAdmission = new AbortController()
 
   function disposeResolvers() {
     if (resolversDisposed) return
@@ -57,20 +84,63 @@ export function createToolSessionContext(
   }
 
   function disposeProcesses(): Promise<void> {
+    processAdmission.abort()
     processesDisposed ??= (async () => {
       try {
-        dependencies.disposeTerminalRepls(sessionId)
+        const results = await Promise.allSettled([
+          dependencies.disposeTerminalRepls(sessionId),
+          disposeForegroundGroups(sessionId),
+        ])
+        const failure = results.find((result) => result.status === "rejected")
+        if (failure?.status === "rejected") throw failure.reason
       } finally {
         await bgShells.killAll()
+        // Host-backed killAll is best-effort. A fresh authoritative read must
+        // also prove that no job in this session's teardown scope is running:
+        // owner-only ordinarily, origin-wide for durable children.
+        const deadline = Date.now() + 2_000
+        while (groupProofSupported) {
+          const remaining = bgShells.hasLiveProcesses
+            ? await bgShells.hasLiveProcesses()
+            : (await bgShells.list()).some((job) => job.status === "running")
+          if (!remaining) break
+          if (Date.now() >= deadline)
+            throw new Error(`session ${sessionId} still has live background processes`)
+          await new Promise<void>((resolve) => setTimeout(resolve, 25))
+        }
       }
-    })()
+    })().finally(() => {
+      // WP1 covers Bash/background jobs/PTY TOOL groups, not MCP/hooks/LSP helpers.
+      if (!retireForegroundGroups(sessionId)) processProofUnconfirmed = true
+      if (!retireTerminalRepls(sessionId)) processProofUnconfirmed = true
+    })
     return processesDisposed
   }
 
   return {
+    executorId,
     readTracker,
     taskStore,
     bgShells,
+    async hasRunningProcesses(): Promise<boolean> {
+      return (
+        hasSessionForegroundProcesses(sessionId) ||
+        hasRunningSessionTerminalRepls(sessionId) ||
+        ("hasRunningProcesses" in bgShells
+          ? await bgShells.hasRunningProcesses()
+          : (await bgShells.list()).some((job) => job.status === "running"))
+      )
+    },
+    async hasLiveProcesses(): Promise<boolean> {
+      return (
+        processProofUnconfirmed ||
+        hasSessionForegroundGroups(sessionId) ||
+        hasSessionTerminalRepls(sessionId) ||
+        (bgShells.hasLiveProcesses
+          ? await bgShells.hasLiveProcesses()
+          : (await bgShells.list()).some((job) => job.status === "running"))
+      )
+    },
     get lsp() {
       return lsp
     },
@@ -84,6 +154,8 @@ export function createToolSessionContext(
         bgShells,
         hostRpc,
         sessionId,
+        processSignal: processAdmission.signal,
+        groupProofSupported,
         lspResolver: lsp.lspResolver,
         codeGraphResolver: codeGraph.codeGraphResolver,
       }

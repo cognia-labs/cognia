@@ -110,11 +110,28 @@ fn u64_field(params: &Value, key: &str, default: u64) -> u64 {
 /// which is what lets the same call succeed headless and under remote driving.
 pub async fn dispatch_host_rpc(method: &str, params: &Value) -> Result<Value, String> {
     let sup = require_supervisor()?;
+    dispatch_with_supervisor(&sup, method, params).await
+}
+
+async fn dispatch_with_supervisor(
+    sup: &JobSupervisor,
+    method: &str,
+    params: &Value,
+) -> Result<Value, String> {
     match method {
         "jobs.spawn" => {
+            let origin = params
+                .get("origin")
+                .filter(|value| !value.is_null())
+                .map(|value| serde_json::from_value::<crate::types::JobOrigin>(value.clone()))
+                .transpose()
+                .map_err(|error| format!("invalid job origin: {error}"))?;
             let req: SpawnJobRequest = serde_json::from_value(params.clone())
                 .map_err(|e| format!("invalid spawn request: {e}"))?;
-            let rec = sup.spawn(req).await.map_err(|e| e.to_string())?;
+            let rec = sup
+                .spawn_with_origin(req, origin)
+                .await
+                .map_err(|e| e.to_string())?;
             serde_json::to_value(rec).map_err(|e| e.to_string())
         }
         "jobs.read" => {
@@ -183,12 +200,43 @@ pub async fn dispatch_host_rpc(method: &str, params: &Value) -> Result<Value, St
                 Some(Value::Null) | None => None,
                 Some(_) => Some(owner_from(params)?),
             };
-            let rows = sup.list(owner.as_ref()).map_err(|e| e.to_string())?;
-            Ok(json!({ "jobs": rows }))
+            let rows = match (&owner, params.get("includeOrigin").and_then(Value::as_bool)) {
+                (Some(JobOwner::Session { session_id }), Some(true)) => {
+                    sup.list_by_origin_session(session_id)
+                }
+                _ => sup.list(owner.as_ref()),
+            }
+            .map_err(|e| e.to_string())?;
+            // Keep JobRecord's Rust/source shape compatible. Liveness is an
+            // optional wire field, separate from the leader's terminal status.
+            let jobs = rows
+                .into_iter()
+                .map(|row| {
+                    let running = sup.process_group_running(&row.id);
+                    let mut value = serde_json::to_value(row).map_err(|error| error.to_string())?;
+                    if let Some(running) = running {
+                        value["processGroupRunning"] = json!(running);
+                    }
+                    Ok::<_, String>(value)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut response = json!({ "jobs": jobs });
+            if let (Some(JobOwner::Session { session_id }), Some(true)) =
+                (&owner, params.get("includeOrigin").and_then(Value::as_bool))
+            {
+                response["originSessionId"] = json!(session_id);
+            }
+            Ok(response)
         }
         "jobs.killOwnedBy" => {
             let owner = owner_from(params)?;
-            let ids = sup.kill_owned_by(&owner).await.map_err(|e| e.to_string())?;
+            let ids = match (&owner, params.get("includeOrigin").and_then(Value::as_bool)) {
+                (JobOwner::Session { session_id }, Some(true)) => {
+                    sup.kill_origin_session(session_id).await
+                }
+                _ => sup.kill_owned_by(&owner).await,
+            }
+            .map_err(|e| e.to_string())?;
             Ok(json!({ "killed": ids }))
         }
         // --- monitors ------------------------------------------------------
@@ -265,6 +313,106 @@ pub async fn dispatch_host_rpc(method: &str, params: &Value) -> Result<Value, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_origin_list_reports_live_group_after_shell_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = JobSupervisor::new(
+            Arc::new(JobStore::new_in_memory().unwrap()),
+            dir.path().join("logs"),
+        );
+        let command = "sleep 60 </dev/null >/dev/null 2>&1 & exit 0";
+        dispatch_with_supervisor(
+            &sup,
+            "jobs.spawn",
+            &json!({
+                "command": command, "program": "/bin/sh", "args": ["-c", command],
+                "cwd": dir.path(), "env": { "PATH": "/usr/bin:/bin" }, "owner": { "kind": "app" },
+                "origin": { "sessionId": "origin", "childRunId": "child", "dispatchEpoch": 1 }
+            }),
+        )
+        .await
+        .unwrap();
+        let scope =
+            json!({ "owner": { "kind": "session", "sessionId": "origin" }, "includeOrigin": true });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let list = dispatch_with_supervisor(&sup, "jobs.list", &scope)
+                .await
+                .unwrap();
+            if list["jobs"][0]["status"] == "exited" {
+                assert_eq!(list["jobs"][0]["processGroupRunning"], true);
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        dispatch_with_supervisor(&sup, "jobs.killOwnedBy", &scope)
+            .await
+            .unwrap();
+        let list = dispatch_with_supervisor(&sup, "jobs.list", &scope)
+            .await
+            .unwrap();
+        assert_eq!(list["jobs"][0]["processGroupRunning"], false);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detached_rpc_jobs_keep_origin_scope_through_kill_and_authoritative_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let sup = JobSupervisor::new(
+            Arc::new(JobStore::new_in_memory().unwrap()),
+            dir.path().join("logs"),
+        );
+        let spawned = dispatch_with_supervisor(
+            &sup,
+            "jobs.spawn",
+            &json!({
+                "command": "sleep 60", "program": "/bin/sh", "args": ["-c", "sleep 60"],
+                "cwd": dir.path(), "env": { "PATH": "/usr/bin:/bin" }, "owner": { "kind": "app" },
+                "origin": { "sessionId": "origin", "childRunId": "child", "dispatchEpoch": 5 }
+            }),
+        )
+        .await
+        .unwrap();
+        let owned = json!({ "owner": { "kind": "session", "sessionId": "origin" } });
+        assert_eq!(
+            dispatch_with_supervisor(&sup, "jobs.list", &owned)
+                .await
+                .unwrap(),
+            json!({ "jobs": [] })
+        );
+        let origin =
+            json!({ "owner": { "kind": "session", "sessionId": "origin" }, "includeOrigin": true });
+        // Ordinary session disposal must leave an app-owned detached job alive.
+        assert_eq!(
+            dispatch_with_supervisor(&sup, "jobs.killOwnedBy", &owned)
+                .await
+                .unwrap(),
+            json!({ "killed": [] })
+        );
+        let live = dispatch_with_supervisor(&sup, "jobs.list", &origin)
+            .await
+            .unwrap();
+        assert_eq!(live["originSessionId"], "origin");
+        assert_eq!(live["jobs"][0]["id"], spawned["id"]);
+        assert_eq!(live["jobs"][0]["status"], "running");
+        dispatch_with_supervisor(&sup, "jobs.killOwnedBy", &origin)
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            let read = dispatch_with_supervisor(&sup, "jobs.list", &origin)
+                .await
+                .unwrap();
+            if read["jobs"][0]["status"] != "running" {
+                assert_eq!(read["jobs"][0]["status"], "killed");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("origin process did not stop");
+    }
 
     #[test]
     fn str_field_reports_the_missing_key_by_name() {

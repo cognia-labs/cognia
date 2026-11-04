@@ -2,6 +2,9 @@ import type { SendOptions } from "../../shared/wire/inbound.ts"
 import type { Emit, RuntimeQuery } from "./runtime-types.ts"
 import type { PendingApproval } from "../../policy/permission/approval.ts"
 import { randomUUID } from "node:crypto"
+import { spawn } from "node:child_process"
+import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import { trackChildProcessGroup, type ProcessGroup } from "../../tools/state/process-group.ts"
 import { awaitApproval } from "../../policy/permission/approval.ts"
 import { readPermissionProfile } from "../../policy/permission/permission-classes.ts"
 import {
@@ -11,6 +14,47 @@ import {
 
 // These policies govern process admission and invocation lifetime, rather than
 // the SDK option overlay: neither consent nor a deadline is an SDK setting.
+
+/** Seal CLI admission and require group ESRCH; SDK close alone is a request. */
+export function createClaudeProcessTracker() {
+  const exits: Promise<void>[] = []
+  const groups: ProcessGroup[] = []
+  let sealed = false
+  let disposal: Promise<void> | undefined
+  return {
+    options(options: Options): Options {
+      return {
+        ...options,
+        spawnClaudeCodeProcess(params) {
+          if (sealed) throw new Error("Claude runtime is already disposed")
+          const child = spawn(params.command, params.args, {
+            cwd: params.cwd,
+            env: params.env,
+            signal: params.signal,
+            stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
+            detached: process.platform !== "win32",
+          })
+          groups.push(trackChildProcessGroup(child))
+          child.stderr.on("data", (chunk: Buffer) => options.stderr?.(chunk.toString()))
+          exits.push(new Promise<void>((resolve) => child.once("close", () => resolve())))
+          return child
+        },
+      }
+    },
+    waitForExit() {
+      // A delayed protected-query admission cannot spawn after proof was issued.
+      sealed = true
+      disposal ??= (async () => {
+        await Promise.all(exits)
+        const confirmed = groups.map((group) => group.retire()).every(Boolean)
+        groups.length = 0
+        if (!confirmed) throw new Error("Claude CLI process group stop unconfirmed")
+      })()
+      return disposal
+    },
+  }
+}
 
 export function unattendedRetryPolicy(sendOptions: SendOptions | undefined) {
   const retry = sendOptions?.claudeAgentSdk?.unattendedRetry

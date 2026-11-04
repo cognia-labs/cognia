@@ -32,6 +32,7 @@ import type { ShellDescriptor } from "../../../platform/process/shell.ts"
 import { detectInteractiveCommand } from "../../../policy/shell/interactive.ts"
 import { resolveToolPath } from "../../../platform/fs/paths.ts"
 import type { CoreFileToolContext } from "./context.ts"
+import { trackChildProcessGroup, type ProcessGroup } from "../../state/process-group.ts"
 
 // Re-exported for back-compat: the canonical implementation now lives in
 // src/shared/text/truncate.ts (shared with future tail-keeping tools). bash.test.ts
@@ -54,22 +55,103 @@ const PIPE_RELEASE_MS = 500
 // worker running after Esc. The groups still alive are tracked so a sidecar
 // that exits mid-command takes them down instead of orphaning them.
 const GROUP_KILL = process.platform !== "win32"
-const liveForegroundGroups = new Set<number>()
+const liveForegroundGroups = new Map<
+  ChildProcess,
+  {
+    sessionId: string | undefined
+    child: ChildProcess
+    groupProofSupported: boolean
+    group: ProcessGroup
+  }
+>()
+const unconfirmedForegroundSessions = new Set<string>()
 let exitHookInstalled = false
 
-function trackForegroundGroup(pid: number): void {
-  liveForegroundGroups.add(pid)
+function trackForegroundGroup(
+  sessionId: string | undefined,
+  child: ChildProcess,
+  groupProofSupported: boolean
+): void {
+  liveForegroundGroups.set(child, {
+    sessionId,
+    child,
+    groupProofSupported,
+    group: trackChildProcessGroup(child, groupProofSupported),
+  })
+  if (!groupProofSupported) {
+    if (sessionId) unconfirmedForegroundSessions.add(sessionId)
+    child.once("exit", () => liveForegroundGroups.delete(child))
+    child.once("error", () => liveForegroundGroups.delete(child))
+  }
   if (exitHookInstalled) return
   exitHookInstalled = true
   process.on("exit", () => {
-    for (const group of liveForegroundGroups) {
-      try {
-        process.kill(-group, "SIGKILL")
-      } catch {
-        // already gone
-      }
-    }
+    for (const { group } of liveForegroundGroups.values()) group.signal("SIGKILL")
   })
+}
+
+function foregroundGroupIsLive(groupId: ChildProcess): boolean {
+  const group = liveForegroundGroups.get(groupId)
+  if (!group) return false
+  if (!group.group.isLive()) {
+    liveForegroundGroups.delete(groupId)
+    return false
+  }
+  return true
+}
+
+export function hasSessionForegroundGroups(sessionId: string): boolean {
+  return (
+    unconfirmedForegroundSessions.has(sessionId) ||
+    [...liveForegroundGroups].some(
+      ([id, group]) => group.sessionId === sessionId && foregroundGroupIsLive(id)
+    )
+  )
+}
+
+export function hasSessionForegroundProcesses(sessionId: string): boolean {
+  return [...liveForegroundGroups.values()].some(
+    (group) =>
+      group.sessionId === sessionId &&
+      group.child.exitCode === null &&
+      group.child.signalCode === null
+  )
+}
+
+export async function disposeForegroundGroups(sessionId: string): Promise<void> {
+  const groups = [...liveForegroundGroups].filter(([, group]) => group.sessionId === sessionId)
+  const pending = () =>
+    groups.some(([id, group]) =>
+      group.groupProofSupported
+        ? foregroundGroupIsLive(id)
+        : liveForegroundGroups.has(id) &&
+          group.child.exitCode === null &&
+          group.child.signalCode === null
+    )
+  for (const [id, group] of groups) {
+    if (foregroundGroupIsLive(id)) signalProcessTree(group.child, "SIGTERM")
+  }
+  const deadline = Date.now() + KILL_GRACE_MS
+  while (pending() && Date.now() < deadline)
+    await new Promise<void>((resolve) => setTimeout(resolve, 25))
+  for (const [id, group] of groups) {
+    if (foregroundGroupIsLive(id)) signalProcessTree(group.child, "SIGKILL")
+  }
+  const killDeadline = Date.now() + PIPE_RELEASE_MS
+  while (pending() && Date.now() < killDeadline)
+    await new Promise<void>((resolve) => setTimeout(resolve, 25))
+  if (pending()) throw new Error(`session ${sessionId} still has live foreground process groups`)
+}
+
+export function retireForegroundGroups(sessionId: string): boolean {
+  let confirmed = !unconfirmedForegroundSessions.has(sessionId)
+  for (const [id, entry] of liveForegroundGroups) {
+    if (entry.sessionId !== sessionId) continue
+    if (!entry.group.retire()) confirmed = false
+    liveForegroundGroups.delete(id)
+  }
+  unconfirmedForegroundSessions.delete(sessionId)
+  return confirmed
 }
 
 /**
@@ -82,8 +164,8 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   if (!pid) return
   try {
     if (GROUP_KILL) {
-      process.kill(-pid, signal)
-    } else {
+      liveForegroundGroups.get(child)?.group.signal(signal)
+    } else if (child.exitCode === null && child.signalCode === null) {
       spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
         windowsHide: true,
         stdio: "ignore",
@@ -269,19 +351,28 @@ interface BashRun {
 
 export function createBashTool({
   cwd,
+  sessionId,
+  processSignal,
+  groupProofSupported = GROUP_KILL,
   bgShells,
   shell,
+  spawnProcess = spawn,
   builtinProcessSandbox,
 }: CoreFileToolContext & {
   /** Pins the shell (tests); the host's preferred shell otherwise. */
   shell?: ShellDescriptor | undefined
+  /** Process creation seam for deterministic identity-continuity checks. */
+  spawnProcess?: typeof spawn | undefined
 }) {
   // The shell descriptor the tool drives. Defaults to the host's preferred shell
   // (PowerShell on Windows when present); injectable so tests pin a deterministic
   // shell regardless of what the runner machine happens to have on PATH.
   const descriptor = shell ?? activeShellDescriptor()
   async function execBash(args: ToolArgs<typeof bashShape>, extra?: ToolHandlerExtra) {
-    const abortSignal = extra?.signal
+    const abortSignal =
+      processSignal && extra?.signal
+        ? AbortSignal.any([processSignal, extra.signal])
+        : (processSignal ?? extra?.signal)
     try {
       // A one-shot capture shell has no TTY: an interactive program (REPL,
       // editor, ssh, login flow, `git rebase -i`, `psql`, `top`, …) would hang
@@ -336,6 +427,8 @@ export function createBashTool({
       )
 
       const target = sandboxedProcessTarget(shell, shellArgs, workdir, builtinProcessSandbox)
+      if (abortSignal?.aborted)
+        return toolError("interrupted by the user before the command started — it never ran")
       // Background mode: spawn, register, and return a handle immediately.
       if (args.run_in_background) {
         if (!bgShells) {
@@ -356,7 +449,9 @@ export function createBashTool({
           label: args.description,
         })
         const scope = args.detach
-          ? " It will keep running after this session ends, until the app exits."
+          ? "processOrigin" in bgShells && bgShells.processOrigin
+            ? " It survives turn completion; explicit disposal of this session still stops it."
+            : " It will keep running after this session ends, until the app exits."
           : ""
         return toolText(
           `background shell started: ${entry.id} (status: running).${scope} Poll output with bash_output({ shellId: "${entry.id}" }) and stop it with kill_shell.`
@@ -370,7 +465,7 @@ export function createBashTool({
       }
 
       const result = await new Promise<BashRun>((resolve) => {
-        const child = spawn(target.command, target.args, {
+        const child = spawnProcess(target.command, target.args, {
           cwd: workdir,
           env,
           windowsHide: true,
@@ -378,8 +473,8 @@ export function createBashTool({
           stdio: ["pipe", "pipe", "pipe"],
           detached: GROUP_KILL,
         })
-        const groupId = GROUP_KILL ? child.pid : undefined
-        if (groupId) trackForegroundGroup(groupId)
+        // Key ownership by this child handle, never by a reusable numeric PID.
+        trackForegroundGroup(sessionId, child, groupProofSupported)
         // Keep fd 0 connected without relying on /dev/null, which may be
         // unavailable inside the macOS sandbox. End it immediately so
         // non-interactive commands that probe stdin observe EOF instead of
@@ -482,17 +577,13 @@ export function createBashTool({
           if (killTimer) clearTimeout(killTimer)
           if (releaseTimer) clearTimeout(releaseTimer)
           abortSignal?.removeEventListener("abort", onAbort)
-          if (groupId) {
-            liveForegroundGroups.delete(groupId)
+          {
             // The leader exited on SIGTERM; anything left in its group that
             // ignored the signal goes now rather than outliving the call.
-            if (stopping) {
-              try {
-                process.kill(-groupId, "SIGKILL")
-              } catch {
-                // group already empty
-              }
-            }
+            if (stopping) liveForegroundGroups.get(child)?.group.signal("SIGKILL")
+            // Shell exit is independent of descendants, even when all pipes
+            // closed. Retain the session's group until ESRCH proves it empty.
+            foregroundGroupIsLive(child)
           }
           // Flush any bytes the streaming decoder is holding for a partial char.
           if (decoder) append(decoder.decode())

@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
 import type { RuntimeDeps } from "./runtime-types.ts"
 import { dispatchAnthropic } from "./index.ts"
@@ -68,6 +69,50 @@ function capture(sendOptions: SendOptions, overrides: RuntimeDeps = {}) {
     options: () => queryOptions,
   }
 }
+
+test("a completed query cannot prove disposal while its CLI subprocess is still alive", async () => {
+  let child!: SpawnedProcess
+  const captured = capture(
+    {},
+    {
+      query({ options }) {
+        child = options.spawnClaudeCodeProcess!({
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          env: process.env,
+          signal: new AbortController().signal,
+        })
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "result", subtype: "success" }
+          },
+          interrupt() {},
+          close() {},
+        }
+      },
+    }
+  )
+  try {
+    await flush()
+    assert.equal(
+      captured.frames.some((frame) => frame.type === "session_ended"),
+      true
+    )
+    assert.equal(
+      captured.frames.some((frame) => frame.type === "session_disposed"),
+      false
+    )
+  } finally {
+    child.kill("SIGTERM")
+  }
+  for (
+    let i = 0;
+    i < 100 && !captured.frames.some((frame) => frame.type === "session_disposed");
+    i++
+  )
+    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+  assert.equal(captured.frames.filter((frame) => frame.type === "session_disposed").length, 1)
+})
 
 test("dispatch registers a synchronous session, then requires one-off Namespace consent before query or pool", async () => {
   const captured = capture({

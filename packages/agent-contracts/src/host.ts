@@ -199,6 +199,8 @@ export interface AgentTerminalHost {
   /** Free the terminal's resources; it may no longer be addressed. */
   release(terminalId: string): Promise<void>
   waitForExit(terminalId: string, timeoutMs?: number): Promise<AgentTerminalExit>
+  /** Group liveness, independent of leader exit. Missing support cannot prove stop. */
+  isRunning?(terminalId: string): Promise<boolean>
   /** Kill and release every terminal a session created. */
   closeSession(sessionId: string): Promise<void>
 }

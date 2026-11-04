@@ -24,6 +24,27 @@ describe("installed external-agent host", () => {
     expect(getInstalledExternalAgentHost()).toBeNull()
   })
 
+  it("preserves a Host's optional group probe separately from leader liveness", async () => {
+    const cli = host("group-aware")
+    cli.terminals.isRunning = async () => false
+    cli.terminals.isGroupRunning = async () => true
+    cli.terminals.listForStopProof = async () => ["released-group"]
+    const uninstall = installExternalAgentHost(cli)
+    try {
+      await expect(getInstalledExternalAgentHost()?.terminals.isRunning("terminal")).resolves.toBe(
+        false
+      )
+      await expect(
+        getInstalledExternalAgentHost()?.terminals.isGroupRunning?.("terminal")
+      ).resolves.toBe(true)
+      await expect(
+        getInstalledExternalAgentHost()?.terminals.listForStopProof?.()
+      ).resolves.toEqual(["released-group"])
+    } finally {
+      uninstall()
+    }
+  })
+
   it("installs, is idempotent for the same host, and uninstalls", () => {
     const cli = host("cli")
     const uninstall = installExternalAgentHost(cli)
