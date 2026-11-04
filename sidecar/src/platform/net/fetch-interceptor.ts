@@ -69,7 +69,7 @@ interface NoProxySplit {
 
 /** undici's NO_PROXY matching knows host names only; exact IPs and CIDRs are split off here. */
 function splitNoProxy(): NoProxySplit {
-  const value = process.env.no_proxy ?? process.env.NO_PROXY ?? ""
+  const value = process.env.no_proxy || process.env.NO_PROXY || ""
   const directCidrs: ParsedCidr[] = []
   const directIps: ParsedIp[] = []
   const standardEntries: string[] = []
@@ -94,7 +94,11 @@ interface BypassRouter {
 
 function dispatcherWithCidrBypass(undici: Undici): Dispatcher {
   const { directCidrs, directIps, noProxy } = splitNoProxy()
-  const proxied = new undici.EnvHttpProxyAgent({ noProxy })
+  const proxied = new undici.EnvHttpProxyAgent({
+    noProxy,
+    httpProxy: process.env.HTTP_PROXY || process.env.http_proxy,
+    httpsProxy: process.env.HTTPS_PROXY || process.env.https_proxy,
+  })
   if (directCidrs.length === 0 && directIps.length === 0) return proxied
 
   const direct = new undici.Agent()
@@ -123,14 +127,16 @@ function dispatcherWithCidrBypass(undici: Undici): Dispatcher {
 
 // Wire the configured proxy into undici's global dispatcher. The caller awaits
 // this before the SDK can load or issue its first fetch.
-async function installProxyDispatcher(): Promise<void> {
+async function installProxyDispatcher(): Promise<typeof fetch | undefined> {
   const proxyUrl = proxyEnvUrl()
-  if (!proxyUrl) return
+  if (!proxyUrl) return undefined
   validateProxyEnvironment()
 
   let undici: Undici
   try {
-    undici = await import("undici")
+    // The package entry bypasses Bun's built-in `undici` compatibility shim,
+    // whose fetch follows Bun's own proxy environment handling.
+    undici = await import("undici/index.js")
   } catch {
     throw new Error("PROXY_CONNECT_FAILED: undici proxy support is unavailable")
   }
@@ -142,8 +148,10 @@ async function installProxyDispatcher(): Promise<void> {
     throw new Error("PROXY_CONNECT_FAILED: undici proxy dispatcher is unavailable")
   }
 
+  let dispatcher: Dispatcher
   try {
-    undici.setGlobalDispatcher(dispatcherWithCidrBypass(undici))
+    dispatcher = dispatcherWithCidrBypass(undici)
+    undici.setGlobalDispatcher(dispatcher)
   } catch {
     throw new Error("PROXY_INVALID_CONFIG: sidecar proxy dispatcher initialization failed")
   }
@@ -154,6 +162,47 @@ async function installProxyDispatcher(): Promise<void> {
   } catch {
     // stdout is observability only; a closed pipe does not change routing.
   }
+  // Use the transport that owns our proxy/IP/CIDR policy on Bun as well.
+  if (process.versions.bun) return createUndiciFetch(undici, dispatcher)
+  return undefined
+}
+
+/** Adapt native Request objects for the actual npm transport on Bun. */
+export function createUndiciFetch(undici: Undici, dispatcher?: Dispatcher): typeof fetch {
+  return ((input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+    // Bun and the npm transport have distinct Request classes. Preserve
+    // streaming bodies and cancellation rather than stringifying a Request.
+    let request: unknown = input
+    let options = init
+    if (input instanceof Request && !(input instanceof undici.Request)) {
+      const normalized = new Request(input, init)
+      request = new undici.Request(normalized.url, {
+        method: normalized.method,
+        headers: Array.from(normalized.headers.entries()),
+        body: normalized.body,
+        signal: normalized.signal,
+        redirect: normalized.redirect,
+        mode: normalized.mode,
+        referrer: normalized.referrer,
+        referrerPolicy: normalized.referrerPolicy,
+        credentials: normalized.credentials,
+        cache: normalized.cache,
+        integrity: normalized.integrity,
+        keepalive: normalized.keepalive,
+        duplex: "half",
+      } as ConstructorParameters<Undici["Request"]>[1])
+      // Body streams have already been transferred into the normalized Request.
+      options = undefined
+    }
+    const explicitDispatcher = (init as { dispatcher?: Dispatcher } | undefined)?.dispatcher
+    return undici.fetch(
+      request as Parameters<Undici["fetch"]>[0],
+      {
+        ...options,
+        dispatcher: explicitDispatcher ?? dispatcher,
+      } as Parameters<Undici["fetch"]>[1]
+    )
+  }) as unknown as typeof fetch
 }
 
 function emitUsageHeaders(headersBag: Record<string, string>): void {
@@ -209,8 +258,9 @@ function withUsageHeaderCapture(original: typeof fetch): typeof fetch {
 async function install(): Promise<void> {
   // Captured before the proxy dispatcher is installed, as the wrapper target.
   const original = globalThis.fetch
-  await installProxyDispatcher()
-  if (typeof original === "function") globalThis.fetch = withUsageHeaderCapture(original)
+  const proxyFetch = await installProxyDispatcher()
+  if (typeof original === "function")
+    globalThis.fetch = withUsageHeaderCapture(proxyFetch ?? original)
 }
 
 const INSTALLED = Symbol.for("cognia.sidecar.fetch-interceptor")

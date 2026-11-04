@@ -165,12 +165,14 @@ export function sandboxEnv({ standalone = false }: { standalone?: boolean } = {}
 /** Resolve the strict-launcher command without treating a compiled CLI as Node. */
 export function resolveSandboxSpawn({
   standalone,
+  bun = false,
   launcher,
   execPath,
   childPath,
   maxMemoryBytes,
 }: {
   standalone: boolean
+  bun?: boolean
   launcher: readonly string[]
   execPath: string
   childPath: string
@@ -178,7 +180,9 @@ export function resolveSandboxSpawn({
 }): { command: string; args: string[]; env: Record<string, string> } {
   const runtimeArgs = standalone
     ? []
-    : [`--max-old-space-size=${Math.floor(maxMemoryBytes / (1024 * 1024))}`, childPath]
+    : bun
+      ? ["--smol", childPath]
+      : [`--max-old-space-size=${Math.floor(maxMemoryBytes / (1024 * 1024))}`, childPath]
   return {
     command: launcher[0]!,
     args: [...launcher.slice(1), execPath, ...runtimeArgs],
@@ -307,6 +311,7 @@ export async function runCodeProgram({
   )
   const target = resolveSandboxSpawn({
     standalone,
+    bun: Boolean(process.versions.bun),
     launcher: resolvedProbe.launcher ?? [],
     execPath: process.execPath,
     childPath: CHILD_PATH,

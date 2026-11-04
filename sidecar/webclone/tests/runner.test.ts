@@ -8,8 +8,88 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawnSync } from "node:child_process"
 
 import { readJob, runJob } from "../dist/runner.js"
+import { runPool } from "../dist/worker/pool.js"
+
+test("runner worker deadlines do not keep a completed or failed process alive", () => {
+  for (const rejects of [false, true]) {
+    const source = `
+      import { runPool } from ${JSON.stringify(new URL("../dist/worker/pool.js", import.meta.url).href)};
+      const rejects = ${rejects};
+      try {
+        await runPool([async () => { if (rejects) throw new Error('fixture'); return 42; }], {concurrency:1,timeoutMs:60000});
+        if (rejects) throw new Error('worker error was swallowed');
+      } catch (error) {
+        if (!rejects || error.message !== 'fixture') throw error;
+      }
+      console.log('settled');
+    `
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+      encoding: "utf8",
+      timeout: 3000,
+    })
+    assert.equal(result.status, 0, result.stderr || String(result.error))
+    assert.match(result.stdout, /settled/)
+  }
+})
+
+test("worker deadline still stops queued work and waits for the in-flight task", async () => {
+  let release!: () => void
+  let queued = false
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const running = runPool(
+    [
+      async () => {
+        await gate
+        return 42
+      },
+      async () => {
+        queued = true
+        return 99
+      },
+    ],
+    { concurrency: 1, timeoutMs: 5 }
+  )
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  release()
+  const result = await running
+  assert.equal(queued, false)
+  assert.equal(result[0], 42)
+  assert.equal(1 in result, false)
+})
+
+test("a rejected pool cannot let a pending sibling start queued work after its deadline", async () => {
+  let release!: () => void
+  let queued = false
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const running = runPool(
+    [
+      async () => {
+        throw new Error("worker failed")
+      },
+      async () => {
+        await gate
+        return 42
+      },
+      async () => {
+        queued = true
+        return 99
+      },
+    ],
+    { concurrency: 2, timeoutMs: 5 }
+  )
+  await assert.rejects(running, /worker failed/)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(queued, false)
+})
 
 function tmp(prefix: any) {
   return mkdtempSync(join(tmpdir(), prefix))

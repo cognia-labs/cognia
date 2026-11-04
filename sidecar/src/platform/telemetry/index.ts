@@ -5,11 +5,7 @@
 // ./langfuse.ts (Langfuse, with the user's content consent).
 
 import { trace } from "@opentelemetry/api"
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
-import { NodeSDK } from "@opentelemetry/sdk-node"
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base"
-import { PostHogTraceExporter } from "@posthog/ai/otel"
 
 import { langfuseTracingEnabled, parseHeaders, parsePostHogDestinations } from "./config.ts"
 import type { TelemetryEnv } from "./config.ts"
@@ -49,41 +45,64 @@ let aiTelemetryRegistered = false
  * unregistered. `initializeTelemetry` still reports success, because the OTLP
  * exporter itself (the part this process does own) did start.
  *
- * The import settles on a microtask, long before the first model call, which
- * only happens after the IPC handshake.
+ * Initialization awaits registration before the host starts reading commands.
  */
-function registerAiSdkTelemetry(): void {
+async function registerAiSdkTelemetry(): Promise<void> {
   if (aiTelemetryRegistered) return
   // Set before awaiting so two calls in the same tick can't both register —
   // `registerTelemetry` appends to a process-global list and a duplicate would
   // double every span.
   aiTelemetryRegistered = true
-  Promise.all([import("ai"), import("@langfuse/vercel-ai-sdk")])
-    .then(([{ registerTelemetry }, { LangfuseVercelAiSdkIntegration }]) => {
-      registerTelemetry(
-        new LangfuseVercelAiSdkIntegration({
-          tracer: trace.getTracer("cognia.sidecar.ai-sdk"),
-        })
-      )
-    })
-    .catch(() => {
-      // Not the sidecar process (or the packages are absent) — allow a later
-      // init to try again rather than latching the failure.
-      aiTelemetryRegistered = false
-    })
+  try {
+    const [{ registerTelemetry }, { LangfuseVercelAiSdkIntegration }] = await Promise.all([
+      import("ai"),
+      import("@langfuse/vercel-ai-sdk"),
+    ])
+    registerTelemetry(
+      new LangfuseVercelAiSdkIntegration({
+        tracer: trace.getTracer("cognia.sidecar.ai-sdk"),
+      })
+    )
+  } catch {
+    // Not the sidecar process (or the packages are absent) — allow a later
+    // init to try again rather than latching the failure.
+    aiTelemetryRegistered = false
+  }
 }
 
-/**
- * Start the process's telemetry from the host-provided env. Returns false,
- * doing nothing, when no destination is configured or telemetry already runs.
- */
-export function initializeTelemetry(env: TelemetryEnv = process.env): boolean {
+let initialization: Promise<boolean> | undefined
+let shutdownGeneration = 0
+
+/** Start configured telemetry before ready; false when absent or already live. */
+export async function initializeTelemetry(env: TelemetryEnv = process.env): Promise<boolean> {
+  const generation = shutdownGeneration
+  while (initialization) {
+    await initialization
+  }
+  if (generation !== shutdownGeneration || telemetrySession.sdk) return false
+  const pending = startTelemetry(env)
+  initialization = pending
+  try {
+    return await pending
+  } finally {
+    initialization = undefined
+  }
+}
+
+async function startTelemetry(env: TelemetryEnv): Promise<boolean> {
   const endpoint = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
   const posthogDestinations = parsePostHogDestinations(env.COGNIA_POSTHOG_DESTINATIONS_JSON)
   const langfuseEnabled = langfuseTracingEnabled(env)
   if ((!endpoint && posthogDestinations.length === 0 && !langfuseEnabled) || telemetrySession.sdk) {
     return false
   }
+  // These CJS constructors pull in the exporter/metrics graph. An unconfigured
+  // host needs none of it. Await the imports here so configured telemetry is
+  // still live before the host announces ready or accepts its first request.
+  const [{ NodeSDK }, { BatchSpanProcessor }] = await Promise.all([
+    import("@opentelemetry/sdk-node"),
+    import("@opentelemetry/sdk-trace-base"),
+  ])
   telemetrySession.installationId = String(env.COGNIA_OBSERVABILITY_INSTALLATION_ID ?? "").trim()
   telemetrySession.consent = {
     model: env.COGNIA_LANGFUSE_CAPTURE_MODEL_CONTENT === "true",
@@ -91,6 +110,7 @@ export function initializeTelemetry(env: TelemetryEnv = process.env): boolean {
   }
   const spanProcessors: SpanProcessor[] = [new CogniaCorrelationSpanProcessor()]
   if (endpoint) {
+    const { OTLPTraceExporter } = await import("@opentelemetry/exporter-trace-otlp-http")
     spanProcessors.push(
       new BatchSpanProcessor(
         new PrivacyFilteringSpanExporter(
@@ -106,18 +126,21 @@ export function initializeTelemetry(env: TelemetryEnv = process.env): boolean {
       )
     )
   }
-  for (const destination of posthogDestinations) {
-    spanProcessors.push(
-      new BatchSpanProcessor(
-        new PrivacyFilteringSpanExporter(
-          new PostHogTraceExporter({
-            projectToken: destination.projectToken,
-            host: destination.host,
-          })
-        ),
-        { maxExportBatchSize: 16 }
+  if (posthogDestinations.length > 0) {
+    const { PostHogTraceExporter } = await import("@posthog/ai/otel")
+    for (const destination of posthogDestinations) {
+      spanProcessors.push(
+        new BatchSpanProcessor(
+          new PrivacyFilteringSpanExporter(
+            new PostHogTraceExporter({
+              projectToken: destination.projectToken,
+              host: destination.host,
+            })
+          ),
+          { maxExportBatchSize: 16 }
+        )
       )
-    )
+    }
   }
   if (langfuseEnabled) spanProcessors.push(new LazyLangfuseSpanProcessor(env))
   scrubLangfuseSecretEnvironment(env)
@@ -127,15 +150,22 @@ export function initializeTelemetry(env: TelemetryEnv = process.env): boolean {
   })
   telemetrySession.sdk = sdk
   sdk.start()
-  registerAiSdkTelemetry()
+  await registerAiSdkTelemetry()
   return true
 }
 
 /** Flush and stop the SDK, and forget the session's installation id and consent. */
 export async function shutdownTelemetry(): Promise<void> {
-  const current = telemetrySession.sdk
-  telemetrySession.sdk = null
-  telemetrySession.installationId = ""
-  telemetrySession.consent = { model: false, tool: false }
-  if (current) await current.shutdown()
+  // Invalidate callers already waiting behind another init as well as draining
+  // the active one; a queued init must not install a new SDK after we return.
+  shutdownGeneration++
+  try {
+    await initialization
+  } finally {
+    const current = telemetrySession.sdk
+    telemetrySession.sdk = null
+    telemetrySession.installationId = ""
+    telemetrySession.consent = { model: false, tool: false }
+    if (current) await current.shutdown()
+  }
 }

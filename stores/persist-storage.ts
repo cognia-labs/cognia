@@ -97,7 +97,12 @@ export function flushPendingPersistWrites(): void {
 }
 
 function installLifecycleFlush(): void {
-  if (lifecycleInstalled || typeof window === "undefined") return
+  if (
+    lifecycleInstalled ||
+    typeof window === "undefined" ||
+    typeof window.addEventListener !== "function"
+  )
+    return
   lifecycleInstalled = true
   // `pagehide` and a hidden document are the last moments a page (or a Tauri
   // webview being closed) reliably runs script; `beforeunload` covers the

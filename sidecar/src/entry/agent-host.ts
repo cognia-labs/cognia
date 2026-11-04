@@ -9,7 +9,6 @@ let shutdown: Promise<unknown> | undefined
 const shutdownHostTelemetry = () => (shutdown ??= shutdownTelemetry())
 function defaultHost() {
   if (!host) {
-    initializeTelemetry()
     host = createAgentHost({ shutdownHostTelemetry })
   }
   return host
@@ -34,7 +33,7 @@ export function emitForTests(payload: unknown) {
   observeHost().emitForTests(payload)
 }
 export function startAgentHost() {
-  void loadConfiguredEngines().then(
+  void Promise.all([loadConfiguredEngines(), initializeTelemetry()]).then(
     () => observeHost().startAgentHost(),
     (error: unknown) => {
       console.error(error)
@@ -44,6 +43,7 @@ export function startAgentHost() {
 }
 export async function smoke() {
   await loadConfiguredEngines()
+  await initializeTelemetry()
   return observeHost().smoke()
 }
 export function runAgentHostEntry(url: string) {

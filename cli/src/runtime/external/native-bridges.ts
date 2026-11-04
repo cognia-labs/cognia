@@ -318,9 +318,23 @@ export class NativeAgentBridgeRegistry {
 }
 
 export function resolveNativeBridgeBundleRoot(
-  options: { execPath?: string; moduleUrl?: string; packaged?: boolean; bun?: boolean } = {}
+  options: {
+    execPath?: string
+    moduleUrl?: string
+    packaged?: boolean
+    bun?: boolean
+    standalone?: boolean
+  } = {}
 ): string {
-  if ((options.packaged ?? packagedHost()) || (options.bun ?? Boolean(process.versions.bun))) {
+  const standalone =
+    options.standalone ??
+    Boolean(
+      (globalThis as { Bun?: { isStandaloneExecutable?: boolean } }).Bun?.isStandaloneExecutable
+    )
+  if (
+    (options.packaged ?? packagedHost()) ||
+    ((options.bun ?? Boolean(process.versions.bun)) && standalone)
+  ) {
     const directory = path.join(path.dirname(options.execPath ?? process.execPath), "sidecar")
     if (!fs.existsSync(directory))
       throw new Error(

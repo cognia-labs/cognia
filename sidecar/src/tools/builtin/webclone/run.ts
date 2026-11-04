@@ -17,13 +17,15 @@ import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 
 import { assertPathInside } from "../../../platform/fs/paths.ts"
+// Keep the engine's canonical validators without loading its parser/transform
+// graph into the host. The isolated runner loads that graph when a job runs.
 import {
   DEFAULTS as ENGINE_DEFAULTS,
-  evaluateFetchTarget,
   parseCodegenFramework,
   parseFrameworkHint,
   validateOptions,
-} from "../../../../webclone/dist/index.js"
+} from "../../../../webclone/dist/config/index.js"
+import { evaluateFetchTarget } from "../../../../webclone/dist/ssrf-guard.js"
 
 /** Absolute path to the vendored engine's runner (built by `tsc`). */
 export const RUNNER_PATH = fileURLToPath(

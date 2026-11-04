@@ -47,23 +47,48 @@ pub async fn scope_receipts<T>(scope: Option<PersonReceiptScope>, future: impl F
 pub struct PersonBrainAuthority {
     account_id: String,
     generation: RwLock<Option<String>>,
+    admission: RwLock<Arc<std::sync::atomic::AtomicBool>>,
     stopped: std::sync::atomic::AtomicBool,
 }
 impl PersonBrainAuthority {
-    pub fn new(account_id: String) -> Arc<Self> { Arc::new(Self { account_id, generation: RwLock::new(None), stopped: std::sync::atomic::AtomicBool::new(false) }) }
+    pub fn new(account_id: String) -> Arc<Self> {
+        Arc::new(Self {
+            account_id,
+            generation: RwLock::new(None),
+            admission: RwLock::new(Arc::new(std::sync::atomic::AtomicBool::new(false))),
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
     pub fn begin_child(self: &Arc<Self>) -> Option<PersonChildGeneration> {
         let mut current = self.generation.write();
-        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) { return None; }
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
         crate::ws_bridge::disconnect_account(&self.account_id);
         let generation = uuid::Uuid::new_v4().to_string();
         *current = Some(generation.clone());
-        Some(PersonChildGeneration { authority: self.clone(), generation })
+        let admission = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self.admission.write() = admission.clone();
+        Some(PersonChildGeneration {
+            authority: self.clone(),
+            generation,
+            admission,
+        })
     }
-    pub fn current(&self) -> Option<String> { self.generation.read().clone() }
-    pub fn accepts(&self, generation: &str) -> bool { self.generation.read().as_deref() == Some(generation) }
+    pub fn current(&self) -> Option<String> {
+        self.generation.read().clone()
+    }
+    pub fn accepts(&self, generation: &str) -> bool {
+        self.generation.read().as_deref() == Some(generation)
+    }
     pub fn admit(&self, generation: &str, install: impl FnOnce()) -> bool {
         let current = self.generation.read();
-        if current.as_deref() != Some(generation) { return false; }
+        if current.as_deref() != Some(generation) {
+            return false;
+        }
+        self.admission
+            .read()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         install();
         true
     }
@@ -73,18 +98,38 @@ impl PersonBrainAuthority {
         crate::ws_bridge::disconnect_account(&self.account_id);
     }
     pub fn stop(&self) {
-        self.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.invalidate();
     }
 }
-pub struct PersonChildGeneration { authority: Arc<PersonBrainAuthority>, generation: String }
-impl Drop for PersonChildGeneration {
-    fn drop(&mut self) {
+pub struct PersonChildGeneration {
+    authority: Arc<PersonBrainAuthority>,
+    generation: String,
+    admission: Arc<std::sync::atomic::AtomicBool>,
+}
+impl PersonChildGeneration {
+    pub fn was_admitted(&self) -> bool {
+        self.admission.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Revoke under the admission fence, retaining whether this child ever
+    /// admitted a bridge even when hello and disconnect occurred between polls.
+    pub fn revoke(self) -> bool {
+        self.revoke_current();
+        self.was_admitted()
+    }
+
+    fn revoke_current(&self) {
         let mut current = self.authority.generation.write();
         if current.as_deref() == Some(&self.generation) {
             *current = None;
             crate::ws_bridge::disconnect_account(&self.authority.account_id);
         }
+    }
+}
+impl Drop for PersonChildGeneration {
+    fn drop(&mut self) {
+        self.revoke_current();
     }
 }
 
@@ -227,6 +272,21 @@ pub mod person_test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admission_latch_is_per_child_and_survives_revocation() {
+        let authority = PersonBrainAuthority::new("admission-test".into());
+        let child = authority.begin_child().unwrap();
+        let id = authority.current().unwrap();
+        assert!(!child.was_admitted());
+        assert!(authority.admit(&id, || {}));
+        assert!(child.revoke());
+        assert!(!authority.accepts(&id));
+        let next = authority.begin_child().unwrap();
+        assert!(!next.was_admitted());
+        assert!(!authority.admit(&id, || panic!("stale generation installed a bridge")));
+        assert!(!next.revoke());
+    }
+
     #[test]
     fn p5_event_replay_requires_current_person_binding_and_hides_routing_metadata() {
         use crate::security_store::{SecurityStore, VerifiedDevicePerson};

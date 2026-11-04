@@ -37,6 +37,7 @@ interface IsolatedRun {
 let connectHits: string[] = []
 let forwardHits: string[] = []
 let originHits: string[] = []
+const originBodies: Array<{ path: string; body: string }> = []
 let proxyServer: http.Server | undefined
 let originServer: http.Server | undefined
 let originPort = 0
@@ -49,9 +50,13 @@ function listen(server: http.Server): Promise<number> {
   )
 }
 
-function runIsolatedInterceptor(source: string, env: Record<string, string>): Promise<IsolatedRun> {
+function runIsolatedInterceptor(
+  source: string,
+  env: Record<string, string>,
+  executable = process.execPath
+): Promise<IsolatedRun> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--input-type=module", "--eval", source], {
+    const child = spawn(executable, ["--input-type=module", "--eval", source], {
       env: {
         ...process.env,
         HTTP_PROXY: "",
@@ -66,18 +71,32 @@ function runIsolatedInterceptor(source: string, env: Record<string, string>): Pr
     })
     let stdout = ""
     let stderr = ""
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 10_000)
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk))
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk))
-    child.once("error", reject)
-    child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }))
+    child.once("error", (error) => {
+      clearTimeout(deadline)
+      reject(error)
+    })
+    child.once("close", (code, signal) => {
+      clearTimeout(deadline)
+      resolve({ code, signal, stdout, stderr })
+    })
   })
 }
 
 before(async () => {
   originServer = http.createServer((req, res) => {
     originHits.push(req.url ?? "")
-    res.writeHead(200, { "content-type": "text/plain" })
-    res.end("origin-ok")
+    let body = ""
+    req.on("data", (chunk) => {
+      body += chunk
+    })
+    req.on("end", () => {
+      originBodies.push({ path: req.url ?? "", body })
+      res.writeHead(200, { "content-type": "text/plain" })
+      res.end("origin-ok")
+    })
   })
   originPort = await listen(originServer)
 
@@ -199,6 +218,76 @@ test("supports IP/CIDR bypass without weakening all other proxy routing", async 
   assert.equal(result.code, 0, result.stderr)
   assert.match(result.stdout, /body=origin-ok/)
 })
+
+test(
+  "Bun preserves proxy routing, CIDR bypass and fail-closed proxy failures",
+  {
+    skip: !process.env.COGNIA_TEST_BUN,
+  },
+  async () => {
+    const executable = process.env.COGNIA_TEST_BUN!
+    const proxyUrl = process.env.HTTP_PROXY!
+    const proxied = await runIsolatedInterceptor(
+      `await import(${JSON.stringify(INSTALLER_URL)});
+     const response = await fetch("http://bun-proxied.test/check");
+     process.stdout.write(await response.text());
+     const request = new Request("http://bun-proxied.test/request", { method: "POST", body: "sample" });
+     process.stdout.write(await (await fetch(request)).text());
+     const consumed = new Request("http://bun-proxied.test/replacement", {method:"POST",body:"first"});
+     await consumed.text();
+     await fetch(consumed, {body:"replacement"});
+     let dispatches=0;
+     try { await fetch("https://guarded-dispatch.test/",{dispatcher:{dispatch(){dispatches++;throw Error("GUARDED_DISPATCH")}}}) } catch {}
+     if(dispatches!==1) throw Error("explicit guarded dispatcher was replaced");
+     const {createEgressGuard}=await import(${JSON.stringify(new URL("./egress-guard.ts", import.meta.url).href)});
+     const guard=createEgressGuard({allowPrivateNetwork:true});
+     await guard.fetch(new Request(${JSON.stringify(`http://127.0.0.1:${originPort}/guard-body`)},{method:"POST",body:"guard-body"}));
+     await guard.close();
+     const controller = new AbortController(); controller.abort();
+     try { await fetch(new Request("http://bun-proxied.test/cancelled",{signal:controller.signal})); throw Error("abort ignored") }
+     catch(error) { if(error.name!=="AbortError") throw error }`,
+      { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl },
+      executable
+    )
+    assert.equal(proxied.code, 0, proxied.stderr)
+    assert.match(proxied.stdout, /origin-ok/)
+    assert.ok(
+      [...forwardHits, ...connectHits].some((value) => value.startsWith("bun-proxied.test"))
+    )
+    assert.ok(originBodies.some((value) => value.path === "/request" && value.body === "sample"))
+    assert.ok(
+      originBodies.some((value) => value.path === "/guard-body" && value.body === "guard-body")
+    )
+    assert.ok(
+      originBodies.some((value) => value.path === "/replacement" && value.body === "replacement")
+    )
+    assert.ok(!originHits.includes("/cancelled"))
+
+    const bypass = await runIsolatedInterceptor(
+      `await import(${JSON.stringify(INSTALLER_URL)});
+     const response = await fetch(${JSON.stringify(`http://127.0.0.1:${originPort}/bun-cidr`)});
+     process.stdout.write(await response.text());`,
+      {
+        HTTP_PROXY: "http://127.0.0.1:1",
+        HTTPS_PROXY: "http://127.0.0.1:1",
+        NO_PROXY: "127.0.0.0/8",
+      },
+      executable
+    )
+    assert.equal(bypass.code, 0, bypass.stderr)
+    assert.match(bypass.stdout, /origin-ok/)
+
+    const failed = await runIsolatedInterceptor(
+      `await import(${JSON.stringify(INSTALLER_URL)});
+     try { await fetch(${JSON.stringify(`http://127.0.0.1:${originPort}/must-not-go-direct`)}); process.exit(2) }
+     catch { process.exit(0) }`,
+      { HTTP_PROXY: "http://127.0.0.1:1", HTTPS_PROXY: "http://127.0.0.1:1" },
+      executable
+    )
+    assert.equal(failed.code, 0, failed.stderr)
+    assert.ok(!originHits.includes("/must-not-go-direct"))
+  }
+)
 
 test("redacts proxy userinfo from startup diagnostics", async () => {
   const moduleUrl = INSTALLER_URL

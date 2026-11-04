@@ -38,6 +38,7 @@ use tokio::sync::{watch, Mutex};
 use cognia_companion::jwt::issue_service_jwt;
 use cognia_companion::{ws_bridge, SharedState};
 use cognia_core::supervision_backoff::CrashBackoff;
+use cognia_core::host_runtime::{RuntimeConfig, RuntimeError, RuntimeRole};
 
 /// Env var naming the brain entry script. Set by `Dockerfile.cognia-server`.
 pub use cognia_companion::runtime::BRAIN_ENTRY_ENV;
@@ -66,6 +67,23 @@ enum ChildOutcome {
     Refused,
     /// Shutdown was requested.
     Shutdown,
+}
+
+#[derive(Clone, Copy)]
+struct StartupEvidence {
+    accepted: u64,
+    refused: u64,
+}
+
+impl StartupEvidence {
+    fn capture() -> Self {
+        Self {
+            accepted: ws_bridge::accepted_brain_generation(),
+            refused: *ws_bridge::subscribe_refusals().borrow(),
+        }
+    }
+    fn was_accepted(self) -> bool { ws_bridge::accepted_brain_generation() != self.accepted }
+    fn was_refused(self) -> bool { *ws_bridge::subscribe_refusals().borrow() != self.refused }
 }
 
 /// What identifies the installed brain build: replacing it changes the
@@ -219,6 +237,9 @@ pub struct BrainSupervisor {
     state: SharedState,
     backoff: Mutex<CrashBackoff>,
     running: AtomicBool,
+    runtime_config: std::sync::OnceLock<Result<RuntimeConfig, RuntimeError>>,
+    bun_active: AtomicBool,
+    bun_disabled: AtomicBool,
     /// Respawning stopped after a refusal (see [`ChildOutcome::Refused`]).
     parked: AtomicBool,
     restart_count: AtomicU64,
@@ -355,6 +376,9 @@ impl BrainSupervisor {
             state,
             backoff: Mutex::new(CrashBackoff::default()),
             running: AtomicBool::new(false),
+            runtime_config: std::sync::OnceLock::new(),
+            bun_active: AtomicBool::new(false),
+            bun_disabled: AtomicBool::new(false),
             parked: AtomicBool::new(false),
             restart_count: AtomicU64::new(0),
             shutdown_tx,
@@ -443,8 +467,8 @@ impl BrainSupervisor {
             }
 
             match self.spawn_once().await {
-                Ok((child, generation)) => {
-                    let outcome = self.supervise_child(child, generation, &mut shutdown).await;
+                Ok((child, generation, startup)) => {
+                    let outcome = self.supervise_child(child, generation, &mut shutdown, startup).await;
                     if outcome == ChildOutcome::Refused {
                         self.park(&mut shutdown).await;
                     }
@@ -505,50 +529,112 @@ impl BrainSupervisor {
         self.backoff.lock().await.reset();
     }
 
-    async fn spawn_once(&self) -> Result<(tokio::process::Child, Option<cognia_companion::person_partition::PersonChildGeneration>), String> {
+    async fn spawn_once(
+        &self,
+    ) -> Result<
+        (
+            tokio::process::Child,
+            Option<cognia_companion::person_partition::PersonChildGeneration>,
+            StartupEvidence,
+        ),
+        String,
+    > {
+        if self.is_stopping() {
+            return Err("brain startup cancelled by shutdown".into());
+        }
         if !self.config.entry.exists() {
             return Err(format!(
                 "brain entry not found at {} (check {BRAIN_ENTRY_ENV})",
                 self.config.entry.display()
             ));
         }
-        let node =
-            cognia_core::node_runtime::node_executable().map_err(|error| error.to_string())?;
-        let generation = self.person_authority.as_ref().and_then(|authority| authority.begin_child());
-        let token = self.mint_token()?;
-        let mut cmd = Command::new(&node);
-        cmd.arg(&self.config.entry)
-            .arg("serve")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd.env_remove("COGNIA_BRAIN_PROFILE");
-        cmd.env_remove("COGNIA_PERSON_EXECUTION"); // P6d never inherit the operator environment.
-        cmd.env_remove("COGNIA_PERSON_CHAT"); // P6c is advertised only by this supervisor.
-        if withhold_unpaired_collab_url(
-            std::env::var("COGNIA_COLLAB_URL").ok().as_deref(),
-            std::env::var("COGNIA_COLLAB_ORG_ID").ok().as_deref(),
-        ) {
-            cmd.env_remove("COGNIA_COLLAB_URL");
-        }
-        for (k, v) in self.child_env(&token).await {
-            cmd.env(k, v);
-        }
-        #[cfg(target_os = "windows")]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        let config = self
+            .runtime_config
+            .get_or_init(|| RuntimeConfig::from_env(RuntimeRole::Brain))
+            .clone()
+            .map_err(|error| error.to_string())?;
+        let mut bun = if self.bun_disabled.load(Ordering::SeqCst) {
+            None
+        } else {
+            match tokio::task::spawn_blocking(move || config.preferred_bun())
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    log::warn!("brain: {error}; falling back to Node");
+                    self.bun_disabled.store(true, Ordering::SeqCst);
+                    None
+                }
+            }
+        };
+        loop {
+            if self.is_stopping() {
+                return Err("brain startup cancelled by shutdown".into());
+            }
+            let executable = if let Some(runtime) = &bun {
+                log::info!("brain: starting Bun {}", runtime.version);
+                runtime.executable.clone()
+            } else {
+                cognia_core::node_runtime::node_executable().map_err(|error| error.to_string())?
+            };
+            let generation = self
+                .person_authority
+                .as_ref()
+                .and_then(|authority| authority.begin_child());
+            let startup = StartupEvidence::capture();
+            let token = self.mint_token()?;
+            let mut cmd = Command::new(&executable);
+            if let Some(runtime) = &bun {
+                cmd.args(runtime.kind.launch_args());
+            }
+            cognia_exec_sandbox::proc_group::apply_process_group(&mut cmd);
+            cmd.arg(&self.config.entry)
+                .arg("serve")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            cmd.env_remove("COGNIA_BRAIN_PROFILE");
+            cmd.env_remove("COGNIA_PERSON_EXECUTION"); // P6d never inherit the operator environment.
+            cmd.env_remove("COGNIA_PERSON_CHAT"); // P6c is advertised only by this supervisor.
+            if withhold_unpaired_collab_url(
+                std::env::var("COGNIA_COLLAB_URL").ok().as_deref(),
+                std::env::var("COGNIA_COLLAB_ORG_ID").ok().as_deref(),
+            ) {
+                cmd.env_remove("COGNIA_COLLAB_URL");
+            }
+            for (k, v) in self.child_env(&token).await {
+                cmd.env(k, v);
+            }
+            if self.is_stopping() {
+                return Err("brain startup cancelled by shutdown".into());
+            }
+            #[cfg(target_os = "windows")]
+            {
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
 
-        cmd.spawn().map(|child| (child, generation)).map_err(|e| {
-            format!(
-                "failed to spawn brain with Node.js at {}: {e}",
-                node.display()
-            )
-        })
+            match cmd.spawn() {
+                Ok(child) => {
+                    self.bun_active.store(bun.is_some(), Ordering::SeqCst);
+                    return Ok((child, generation, startup));
+                }
+                Err(error) if bun.is_some() => {
+                    log::warn!("brain: Bun spawn failed: {error}; falling back to Node");
+                    self.bun_disabled.store(true, Ordering::SeqCst);
+                    bun = None;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to spawn brain with Node.js at {}: {error}",
+                        executable.display()
+                    ))
+                }
+            }
+        }
     }
-
     async fn supervise_child(
         &self,
         mut child: tokio::process::Child,
@@ -556,8 +642,10 @@ impl BrainSupervisor {
         // before run() can park, back off or start a successor.
         mut generation: Option<cognia_companion::person_partition::PersonChildGeneration>,
         shutdown: &mut watch::Receiver<bool>,
+        startup: StartupEvidence,
     ) -> ChildOutcome {
         self.running.store(true, Ordering::SeqCst);
+        let child_pid = child.id();
         let mut refusals = ws_bridge::subscribe_refusals();
         refusals.mark_unchanged();
         let mut refused = false;
@@ -601,12 +689,13 @@ impl BrainSupervisor {
                 status = child.wait() => {
                     // Revoke as soon as exit is observed, before any await
                     // while updating backoff or preparing the successor.
-                    drop(generation.take());
+                    was_ready |= generation.take().is_some_and(|generation| generation.revoke());
+                    was_ready |= !self.person && startup.was_accepted();
                     match &status {
                         Ok(s) => log::warn!("brain exited: {s}"),
                         Err(e) => log::error!("brain wait error: {e}"),
                     }
-                    if refused
+                    if refused || (!self.person && startup.was_refused())
                         || status
                             .as_ref()
                             .is_ok_and(|s| s.code() == Some(BRAIN_REFUSED_EXIT_CODE))
@@ -617,7 +706,16 @@ impl BrainSupervisor {
                     // Any exit is a failure for backoff purposes; a healthy
                     // run reset the counter at hello time, so a single crash
                     // after a long healthy run respawns immediately.
-                    self.backoff.lock().await.note_failure(Instant::now());
+                    if !was_ready && self.bun_active.load(Ordering::SeqCst) {
+                        // The failed child has been reaped and its authority revoked.
+                        // Never replay a running brain on a different runtime.
+                        cognia_exec_sandbox::proc_group::kill_process_group(child_pid);
+                        self.bun_disabled.store(true, Ordering::SeqCst);
+                        self.backoff.lock().await.reset();
+                        log::warn!("brain: Bun exited before ready; falling back to Node");
+                    } else {
+                        self.backoff.lock().await.note_failure(Instant::now());
+                    }
                     break;
                 }
 
@@ -630,6 +728,7 @@ impl BrainSupervisor {
                         continue;
                     }
                     refused = true;
+                    cognia_exec_sandbox::proc_group::kill_process_group(child_pid);
                     let _ = child.start_kill();
                     // Loop continues; child.wait() observes the kill.
                 }
@@ -650,12 +749,16 @@ impl BrainSupervisor {
                 }
 
                 _ = &mut ready_deadline, if ready_watchdog.is_armed(was_ready) => {
-                    drop(generation.take());
+                    was_ready |= generation.as_ref().is_some_and(|generation| generation.was_admitted());
+                    was_ready |= !self.person && startup.was_accepted();
+                    if was_ready { continue; }
+                    was_ready |= generation.take().is_some_and(|generation| generation.revoke());
                     ready_watchdog.mark_fired();
                     log::error!(
                         "brain did not complete the bridge hello within {}s; killing",
                         self.config.ready_timeout.as_secs()
                     );
+                    cognia_exec_sandbox::proc_group::kill_process_group(child_pid);
                     let _ = child.start_kill();
                     // Loop continues; child.wait() observes the kill.
                 }
@@ -677,6 +780,7 @@ impl BrainSupervisor {
                     if *shutdown.borrow() {
                         drop(generation.take());
                         log::info!("brain supervisor: shutdown — killing brain");
+                        cognia_exec_sandbox::proc_group::kill_process_group(child_pid);
                         let _ = child.start_kill();
                         let _ = child.wait().await;
                         outcome = ChildOutcome::Shutdown;
@@ -689,6 +793,7 @@ impl BrainSupervisor {
         self.running.store(false, Ordering::SeqCst);
         outcome
     }
+
 }
 
 #[cfg(test)]
@@ -702,6 +807,192 @@ pub(crate) mod tests {
     };
     use parking_lot::RwLock;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_startup_failure_and_watchdog_fall_back_to_node() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
+        cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
+        for body in ["exit 9", "exec sleep 30"] {
+            let dir = tempfile::tempdir().unwrap();
+            let bun = dir.path().join("bun");
+            std::fs::write(&bun, format!("#!/bin/sh\nif [ \"$1\" = --eval ]; then printf cognia-bun:1.4.0; exit; fi\n{body}\n")).unwrap();
+            std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let marker = dir.path().join("node-started");
+            let entry = dir.path().join("brain.mjs");
+            std::fs::write(&entry, format!("import fs from 'node:fs'; fs.writeFileSync({},process.versions.bun?'bun':'node');setInterval(()=>{{}},1000);", serde_json::to_string(&marker).unwrap())).unwrap();
+            let supervisor =
+                BrainSupervisor::new(test_config(entry, Duration::from_millis(150)), test_state());
+            supervisor
+                .runtime_config
+                .set(RuntimeConfig::parse(Some("bun"), Some(bun)))
+                .unwrap();
+            let task = supervisor.start();
+            let started = tokio::time::timeout(Duration::from_secs(5), async {
+                while !marker.exists() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+            supervisor.shutdown();
+            tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .unwrap()
+                .unwrap();
+            started.expect("Node fallback did not start");
+            assert_eq!(std::fs::read_to_string(marker).unwrap(), "node");
+            assert!(supervisor.bun_disabled.load(Ordering::SeqCst));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_during_bun_probe_does_not_launch_a_brain() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bun = dir.path().join("bun");
+        let probing = dir.path().join("probing");
+        let launched = dir.path().join("launched");
+        std::fs::write(&bun, format!("#!/bin/sh\nif [ \"$1\" = --eval ]; then touch '{}'; sleep 0.15; printf cognia-bun:1.4.0; exit; fi\ntouch '{}'\n", probing.display(), launched.display())).unwrap();
+        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let entry = dir.path().join("brain.mjs");
+        std::fs::write(&entry, "unused").unwrap();
+        let supervisor =
+            BrainSupervisor::new(test_config(entry, Duration::from_secs(1)), test_state());
+        supervisor
+            .runtime_config
+            .set(RuntimeConfig::parse(Some("bun"), Some(bun)))
+            .unwrap();
+        let owner = supervisor.clone();
+        let task = tokio::spawn(async move { owner.spawn_once().await });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !probing.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        supervisor.shutdown();
+        assert!(matches!(task.await.unwrap(), Err(error) if error.contains("cancelled")));
+        assert!(!launched.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_contract_refusal_still_parks_instead_of_falling_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
+        cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
+        let dir = tempfile::tempdir().unwrap();
+        let bun = dir.path().join("bun");
+        std::fs::write(
+            &bun,
+            "#!/bin/sh\nif [ \"$1\" = --eval ]; then printf cognia-bun:1.4.0; exit; fi\nexit 78\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let entry = dir.path().join("brain.mjs");
+        std::fs::write(&entry, "throw new Error('Node fallback must not run')").unwrap();
+        let supervisor =
+            BrainSupervisor::new(test_config(entry, Duration::from_secs(1)), test_state());
+        supervisor
+            .runtime_config
+            .set(RuntimeConfig::parse(Some("bun"), Some(bun)))
+            .unwrap();
+        let task = supervisor.start();
+        let parked = tokio::time::timeout(Duration::from_secs(5), async {
+            while !supervisor.parked.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        supervisor.shutdown();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        parked.expect("refusal must park the supervisor");
+        assert!(!supervisor.bun_disabled.load(Ordering::SeqCst));
+        assert_eq!(supervisor.status().restart_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn admission_and_refusal_survive_exit_before_the_watch_branch_is_polled() {
+        let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
+        for refused in [false, true] {
+            cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
+            cognia_companion::ws_bridge::test_support::clear_refusal_for_testing();
+            let supervisor = BrainSupervisor::new(
+                test_config(PathBuf::new(), Duration::from_secs(1)),
+                test_state(),
+            );
+            supervisor.bun_active.store(true, Ordering::SeqCst);
+            let evidence = StartupEvidence::capture();
+            if refused {
+                cognia_companion::ws_bridge::test_support::refuse_for_testing("contract_mismatch");
+            } else {
+                let _socket = cognia_companion::ws_bridge::test_support::install_socket_for_testing(
+                    &supervisor.state,
+                );
+                cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
+            }
+            // Both readiness transitions already happened before select! polls.
+            let child = Command::new("/bin/sh")
+                .args(["-c", "exit 1"])
+                .spawn()
+                .unwrap();
+            let (_tx, mut shutdown) = watch::channel(false);
+            let outcome = supervisor
+                .supervise_child(child, None, &mut shutdown, evidence)
+                .await;
+            assert_eq!(
+                outcome,
+                if refused {
+                    ChildOutcome::Refused
+                } else {
+                    ChildOutcome::Exited
+                }
+            );
+            assert!(!supervisor.bun_disabled.load(Ordering::SeqCst));
+        }
+        cognia_companion::ws_bridge::test_support::clear_refusal_for_testing();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn person_admission_is_fenced_and_retained_after_disconnect() {
+        let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
+        let supervisor = BrainSupervisor::new_person(
+            test_config(PathBuf::new(), Duration::from_secs(1)),
+            test_state(),
+        );
+        let authority = supervisor.person_authority.as_ref().unwrap();
+        let generation = authority.begin_child().unwrap();
+        let id = authority.current().unwrap();
+        assert!(authority.admit(&id, || {}));
+        assert!(generation.was_admitted());
+        supervisor.bun_active.store(true, Ordering::SeqCst);
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 1"])
+            .spawn()
+            .unwrap();
+        let (_tx, mut shutdown) = watch::channel(false);
+        assert_eq!(
+            supervisor
+                .supervise_child(
+                    child,
+                    Some(generation),
+                    &mut shutdown,
+                    StartupEvidence::capture()
+                )
+                .await,
+            ChildOutcome::Exited
+        );
+        assert!(!supervisor.bun_disabled.load(Ordering::SeqCst));
+        assert!(!authority.accepts(&id));
+        assert!(!authority.begin_child().unwrap().was_admitted());
+    }
     pub(crate) fn test_state() -> SharedState {
         Arc::new(CompanionState {
             secret: RwLock::new(b"test-secret-32-bytes-exactly____".to_vec()),
@@ -843,7 +1134,7 @@ pub(crate) mod tests {
         let token = cognia_companion::jwt::verify_person_brain(&supervisor.state.secret.read(), &supervisor.mint_token().unwrap()).unwrap();
         let child = Command::new("/bin/sh").arg("-c").arg("exit 7").kill_on_drop(true).spawn().unwrap();
         let mut shutdown = supervisor.shutdown_rx.clone();
-        assert_eq!(supervisor.supervise_child(child, Some(child_generation), &mut shutdown).await, ChildOutcome::Exited);
+        assert_eq!(supervisor.supervise_child(child, Some(child_generation), &mut shutdown, StartupEvidence::capture()).await, ChildOutcome::Exited);
         assert!(!authority.accepts(&token.generation));
         let _respawn = authority.begin_child().unwrap();
         assert!(!authority.accepts(&token.generation));

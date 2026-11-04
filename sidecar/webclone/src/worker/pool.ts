@@ -71,18 +71,24 @@ export async function runPool<T>(
   if (options.timeoutMs && options.timeoutMs > 0) {
     // Timeout handler: set the flag so workers stop picking new tasks,
     // then resolve (not reject) so the caller gets partial results.
+    let timer: ReturnType<typeof setTimeout> | undefined
     const timeoutGuard = new Promise<void>((resolve) => {
-      setTimeout(() => {
+      timer = setTimeout(() => {
         timedOut = true
         resolve()
       }, options.timeoutMs)
     })
-    await Promise.race([Promise.all(workers), timeoutGuard])
-    // If timeout fired, the timedOut flag is already set. Workers that are
-    // in-flight will complete their current task naturally and then stop.
-    // Wait a brief moment for those in-flight tasks to settle.
-    if (timedOut) {
-      await Promise.all(workers)
+    try {
+      await Promise.race([Promise.all(workers), timeoutGuard])
+      // If timeout fired, let in-flight workers settle before returning.
+      if (timedOut) await Promise.all(workers)
+    } catch (error) {
+      // Stop siblings from dequeuing more work after the pool has failed.
+      timedOut = true
+      throw error
+    } finally {
+      // A completed or rejected job must not keep its one-shot runner alive.
+      clearTimeout(timer)
     }
   } else {
     await Promise.all(workers)

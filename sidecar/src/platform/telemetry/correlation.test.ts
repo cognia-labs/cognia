@@ -7,7 +7,7 @@ import { initializeTelemetry, shutdownTelemetry } from "./index.ts"
 
 test("preserves Cognia and PostHog correlation across the Langfuse AI SDK integration", async () => {
   assert.equal(
-    initializeTelemetry({
+    await initializeTelemetry({
       COGNIA_POSTHOG_DESTINATIONS_JSON: JSON.stringify([
         {
           id: "managed",

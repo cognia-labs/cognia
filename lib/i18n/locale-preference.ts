@@ -19,7 +19,9 @@ export function resolveSystemLocale(languages?: readonly string[]): Locale {
       ? []
       : navigator.languages?.length
         ? navigator.languages
-        : [navigator.language])
+        : typeof navigator.language === "string"
+          ? [navigator.language]
+          : [])
   for (const tag of preferred) {
     const language = tag.toLowerCase().split(/[-_]/)[0]
     if (language === "zh") return "zh-CN"

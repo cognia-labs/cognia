@@ -11,6 +11,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
 use super::host::SidecarHost;
+use cognia_core::host_runtime::{RuntimeConfig, RuntimeKind, RuntimeRole};
 use cognia_core::supervision_backoff::CrashBackoff;
 
 /// Tauri event channel name. The frontend subscribes via
@@ -79,15 +80,20 @@ fn node_resource_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn sidecar_command(node_executable: &Path, script: &Path) -> Result<Command, String> {
+fn sidecar_command(
+    runtime_executable: &Path,
+    script: &Path,
+    runtime: RuntimeKind,
+) -> Result<Command, String> {
     // Node's CLI realpath resolution rejects canonical Windows `\\?\` paths
     // with EISDIR, including paths derived from its working directory.
     let script = node_resource_path(script);
     let cwd = script
         .parent()
         .ok_or_else(|| "sidecar script has no parent dir".to_string())?;
-    let mut command = background_command(&node_resource_path(node_executable));
+    let mut command = background_command(&node_resource_path(runtime_executable));
     command
+        .args(runtime.launch_args())
         .arg(&script)
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -95,6 +101,15 @@ fn sidecar_command(node_executable: &Path, script: &Path) -> Result<Command, Str
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     Ok(command)
+}
+
+/// Cancellation before admission must kill the entire uncommitted Bun tree.
+struct StartupProcessGuard(Option<u32>);
+
+impl Drop for StartupProcessGuard {
+    fn drop(&mut self) {
+        cognia_exec_sandbox::proc_group::kill_process_group(self.0);
+    }
 }
 
 /// Hand the sidecar the confinement wrapper for `run_code` children, when this
@@ -168,9 +183,75 @@ fn apply_managed_proxy_env(
 fn handle_active_run_event(state: &SidecarState, generation: u64, value: &Value) {
     let session_id = value.get("sessionId").and_then(Value::as_str);
     match value.get("type").and_then(Value::as_str) {
-        Some("session_ended") => {
+        Some("executor_started") => {
+            if let (Some(session_id), Some(executor_id)) =
+                (session_id, value.get("executorId").and_then(Value::as_str))
+            {
+                let mut registry = state.active_runs.lock();
+                if let Some(hold) = registry.by_session.get_mut(session_id).and_then(|holds| {
+                    holds.iter_mut().find(|hold| {
+                        hold.generation == Some(generation)
+                            && hold.executor_id.is_none()
+                            && hold.turn_id.as_deref()
+                                == value.get("turnId").and_then(Value::as_str)
+                    })
+                }) {
+                    hold.executor_id = Some(executor_id.to_owned());
+                }
+            }
+        }
+        // Turn liveness and the wake assertion are independent. An explicit
+        // process snapshot can release power without claiming disposal.
+        Some("session_ended" | "turn_settled")
+            if value
+                .get("backgroundProcessesRunning")
+                .and_then(Value::as_bool)
+                == Some(false) =>
+        {
             if let Some(session_id) = session_id {
-                state.finish_active_run(generation, session_id);
+                let mut registry = state.active_runs.lock();
+                if let Some(holds) = registry.by_session.get_mut(session_id) {
+                    for hold in holds.iter_mut().filter(|hold| {
+                        hold.generation == Some(generation)
+                            && value
+                                .get("executorId")
+                                .and_then(Value::as_str)
+                                .is_none_or(|id| hold.executor_id.as_deref() == Some(id))
+                    }) {
+                        if hold.wake_held {
+                            hold.wake_held = false;
+                            cognia_power::release(&cognia_power::WakeReason::ActiveRun(
+                                session_id.to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        // Only disposal removes session liveness across renderer reloads.
+        Some("session_disposed") => {
+            if let (Some(session_id), Some(executor_id)) =
+                (session_id, value.get("executorId").and_then(Value::as_str))
+            {
+                let tokens: Vec<_> = state
+                    .active_runs
+                    .lock()
+                    .by_session
+                    .get(session_id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|hold| {
+                        hold.generation == Some(generation)
+                            && hold.executor_id.as_deref() == Some(executor_id)
+                    })
+                    .map(|hold| ActiveRunToken {
+                        session_id: session_id.to_owned(),
+                        token_id: hold.token_id,
+                    })
+                    .collect();
+                for token in tokens {
+                    state.cancel_active_run(token);
+                }
             }
         }
         Some("command_ack") if value.get("duplicate").and_then(Value::as_bool) == Some(true) => {
@@ -221,13 +302,20 @@ pub struct SidecarState {
     /// a failed probe leaves this `false` so a later spawn (after the user
     /// installs/upgrades Node) re-checks.
     node_version_ok: Arc<std::sync::atomic::AtomicBool>,
+    /// A Bun boot failure switches this sidecar slot to Node until host restart.
+    bun_disabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Invalidates a private pre-ready attempt when teardown starts.
+    stop_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[derive(Debug)]
 struct ActiveRunHold {
     token_id: u64,
-    generation: u64,
+    generation: Option<u64>,
     command_id: Option<String>,
+    turn_id: Option<String>,
+    executor_id: Option<String>,
+    wake_held: bool,
 }
 
 #[derive(Default)]
@@ -344,10 +432,43 @@ impl SidecarState {
     }
 
     pub fn begin_active_run(&self, session_id: &str, command_id: Option<&str>) -> ActiveRunToken {
+        self.begin_run(session_id, command_id, Some(self.current_epoch()))
+    }
+
+    pub fn begin_pending_run(&self, session_id: &str, command_id: Option<&str>) -> ActiveRunToken {
+        self.begin_run(session_id, command_id, None)
+    }
+
+    fn activate_pending_run(&self, token: &ActiveRunToken, message: &Value) {
+        if let Some(hold) = self
+            .active_runs
+            .lock()
+            .by_session
+            .get_mut(&token.session_id)
+            .and_then(|holds| {
+                holds
+                    .iter_mut()
+                    .find(|hold| hold.token_id == token.token_id)
+            })
+        {
+            hold.generation = Some(self.current_epoch());
+            hold.turn_id = message
+                .get("options")
+                .and_then(|options| options.get("turnId"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+
+    fn begin_run(
+        &self,
+        session_id: &str,
+        command_id: Option<&str>,
+        generation: Option<u64>,
+    ) -> ActiveRunToken {
         let mut registry = self.active_runs.lock();
         registry.next_token_id = registry.next_token_id.wrapping_add(1);
         let token_id = registry.next_token_id;
-        let generation = self.current_epoch();
         cognia_power::acquire(cognia_power::WakeReason::ActiveRun(session_id.to_string()));
         registry
             .by_session
@@ -357,6 +478,9 @@ impl SidecarState {
                 token_id,
                 generation,
                 command_id: command_id.map(str::to_string),
+                turn_id: None,
+                executor_id: None,
+                wake_held: true,
             });
         ActiveRunToken {
             token_id,
@@ -368,13 +492,25 @@ impl SidecarState {
         self.release_active_run_matching(&token.session_id, |hold| hold.token_id == token.token_id);
     }
 
+    /// Host-owned executors survive renderer reloads, including background
+    /// processes after a turn ends. Disposal releases their holds.
+    pub fn live_session_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.active_runs.lock().by_session.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     fn finish_active_run(&self, generation: u64, session_id: &str) {
-        self.release_active_run_matching(session_id, |hold| hold.generation == generation);
+        self.release_active_run_matching_from_back(session_id, |hold| {
+            hold.generation == Some(generation) && hold.executor_id.is_none()
+        });
     }
 
     fn finish_duplicate_active_run(&self, generation: u64, session_id: &str, command_id: &str) {
         self.release_active_run_matching_from_back(session_id, |hold| {
-            hold.generation == generation && hold.command_id.as_deref() == Some(command_id)
+            hold.generation == Some(generation)
+                && hold.command_id.as_deref() == Some(command_id)
+                && hold.executor_id.is_none()
         });
     }
 
@@ -383,11 +519,15 @@ impl SidecarState {
             let mut registry = self.active_runs.lock();
             let mut releases = Vec::new();
             registry.by_session.retain(|session_id, holds| {
-                let before = holds.len();
-                holds.retain(|hold| hold.generation != generation);
+                let before = holds.iter().filter(|hold| hold.wake_held).count();
+                // Host-owned jobs can survive a sidecar crash. Started runtimes
+                // remain unknown until independently disposed, even after exit.
+                holds.retain(|hold| {
+                    hold.generation != Some(generation) || hold.executor_id.is_some()
+                });
                 releases.extend(std::iter::repeat_n(
                     session_id.clone(),
-                    before - holds.len(),
+                    before - holds.iter().filter(|hold| hold.wake_held).count(),
                 ));
                 !holds.is_empty()
             });
@@ -424,13 +564,13 @@ impl SidecarState {
             let Some(holds) = registry.by_session.get_mut(session_id) else {
                 return;
             };
-            let removed = index(holds).and_then(|index| holds.remove(index)).is_some();
+            let removed = index(holds).and_then(|index| holds.remove(index));
             if holds.is_empty() {
                 registry.by_session.remove(session_id);
             }
             removed
         };
-        if removed {
+        if removed.is_some_and(|hold| hold.wake_held) {
             cognia_power::release(&cognia_power::WakeReason::ActiveRun(session_id.to_string()));
         }
     }
@@ -440,11 +580,32 @@ impl SidecarState {
     /// reads; the `stdin` lock still serializes concurrent writers, preserving
     /// line ordering.
     pub async fn write_command(&self, msg: &Value) -> Result<(), String> {
+        self.write_command_inner(msg, None).await
+    }
+
+    pub async fn write_pending_run_command(
+        &self,
+        msg: &Value,
+        token: &ActiveRunToken,
+    ) -> Result<(), String> {
+        self.write_command_inner(msg, Some(token)).await
+    }
+
+    async fn write_command_inner(
+        &self,
+        msg: &Value,
+        token: Option<&ActiveRunToken>,
+    ) -> Result<(), String> {
         let line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         let mut guard = self.stdin.lock().await;
         let stdin = guard
             .as_mut()
             .ok_or_else(|| "sidecar not running".to_string())?;
+        // The exit path also needs stdin's lock before generation cleanup.
+        // Until this lock is held, a pending writer must survive that cleanup.
+        if let Some(token) = token {
+            self.activate_pending_run(token, msg);
+        }
         stdin
             .write_all(line.as_bytes())
             .await
@@ -541,17 +702,29 @@ impl SidecarState {
     }
 }
 
-/// Spawn the Node sidecar and start pumping its stdout into host events
+/// Spawn the Agent sidecar and start pumping its stdout into host events
 /// (Tauri events on desktop, the companion EventBus headless — see
 /// [`super::host`]).
 ///
 /// Safe to call multiple times — subsequent calls become no-ops while the
 /// child is alive.
 pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<(), String> {
+    let config =
+        RuntimeConfig::from_env(RuntimeRole::Sidecar).map_err(|error| error.to_string())?;
+    spawn_with_runtime(host, state, config, SIDECAR_READY_TIMEOUT).await
+}
+
+async fn spawn_with_runtime(
+    host: Arc<dyn SidecarHost>,
+    state: SidecarState,
+    config: RuntimeConfig,
+    ready_timeout: Duration,
+) -> Result<(), String> {
     // Serialize concurrent spawns (mirrors `plugin_api/python` materialize_lock):
     // a second caller blocks here, then sees the live child below and no-ops,
-    // so we can never start two Node processes for one slot.
+    // so we can never start two sidecar processes for one slot.
     let _spawn_guard = state.spawn_lock.lock().await;
+    let stop_epoch = state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst);
 
     if state.inner.lock().await.child.is_some() {
         return Ok(());
@@ -578,60 +751,173 @@ pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<()
         ));
     }
 
-    let node_executable = host.resolve_node_executable()?;
-
-    // Fail fast with an actionable message if Node is missing or too old,
-    // rather than letting the spawn (or the SDK) blow up later and opaquely.
-    state.ensure_node_version(&node_executable).await?;
-
     let script = host.resolve_script()?;
     let cwd = script
         .parent()
         .ok_or_else(|| "sidecar script has no parent dir".to_string())?
         .to_path_buf();
 
-    let mut cmd = sidecar_command(&node_executable, &script)?;
-    cognia_exec_sandbox::proc_group::apply_process_group(&mut cmd);
+    // Probe only after explicit opt-in. A failed Bun is not retried on each send.
+    let bun = if state
+        .bun_disabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        None
+    } else {
+        match tokio::task::spawn_blocking(move || config.preferred_bun())
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                log::warn!("sidecar: {error}; falling back to Node");
+                state
+                    .bun_disabled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+        }
+    };
+    let mut bun = bun;
+    let mut startup_guard = StartupProcessGuard(None);
+    let (child, stdout, stderr, stdin, mut startup_lines) = loop {
+        if state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst) != stop_epoch {
+            return Err("sidecar startup cancelled by shutdown".into());
+        }
+        let executable = if let Some(runtime) = &bun {
+            log::info!("sidecar: starting Bun {}", runtime.version);
+            runtime.executable.clone()
+        } else {
+            let node = host.resolve_node_executable()?;
+            state.ensure_node_version(&node).await?;
+            node
+        };
+        let mut cmd = sidecar_command(
+            &executable,
+            &script,
+            if bun.is_some() {
+                RuntimeKind::Bun
+            } else {
+                RuntimeKind::Node
+            },
+        )?;
+        cognia_exec_sandbox::proc_group::apply_process_group(&mut cmd);
 
-    // Inject the host-resolved provider credentials (OAuth bearer → API key;
-    // base URL orthogonal). See `host::inject_provider_env` for the precedence
-    // rationale.
-    host.inject_env(&mut cmd).await;
+        // Inject the host-resolved provider credentials (OAuth bearer → API key;
+        // base URL orthogonal). See `host::inject_provider_env` for the precedence
+        // rationale.
+        host.inject_env(&mut cmd).await;
 
-    // Inject the user's network proxy config so the Node sidecar's outbound
-    // HTTP (Anthropic SDK + any provider relays) routes through the same
-    // proxy as the rest of the app. The interceptor at
-    // `sidecar/src/platform/net/fetch-interceptor.ts` reads HTTPS_PROXY at boot
-    // and wraps the global undici dispatcher.
-    let proxy_cfg = cognia_net::proxy_config::current().map_err(|error| error.to_string())?;
-    apply_managed_proxy_env(&mut cmd, &proxy_cfg)?;
+        // Inject the user's network proxy config so the Node sidecar's outbound
+        // HTTP (Anthropic SDK + any provider relays) routes through the same
+        // proxy as the rest of the app. The interceptor at
+        // `sidecar/src/platform/net/fetch-interceptor.ts` reads HTTPS_PROXY at boot
+        // and wraps the global undici dispatcher.
+        let proxy_cfg = cognia_net::proxy_config::current().map_err(|error| error.to_string())?;
+        apply_managed_proxy_env(&mut cmd, &proxy_cfg)?;
 
-    // Code tool presentation (ADR-0117 Phase 4). The sidecar itself runs
-    // unconfined — it needs egress to reach the model — so it cannot confine
-    // the `run_code` children it forks. We hand it the OS confinement wrapper
-    // to exec through instead. When this host has no backend the variable stays
-    // unset, and the sidecar then refuses to register `run_code` at all.
-    apply_code_sandbox_env(&mut cmd, &node_executable, &cwd);
+        // Code tool presentation (ADR-0117 Phase 4). The sidecar itself runs
+        // unconfined — it needs egress to reach the model — so it cannot confine
+        // the `run_code` children it forks. We hand it the OS confinement wrapper
+        // to exec through instead. When this host has no backend the variable stays
+        // unset, and the sidecar then refuses to register `run_code` at all.
+        apply_code_sandbox_env(&mut cmd, &executable, &cwd);
 
-    let mut child = cmd.spawn().map_err(|e| {
-        format!(
-            "failed to spawn sidecar with Node.js at {}: {e}",
-            node_executable.display()
-        )
-    })?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(error) if bun.is_some() => {
+                log::warn!("sidecar: Bun spawn failed: {error}; falling back to Node");
+                state
+                    .bun_disabled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                bun = None;
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to spawn sidecar with Node.js at {}: {error}",
+                    executable.display()
+                ))
+            }
+        };
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "child has no stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "child has no stderr".to_string())?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "child has no stdin".to_string())?;
+        startup_guard.0 = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "child has no stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "child has no stderr".to_string())?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "child has no stdin".to_string())?;
+        let mut stdout = BufReader::new(stdout).lines();
+        let mut startup_lines = VecDeque::new();
+        if bun.is_some() {
+            // Nothing is published in state yet: no command can reach a failed Bun.
+            // Drain stderr concurrently so a full pipe cannot stall the ready frame.
+            let stderr_task = tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    log::warn!("[sidecar.stderr] {line}");
+                }
+            });
+            let readiness = tokio::time::timeout(ready_timeout, async {
+                let mut bytes = 0;
+                loop {
+                    if state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst) != stop_epoch {
+                        return Err("sidecar startup cancelled by shutdown".into());
+                    }
+                    let line = tokio::select! {
+                        line = stdout.next_line() => line,
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => continue,
+                    }
+                    .map_err(|error| error.to_string())?
+                    .ok_or("Bun sidecar exited before ready")?;
+                    bytes += line.len();
+                    if bytes > 1024 * 1024 {
+                        return Err("Bun sidecar startup output exceeded 1 MiB".to_string());
+                    }
+                    let ready = serde_json::from_str::<Value>(&line)
+                        .ok()
+                        .is_some_and(|event| {
+                            event.get("type").and_then(Value::as_str) == Some("ready")
+                        });
+                    startup_lines.push_back(line);
+                    if ready {
+                        return Ok(());
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| Err("Bun sidecar ready deadline exceeded".into()));
+            if let Err(error) = readiness {
+                cognia_exec_sandbox::proc_group::kill_process_group(child.id());
+                let _ = child.start_kill();
+                tokio::time::timeout(Duration::from_secs(3), child.wait())
+                    .await
+                    .map_err(|_| "could not reap failed Bun sidecar; Node fallback refused")?
+                    .map_err(|error| format!("could not reap failed Bun sidecar: {error}"))?;
+                startup_guard.0 = None;
+                stderr_task.abort();
+                if state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst) != stop_epoch {
+                    return Err("sidecar startup cancelled by shutdown".into());
+                }
+                log::warn!("sidecar: {error}; falling back to Node");
+                state
+                    .bun_disabled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                bun = None;
+                continue;
+            }
+            // The Bun stderr task already owns this stream.
+            break (child, stdout, None, stdin, startup_lines);
+        }
+        break (child, stdout, Some(stderr), stdin, startup_lines);
+    };
 
     // Claim this spawn's generation (under `spawn_lock`, so it's serial). The
     // watchdog below captures it to avoid acting on a superseded child.
@@ -639,9 +925,12 @@ pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<()
 
     // stdin lives behind its own lock (see `write_command`); child + ready stay
     // in the shared state.
-    *state.stdin.lock().await = Some(stdin);
     {
+        // Wait for both slots before publishing either. Cancellation still
+        // leaves the process group owned by the startup guard at this point.
+        let mut stdin_slot = state.stdin.lock().await;
         let mut guard = state.inner.lock().await;
+        *stdin_slot = Some(stdin);
         guard.child = Some(child);
         guard.ready = false;
     }
@@ -654,9 +943,13 @@ pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<()
         let host = Arc::clone(&host);
         let state = state.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
+            let mut reader = stdout;
             loop {
-                match reader.next_line().await {
+                let next = match startup_lines.pop_front() {
+                    Some(line) => Ok(Some(line)),
+                    None => reader.next_line().await,
+                };
+                match next {
                     Ok(Some(line)) => {
                         let trimmed = line.trim();
                         if trimmed.is_empty() {
@@ -757,12 +1050,14 @@ pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<()
     }
 
     // Forward stderr to the parent log so users can debug install issues.
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            log::warn!("[sidecar.stderr] {line}");
-        }
-    });
+    if let Some(stderr) = stderr {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                log::warn!("[sidecar.stderr] {line}");
+            }
+        });
+    }
 
     // Ready watchdog: a child that never announces `ready` (e.g. Node hung on a
     // bad install) would otherwise sit forever while sends silently queue. Wait
@@ -822,9 +1117,9 @@ pub async fn spawn(host: Arc<dyn SidecarHost>, state: SidecarState) -> Result<()
         });
     }
 
+    startup_guard.0 = None;
     Ok(())
 }
-
 /// Answer one `host_rpc` frame and write the result back down the sidecar's
 /// stdin.
 ///
@@ -891,6 +1186,14 @@ async fn handle_permission_request(host: Arc<dyn SidecarHost>, value: Value) {
 /// kills because of a *genuine* failure (the ready watchdog) reports that
 /// failure itself before calling this.
 pub async fn shutdown_sidecar(state: SidecarState) -> Result<(), String> {
+    state
+        .stop_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let _spawn_guard = state.spawn_lock.lock().await;
+    shutdown_sidecar_locked(&state).await
+}
+
+async fn shutdown_sidecar_locked(state: &SidecarState) -> Result<(), String> {
     state.note_intentional_stop().await;
     // Closing stdin first lets the sidecar exit cleanly (its stdin EOF handler
     // tears down active sessions). stdin lives behind its own lock; take it
@@ -936,15 +1239,269 @@ pub async fn kill_sidecar(state: SidecarState) {
 /// shutdown/reap failure to the settings command. The next request respawns the
 /// child with a fresh, already-committed environment.
 pub async fn restart_sidecar_for_config(state: SidecarState) -> Result<(), String> {
-    let _spawn_guard = state.spawn_lock.lock().await;
-    shutdown_sidecar(state.clone()).await
+    shutdown_sidecar(state).await
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    struct RuntimeTestHost {
+        script: PathBuf,
+        events: ParkingMutex<Vec<Value>>,
+    }
+
+    #[cfg(unix)]
+    #[async_trait::async_trait]
+    impl SidecarHost for RuntimeTestHost {
+        fn resolve_script(&self) -> Result<PathBuf, String> {
+            Ok(self.script.clone())
+        }
+        fn emit(&self, _: &str, payload: &Value) {
+            self.events.lock().push(payload.clone());
+        }
+        async fn inject_env(&self, _: &mut Command) {}
+        fn is_disabled(&self) -> bool {
+            false
+        }
+        fn report_failure(&self) {
+            panic!("pre-admission fallback must not spend the recovery budget")
+        }
+        async fn dispatch_host_rpc(&self, _: &str, _: &Value) -> Result<Value, String> {
+            Ok(Value::Null)
+        }
+        fn kind(&self) -> &'static str {
+            "runtime-test"
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_boot_failures_fall_back_before_commands_are_admitted() {
+        use std::os::unix::fs::PermissionsExt;
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        for body in ["exit 9", "exec sleep 30"] {
+            let dir = tempfile::tempdir().unwrap();
+            let bun = dir.path().join("bun");
+            std::fs::write(&bun, format!("#!/bin/sh\nif [ \"$1\" = --eval ]; then printf cognia-bun:1.4.0; exit; fi\n{body}\n")).unwrap();
+            std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let script = dir.path().join("host.mjs");
+            std::fs::write(&script, "import readline from 'node:readline';\nconsole.log(JSON.stringify({type:'ready',runtime:process.versions.bun?'bun':'node'}));\nreadline.createInterface({input:process.stdin}).on('line', line=>console.log(line)).on('close',()=>process.exit(0));\n").unwrap();
+            let host = Arc::new(RuntimeTestHost {
+                script,
+                events: ParkingMutex::new(Vec::new()),
+            });
+            let state = SidecarState::new();
+            let config = RuntimeConfig::parse(Some("bun"), Some(bun)).unwrap();
+            let spawn_task = tokio::spawn(spawn_with_runtime(
+                host.clone(),
+                state.clone(),
+                config,
+                Duration::from_millis(100),
+            ));
+            if body == "exec sleep 30" {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                // The failed Bun never owns a visible stdin or generation.
+                assert_eq!(state.restart_count(), 0);
+                assert!(state
+                    .write_command(&serde_json::json!({"type":"never-admitted"}))
+                    .await
+                    .is_err());
+            }
+            spawn_task.await.unwrap().unwrap();
+            state.wait_until_ready().await.unwrap();
+            assert!(state
+                .bun_disabled
+                .load(std::sync::atomic::Ordering::Relaxed));
+            assert_eq!(state.restart_count(), 1);
+            state
+                .write_command(&serde_json::json!({"type":"accepted-once"}))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if host
+                        .events
+                        .lock()
+                        .iter()
+                        .any(|event| event["type"] == "accepted-once")
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            shutdown_sidecar(state.clone()).await.unwrap();
+            assert_eq!(
+                host.events
+                    .lock()
+                    .iter()
+                    .filter(|event| event["type"] == "accepted-once")
+                    .count(),
+                1
+            );
+            assert!(host
+                .events
+                .lock()
+                .iter()
+                .any(|event| event["type"] == "ready" && event["runtime"] == "node"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn source_bun_can_start_the_real_sidecar_protocol() {
+        let Some(bun) = std::env::var_os("COGNIA_TEST_BUN") else {
+            return;
+        };
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        let host = Arc::new(RuntimeTestHost {
+            script: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../sidecar/agent-host.mjs")
+                .canonicalize()
+                .unwrap(),
+            events: ParkingMutex::new(Vec::new()),
+        });
+        let state = SidecarState::new();
+        let config = RuntimeConfig::parse(Some("bun"), Some(bun.into())).unwrap();
+        spawn_with_runtime(host.clone(), state.clone(), config, Duration::from_secs(20))
+            .await
+            .unwrap();
+        state.wait_until_ready().await.unwrap();
+        assert!(
+            !state
+                .bun_disabled
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "real Bun must not silently fall back"
+        );
+        state
+            .write_command(&serde_json::json!({"command":"close","sessionId":"runtime-smoke"}))
+            .await
+            .unwrap();
+        shutdown_sidecar(state).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_cancels_private_bun_startup_without_late_publication_or_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bun = dir.path().join("bun");
+        let pid_file = dir.path().join("started");
+        std::fs::write(&bun, format!("#!/bin/sh\nif [ \"$1\" = --eval ]; then printf cognia-bun:1.4.0; exit; fi\necho $$ > '{}'\nexec sleep 30\n", pid_file.display())).unwrap();
+        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let script = dir.path().join("host.mjs");
+        std::fs::write(
+            &script,
+            "throw new Error('Node fallback must not start after shutdown')",
+        )
+        .unwrap();
+        let host = Arc::new(RuntimeTestHost {
+            script,
+            events: ParkingMutex::new(Vec::new()),
+        });
+        let state = SidecarState::new();
+        let config = RuntimeConfig::parse(Some("bun"), Some(bun)).unwrap();
+        let task = tokio::spawn(spawn_with_runtime(
+            host,
+            state.clone(),
+            config,
+            Duration::from_secs(30),
+        ));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !pid_file.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), shutdown_sidecar(state.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(task.await.unwrap().unwrap_err().contains("cancelled"));
+        assert_eq!(state.restart_count(), 0);
+        assert!(state.managed_snapshot().await.is_none());
+        assert!(!state
+            .bun_disabled
+            .load(std::sync::atomic::Ordering::Relaxed));
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        assert!(!std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abort_during_publication_keeps_stdin_empty_and_kills_bun_descendants() {
+        use std::os::unix::fs::PermissionsExt;
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bun = dir.path().join("bun");
+        let marker = dir.path().join("started");
+        let descendant = dir.path().join("descendant");
+        let release = dir.path().join("ready");
+        std::fs::write(&bun, format!("#!/bin/sh\nif [ \"$1\" = --eval ]; then printf cognia-bun:1.4.0; exit; fi\necho $$ > '{}'\nsleep 30 &\necho $! > '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\nprintf '{{\"type\":\"ready\"}}\\n'\nwait\n", marker.display(), descendant.display(), release.display())).unwrap();
+        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let script = dir.path().join("host.mjs");
+        std::fs::write(&script, "unused").unwrap();
+        let host = Arc::new(RuntimeTestHost {
+            script,
+            events: ParkingMutex::new(Vec::new()),
+        });
+        let state = SidecarState::new();
+        let config = RuntimeConfig::parse(Some("bun"), Some(bun)).unwrap();
+        let task = tokio::spawn(spawn_with_runtime(
+            host,
+            state.clone(),
+            config,
+            Duration::from_secs(3),
+        ));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !descendant.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let inner = state.inner.lock().await;
+        std::fs::write(release, "ready").unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while state.stdin.try_lock().is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(state.stdin.lock().await.is_none());
+        assert!(inner.child.is_none());
+        drop(inner);
+        for file in [marker, descendant] {
+            let pid = std::fs::read_to_string(file).unwrap();
+            let mut alive = true;
+            for _ in 0..50 {
+                alive = std::process::Command::new("kill")
+                    .args(["-0", pid.trim()])
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success();
+                if !alive {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(!alive, "cancelled startup left process {pid} alive");
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn node_resource_paths_preserve_drive_unc_and_non_verbatim_paths() {
@@ -980,7 +1537,9 @@ mod tests {
         let node = std::env::var_os("COGNIA_TEST_NODE").unwrap_or_else(|| "node".into());
         let output = tokio::time::timeout(
             Duration::from_secs(10),
-            sidecar_command(Path::new(&node), &script).unwrap().output(),
+            sidecar_command(Path::new(&node), &script, RuntimeKind::Node)
+                .unwrap()
+                .output(),
         )
         .await
         .expect("Node entrypoint timed out")
@@ -1029,6 +1588,218 @@ mod tests {
 
         state.finish_generation_active_runs(new_generation);
         assert!(!cognia_power::active_reasons().contains(&reason));
+    }
+
+    #[test]
+    fn disposal_releases_only_its_executor_and_all_of_that_executors_turns() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let generation = state.next_epoch();
+        for executor in ["old", "old", "replacement"] {
+            state.begin_active_run("reused-session", None);
+            handle_active_run_event(
+                &state,
+                generation,
+                &serde_json::json!({
+                    "type": "executor_started", "sessionId": "reused-session", "executorId": executor
+                }),
+            );
+        }
+        for executor in ["unknown", "old"] {
+            handle_active_run_event(
+                &state,
+                generation,
+                &serde_json::json!({
+                    "type": "session_disposed", "sessionId": "reused-session", "executorId": executor
+                }),
+            );
+            assert_eq!(state.live_session_ids(), vec!["reused-session"]);
+        }
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "capability_error", "command": "send", "sessionId": "reused-session"
+            }),
+        );
+        assert_eq!(state.live_session_ids(), vec!["reused-session"]);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "reused-session", "executorId": "replacement"
+            }),
+        );
+        assert!(state.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn idle_turn_releases_wake_without_claiming_session_disposal() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let generation = state.next_epoch();
+        let reason = cognia_power::WakeReason::ActiveRun("idle-chat".into());
+        state.begin_active_run("idle-chat", None);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "executor_started", "sessionId": "idle-chat", "executorId": "executor"
+            }),
+        );
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_ended", "sessionId": "idle-chat"
+            }),
+        );
+        assert!(cognia_power::active_reasons().contains(&reason));
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "turn_settled", "sessionId": "idle-chat", "executorId": "executor", "backgroundProcessesRunning": false
+            }),
+        );
+        assert!(!cognia_power::active_reasons().contains(&reason));
+        assert_eq!(state.live_session_ids(), vec!["idle-chat"]);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "idle-chat", "executorId": "executor"
+            }),
+        );
+        assert!(state.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn turn_end_keeps_background_executor_live_until_disposal() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let generation = state.next_epoch();
+        state.begin_active_run("background-child", None);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "executor_started", "sessionId": "background-child", "executorId": "executor"
+            }),
+        );
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_ended", "sessionId": "background-child"
+            }),
+        );
+        assert_eq!(state.clone().live_session_ids(), vec!["background-child"]);
+        state.finish_generation_active_runs(generation);
+        assert_eq!(state.clone().live_session_ids(), vec!["background-child"]);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "background-child", "executorId": "executor"
+            }),
+        );
+        assert!(state.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn host_liveness_survives_renderer_reload_until_all_turns_end() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        assert!(state.live_session_ids().is_empty());
+        let generation = state.next_epoch();
+        let first = state.begin_active_run("surviving-session", None);
+        state.begin_active_run("surviving-session", Some("queued"));
+        // The WebView reloads; the Rust state and pending turns survive.
+        let reloaded = state.clone();
+        assert_eq!(reloaded.live_session_ids(), vec!["surviving-session"]);
+        state.cancel_active_run(first);
+        assert_eq!(reloaded.live_session_ids(), vec!["surviving-session"]);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "executor_started", "sessionId": "surviving-session", "executorId": "executor"
+            }),
+        );
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "surviving-session", "executorId": "executor"
+            }),
+        );
+        assert!(reloaded.live_session_ids().is_empty());
+        state.begin_active_run("old-host", None);
+        assert!(SidecarState::new().live_session_ids().is_empty());
+        state.finish_generation_active_runs(generation);
+        assert!(reloaded.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn pending_native_admission_survives_spawn_and_old_generation_cleanup() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let old = state.next_epoch();
+        let pending = state.begin_pending_run("pending-send", None);
+        assert_eq!(state.clone().live_session_ids(), vec!["pending-send"]);
+        state.finish_generation_active_runs(old);
+        assert_eq!(state.live_session_ids(), vec!["pending-send"]);
+        let next = state.next_epoch();
+        state.activate_pending_run(&pending, &serde_json::json!({}));
+        state.finish_generation_active_runs(old);
+        assert_eq!(state.live_session_ids(), vec!["pending-send"]);
+        handle_active_run_event(
+            &state,
+            next,
+            &serde_json::json!({
+                "type": "executor_started", "sessionId": "pending-send", "executorId": "executor"
+            }),
+        );
+        handle_active_run_event(
+            &state,
+            next,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "pending-send", "executorId": "executor"
+            }),
+        );
+        assert!(state.live_session_ids().is_empty());
+        let failed = state.begin_pending_run("rejected-send", None);
+        state.cancel_active_run(failed);
+        assert!(state.live_session_ids().is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_send_is_live_while_waiting_for_spawn_admission() {
+        use std::future::Future;
+        let state = SidecarState::new();
+        let spawn_guard = state.spawn_lock.lock().await;
+        let host = Arc::new(crate::host::tests::TestHost {
+            disabled: true,
+            ..Default::default()
+        });
+        let mut send = Box::pin(crate::commands::claude_send_with_host_and_id(
+            host,
+            state.clone(),
+            "pending-native-admission".into(),
+            serde_json::json!("work"),
+            None,
+            None,
+        ));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(send.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            state.clone().live_session_ids(),
+            vec!["pending-native-admission"]
+        );
+        drop(spawn_guard);
+        assert!(send.await.is_err());
+        assert!(state.live_session_ids().is_empty());
     }
 
     #[test]

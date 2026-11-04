@@ -26,7 +26,7 @@ test("Langfuse model and tool message consent remain independent", async () => {
     },
   ])
   assert.equal(
-    initializeTelemetry({
+    await initializeTelemetry({
       ...LANGFUSE_CREDENTIALS,
       COGNIA_LANGFUSE_CAPTURE_MODEL_CONTENT: "true",
       COGNIA_LANGFUSE_CAPTURE_TOOL_CONTENT: "false",
@@ -50,7 +50,7 @@ test("Langfuse model and tool message consent remain independent", async () => {
   await shutdownTelemetry()
 
   assert.equal(
-    initializeTelemetry({
+    await initializeTelemetry({
       ...LANGFUSE_CREDENTIALS,
       COGNIA_LANGFUSE_CAPTURE_MODEL_CONTENT: "false",
       COGNIA_LANGFUSE_CAPTURE_TOOL_CONTENT: "true",

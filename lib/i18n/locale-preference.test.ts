@@ -14,6 +14,12 @@ beforeEach(() => {
 })
 afterEach(() => jest.restoreAllMocks())
 
+it("uses the default when a headless runtime has an incomplete navigator", () => {
+  jest.spyOn(navigator, "languages", "get").mockReturnValue([])
+  jest.spyOn(navigator, "language", "get").mockReturnValue(undefined as unknown as string)
+  expect(resolveSystemLocale()).toBe("en")
+})
+
 it.each([
   [["zh-Hans-CN"], "zh-CN"],
   [["zh-TW"], "zh-CN"],

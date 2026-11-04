@@ -11,7 +11,7 @@
 import nodeDns from "node:dns"
 import type { LookupAddress, LookupAllOptions, LookupOptions } from "node:dns"
 import type { LookupFunction } from "node:net"
-import { Agent } from "undici"
+import { createUndiciFetch } from "./fetch-interceptor.ts"
 import type { Dispatcher } from "undici"
 
 function parseIpv4(hostname: string): number[] | null {
@@ -153,29 +153,65 @@ export interface EgressGuard {
  */
 export function createEgressGuard({
   allowPrivateNetwork = false,
-  fetchImpl = globalThis.fetch,
+  fetchImpl = process.versions.bun ? undefined : globalThis.fetch,
   lookup = nodeDns.lookup,
-  AgentCtor = Agent,
+  AgentCtor,
 }: EgressGuardOptions = {}): EgressGuard {
   let dispatcher: Dispatcher | undefined
-  const getDispatcher = (): Dispatcher | undefined => {
-    if (allowPrivateNetwork) return undefined
-    dispatcher ??= new AgentCtor({ connect: { lookup: guardedLookup(false, lookup) } })
-    return dispatcher
+  let initializing: Promise<typeof fetch> | undefined
+  let closing: Promise<void> | undefined
+  let closed = false
+  const initialize = async (): Promise<typeof fetch> => {
+    if (!fetchImpl || (!allowPrivateNetwork && !AgentCtor)) {
+      // Keep the literal npm entry for packaging and Bun's dispatcher-aware
+      // fetch. Bun's built-in undici shim cannot enforce this socket guard.
+      const undici = await import("undici/index.js")
+      if (closed) throw new Error("MCP egress guard is closed")
+      fetchImpl ??= createUndiciFetch(undici)
+      AgentCtor ??= undici.Agent
+    }
+    if (!allowPrivateNetwork) {
+      if (typeof AgentCtor !== "function") throw new Error("MCP egress dispatcher is unavailable")
+      dispatcher = new AgentCtor({ connect: { lookup: guardedLookup(false, lookup) } })
+    }
+    // The branch above supplies Bun's fetch; Node keeps its captured fetch.
+    return fetchImpl!
   }
   return {
     fetch: (input, init = {}) => {
       const value = typeof Request !== "undefined" && input instanceof Request ? input.url : input
-      validateRemoteUrl(value, allowPrivateNetwork)
-      const activeDispatcher = getDispatcher()
-      return fetchImpl(input, {
+      const url = validateRemoteUrl(value, allowPrivateNetwork)
+      // URL is mutable: never pass it across the lazy-loading boundary after
+      // validation. Request.url is immutable and its body must be preserved.
+      const target = input instanceof URL ? url.href : input
+      if (closed) return Promise.reject(new Error("MCP egress guard is closed"))
+      const signal =
+        init.signal === undefined && typeof Request !== "undefined" && input instanceof Request
+          ? input.signal
+          : init.signal
+      if (signal?.aborted) return Promise.reject(signal.reason)
+      const options = {
         ...init,
-        redirect: "error",
-        ...(activeDispatcher ? { dispatcher: activeDispatcher } : {}),
+        redirect: "error" as const,
+      }
+      initializing ??= initialize()
+      return initializing.then((activeFetch) => {
+        if (closed) throw new Error("MCP egress guard is closed")
+        signal?.throwIfAborted()
+        return activeFetch(target, {
+          ...options,
+          ...(dispatcher ? { dispatcher } : {}),
+        })
       })
     },
-    close: async () => {
-      await dispatcher?.close?.()
+    close: () => {
+      closed = true
+      closing ??= (async () => {
+        // A failed import owns no pool; cleanup must not mask its fetch error.
+        await initializing?.catch(() => undefined)
+        await dispatcher?.close?.()
+      })()
+      return closing
     },
   }
 }

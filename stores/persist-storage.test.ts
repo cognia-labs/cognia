@@ -87,6 +87,24 @@ describe("resolvePersistStorage", () => {
 })
 
 describe("persistCoalescedLocalStorage without a browser", () => {
+  it("accepts the headless window storage shim without browser lifecycle methods", () => {
+    jest.useFakeTimers()
+    const real = { getItem: jest.fn(() => null), setItem: jest.fn(), removeItem: jest.fn() }
+    try {
+      withWindow(real, () => {
+        const storage = persistCoalescedLocalStorage<{ a: number }>()
+        expect(() => storage.setItem("headless", { state: { a: 1 }, version: 0 })).not.toThrow()
+        storage.flush()
+        expect(real.setItem).toHaveBeenCalledWith(
+          "headless",
+          JSON.stringify({ state: { a: 1 }, version: 0 })
+        )
+      })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it("passes writes straight through to the inert storage and holds nothing", () => {
     jest.useFakeTimers()
     try {

@@ -12,7 +12,7 @@ name = "cognia-server"
 # Reports the app version on the wire and to `service status`;
 # `scripts/sync/version-sync.mjs` keeps it the app's.
 version = "0.1.0"
-description = "The headless Cognia Host: companion server, Node brain supervisor and operator CLI."
+description = "The headless Cognia Host: companion server, JavaScript brain supervisor and operator CLI."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -54,6 +54,7 @@ cognia-agent-state = { path = "../cognia-agent-state" }
 cognia-companion = { path = "../cognia-companion" }
 cognia-companion-rpc = { path = "../cognia-companion-rpc" }
 cognia-core = { path = "../cognia-core", features = ["signal"] }
+cognia-exec-sandbox = { path = "../cognia-exec-sandbox" }
 cognia-external-agent = { path = "../cognia-external-agent" }
 cognia-file-share = { path = "../cognia-file-share" }
 cognia-gateway = { path = "../cognia-gateway" }

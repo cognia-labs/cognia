@@ -2,6 +2,7 @@
 // what generated code CANNOT reach at least as hard as what it can.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 
 import {
   CallBudget,
@@ -20,6 +21,36 @@ import type { CodeModeLimits, SandboxProbe } from "./supervisor.ts"
 // exercises the launcher path end to end without needing bwrap installed.
 const TEST_LAUNCHER = ["/usr/bin/env"]
 const SANDBOXED = { canSpawnProcess: true, strictSandbox: true, launcher: TEST_LAUNCHER }
+
+test(
+  "source Bun executes code, brokers IPC and enforces time and RSS budgets",
+  {
+    skip: !process.env.COGNIA_TEST_BUN,
+  },
+  () => {
+    const moduleUrl = new URL("./supervisor.ts", import.meta.url).href
+    const source = `
+    import assert from "node:assert/strict";
+    const {runCodeProgram,CODE_MODE_LIMITS}=await import(${JSON.stringify(moduleUrl)});
+    const probe={canSpawnProcess:true,strictSandbox:true,launcher:["/usr/bin/env"]};
+    const callTool=async(name,input)=>({name,input});
+    const value=await runCodeProgram({source:"return 6 * 7",probe,callTool});
+    assert.equal(value.result,42);
+    const ipc=await runCodeProgram({source:'return await cognia.read({path:"sample.ts"})',probe,callTool});
+    assert.deepEqual(ipc.result,{name:"read",input:{path:"sample.ts"}});
+    assert.equal(ipc.callsUsed,1);
+    const timed=await runCodeProgram({source:"while(true){}",probe,callTool,config:{...CODE_MODE_LIMITS,wallTimeMs:100}});
+    assert.equal(timed.limit?.kind,"wall-time");
+    const memory=await runCodeProgram({source:"while(true){}",probe,callTool,config:{...CODE_MODE_LIMITS,wallTimeMs:3000,maxMemoryBytes:1}});
+    assert.equal(memory.limit?.kind,"memory");
+    console.log("source-bun-code-ok");`
+    const output = execFileSync(process.env.COGNIA_TEST_BUN!, ["--eval", source], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    assert.match(output, /source-bun-code-ok/)
+  }
+)
 
 /** Run a program with a recording tool broker. */
 async function run(
@@ -132,6 +163,20 @@ test("source runtimes keep the physical sandbox child and V8 memory limit", () =
       },
     }
   )
+})
+
+test("source Bun uses the physical child without a V8-only memory flag", () => {
+  const target = resolveSandboxSpawn({
+    standalone: false,
+    bun: true,
+    launcher: ["/sandbox"],
+    execPath: "/usr/bin/bun",
+    childPath: "/repo/sandbox-child.mjs",
+    maxMemoryBytes: 64 * 1024 * 1024,
+  })
+  assert.deepEqual(target.args, ["/usr/bin/bun", "--smol", "/repo/sandbox-child.mjs"])
+  assert.equal(target.env.COGNIA_ROLE, undefined)
+  assert.equal(target.env.COGNIA_CODE_SANDBOX_CHILD, "1")
 })
 
 test("process-group RSS sums the sandbox wrapper and every descendant", () => {

@@ -1,7 +1,7 @@
 //! Shared Node.js runtime selection and validation.
 //!
 //! Desktop builds install one immutable result during Tauri setup. Every
-//! app-owned JavaScript child then reads that result, so a process cannot
+//! app-owned Node-only child then reads that result, so a process cannot
 //! silently fall back to a different `node` executable. Headless binaries do
 //! not install a desktop result and retain their explicit `node`-on-`PATH`
 //! deployment contract.
@@ -156,7 +156,7 @@ fn probe_node_with_timeout(
     Ok((version, parsed))
 }
 
-fn terminate_probe_process_tree(child: &mut std::process::Child) {
+pub(crate) fn terminate_probe_process_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
         // The probe starts in its own process group, so a shim cannot leave a
@@ -297,16 +297,16 @@ pub fn configured_node_executable() -> Option<Result<PathBuf, NodeRuntimeError>>
     })
 }
 
+// Fixture executables must not be rewritten while another test forks: the
+// inherited writable descriptor can make exec fail with ETXTBSY on Linux.
+#[cfg(all(test, unix))]
+pub(crate) static EXECUTABLE_SCRIPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
 
-    // A concurrent probe can fork while another fixture is open for writing.
-    // On Linux that inherited descriptor makes exec fail with ETXTBSY until
-    // the child closes it, even after NamedTempFile closes the parent's copy.
-    #[cfg(unix)]
-    static EXECUTABLE_SCRIPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn parses_canonical_node_versions() {

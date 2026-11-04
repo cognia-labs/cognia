@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import {
   NativeAgentBridgeRegistry,
   hermesProbeOwnedStateRoot,
@@ -275,7 +276,21 @@ describe("plain Node interpreter for released hosts", () => {
         moduleUrl: "file:///$bunfs/root/cli/native-bridges.ts",
         packaged: false,
         bun: true,
+        standalone: true,
       })
     ).toBe(path.join(root, "sidecar/native-agents"))
+  })
+  it("locates source Bun bridge assets in the module layout while retaining the Node interpreter", () => {
+    const layout = path.join(root, "source-layout")
+    fs.mkdirSync(path.join(layout, "sidecar/native-agents"), { recursive: true })
+    expect(
+      resolveNativeBridgeBundleRoot({
+        execPath: path.join(root, "bun-install/bin/bun"),
+        moduleUrl: pathToFileURL(path.join(layout, "chunks/native-bridges.mjs")).href,
+        packaged: false,
+        bun: true,
+        standalone: false,
+      })
+    ).toBe(path.join(layout, "sidecar/native-agents"))
   })
 })

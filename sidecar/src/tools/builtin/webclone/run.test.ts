@@ -1,10 +1,15 @@
 // Tests for the web-clone tool orchestration (job building, output confinement,
 // SSRF pre-check, and the child-process runner) with a fully injected fake
-// spawn + fs, so nothing real is spawned and no network is touched.
+// spawn + fs. Separate subprocess cases exercise real Node/Bun runners against
+// a loopback-only HTTP fixture and verify snapshot/convert output.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import { spawnSync, execFile } from "node:child_process"
+import { promisify } from "node:util"
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -37,6 +42,25 @@ const partialArgs = (args: Record<string, unknown>) => args as unknown as Webclo
 /** A job for runner tests, where the engine options do not matter. */
 const bareJob = (options: Record<string, unknown> = {}) =>
   ({ mode: "snapshot", url: "https://x/", options }) as unknown as WebcloneJob
+
+test("importing the orchestration does not load the snapshot/parser graph", () => {
+  const source = `
+    import { registerHooks } from 'node:module';
+    registerHooks({ resolve(specifier, context, next) {
+      const resolved = next(specifier, context);
+      if (/webclone\\/dist\\/(?:assembler\\.js|parser\\/|transform\\/)/.test(resolved.url))
+        throw new Error('eager snapshot engine import: ' + resolved.url);
+      return resolved;
+    }});
+    const { buildJob } = await import(${JSON.stringify(new URL("./run.ts", import.meta.url).href)});
+    if (typeof buildJob !== 'function') throw new Error('orchestration was not loaded');
+  `
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    encoding: "utf8",
+    timeout: 10000,
+  })
+  assert.equal(result.status, 0, result.stderr || String(result.error))
+})
 
 function realCwd(prefix = "wc-tool-") {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -362,3 +386,90 @@ test("snapshotSite allows a private target when allowPrivateHosts is set", async
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+for (const [runtime, executable] of [
+  ["node", process.execPath],
+  ["bun", process.env.COGNIA_TEST_BUN],
+] as const) {
+  test(
+    `real ${runtime} snapshot and conversion preserve child isolation and guards`,
+    {
+      skip: !executable,
+      timeout: 30000,
+    },
+    async () => {
+      const cwd = realCwd("wc-runtime-")
+      const requests: string[] = []
+      const server = createServer((request, response) => {
+        requests.push(request.url ?? "")
+        response.writeHead(200, { "content-type": "text/html" })
+        response.end(
+          '<!doctype html><html><head><style>.card{color:red}</style></head><body><header class="card" data-component="Hero"><h1>Webclone fixture</h1><button onclick="increment()">Go</button></header><script>let count=0;function increment(){count++}</script></body></html>'
+        )
+      })
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/fixture`
+      const source = `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs/promises';
+      import path from 'node:path';
+      const { snapshotSite } = await import(${JSON.stringify(new URL("./run.ts", import.meta.url).href)});
+      const options = {timeoutMs:10000};
+      const cwd = ${JSON.stringify(cwd)};
+      const url = ${JSON.stringify(url)};
+      const blocked = await snapshotSite({cwd,url,output:'blocked'});
+      assert.equal(blocked.ok,false);
+      assert.equal(blocked.error.reason,'private-host');
+      await assert.rejects(snapshotSite({cwd,url,output:'../escape',allowPrivateHosts:true}),/escapes root/);
+      const snapshot = await snapshotSite({cwd,url,output:'snapshot',mode:'bundle',allowPrivateHosts:true},options);
+      assert.equal(snapshot.ok,true,JSON.stringify(snapshot));
+      assert.equal(snapshot.result.mode,'snapshot');
+      assert.match(await fs.readFile(path.join(cwd,'snapshot/index.html'),'utf8'),/Webclone fixture/);
+      const converted = await snapshotSite({cwd,convertLocal:'snapshot',output:'converted',mode:'bundle',framework:'react',codegenGenerateDrafts:true},options);
+      assert.equal(converted.ok,true,JSON.stringify(converted));
+      assert.equal(converted.result.mode,'convert');
+      const index = JSON.parse(await fs.readFile(path.join(cwd,'converted/components/index.json'),'utf8'));
+      assert.ok(index && typeof index === 'object');
+      const draft = await fs.readFile(path.join(cwd,'converted/components/__drafts__/react/src/App.tsx'),'utf8');
+      assert.match(draft,/import|export/);
+      const temporary = (await fs.readdir(cwd)).filter(file=>file.startsWith('webclone-job-'));
+      assert.deepEqual(temporary,[],'job files must be removed');
+      console.log(JSON.stringify({runtime:process.versions.bun?'bun':'node',snapshot:true,convert:true}));
+    `
+      try {
+        const result = await promisify(execFile)(
+          executable!,
+          [
+            ...(runtime === "bun" ? ["--no-env-file"] : []),
+            "--input-type=module",
+            "--eval",
+            source,
+          ],
+          {
+            cwd,
+            encoding: "utf8",
+            timeout: 25000,
+            env: {
+              PATH: process.env.PATH,
+              HOME: cwd,
+              USERPROFILE: cwd,
+              TMPDIR: cwd,
+              NODE_ENV: "production",
+              NO_COLOR: "1",
+            },
+          }
+        )
+        assert.match(result.stdout, new RegExp(`"runtime":"${runtime}"`))
+        assert.deepEqual(
+          requests,
+          ["/fixture"],
+          "blocked target and local conversion must make no extra requests"
+        )
+      } finally {
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+        rmSync(cwd, { recursive: true, force: true })
+      }
+    }
+  )
+}

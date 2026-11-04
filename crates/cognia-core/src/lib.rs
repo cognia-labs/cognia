@@ -11,6 +11,7 @@
 
 pub mod command_error;
 pub mod fs_atomic;
+pub mod host_runtime;
 pub mod installed;
 pub mod node_runtime;
 #[cfg(feature = "rt")]
