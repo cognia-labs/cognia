@@ -313,6 +313,14 @@ test("DeepSeek runtime changes select the isolated Node launcher smoke without u
   assert.equal(adapter.deepseekRuntime, false)
   assert.equal(classifyCiImpact(["components/chat/message.tsx"]).deepseekRuntime, false)
   assert.equal(classifyCiImpact(["pnpm-lock.yaml"]).deepseekRuntime, true)
+  for (const file of [
+    "scripts/build/stage-dsh-ops-runtime.mjs",
+    "scripts/build/stage-dsh-ops-runtime.test.mjs",
+    "scripts/build/build-native-agent-bridges.mjs",
+    "scripts/build/build-terminal-host-sidecar.mjs",
+    "scripts/build/source-fingerprint.mjs",
+  ])
+    assert.equal(classifyCiImpact([file]).deepseekRuntime, true, file)
 })
 
 test("embedded native inputs and shared tenant auth activate their consumers", () => {

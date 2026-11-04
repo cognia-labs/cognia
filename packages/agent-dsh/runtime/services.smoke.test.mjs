@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 import {
   copyFileSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -37,16 +38,76 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
     `${channel} uses Cognia gateway and MCP tools with denied-call propagation`,
     { timeout: 30000 },
     async () => {
-      const root = mkdtempSync(join(tmpdir(), "cognia-services-smoke-"))
+      const dataRoot = mkdtempSync(join(tmpdir(), "cognia-services-smoke-"))
+      const root = join(dataRoot, "deepseek-harness")
+      mkdirSync(root)
+      const workspace = join(dataRoot, "workspace")
+      mkdirSync(workspace)
+      writeFileSync(join(workspace, "sample.txt"), "Managed ops worker reached Cognia.\n")
+      writeFileSync(
+        join(workspace, "image.png"),
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+          "base64"
+        )
+      )
       let child
+      let turns = 0
       const fixture = await createMockDeepSeek({
-        reply: (body, index) => {
+        reply: (body) => {
+          if (body.model === "cognia-vision") {
+            assert.equal(body.stream, false)
+            assert.match(JSON.stringify(body.messages), /data:image\/png;base64/)
+            return {
+              content: JSON.stringify({
+                summary: "Managed ModLens evidence",
+                ocr: { full_text: "Cognia", lines: [] },
+                layout: { regions: [] },
+                semantics: { scene: "test", entities: [] },
+                visual: {},
+                uncertainty: [],
+              }),
+            }
+          }
           assert.equal(body.model, "cognia-proxy")
+          const index = ++turns
+          for (const name of [
+            "ops_inspect_local_file",
+            "ops_read_files",
+            "ops_read_pdf",
+            "modlens_read_image",
+          ])
+            assert.ok(
+              body.tools.some((tool) => tool.function.name === name),
+              name
+            )
+          for (const name of [
+            "ops_bash",
+            "ops_write_file",
+            "ops_replace",
+            "ops_discover_tools",
+            "ops_ptc",
+          ])
+            assert.ok(!body.tools.some((tool) => tool.function.name === name), name)
+          if (index <= 2)
+            return {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: `plugin-${index}`,
+                  type: "function",
+                  function: {
+                    name: index === 1 ? "ops_inspect_local_file" : "modlens_read_image",
+                    arguments: JSON.stringify({ path: index === 1 ? "sample.txt" : "image.png" }),
+                  },
+                },
+              ],
+            }
           const tool = body.tools.find(
             (tool) => tool.function.name === "mcp__cognia-tools__inspect"
           )
           assert.ok(tool, "Cognia tools must exist before the first request")
-          return index <= 2
+          return index <= 4
             ? {
                 tool_calls: [
                   {
@@ -55,7 +116,7 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
                     type: "function",
                     function: {
                       name: tool.function.name,
-                      arguments: JSON.stringify({ path: index === 1 ? "allowed" : "forbidden" }),
+                      arguments: JSON.stringify({ path: index === 3 ? "allowed" : "forbidden" }),
                     },
                   },
                 ],
@@ -71,8 +132,21 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
             : channel === "sdk-workspace"
               ? "host.sdk-workspace.yml"
               : "host.sdk-readonly.yml"
-        for (const file of ["launcher.mjs", composition])
-          copyFileSync(join(source, file), join(root, file))
+        for (const file of [
+          "launcher.mjs",
+          "managed-plugins.mjs",
+          "ops-worker",
+          "ops-worker.json",
+          "host.root.yml",
+          composition,
+        ])
+          copyFileSync(
+            join(
+              source,
+              file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+            ),
+            join(root, file)
+          )
         const bridge = join(root, "mcp-fixture.mjs")
         writeFileSync(bridge, mcpFixture)
         const callLog = join(root, "calls.jsonl")
@@ -91,11 +165,12 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
             HOME: root,
             DSH_HOME: join(root, "dsh-home"),
             COGNIA_DSH_RUNTIME_HOME: root,
-            COGNIA_DSH_WORKSPACE: root,
+            COGNIA_DSH_WORKSPACE: workspace,
             COGNIA_DSH_PROVIDER: "cognia",
             COGNIA_DSH_MODEL: "cognia-proxy",
             COGNIA_DSH_GATEWAY_TOKEN: "fixture-gateway-lease",
             COGNIA_DSH_GATEWAY_CONFIG: JSON.stringify({
+              visionModel: "cognia-vision",
               providers: {
                 cognia: {
                   api: "openai-completions",
@@ -108,6 +183,13 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
                       contextWindow: 32768,
                       maxTokens: 4096,
                       input: ["text"],
+                    },
+                    {
+                      id: "cognia-vision",
+                      name: "Cognia vision",
+                      contextWindow: 32768,
+                      maxTokens: 4096,
+                      input: ["text", "image"],
                     },
                   ],
                 },
@@ -137,7 +219,11 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
           return frame.result
         }
         if (channel !== "acp") {
-          await request(1, "initialize", { cwd: root, provider: "cognia", model: "cognia-proxy" })
+          await request(1, "initialize", {
+            cwd: workspace,
+            provider: "cognia",
+            model: "cognia-proxy",
+          })
           await request(2, "session/prompt", {
             sessionId: "cognia-services",
             contentBlocks: [{ type: "text", text: "Use the Cognia tool for both paths." }],
@@ -157,7 +243,7 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
             clientCapabilities: {},
             clientInfo: { name: "cognia-smoke", version: "1" },
           })
-          const session = await request(2, "session/new", { cwd: root, mcpServers: servers })
+          const session = await request(2, "session/new", { cwd: workspace, mcpServers: servers })
           await request(3, "session/prompt", {
             sessionId: session.sessionId,
             prompt: [{ type: "text", text: "Use the Cognia tool for both paths." }],
@@ -174,7 +260,14 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
             { name: "inspect", denied: true },
           ]
         )
-        assert.ok(JSON.stringify(fixture.requests[2].messages).includes("Cognia policy denied"))
+        const messages = JSON.stringify(fixture.requests.map((request) => request.messages))
+        assert.ok(messages.includes("Cognia policy denied"))
+        assert.ok(messages.includes("Managed ops worker reached Cognia."), messages)
+        assert.ok(messages.includes("Managed ModLens evidence"), messages)
+        assert.equal(
+          fixture.requests.filter((request) => request.model === "cognia-vision").length,
+          1
+        )
         assert.equal(
           frames.some((frame) => frame.method === "session/request_permission"),
           false,
@@ -185,7 +278,7 @@ for (const channel of ["sdk", "sdk-workspace", "acp"]) {
       } finally {
         child?.kill("SIGKILL")
         await fixture.close()
-        rmSync(root, { recursive: true, force: true })
+        rmSync(dataRoot, { recursive: true, force: true })
       }
     }
   )

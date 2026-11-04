@@ -25,4 +25,11 @@ describe("managed DeepSeek Harness capability refinements", () => {
       "unsupported"
     )
   })
+  it("declares committed SDK messages without certifying live token streaming", () => {
+    expect(DSH_CAPABILITIES.protocols?.["dsh-sdk"]?.capabilities.streaming).toEqual({
+      level: "unsupported",
+      evidence: "protocol-spec",
+      reasonKey: "committedRepliesOnly",
+    })
+  })
 })

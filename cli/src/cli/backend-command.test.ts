@@ -17,7 +17,11 @@ jest.mock("../runtime/external/dsh-installer", () => {
 
 // Imported after the mock so `defaultDataRoot` is the stubbed one.
 import { backendCommand, resolveRuntimeSourceDir } from "./backend-command"
-import { DshInstallError, RUNTIME_ARTIFACTS } from "../runtime/external/dsh-installer"
+import {
+  acquireDshProcessLease,
+  DshInstallError,
+  RUNTIME_ARTIFACTS,
+} from "../runtime/external/dsh-installer"
 
 function sink() {
   const out: string[] = []
@@ -105,6 +109,18 @@ describe("doctor", () => {
 })
 
 describe("remove", () => {
+  it("refuses a live host-owned process without trusting a renderer count", async () => {
+    const lease = acquireDshProcessLease(dataRoot, "other-host")
+    const { ctx, err, out } = sink()
+    try {
+      expect(await backendCommand(args("backend remove deepseek-harness"), ctx)).toBe(1)
+      expect(err.join()).toContain("process leases")
+      expect(out.join()).not.toContain("Removed")
+    } finally {
+      lease.release()
+    }
+  })
+
   it("is idempotent when nothing is installed", async () => {
     const { ctx, out } = sink()
     expect(await backendCommand(args("backend remove deepseek-harness"), ctx)).toBe(0)

@@ -12,6 +12,8 @@
   "files": [
     "dist",
     "runtime/launcher.mjs",
+    "runtime/managed-plugins.mjs",
+    "runtime/ops-worker*",
     "runtime/host.*.yml",
     "runtime/package.json",
     "runtime/README.md",
@@ -34,7 +36,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "cross-env NODE_OPTIONS=--max-old-space-size=16384 tsup",
+    "build": "node ../../scripts/build/stage-dsh-ops-runtime.mjs && cross-env NODE_OPTIONS=--max-old-space-size=16384 tsup",
     "typecheck": "tsc --noEmit",
     "pack:test": "node ../../scripts/build/pack-test-agent-package.mjs agent-dsh"
   },

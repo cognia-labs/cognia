@@ -31,7 +31,13 @@ import {
   type AgentPathRuntime,
 } from "./agent-path"
 // Single source for the runtime-home layout the launcher exception is pinned to.
-import { runtimeHomeFor } from "./dsh-installer"
+import {
+  acquireDshProcessLease,
+  assertDshWritableRoots,
+  defaultDataRoot,
+  runtimeHomeFor,
+  type DshProcessLease,
+} from "./dsh-installer"
 import {
   isRegisteredNativeBridgeInvocation,
   registeredHermesProbeStateRoot,
@@ -114,6 +120,8 @@ export type ExternalAgentLaunchResolver = (
 ) => Promise<ExternalAgentLaunch>
 
 export interface NodeExternalAgentBackendOptions {
+  /** Host-owned runtime data root, independent of the selected workspace. */
+  dataRoot?: string
   workspacesRoot?: string
   allowSmokeAgent?: boolean
   /** Host-owned ceiling; spawn requests can only narrow it. Defaults to full. */
@@ -324,7 +332,7 @@ function baseCommand(command: string): string {
 export function validateCommand(
   config: Pick<NodeExternalAgentSpawnConfig, "command" | "args">,
   smoke: boolean,
-  workspacesRoot: string
+  dataRoot: string = defaultDataRoot()
 ): void {
   const command = config.command.trim()
   if (!command) throw new Error("empty command")
@@ -335,7 +343,7 @@ export function validateCommand(
     try {
       if (
         fs.realpathSync(command) === fs.realpathSync(process.execPath) &&
-        isDshLauncherInvocation(config.args ?? [], workspacesRoot)
+        isDshLauncherInvocation(config.args ?? [], dataRoot)
       )
         return
     } catch {
@@ -358,40 +366,41 @@ export function validateCommand(
   // inside Cognia's own runtime home; the launcher then refuses to boot unless
   // DSH_HOME is pinned there too. Mirrors the Rust rule in
   // crates/cognia-external-agent/src/presets.rs.
-  if (base === "node" && isDshLauncherInvocation(config.args ?? [], workspacesRoot)) return
+  if (base === "node" && isDshLauncherInvocation(config.args ?? [], dataRoot)) return
   throw new Error(`binary ${command} is not in the external-agent allowlist`)
 }
 
 /** `node <launcher.mjs> <composition.yml>`, both canonicalizing under the DSH runtime home. */
-export function isDshLauncherInvocation(args: readonly string[], workspacesRoot: string): boolean {
+export function isDshLauncherInvocation(
+  args: readonly string[],
+  dataRoot: string = defaultDataRoot()
+): boolean {
   if (args.length !== 2) return false
   const [launcher, composition] = args
+  if (!path.isAbsolute(launcher) || !path.isAbsolute(composition)) return false
   if (path.basename(launcher) !== "launcher.mjs") return false
-  if (path.extname(composition) !== ".yml") return false
-  // Pinned to the runtime home, NOT the data root that contains it: the data
-  // root also contains `workspaces/`, which is where `validateCwd` confines
-  // every agent cwd and therefore agent-writable. Rooting the check there let
-  // an agent drop its own `launcher.mjs` + `.yml` into its workspace and run
-  // arbitrary JS through the one `node` exception — defeating the allowlist.
-  const runtimeHome = runtimeHomeFor(path.dirname(workspacesRoot))
+  const approved = ["host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"]
+  if (!approved.includes(path.basename(composition))) return false
+  // Runtime authority comes from the host data root independently of the
+  // selected workspace. Its workspace siblings may be agent-writable, so only
+  // the managed runtime home can qualify for the `node` exception.
+  const runtimeHome = runtimeHomeFor(dataRoot)
   let canonicalRoot: string
   try {
+    if (fs.lstatSync(runtimeHome).isSymbolicLink()) return false
     canonicalRoot = fs.realpathSync(runtimeHome)
   } catch {
     return false
   }
-  // Canonicalize both so `..` traversal and a planted symlink cannot escape.
-  return [launcher, composition].every((candidate) => {
-    try {
-      const resolved = fs.realpathSync(candidate)
-      const relative = path.relative(canonicalRoot, resolved)
-      return (
-        relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-      )
-    } catch {
-      return false
-    }
-  })
+  try {
+    return (
+      fs.realpathSync(launcher) === path.join(canonicalRoot, "launcher.mjs") &&
+      fs.realpathSync(composition) === path.join(canonicalRoot, path.basename(composition)) &&
+      [launcher, composition].every((file) => fs.statSync(file).isFile())
+    )
+  } catch {
+    return false
+  }
 }
 
 function validateCwd(root: string, requested?: string): string {
@@ -444,6 +453,10 @@ function isPiPackageOnlyKey(key: string): boolean {
   return key.startsWith("COGNIA_PIPKG_") || key === "COGNIA_TOOLHOST_PI_PACKAGE_ROOTS"
 }
 
+function isDshHostProofKey(key: string): boolean {
+  return key === "COGNIA_DSH_PROCESS_LEASE" || key === "COGNIA_DSH_PROCESS_LEASE_NONCE"
+}
+
 export function buildExternalAgentChildEnv(
   ambient: NodeJS.ProcessEnv,
   overrides: Record<string, string> | undefined,
@@ -486,11 +499,14 @@ export function buildExternalAgentChildEnv(
     delete env.COGNIA_AGENT_CODEX_WRITABLE_CEILING
     delete env.COGNIA_GATEWAY_TASK_HOME
     delete env.COGNIA_GATEWAY_TASK_CONFIG
+    delete env.COGNIA_DSH_PROCESS_LEASE
+    delete env.COGNIA_DSH_PROCESS_LEASE_NONCE
     if (!pi) for (const key of Object.keys(env)) if (isPiPackageOnlyKey(key)) delete env[key]
     return env
   }
   const env: NodeJS.ProcessEnv = { NODE_ENV: ambient.NODE_ENV ?? "production" }
   for (const [key, value] of Object.entries(ambient)) {
+    if (isDshHostProofKey(key)) continue
     if (
       key === "COGNIA_AGENT_CODEX_WRITABLE_ROOTS" ||
       key === "COGNIA_AGENT_CODEX_WRITABLE_CEILING"
@@ -510,6 +526,7 @@ export function buildExternalAgentChildEnv(
     }
   }
   for (const [key, value] of Object.entries(overrides ?? {})) {
+    if (isDshHostProofKey(key)) continue
     if (
       key === "COGNIA_AGENT_CODEX_WRITABLE_ROOTS" ||
       key === "COGNIA_AGENT_CODEX_WRITABLE_CEILING"
@@ -539,6 +556,7 @@ export class NodeExternalAgentBackend {
   private readonly events = new EventEmitter()
   private readonly processes = new Map<string, ProcessRecord>()
   private readonly workspacesRoot: string
+  private readonly dataRoot: string
   private readonly fixedWorkspaceBoundary: boolean
   private selectedWorkspaceRoot?: string
   private readonly networkCeiling: ExternalAgentProcessSandboxPolicy
@@ -547,6 +565,7 @@ export class NodeExternalAgentBackend {
   private readonly stateIsolationHost: StateIsolationHost
 
   constructor(options: NodeExternalAgentBackendOptions = {}) {
+    this.dataRoot = path.resolve(options.dataRoot ?? defaultDataRoot())
     this.fixedWorkspaceBoundary =
       options.workspacesRoot !== undefined || process.env.COGNIA_WORKSPACES_DIR !== undefined
     this.workspacesRoot = path.resolve(
@@ -663,20 +682,20 @@ export class NodeExternalAgentBackend {
       // surface mirrors the Tauri commands exactly (facts -> stage -> finalize),
       // so the renderer runs one flow on every host.
       case "dsh_runtime_facts": {
-        const { defaultDataRoot, gatherDshRuntimeFacts } = await import("./dsh-installer")
-        return gatherDshRuntimeFacts(defaultDataRoot()) as T
+        const { gatherDshRuntimeFacts } = await import("./dsh-installer")
+        return gatherDshRuntimeFacts(this.dataRoot) as T
       }
       case "dsh_runtime_install": {
-        const { defaultDataRoot, stageDshInstall } = await import("./dsh-installer")
+        const { stageDshInstall } = await import("./dsh-installer")
         const { resolveRuntimeSourceDir } = await import("../../cli/backend-command")
         return (await stageDshInstall({
-          dataRoot: defaultDataRoot(),
+          dataRoot: this.dataRoot,
           sourceDir: resolveRuntimeSourceDir(import.meta.url),
         })) as T
       }
       case "dsh_runtime_finalize": {
-        const { defaultDataRoot, finalizeDshInstall } = await import("./dsh-installer")
-        finalizeDshInstall(defaultDataRoot(), String(args.manifestJson))
+        const { finalizeDshInstall } = await import("./dsh-installer")
+        finalizeDshInstall(this.dataRoot, String(args.manifestJson), String(args.installId))
         return undefined as T
       }
       // Per-configuration state roots (ADR-0216). Local-only, like the
@@ -692,10 +711,9 @@ export class NodeExternalAgentBackend {
         return undefined as T
       }
       case "dsh_runtime_remove": {
-        const { defaultDataRoot, removeDshRuntime } = await import("./dsh-installer")
+        const { removeDshRuntime } = await import("./dsh-installer")
         removeDshRuntime({
-          dataRoot: defaultDataRoot(),
-          activeSessionCount: Number(args.activeSessionCount ?? 0),
+          dataRoot: this.dataRoot,
         })
         return undefined as T
       }
@@ -709,9 +727,42 @@ export class NodeExternalAgentBackend {
   }
 
   private async spawn(config: NodeExternalAgentSpawnConfig): Promise<string> {
+    const lease = isDshLauncherInvocation(config.args ?? [], this.dataRoot)
+      ? acquireDshProcessLease(this.dataRoot, config.id)
+      : undefined
+    let childOwnsLease = false
+    try {
+      if (lease)
+        config = {
+          ...config,
+          env: {
+            ...config.env,
+            COGNIA_DSH_PROCESS_LEASE: lease.leaseId,
+            COGNIA_DSH_PROCESS_LEASE_NONCE: lease.nonce,
+          },
+        }
+      else {
+        config = { ...config, env: { ...config.env } }
+        delete config.env!.COGNIA_DSH_PROCESS_LEASE
+        delete config.env!.COGNIA_DSH_PROCESS_LEASE_NONCE
+      }
+      return await this.spawnLeased(config, lease, () => {
+        childOwnsLease = true
+      })
+    } catch (error) {
+      if (!childOwnsLease) lease?.release()
+      throw error
+    }
+  }
+
+  private async spawnLeased(
+    config: NodeExternalAgentSpawnConfig,
+    lease: DshProcessLease | undefined,
+    transferLease: () => void
+  ): Promise<string> {
     if (this.processes.has(config.id)) throw new Error(`agent already running: ${config.id}`)
     validateSandboxPolicyCeiling(config.sandboxPolicy, this.networkCeiling)
-    validateCommand(config, this.allowSmokeAgent, this.workspacesRoot)
+    validateCommand(config, this.allowSmokeAgent, this.dataRoot)
     const bridgeId = registeredNativeBridgeId(config.command, config.args ?? [])
     validateNativeBridgeSandbox(bridgeId, config.sandboxPolicy?.network)
     const root = this.selectedWorkspaceRoot ?? this.workspacesRoot
@@ -719,6 +770,10 @@ export class NodeExternalAgentBackend {
       throw new Error(`Selected workspace changed on disk: ${root}`)
     }
     const cwd = validateCwd(root, config.cwd)
+    if (lease) {
+      config = { ...config, env: this.managedDshEnvironment(cwd, config.env, lease) }
+      this.validateDshWritableScope(cwd, config.env)
+    }
     const gateway = prepareGatewayTask({ ...config, cwd })
     let prepared: ReturnType<typeof prepareDevinMcpConfig>
     try {
@@ -762,7 +817,7 @@ export class NodeExternalAgentBackend {
     const env = buildExternalAgentChildEnv(
       process.env,
       config.env,
-      isDshLauncherInvocation(config.args ?? [], this.workspacesRoot),
+      isDshLauncherInvocation(config.args ?? [], this.dataRoot),
       config.command === "aider",
       config.command === "kimi",
       baseCommand(config.command) === "pi",
@@ -787,9 +842,16 @@ export class NodeExternalAgentBackend {
     Object.assign(env, workspaceEnv)
     let child: ChildProcessWithoutNullStreams
     try {
+      if (lease) {
+        Object.assign(env, this.managedDshEnvironment(cwd, env, lease))
+        this.validateDshWritableScope(cwd, env)
+      } else {
+        delete env.COGNIA_DSH_PROCESS_LEASE
+        delete env.COGNIA_DSH_PROCESS_LEASE_NONCE
+      }
       // Launch preparation can await filesystem/host work; repeat integrity
       // admission immediately before creating the child.
-      validateCommand(config, this.allowSmokeAgent, this.workspacesRoot)
+      validateCommand(config, this.allowSmokeAgent, this.dataRoot)
       validateNativeBridgeSandbox(bridgeId, config.sandboxPolicy?.network)
       child = spawn(launch.command, launch.args, {
         cwd,
@@ -798,6 +860,18 @@ export class NodeExternalAgentBackend {
         detached: process.platform !== "win32",
       })
     } catch (error) {
+      cleanup()
+      throw error
+    }
+    child.once("exit", () => lease?.release())
+    child.once("error", () => {
+      if (!child.pid) lease?.release()
+    })
+    transferLease()
+    try {
+      if (child.pid) lease?.updateChildPid(child.pid)
+    } catch (error) {
+      child.kill("SIGKILL")
       cleanup()
       throw error
     }
@@ -843,6 +917,62 @@ export class NodeExternalAgentBackend {
       this.emit(CHANNEL.exit, { agentId: config.id, code: code ?? 0, signal })
     })
     return config.id
+  }
+
+  private validateDshWritableScope(
+    cwd: string,
+    env: Readonly<Record<string, string | undefined>> | undefined
+  ): void {
+    const roots = [cwd]
+    if (env?.COGNIA_DSH_WORKSPACE !== undefined) roots.push(env.COGNIA_DSH_WORKSPACE)
+    if (env?.COGNIA_DSH_ADDITIONAL_DIRECTORIES !== undefined) {
+      const additional: unknown = JSON.parse(env.COGNIA_DSH_ADDITIONAL_DIRECTORIES)
+      if (!Array.isArray(additional) || additional.some((root) => typeof root !== "string"))
+        throw new Error("Managed DSH additional writable roots must be paths")
+      roots.push(...additional)
+    }
+    assertDshWritableRoots(this.dataRoot, roots)
+  }
+
+  private managedDshEnvironment(
+    cwd: string,
+    env: Readonly<Record<string, string | undefined>> | undefined,
+    lease: DshProcessLease
+  ): Record<string, string> {
+    const runtime = fs.realpathSync(runtimeHomeFor(this.dataRoot))
+    const expected: Record<string, string> = {
+      COGNIA_DSH_RUNTIME_HOME: runtime,
+      DSH_HOME: path.join(runtime, "dsh-home"),
+      COGNIA_DSH_SESSION_ROOT: path.join(runtime, "sessions"),
+    }
+    for (const [key, value] of Object.entries(expected)) {
+      const supplied = env?.[key]
+      if (supplied !== undefined) {
+        const lexical = path.join(
+          runtimeHomeFor(this.dataRoot),
+          key === "DSH_HOME" ? "dsh-home" : key === "COGNIA_DSH_SESSION_ROOT" ? "sessions" : ""
+        )
+        if (
+          !path.isAbsolute(supplied) ||
+          (path.resolve(supplied) !== value && path.resolve(supplied) !== lexical)
+        )
+          throw new Error(`Invalid managed DeepSeek Harness ${key}`)
+      }
+      if (fs.existsSync(value) && fs.realpathSync(value) !== value)
+        throw new Error(`Invalid managed DeepSeek Harness state symlink: ${key}`)
+    }
+    return {
+      ...Object.fromEntries(
+        Object.entries(env ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string"
+        )
+      ),
+      ...expected,
+      HOME: runtime,
+      COGNIA_DSH_WORKSPACE: env?.COGNIA_DSH_WORKSPACE ?? cwd,
+      COGNIA_DSH_PROCESS_LEASE: lease.leaseId,
+      COGNIA_DSH_PROCESS_LEASE_NONCE: lease.nonce,
+    }
   }
 
   private async send(agentId: string, message: string): Promise<void> {

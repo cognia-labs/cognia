@@ -2,16 +2,21 @@
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs"
 import { createHash, randomUUID } from "node:crypto"
-import { createRequire } from "node:module"
+import { createRequire, registerHooks } from "node:module"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads"
+import { execFileSync } from "node:child_process"
 
 export const DSH_VERSION = "0.2.1-rc.2"
 export const PROFILE_BY_COMPOSITION = Object.freeze({
@@ -19,6 +24,158 @@ export const PROFILE_BY_COMPOSITION = Object.freeze({
   "host.sdk-workspace.yml": "cognia-sdk-workspace",
   "host.acp.yml": "cognia-acp",
 })
+
+function kernelBootId() {
+  const value =
+    process.platform === "linux"
+      ? readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+      : process.platform === "darwin"
+        ? execFileSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], { encoding: "utf8" })
+        : ""
+  const boot = value.trim().toLowerCase()
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(boot))
+    throw new Error("DeepSeek Harness cannot verify the system boot identity")
+  return boot
+}
+
+/** Sandboxed launches read the host's freshly minted ownership proof instead
+ * of gaining write access to host control state. Host PIDs can belong to an
+ * outer namespace, so their liveness is checked by the host, never here.
+ */
+export async function waitForHostProcessLease(runtimeHome, identity, nonce, timeoutMs = 5000) {
+  if (typeof runtimeHome !== "string" || !isAbsolute(runtimeHome))
+    throw new Error("COGNIA_DSH_RUNTIME_HOME must be an absolute runtime path")
+  if (
+    typeof identity !== "string" ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(identity)
+  )
+    throw new Error("DeepSeek Harness host ownership identity is malformed")
+  if (typeof nonce !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(nonce))
+    throw new Error("DeepSeek Harness host ownership nonce is missing or malformed")
+  const nonceDigest = createHash("sha256").update(nonce).digest("hex")
+  const control = join(dirname(realpathSync(runtimeHome)), ".deepseek-harness-control")
+  const directory = join(control, "processes")
+  const recordPath = join(directory, `${identity}.json`)
+  const deadline = performance.now() + timeoutMs
+  while (true) {
+    let record
+    try {
+      for (const path of [control, directory]) {
+        const metadata = lstatSync(path)
+        if (!metadata.isDirectory() || metadata.isSymbolicLink())
+          throw new Error("unsafe directory")
+      }
+      const metadata = lstatSync(recordPath)
+      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("unsafe record")
+      record = JSON.parse(readFileSync(recordPath, "utf8"))
+    } catch {
+      throw new Error("DeepSeek Harness host ownership record is missing or unreadable")
+    }
+    if (
+      record?.schemaVersion !== 2 ||
+      record.retirementRequired !== true ||
+      record.retired !== false ||
+      typeof record.bootId !== "string" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(record.bootId) ||
+      !Number.isSafeInteger(record.pid) ||
+      record.pid <= 0 ||
+      (record.childPid !== undefined &&
+        (!Number.isSafeInteger(record.childPid) || record.childPid <= 0))
+    )
+      throw new Error("DeepSeek Harness host ownership record is malformed")
+    if (record.nonceDigest !== nonceDigest)
+      throw new Error("DeepSeek Harness host ownership nonce does not match this launch")
+    // The host publishes childPid after actual spawn. Before publication a
+    // dead parent must never leave an admitted, unowned runtime behind.
+    if (record.childPid !== undefined) return
+    if (performance.now() >= deadline)
+      throw new Error("DeepSeek Harness host did not confirm process ownership before startup")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+/** Register this actual runtime PID before profile writes or upstream loading.
+ * Hosts also register pending launches. Publish-before-check matches the Node
+ * and Rust maintenance admission protocol, so either side observes the other.
+ */
+export function acquireRuntimeProcessLease(runtimeHome) {
+  if (typeof runtimeHome !== "string" || !isAbsolute(runtimeHome))
+    throw new Error("COGNIA_DSH_RUNTIME_HOME must be an absolute runtime path")
+  const control = join(dirname(realpathSync(runtimeHome)), ".deepseek-harness-control")
+  for (const directory of [control, join(control, "maintenance"), join(control, "processes")]) {
+    try {
+      mkdirSync(directory, { mode: 0o700 })
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+    }
+    const metadata = lstatSync(directory)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink())
+      throw new Error("DeepSeek Harness ownership directory must not be a symlink")
+  }
+  const identity = randomUUID()
+  const lease = join(control, "processes", `${identity}.json`)
+  const temporary = join(control, "processes", `${identity}.tmp`)
+  let released = false
+  const release = () => {
+    if (released) return
+    try {
+      unlinkSync(lease)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+    released = true
+  }
+  try {
+    writeFileSync(
+      temporary,
+      JSON.stringify({
+        schemaVersion: 2,
+        pid: process.pid,
+        processId: "dsh-runtime",
+        bootId: kernelBootId(),
+        retirementRequired: true,
+        retired: false,
+      }),
+      { flag: "wx", mode: 0o600 }
+    )
+    renameSync(temporary, lease)
+    for (const name of readdirSync(join(control, "maintenance"))) {
+      if (!name.endsWith(".json")) continue
+      const recordPath = join(control, "maintenance", name)
+      let record
+      try {
+        const metadata = lstatSync(recordPath)
+        if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("unsafe record")
+        record = JSON.parse(readFileSync(recordPath, "utf8"))
+      } catch (error) {
+        // An owner may finish between directory enumeration and this read.
+        if (error.code === "ENOENT") continue
+        throw new Error("DeepSeek Harness maintenance ownership is unreadable")
+      }
+      if (
+        record?.schemaVersion !== 1 ||
+        !Number.isSafeInteger(record.pid) ||
+        record.pid <= 0 ||
+        typeof record.operationId !== "string" ||
+        !record.operationId
+      )
+        throw new Error("DeepSeek Harness maintenance ownership is malformed")
+      try {
+        process.kill(record.pid, 0)
+      } catch (error) {
+        if (error.code === "ESRCH") continue
+        // EPERM and unknown liveness failures cannot grant admission.
+      }
+      throw new Error("DeepSeek Harness runtime maintenance is in progress")
+    }
+  } catch (error) {
+    release()
+    throw error
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary)
+  }
+  return release
+}
 
 function inside(child, parent) {
   const path = relative(parent, child)
@@ -65,7 +222,7 @@ export function prepareLaunch(argv, env) {
   }
   const composition = realpathSync(argv[2])
   const profile = PROFILE_BY_COMPOSITION[basename(composition)]
-  if (!profile || !inside(composition, runtimeHome)) {
+  if (!profile || dirname(composition) !== runtimeHome) {
     throw new Error("Composition must be a managed host profile inside the Cognia runtime home")
   }
   const profileDir = canonical(join(home, "profiles", profile))
@@ -120,6 +277,7 @@ export function resolveProductLauncher(require = createRequire(import.meta.url))
     "dsh-sdk-jsonrpc-server",
     "dsh-acp",
     "dsh-app-boot",
+    "dsh-launch-environment",
     "dsh-sdk-app",
     "dsh-acp-app",
     "dsh-session",
@@ -134,6 +292,8 @@ export function resolveProductLauncher(require = createRequire(import.meta.url))
     "dsh-working-directory",
     "dsh-tool-working-directory",
     "dsh-compaction-basic",
+    "dsh-compaction-tool-result-pruner",
+    "dsh-tool-todo",
     "dsh-compaction-image-offload",
   ]) {
     const pkg = JSON.parse(
@@ -146,6 +306,219 @@ export function resolveProductLauncher(require = createRequire(import.meta.url))
   }
   return join(dirname(manifestPath), "lib", "bin.js")
 }
+
+const MANAGED_MODULE_POLICY = "cognia/dsh-managed-module-policy"
+
+/** The official CLI keeps its profile lifecycle; its host-facing boot exports
+ * close over the certified bundle and overlay instead of mutable user layers.
+ */
+export function createManagedAppBoot(upstream, policy, createEnvironmentSnapshot) {
+  let selected
+  return {
+    // All launch configuration already came through the host's environment
+    // gate. Mutable profile/home dotenv files cannot add a second source.
+    loadEnv() {},
+    loadLayeredEnv() {
+      return createEnvironmentSnapshot([{ source: "process", values: { ...process.env } }])
+    },
+    loadProfile(binName, name, installAnchor, home, options) {
+      if (name !== policy.profile) throw new Error("Unmanaged DeepSeek Harness profile")
+      const profile = upstream.loadProfile(binName, name, installAnchor, home, {
+        ...options,
+        userLayer: false,
+      })
+      if (
+        profile.layers.length !== 1 ||
+        profile.layers[0].packageName !== "@deepseek-ai/dsh-sdk-minimal" ||
+        realpathSync(profile.layers[0].packageDir) !== policy.bundleDir
+      )
+        throw new Error("DeepSeek Harness profile must use its certified installation bundle")
+      selected = { ...profile, patches: [] }
+      return selected
+    },
+    readProfilePatches(binName, context, initialProfile) {
+      if (!selected || initialProfile !== selected)
+        throw new Error("DeepSeek Harness profile was not prepared by its managed host")
+      const patches = structuredClone([
+        ...upstream.readBundlePatches(binName, context, selected),
+        ...upstream.loadOverlayPatches(binName, policy.composition),
+      ])
+      const telemetry = upstream.resolveTelemetryPatch(
+        "1",
+        upstream.composeEntries([patches]).some((row) => row.id === "session-telemetry-otel")
+      )
+      if (telemetry) patches.push(telemetry)
+      return patches
+    },
+    boot(binName, _profileConfig, patches, prepare) {
+      return upstream.boot(
+        binName,
+        policy.rootConfig,
+        patches,
+        async (ctx) => {
+          await prepare?.(ctx)
+          // Include normally writes back plugin retirement into its root YAML.
+          // This host-owned root is immutable; profile/session data stays writable.
+          let include
+          Object.defineProperty(ctx.loader.builtins, "include", {
+            configurable: false,
+            get: () => include,
+            set: (Base) => {
+              include = class ManagedInclude extends Base {
+                write() {
+                  if (this.filename !== policy.rootConfig) return super.write()
+                }
+              }
+            },
+          })
+        },
+        pathToFileURL(policy.runtimeHome + "/").href
+      )
+    },
+  }
+}
+
+/** Pin both module selection and loading, including late profile mutations.
+ * Canonical URLs are delegated, so changing a writable symlink after admission
+ * cannot redirect the bytes Node actually loads.
+ */
+export function installManagedModulePolicy(policy) {
+  const facade = `data:text/javascript,${encodeURIComponent(`
+    import * as upstream from ${JSON.stringify(policy.appBootUrl)};
+    import { createManagedAppBoot } from ${JSON.stringify(policy.launcherUrl)};
+    import { createLaunchEnvironmentSnapshot } from ${JSON.stringify(policy.launchEnvironmentUrl)};
+    export * from ${JSON.stringify(policy.appBootUrl)};
+    export const { boot, loadProfile, readProfilePatches, loadEnv, loadLayeredEnv } = createManagedAppBoot(upstream, ${JSON.stringify(policy)}, createLaunchEnvironmentSnapshot);
+  `)}`
+  const pluginNetworkFacade = policy.modlensCliUrl
+    ? `data:text/javascript,${encodeURIComponent(`
+      import { fetch as nativeFetch } from ${JSON.stringify(policy.undiciUrl)};
+      export * from ${JSON.stringify(policy.undiciUrl)};
+      import { managedPluginFetch } from ${JSON.stringify(policy.launcherUrl)};
+      export const fetch = (input, init) => managedPluginFetch(nativeFetch, input, init);
+    `)}`
+    : undefined
+  const admittedUrl = (url) => {
+    if (url.startsWith("node:") || url === facade || url === pluginNetworkFacade) return url
+    if (!url.startsWith("file:")) throw new Error("Unmanaged DeepSeek Harness module URL")
+    const original = new URL(url)
+    const filename = realpathSync(fileURLToPath(original))
+    if (
+      policy.stateRoots.some((root) => inside(filename, root)) ||
+      ![policy.runtimeHome, policy.modules].some((root) => inside(filename, root))
+    )
+      throw new Error(`DeepSeek Harness cannot load module code from writable state: ${filename}`)
+    const canonical = pathToFileURL(filename)
+    canonical.search = original.search
+    canonical.hash = original.hash
+    return canonical.href
+  }
+  return registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "@deepseek-ai/dsh-app-boot") return { url: facade, shortCircuit: true }
+      if (specifier === "undici" && context.parentURL === policy.modlensCliUrl)
+        return { url: pluginNetworkFacade, shortCircuit: true }
+      const resolved = nextResolve(specifier, context)
+      return { ...resolved, url: admittedUrl(resolved.url) }
+    },
+    load(url, context, nextLoad) {
+      const canonical = admittedUrl(url)
+      const loaded = nextLoad(canonical, context)
+      if (canonical !== policy.acpUrl) return loaded
+      return { ...loaded, source: transformManagedAcp(Buffer.from(loaded.source).toString("utf8")) }
+    },
+  })
+}
+
+/** Adapt only the exact pinned ACP projection seam, never arbitrary modules. */
+export function transformManagedAcp(source) {
+  if (
+    createHash("sha256").update(source).digest("hex") !==
+    "9df25827fbf2ac7c0b168f22e5bea151153c1492ef118511be96688dc3039989"
+  )
+    throw new Error("Managed DSH ACP source differs from the certified release")
+  const resultBranch = '} else if (event.type === "tool/result") {'
+  const resumeBranch = "return { configOptions: await record.configOptions(signal) };"
+  if (source.split(resultBranch).length !== 2 || source.split(resumeBranch).length !== 2)
+    throw new Error("Managed DSH ACP projection seam changed")
+  return source
+    .replace(
+      resultBranch,
+      `} else if (event.type === "todo/write" || event.type === "turn/start") {
+    const entries = (event.type === "todo/write" ? event.data.todos : []).map(todo => ({ content: todo.content, status: todo.status, priority: "medium" }));
+    this.outputTail = this.outputTail.then(() => this.notify({ sessionId: this.agent.session.id,
+      update: { sessionUpdate: "plan", entries } })).catch(error => {
+        this.ctx.logger.warn("acp: managed Todo delivery failed: " + errorChain(error));
+      });
+  } else if (event.type === "tool/result" && event.surfaceOp?.op !== "replace") {`
+    )
+    .replace(
+      resumeBranch,
+      `const configOptions = await record.configOptions(signal);
+      const todos = ctx.get("sessionProjections").snapshot(record.agent.session, ["todos"]).values.todos;
+      await notify({ sessionId, update: { sessionUpdate: "plan",
+        entries: (todos ?? []).map(todo => ({ content: todo.content, status: todo.status, priority: "medium" })) } });
+      return { configOptions };`
+    )
+}
+
+/** The pinned ModLens CLI may POST only to its admitted gateway, without redirects. */
+export async function managedPluginFetch(fetch, input, init) {
+  const expected = new URL(`${process.env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`)
+  if (typeof input !== "string" || new URL(input).href !== expected.href || init?.method !== "POST")
+    throw new Error("Managed ModLens network target refused")
+  return fetch(input, { ...init, redirect: "error" })
+}
+
+export function prepareManagedModulePolicy(
+  runtimeHome,
+  launch,
+  require = createRequire(import.meta.url)
+) {
+  const policy = {
+    runtimeHome: realpathSync(runtimeHome),
+    modules: realpathSync(join(runtimeHome, "node_modules")),
+    stateRoots: [launch.home, launch.sessionRoot],
+    profile: launch.profile,
+    composition: launch.composition,
+    rootConfig: realpathSync(join(runtimeHome, "host.root.yml")),
+    appBootUrl: pathToFileURL(realpathSync(require.resolve("@deepseek-ai/dsh-app-boot"))).href,
+    ...(launch.profile === "cognia-acp"
+      ? {
+          acpUrl: pathToFileURL(realpathSync(require.resolve("@deepseek-ai/dsh-acp"))).href,
+        }
+      : {}),
+    launchEnvironmentUrl: pathToFileURL(
+      realpathSync(require.resolve("@deepseek-ai/dsh-launch-environment"))
+    ).href,
+    bundleDir: realpathSync(dirname(require.resolve("@deepseek-ai/dsh-sdk-minimal/package.json"))),
+    launcherUrl: import.meta.url,
+  }
+  for (const path of [policy.rootConfig, policy.composition]) {
+    if (!inside(path, policy.runtimeHome) || policy.stateRoots.some((root) => inside(path, root)))
+      throw new Error("DeepSeek Harness configuration must remain in protected runtime code")
+  }
+  if (
+    policy.stateRoots.some((root) => inside(policy.modules, root)) ||
+    !inside(policy.bundleDir, policy.modules) ||
+    !inside(fileURLToPath(policy.appBootUrl), policy.modules) ||
+    !inside(fileURLToPath(policy.launchEnvironmentUrl), policy.modules)
+  )
+    throw new Error("DeepSeek Harness modules must come from the protected installation")
+  // The upstream internal-loader addon otherwise copies executable bindings
+  // into a shared writable temp cache. Load its installed prebuild directly.
+  process.env.NARB_DISABLE_NATIVE_CACHE = "1"
+  setEnvironmentData(MANAGED_MODULE_POLICY, policy)
+  // Workers inheriting launcher execArgv install the closed runtime policy
+  // before upstream resolution. Spawned tools do not inherit environment data.
+  if (!process.execArgv.some((arg) => arg === import.meta.url))
+    process.execArgv.push("--import", import.meta.url)
+  installManagedModulePolicy(policy)
+  return policy
+}
+
+const inheritedModulePolicy = getEnvironmentData(MANAGED_MODULE_POLICY)
+if (inheritedModulePolicy) installManagedModulePolicy(inheritedModulePolicy)
 
 function parseJson(raw, field) {
   try {
@@ -290,7 +663,7 @@ export function resolveCogniaServices(env, workspace, profile) {
 // wait for its readiness service, so no prompt can race MCP discovery or route
 // registration. Importing the plugin never executes the CLI entry below.
 export const name = "cognia-services"
-export const inject = ["tools", "llm"]
+export const inject = ["tools", "llm", "fs"]
 export async function apply(ctx) {
   const services = resolveCogniaServices(
     process.env,
@@ -299,20 +672,36 @@ export async function apply(ctx) {
   )
   if (services.gateway) {
     const adapter = await import("@deepseek-ai/dsh-llm-pi-ai")
-    await ctx.plugin(adapter, services.gateway)
+    await ctx.plugin(adapter, { providers: services.gateway.providers })
   }
   if (services.mcp.length) {
     const bridge = await import("@deepseek-ai/dsh-mcp-client")
     for (const config of services.mcp) await ctx.plugin(bridge, config)
   }
+  const { mountManagedPlugins } = await import("./managed-plugins.mjs")
+  await mountManagedPlugins(ctx)
   // allowedTools is preapproval, not a visibility mask. Broker authorization
   // owns those grants and extra roots; native tools keep the profile sandbox.
   ctx.provide("cogniaServicesReady", { ready: true })
 }
 
 export async function main() {
+  const identity = process.env.COGNIA_DSH_PROCESS_LEASE
+  const nonce = process.env.COGNIA_DSH_PROCESS_LEASE_NONCE
+  // Do not let upstream tools or descendant sessions inherit this launch's
+  // proof. Only its digest is retained in the read-only host record.
+  delete process.env.COGNIA_DSH_PROCESS_LEASE
+  delete process.env.COGNIA_DSH_PROCESS_LEASE_NONCE
+  if (identity !== undefined || nonce !== undefined) {
+    await waitForHostProcessLease(process.env.COGNIA_DSH_RUNTIME_HOME, identity, nonce)
+  } else {
+    // Exit status cannot establish that owned descendants have retired.
+    // Leave the boot-scoped record for authoritative host maintenance checks.
+    acquireRuntimeProcessLease(process.env.COGNIA_DSH_RUNTIME_HOME)
+  }
   const launch = prepareLaunch(process.argv, process.env)
   const bin = resolveProductLauncher()
+  prepareManagedModulePolicy(process.env.COGNIA_DSH_RUNTIME_HOME, launch)
   resolveCogniaServices(process.env, launch.workspace, launch.profile)
   process.env.COGNIA_DSH_PROFILE = launch.profile
   process.env.DSH_HOME = launch.home

@@ -6,6 +6,7 @@ import {
   computeExternalAgentProfileDigest,
   negotiateCapabilityProfile,
 } from "./capability-profile"
+import { liveCapabilityFacts } from "./capability-live-facts"
 
 describe("buildDeclaredCapabilityProfile", () => {
   it("is complete and explicitly un-negotiated", () => {
@@ -88,6 +89,27 @@ describe("buildDeclaredCapabilityProfile", () => {
 
 describe("negotiateCapabilityProfile", () => {
   const adapter = { steerTurn: () => undefined, resumeSession: () => undefined }
+
+  it.each(["deepseek-harness-readonly", "deepseek-harness-workspace"])(
+    "does not certify live token streaming for committed-only SDK preset %s",
+    (presetId) => {
+      const declared = buildDeclaredCapabilityProfile({ protocol: "dsh-sdk", presetId })
+      const negotiated = negotiateCapabilityProfile({
+        protocol: "dsh-sdk",
+        presetId,
+        adapter: {},
+        liveFacts: liveCapabilityFacts({ negotiated: { mcpTools: true } }),
+      })
+      for (const profile of [declared, negotiated]) {
+        expect(profile.effective.streaming).toMatchObject({
+          level: "unsupported",
+          reasonKey: "committedRepliesOnly",
+        })
+        expect(profile.effective["tools.ordinary"].level).toBe("native")
+        expect(profile.effective["session.multi-turn"].level).toBe("native")
+      }
+    }
+  )
 
   it("marks itself negotiated only when live facts were supplied", () => {
     expect(negotiateCapabilityProfile({ protocol: "acp", adapter }).negotiated).toBe(false)

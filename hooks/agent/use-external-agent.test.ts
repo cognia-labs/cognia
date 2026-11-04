@@ -7,6 +7,7 @@
  * leaks across tests when run side by side.
  */
 import { act, renderHook } from "@testing-library/react"
+import { translateDshNotification } from "@cognia/agent-dsh/event-codec"
 
 const logError = jest.fn()
 // Any namespace, not just `agent`. This suite's import graph reaches modules
@@ -1519,6 +1520,60 @@ describe("useExternalAgent core actions", () => {
     await expect(result.current.undoLastProviderChange("s1")).rejects.toThrow(
       "Provider undo warning must be acknowledged"
     )
+  })
+
+  it("rehydrates DSH Todo plans and ignores another session's plan updates", async () => {
+    seedAgent("a1")
+    const plan = translateDshNotification({
+      method: "session.event",
+      params: {
+        sessionId: "first",
+        event: {
+          type: "todo/write",
+          seq: 1,
+          time: 1234,
+          data: { todos: [{ content: "Verify DSH", status: "in_progress" }] },
+        },
+      },
+    }).events[0]
+    if (plan.type !== "plan_update") throw new Error("Expected a native Todo plan")
+    const sessions: Record<string, { id: string; metadata: { plan: typeof plan.entries } }> = {
+      first: { id: "first", metadata: { plan: plan.entries } },
+      second: { id: "second", metadata: { plan: [] } },
+    }
+    fakeManager.getSession.mockImplementation((_agentId, id) => sessions[id])
+    fakeManager.resumeSession.mockImplementation(async (_agentId, id) => sessions[id])
+    let listener: ((event: Record<string, unknown>) => void) | undefined
+    fakeManager.addEventListener.mockImplementation((_agentId, callback) => {
+      listener = callback
+      return () => undefined
+    })
+    const { result } = renderHook(() => useExternalAgent())
+    await flush()
+    await act(async () => {
+      await result.current.resumeSession("first")
+    })
+    expect(result.current.planEntries).toEqual(plan.entries)
+    act(() => {
+      listener?.({
+        ...plan,
+        sessionId: "second",
+        entries: [{ content: "Foreign", status: "pending", priority: "medium" }],
+      })
+    })
+    expect(result.current.planEntries).toEqual(plan.entries)
+    await act(async () => {
+      await result.current.resumeSession("second")
+    })
+    expect(result.current.planEntries).toEqual([])
+    await act(async () => {
+      await result.current.resumeSession("first")
+    })
+    expect(result.current.planEntries).toEqual(plan.entries)
+    act(() => {
+      listener?.({ ...plan, entries: [], step: -1, progress: 0, totalSteps: 0 })
+    })
+    expect(result.current.planEntries).toEqual([])
   })
 
   it("retains identified file plans emitted by the active session", async () => {

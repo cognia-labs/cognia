@@ -315,6 +315,10 @@ test("DeepSeek node:test suites run in their isolated native Node job, never und
   assert.equal(job.needs, "jest-plan")
   assert.equal(job.if, "fromJSON(needs.jest-plan.outputs.impacts).deepseekRuntime")
   const install = job.steps.find((step) => step.name === "Install isolated runtime")
+  const build = job.steps.find((step) => step.name === "Build workspace-bound DSH file reader")
+  assert.match(build.run, /node scripts\/build\/stage-dsh-ops-runtime.mjs/)
+  assert.ok(job.steps.indexOf(build) < job.steps.indexOf(install))
+  assert.ok(job.steps.some((step) => step.uses === "dtolnay/rust-toolchain@stable"))
   assert.match(install.run, /cp packages\/agent-dsh\/runtime\/\* "\$DSH_TEST_ROOT\/"/)
   assert.match(install.run, /npm install --prefix "\$DSH_TEST_ROOT" --ignore-scripts/)
   const test = job.steps.find((step) => step.name === "Run launcher and service smoke suites")
@@ -324,6 +328,18 @@ test("DeepSeek node:test suites run in their isolated native Node job, never und
     test.run,
     /node --test launcher.test.mjs launcher.smoke.test.mjs services.smoke.test.mjs/
   )
+  assert.ok(test.run.includes("managed-plugins.test.mjs"))
+  assert.ok(test.run.includes("planning.smoke.test.mjs"))
+  const rustJob = jobs["cargo-test-workspace"]
+  const rustReader = rustJob.steps.find(
+    (step) => step.name === "Prepare generated DSH source payload"
+  )
+  const rustTests = rustJob.steps.find(
+    (step) => step.name === "Run Rust tests (all crates except src-tauri)"
+  )
+  assert.ok(rustReader)
+  assert.ok(rustTests)
+  assert.ok(rustJob.steps.indexOf(rustReader) < rustJob.steps.indexOf(rustTests))
   assert.ok(!job.steps.some((step) => step.run?.includes("pnpm install")))
 })
 

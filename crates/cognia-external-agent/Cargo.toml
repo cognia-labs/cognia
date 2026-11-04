@@ -42,6 +42,7 @@ url.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 # sha2 0.11's digest output does not implement LowerHex; `hex` renders it.
 hex.workspace = true
 tempfile.workspace = true

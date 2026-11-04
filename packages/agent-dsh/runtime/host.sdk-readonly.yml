@@ -27,6 +27,12 @@
     defaultContextWindow: !!js Number(process.env.COGNIA_DSH_CONTEXT_WINDOW ?? 1000000)
     streamIdleTimeoutMs: 172800000
 
+# Keep automatic pruning usable for the frozen model window, including small models.
+- id: compaction-basic
+  config:
+    headroomTokens: !!js Math.max(1, Math.min(65536, Math.floor(Number(process.env.COGNIA_DSH_CONTEXT_WINDOW ?? 1000000) / 4)))
+    maxTokens: !!js Math.max(1, Math.min(65536, Math.floor(Number(process.env.COGNIA_DSH_CONTEXT_WINDOW ?? 1000000) / 4)))
+
 - id: system-prompt
   config:
     includeHarnessIdentity: false
@@ -64,8 +70,15 @@
       name: "@deepseek-ai/dsh-fs-sandbox"
       config:
         cwd: !!js process.env.COGNIA_DSH_WORKSPACE
+    - id: tool-result-pruner
+      name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
+    - id: tool-todo
+      name: "@deepseek-ai/dsh-tool-todo"
+      config:
+        allowParallelInProgress: false
     - id: cognia-services
       name: "./launcher.mjs"
+      inject: [tools, llm, fs, toolResultPruner, sessionProjections]
 
 # Await governed tools and model route before claiming the SDK transport.
 - id: sdk-jsonrpc-server

@@ -13,6 +13,93 @@ const assistant = (content: unknown[], usage?: unknown) =>
   frame("assistant/message", { message: { id: "a", content }, usage, stream: [] })
 
 describe("current DeepSeek Harness session format 4", () => {
+  it("projects an owned Todo snapshot to the existing plan UI contract", () => {
+    const result = translateDshNotification(
+      frame("todo/write", {
+        todos: [
+          { content: "Inspect", status: "completed" },
+          { content: "Verify", status: "in_progress" },
+          { content: "Commit", status: "pending" },
+        ],
+      })
+    )
+    expect(result.events).toEqual([
+      expect.objectContaining({
+        type: "plan_update",
+        sessionId: "s",
+        progress: expect.closeTo(100 / 3),
+        step: 1,
+        totalSteps: 3,
+        entries: [
+          { content: "Inspect", status: "completed", priority: "medium" },
+          { content: "Verify", status: "in_progress", priority: "medium" },
+          { content: "Commit", status: "pending", priority: "medium" },
+        ],
+      }),
+    ])
+    expect(translateDshNotification(frame("todo/write", { todos: [] })).events).toEqual([
+      expect.objectContaining({
+        type: "plan_update",
+        entries: [],
+        progress: 0,
+        step: -1,
+        totalSteps: 0,
+      }),
+    ])
+  })
+  it.each([
+    undefined,
+    null,
+    {},
+    [{ content: "", status: "pending" }],
+    [{ content: "Task", status: "invalid" }],
+    [{ content: "Task", status: ["pending"] }],
+  ])("refuses malformed Todo snapshots (%j)", (todos) => {
+    expect(() => translateDshNotification(frame("todo/write", { todos }))).toThrow(TypeError)
+  })
+  it("keeps model-context tool replacements out of the UI completion stream", () => {
+    const result = translateDshNotification(
+      frame(
+        "tool/result",
+        {
+          message: {
+            role: "tool",
+            source: { kind: "tool", callId: "c" },
+            toolCallId: "c",
+            content: [{ type: "text", text: "head [... middle pruned ...] tail" }],
+          },
+        },
+        { seq: 4, surfaceOp: { op: "replace", startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2] }
+      )
+    )
+    expect(result.events).toEqual([])
+    const original = frame("tool/result", {
+      message: {
+        role: "tool",
+        source: { kind: "tool", callId: "c" },
+        toolCallId: "c",
+        content: [{ type: "text", text: "Full original including the middle" }],
+      },
+    })
+    const replay = translateDshNotifications([
+      original,
+      frame(
+        "tool/result",
+        {
+          message: {
+            role: "tool",
+            source: { kind: "tool", callId: "c" },
+            toolCallId: "c",
+            content: [{ type: "text", text: "head [... middle pruned ...] tail" }],
+          },
+        },
+        { seq: 4, surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 } }
+      ),
+    ])
+    expect(replay.events.filter((event) => event.type === "tool_result")).toEqual([
+      expect.objectContaining({ result: "Full original including the middle", toolUseId: "c" }),
+    ])
+  })
   it("projects only the request's context capacity as session metadata", () => {
     expect(
       translateDshNotification(
@@ -269,7 +356,6 @@ describe("current DeepSeek Harness session format 4", () => {
       "approval/policy",
       "agent/inbox/spliced",
       "compaction/prune",
-      "todo/write",
       "tool/ptc-dispatch-start",
       "goal/change",
     ]) {

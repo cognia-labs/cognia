@@ -5656,6 +5656,135 @@ describe("DeepSeek Harness ACP capability boundaries", () => {
       value: "cognia/two",
     })
   })
+  it.each([false, true])(
+    "preserves pre-response Todo replay when resuming an existing session (%s)",
+    async (existing) => {
+      const { adapter, internal } = harness()
+      if (existing) seedSession(adapter, "saved", "default")
+      const entries = [{ content: "Verify native Todo", status: "completed", priority: "medium" }]
+      internal.sendRequest.mockImplementationOnce(async () => {
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "current_mode_update",
+          currentModeId: "default",
+        })
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "current_mode_update",
+          currentModeId: "default",
+        })
+        handleUpdate(adapter, "saved", { sessionUpdate: "plan", entries })
+        return { sessionId: "saved" }
+      })
+      const session = await adapter.resumeSession("saved", { cwd: "/work" })
+      expect(session.metadata?.plan).toEqual(entries)
+      expect(adapter.getSession("saved")?.metadata?.plan).toEqual(entries)
+    }
+  )
+  it.each([false, true])(
+    "rolls back provisional Todo replay when resume fails (%s)",
+    async (existing) => {
+      const { adapter, internal } = harness()
+      if (existing) seedSession(adapter, "saved", "default")
+      const previous = adapter.getSession("saved")
+      const modes = (adapter as unknown as { hostPermissionModes: Map<string, string> })
+        .hostPermissionModes
+      const previousPlan = [{ content: "Previous plan", status: "completed", priority: "medium" }]
+      if (previous) {
+        previous.metadata = { ...previous.metadata, plan: previousPlan }
+        modes.set("saved", "plan")
+      }
+      internal.sendRequest.mockImplementationOnce(async () => {
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "current_mode_update",
+          currentModeId: "default",
+        })
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "plan",
+          entries: [{ content: "Uncommitted replay", status: "pending", priority: "medium" }],
+        })
+        throw new Error("resume refused")
+      })
+      await expect(
+        adapter.resumeSession("saved", { cwd: "/work", permissionMode: "bypassPermissions" })
+      ).rejects.toThrow("resume refused")
+      expect(adapter.getSession("saved")).toBe(previous)
+      expect(previous?.metadata?.plan).toEqual(existing ? previousPlan : undefined)
+      expect(modes.get("saved")).toBe(existing ? "plan" : undefined)
+    }
+  )
+  it.each([false, true])(
+    "cleans up provisional resume state when the response changes identity (%s)",
+    async (existing) => {
+      const { adapter, internal } = harness()
+      if (existing) seedSession(adapter, "saved", "default")
+      const previous = adapter.getSession("saved")
+      const modes = (adapter as unknown as { hostPermissionModes: Map<string, string> })
+        .hostPermissionModes
+      if (previous) modes.set("saved", "plan")
+      const entries = [{ content: "Restored Todo", status: "completed", priority: "medium" }]
+      internal.sendRequest.mockImplementationOnce(async () => {
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "current_mode_update",
+          currentModeId: "default",
+        })
+        handleUpdate(adapter, "saved", {
+          sessionUpdate: "current_mode_update",
+          currentModeId: "default",
+        })
+        handleUpdate(adapter, "saved", { sessionUpdate: "plan", entries })
+        return { sessionId: "renamed" }
+      })
+      const resumed = await adapter.resumeSession("saved", { cwd: "/work" })
+      expect(resumed.id).toBe("renamed")
+      expect(resumed.metadata?.plan).toEqual(entries)
+      expect(adapter.getSession("saved")).toBe(previous)
+      expect(modes.get("saved")).toBe(existing ? "plan" : undefined)
+    }
+  )
+  it("rejects overlapping resume admission for the same session", async () => {
+    const { adapter, internal } = harness()
+    let release!: (value: unknown) => void
+    internal.sendRequest.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    )
+    const pending = adapter.resumeSession("saved", { cwd: "/work" })
+    await expect(adapter.resumeSession("saved", { cwd: "/work" })).rejects.toThrow(
+      "already in progress"
+    )
+    release({ sessionId: "saved" })
+    await expect(pending).resolves.toMatchObject({ id: "saved" })
+    expect(internal.sendRequest).toHaveBeenCalledTimes(1)
+  })
+  it("does not resurrect a closed resume or erase its replacement admission", async () => {
+    const { adapter, internal } = harness()
+    let release!: (value: unknown) => void
+    internal.sendRequest.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    )
+    const pending = adapter.resumeSession("saved", {
+      cwd: "/work",
+      permissionMode: "bypassPermissions",
+    })
+    await adapter.closeSession("saved")
+    internal.sendRequest.mockResolvedValueOnce({ sessionId: "saved" })
+    const replacement = await adapter.resumeSession("saved", {
+      cwd: "/work",
+      permissionMode: "plan",
+    })
+    release({ sessionId: "saved" })
+    await expect(pending).rejects.toThrow("cancelled")
+    expect(adapter.getSession("saved")).toBe(replacement)
+    expect(
+      (adapter as unknown as { hostPermissionModes: Map<string, string> }).hostPermissionModes.get(
+        "saved"
+      )
+    ).toBe("plan")
+  })
   it("carries DSH Cognia skills as prompt content once and keeps additional roots in the host scope", async () => {
     const { adapter, internal } = harness()
     internal.sendRequest.mockResolvedValueOnce({ sessionId: "context-session" })

@@ -14,7 +14,7 @@ import { piSubagentSupport } from "./pi-subagents"
  * from; it is not a claim that a live run on that release was verified.
  */
 export interface AgentModelSlotDescriptor {
-  id: "subagent.default" | "tier.haiku" | "tier.sonnet" | "tier.opus" | "aux.small"
+  id: "subagent.default" | "tier.haiku" | "tier.sonnet" | "tier.opus" | "aux.small" | "aux.vision"
   /**
    * `child-default`: the model a native child (subagent) uses when its own
    * definition and the spawning call name none. `tier`: what a model alias
@@ -81,6 +81,9 @@ export function gatewayModelSlots(config: SlotRuntimeConfig): readonly AgentMode
       return CLAUDE_SLOTS
     case "codex":
       return CODEX_SLOTS
+    case "dsh":
+    case "dsh-sdk":
+      return [{ id: "aux.vision", kind: "auxiliary", evidence: "ModLens v3.27.2 managed CLI" }]
     case "opencode":
       return config.protocol === "opencode-v2" ? OPENCODE_V2_SLOTS : OPENCODE_V1_SLOTS
     case "pi": {

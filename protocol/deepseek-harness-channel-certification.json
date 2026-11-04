@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "channelId": "dsh-0.2.1-rc.2-00000000",
+  "lockfileDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "compositionDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "upstreamVersion": "0.2.1-rc.2",
+  "nodeMajorRequired": 26,
+  "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"],
+  "profiles": [
+    {
+      "profileId": "cognia-sdk-readonly",
+      "compositionFile": "host.sdk-readonly.yml",
+      "capabilities": {
+        "transport": "dsh-sdk",
+        "streamingDeltas": false,
+        "toolEvents": true,
+        "reasoning": true,
+        "usage": true,
+        "subagentLineage": true,
+        "interactiveApproval": false,
+        "turnCancellation": false,
+        "mcpPassthrough": true,
+        "sessionResume": false
+      },
+      "requiresNativeSubprocess": false
+    },
+    {
+      "profileId": "cognia-sdk-workspace",
+      "compositionFile": "host.sdk-workspace.yml",
+      "capabilities": {
+        "transport": "dsh-sdk",
+        "streamingDeltas": false,
+        "toolEvents": true,
+        "reasoning": true,
+        "usage": true,
+        "subagentLineage": true,
+        "interactiveApproval": false,
+        "turnCancellation": false,
+        "mcpPassthrough": true,
+        "sessionResume": false
+      },
+      "requiresNativeSubprocess": true
+    },
+    {
+      "profileId": "cognia-acp",
+      "compositionFile": "host.acp.yml",
+      "capabilities": {
+        "transport": "acp",
+        "streamingDeltas": false,
+        "toolEvents": true,
+        "reasoning": true,
+        "usage": false,
+        "subagentLineage": false,
+        "interactiveApproval": true,
+        "turnCancellation": true,
+        "mcpPassthrough": true,
+        "sessionResume": true
+      },
+      "requiresNativeSubprocess": false
+    }
+  ],
+  "conformanceSuiteVersion": "8",
+  "experimental": true
+}

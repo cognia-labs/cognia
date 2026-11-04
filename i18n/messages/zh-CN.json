@@ -19322,6 +19322,7 @@
       "search": "搜索兼容模型…",
       "slots": {
         "auxSmall": "小型辅助模型",
+        "auxVision": "ModLens 视觉模型",
         "subagentDefault": "默认子代理模型",
         "tierHaiku": "Haiku 别名",
         "tierOpus": "Opus 别名",
@@ -19704,6 +19705,8 @@
           "cognia-gateway": "仅在启动时获得 Cognia 模型网关租约后启用。",
           "direct-provider": "仅在使用 DeepSeek 凭据直连时启用；使用 Cognia 模型时禁用。",
           "mcp-servers": "配置了服务器时启用：SDK 在启动时挂载，ACP 按会话挂载。",
+          "ops-worker": "macOS arm64/x64 和 Linux x64 提供九个只读文件、搜索及文档工具；不启用 Shell、写入或 PTC。",
+          "vision-model": "通过任务的 Cognia 视觉模型读取工作区本地图片；主模型仅支持文本时，请配置 ModLens 视觉模型角色。",
           "windows-only": "仅适用于 Windows；在已认证的 macOS 和 Linux 配置中禁用。"
         },
         "pluginStatus": {

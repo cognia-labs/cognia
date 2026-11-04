@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -31,14 +32,33 @@ import { createRuntimeHasher, hashHex } from "../crypto-hasher"
 export const RUNTIME_ARTIFACTS = [
   "package.json",
   "launcher.mjs",
+  "managed-plugins.mjs",
+  "ops-worker",
+  "ops-worker.json",
+  "ops-worker.LICENSE",
+  "host.root.yml",
   "host.sdk-readonly.yml",
   "host.sdk-workspace.yml",
   "host.acp.yml",
 ] as const
 
+/** Source payloads coexist across build targets; installed names stay stable. */
+export function runtimeArtifactSourceName(
+  artifact: string,
+  platform = `${process.platform}-${process.arch}`
+): string {
+  return artifact.startsWith("ops-worker")
+    ? artifact.replace("ops-worker", `ops-worker-${platform}`)
+    : artifact
+}
+
 /** Files whose bytes make up the composition digest, in a stable order. */
 const COMPOSITION_DIGEST_FILES = [
   "launcher.mjs",
+  "managed-plugins.mjs",
+  "ops-worker",
+  "ops-worker.json",
+  "host.root.yml",
   "host.sdk-readonly.yml",
   "host.sdk-workspace.yml",
   "host.acp.yml",
@@ -100,6 +120,335 @@ export interface InstallOptions extends DshInstallPaths {
 
 export class DshInstallError extends Error {}
 
+const INSTALL_READY_FILE = ".cognia-install.json"
+const SAFE_INSTALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface OwnershipRecord {
+  schemaVersion: 1 | 2
+  pid: number
+  operationId?: string
+  processId?: string
+  childPid?: number
+  nonceDigest?: string
+  bootId?: string
+  retirementRequired?: boolean
+  retired?: boolean
+  legacyRecord?: string
+}
+
+function validBootId(value: unknown): value is string {
+  return typeof value === "string" && SAFE_INSTALL_ID.test(value) && value === value.toLowerCase()
+}
+
+/** Only a kernel boot identifier may invalidate uncertain ownership. */
+export function dshBootId(): string {
+  let value: string
+  if (process.platform === "linux")
+    value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+  else if (process.platform === "darwin")
+    value = execFileSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], { encoding: "utf8" })
+  else throw new DshInstallError("DeepSeek Harness ownership requires a supported boot identity")
+  const identity = value.trim().toLowerCase()
+  if (!validBootId(identity)) throw new DshInstallError("Cannot verify system boot identity")
+  return identity
+}
+
+function ownedDirectory(dir: string): void {
+  if (
+    fs.existsSync(dir) &&
+    (fs.lstatSync(dir).isSymbolicLink() || !fs.lstatSync(dir).isDirectory())
+  ) {
+    throw new DshInstallError(`Runtime control directory is not an owned directory: ${dir}`)
+  }
+  fs.mkdirSync(dir, { recursive: true })
+}
+
+export function dshControlRootFor(dataRoot: string): string {
+  return path.join(dataRoot, ".deepseek-harness-control")
+}
+
+export function canonicalDshPath(candidate: string): string {
+  try {
+    return fs.realpathSync(candidate)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    const absolute = path.resolve(candidate)
+    const parent = path.dirname(absolute)
+    if (parent === absolute) throw error
+    return path.join(canonicalDshPath(parent), path.basename(absolute))
+  }
+}
+
+/** Enforced before any resolver so native workspace-write cannot alter host authority. */
+export function assertDshWritableRoots(dataRoot: string, roots: readonly string[]): void {
+  const runtime = fs.realpathSync(runtimeHomeFor(dataRoot))
+  const control = canonicalDshPath(dshControlRootFor(dataRoot))
+  const data = canonicalDshPath(dataRoot)
+  const state = [path.join(runtime, "dsh-home"), path.join(runtime, "sessions")]
+  const inside = (candidate: string, parent: string) => {
+    const relative = path.relative(parent, candidate)
+    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+  }
+  for (const root of roots) {
+    if (!path.isAbsolute(root))
+      throw new DshInstallError("Managed DSH writable roots must be absolute")
+    const canonical = canonicalDshPath(root)
+    const reserved = path.relative(data, canonical).split(path.sep)[0]
+    const overlapsInactiveCode =
+      reserved === "deepseek-harness.previous" ||
+      reserved === "deepseek-harness.staging" ||
+      reserved.startsWith("deepseek-harness.staging-")
+    const overlapsControl = inside(canonical, control) || inside(control, canonical)
+    const overlapsRuntime = inside(canonical, runtime) || inside(runtime, canonical)
+    if (
+      overlapsControl ||
+      overlapsInactiveCode ||
+      (overlapsRuntime && !state.some((dir) => inside(canonical, dir)))
+    ) {
+      throw new DshInstallError(
+        "Managed DeepSeek Harness writable roots overlap host control or runtime code"
+      )
+    }
+  }
+}
+
+function controlDirectories(dataRoot: string) {
+  const control = dshControlRootFor(dataRoot)
+  ownedDirectory(control)
+  const maintenance = path.join(control, "maintenance")
+  const processes = path.join(control, "processes")
+  ownedDirectory(maintenance)
+  ownedDirectory(processes)
+  return { maintenance, processes }
+}
+
+function publishRecord(file: string, record: OwnershipRecord, createOnly = false): void {
+  const temporary = path.join(path.dirname(file), `${randomUUID()}.tmp`)
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(record), { flag: "wx", mode: 0o600 })
+    if (createOnly) {
+      try {
+        fs.linkSync(temporary, file)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      }
+    } else fs.renameSync(temporary, file)
+  } finally {
+    fs.rmSync(temporary, { force: true })
+  }
+}
+
+function pidIsLive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
+function validLegacyBinding(filename: string, legacyRecord: unknown): boolean {
+  if (legacyRecord === undefined) return !filename.startsWith("legacy-")
+  return (
+    typeof legacyRecord === "string" &&
+    legacyRecord.endsWith(".json") &&
+    path.basename(legacyRecord) === legacyRecord &&
+    filename === `legacy-${sha256(legacyRecord)}.json`
+  )
+}
+
+function validateOwnershipRecord(
+  record: OwnershipRecord,
+  file: string,
+  kind: "maintenance" | "processes"
+): void {
+  if (
+    (record?.schemaVersion !== 1 && (kind !== "processes" || record?.schemaVersion !== 2)) ||
+    !Number.isSafeInteger(record.pid) ||
+    record.pid <= 0 ||
+    (kind === "maintenance" &&
+      (typeof record.operationId !== "string" || !SAFE_INSTALL_ID.test(record.operationId))) ||
+    (record.childPid !== undefined &&
+      (!Number.isSafeInteger(record.childPid) || record.childPid <= 0)) ||
+    (record.processId !== undefined && typeof record.processId !== "string") ||
+    (record.nonceDigest !== undefined &&
+      (typeof record.nonceDigest !== "string" || !/^[0-9a-f]{64}$/.test(record.nonceDigest))) ||
+    (record.schemaVersion === 1 && record.legacyRecord !== undefined)
+  )
+    throw new Error("invalid ownership record")
+  if (
+    record.schemaVersion === 2 &&
+    (!validBootId(record.bootId) ||
+      record.retirementRequired !== true ||
+      record.retired !== false ||
+      !validLegacyBinding(path.basename(file), record.legacyRecord))
+  )
+    throw new Error("invalid retirement record")
+}
+
+function quarantineObservedProcess(
+  dir: string,
+  name: string,
+  currentBoot: string,
+  source?: OwnershipRecord
+): boolean {
+  const shadow = path.join(dir, `legacy-${sha256(name)}.json`)
+  publishRecord(
+    shadow,
+    {
+      ...(source ?? { pid: process.pid }),
+      schemaVersion: 2,
+      bootId: currentBoot,
+      retirementRequired: true,
+      retired: false,
+      legacyRecord: name,
+    },
+    true
+  )
+  const metadata = fs.lstatSync(shadow)
+  if (!metadata.isFile() || metadata.isSymbolicLink())
+    throw new DshInstallError("Cannot establish legacy runtime retirement")
+  const quarantine = JSON.parse(fs.readFileSync(shadow, "utf8")) as OwnershipRecord
+  validateOwnershipRecord(quarantine, shadow, "processes")
+  if (
+    quarantine.schemaVersion !== 2 ||
+    quarantine.legacyRecord !== name ||
+    !validBootId(quarantine.bootId)
+  )
+    throw new DshInstallError("Cannot establish legacy runtime retirement")
+  return quarantine.bootId === currentBoot
+}
+
+function hasLiveOwner(dir: string, kind: "maintenance" | "processes", own?: string): boolean {
+  const currentBoot = kind === "processes" ? dshBootId() : undefined
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith(".tmp")) continue
+    const file = path.join(dir, name)
+    if (file === own) continue
+    let record: OwnershipRecord
+    try {
+      const stat = fs.lstatSync(file)
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular record")
+      record = JSON.parse(fs.readFileSync(file, "utf8")) as OwnershipRecord
+      validateOwnershipRecord(record, file, kind)
+    } catch (error) {
+      if (kind === "processes") quarantineObservedProcess(dir, name, currentBoot!)
+      throw new DshInstallError(
+        `Cannot establish runtime ownership from ${file}: ${(error as Error).message}`
+      )
+    }
+    if (kind === "processes" && record.schemaVersion === 1) {
+      if (quarantineObservedProcess(dir, name, currentBoot!, record)) return true
+      continue
+    }
+    if (record.schemaVersion === 2) {
+      if (record.bootId !== currentBoot) continue
+      return true
+    }
+    if (pidIsLive(record.pid) || (record.childPid !== undefined && pidIsLive(record.childPid)))
+      return true
+  }
+  return false
+}
+
+export interface DshProcessLease {
+  readonly leaseId: string
+  readonly nonce: string
+  updateChildPid(childPid: number): void
+  release(): void
+}
+
+/** Publish before checking maintenance, including the pending-launch interval. */
+export function acquireDshProcessLease(dataRoot: string, processId?: string): DshProcessLease {
+  const dirs = controlDirectories(dataRoot)
+  const leaseId = randomUUID()
+  const nonce = randomUUID()
+  const file = path.join(dirs.processes, `${leaseId}.json`)
+  const record: OwnershipRecord = {
+    schemaVersion: 2,
+    pid: process.pid,
+    nonceDigest: sha256(nonce),
+    bootId: dshBootId(),
+    retirementRequired: true,
+    retired: false,
+    ...(processId ? { processId } : {}),
+  }
+  publishRecord(file, record)
+  let released = false
+  const release = () => {
+    if (released) return
+    if (record.childPid !== undefined) return
+    fs.rmSync(file, { force: true })
+    released = true
+  }
+  try {
+    if (hasLiveOwner(dirs.maintenance, "maintenance"))
+      throw new DshInstallError("Runtime maintenance is in progress")
+  } catch (error) {
+    release()
+    throw error
+  }
+  return {
+    leaseId,
+    nonce,
+    updateChildPid(childPid) {
+      if (released || !Number.isSafeInteger(childPid) || childPid <= 0)
+        throw new DshInstallError("Invalid runtime child lease")
+      record.childPid = childPid
+      publishRecord(file, record)
+    },
+    release,
+  }
+}
+
+function acquireMaintenance(dataRoot: string): () => void {
+  const dirs = controlDirectories(dataRoot)
+  const operationId = randomUUID()
+  const file = path.join(dirs.maintenance, `${operationId}.json`)
+  publishRecord(file, { schemaVersion: 1, pid: process.pid, operationId })
+  const release = () => fs.rmSync(file, { force: true })
+  try {
+    if (hasLiveOwner(dirs.maintenance, "maintenance", file))
+      throw new DshInstallError("Runtime maintenance is already in progress")
+    if (hasLiveOwner(dirs.processes, "processes"))
+      throw new DshInstallError(
+        "Runtime process leases remain active or retirement is unverified; restart the system before runtime maintenance if retirement cannot be proved"
+      )
+    return release
+  } catch (error) {
+    release()
+    throw error
+  }
+}
+
+function recoverPrevious(dataRoot: string): void {
+  const home = runtimeHomeFor(dataRoot)
+  const previous = `${home}.previous`
+  if (!fs.existsSync(previous)) return
+  if (fs.existsSync(home)) {
+    throw new DshInstallError(
+      `Runtime recovery requires inspection of both ${home} and ${previous}; neither was deleted`
+    )
+  }
+  fs.renameSync(previous, home)
+}
+
+/** Preserve internal links without importing files or authority from sibling trees. */
+function validateDurableTree(dir: string, home: string, root = true): void {
+  const stat = fs.lstatSync(dir)
+  if (stat.isSymbolicLink()) {
+    if (root) throw new DshInstallError(`Durable runtime root must not be a symlink: ${dir}`)
+    const relative = path.relative(fs.realpathSync(home), fs.realpathSync(dir))
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new DshInstallError(`Durable runtime link escapes its runtime: ${dir}`)
+    }
+  } else if (stat.isDirectory()) {
+    for (const name of fs.readdirSync(dir)) validateDurableTree(path.join(dir, name), home, false)
+  } else if (root) {
+    throw new DshInstallError(`Durable runtime root must be a directory: ${dir}`)
+  }
+}
+
 /**
  * Install or reinstall the runtime.
  *
@@ -108,58 +457,11 @@ export class DshInstallError extends Error {}
  * the previously certified runtime untouched.
  */
 export async function installDshRuntime(options: InstallOptions): Promise<DshRuntimeChannel> {
-  const { dataRoot, sourceDir, onProgress } = options
-  const runtimeHome = runtimeHomeFor(dataRoot)
-  const staging = `${runtimeHome}.staging`
-  const previous = `${runtimeHome}.previous`
-
-  for (const artifact of RUNTIME_ARTIFACTS) {
-    if (!fs.existsSync(path.join(sourceDir, artifact))) {
-      throw new DshInstallError(`Runtime artifact missing from source: ${artifact}`)
-    }
-  }
-
-  fs.rmSync(staging, { recursive: true, force: true })
-  fs.mkdirSync(staging, { recursive: true })
-  for (const artifact of RUNTIME_ARTIFACTS) {
-    fs.copyFileSync(path.join(sourceDir, artifact), path.join(staging, artifact))
-  }
-  // Created up front so the launcher's containment check has a real directory
-  // to canonicalize rather than falling back to a lexical path.
-  fs.mkdirSync(path.join(staging, "dsh-home"), { recursive: true })
-
-  onProgress?.("Installing DeepSeek Harness packages…")
-  const runNpmInstall = options.runNpmInstall ?? defaultNpmInstall
-  try {
-    await runNpmInstall(staging)
-  } catch (error) {
-    fs.rmSync(staging, { recursive: true, force: true })
-    throw new DshInstallError(
-      `npm install failed; the previous runtime was left in place. ${(error as Error).message}`
-    )
-  }
-
-  if (!fs.existsSync(path.join(staging, "package-lock.json"))) {
-    fs.rmSync(staging, { recursive: true, force: true })
-    throw new DshInstallError("npm install produced no package-lock.json; refusing to certify.")
-  }
-
-  const channel = buildDshChannelManifest({
-    lockfileDigest: computeLockfileDigest(staging),
-    compositionDigest: computeCompositionDigest(staging),
-  })
-  fs.writeFileSync(
-    path.join(staging, CHANNEL_MANIFEST_FILE),
-    `${JSON.stringify(channel, null, 2)}\n`
-  )
-
-  // Swap last: until this point the live runtime is still the old one.
-  fs.rmSync(previous, { recursive: true, force: true })
-  if (fs.existsSync(runtimeHome)) fs.renameSync(runtimeHome, previous)
-  fs.renameSync(staging, runtimeHome)
-  fs.rmSync(previous, { recursive: true, force: true })
-
-  onProgress?.(`Installed channel ${channel.channelId}`)
+  options.onProgress?.("Installing DeepSeek Harness packages…")
+  const staged = await stageDshInstall(options)
+  const channel = buildDshChannelManifest(staged)
+  finalizeDshInstall(options.dataRoot, `${JSON.stringify(channel, null, 2)}\n`, staged.installId)
+  options.onProgress?.(`Installed channel ${channel.channelId}`)
   return channel
 }
 
@@ -328,15 +630,26 @@ export function removeDshRuntime(options: RemoveOptions): void {
       `Refusing to remove the runtime while ${options.activeSessionCount} session(s) are still using it.`
     )
   }
-  const runtimeHome = runtimeHomeFor(options.dataRoot)
-  fs.rmSync(runtimeHome, { recursive: true, force: true })
-  fs.rmSync(`${runtimeHome}.staging`, { recursive: true, force: true })
-  fs.rmSync(`${runtimeHome}.previous`, { recursive: true, force: true })
+  const release = acquireMaintenance(options.dataRoot)
+  try {
+    const runtimeHome = runtimeHomeFor(options.dataRoot)
+    recoverPrevious(options.dataRoot)
+    fs.rmSync(runtimeHome, { recursive: true, force: true })
+    fs.rmSync(`${runtimeHome}.staging`, { recursive: true, force: true })
+    for (const name of fs.readdirSync(options.dataRoot)) {
+      const id = name.slice("deepseek-harness.staging-".length)
+      if (name.startsWith("deepseek-harness.staging-") && SAFE_INSTALL_ID.test(id)) {
+        fs.rmSync(path.join(options.dataRoot, name), { recursive: true, force: true })
+      }
+    }
+  } finally {
+    release()
+  }
 }
 
-/** Default Cognia data root, matching the CLI's `~/.cognia` convention. */
+/** Relocated host data root, otherwise the CLI's `~/.cognia` convention. */
 export function defaultDataRoot(): string {
-  return path.join(os.homedir(), ".cognia")
+  return process.env.COGNIA_DATA_DIR?.trim() || path.join(os.homedir(), ".cognia")
 }
 
 // ── Host surface shared with the Tauri commands ──────────────────────────────
@@ -347,6 +660,7 @@ export function defaultDataRoot(): string {
 // shared `doctorDshRuntime()`.
 
 export interface DshInstallDigests {
+  installId: string
   lockfileDigest: string
   compositionDigest: string
 }
@@ -402,58 +716,104 @@ export async function stageDshInstall(
   options: DshInstallPaths & { runNpmInstall?: (cwd: string) => Promise<void> }
 ): Promise<DshInstallDigests> {
   const { dataRoot, sourceDir } = options
-  const staging = `${runtimeHomeFor(dataRoot)}.staging`
+  const installId = randomUUID()
+  const staging = `${runtimeHomeFor(dataRoot)}.staging-${installId}`
 
   for (const artifact of RUNTIME_ARTIFACTS) {
-    if (!fs.existsSync(path.join(sourceDir, artifact))) {
+    if (!fs.existsSync(path.join(sourceDir, runtimeArtifactSourceName(artifact)))) {
       throw new DshInstallError(`Runtime artifact missing from source: ${artifact}`)
     }
   }
 
-  fs.rmSync(staging, { recursive: true, force: true })
-  fs.mkdirSync(staging, { recursive: true })
-  for (const artifact of RUNTIME_ARTIFACTS) {
-    fs.copyFileSync(path.join(sourceDir, artifact), path.join(staging, artifact))
-  }
-  fs.mkdirSync(path.join(staging, "dsh-home"), { recursive: true })
-
+  const release = acquireMaintenance(dataRoot)
   try {
+    recoverPrevious(dataRoot)
+    fs.mkdirSync(staging)
+    for (const artifact of RUNTIME_ARTIFACTS) {
+      fs.copyFileSync(
+        path.join(sourceDir, runtimeArtifactSourceName(artifact)),
+        path.join(staging, artifact)
+      )
+    }
+    fs.mkdirSync(path.join(staging, "dsh-home"))
     await (options.runNpmInstall ?? defaultNpmInstall)(staging)
+    if (!fs.existsSync(path.join(staging, "package-lock.json"))) {
+      throw new DshInstallError("npm install produced no package-lock.json; refusing to certify.")
+    }
+    const digests = {
+      installId,
+      lockfileDigest: computeLockfileDigest(staging),
+      compositionDigest: computeCompositionDigest(staging),
+    }
+    fs.writeFileSync(
+      path.join(staging, INSTALL_READY_FILE),
+      JSON.stringify({ schemaVersion: 1, ...digests }),
+      { flag: "wx" }
+    )
+    return digests
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true })
+    if (error instanceof DshInstallError) throw error
     throw new DshInstallError(
       `npm install failed; the previous runtime was left in place. ${(error as Error).message}`
     )
-  }
-  if (!fs.existsSync(path.join(staging, "package-lock.json"))) {
-    fs.rmSync(staging, { recursive: true, force: true })
-    throw new DshInstallError("npm install produced no package-lock.json; refusing to certify.")
-  }
-
-  return {
-    lockfileDigest: computeLockfileDigest(staging),
-    compositionDigest: computeCompositionDigest(staging),
+  } finally {
+    release()
   }
 }
 
 /** Write the renderer-built manifest and activate the staged runtime. */
-export function finalizeDshInstall(dataRoot: string, manifestJson: string): void {
+export function finalizeDshInstall(
+  dataRoot: string,
+  manifestJson: string,
+  installId: string
+): void {
+  if (!SAFE_INSTALL_ID.test(installId))
+    throw new DshInstallError("Invalid runtime install identifier")
   const home = runtimeHomeFor(dataRoot)
-  const staging = `${home}.staging`
+  const staging = `${home}.staging-${installId}`
   const previous = `${home}.previous`
-  if (!fs.existsSync(staging)) {
-    throw new DshInstallError("No staged runtime to finalize.")
-  }
-  fs.writeFileSync(path.join(staging, CHANNEL_MANIFEST_FILE), manifestJson)
-
-  fs.rmSync(previous, { recursive: true, force: true })
-  if (fs.existsSync(home)) fs.renameSync(home, previous)
+  const release = acquireMaintenance(dataRoot)
   try {
-    fs.renameSync(staging, home)
+    recoverPrevious(dataRoot)
+    if (!fs.existsSync(staging) || fs.lstatSync(staging).isSymbolicLink()) {
+      throw new DshInstallError("No owned staged runtime to finalize.")
+    }
+    const ready = JSON.parse(fs.readFileSync(path.join(staging, INSTALL_READY_FILE), "utf8"))
+    const manifest = JSON.parse(manifestJson)
+    if (
+      ready.schemaVersion !== 1 ||
+      ready.installId !== installId ||
+      ready.lockfileDigest !== computeLockfileDigest(staging) ||
+      ready.compositionDigest !== computeCompositionDigest(staging) ||
+      manifest.lockfileDigest !== ready.lockfileDigest ||
+      manifest.compositionDigest !== ready.compositionDigest
+    )
+      throw new DshInstallError(
+        "Staged runtime digests do not match its ready marker and channel manifest"
+      )
+    if (!isDeepStrictEqual(manifest, buildDshChannelManifest(ready)))
+      throw new DshInstallError("Channel manifest does not match the current runtime certification")
+    for (const name of ["sessions", "dsh-home"]) {
+      const source = path.join(home, name)
+      if (!fs.existsSync(source)) continue
+      validateDurableTree(source, home)
+      fs.rmSync(path.join(staging, name), { recursive: true, force: true })
+      fs.cpSync(source, path.join(staging, name), { recursive: true, verbatimSymlinks: true })
+    }
+    fs.writeFileSync(path.join(staging, CHANNEL_MANIFEST_FILE), manifestJson)
+    if (fs.existsSync(home)) fs.renameSync(home, previous)
+    try {
+      fs.renameSync(staging, home)
+    } catch (error) {
+      if (fs.existsSync(previous)) fs.renameSync(previous, home)
+      throw error
+    }
+    fs.rmSync(previous, { recursive: true, force: true })
   } catch (error) {
-    // Put the old runtime back rather than leaving the user with none.
-    if (fs.existsSync(previous)) fs.renameSync(previous, home)
+    if (error instanceof DshInstallError) throw error
     throw new DshInstallError(`Cannot activate staged runtime: ${(error as Error).message}`)
+  } finally {
+    release()
   }
-  fs.rmSync(previous, { recursive: true, force: true })
 }

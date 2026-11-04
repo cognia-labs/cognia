@@ -234,7 +234,15 @@ export function classifyCiImpact(changedFiles, mode = "incremental") {
       ),
     sidecar: globalJS || any(/^(?:sidecar|cli|packages|lib)\//),
     deepseekRuntime:
-      all || globalJS || changedFiles.some((file) => /^packages\/agent-dsh\/runtime\//.test(file)),
+      all ||
+      globalJS ||
+      changedFiles.some(
+        (file) =>
+          /^packages\/agent-dsh\/runtime\//.test(file) ||
+          /^scripts\/build\/(?:stage-dsh-ops-runtime(?:\.test)?|build-native-agent-bridges|build-terminal-host-sidecar|source-fingerprint)\.mjs$/.test(
+            file
+          )
+      ),
     docs: globalJS || any(/^docs\//),
     mobile: globalJS || any(/^mobile\/|^lib\/capacitor\/|\.mobile\.tsx?$|^next\.config\./),
     browserExtension:

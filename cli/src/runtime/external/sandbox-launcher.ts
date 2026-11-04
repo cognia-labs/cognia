@@ -18,11 +18,13 @@ import {
 
 import {
   botRuntimeEnvironment,
+  isDshLauncherInvocation,
   type ExternalAgentLaunch,
   type NodeExternalAgentSpawnConfig,
 } from "./node-backend"
 import { devinOwnedConfigRoot, devinOriginalConfigRoot } from "./devin-mcp-config"
 import { hostAgentStateDataDir, type StateIsolationPlan } from "./state-isolation"
+import { assertDshWritableRoots, canonicalDshPath } from "./dsh-installer"
 import {
   registeredNativeBridgeId,
   registeredNativeBridgeRoot,
@@ -227,6 +229,58 @@ export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): s
   })
 }
 
+/** Command admission has already pinned the runtime; environment cannot widen its state. */
+function managedDshSandboxRoots(config: NodeExternalAgentSpawnConfig) {
+  const raw = config.env?.COGNIA_DSH_RUNTIME_HOME
+  const invalid = () => new Error("Invalid managed DeepSeek Harness state paths")
+  let invocationRoot: string | undefined
+  try {
+    const launcher = fs.realpathSync(config.args?.[0] ?? "")
+    const root = path.dirname(launcher)
+    if (isDshLauncherInvocation(config.args ?? [], path.dirname(root))) invocationRoot = root
+  } catch {
+    // Other runtime commands do not carry a managed launcher path.
+  }
+  if (raw === undefined) {
+    if (invocationRoot)
+      throw new Error("Managed DeepSeek Harness host environment and lease are required")
+    return undefined
+  }
+  if (
+    !invocationRoot ||
+    !path.isAbsolute(raw) ||
+    path.basename(config.command) !== "node" ||
+    config.args?.length !== 2 ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      config.env?.COGNIA_DSH_PROCESS_LEASE ?? ""
+    ) ||
+    (config.env?.COGNIA_DSH_PROCESS_LEASE_NONCE?.length ?? 0) < 32
+  )
+    throw invalid()
+  const runtimeHome = fs.realpathSync(raw)
+  if (runtimeHome !== invocationRoot) throw invalid()
+  if (
+    fs.realpathSync(config.args[0]) !== path.join(runtimeHome, "launcher.mjs") ||
+    !["host.sdk-readonly.yml", "host.sdk-workspace.yml", "host.acp.yml"].some(
+      (name) => fs.realpathSync(config.args![1]) === path.join(runtimeHome, name)
+    )
+  )
+    throw invalid()
+  const state = [path.join(runtimeHome, "dsh-home"), path.join(runtimeHome, "sessions")]
+  for (const [index, key] of ["DSH_HOME", "COGNIA_DSH_SESSION_ROOT"].entries()) {
+    const requested = config.env?.[key]
+    if (
+      (requested !== state[index] && requested !== path.join(raw, path.basename(state[index]))) ||
+      canonicalDshPath(state[index]) !== state[index]
+    )
+      throw invalid()
+  }
+  const controlRoot = path.join(path.dirname(runtimeHome), ".deepseek-harness-control")
+  const processes = path.join(controlRoot, "processes")
+  if (canonicalDshPath(processes) !== processes) throw invalid()
+  return { runtimeHome, state, controlRoot, processes }
+}
+
 /**
  * The launcher argv for one spawn.
  *
@@ -242,6 +296,7 @@ export function buildSandboxLauncherArgs(
   isolation: StateIsolationPlan | null = null
 ): string[] {
   validateExternalAgentSandboxPolicy(config.sandboxPolicy)
+  const managedDsh = managedDshSandboxRoots(config)
   const nativeBridgeRoot = registeredNativeBridgeRoot(config.command, config.args ?? [])
   const crushBridge = registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http"
   const hermesProbeRoot = registeredHermesProbeStateRoot(
@@ -270,17 +325,25 @@ export function buildSandboxLauncherArgs(
     ...(crushBridge
       ? policyAgentStateWritableRoots("crush", []).map((root) => path.join(homedir, root))
       : []),
-    ...(botIsolation
-      ? [botState!]
-      : taskHome
-        ? [taskHome]
-        : agentStateWritableRoots(config, homedir, isolation)),
-    ...(isolation && !botIsolation && !taskHome ? [isolation.root] : []),
+    ...(managedDsh
+      ? managedDsh.state
+      : botIsolation
+        ? [botState!]
+        : taskHome
+          ? [taskHome]
+          : agentStateWritableRoots(config, homedir, isolation)),
+    ...(isolation && !managedDsh && !botIsolation && !taskHome ? [isolation.root] : []),
     toolHostRuntimeDir(),
   ]
   const devinConfigRoot = devinOwnedConfigRoot(config)
   if (devinConfigRoot) writable.push(devinConfigRoot)
+  if (managedDsh) {
+    assertDshWritableRoots(path.dirname(managedDsh.runtimeHome), writable)
+  }
   return [
+    ...(managedDsh
+      ? ["--readable", managedDsh.runtimeHome, "--readable", managedDsh.processes]
+      : []),
     ...[nativeBridgeRoot, hermesProbeRoot]
       .filter((root): root is string => !!root)
       .flatMap((root) => ["--readable", root]),
@@ -643,6 +706,8 @@ function agentStateWritableRoots(
   homedir: string,
   isolation: StateIsolationPlan | null = null
 ): string[] {
+  const managedDsh = managedDshSandboxRoots(config)
+  if (managedDsh) return managedDsh.state
   if (registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http")
     return policyAgentStateWritableRoots("crush", []).map((root) => path.join(homedir, root))
   const additional = additionalNativeHome(config, homedir)

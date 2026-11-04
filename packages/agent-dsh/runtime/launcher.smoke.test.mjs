@@ -18,9 +18,9 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { test } from "node:test"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { createMockDeepSeek } from "./mock-deepseek.mjs"
-import { DSH_VERSION, resolveProductLauncher } from "./launcher.mjs"
+import { DSH_VERSION, managedProfileManifest, resolveProductLauncher } from "./launcher.mjs"
 
 const source = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -45,12 +45,170 @@ test("installed dependency closure contains only the managed DSH release", () =>
   assert.deepEqual([...installed].sort(), Object.keys(manifest.overrides).sort())
 })
 
+for (const mutation of ["module", "configuration-race", "late-dotenv"])
+  test(
+    `profile-local ${mutation} cannot replace the certified SDK application`,
+    { timeout: 30000 },
+    async () => {
+      const dataRoot = mkdtempSync(join(tmpdir(), "cognia-dsh-profile-shadow-"))
+      const root = join(dataRoot, "deepseek-harness")
+      mkdirSync(root)
+      let child
+      let stderr = ""
+      let mutationObserved = false
+      try {
+        symlinkSync(modules, join(root, "node_modules"), "dir")
+        for (const file of [
+          "launcher.mjs",
+          "managed-plugins.mjs",
+          "ops-worker",
+          "ops-worker.json",
+          "host.root.yml",
+          "host.sdk-readonly.yml",
+        ])
+          copyFileSync(
+            join(
+              source,
+              file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+            ),
+            join(root, file)
+          )
+        const profile = join(root, "dsh-home", "profiles", "cognia-sdk-readonly")
+        const shadow = join(profile, "node_modules", "@deepseek-ai", "dsh-sdk-app")
+        mkdirSync(shadow, { recursive: true })
+        writeFileSync(
+          join(profile, "package.json"),
+          JSON.stringify(managedProfileManifest("cognia-sdk-readonly"))
+        )
+        writeFileSync(
+          join(shadow, "package.json"),
+          JSON.stringify({
+            name: "@deepseek-ai/dsh-sdk-app",
+            version: DSH_VERSION,
+            type: "module",
+            exports: "./index.js",
+          })
+        )
+        writeFileSync(
+          join(shadow, "index.js"),
+          "throw new Error('COGNIA_UNTRUSTED_PROFILE_PLUGIN_EXECUTED');\n"
+        )
+        const bootstrap = join(root, "fixture-bootstrap.mjs")
+        if (mutation !== "module")
+          writeFileSync(
+            bootstrap,
+            `
+        import fs from 'node:fs';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { main } from ${JSON.stringify(pathToFileURL(join(root, "launcher.mjs")).href)};
+        const write = fs.writeFileSync;
+        ${
+          mutation === "configuration-race"
+            ? `
+        fs.writeFileSync = (file, ...args) => {
+          const result = write(file, ...args);
+          if (String(file).endsWith('/cordis.yml') && fs.realpathSync(file) === fs.realpathSync(${JSON.stringify(join(profile, "cordis.yml"))})) {
+            write(file, '[ invalid profile configuration\\n');
+            write(${JSON.stringify(join(profile, "cordis.patch.yml"))}, '[ invalid mutable patch\\n');
+            process.stdout.write(JSON.stringify({ testMutation: true }) + '\\n');
+          }
+          return result;
+        };
+        `
+            : `
+        const realpath = fs.realpathSync;
+        let mutated = false;
+        fs.realpathSync = (file, ...args) => {
+          const result = realpath(file, ...args);
+          if (!mutated && String(file).endsWith('/host.root.yml')) {
+            mutated = true;
+            write(${JSON.stringify(join(root, "dsh-home", ".env"))}, 'COGNIA_DSH_MCP_SERVERS=invalid-untrusted-json\\n');
+            process.stdout.write(JSON.stringify({ testMutation: true }) + '\\n');
+          }
+          return result;
+        };
+        fs.realpathSync.native = realpath.native;
+        `
+        }
+        syncBuiltinESMExports();
+        process.argv = [process.execPath, ${JSON.stringify(join(root, "launcher.mjs"))}, ${JSON.stringify(join(root, "host.sdk-readonly.yml"))}];
+        await main();
+      `
+          )
+        child = spawn(
+          process.execPath,
+          mutation !== "module"
+            ? [bootstrap]
+            : [join(root, "launcher.mjs"), join(root, "host.sdk-readonly.yml")],
+          {
+            cwd: root,
+            env: {
+              PATH: process.env.PATH,
+              HOME: process.env.HOME,
+              DSH_HOME: join(root, "dsh-home"),
+              COGNIA_DSH_RUNTIME_HOME: root,
+              COGNIA_DSH_WORKSPACE: root,
+              DEEPSEEK_API_KEY: "fixture-not-a-credential",
+              DEEPSEEK_BASE_URL: "http://127.0.0.1:1",
+            },
+            stdio: ["pipe", "pipe", "pipe"],
+          }
+        )
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk
+        })
+        const initialized = new Promise((resolve, reject) => {
+          const lines = createInterface({ input: child.stdout })
+          lines.on("line", (line) => {
+            let frame
+            try {
+              frame = JSON.parse(line)
+            } catch {
+              return
+            }
+            if (frame.testMutation === true) mutationObserved = true
+            if (frame.id === 1) {
+              if (frame.error) reject(new Error(JSON.stringify(frame.error)))
+              else resolve(frame.result)
+            }
+          })
+          child.once("error", reject)
+          child.once("exit", (code, signal) =>
+            reject(new Error(`DSH exited ${code}/${signal}: ${stderr}`))
+          )
+        })
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: { cwd: root, provider: "deepseek-official", model: "deepseek-flash" },
+          }) + "\n"
+        )
+        const result = await initialized
+        assert.ok(result.serverInfo)
+        assert.doesNotMatch(stderr, /COGNIA_UNTRUSTED_PROFILE_PLUGIN_EXECUTED/)
+        if (mutation !== "module") assert.equal(mutationObserved, true)
+        assert.equal(readFileSync(join(root, "host.root.yml"), "utf8"), "[]\n")
+      } finally {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          const exited = new Promise((resolve) => child.once("exit", resolve))
+          child.kill("SIGKILL")
+          await exited
+        }
+        rmSync(dataRoot, { recursive: true, force: true })
+      }
+    }
+  )
+
 for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
   test(
     `official product launcher initializes ${profile} and exits on disconnect`,
     { timeout: 30000 },
     async () => {
-      const root = mkdtempSync(join(tmpdir(), "cognia-dsh-smoke-"))
+      const dataRoot = mkdtempSync(join(tmpdir(), "cognia-dsh-smoke-"))
+      const root = join(dataRoot, "deepseek-harness")
+      mkdirSync(root)
       let child
       let backend
       const requests = []
@@ -91,8 +249,21 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
           },
         })
         symlinkSync(modules, join(root, "node_modules"), "dir")
-        for (const file of ["launcher.mjs", `host.${profile}.yml`])
-          copyFileSync(join(source, file), join(root, file))
+        for (const file of [
+          "launcher.mjs",
+          "managed-plugins.mjs",
+          "ops-worker",
+          "ops-worker.json",
+          "host.root.yml",
+          `host.${profile}.yml`,
+        ])
+          copyFileSync(
+            join(
+              source,
+              file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+            ),
+            join(root, file)
+          )
         // This must never be read by the product CLI; launcher boots inside DSH_HOME.
         writeFileSync(join(root, ".env"), "DSH_HOME=/unmanaged-home\n")
         child = spawn(
@@ -300,6 +471,8 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
           "dsh-tool-working-directory",
           "dsh-session-projection",
           "dsh-token-meter",
+          "dsh-compaction-tool-result-pruner",
+          "dsh-tool-todo",
           "dsh-compaction-basic",
           "dsh-compaction-image-offload",
           "dsh-sandbox-policy",
@@ -351,7 +524,6 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
           "dsh-tool-skill",
           "dsh-tool-fs-search",
           "dsh-web-search-deepseek",
-          "dsh-tool-todo",
           "dsh-goal",
           "dsh-goal-round-driver",
           "dsh-tool-goal",
@@ -372,6 +544,16 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
         const status = await exited
         assert.equal(status.code, 0, stderr)
         assert.equal(status.signal, null)
+        const ownershipDirectory = join(dataRoot, ".deepseek-harness-control", "processes")
+        const ownershipFiles = readdirSync(ownershipDirectory)
+        assert.equal(ownershipFiles.length, 1, "normal exit cannot prove descendant retirement")
+        const ownership = JSON.parse(
+          readFileSync(join(ownershipDirectory, ownershipFiles[0]), "utf8")
+        )
+        assert.equal(ownership.schemaVersion, 2)
+        assert.equal(ownership.retirementRequired, true)
+        assert.equal(ownership.retired, false)
+        assert.equal(readFileSync(join(root, "host.root.yml"), "utf8"), "[]\n")
         const sessionRoot = join(root, "sessions")
         const logs = readdirSync(sessionRoot, { recursive: true }).filter((path) =>
           path.endsWith(".jsonl")
@@ -382,7 +564,7 @@ for (const profile of ["sdk-readonly", "sdk-workspace", "acp"]) {
       } finally {
         child?.kill("SIGKILL")
         await backend?.close()
-        rmSync(root, { recursive: true, force: true })
+        rmSync(dataRoot, { recursive: true, force: true })
       }
     }
   )

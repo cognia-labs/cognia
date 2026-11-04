@@ -151,6 +151,23 @@ function renderFields(props: Partial<Parameters<typeof RoleModelFields>[0]> = {}
 }
 
 describe("RoleModelFields", () => {
+  it("offers the ModLens vision role on managed DSH without a subagent role", () => {
+    const { onChange } = renderFields({ config: config("deepseek-harness-readonly", "dsh-sdk") })
+    const label = screen.getByText(en.externalAgent.roleModels.slots.auxVision)
+    expect(label).toBeVisible()
+    expect(
+      screen.queryByText(en.externalAgent.roleModels.slots.subagentDefault)
+    ).not.toBeInTheDocument()
+    const select = screen.getByRole("combobox")
+    fireEvent.change(select, { target: { value: "__model__" } })
+    fireEvent.click(screen.getByText("pick gateway/big"))
+    expect(onChange).toHaveBeenLastCalledWith({
+      version: 1,
+      slots: {
+        "aux.vision": { kind: "cognia", binding: primary },
+      },
+    })
+  })
   it("shows Pi child controls only after a supported package is detected", async () => {
     const input = config("pi-rpc", "pi-rpc")
     let finish!: (value: typeof input) => void

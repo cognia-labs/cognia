@@ -715,6 +715,8 @@
         "not-composed": "Not composed"
       },
       "pluginCondition": {
+        "ops-worker": "Nine read-only file/search/document tools on macOS arm64/x64 and Linux x64; no shell, mutations or PTC.",
+        "vision-model": "Local workspace images through the task's Cognia vision model; configure the ModLens vision role for a text-only primary.",
         "direct-provider": "Active only for direct DeepSeek credentials; disabled for Cognia models.",
         "cognia-gateway": "Active only with a Cognia model gateway lease at startup.",
         "mcp-servers": "Active when servers are configured: at startup for SDK, per session for ACP.",
@@ -1470,7 +1472,8 @@
       "tierHaiku": "Haiku alias",
       "tierSonnet": "Sonnet alias",
       "tierOpus": "Opus alias",
-      "auxSmall": "Small helper model"
+      "auxSmall": "Small helper model",
+      "auxVision": "ModLens vision model"
     },
     "hints": {
       "childDefault": "Used when a subagent's own definition and the spawning call name no model.",

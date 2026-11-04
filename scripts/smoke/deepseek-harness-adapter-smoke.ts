@@ -221,10 +221,26 @@ async function main() {
       path.join(runtimeHome, "node_modules"),
       "dir"
     )
-  for (const name of pi || opencode ? [] : ["launcher.mjs", "host.sdk-readonly.yml"])
-    fs.copyFileSync(path.join(source, name), path.join(runtimeHome, name))
+  for (const name of pi || opencode
+    ? []
+    : [
+        "launcher.mjs",
+        "managed-plugins.mjs",
+        "ops-worker",
+        "ops-worker.json",
+        "host.root.yml",
+        "host.sdk-readonly.yml",
+      ])
+    fs.copyFileSync(
+      path.join(
+        source,
+        name.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)
+      ),
+      path.join(runtimeHome, name)
+    )
   const host = new NodeExternalAgentBackend({
     workspacesRoot: workspace,
+    ...(!pi && !opencode ? { dataRoot } : {}),
     // --pi --sandbox also exercises the production host launcher on this OS.
     // DSH's own read-only profile remains active in the protocol-only mode.
     ...(sandbox

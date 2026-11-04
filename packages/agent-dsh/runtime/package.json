@@ -6,6 +6,8 @@
   "description": "Cognia-owned DeepSeek Harness host composition. Installed into an isolated runtime home, never into the Cognia workspace.",
   "license": "MIT",
   "dependencies": {
+    "dsh-ops": "0.4.4",
+    "@liustack/modlens": "3.27.2",
     "@deepseek-ai/dsh": "0.2.1-rc.2",
     "@deepseek-ai/dsh-sdk-minimal": "0.2.1-rc.2",
     "@deepseek-ai/dsh-sdk-app": "0.2.1-rc.2",
@@ -23,7 +25,9 @@
     "@deepseek-ai/dsh-attachment-local": "0.2.1-rc.2",
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.2",
     "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm-deepseek-api-key": "0.2.1-rc.2"
+    "@deepseek-ai/dsh-llm-deepseek-api-key": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-todo": "0.2.1-rc.2"
   },
   "overrides": {
     "@deepseek-ai/dsh": "$@deepseek-ai/dsh",
@@ -127,7 +131,7 @@
     "@deepseek-ai/dsh-compaction": "0.2.1-rc.2",
     "@deepseek-ai/dsh-compaction-basic": "0.2.1-rc.2",
     "@deepseek-ai/dsh-compaction-image-offload": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "$@deepseek-ai/dsh-compaction-tool-result-pruner",
     "@deepseek-ai/dsh-config-editor": "0.2.1-rc.2",
     "@deepseek-ai/dsh-cordis-client-runner": "0.2.1-rc.2",
     "@deepseek-ai/dsh-cordis-host-runner": "0.2.1-rc.2",
@@ -293,7 +297,7 @@
     "@deepseek-ai/dsh-tool-subagent": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-subagent-control": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-terminal": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-tool-todo": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-todo": "$@deepseek-ai/dsh-tool-todo",
     "@deepseek-ai/dsh-tool-web": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-workflow": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-working-directory": "0.2.1-rc.2",

@@ -1046,6 +1046,27 @@ export function buildGatewayTaskConfig(input: {
   let selectedModel: string | undefined = model
   const launchArgs: string[] = []
   if (runtime === "dsh") {
+    const vision = modelPlan?.slots["aux.vision"]?.modelId
+    if (vision && !modelPlan?.models.includes(vision))
+      throw new Error("ModLens vision model is not admitted by this Cognia task")
+    const visionBinding = vision ? modelPlan?.bindings?.[vision] : undefined
+    const visionMeta = vision
+      ? (input.modelMetadataById?.[vision] ??
+        (vision === model
+          ? meta
+          : resolveModelMeta(
+              visionBinding?.providerId ?? binding.providerId,
+              visionBinding?.modelId ?? vision,
+              settings.providerSettings,
+              settings.customProviders
+            )))
+      : undefined
+    if (vision && visionMeta?.supportsVision !== true)
+      throw new Error("ModLens requires a vision-capable Cognia model")
+    if (vision && (visionMeta?.supportsTools === false || visionMeta?.supportsStreaming === false))
+      throw new Error(
+        "ModLens vision model must meet the existing Cognia gateway tools and streaming requirements"
+      )
     // Current DSH ACP config_options encodes the complete provider/model pair.
     selectedModel = config.protocol === "acp" ? JSON.stringify(["cognia", model]) : model
     // Preserve the certified managed launch and tool-host bridge, but rebuild
@@ -1071,6 +1092,7 @@ export function buildGatewayTaskConfig(input: {
     if (meta.contextLength) env.COGNIA_DSH_CONTEXT_WINDOW = String(meta.contextLength)
     if (meta.maxOutputTokens) env.COGNIA_DSH_MAX_TOKENS = String(meta.maxOutputTokens)
     env.COGNIA_DSH_GATEWAY_CONFIG = JSON.stringify({
+      ...(vision || meta.supportsVision ? { visionModel: vision ?? model } : {}),
       providers: {
         cognia: {
           api: "openai-completions",
@@ -1110,6 +1132,21 @@ export function buildGatewayTaskConfig(input: {
                 : {}),
               input: meta.supportsVision ? ["text", "image"] : ["text"],
             },
+            ...(vision && vision !== model
+              ? [
+                  {
+                    id: vision,
+                    name: vision,
+                    input: ["text", "image"],
+                    ...(visionMeta?.contextLength
+                      ? { contextWindow: visionMeta.contextLength }
+                      : {}),
+                    ...(visionMeta?.maxOutputTokens
+                      ? { maxTokens: visionMeta.maxOutputTokens }
+                      : {}),
+                  },
+                ]
+              : []),
           ],
         },
       },

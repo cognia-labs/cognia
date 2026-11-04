@@ -5151,6 +5151,49 @@ describe("Cognia gateway task lifecycle", () => {
     }
   })
 
+  it("mints the ModLens vision selector in the same frozen DSH task lease", async () => {
+    const { manager, restorePlane } = prepare()
+    try {
+      const { launched } = captureChildren()
+      mockGatewayMint.mockImplementationOnce(async () =>
+        leaseFor(binding, {
+          modelMetadataById: {
+            model: { id: "model", supportsVision: false },
+            vision: { id: "vision", supportsVision: true },
+          },
+        })
+      )
+      await manager.addAgent({
+        ...managedConfig(),
+        process: { command: "", cwd: "/workspace" },
+        metadata: { preset: "deepseek-harness-acp", dshProfileId: "cognia-acp" },
+        modelRoles: {
+          version: 1,
+          slots: {
+            "aux.vision": { kind: "cognia", binding: { ...binding, modelId: "vision" } },
+          },
+        },
+      })
+      await expect(manager.execute("managed", "Read the workspace image")).resolves.toMatchObject({
+        success: true,
+      })
+      expect(mockGatewayMint.mock.calls[0][0].modelPlan).toEqual({
+        additionalModels: ["vision"],
+        modelBindings: {},
+      })
+      const route = JSON.parse(launched[0].config.process!.env!.COGNIA_DSH_GATEWAY_CONFIG)
+      expect(route.visionModel).toBe("vision")
+      expect(route.providers.cognia.models.map((model: { id: string }) => model.id)).toEqual([
+        "model",
+        "vision",
+      ])
+      expect(launched[0].config.process!.env!.COGNIA_DSH_MODEL).toBe("model")
+      expect(mockGatewayRevoke).toHaveBeenCalledTimes(1)
+    } finally {
+      restorePlane()
+    }
+  })
+
   const childRoles = {
     version: 1 as const,
     slots: {

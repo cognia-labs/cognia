@@ -42,6 +42,7 @@ interface DshHostFacts {
 }
 
 interface DshInstallDigests {
+  installId: string
   lockfileDigest: string
   compositionDigest: string
 }
@@ -145,8 +146,16 @@ export function useDshRuntime(profileId: DshProfileId): UseDshRuntimeResult {
     if (!supported) return
     await run(async () => {
       const digests = await agentInvoke<DshInstallDigests>("dsh_runtime_install", {})
+      if (typeof digests.installId !== "string" || !digests.installId.trim()) {
+        throw new Error(
+          "DeepSeek Harness host did not return an installation identity; update the host"
+        )
+      }
       const manifest = buildDshChannelManifest(digests)
-      await agentInvoke("dsh_runtime_finalize", { manifestJson: JSON.stringify(manifest, null, 2) })
+      await agentInvoke("dsh_runtime_finalize", {
+        installId: digests.installId,
+        manifestJson: JSON.stringify(manifest, null, 2),
+      })
       // Re-read rather than assuming success implies health: the install may
       // have succeeded while the platform or Node version still fails preflight.
       await check()

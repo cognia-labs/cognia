@@ -58,6 +58,7 @@ const SLOT_LABEL_KEYS = {
   "tier.sonnet": "slots.tierSonnet",
   "tier.opus": "slots.tierOpus",
   "aux.small": "slots.auxSmall",
+  "aux.vision": "slots.auxVision",
 } as const satisfies Record<AgentModelSlotDescriptor["id"], string>
 
 const KIND_HINT_KEYS = {

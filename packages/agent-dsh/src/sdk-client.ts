@@ -294,6 +294,25 @@ export class DshSdkRuntimeAdapter extends BaseProtocolAdapter {
   }
 
   private emit(state: DshSessionState, event: ExternalAgentEvent): void {
+    if (event.type === "session_start" && Array.isArray(state.session.metadata?.plan)) {
+      // Upstream's Todo projection is turn-scoped, even though every snapshot
+      // remains in the durable log. Clear both the live view and rehydration.
+      this.emit(state, {
+        type: "plan_update",
+        sessionId: state.session.id,
+        timestamp: event.timestamp,
+        entries: [],
+        progress: 0,
+        step: -1,
+        totalSteps: 0,
+      })
+    }
+    if (event.type === "plan_update") {
+      state.session.metadata = {
+        ...state.session.metadata,
+        plan: event.entries.map((entry) => ({ ...entry })),
+      }
+    }
     const owned = { ...event, sessionId: state.session.id }
     if (state.queue) state.queue.push(owned)
     else for (const listener of this.listeners.get(state.session.id) ?? []) listener(owned)

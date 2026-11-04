@@ -31,11 +31,16 @@ test("stages the package-owned DSH runtime for the desktop installer", async () 
   for (const file of [
     "package.json",
     "launcher.mjs",
+    "managed-plugins.mjs",
+    "ops-worker",
+    "ops-worker.json",
+    "ops-worker.LICENSE",
+    "host.root.yml",
     "host.sdk-readonly.yml",
     "host.sdk-workspace.yml",
     "host.acp.yml",
   ]) {
-    const source = `packages/agent-dsh/runtime/${file}`
+    const source = `packages/agent-dsh/runtime/${file.replace(/^ops-worker/, `ops-worker-${process.platform}-${process.arch}`)}`
     assert.ok(resources.some((entry) => resourceMatcher(entry)(source)), source)
   }
 })
