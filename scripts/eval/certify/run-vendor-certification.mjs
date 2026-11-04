@@ -9,7 +9,7 @@
 // var so production keys are never burned by accident.
 //
 // Usage:
-//   node scripts/certify/run-vendor-certification.mjs \
+//   node scripts/eval/certify/run-vendor-certification.mjs \
 //     --deployment <deploymentRef> --base-url <url> \
 //     --credential-env <ENV_VAR> --i-understand-this-bills
 

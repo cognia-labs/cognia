@@ -38999,7 +38999,7 @@
     "certificationEvidence_unsupported": "Unsupported",
     "certificationEvidence_vendor_certified": "Vendor certified",
     "certificationFresh": "Current",
-    "certificationRollbackHint": "A stale certification is ignored by automatic routing. Re-run certification, or roll back the certified bundle with scripts/certify/rollback-bundle.mjs.",
+    "certificationRollbackHint": "A stale certification is ignored by automatic routing. Re-run certification, or roll back the certified bundle with scripts/eval/certify/rollback-bundle.mjs.",
     "certificationStale": "Stale",
     "certificationSupport_supported": "Supported",
     "certificationSupport_unknown": "Unknown",

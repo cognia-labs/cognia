@@ -256,7 +256,7 @@ export function classifyCiImpact(changedFiles, mode = "incremental") {
       rust ||
       globalJS ||
       any(
-        /^(?:sidecar|packages|lib\/companion|tests\/conformance|scripts\/certify|scripts\/build)\//
+        /^(?:sidecar|packages|lib\/companion|tests\/conformance|scripts\/eval\/certify|scripts\/build)\//
       ),
     postgres: globalRust || any(/^crates\/(?:cognia-collab-server|cognia-tenant-auth)\//),
     // The real-binary Pro IDE E2E: slow (it starts code-server and Chromium),

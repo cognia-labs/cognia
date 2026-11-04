@@ -6,13 +6,13 @@ import { mkdirSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { SUITE_CASES, SUITE_VERSION } from "../../tests/conformance/suite-manifest.mjs"
+import { SUITE_CASES, SUITE_VERSION } from "../../../tests/conformance/suite-manifest.mjs"
 import {
   buildManifest,
   emitManifestBundle,
-} from "../../tests/conformance/harness/emit-manifest.mjs"
-import { spawnSidecar, assistantText } from "../../tests/conformance/harness/sidecar-process.mjs"
-import { PINNED_RUNTIME_VERSIONS } from "../../packages/agent-config-types/src/runtime-versions.ts"
+} from "../../../tests/conformance/harness/emit-manifest.mjs"
+import { spawnSidecar, assistantText } from "../../../tests/conformance/harness/sidecar-process.mjs"
+import { PINNED_RUNTIME_VERSIONS } from "../../../packages/agent-config-types/src/runtime-versions.ts"
 
 /**
  * Drive a minimal-but-real certification pass: one live turn per suite case

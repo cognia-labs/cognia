@@ -43,7 +43,7 @@ export function rollbackBundle({ rootDir, read = readFileSync, write = writeFile
 const isEntry = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())
 if (isEntry) {
   const { PINNED_RUNTIME_VERSIONS } =
-    await import("../../packages/agent-config-types/src/runtime-versions.ts")
+    await import("../../../packages/agent-config-types/src/runtime-versions.ts")
   const rootDir =
     process.env.COGNIA_CERT_ROOT ?? path.join(os.homedir(), ".cognia", "agent-certification")
   const { next, mismatches } = rollbackBundle({ rootDir, pins: PINNED_RUNTIME_VERSIONS })

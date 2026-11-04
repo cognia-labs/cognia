@@ -3,7 +3,7 @@
 // Read-only certification status for one deployment (ADR-0090 Phase 5):
 // evidence level, capability table, staleness, bundle id, rollback hint.
 // Pure display over the Dexie projection — activation/rollback are admin
-// operations (scripts/certify), never a click here.
+// operations (scripts/eval/certify), never a click here.
 
 import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"

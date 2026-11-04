@@ -12,9 +12,9 @@ import { once } from "node:events"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
 import { createHash } from "node:crypto"
-import { cliEsbuildOptions, loadEsbuild } from "../build/esbuild-shared.mjs"
+import { cliEsbuildOptions, loadEsbuild } from "../../build/esbuild-shared.mjs"
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 
 export function summarize(values) {
   if (values.length === 0 || values.some((value) => !Number.isFinite(value))) {

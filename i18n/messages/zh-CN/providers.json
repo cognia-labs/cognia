@@ -113,7 +113,7 @@
   "certificationEvidence_unsupported": "不支持",
   "certificationEvidence_vendor_certified": "厂商认证",
   "certificationFresh": "有效",
-  "certificationRollbackHint": "过期的认证会被自动路由忽略。请重新运行认证，或使用 scripts/certify/rollback-bundle.mjs 回滚认证包。",
+  "certificationRollbackHint": "过期的认证会被自动路由忽略。请重新运行认证，或使用 scripts/eval/certify/rollback-bundle.mjs 回滚认证包。",
   "certificationStale": "已过期",
   "certificationSupport_supported": "支持",
   "certificationSupport_unknown": "未知",

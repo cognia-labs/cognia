@@ -9,7 +9,7 @@ import { once } from "node:events"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { sidecarSourceDigest, summarize } from "./host-js-runtime.mjs"
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 export const REQUEST_MODES = [
   "model",
   "model-proxy",

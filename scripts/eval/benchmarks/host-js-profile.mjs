@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { hostFixture, trial, sidecarSourceDigest } from "./host-js-runtime.mjs"
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const execute = promisify(execFile)
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 

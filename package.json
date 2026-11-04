@@ -152,7 +152,7 @@
     "plugin:api-matrix:check": "node scripts/gates/convergence/plugin-api-matrix.mjs --check",
     "plugin:api-matrix:test": "node --test scripts/gates/convergence/plugin-api-matrix.test.mjs",
     "plugin:contract:check": "node scripts/plugin/generate-contract.mjs --check && node scripts/plugin/check-selection-action-parity.mjs",
-    "plugin:eval": "tsx scripts/plugin-eval/run-eval.ts",
+    "plugin:eval": "tsx scripts/eval/plugin-eval.ts",
     "plugin:pi-latex-workbench:check": "node plugins/pi-latex-workbench/scripts/sync-vendor.mjs --check",
     "plugin:repowiki:test": "uv run --project plugins/repowiki --with pytest --with pytest-asyncio python -m pytest plugins/repowiki/tests",
     "plugin:laya-guard:test": "uv run --no-project --with pytest python -m pytest plugins/cognia-laya-guard/tests",

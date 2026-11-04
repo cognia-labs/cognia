@@ -9,7 +9,7 @@ import { createHash } from "node:crypto"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { summarize, processFootprint } from "./host-js-runtime.mjs"
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function sourceIdentity() {
@@ -118,7 +118,7 @@ export async function validateFixture(fixture, manifest) {
 }
 
 async function sqliteGraphHash(workspace) {
-  const { loadSqliteBinding } = await import("../../sidecar/src/services/code-graph/store.ts")
+  const { loadSqliteBinding } = await import("../../../sidecar/src/services/code-graph/store.ts")
   const Database = loadSqliteBinding()
   if (!Database) throw new Error("SQLite inspection binding unavailable")
   const database = new Database(path.join(workspace, ".cognia/codegraph.db"))
@@ -178,7 +178,7 @@ function graphSignature(service) {
 
 async function childMain(workspace) {
   const { createIndexService } =
-    await import("../../sidecar/src/services/code-graph/index-service.ts")
+    await import("../../../sidecar/src/services/code-graph/index-service.ts")
   let clock = 1_000_000
   let workerStarts = 0,
     liveWorkers = 0,

@@ -91,7 +91,7 @@ test("emit → verify → activate → rollback round trip", async () => {
   const emittedB = emitManifestBundle({ rootDir, manifest: manifestB })
   assert.notEqual(emittedA.manifest.bundleId, emittedB.manifest.bundleId)
 
-  const { rollbackBundle } = await import("../../../scripts/certify/rollback-bundle.mjs")
+  const { rollbackBundle } = await import("../../../scripts/eval/certify/rollback-bundle.mjs")
   const { writeFileSync } = await import("node:fs")
   writeFileSync(
     path.join(rootDir, "active-bundle.json"),
@@ -132,7 +132,7 @@ test("emit → verify → activate → rollback round trip", async () => {
 
 test("vendor certification CLI refuses without explicit billing acknowledgement", async () => {
   const { validateCertifyArgs } =
-    await import("../../../scripts/certify/run-vendor-certification.mjs")
+    await import("../../../scripts/eval/certify/run-vendor-certification.mjs")
   const refused = validateCertifyArgs(
     ["--deployment", "dep-1", "--base-url", "https://vendor.example"],
     { CI: "false" }

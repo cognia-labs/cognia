@@ -27,4 +27,4 @@ ticket（`sk-cognia-rt-…`,secret 仅驻内存,metadata 持久化）在签发�
 
 ## 认证（Phase 5）
 
-`auto` 运行时采纳只接受三级证据——`native`、`vendor-certified`、`cognia-verified`——且必须来自**签名**的 `CompatibilityManifest` bundle（Ed25519;CI issuer 或显式 local）。probe 与 opt-in 在类型上就进不了门: 只有 `evaluateCompatibilityGate` 的输出才能构造 `certifiedPath`。任一版本轴漂移（SDK、claude-code、gateway crate、suite）即 stale——由 `scripts/gates/check-runtime-versions.mjs` 钉住。按能力熔断（连续 3 次失败 → 熔断 10 分钟）只能降不能升。厂商认证是需计费确认的本地 CLI（`scripts/certify/run-vendor-certification.mjs`）,CI 中拒跑。
+`auto` 运行时采纳只接受三级证据——`native`、`vendor-certified`、`cognia-verified`——且必须来自**签名**的 `CompatibilityManifest` bundle（Ed25519;CI issuer 或显式 local）。probe 与 opt-in 在类型上就进不了门: 只有 `evaluateCompatibilityGate` 的输出才能构造 `certifiedPath`。任一版本轴漂移（SDK、claude-code、gateway crate、suite）即 stale——由 `scripts/gates/check-runtime-versions.mjs` 钉住。按能力熔断（连续 3 次失败 → 熔断 10 分钟）只能降不能升。厂商认证是需计费确认的本地 CLI（`scripts/eval/certify/run-vendor-certification.mjs`）,CI 中拒跑。

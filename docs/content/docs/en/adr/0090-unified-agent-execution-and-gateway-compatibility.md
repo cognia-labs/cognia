@@ -406,7 +406,7 @@ Anthropic-protocol server (`anthropic-server/`), scenario matrix, harness
 (real `cognia-server` binary + real sidecar), and cases. Run with
 `pnpm test:conformance` after `pnpm conformance:prepare`. Certification
 bundles emit from the same suite (`--emit-manifest`); rollback via
-`scripts/certify/rollback-bundle.mjs` restores the previous bundle pointer
+`scripts/eval/certify/rollback-bundle.mjs` restores the previous bundle pointer
 and reports installed-artifact version mismatches that must move with it.
 The contextual-materialization path has its own end-to-end case
 (`cases/session-materialize.test.mjs`, byte-pinned against the codec's

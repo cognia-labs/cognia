@@ -40,10 +40,9 @@ scripts/
   scaffold/       plugin scaffolding and typed config codegen
   tauri/          agent-debug bridge into the real Tauri webview (see AGENT_DEBUG.md)
   bootstrap/      cross-platform project bootstrap scripts and presets (product asset)
-  eval/           MultiAgentBench runner, HTE CEM grader, tool-search cache probe
-  benchmarks/     Host/sidecar JS runtime and code-index benchmarks
-  certify/        billable vendor certification and bundle rollback (ADR-0090)
-  plugin-eval/    plugin eval runner
+  eval/           MultiAgentBench, HTE CEM grader, tool-search probe, plugin eval (plugin-eval.ts)
+    benchmarks/   Host/sidecar JS runtime and code-index benchmarks
+    certify/      billable vendor certification and bundle rollback (ADR-0090)
 ```
 
 Top-level files:
@@ -183,13 +182,15 @@ The `cognia-bootstrap.sh` / `.ps1` project bootstrap scripts and
 [README.md](./bootstrap/README.md), validation reports in `docs/reports/`.
 CI: `.github/workflows/bootstrap-scripts.yml`.
 
-### Evaluation and measurement
+### `eval/`
 
-`eval/` (MultiAgentBench, see `docs/development/multiagentbench.md`; HTE CEM
-grader, see `docs/development/hte-cem-grading.md`), `benchmarks/` (Host
-runtime benchmarks), `certify/` (billable vendor certification, ADR-0090
-Phase 5) and `plugin-eval/`. Most need provider keys or spend money; read the
-header first.
+MultiAgentBench (`docs/development/multiagentbench.md`), the HTE CEM grader
+(`docs/development/hte-cem-grading.md`), the tool-search cache probe and the
+plugin eval runner (`plugin-eval.ts`, `pnpm plugin:eval`). `benchmarks/` holds
+the Host runtime benchmarks and `certify/` the billable vendor certification
+(ADR-0090 Phase 5). Most need provider keys or spend money; read the header
+first. The `benchmarks/` tests have no command yet; run them with
+`node --test scripts/eval/benchmarks/*.test.mjs`.
 
 ## Run by hand
 
@@ -197,27 +198,27 @@ These scripts have no `package.json` command. They are either generators whose
 output is checked in, or harnesses tied to a specific record. Run them with
 `node` (`.mjs`) or `tsx` (`.ts` / `.mts`) from the repo root.
 
-| Script                                                        | What it is for                                                                                         |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `build/build-sign-in-icons.mjs`                               | Regenerates the sign-in callback icons used by `app/logto/callback` and the CLI.                       |
-| `build/bundle-tui-fixture.mjs`                                | Bundles the TUI fixture used by `cli/src/tui/pty/node-pty-harness.ts`.                                 |
-| `build/gen-sidecar-gh-command.mjs`                            | Regenerates `sidecar/src/policy/shell/gh-command.generated.ts` (ADR-0239).                             |
-| `sync/generate-live2d-fixtures.mjs`                           | Regenerates the Live2D compatibility fixtures.                                                         |
-| `plugin/build-github-delivery.ts`                             | Builds the plugin GitHub delivery bundle (see `packages/plugin-sdk/contract/compat`).                  |
-| `plugin/test-sdk-package.mjs`                                 | Packs and installs the SDK as a third-party consumer would.                                            |
-| `dev/move-to-crate.mjs`                                       | Moves Rust modules from `src-tauri` into a crate without touching the shared index.                    |
-| `certify/run-vendor-certification.mjs`, `rollback-bundle.mjs` | Billable vendor certification and its rollback (ADR-0090).                                             |
-| `eval/toolsearch-cache-probe.mjs`                             | Wire-level tool-search cache experiment (`docs/evidence/2026-10-24-eval-tui-gap-audit.md`).            |
-| `benchmarks/code-index-workers.mjs`, `host-first-request.mjs` | Host runtime measurements (`docs/evidence/2026-11-03-bun-host-runtime.md`).                            |
-| `smoke/lark-live-smoke.mts`                                   | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
-| `smoke/lume-sandbox.mjs`                                      | Lume sandbox smoke (`docs/development/lume-sandbox.md`).                                               |
-| `smoke/scheduler-tauri.mjs`                                   | Scheduler smoke in the desktop shell.                                                                  |
-| `smoke/tui-v41-live.mjs`                                      | TUI v4.1 acceptance (`docs/evidence/2026-10-22-tui-v41-acceptance.md`).                                |
-| `smoke/team-eval-live.ts`                                     | Agent Team live evaluation (`docs/reports/2026-10-25-team-squad-live-evaluation.md`).                  |
-| `smoke/builtin-agent-budget-live.ts`                          | Built-in agent budgets (`docs/evidence/2026-10-21-builtin-agent-budgets.md`).                          |
-| `smoke/{antigravity-acp,gemini-history}-smoke.ts`             | Gemini / Antigravity CLI support (`docs/evidence/2026-10-24-gemini-antigravity-cli-support-audit.md`). |
-| `smoke/minimax-acp-smoke.ts`                                  | MiniMax ACP smoke (`packages/agent-acp/README.md`).                                                    |
-| `smoke/opencode-v2-smoke.ts`, `opencode-subagent-models.ts`   | OpenCode v2 API and per-agent models (`docs/research/2026-09-12-opencode-v2-api-audit.md`).            |
+| Script                                                             | What it is for                                                                                         |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `build/build-sign-in-icons.mjs`                                    | Regenerates the sign-in callback icons used by `app/logto/callback` and the CLI.                       |
+| `build/bundle-tui-fixture.mjs`                                     | Bundles the TUI fixture used by `cli/src/tui/pty/node-pty-harness.ts`.                                 |
+| `build/gen-sidecar-gh-command.mjs`                                 | Regenerates `sidecar/src/policy/shell/gh-command.generated.ts` (ADR-0239).                             |
+| `sync/generate-live2d-fixtures.mjs`                                | Regenerates the Live2D compatibility fixtures.                                                         |
+| `plugin/build-github-delivery.ts`                                  | Builds the plugin GitHub delivery bundle (see `packages/plugin-sdk/contract/compat`).                  |
+| `plugin/test-sdk-package.mjs`                                      | Packs and installs the SDK as a third-party consumer would.                                            |
+| `dev/move-to-crate.mjs`                                            | Moves Rust modules from `src-tauri` into a crate without touching the shared index.                    |
+| `eval/certify/run-vendor-certification.mjs`, `rollback-bundle.mjs` | Billable vendor certification and its rollback (ADR-0090).                                             |
+| `eval/toolsearch-cache-probe.mjs`                                  | Wire-level tool-search cache experiment (`docs/evidence/2026-10-24-eval-tui-gap-audit.md`).            |
+| `eval/benchmarks/code-index-workers.mjs`, `host-first-request.mjs` | Host runtime measurements (`docs/evidence/2026-11-03-bun-host-runtime.md`).                            |
+| `smoke/lark-live-smoke.mts`                                        | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
+| `smoke/lume-sandbox.mjs`                                           | Lume sandbox smoke (`docs/development/lume-sandbox.md`).                                               |
+| `smoke/scheduler-tauri.mjs`                                        | Scheduler smoke in the desktop shell.                                                                  |
+| `smoke/tui-v41-live.mjs`                                           | TUI v4.1 acceptance (`docs/evidence/2026-10-22-tui-v41-acceptance.md`).                                |
+| `smoke/team-eval-live.ts`                                          | Agent Team live evaluation (`docs/reports/2026-10-25-team-squad-live-evaluation.md`).                  |
+| `smoke/builtin-agent-budget-live.ts`                               | Built-in agent budgets (`docs/evidence/2026-10-21-builtin-agent-budgets.md`).                          |
+| `smoke/{antigravity-acp,gemini-history}-smoke.ts`                  | Gemini / Antigravity CLI support (`docs/evidence/2026-10-24-gemini-antigravity-cli-support-audit.md`). |
+| `smoke/minimax-acp-smoke.ts`                                       | MiniMax ACP smoke (`packages/agent-acp/README.md`).                                                    |
+| `smoke/opencode-v2-smoke.ts`, `opencode-subagent-models.ts`        | OpenCode v2 API and per-agent models (`docs/research/2026-09-12-opencode-v2-api-audit.md`).            |
 
 When a record above is closed and its harness is no longer worth keeping,
 delete the harness. It stays recoverable from git history.
@@ -276,6 +277,9 @@ old paths; this table maps them.
 | `lark-live-smoke.mts`                     | `smoke/lark-live-smoke.mts`                  |
 | `lark-entry-verify.mts`                   | `smoke/lark-entry-verify.mts`                |
 | `provider-diagnostics-live.mjs`           | `smoke/provider-diagnostics-live.mjs`        |
+| `benchmarks/*`                            | `eval/benchmarks/*`                          |
+| `certify/*`                               | `eval/certify/*`                             |
+| `plugin-eval/run-eval.ts`                 | `eval/plugin-eval.ts`                        |
 
 ## Known layout debt
 
@@ -285,9 +289,10 @@ new scripts and do not copy these patterns:
 
 - Gates outside `gates/`: `plugin/check-*.mjs`, kept with the rest of the
   plugin tooling while the plugin repository extraction is in progress.
-- Generators outside `sync/`: `build/gen-*.mjs`, `plugin/generate-*.mjs`.
-- Evaluation split across `eval/`, `benchmarks/`, `certify/` and
-  `plugin-eval/`.
+- Generators outside `sync/`: `build/gen-*.mjs` stay in `build/` because
+  their outputs embed the generator path and the CI lane rules, cache keys and
+  Android fingerprint select on `scripts/build/`; `plugin/generate-*.mjs` stay
+  with the plugin tooling.
 - `bootstrap/` is a product asset: `lib/project-environment/bootstrap-presets.ts`
   imports `bootstrap/presets.json`, the only app import from `scripts/`.
 - `gates/convergence/*.md` are working notes of the in-flight convergence
