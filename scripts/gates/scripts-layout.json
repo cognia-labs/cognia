@@ -60,14 +60,6 @@
       "why": "MiniMax ACP smoke (packages/agent-acp/README.md)."
     },
     {
-      "path": "scripts/smoke/opencode-subagent-models.ts",
-      "why": "Needs OPENCODE_V1_BIN and OPENCODE_V2_BIN binaries (docs/evidence/2026-10-21-opencode-per-agent-models.md)."
-    },
-    {
-      "path": "scripts/smoke/opencode-v2-smoke.ts",
-      "why": "Runs against an isolated real OpenCode service binary (docs/research/2026-09-12-opencode-v2-api-audit.md)."
-    },
-    {
       "path": "scripts/smoke/scheduler-tauri.mjs",
       "why": "Scheduler smoke inside the desktop shell (docs/reports/2026-10-22-scheduled-task-implementation-audit.md)."
     },

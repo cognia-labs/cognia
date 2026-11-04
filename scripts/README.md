@@ -126,6 +126,11 @@ authentication refusal, reconnect, list/load/delete) plus the runtime's
 vendor module under `agents/vendors/`; `--live` adds real model turns on the
 local login. It needs the sandbox launcher (`pnpm cli:external-host:build`).
 New vendor checks belong in a vendor module, not a new top-level smoke.
+`pnpm smoke:subagent-models [pi|opencode]` checks that real Pi and OpenCode
+processes send each subagent to the model its Cognia slot names, against the
+loopback fixture model in `agents/fixture-model.ts` (set `OPENCODE_V1_BIN` and
+`OPENCODE_V2_BIN`); `pnpm smoke:opencode-v2` runs the OpenCode V2 service and
+adapter checks against the same kind of fixture.
 Vendor smokes not yet moved run through `build-and-run-smoke.mjs`
 (`pnpm smoke:external-parity --<lane>`). `im-live/` is the live
 IM bot smoke (`pnpm im:*`). Live harnesses against real services:
@@ -230,7 +235,6 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `smoke/builtin-agent-budget-live.ts`                               | Built-in agent budgets (`docs/evidence/2026-10-21-builtin-agent-budgets.md`).                          |
 | `smoke/{antigravity-acp,gemini-history}-smoke.ts`                  | Gemini / Antigravity CLI support (`docs/evidence/2026-10-24-gemini-antigravity-cli-support-audit.md`). |
 | `smoke/minimax-acp-smoke.ts`                                       | MiniMax ACP smoke (`packages/agent-acp/README.md`).                                                    |
-| `smoke/opencode-v2-smoke.ts`, `opencode-subagent-models.ts`        | OpenCode v2 API and per-agent models (`docs/research/2026-09-12-opencode-v2-api-audit.md`).            |
 
 A script nothing else references (no command, workflow, import or path in
 code) must also be listed under `manual` in `gates/scripts-layout.json` with
@@ -278,24 +282,28 @@ Folders were consolidated on 2026-11-04 (plan:
 `docs/plans/2026-11-04-scripts-layout-phase2.md`). Older records still name the
 old paths; this table maps them.
 
-| Old path                                  | New path                                     |
-| ----------------------------------------- | -------------------------------------------- |
-| `i18n-baseline.json`                      | `gates/i18n-baseline.json`                   |
-| `i18n-ignore.txt`                         | `gates/i18n-ignore.txt`                      |
-| `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`                  |
-| `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`               |
-| `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs`          |
-| `pet/fetch-live2d-corpus.mjs`             | `dev/fetch-live2d-corpus.mjs`                |
-| `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`            |
-| `ci/check-cognia-services.mjs`            | `gates/check-cognia-services.mjs`            |
-| `ci/check-browser-companion-contract.mjs` | `gates/check-browser-companion-contract.mjs` |
-| `router-fusion/live-smoke.mjs`            | `smoke/router-fusion-live.mjs`               |
-| `lark-live-smoke.mts`                     | `smoke/lark-live-smoke.mts`                  |
-| `lark-entry-verify.mts`                   | `smoke/lark-entry-verify.mts`                |
-| `provider-diagnostics-live.mjs`           | `smoke/provider-diagnostics-live.mjs`        |
-| `benchmarks/*`                            | `eval/benchmarks/*`                          |
-| `certify/*`                               | `eval/certify/*`                             |
-| `plugin-eval/run-eval.ts`                 | `eval/plugin-eval.ts`                        |
+| Old path                                  | New path                                                                           |
+| ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `i18n-baseline.json`                      | `gates/i18n-baseline.json`                                                         |
+| `i18n-ignore.txt`                         | `gates/i18n-ignore.txt`                                                            |
+| `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`                                                        |
+| `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`                                                     |
+| `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs`                                                |
+| `pet/fetch-live2d-corpus.mjs`             | `dev/fetch-live2d-corpus.mjs`                                                      |
+| `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`                                                  |
+| `ci/check-cognia-services.mjs`            | `gates/check-cognia-services.mjs`                                                  |
+| `ci/check-browser-companion-contract.mjs` | `gates/check-browser-companion-contract.mjs`                                       |
+| `router-fusion/live-smoke.mjs`            | `smoke/router-fusion-live.mjs`                                                     |
+| `lark-live-smoke.mts`                     | `smoke/lark-live-smoke.mts`                                                        |
+| `lark-entry-verify.mts`                   | `smoke/lark-entry-verify.mts`                                                      |
+| `provider-diagnostics-live.mjs`           | `smoke/provider-diagnostics-live.mjs`                                              |
+| `benchmarks/*`                            | `eval/benchmarks/*`                                                                |
+| `certify/*`                               | `eval/certify/*`                                                                   |
+| `plugin-eval/run-eval.ts`                 | `eval/plugin-eval.ts`                                                              |
+| `smoke/kimi-acp-smoke.ts`                 | `pnpm smoke:agent kimi` (`smoke/agents/vendors/kimi.ts`)                           |
+| `smoke/qoder-acp-smoke.ts`                | `pnpm smoke:agent qoder` (`smoke/agents/vendors/qoder.ts`)                         |
+| `smoke/pi-subagent-models.ts`             | `pnpm smoke:subagent-models pi` (`smoke/agents/subagent-models/pi.ts`)             |
+| `smoke/opencode-subagent-models.ts`       | `pnpm smoke:subagent-models opencode` (`smoke/agents/subagent-models/opencode.ts`) |
 
 ## Known layout debt
 

@@ -12,7 +12,8 @@ import { createBundleAgentProtocolDependenciesPlugin } from "../build/esbuild-sh
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 
 // One lane per flag, first match wins. Kimi and Qoder moved to
-// `pnpm smoke:agent` (scripts/smoke/agent.ts), which installs the host itself.
+// `pnpm smoke:agent` (scripts/smoke/agent.ts), which installs the host itself,
+// and the Pi subagent models to `pnpm smoke:subagent-models`.
 // `cliModules` lanes reach CLI-only dependencies such as undici.
 const LANES = [
   {
@@ -26,11 +27,6 @@ const LANES = [
     entry: "copilot-acp-smoke.ts",
     out: ".cache/copilot-cli-acceptance/probe.mjs",
     cliModules: true,
-  },
-  {
-    flags: ["--pi-subagent-models"],
-    entry: "pi-subagent-models.ts",
-    out: ".cache/pi-subagent-models/probe.mjs",
   },
   {
     flags: ["--cline-acp"],

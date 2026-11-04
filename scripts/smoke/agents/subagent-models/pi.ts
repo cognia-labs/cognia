@@ -1,8 +1,12 @@
-/** Real Pi/extension processes against a loopback model fixture. No provider credentials. */
+/** Real Pi processes, with each subagent package family (gotgenes, nico) and
+ * Cognia's guard extension, against the loopback fixture model: every child
+ * must reach the model its Cognia slot names, and a child write must be
+ * denied by Cognia. No provider credentials.
+ * Run through `pnpm smoke:subagent-models pi`.
+ */
 import assert from "node:assert/strict"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { createServer } from "node:http"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -13,24 +17,26 @@ import type {
   AgentProcessExitEvent,
 } from "@cognia/agent-contracts/host"
 import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
-import { PiRpcClientAdapter } from "../../packages/agent-pi/src/rpc-client"
-import { verifyPiExtension } from "../../cli/src/agent/tool-host/pi-extension"
+import { PiRpcClientAdapter } from "../../../../packages/agent-pi/src/rpc-client"
+import { verifyPiExtension } from "../../../../cli/src/agent/tool-host/pi-extension"
 import {
   resolvePiSubagents,
   piSubagentSupport,
-} from "../../lib/ai/agent/external/config/pi-subagents"
+} from "../../../../lib/ai/agent/external/config/pi-subagents"
 import {
   buildGatewayTaskConfig,
   nativeSubagentModelBindings,
-} from "../../lib/ai/agent/external/config/gateway-task"
-import { compileTaskModelPlan } from "../../lib/ai/agent/external/config/model-plan"
-import { gatewayModelSlots } from "../../lib/ai/agent/external/config/model-slots"
+} from "../../../../lib/ai/agent/external/config/gateway-task"
+import { compileTaskModelPlan } from "../../../../lib/ai/agent/external/config/model-plan"
+import { gatewayModelSlots } from "../../../../lib/ai/agent/external/config/model-slots"
 import {
   prepareGatewayTask,
   gatewayRuntimeEnvironment,
-} from "../../cli/src/runtime/external/gateway-task"
+} from "../../../../cli/src/runtime/external/gateway-task"
+import { startFixtureModel, type FixtureToolCall, type FixtureTurn } from "../fixture-model"
 
-async function main() {
+/** One report per Pi subagent family; throws on the first failing family. */
+export async function runPiSubagentModels(): Promise<unknown[]> {
   const root = path.resolve(
     ".cache/pi-subagent-models/native",
     new Date().toISOString().replaceAll(":", "-")
@@ -85,36 +91,22 @@ async function main() {
     let parentTurns = 0
     let backgroundDone = false
     const childTurns = new Map<string, number>()
-    const server = createServer(async (req, res) => {
-      try {
-        const chunks: Buffer[] = []
-        for await (const chunk of req) chunks.push(Buffer.from(chunk))
-        const body = JSON.parse(Buffer.concat(chunks).toString())
-        const messages = body.messages as Array<{ role: string; content: unknown }>
+    const server = await startFixtureModel({
+      reply: async ({ model, messages, tools }): Promise<FixtureTurn> => {
         const latestUser = messages.filter((message) => message.role === "user").at(-1)
         const child = JSON.stringify(latestUser?.content).includes("CHILD_FIXTURE_")
-        const text = JSON.stringify(messages)
-        calls.push({ model: body.model, child, content: text })
-        let tool:
-          { id: string; type: string; function: { name: string; arguments: string } } | undefined
+        calls.push({ model, child, content: JSON.stringify(messages) })
+        let tool: FixtureToolCall | undefined
         let answer = "FIXTURE_DONE"
         if (child) {
           const key = JSON.stringify(latestUser?.content)
           const count = childTurns.get(key) ?? 0
           childTurns.set(key, count + 1)
-          if (
-            count === 0 &&
-            (body.tools ?? []).some(
-              (tool: { function: { name: string } }) => tool.function.name === "write"
-            )
-          )
+          if (count === 0 && tools.includes("write"))
             tool = {
               id: `write_${calls.length}`,
-              type: "function",
-              function: {
-                name: "write",
-                arguments: JSON.stringify({ path: deniedFile, content: "must be denied" }),
-              },
+              name: "write",
+              arguments: JSON.stringify({ path: deniedFile, content: "must be denied" }),
             }
           if (count > 0 && key.includes("CHILD_FIXTURE_background")) backgroundDone = true
           answer = "CHILD_DONE"
@@ -125,56 +117,36 @@ async function main() {
           if (name)
             tool = {
               id: `delegate_${parentTurns}`,
-              type: "function",
-              function: {
-                name: "subagent",
-                arguments: JSON.stringify(
-                  family === "nico"
-                    ? {
-                        agent: name === "background" ? "reviewer" : name,
-                        task: `CHILD_FIXTURE_${name}`,
-                        async: name === "background",
-                        ...(name === "caller" ? { model: "cognia/search" } : {}),
-                      }
-                    : {
-                        subagent_type: name === "background" ? "reviewer" : name,
-                        description: name,
-                        prompt: `CHILD_FIXTURE_${name}`,
-                        run_in_background: name === "background",
-                        ...(name === "caller" ? { model: "cognia/search" } : {}),
-                      }
-                ),
-              },
+              name: "subagent",
+              arguments: JSON.stringify(
+                family === "nico"
+                  ? {
+                      agent: name === "background" ? "reviewer" : name,
+                      task: `CHILD_FIXTURE_${name}`,
+                      async: name === "background",
+                      ...(name === "caller" ? { model: "cognia/search" } : {}),
+                    }
+                  : {
+                      subagent_type: name === "background" ? "reviewer" : name,
+                      description: name,
+                      prompt: `CHILD_FIXTURE_${name}`,
+                      run_in_background: name === "background",
+                      ...(name === "caller" ? { model: "cognia/search" } : {}),
+                    }
+              ),
             }
         }
         if (!child && parentTurns > 6) {
+          // The parent's last turn waits for the background child to finish under the guard.
           const deadline = Date.now() + 20000
           while (!backgroundDone && Date.now() < deadline)
             await new Promise((done) => setTimeout(done, 50))
           assert(backgroundDone, "Background child did not finish under Cognia guard")
         }
-        const delta = tool
-          ? { role: "assistant", tool_calls: [{ ...tool, index: 0 }] }
-          : { role: "assistant", content: answer }
-        res.writeHead(200, { "Content-Type": "text/event-stream" })
-        for (const item of [
-          { choices: [{ index: 0, delta, finish_reason: null }] },
-          {
-            choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }],
-            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-          },
-        ])
-          res.write(
-            `data: ${JSON.stringify({ id: "fixture-completion", object: "chat.completion.chunk", created: 1, model: body.model, ...item })}\n\n`
-          )
-        res.end("data: [DONE]\n\n")
-      } catch (error) {
-        res.writeHead(500)
-        res.end(String(error))
-      }
+        return tool ? { toolCalls: [tool] } : { text: answer }
+      },
     })
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done))
-    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`
+    const endpoint = server.baseUrl
     const source = await resolvePiSubagents(
       {
         id: "pi-fixture",
@@ -386,22 +358,9 @@ async function main() {
       await adapter.disconnect().catch(() => undefined)
       for (const child of children.values()) child.kill("SIGTERM")
       for (const cleanup of cleanups) cleanup()
-      server.closeAllConnections()
-      await new Promise<void>((done) => server.close(() => done()))
+      await server.close()
     }
   }
   fs.writeFileSync(path.join(root, "report.json"), JSON.stringify(reports, null, 2))
+  return reports
 }
-const timer = setTimeout(() => {
-  console.error("Pi child model probe timed out")
-  process.exit(1)
-}, 120000)
-main()
-  .then(() => {
-    clearTimeout(timer)
-  })
-  .catch((error) => {
-    clearTimeout(timer)
-    console.error(error)
-    process.exitCode = 1
-  })

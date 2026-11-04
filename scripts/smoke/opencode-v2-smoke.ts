@@ -1,6 +1,8 @@
 /**
  * Exercise the current OpenCode V2 protocol against an isolated real service.
- * Run: node --import tsx scripts/smoke/opencode-v2-smoke.ts /path/to/opencode --adapter
+ * Run: pnpm smoke:opencode-v2 [/path/to/opencode] (or set OPENCODE_V2_BIN; the
+ * binary must match the @opencode/client version). The command passes
+ * --adapter, which adds the Cognia adapter checks to the raw service checks.
  * Uses fresh XDG state, a temporary workspace, and a deterministic localhost model
  * fixture; requires no model credentials and never calls an external model.
  */
@@ -111,7 +113,9 @@ async function main() {
   const { OpenCode } = await import("@opencode/client")
   const { Service } = await import("@opencode/client/service")
   const executable =
-    process.argv.slice(2).find((argument) => argument !== "--adapter") ?? "opencode"
+    process.argv.slice(2).find((argument) => argument !== "--adapter") ??
+    process.env.OPENCODE_V2_BIN ??
+    "opencode"
   const version = execFileSync(executable, ["--version"], { encoding: "utf8" }).trim()
   assert.match(version, /\bv?2\.\d+\.\d+/)
   const scratch = await mkdtemp(join(tmpdir(), "cognia-opencode-v2-smoke-"))

@@ -1,11 +1,12 @@
-/** Real OpenCode processes against a loopback-only deterministic model fixture.
- * Run with OPENCODE_V1_BIN and OPENCODE_V2_BIN, using pnpm exec tsx.
- * No account credentials or remote model calls are used.
+/** Real OpenCode processes (server, ACP, V2 service) against the loopback fixture
+ * model: every subagent must reach the model its Cognia slot names. Needs
+ * OPENCODE_V1_BIN and OPENCODE_V2_BIN; the V2 binary must match the
+ * @opencode/client version. No account credentials or remote model calls.
+ * Run through `pnpm smoke:subagent-models opencode`.
  */
 import assert from "node:assert/strict"
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { createServer } from "node:http"
 import { mkdir, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { createInterface } from "node:readline"
@@ -15,17 +16,19 @@ import type {
   AgentProcessExitEvent,
 } from "@cognia/agent-contracts/host"
 import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
-import { OpenCodeClientAdapter } from "../../packages/agent-opencode/src/client"
-import { OpenCodeV2ClientAdapter } from "../../packages/agent-opencode/src/v2-client"
-import { createOpenCodeV2Launcher } from "../../packages/agent-opencode/src/v2-launcher"
+import { OpenCodeClientAdapter } from "../../../../packages/agent-opencode/src/client"
+import { OpenCodeV2ClientAdapter } from "../../../../packages/agent-opencode/src/v2-client"
+import { createOpenCodeV2Launcher } from "../../../../packages/agent-opencode/src/v2-launcher"
 import {
   buildGatewayTaskConfig,
   openCodeSubagentModelBindings,
-} from "../../lib/ai/agent/external/config/gateway-task"
-import { compileTaskModelPlan } from "../../lib/ai/agent/external/config/model-plan"
-import { gatewayModelSlots } from "../../lib/ai/agent/external/config/model-slots"
+} from "../../../../lib/ai/agent/external/config/gateway-task"
+import { compileTaskModelPlan } from "../../../../lib/ai/agent/external/config/model-plan"
+import { gatewayModelSlots } from "../../../../lib/ai/agent/external/config/model-slots"
+import { startFixtureModel, type FixtureTurn } from "../fixture-model"
 
-async function main() {
+/** One report per OpenCode protocol; throws on the first failing lane. */
+export async function runOpenCodeSubagentModels(): Promise<unknown[]> {
   const root = resolve(
     ".cache/opencode-subagent-models",
     new Date().toISOString().replaceAll(":", "-")
@@ -42,79 +45,35 @@ async function main() {
     const version = execFileSync(binary, ["--version"], { encoding: "utf8" }).trim()
     const calls: Array<{ model: string; tools: string[]; taskSchema?: unknown }> = []
     let primaryCalls = 0
-    const modelServer = createServer(async (request, response) => {
-      try {
-        const chunks: Buffer[] = []
-        for await (const chunk of request) chunks.push(Buffer.from(chunk))
-        const body = JSON.parse(Buffer.concat(chunks).toString())
+    const modelServer = await startFixtureModel({
+      reply: ({ body }): FixtureTurn => {
         const tools = (body.tools ?? []) as Array<{
           function: { name: string; parameters: { properties?: Record<string, unknown> } }
         }>
-        calls.push({ model: body.model, tools: tools.map((tool) => tool.function.name) })
+        calls.push({ model: String(body.model), tools: tools.map((tool) => tool.function.name) })
         const targets = ["reviewer", "researcher", "fallback"]
         const taskTool =
           tools.find((tool) => tool.function.parameters?.properties?.subagent_type) ??
           tools.find((tool) => /^(task|subagent)$/.test(tool.function.name))
         if (taskTool) calls.at(-1)!.taskSchema = taskTool.function.parameters
         const target = body.model === "primary" && taskTool ? targets[primaryCalls++] : undefined
-        const toolCall =
-          target && taskTool
-            ? {
-                id: `call_${primaryCalls}`,
-                type: "function",
-                function: {
-                  name: taskTool.function.name,
-                  arguments: JSON.stringify({
-                    description: `Probe ${target}`,
-                    prompt: "Reply with OK. Do not use tools.",
-                    subagent_type: target,
-                    agent: target,
-                  }),
-                },
-              }
-            : undefined
-        if (target && !taskTool)
-          throw new Error(
-            `Native task tool unavailable: ${JSON.stringify(tools.map((tool) => tool.function))}`
-          )
-        const finish = toolCall ? "tool_calls" : "stop"
-        const message = toolCall
-          ? { role: "assistant", content: null, tool_calls: [toolCall] }
-          : { role: "assistant", content: "OK" }
-        const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
-        if (body.stream) {
-          response.writeHead(200, { "Content-Type": "text/event-stream" })
-          const delta = toolCall
-            ? { role: "assistant", tool_calls: [{ ...toolCall, index: 0 }] }
-            : { role: "assistant", content: "OK" }
-          for (const chunk of [
-            { choices: [{ index: 0, delta, finish_reason: null }] },
-            { choices: [{ index: 0, delta: {}, finish_reason: finish }], usage },
-          ])
-            response.write(
-              `data: ${JSON.stringify({ id: "chatcmpl-probe", object: "chat.completion.chunk", created: 1, model: body.model, ...chunk })}\n\n`
-            )
-          response.end("data: [DONE]\n\n")
-        } else {
-          response.writeHead(200, { "Content-Type": "application/json" })
-          response.end(
-            JSON.stringify({
-              id: "chatcmpl-probe",
-              object: "chat.completion",
-              created: 1,
-              model: body.model,
-              choices: [{ index: 0, message, finish_reason: finish }],
-              usage,
-            })
-          )
+        if (!target || !taskTool) return { text: "OK" }
+        return {
+          toolCalls: [
+            {
+              id: `call_${primaryCalls}`,
+              name: taskTool.function.name,
+              arguments: JSON.stringify({
+                description: `Probe ${target}`,
+                prompt: "Reply with OK. Do not use tools.",
+                subagent_type: target,
+                agent: target,
+              }),
+            },
+          ],
         }
-      } catch (error) {
-        response.writeHead(500, { "Content-Type": "application/json" })
-        response.end(JSON.stringify({ error: { message: String(error), type: "fixture_error" } }))
-      }
+      },
     })
-    await new Promise<void>((done) => modelServer.listen(0, "127.0.0.1", done))
-    const address = modelServer.address() as { port: number }
     const v2 = protocol === "opencode-v2"
     const binding = { providerId: "fixture", modelId: "primary" }
     const source = {
@@ -175,7 +134,7 @@ async function main() {
       config: source,
       binding,
       taskId: "probe",
-      endpoint: `http://127.0.0.1:${address.port}/v1`,
+      endpoint: modelServer.baseUrl,
       secret: "fixture-only",
       model: "primary",
       settings: { providerSettings: {}, customProviders: [] },
@@ -373,20 +332,9 @@ async function main() {
       await adapter?.disconnect().catch(() => undefined)
       for (const child of children.values()) child.kill("SIGTERM")
       process.removeListener("exit", cleanup)
-      modelServer.closeAllConnections()
-      await new Promise<void>((done) => modelServer.close(() => done()))
+      await modelServer.close()
     }
   }
   await writeFile(resolve(root, "results.json"), JSON.stringify(reports, null, 2))
+  return reports
 }
-
-const timeout = setTimeout(() => {
-  console.error("OpenCode model probe timed out")
-  process.exit(1)
-}, 180000)
-main()
-  .catch((error) => {
-    console.error(error)
-    process.exitCode = 1
-  })
-  .finally(() => clearTimeout(timeout))
