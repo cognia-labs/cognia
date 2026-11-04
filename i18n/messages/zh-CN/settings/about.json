@@ -33,8 +33,11 @@
   "legal": {
     "acknowledgements": "基于开源构建",
     "copyright": "© {year} {holder}。保留所有权利。",
+    "dependencyDescription": "主应用声明的直接运行依赖。版本要求或来源按声明展示，不代表实际安装时解析的版本。",
+    "dependencyToggle": "运行依赖（{count}）",
     "license": "许可证",
     "privacy": "隐私",
+    "runtimeDependencies": "运行依赖",
     "title": "法律与致谢",
     "viewLicense": "查看许可证",
     "viewPrivacy": "隐私政策"

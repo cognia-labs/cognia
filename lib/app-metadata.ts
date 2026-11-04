@@ -12,6 +12,7 @@
  */
 
 import { version as reactVersion } from "react"
+import pkg from "../package.json" with { type: "json" }
 
 import { APP_VERSION } from "@/lib/app-version"
 import { isCapacitor, isTauri } from "@/lib/tauri"
@@ -20,6 +21,12 @@ export { APP_VERSION }
 
 /** Product name. Mirrors `src-tauri/tauri.conf.json` `productName`. */
 export const APP_NAME = "Cognia"
+
+/** Direct runtime requirements as declared by this app, not resolved installed versions. */
+export const APP_RUNTIME_DEPENDENCIES: ReadonlyArray<{ name: string; requirement: string }> =
+  Object.entries(pkg.dependencies)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, requirement]) => ({ name, requirement }))
 
 /** Copyright holder + the year the project started (for the legal line). */
 export const COPYRIGHT_HOLDER = "AstroAir"

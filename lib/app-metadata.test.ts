@@ -24,6 +24,7 @@ jest.mock(
 
 import {
   APP_NAME,
+  APP_RUNTIME_DEPENDENCIES,
   COPYRIGHT_HOLDER,
   COPYRIGHT_START_YEAR,
   LICENSE_NAME,
@@ -34,6 +35,7 @@ import {
   getRuntimeVersions,
   parseEngine,
 } from "./app-metadata"
+import pkg from "../package.json" with { type: "json" }
 
 beforeEach(() => {
   isTauriMock.mockReturnValue(false)
@@ -43,6 +45,30 @@ beforeEach(() => {
 })
 
 describe("constants", () => {
+  it("keeps direct runtime dependency declarations complete without development-only packages", () => {
+    expect(APP_RUNTIME_DEPENDENCIES).toBeDefined()
+    const declared = new Map(
+      APP_RUNTIME_DEPENDENCIES.map(({ name, requirement }) => [name, requirement])
+    )
+    expect(declared.size).toBe(Object.keys(pkg.dependencies).length)
+    for (const [name, requirement] of Object.entries(pkg.dependencies)) {
+      expect(declared.get(name)).toBe(requirement)
+    }
+    const runtimeNames = new Set(Object.keys(pkg.dependencies))
+    for (const name of Object.keys(pkg.devDependencies)) {
+      if (!runtimeNames.has(name)) expect(declared.has(name)).toBe(false)
+    }
+  })
+
+  it("preserves workspace, catalog, and source requirements instead of presenting resolved versions", () => {
+    expect(APP_RUNTIME_DEPENDENCIES).toBeDefined()
+    for (const name of ["@cognia/agent", "zod", "xlsx"]) {
+      expect(
+        APP_RUNTIME_DEPENDENCIES.find((dependency) => dependency.name === name)?.requirement
+      ).toBe(pkg.dependencies[name as keyof typeof pkg.dependencies])
+    }
+  })
+
   it("exposes stable identity facts", () => {
     expect(APP_NAME).toBe("Cognia")
     expect(COPYRIGHT_HOLDER).toBe("AstroAir")

@@ -14,9 +14,21 @@
  */
 
 import type { ComponentType } from "react"
-import { LanguagesIcon, LayersIcon } from "lucide-react"
+import { ChevronDownIcon, LanguagesIcon, LayersIcon } from "lucide-react"
+import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import {
+  PackageInfo,
+  PackageInfoContent,
+  PackageInfoDependency,
+  PackageInfoDescription,
+  PackageInfoHeader,
+  PackageInfoName,
+  PackageInfoVersion,
+} from "@/components/ai-elements/package-info"
+import { APP_NAME, APP_RUNTIME_DEPENDENCIES, APP_VERSION } from "@/lib/app-metadata"
 import { openExternal } from "@/lib/tauri/opener"
 
 type MarkProps = { className?: string }
@@ -114,33 +126,79 @@ const STACK: StackEntry[] = [
 /**
  * Tech-stack credits as a tile grid: each entry is a real brand mark on a
  * tinted plate above its name, and opens the project's site. Two columns on a
- * phone, three from `sm` up.
+ * phone, three from `sm` up. Declared runtime dependencies follow in a
+ * collapsible PackageInfo section.
  */
 export function TechStack() {
+  const t = useTranslations("settings.about")
   return (
-    <div
-      className="grid grid-cols-2 gap-2 sm:grid-cols-3"
-      data-testid="acknowledgements"
-      role="list"
+    <PackageInfo
+      name={APP_NAME}
+      currentVersion={APP_VERSION}
+      className="rounded-none border-0 bg-transparent p-0"
     >
-      {STACK.map(({ name, url, mark: Mark, tint }) => (
-        <Button
-          key={name}
-          type="button"
-          variant="outline"
-          role="listitem"
-          onClick={() => void openExternal(url)}
-          data-testid={`stack-${name}`}
-          className="group h-auto justify-start gap-2.5 rounded-lg bg-background/40 p-2.5 text-left font-normal transition-all duration-200 hover:-translate-y-px hover:border-foreground/20 hover:bg-accent/50 hover:shadow-sm"
-        >
-          <span
-            className={`flex size-7 shrink-0 items-center justify-center rounded-md bg-current/10 ${tint}`}
+      <div
+        className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+        data-testid="acknowledgements"
+        role="list"
+      >
+        {STACK.map(({ name, url, mark: Mark, tint }) => (
+          <Button
+            key={name}
+            type="button"
+            variant="outline"
+            role="listitem"
+            onClick={() => void openExternal(url)}
+            data-testid={`stack-${name}`}
+            className="group h-auto justify-start gap-2.5 rounded-lg bg-background/40 p-2.5 text-left font-normal transition-all duration-200 hover:-translate-y-px hover:border-foreground/20 hover:bg-accent/50 hover:shadow-sm"
           >
-            <Mark className="size-4" />
-          </span>
-          <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-        </Button>
-      ))}
-    </div>
+            <span
+              className={`flex size-7 shrink-0 items-center justify-center rounded-md bg-current/10 ${tint}`}
+            >
+              <Mark className="size-4" />
+            </span>
+            <span className="min-w-0 truncate text-xs font-medium">{name}</span>
+          </Button>
+        ))}
+      </div>
+      <Collapsible className="mt-4">
+        <PackageInfoHeader>
+          <PackageInfoName />
+          <PackageInfoVersion className="mt-0 text-xs" />
+        </PackageInfoHeader>
+        <PackageInfoDescription className="text-xs">
+          {t("legal.dependencyDescription")}
+        </PackageInfoDescription>
+        <CollapsibleTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="group mt-2 w-full justify-between text-xs"
+          >
+            {t("legal.dependencyToggle", { count: APP_RUNTIME_DEPENDENCIES.length })}
+            <ChevronDownIcon
+              aria-hidden
+              className="size-3.5 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+            />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <PackageInfoContent className="max-h-80 overflow-y-auto overscroll-contain">
+            <div role="list" aria-label={t("legal.runtimeDependencies")} className="divide-y">
+              {APP_RUNTIME_DEPENDENCIES.map(({ name, requirement }) => (
+                <PackageInfoDependency
+                  key={name}
+                  role="listitem"
+                  name={name}
+                  version={requirement}
+                  className="gap-3 py-2 text-xs [&>span]:min-w-0 [&>span]:break-all [&>span:last-child]:max-w-[50%] [&>span:last-child]:text-right"
+                />
+              ))}
+            </div>
+          </PackageInfoContent>
+        </CollapsibleContent>
+      </Collapsible>
+    </PackageInfo>
   )
 }

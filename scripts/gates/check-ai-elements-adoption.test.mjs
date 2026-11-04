@@ -37,6 +37,55 @@ describe("AI Elements adoption audit", () => {
     assert.deepEqual(auditAdoption({ manifest: manifest(), ...fixture() }), [])
   })
 
+  it("accepts installed primitives without claiming production adoption", () => {
+    const value = manifest()
+    for (const name of ["confirmation", "task"]) {
+      const entry = value.components.find((entry) => entry.name === name)
+      entry.status = "installed-not-adopted"
+      entry.reason = "Existing business surfaces own the richer product behavior."
+      delete entry.consumers
+    }
+    assert.deepEqual(auditAdoption({ manifest: value, ...fixture() }), [])
+  })
+
+  it("requires a reason and installed source for an unadopted primitive", () => {
+    const value = manifest()
+    const entry = value.components.find((entry) => entry.name === "confirmation")
+    entry.status = "installed-not-adopted"
+    entry.reason = " "
+    delete entry.consumers
+    const base = fixture()
+    const errors = auditAdoption({
+      manifest: value,
+      ...base,
+      exists: (file) => !file.endsWith("/ai-elements/confirmation.tsx") && base.exists(file),
+    })
+    assert.ok(errors.includes("Installed-not-adopted component has no reason: confirmation"))
+    assert.ok(errors.includes("Installed-not-adopted component file is missing: confirmation"))
+  })
+
+  it("rejects production consumer claims on an installed-not-adopted primitive", () => {
+    const value = manifest()
+    const entry = value.components.find((entry) => entry.name === "task")
+    entry.status = "installed-not-adopted"
+    entry.reason = "The product task view owns its status model."
+    const errors = auditAdoption({ manifest: value, ...fixture() })
+    assert.ok(errors.includes("Installed-not-adopted component must not declare consumers: task"))
+  })
+
+  it("rejects invalid statuses and incomplete registry classification", () => {
+    const value = manifest()
+    value.components.find((entry) => entry.name === "agent").status = "available"
+    value.components = value.components.filter((entry) => entry.name !== "task")
+    value.components.push({ ...value.components[0] })
+    value.components.push({ name: "unknown", status: "excluded", reason: "Not in the registry." })
+    const errors = auditAdoption({ manifest: value, ...fixture() })
+    assert.ok(errors.includes("Invalid status for agent: available"))
+    assert.ok(errors.includes("Unclassified registry component: task"))
+    assert.ok(errors.includes("Unknown registry component: unknown"))
+    assert.ok(errors.includes("Manifest contains duplicate component names"))
+  })
+
   it("rejects an adopted primitive referenced only by a test", () => {
     const value = manifest()
     value.components.find((entry) => entry.name === "agent").consumers = [

@@ -13,7 +13,7 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Local build/test caches contain generated bundles and temporary fixtures.
     // Flat ESLint does not inherit these exclusions from .gitignore.
-    ".cache/**",
+    "**/.cache/**",
     // Generated native acceptance fixture output
     // (scripts/smoke/fixtures/cloud-docs-p0/build.mjs --public; bundles third-party code).
     "public/.p0-native-fixture/**",

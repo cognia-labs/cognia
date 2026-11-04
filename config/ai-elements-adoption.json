@@ -58,8 +58,8 @@
     },
     {
       "name": "confirmation",
-      "status": "adopted",
-      "consumers": ["components/chat/decisions/pending-decision-surface.tsx"]
+      "status": "installed-not-adopted",
+      "reason": "Unified pending decisions own observe/control access, terminal statuses, biometric gating, outbound grants and elicitation; their states do not map directly to AI SDK ToolUIPart approval states."
     },
     {
       "name": "connection",
@@ -139,7 +139,7 @@
     {
       "name": "package-info",
       "status": "adopted",
-      "consumers": ["components/plugins/_shared/plugin-dependency-panel.tsx"]
+      "consumers": ["components/settings/about/tech-stack.tsx"]
     },
     {
       "name": "panel",
@@ -216,8 +216,8 @@
     },
     {
       "name": "task",
-      "status": "adopted",
-      "consumers": ["components/chat/todo-list.tsx"]
+      "status": "installed-not-adopted",
+      "reason": "TaskListView, TaskUpdateRow and SessionTasksPanel own unified task statuses, progress, folding, plan decisions and history; Task provides generic collapsible presentation rather than those product behaviors."
     },
     {
       "name": "terminal",

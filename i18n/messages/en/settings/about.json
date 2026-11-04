@@ -33,8 +33,11 @@
   "legal": {
     "acknowledgements": "Built with open source",
     "copyright": "© {year} {holder}. All rights reserved.",
+    "dependencyDescription": "Direct runtime dependencies declared by this app. Version requirements and sources are declarations, not resolved installed versions.",
+    "dependencyToggle": "Runtime dependencies ({count})",
     "license": "License",
     "privacy": "Privacy",
+    "runtimeDependencies": "Runtime dependencies",
     "title": "Legal & credits",
     "viewLicense": "View license",
     "viewPrivacy": "Privacy policy"

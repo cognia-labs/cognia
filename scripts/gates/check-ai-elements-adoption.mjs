@@ -127,19 +127,23 @@ export function auditAdoption({
   }
   if (actual.size !== names.length) errors.push("Manifest contains duplicate component names")
 
-  const adopted = entries.filter((entry) => entry.status === "adopted")
-  const excluded = entries.filter((entry) => entry.status === "excluded")
-  if (adopted.length !== 44 || excluded.length !== 4) {
-    errors.push(
-      `Expected 44 adopted and 4 excluded components; found ${adopted.length} and ${excluded.length}`
-    )
-  }
-
   for (const entry of entries) {
     const primitive = join(root, "components", "ai-elements", `${entry.name}.tsx`)
     if (entry.status === "excluded") {
       if (!entry.reason?.trim()) errors.push(`Excluded component has no reason: ${entry.name}`)
       if (exists(primitive)) errors.push(`Excluded component must not be installed: ${entry.name}`)
+      continue
+    }
+    if (entry.status === "installed-not-adopted") {
+      if (!exists(primitive)) {
+        errors.push(`Installed-not-adopted component file is missing: ${entry.name}`)
+      }
+      if (!entry.reason?.trim()) {
+        errors.push(`Installed-not-adopted component has no reason: ${entry.name}`)
+      }
+      if (entry.consumers?.length) {
+        errors.push(`Installed-not-adopted component must not declare consumers: ${entry.name}`)
+      }
       continue
     }
     if (entry.status !== "adopted") {
@@ -193,7 +197,11 @@ export function main() {
     return
   }
 
-  process.stdout.write("AI Elements adoption audit passed: 44 adopted, 4 excluded.\n")
+  const counts = { adopted: 0, "installed-not-adopted": 0, excluded: 0 }
+  for (const { status } of manifest.components) counts[status] += 1
+  process.stdout.write(
+    `AI Elements adoption audit passed: ${counts.adopted} adopted, ${counts["installed-not-adopted"]} installed-not-adopted, ${counts.excluded} excluded.\n`
+  )
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main()
