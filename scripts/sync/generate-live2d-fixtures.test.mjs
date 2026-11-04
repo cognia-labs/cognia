@@ -1,10 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import JSZip from "jszip"
-import {
-  fixtureSha256,
-  generatePetCompatibilityFixtures,
-} from "./generate-compatibility-fixtures.mjs"
+import { fixtureSha256, generatePetCompatibilityFixtures } from "./generate-live2d-fixtures.mjs"
 
 test("generates a deterministic compatibility corpus without committed binaries", async () => {
   const first = await generatePetCompatibilityFixtures()

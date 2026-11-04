@@ -44,9 +44,7 @@ scripts/
   benchmarks/     Host/sidecar JS runtime and code-index benchmarks
   certify/        billable vendor certification and bundle rollback (ADR-0090)
   plugin-eval/    plugin eval runner
-  pet/            Live2D corpus fetch and compatibility fixtures
-  pi/             Pi extension integrity pin (ADR-0119)
-  pricing/        model price catalog builder (LiteLLM cost map)
+  pet/            Live2D corpus fetch
   router-fusion/  Router + Fusion live smoke (ADR-0188)
   screenshots/    PWA manifest screenshot capture
 ```
@@ -98,8 +96,11 @@ Tests: `pnpm scripts:test:gates`.
 Idempotent generators whose output is checked in: models.dev catalog, WIT
 mirrors, release public key, app version (`version-sync.mjs`, run by
 `release:version`), shared config constants, the frozen WASM API digest, and
-i18n key sorting. Each one offers `--check` and runs as a drift gate.
-Tests: `pnpm scripts:test:sync`.
+i18n key sorting, the bundled Pi extension pin (`pin-pi-extension.mjs`,
+ADR-0119), the model price catalog from LiteLLM's cost map
+(`build-price-catalog.mjs`, `pnpm pricing:sync`) and the Live2D compatibility
+fixtures (`generate-live2d-fixtures.mjs`). Most offer `--check` and run as a
+drift gate. Tests: `pnpm scripts:test:sync`.
 
 ### `test/`
 
@@ -190,8 +191,7 @@ header first.
 
 ### Single-purpose folders
 
-`pet/` (Live2D corpus and fixtures), `pi/` (`pnpm pi:extension:pin`),
-`pricing/` (price catalog), `router-fusion/` (live smoke), `screenshots/`
+`pet/` (Live2D corpus), `router-fusion/` (live smoke), `screenshots/`
 (PWA screenshots).
 
 ## Run by hand
@@ -205,7 +205,7 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `build/build-sign-in-icons.mjs`                               | Regenerates the sign-in callback icons used by `app/logto/callback` and the CLI.                       |
 | `build/bundle-tui-fixture.mjs`                                | Bundles the TUI fixture used by `cli/src/tui/pty/node-pty-harness.ts`.                                 |
 | `build/gen-sidecar-gh-command.mjs`                            | Regenerates `sidecar/src/policy/shell/gh-command.generated.ts` (ADR-0239).                             |
-| `pet/generate-compatibility-fixtures.mjs`                     | Regenerates the Live2D compatibility fixtures.                                                         |
+| `sync/generate-live2d-fixtures.mjs`                           | Regenerates the Live2D compatibility fixtures.                                                         |
 | `plugin/build-github-delivery.ts`                             | Builds the plugin GitHub delivery bundle (see `packages/plugin-sdk/contract/compat`).                  |
 | `plugin/test-sdk-package.mjs`                                 | Packs and installs the SDK as a third-party consumer would.                                            |
 | `dev/move-to-crate.mjs`                                       | Moves Rust modules from `src-tauri` into a crate without touching the shared index.                    |
@@ -264,10 +264,13 @@ Folders were consolidated on 2026-11-04 (plan:
 `docs/plans/2026-11-04-scripts-layout-phase2.md`). Older records still name the
 old paths; this table maps them.
 
-| Old path             | New path                   |
-| -------------------- | -------------------------- |
-| `i18n-baseline.json` | `gates/i18n-baseline.json` |
-| `i18n-ignore.txt`    | `gates/i18n-ignore.txt`    |
+| Old path                                  | New path                            |
+| ----------------------------------------- | ----------------------------------- |
+| `i18n-baseline.json`                      | `gates/i18n-baseline.json`          |
+| `i18n-ignore.txt`                         | `gates/i18n-ignore.txt`             |
+| `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`         |
+| `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`      |
+| `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs` |
 
 ## Known layout debt
 
@@ -276,12 +279,11 @@ later pass will fold together. Until then, follow the conventions above for
 new scripts and do not copy these patterns:
 
 - Gates outside `gates/`: `ci/check-*.mjs` and `plugin/check-*.mjs`.
-- Generators outside `sync/`: `build/gen-*.mjs`, `plugin/generate-*.mjs`,
-  `pet/generate-compatibility-fixtures.mjs`.
+- Generators outside `sync/`: `build/gen-*.mjs`, `plugin/generate-*.mjs`.
 - Live smokes outside `smoke/`: `router-fusion/live-smoke.mjs` and the
   top-level `lark-*.mts`.
 - Evaluation split across `eval/`, `benchmarks/`, `certify/` and
-  `plugin-eval/`; single-file folders `pi/`, `pricing/`, `screenshots/`.
+  `plugin-eval/`; single-file folder `screenshots/`.
 - `bootstrap/` is a product asset: `lib/project-environment/bootstrap-presets.ts`
   imports `bootstrap/presets.json`, the only app import from `scripts/`.
 - `gates/convergence/*.md` are working notes of the in-flight convergence

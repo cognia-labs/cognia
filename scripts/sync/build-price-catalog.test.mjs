@@ -7,7 +7,7 @@ import {
   serializeCatalog,
   readCommittedCatalog,
   PROVIDER_MAP,
-} from "./build-catalog.mjs"
+} from "./build-price-catalog.mjs"
 
 test("projectEntry converts per-token rates to per-1M", () => {
   const out = projectEntry({
