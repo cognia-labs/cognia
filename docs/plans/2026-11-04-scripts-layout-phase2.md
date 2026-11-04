@@ -1,6 +1,11 @@
 # Scripts layout, phase 2: path mapping for review
 
-Status: draft for review. No file has moved yet.
+Status: done 2026-11-04, one commit per group: F `f32b397b53`, B `eae131c27a`,
+E `b47e17ece6`, A `176ba92e98`, C `23235c6ebd`, D `9c378f0e4d`. Two references
+the search below missed were found while executing and fixed in their group:
+the rollback hint in `i18n/messages/{en,zh-CN}/providers.json` (D) and the
+`lib/support-agent/support-docs.generated.json` corpus entries of the edited
+docs (C, D). Line numbers below are as of `12d5c20691`, before the moves.
 
 Phase 1 (`12d5c20691`) removed dead scripts and rewrote `scripts/README.md`.
 This phase folds the overlapping folders that README lists as layout debt. It
