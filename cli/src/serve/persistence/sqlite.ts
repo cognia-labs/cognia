@@ -410,6 +410,13 @@ export function openSqliteBackend(opts: SqliteBackendOptions): HeadlessDurabilit
       db.exec("PRAGMA wal_checkpoint(TRUNCATE);")
       return { generation: "sqlite", previousGeneration: null, sequence }
     },
+    maintain() {
+      // Commits keep each schema's table list current and SQLite folds its WAL
+      // as it goes (`wal_autocheckpoint`). What is left is handing the WAL
+      // file's space back; the full rewrite and `integrity_check` are kept for
+      // schema changes, explicit compaction and every open.
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    },
     async close() {
       if (closed) return
       closed = true

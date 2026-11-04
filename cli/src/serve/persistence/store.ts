@@ -133,6 +133,23 @@ function includedTables(source: DurabilitySourceLike): DurabilityTableLike[] {
   return source.db.tables.filter((table) => !excluded.has(table.name))
 }
 
+/** Whether any live source's version or table set differs from `dbs`' schemas. */
+function schemaDrifted(
+  sources: readonly DurabilitySourceLike[],
+  dbs: DurabilityState["dbs"]
+): boolean {
+  return sources.some((source) => {
+    const persisted = dbs[source.name]?.schema
+    const tables = includedTables(source)
+      .map((table) => table.name)
+      .sort()
+    return (
+      persisted?.version !== source.db.verno ||
+      JSON.stringify(persisted.tables) !== JSON.stringify(tables)
+    )
+  })
+}
+
 function keyPathOf(table: DurabilityTableLike): string | string[] | null {
   return table.schema?.primKey?.keyPath ?? null
 }
@@ -279,6 +296,8 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
 
   let compacting: Promise<void> | null = null
   let compactionTail: DurabilityCommit[] | null = null
+  /** The schemas the backend was last pinned to: by the open, or by a full compaction. */
+  let pinned: DurabilityState["dbs"] | null = null
   let closing: Promise<void> | null = null
 
   /**
@@ -361,7 +380,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     // here is not data loss — the journal still holds every commit — so it is
     // swallowed rather than propagated into an event listener.
     if (compactEvery > 0 && sinceCompaction >= compactEvery && !compacting && !closing) {
-      void compact().catch(() => {})
+      void periodicCompaction().catch(() => {})
     }
   }
 
@@ -438,13 +457,16 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     // rewritten the same way, before any commit can be appended to it (the
     // journal refuses that), now that its findings are on record above.
     // Restore/rebuild remains capture-suppressed.
+    pinned = resolved.state.dbs
     if (
       resolved.legacyValueCodec ||
       sources.some((source) =>
         isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
       )
     ) {
-      await resolved.backend.compact(await readSourcesState(sources, sequence, root, prefetcher))
+      const state = await readSourcesState(sources, sequence, root, prefetcher)
+      await resolved.backend.compact(state)
+      pinned = state.dbs
     }
   })
 
@@ -459,16 +481,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       // durable snapshot and any commits made while load() was resolving.
       // This avoids retrying (and starving) compaction under continuous writes.
       let checkpoint = await backend.load()
-      const schemaChanged = sources.some((source) => {
-        const persisted = checkpoint.dbs[source.name]?.schema
-        const tables = includedTables(source)
-          .map((table) => table.name)
-          .sort()
-        return (
-          persisted?.version !== source.db.verno ||
-          JSON.stringify(persisted.tables) !== JSON.stringify(tables)
-        )
-      })
+      const schemaChanged = schemaDrifted(sources, checkpoint.dbs)
       // Runtime plugin registration can add tables after the backend opened.
       // Keep the previous schema-repinning behavior for that exceptional path;
       // replaying the captured tail also makes these live reads consistent.
@@ -480,12 +493,30 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       )
       compactionTail = null
       await backend.compact(checkpoint)
+      pinned = checkpoint.dbs
       sinceCompaction = sequence - checkpoint.sequence
     })().finally(() => {
       compactionTail = null
       compacting = null
     })
     return compacting
+  }
+
+  /**
+   * The commit-count upkeep. A backend with no journal to fold only does its
+   * own cheap maintenance while its schema still matches the live one: the
+   * full compaction loads, rewrites and verifies every row synchronously on
+   * the brain's event loop, which stalls the brain in proportion to its data.
+   */
+  async function periodicCompaction(): Promise<void> {
+    const backend = backendRef
+    if (!backend?.maintain || !pinned || schemaDrifted(sources, pinned)) return compact()
+    try {
+      backend.maintain()
+    } finally {
+      // A failed upkeep waits for the next interval rather than every commit.
+      sinceCompaction = 0
+    }
   }
 
   function close(): Promise<void> {

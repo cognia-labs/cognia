@@ -107,6 +107,13 @@ export interface HeadlessDurabilityBackend {
   lastSequence(): number
   /** Fold the journal (if any) into a fresh verified generation. */
   compact(state: DurabilityState): Promise<CompactionResult>
+  /**
+   * Routine upkeep that stands in for {@link compact} on the commit-count
+   * cadence, for a backend with no journal to fold (SQLite). The store calls
+   * it only while the schema the backend holds matches the live one. It runs
+   * on the brain's event loop, so it must not read or rewrite the data set.
+   */
+  maintain?(): void
   /** Release file handles. Safe to call more than once. */
   close(): Promise<void>
 }

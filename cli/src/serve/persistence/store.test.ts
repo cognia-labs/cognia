@@ -426,6 +426,61 @@ describe("openDurabilityStore", () => {
     await reopened.close()
   })
 
+  it("keeps a sqlite store's periodic upkeep off the full rewrite while its schema holds", async () => {
+    const source = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "sqlite-v5",
+      getSources: async () => [source],
+      compactEveryCommits: 2,
+    })
+    const compact = jest.spyOn(store.backend, "compact")
+    const maintain = jest.spyOn(store.backend, "maintain" as never) as unknown as jest.SpyInstance
+    for (const id of ["a", "b", "c", "d"]) {
+      await source.db.commit("sessions", { type: "put", values: [{ id }] })
+    }
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(maintain).toHaveBeenCalledTimes(2)
+    expect(compact).not.toHaveBeenCalled()
+    await store.close()
+
+    const revived = makeSource()
+    const reopened = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "sqlite-v5",
+      getSources: async () => [revived],
+    })
+    expect((await revived.db.tables[0].toArray()).length).toBe(4)
+    await reopened.close()
+  })
+
+  it("re-pins a sqlite store's schema with a full compaction once a table appears", async () => {
+    const source = makeSource()
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "sqlite-v5",
+      getSources: async () => [source],
+      compactEveryCommits: 1,
+    })
+    const compact = jest.spyOn(store.backend, "compact")
+    const maintain = jest.spyOn(store.backend, "maintain" as never) as unknown as jest.SpyInstance
+    // A plugin registered a table after the backend opened.
+    source.db.tables.push(new FakeTable("pluginRows"))
+    await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
+    await store.compact()
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(maintain).not.toHaveBeenCalled()
+    // Pinned again: the next interval is routine upkeep.
+    await source.db.commit("sessions", { type: "put", values: [{ id: "b" }] })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(maintain).toHaveBeenCalledTimes(1)
+    await store.close()
+  })
+
   it("preserves a commit that overlaps compaction and accepts the next sequence", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
