@@ -35,7 +35,7 @@ use super::{
     deployment::{deployment_mode, DeploymentMode},
     host_identity,
     middleware::DeviceContext,
-    replay_cache::ReplayCache,
+    replay_cache::{Redemption, ReplayCache},
     security_store::{security_store, AuthorizationSnapshot, SecurityStore, SecurityStoreError},
     SharedState,
 };
@@ -44,6 +44,11 @@ const CHALLENGE_TTL_SECS: i64 = 60;
 const ACCESS_TOKEN_TTL_SECS: i64 = 5 * 60;
 const SOCKET_TICKET_TTL_SECS: i64 = 60;
 const PROOF_CLOCK_SKEW_SECS: i64 = 60;
+/// Longest `exp - iat` a device proof may claim. Every signer (the companion
+/// client, the desktop shell, the code-server relay) uses 60 s. The replay
+/// cache keeps a proof until its `exp`, so an unbounded `exp` would let one
+/// device pin entries in the process-wide cache indefinitely.
+const PROOF_MAX_LIFETIME_SECS: i64 = 60;
 const MAX_POLICY_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 const MAX_POLICY_BYTES: usize = 16 * 1024;
 const MAX_POLICY_COMMANDS: usize = 64;
@@ -2543,7 +2548,10 @@ fn verify_device_proof(
         .claims;
     let fresh = claims.iat >= now.saturating_sub(PROOF_CLOCK_SKEW_SECS)
         && claims.iat <= now.saturating_add(PROOF_CLOCK_SKEW_SECS);
+    let lifetime = claims.exp.saturating_sub(claims.iat);
     if !fresh
+        || lifetime <= 0
+        || lifetime > PROOF_MAX_LIFETIME_SECS
         || claims.jti.is_empty()
         || claims.nonce != nonce
         || claims.htm != method
@@ -2591,15 +2599,29 @@ fn consume_device_proof(
     // jsonwebtoken accepts an expired proof within `PROOF_CLOCK_SKEW_SECS`, so
     // the replay entry must live through that same leeway window.
     let replay_expires_at = proof.expires_at.saturating_add(PROOF_CLOCK_SKEW_SECS);
-    if DPOP_REPLAY_CACHE.mark_redeemed(&cache_key, replay_expires_at, now) {
-        Ok(())
-    } else {
-        super::metrics::record_dpop_replay();
-        Err(api_error(
-            StatusCode::CONFLICT,
-            "device_proof_replay",
-            "the device proof has already been used",
-        ))
+    match DPOP_REPLAY_CACHE.redeem(&cache_key, replay_expires_at, now) {
+        Redemption::Fresh => Ok(()),
+        Redemption::Replayed => {
+            super::metrics::record_dpop_replay();
+            Err(api_error(
+                StatusCode::CONFLICT,
+                "device_proof_replay",
+                "the device proof has already been used",
+            ))
+        }
+        // The proof was never seen: refusing it keeps replay protection, but
+        // it is the Host's capacity, not the caller's proof, that failed. A
+        // retry with a new proof succeeds once retained proofs expire.
+        Redemption::Full { retry_after_secs } => {
+            super::metrics::record_dpop_cache_full();
+            Err(Problem::with_status(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "device_proof_capacity",
+                "the Host cannot record more device proofs right now; retry with a new proof",
+            )
+            .retryable(true)
+            .with_detail_field("retryAfterSeconds", retry_after_secs))
+        }
     }
 }
 
@@ -3104,6 +3126,45 @@ mod tests {
 
         assert_eq!(first.decode(&token).unwrap().sub, "device-a");
         assert!(restarted.decode(&token).is_err());
+    }
+
+    // A throwaway P-256 key pair, for signing proofs the verifier must judge.
+    const TEST_PROOF_PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5HOjqT8Hbeoqcp/S
+wjL40257Je7EE7qbWHfanKCWrZihRANCAASdfs7ngGYhtN60Rkipl1U6RZcCwv00
+c4ZJ8a8iZQmynzt4cANShNyczdg3DqGXHN706lkU8LsPgAHyRKTf7qGF
+-----END PRIVATE KEY-----
+";
+    const TEST_PROOF_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnX7O54BmIbTetEZIqZdVOkWXAsL9
+NHOGSfGvImUJsp87eHADUoTcnM3YNw6hlxze9OpZFPC7D4AB8kSk3+6hhQ==
+-----END PUBLIC KEY-----
+";
+
+    fn signed_proof(iat: i64, exp: i64) -> String {
+        let key = jsonwebtoken::EncodingKey::from_ec_pem(TEST_PROOF_PRIVATE_PEM.as_bytes()).unwrap();
+        let claims = json!({
+            "nonce": "nonce-a", "htm": "POST", "htu": "/api/_rpc/ping",
+            "iat": iat, "exp": exp, "jti": uuid::Uuid::new_v4().to_string(),
+        });
+        jsonwebtoken::encode(&jsonwebtoken::Header::new(Algorithm::ES256), &claims, &key).unwrap()
+    }
+
+    #[test]
+    fn device_proofs_may_not_claim_more_than_the_signers_lifetime() {
+        let now = unix_time_secs();
+        let verify = |proof: &str| {
+            verify_device_proof(TEST_PROOF_PUBLIC_PEM, proof, "nonce-a", "POST", "/api/_rpc/ping", now)
+        };
+        // What every signer sends.
+        let accepted = verify(&signed_proof(now, now + PROOF_MAX_LIFETIME_SECS)).unwrap();
+        assert_eq!(accepted.expires_at, now + PROOF_MAX_LIFETIME_SECS);
+        // A far-future `exp` would pin a replay-cache entry for as long as it claims.
+        for exp in [now + PROOF_MAX_LIFETIME_SECS + 1, now + 10 * 365 * 24 * 60 * 60] {
+            assert_eq!(verify(&signed_proof(now, exp)).err().expect("rejected").code, "device_proof_mismatch");
+        }
+        // `exp` at or before `iat` is no lifetime at all.
+        assert_eq!(verify(&signed_proof(now, now)).err().expect("rejected").code, "device_proof_mismatch");
     }
 
     #[test]

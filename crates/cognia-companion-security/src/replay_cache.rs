@@ -5,7 +5,9 @@
 //! scan the cache for expired entries; the capacity check does that work only
 //! when the cache fills, keeping cleanup off the request hot path. If every
 //! retained assertion is still valid, the cache fails closed and rejects the
-//! new assertion rather than weakening replay protection.
+//! new assertion rather than weakening replay protection. That refusal is
+//! [`Redemption::Full`], not [`Redemption::Replayed`]: the assertion was never
+//! seen, so callers must not report it as a replay.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -16,6 +18,19 @@ pub struct ReplayCache {
     inner: Mutex<HashMap<String, i64>>,
 }
 
+/// What [`ReplayCache::redeem`] did with an assertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Redemption {
+    /// First sighting within its validity window; now retained.
+    Fresh,
+    /// Already observed and still valid.
+    Replayed,
+    /// Never observed, but every retained assertion is still valid, so there
+    /// is no room to record it. Refused without weakening replay protection;
+    /// `retry_after_secs` is when the soonest retained assertion expires.
+    Full { retry_after_secs: i64 },
+}
+
 impl ReplayCache {
     pub fn new() -> Self {
         Self {
@@ -24,23 +39,30 @@ impl ReplayCache {
     }
 
     /// Returns `true` only when `assertion_id` has not already been observed
-    /// during its validity window.
+    /// during its validity window and could be recorded.
     pub fn mark_redeemed(&self, assertion_id: &str, expires_at: i64, now: i64) -> bool {
+        self.redeem(assertion_id, expires_at, now) == Redemption::Fresh
+    }
+
+    /// Record `assertion_id` until `expires_at`, telling a replay apart from a
+    /// cache with no room left.
+    pub fn redeem(&self, assertion_id: &str, expires_at: i64, now: i64) -> Redemption {
         let mut entries = self.inner.lock();
         if let Some(existing_expiry) = entries.get(assertion_id).copied() {
             if existing_expiry > now {
-                return false;
+                return Redemption::Replayed;
             }
             entries.remove(assertion_id);
         }
         if entries.len() >= MAX_ENTRIES {
             entries.retain(|_, expiry| *expiry > now);
             if entries.len() >= MAX_ENTRIES {
-                return false;
+                let soonest = entries.values().copied().min().unwrap_or(now);
+                return Redemption::Full { retry_after_secs: soonest.saturating_sub(now).max(1) };
             }
         }
         entries.insert(assertion_id.to_string(), expires_at);
-        true
+        Redemption::Fresh
     }
 
     #[cfg(test)]
@@ -94,6 +116,18 @@ mod tests {
         assert!(!cache.mark_redeemed("overflow", EXPIRY, NOW));
         assert!(!cache.mark_redeemed("assertion-0", EXPIRY, NOW));
         assert_eq!(cache.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn a_full_cache_is_not_reported_as_a_replay() {
+        let cache = ReplayCache::new();
+        for index in 0..MAX_ENTRIES {
+            assert_eq!(cache.redeem(&format!("assertion-{index}"), EXPIRY, NOW), Redemption::Fresh);
+        }
+        assert_eq!(cache.redeem("never-seen", EXPIRY, NOW), Redemption::Full { retry_after_secs: 300 });
+        assert_eq!(cache.redeem("assertion-0", EXPIRY, NOW), Redemption::Replayed);
+        // Room returns once retained assertions expire.
+        assert_eq!(cache.redeem("never-seen", EXPIRY + 60, EXPIRY), Redemption::Fresh);
     }
 
     #[test]
