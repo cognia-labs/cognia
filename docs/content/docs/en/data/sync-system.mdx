@@ -70,7 +70,7 @@ flowchart TB
     Registry[sync_registry.rs<br/>default_tables · 48]
     Bridge[sync_bridge.rs<br/>SyncBridge.pull · 30 s]
     Source[lib/sync/desktop-sync-source.ts<br/>readDexieDelta · finalizeDelta]
-    Tomb[lib/sync/tombstones.ts<br/>syncTombstones]
+    Tomb[lib/db/tombstones.ts<br/>syncTombstones]
     Hooks[host-table-invalidation.ts<br/>Dexie hooks]
     Inval[host-invalidate.ts<br/>150 ms coalesce]
     HostDexie[(Host Dexie)]
@@ -122,7 +122,7 @@ flowchart TB
 | File | Purpose |
 | --- | --- |
 | `lib/sync/desktop-sync-source.ts` | `installDesktopSyncSource`: answers `companion://sync-pull-request` from Dexie; `readDexieDelta` (one branch per table), `readCursorDelta` (paged tables), `finalizeDelta` (tombstones and `next_since`) |
-| `lib/sync/tombstones.ts` | `recordTombstones`, `readTombstonesSince`, `pruneTombstones` (90-day retention) |
+| `lib/db/tombstones.ts` | `recordTombstones`, `readTombstonesSince`, `pruneTombstones` (90-day retention) |
 | `lib/sync/host-table-invalidation.ts` | `SYNC_TABLE_SOURCES` and the Dexie hooks that announce a change to any synced table |
 | `lib/sync/host-invalidate.ts` | `publishSyncInvalidate`: per-table 150 ms coalescing of `sync://invalidate` |
 | `lib/headless/runtimes/desktop-sync-source.ts` | The headless brain's registration: the same source with the socket bridge |
@@ -290,7 +290,7 @@ Sync reads the Host's existing tables and adds three of its own:
   restart resumes where it stopped instead of pulling a full snapshot. `serverKey` namespaces the
   cursor by account and Host, so one phone paired to several Hosts keeps them apart.
 - `syncTombstones` (`[table+id]`): the Host records one row per genuine user deletion, in the same
-  transaction as the delete (`lib/sync/tombstones.ts`), and folds them into each delta as
+  transaction as the delete (`lib/db/tombstones.ts`), and folds them into each delta as
   `deleted_ids`. Rows are pruned after 90 days.
 - `mobileOutboundQueue`: the client's durable write queue (see Known Limitations).
 

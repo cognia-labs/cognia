@@ -28,7 +28,7 @@ import {
 } from "@/lib/mcp/tool-rules"
 import { applyCapabilityOverlay } from "@/lib/workspace/capability-overlay"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import {
   loadWorkspaceCapabilityOverlay,
   type WorkspaceCapabilityScope,

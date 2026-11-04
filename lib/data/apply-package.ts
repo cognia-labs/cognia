@@ -14,7 +14,7 @@ import {
   AUTHORED_CONTENT_TABLES,
   remapAuthoredReferences,
 } from "./authored-content"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "@/lib/db/tombstones"
 import type {
   AppSettings,
   Character,

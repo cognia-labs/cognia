@@ -20,7 +20,7 @@ import { getDb } from "./schema"
 import { deriveParams, templateSlug, type ChatTemplateParam } from "@/lib/chat/template/template"
 import type { ChatTemplateParamValue } from "@/lib/chat/template/binding"
 import type { ChatTemplateLaunchSpec } from "@/lib/chat/template/launch-spec"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import type { ChatTemplateRow } from "@cognia/plugin-contract/lib/db/chat-templates"
 export type { ChatTemplateRow } from "@cognia/plugin-contract/lib/db/chat-templates"
 

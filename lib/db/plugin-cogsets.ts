@@ -13,7 +13,7 @@ import {
   type CogsetStateRow,
 } from "@/types/plugin/plugin-cogset"
 
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 import { getDb } from "./schema"
 

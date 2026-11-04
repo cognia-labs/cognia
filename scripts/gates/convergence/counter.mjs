@@ -194,7 +194,8 @@ export function resolveModule(ctx, spec, from) {
   return null
 }
 
-function importsIn(ctx, file) {
+/** Every import `file` makes, static or dynamic, flagged when type-only. The module gate reuses it. */
+export function importsIn(ctx, file) {
   const imports = []
   visit(ctx.ast(file), (node) => {
     if (

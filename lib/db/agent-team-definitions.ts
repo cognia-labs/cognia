@@ -22,7 +22,7 @@
  */
 
 import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agent-team"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { getDb } from "./schema"
 
 /**

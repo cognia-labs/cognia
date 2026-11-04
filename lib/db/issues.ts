@@ -47,7 +47,7 @@ import { getDb } from "./schema"
 import { allocateIssueNumber } from "./issue-counters"
 import { appendIssueEvent, deleteIssueEvents } from "./issue-events"
 import { deleteIssueRuns } from "./issue-runs"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import type { ListIssuesQuery } from "@cognia/plugin-contract/lib/db/issues"
 export type { ListIssuesQuery } from "@cognia/plugin-contract/lib/db/issues"
 

@@ -10,7 +10,7 @@
 import type { Character } from "@cognia/agent-config-types"
 import { getDb } from "./schema"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import type {
   PetAchievementRecord,
   PetActivityRow,

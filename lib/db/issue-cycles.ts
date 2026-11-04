@@ -15,7 +15,7 @@
 import type { IssueCycle, IssueCycleKind, IssueCycleStatus, IssueExternalRef } from "@/types/issues"
 import { externalKeyOf } from "@/types/issues"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 function newCycleId(): string {
   return `icyc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`

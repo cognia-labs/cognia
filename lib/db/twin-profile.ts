@@ -16,7 +16,7 @@ import type {
   TwinProfile,
 } from "@/types/twin"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { recordTwinDecisionsGovernance } from "@/lib/governance/producers/twin"
 
 function emptyProfile(twinId: string): TwinProfile {

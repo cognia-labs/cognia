@@ -203,7 +203,7 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0a. 摸清事实、搭安全网 | 在干净 worktree 上确认门禁状态；可复现清单和计数器；基线增长检查；双宿主测试框架和 PR 通道；宿主适配器矩阵；插件 API 矩阵 | 清单已提交；基线准确；测试框架在 CI 中驱动一个行为跑通两个宿主 |
 | S1. 本地 brain spike（与 0a 并行，一周） | 五个测量问题：存储、启动、迁移、双窗口下的一个轮次、崩溃与重启 | 已完成：2a 暂时否决，§2 决定为 2b |
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
-| M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 基线已提交，并与合并基准比较 |
+| M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 已完成（2026-11-05）：基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
 | M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器 |
 | 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
@@ -277,20 +277,20 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **一个厂商的全套一起分发。** "一键安装某厂商全套"用 cogset（ADR-0209）组合，这是分发层的打包，不是代码依赖。
 - 同样的拆法适用于 Google（协议库、`auth.google`、Drive 备份和 Docs）、GitHub（由 `octokit-factory` 和 `auth-app` 组成的协议库、GitHub 连接、`forge` 实现、`backup-github`、runner），以及各家订阅（协议库、账号登录，再加订阅、余额、模型目录三个端口的实现）。
 
-**门禁。** 全部注册进 `scripts/gates/check-all.mjs`。计数类门禁作为 `scripts/gates/convergence/counter.mjs` 的新清单实现，基线登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。
+**门禁。** G1、G2 和 G6–G8 合在一个门禁里运行：`scripts/gates/check-modules.mjs`（`pnpm audit:modules`），注册在 `scripts/gates/check-all.mjs`。它用 `scripts/gates/convergence/counter.mjs` 的源码读取器和解析器读取源码、解析 import。它的棘轮是过渡归属表 `scripts/gates/module-ownership.json` 和 `scripts/gates/modules-baseline.json`，两者都登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。G3–G5 随各自检查的注册表并入同一个门禁。下表的数字是门禁在 M0 时自己的计数。
 
 | 门禁 | 检查什么 | 度量 | 起始 |
 | --- | --- | --- | --- |
 | G1 归属 | 每个非测试源文件恰好有一个所有者；`owner` 与 `.github/CODEOWNERS` 一致 | 过渡归属表的行数，只降不升 | M0，阻断 |
-| G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的边。扩展 `check-package-boundaries.mjs` | 违规边按"文件 → 子系统"取指纹，只降不升 | M0 只报告，M1 阻断 |
+| G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（1,124），只降不升 | M0 只报告，M1 阻断 |
 | G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件；不新增 barrel | 违规 import，只降不升 | M1 |
 | G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用 | 不一致为 0 | M1 |
 | G5 生成 | manifest 只含数据；生成器无报错跑完；生成的注册表里没有手写条目 | 0 | 每迁一份注册表启用一份 |
-| G6 环 | `dependsOn` 图无环；`lib/` 层最大强连通分量的大小（150） | 只降不升 | M0 |
-| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（530）、每个宿主的注册表带来的急加载模块图 | 只降不升；例外要有记录 | M0 |
-| G8 框架与厂商无关 | 框架目录里没有按厂商名分支，也不 import 厂商实现。扩展 `check-provider-name-branches.mjs`（ADR-0090） | 违规项（例如 connectors 框架里约 20 个文件 import 飞书适配器），只降不升 | M0 |
+| G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
+| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起每个宿主的注册表带来的急加载模块图 | 只降不升；例外要有记录 | M0 |
+| G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（166，大多在 connectors 框架里），只降不升 | M0 |
 
-G2 和 G6 复用 `counter.mjs` 的源码读取器和 `check-headless-registry.mjs` 的 `resolveSpecifier`，不沿用分析脚本里简化的解析器。
+子系统的键来自 `scripts/gates/lib/subsystems.mjs`，依赖分析脚本也用它，所以两者对任何路径的归属都一致。
 
 **迁移。** 模块线就是 §13 里的 M0–M4。试点顺序：`squads`（M1 的三类注册表）、`eval`（归属表）、飞书三层（G8 和协议包）、`speech`（第一个端口，M3）、`pet`（依赖反转，M2）。
 

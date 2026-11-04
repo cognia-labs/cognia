@@ -1,0 +1,1032 @@
+{
+  "version": 1,
+  "note": "Transitional ownership table of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14, G1). `subsystems` gives every subsystem without a manifest its class: foundation, kernel, shell or module. A kernel member owns its lib/, stores/ and types/ files as kernel code, and its app/, components/ and hooks/ files are its UI module. `paths` hands a path prefix to another owner; the longest prefix wins, and a manifest`s `owns` adds more. The classification follows docs/research/feature-module-analysis-2026-11-04.md §11. The row count of `subsystems` may only fall (scripts/gates/baseline-growth.json): a subsystem leaves the table when it gains lib/<id>/module.ts, and a new one arrives with its manifest instead of a row.",
+  "subsystems": {
+    "_platform": {
+      "class": "foundation"
+    },
+    "a2ui": {
+      "class": "module"
+    },
+    "account": {
+      "class": "kernel"
+    },
+    "account-sync": {
+      "class": "module"
+    },
+    "agent": {
+      "class": "kernel"
+    },
+    "agent-config": {
+      "class": "module"
+    },
+    "agent-ecosystem": {
+      "class": "module"
+    },
+    "agent-migration": {
+      "class": "module"
+    },
+    "agent-roots": {
+      "class": "kernel"
+    },
+    "agent-runs": {
+      "class": "module"
+    },
+    "agent-tasks": {
+      "class": "module"
+    },
+    "agent-team": {
+      "class": "module"
+    },
+    "agent-trace": {
+      "class": "module"
+    },
+    "ai": {
+      "class": "kernel"
+    },
+    "ai-elements": {
+      "class": "foundation"
+    },
+    "analysis": {
+      "class": "kernel"
+    },
+    "annotations": {
+      "class": "module"
+    },
+    "app-root": {
+      "class": "foundation"
+    },
+    "appearance": {
+      "class": "module"
+    },
+    "artifact": {
+      "class": "module"
+    },
+    "attention": {
+      "class": "module"
+    },
+    "audio": {
+      "class": "module"
+    },
+    "auth-providers": {
+      "class": "kernel"
+    },
+    "automation": {
+      "class": "module"
+    },
+    "background-tasks": {
+      "class": "module"
+    },
+    "best-of-n": {
+      "class": "module"
+    },
+    "biometric": {
+      "class": "foundation"
+    },
+    "board": {
+      "class": "module"
+    },
+    "boot": {
+      "class": "shell"
+    },
+    "bot": {
+      "class": "module"
+    },
+    "browser": {
+      "class": "module"
+    },
+    "browser-companion": {
+      "class": "module"
+    },
+    "browser-stubs": {
+      "class": "foundation"
+    },
+    "builtin": {
+      "class": "kernel"
+    },
+    "canvas": {
+      "class": "module"
+    },
+    "capacitor": {
+      "class": "foundation"
+    },
+    "capture": {
+      "class": "module"
+    },
+    "ccswitch": {
+      "class": "module"
+    },
+    "chat": {
+      "class": "kernel"
+    },
+    "chat-copilot": {
+      "class": "module"
+    },
+    "claude": {
+      "class": "kernel"
+    },
+    "cli-bridge": {
+      "class": "module"
+    },
+    "code-adoption": {
+      "class": "module"
+    },
+    "codeserver": {
+      "class": "module"
+    },
+    "cogsets": {
+      "class": "module"
+    },
+    "collab": {
+      "class": "module"
+    },
+    "commands-import": {
+      "class": "module"
+    },
+    "common": {
+      "class": "foundation"
+    },
+    "companion": {
+      "class": "kernel"
+    },
+    "components-root": {
+      "class": "foundation"
+    },
+    "config": {
+      "class": "foundation"
+    },
+    "connectivity": {
+      "class": "kernel"
+    },
+    "connectors": {
+      "class": "module"
+    },
+    "constants": {
+      "class": "foundation"
+    },
+    "context-workbench": {
+      "class": "module"
+    },
+    "conversations": {
+      "class": "shell"
+    },
+    "core": {
+      "class": "foundation"
+    },
+    "creator": {
+      "class": "module"
+    },
+    "credentials": {
+      "class": "kernel"
+    },
+    "data": {
+      "class": "kernel"
+    },
+    "data-governance": {
+      "class": "foundation"
+    },
+    "data-hooks": {
+      "class": "foundation"
+    },
+    "db": {
+      "class": "foundation"
+    },
+    "decisions": {
+      "class": "kernel"
+    },
+    "desktop": {
+      "class": "shell"
+    },
+    "dev": {
+      "class": "shell"
+    },
+    "device": {
+      "class": "module"
+    },
+    "diagnostic-service": {
+      "class": "module"
+    },
+    "diagnostics": {
+      "class": "foundation"
+    },
+    "diff": {
+      "class": "module"
+    },
+    "discover": {
+      "class": "module"
+    },
+    "docs-providers": {
+      "class": "kernel",
+      "note": "The framework and the `docs-provider` port; vendor implementations follow the three-layer rule."
+    },
+    "document": {
+      "class": "module"
+    },
+    "document-templates": {
+      "class": "module"
+    },
+    "durable": {
+      "class": "module"
+    },
+    "e2e": {
+      "class": "foundation"
+    },
+    "editor": {
+      "class": "module"
+    },
+    "editor-workbench": {
+      "class": "module"
+    },
+    "error": {
+      "class": "foundation"
+    },
+    "eval": {
+      "class": "module"
+    },
+    "execution": {
+      "class": "kernel"
+    },
+    "export": {
+      "class": "module"
+    },
+    "external-bridge": {
+      "class": "module"
+    },
+    "external-services": {
+      "class": "module"
+    },
+    "feature-shell": {
+      "class": "foundation"
+    },
+    "file": {
+      "class": "foundation"
+    },
+    "file-viewer": {
+      "class": "module"
+    },
+    "files-library": {
+      "class": "module"
+    },
+    "filespace": {
+      "class": "module"
+    },
+    "fleet": {
+      "class": "module"
+    },
+    "gateway": {
+      "class": "kernel"
+    },
+    "git": {
+      "class": "module"
+    },
+    "github": {
+      "class": "module"
+    },
+    "glance": {
+      "class": "module"
+    },
+    "global-search": {
+      "class": "shell"
+    },
+    "goal": {
+      "class": "module"
+    },
+    "governance": {
+      "class": "module"
+    },
+    "guide": {
+      "class": "shell"
+    },
+    "harness": {
+      "class": "module"
+    },
+    "headless": {
+      "class": "shell"
+    },
+    "hooks-root": {
+      "class": "foundation"
+    },
+    "host-admin": {
+      "class": "module"
+    },
+    "host-consent": {
+      "class": "module"
+    },
+    "host-installer": {
+      "class": "module"
+    },
+    "host-secrets": {
+      "class": "kernel"
+    },
+    "i18n": {
+      "class": "foundation"
+    },
+    "icons": {
+      "class": "module"
+    },
+    "identity": {
+      "class": "kernel"
+    },
+    "images": {
+      "class": "module"
+    },
+    "inbound": {
+      "class": "module"
+    },
+    "inbox": {
+      "class": "module"
+    },
+    "initializers": {
+      "class": "shell"
+    },
+    "integrations": {
+      "class": "module"
+    },
+    "interactions": {
+      "class": "foundation"
+    },
+    "island": {
+      "class": "module"
+    },
+    "issues": {
+      "class": "module"
+    },
+    "jobs": {
+      "class": "module"
+    },
+    "jsonc": {
+      "class": "foundation"
+    },
+    "keyring": {
+      "class": "foundation"
+    },
+    "knowledge-base": {
+      "class": "module"
+    },
+    "labels": {
+      "class": "module"
+    },
+    "lib-root": {
+      "class": "foundation"
+    },
+    "loading-ui": {
+      "class": "foundation"
+    },
+    "locks": {
+      "class": "foundation"
+    },
+    "logging": {
+      "class": "module"
+    },
+    "logto": {
+      "class": "kernel"
+    },
+    "loop": {
+      "class": "module"
+    },
+    "lsp": {
+      "class": "module"
+    },
+    "magpie": {
+      "class": "kernel"
+    },
+    "mcp": {
+      "class": "kernel"
+    },
+    "mcp-apps": {
+      "class": "module"
+    },
+    "me": {
+      "class": "shell"
+    },
+    "media": {
+      "class": "module"
+    },
+    "memory": {
+      "class": "module"
+    },
+    "mobile": {
+      "class": "shell"
+    },
+    "modules": {
+      "class": "kernel",
+      "note": "The module system: the manifest schema and, from M1, the generated registries (ADR-0250 §14)."
+    },
+    "monaco": {
+      "class": "module"
+    },
+    "native": {
+      "class": "foundation"
+    },
+    "navigation": {
+      "class": "shell"
+    },
+    "network": {
+      "class": "foundation"
+    },
+    "network-proxy": {
+      "class": "foundation"
+    },
+    "notifications": {
+      "class": "kernel"
+    },
+    "oauth": {
+      "class": "kernel"
+    },
+    "observability": {
+      "class": "foundation"
+    },
+    "ocr": {
+      "class": "kernel",
+      "note": "The registry and auto-routing are the `ocr` port; local engines split out as a module, cloud adapters as plugins."
+    },
+    "onboarding": {
+      "class": "shell"
+    },
+    "outbound": {
+      "class": "module"
+    },
+    "packaging": {
+      "class": "foundation"
+    },
+    "paste-collapse": {
+      "class": "foundation"
+    },
+    "perf": {
+      "class": "foundation",
+      "note": "The timing interface other code calls; the dashboard is `performance`."
+    },
+    "performance": {
+      "class": "module"
+    },
+    "pet": {
+      "class": "module"
+    },
+    "pi-packages": {
+      "class": "module"
+    },
+    "placement": {
+      "class": "kernel"
+    },
+    "platform": {
+      "class": "foundation"
+    },
+    "plugin": {
+      "class": "kernel"
+    },
+    "plugin-convert": {
+      "class": "module"
+    },
+    "plugin-devtools": {
+      "class": "module"
+    },
+    "plugin-marketplace": {
+      "class": "module"
+    },
+    "plugin-runtime": {
+      "class": "kernel"
+    },
+    "policy": {
+      "class": "kernel"
+    },
+    "power": {
+      "class": "module"
+    },
+    "presets": {
+      "class": "kernel"
+    },
+    "profile": {
+      "class": "foundation"
+    },
+    "project": {
+      "class": "kernel"
+    },
+    "project-coordinator": {
+      "class": "module"
+    },
+    "project-environment": {
+      "class": "kernel"
+    },
+    "project-knowledge": {
+      "class": "module"
+    },
+    "prompts": {
+      "class": "kernel"
+    },
+    "provider": {
+      "class": "kernel"
+    },
+    "provider-diagnostics": {
+      "class": "module"
+    },
+    "push": {
+      "class": "kernel"
+    },
+    "pwa": {
+      "class": "foundation"
+    },
+    "qr": {
+      "class": "module"
+    },
+    "queue": {
+      "class": "kernel"
+    },
+    "radar": {
+      "class": "module"
+    },
+    "rag": {
+      "class": "module"
+    },
+    "recovery": {
+      "class": "module"
+    },
+    "remote-desktop": {
+      "class": "module"
+    },
+    "remote-host": {
+      "class": "kernel"
+    },
+    "reply-copilot": {
+      "class": "module"
+    },
+    "review": {
+      "class": "module"
+    },
+    "router-fusion": {
+      "class": "kernel",
+      "note": "Provisional: the model-routing convergence analysis decides its split (ADR-0250 §14, not decided here)."
+    },
+    "routing": {
+      "class": "module",
+      "note": "Provisional: folded into the model-routing convergence analysis."
+    },
+    "runtime": {
+      "class": "foundation"
+    },
+    "sandbox": {
+      "class": "kernel"
+    },
+    "scheduler": {
+      "class": "kernel"
+    },
+    "scm": {
+      "class": "module"
+    },
+    "search": {
+      "class": "kernel"
+    },
+    "security": {
+      "class": "foundation"
+    },
+    "selection": {
+      "class": "module"
+    },
+    "selection-toolbar": {
+      "class": "module"
+    },
+    "server-ops": {
+      "class": "module"
+    },
+    "servers": {
+      "class": "module"
+    },
+    "session-import": {
+      "class": "module"
+    },
+    "settings": {
+      "class": "shell"
+    },
+    "settings-import": {
+      "class": "module"
+    },
+    "settings-store": {
+      "class": "kernel",
+      "note": "The settings store (stores/settings and the non-UI settings code); the settings UI is the `settings` shell."
+    },
+    "sftp": {
+      "class": "module"
+    },
+    "share": {
+      "class": "module"
+    },
+    "shared": {
+      "class": "foundation"
+    },
+    "shell": {
+      "class": "shell"
+    },
+    "shell-intelligence": {
+      "class": "module"
+    },
+    "shiki": {
+      "class": "module"
+    },
+    "shortcuts": {
+      "class": "foundation"
+    },
+    "signaling": {
+      "class": "kernel"
+    },
+    "sites": {
+      "class": "module"
+    },
+    "skill-marketplace": {
+      "class": "module"
+    },
+    "skill-recorder": {
+      "class": "module"
+    },
+    "skills": {
+      "class": "kernel"
+    },
+    "slash-commands": {
+      "class": "shell"
+    },
+    "source-control": {
+      "class": "module"
+    },
+    "squads": {
+      "class": "module"
+    },
+    "stack": {
+      "class": "module"
+    },
+    "status": {
+      "class": "module"
+    },
+    "storage": {
+      "class": "foundation"
+    },
+    "stores-root": {
+      "class": "foundation"
+    },
+    "storybook": {
+      "class": "foundation"
+    },
+    "subscription": {
+      "class": "kernel"
+    },
+    "support": {
+      "class": "module"
+    },
+    "support-agent": {
+      "class": "module"
+    },
+    "support-report": {
+      "class": "module"
+    },
+    "surface": {
+      "class": "foundation"
+    },
+    "sync": {
+      "class": "kernel"
+    },
+    "system": {
+      "class": "foundation"
+    },
+    "task-workspace": {
+      "class": "kernel"
+    },
+    "tasks": {
+      "class": "module"
+    },
+    "tauri": {
+      "class": "foundation"
+    },
+    "telemetry": {
+      "class": "foundation"
+    },
+    "templates": {
+      "class": "module"
+    },
+    "terminal": {
+      "class": "module"
+    },
+    "test": {
+      "class": "foundation"
+    },
+    "testing": {
+      "class": "foundation"
+    },
+    "theme": {
+      "class": "module"
+    },
+    "thread-handoff": {
+      "class": "module"
+    },
+    "tools": {
+      "class": "kernel"
+    },
+    "tray": {
+      "class": "module"
+    },
+    "tray-panel": {
+      "class": "module"
+    },
+    "tts": {
+      "class": "module"
+    },
+    "twin": {
+      "class": "module"
+    },
+    "types-root": {
+      "class": "foundation"
+    },
+    "ui": {
+      "class": "foundation"
+    },
+    "updates": {
+      "class": "module"
+    },
+    "usage": {
+      "class": "kernel"
+    },
+    "usage-dock": {
+      "class": "module"
+    },
+    "utils": {
+      "class": "foundation"
+    },
+    "vector": {
+      "class": "module"
+    },
+    "voice": {
+      "class": "module"
+    },
+    "vscode-compat": {
+      "class": "module"
+    },
+    "web": {
+      "class": "kernel",
+      "note": "The `web-reader` and `web-search` ports; search services become plugins."
+    },
+    "webdav": {
+      "class": "module"
+    },
+    "webhooks": {
+      "class": "module"
+    },
+    "wiki": {
+      "class": "module"
+    },
+    "work-migration": {
+      "class": "module"
+    },
+    "work-submission": {
+      "class": "kernel"
+    },
+    "workflow": {
+      "class": "module"
+    },
+    "workspace": {
+      "class": "kernel"
+    }
+  },
+  "paths": [
+    {
+      "prefix": "app/share-target/",
+      "owner": "share",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/plugin-auth/",
+      "owner": "plugin",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/invite/",
+      "owner": "account",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/remote-sessions/",
+      "owner": "companion",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/deep-link/",
+      "owner": "navigation",
+      "why": "Route shell owned by the deep-link navigation shell (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/(mobile-onboard)/",
+      "owner": "onboarding",
+      "why": "Route shell owned by onboarding (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/pet-overlay/",
+      "owner": "pet",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/pet-popup/",
+      "owner": "pet",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/portal/",
+      "owner": "workflow",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/recorder-controller/",
+      "owner": "skill-recorder",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/logs/",
+      "owner": "logging",
+      "why": "Route shell owned by its module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "app/lark/",
+      "owner": "connectors",
+      "why": "Route shell owned by the IM platform module (analysis §11.3 C)."
+    },
+    {
+      "prefix": "components/extensions/",
+      "owner": "vscode-compat",
+      "why": "VS Code extension host UI (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/ai/eval/",
+      "owner": "eval",
+      "why": "Split out of `ai` (analysis §11.1 ai)."
+    },
+    {
+      "prefix": "lib/ai/agent/team/",
+      "owner": "agent-team",
+      "why": "Split out of `ai` into agent orchestration (analysis §11.1 ai)."
+    },
+    {
+      "prefix": "lib/ai/media/",
+      "owner": "media",
+      "why": "Split out of `ai` into media generation (analysis §11.1 ai)."
+    },
+    {
+      "prefix": "lib/chat/image-edit/",
+      "owner": "images",
+      "why": "The chat image workbench belongs to the images module (analysis §11.1)."
+    },
+    {
+      "prefix": "components/chat/image-workbench/",
+      "owner": "images",
+      "why": "The chat image workbench belongs to the images module (analysis §11.1)."
+    },
+    {
+      "prefix": "lib/skills/built-in/issues/",
+      "owner": "issues",
+      "why": "Built-in skill of its feature (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/skills/built-in/lark/",
+      "owner": "connectors",
+      "why": "Built-in skill of its feature (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/skills/built-in/im/",
+      "owner": "connectors",
+      "why": "Built-in skill of its feature (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/skills/marketplace-",
+      "owner": "skill-marketplace",
+      "why": "Split out of `skills` (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/skills/skillssh-",
+      "owner": "skill-marketplace",
+      "why": "Split out of `skills` (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/skills/recording/",
+      "owner": "skill-recorder",
+      "why": "Split out of `skills` (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "components/skills/recorder/",
+      "owner": "skill-recorder",
+      "why": "Split out of `skills` (analysis §11.1 skills)."
+    },
+    {
+      "prefix": "lib/plugin/vscode-shim/",
+      "owner": "vscode-compat",
+      "why": "Plugin ecosystem module, kept stable (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/ide/",
+      "owner": "vscode-compat",
+      "why": "Plugin ecosystem module, kept stable (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/lsp/",
+      "owner": "vscode-compat",
+      "why": "Plugin ecosystem module, kept stable (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/convert/",
+      "owner": "plugin-convert",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/cogset/",
+      "owner": "cogsets",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/cogpack/",
+      "owner": "cogsets",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "components/plugins/cogsets/",
+      "owner": "cogsets",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "components/plugins/cogpacks/",
+      "owner": "cogsets",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/marketplace/",
+      "owner": "plugin-marketplace",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "components/plugins/marketplace/",
+      "owner": "plugin-marketplace",
+      "why": "Plugin ecosystem module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/devtools/",
+      "owner": "plugin-devtools",
+      "why": "Plugin ecosystem module, experimental (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "components/plugins/devtools/",
+      "owner": "plugin-devtools",
+      "why": "Plugin ecosystem module, experimental (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/eval/",
+      "owner": "eval",
+      "why": "Plugin eval helpers join the eval module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/plugin/pi-packages/",
+      "owner": "pi-packages",
+      "why": "Joins the Pi agent module (analysis §11.1 plugin)."
+    },
+    {
+      "prefix": "lib/remote-host/host-runtimes",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "lib/remote-host/host-system",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "lib/remote-host/host-update",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "hooks/remote-host/use-host-runtimes",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "hooks/remote-host/use-host-system",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "hooks/remote-host/use-host-update",
+      "owner": "host-admin",
+      "why": "Host administration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "lib/remote-host/migration/",
+      "owner": "work-migration",
+      "why": "Work migration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "hooks/remote-host/use-migration-lease",
+      "owner": "work-migration",
+      "why": "Work migration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "hooks/remote-host/use-always-on-work",
+      "owner": "work-migration",
+      "why": "Work migration (analysis §11.1 remote-host)."
+    },
+    {
+      "prefix": "lib/remote-host/github-runner/",
+      "owner": "github",
+      "why": "The GitHub runner belongs to the GitHub module (analysis §11.1 remote-host)."
+    }
+  ]
+}

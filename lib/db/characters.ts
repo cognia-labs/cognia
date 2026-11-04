@@ -24,7 +24,7 @@ import {
   getBuiltinCharacterPack,
 } from "./builtin-character-pack"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import {
   CHARACTER_ROW_FIELDS,
   MAX_VARIANT_DEPTH,

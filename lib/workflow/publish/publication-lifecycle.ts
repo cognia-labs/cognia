@@ -2,7 +2,7 @@ import type { Skill } from "@cognia/agent-config-types"
 
 import { getDb, withDbReopenRetry } from "@/lib/db/schema"
 import { upsertSkillByCanonicalId, workflowSkillBody } from "@/lib/db/skills"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "@/lib/db/tombstones"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
 import { validateWorkflow } from "@/lib/workflow/definition/validate"

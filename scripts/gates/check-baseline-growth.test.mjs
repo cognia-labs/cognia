@@ -649,6 +649,8 @@ const GATE_DEBT_FILES = [
   "scripts/gates/invoke-arg-parity-baseline.json",
   "scripts/gates/llm-ledger-boundary-baseline.json",
   "scripts/gates/loading-states-baseline.json",
+  "scripts/gates/module-ownership.json",
+  "scripts/gates/modules-baseline.json",
   "scripts/gates/network-egress-allowlist.json",
   "scripts/gates/pii-boundary-allowlist.json",
   "scripts/gates/pro-ide-perf-baseline.json",

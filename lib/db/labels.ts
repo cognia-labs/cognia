@@ -17,7 +17,7 @@
 import type { LabelRow, LabelScope } from "@/types/labels"
 import { defaultLabelColor } from "@/types/labels"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 function newLabelId(): string {
   return `lbl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`

@@ -1662,7 +1662,9 @@ describe("the desktop pet readers (ADR-0219)", () => {
   const { generateBones } = jest.requireActual(
     "@/lib/pet/bones/generate"
   ) as typeof import("@/lib/pet/bones/generate")
-  const { recordTombstones } = jest.requireActual("./tombstones") as typeof import("./tombstones")
+  const { recordTombstones } = jest.requireActual(
+    "@/lib/db/tombstones"
+  ) as typeof import("@/lib/db/tombstones")
 
   beforeEach(async () => {
     const db = getDb()
@@ -1757,7 +1759,9 @@ describe("the desktop pet readers (ADR-0219)", () => {
 })
 
 describe("the goal event log reader (goalEvents)", () => {
-  const { recordTombstones } = jest.requireActual("./tombstones") as typeof import("./tombstones")
+  const { recordTombstones } = jest.requireActual(
+    "@/lib/db/tombstones"
+  ) as typeof import("@/lib/db/tombstones")
 
   const ev = (id: string, ts: number, goalId = "g1") => ({
     id,
@@ -1903,7 +1907,9 @@ it("serves persisted Best-of-N summaries to paired devices with incremental time
 })
 
 describe("the per-turn usage reader (sessionUsage)", () => {
-  const { recordTombstones } = jest.requireActual("./tombstones") as typeof import("./tombstones")
+  const { recordTombstones } = jest.requireActual(
+    "@/lib/db/tombstones"
+  ) as typeof import("@/lib/db/tombstones")
   const now = Date.now()
   const row = (messageId: string, at: number, extra: Record<string, unknown> = {}) => ({
     messageId,

@@ -53,7 +53,7 @@ import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { invoke } from "@tauri-apps/api/core"
 import Dexie from "dexie"
 
-import { readTombstonesSince } from "./tombstones"
+import { readTombstonesSince } from "@/lib/db/tombstones"
 import { PAGED_SYNC_TABLES, type SyncDelta, type SyncableTable } from "./types"
 import { portableExecutionContext } from "@/lib/task-workspace/managed-workspace"
 import { createProfileDekStore, type ProfileDekHandle } from "@/lib/rag/profile-dek-store"

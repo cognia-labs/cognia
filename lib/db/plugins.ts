@@ -9,7 +9,7 @@
 
 import type { PluginRow } from "./plugin-types"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 /** Stable-prefix id generator matching the convention used by other CRUD modules. */
 function newId() {

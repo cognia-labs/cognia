@@ -20,7 +20,7 @@ import type {
 import { DEFAULT_WORKFLOW_SETTINGS } from "@/types/workflow/visual"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
 import {
   deleteWorkflowWithPublication,

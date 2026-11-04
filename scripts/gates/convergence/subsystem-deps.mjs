@@ -21,10 +21,12 @@
 
 import { execFileSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
-import { basename, dirname, extname, join, normalize, resolve } from "node:path"
+import { dirname, join, normalize, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import ts from "typescript"
+
+import { createSubsystemClassifier } from "../lib/subsystems.mjs"
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 const args = process.argv.slice(2)
@@ -45,7 +47,6 @@ const SOURCE_ROOTS = [
   "cli/src",
 ]
 const TEST_RE = /(\.test\.|\.spec\.|\.stories\.|__mocks__\/|\/fixtures\/|\.d\.ts$)/
-const LAYERED = new Set(["app", "components", "hooks", "lib", "stores", "types"])
 // Shared plumbing: high fan-in by design, never a feature.
 const FOUNDATION = new Set([
   "ui",
@@ -71,53 +72,6 @@ function listFiles() {
     .toString()
     .split("\n")
   return out.filter((f) => /\.(ts|tsx|mts|mjs)$/.test(f) && !TEST_RE.test(f))
-}
-
-let knownKeys = new Set()
-// Plural/singular directory pairs that are one subsystem split across layers
-// (lib/plugin + components/plugins). components/providers holds the React
-// initializers, so it gets its own name instead of merging with lib/provider.
-const ALIASES = new Map([
-  ["plugins", "plugin"],
-  ["workflows", "workflow"],
-  ["agents", "agent"],
-  ["accounts", "account"],
-  ["goals", "goal"],
-  ["bots", "bot"],
-  ["artifacts", "artifact"],
-  ["agent-teams", "agent-team"],
-  ["projects", "project"],
-  ["themes", "theme"],
-  ["files", "file"],
-  ["devices", "device"],
-])
-const alias = (key, layer) => {
-  if (layer === "components" && key === "providers") return "initializers"
-  // components/settings is the settings UI hub; the store under it is shared state.
-  if (key === "settings" && layer !== "components" && layer !== "app") return "settings-store"
-  return ALIASES.get(key) ?? key
-}
-
-/** Map a repo-relative path to its subsystem key and layer. */
-function classify(path) {
-  const parts = path.split("/")
-  const top = parts[0]
-  if (top === "packages" && parts[1]) return { key: `pkg:${parts[1]}`, layer: "packages" }
-  if (top === "plugins" && parts[1]) return { key: `plugin:${parts[1]}`, layer: "plugins" }
-  if (top === "cli") return { key: "cli", layer: "cli" }
-  if (!LAYERED.has(top)) return null
-  if (parts.length < 2 || !parts[1]) return { key: `${top}-root`, layer: top }
-  if (parts.length === 2) {
-    // A file directly under the layer root: try to attach it by name.
-    const stem = basename(parts[1], extname(parts[1]))
-      .replace(/^use-/, "")
-      .replace(/-store$/, "")
-    if (knownKeys.has(stem)) return { key: alias(stem, top), layer: top }
-    return { key: `${top}-root`, layer: top }
-  }
-  let seg = parts[1]
-  if (top === "app") seg = seg.replace(/^\((.*)\)$/, "$1")
-  return { key: alias(seg, top), layer: top }
 }
 
 const PACKAGE_DIRS = new Map()
@@ -188,11 +142,7 @@ function countLines(text) {
 // ---------------------------------------------------------------- collect
 
 const files = listFiles()
-for (const f of files) {
-  const parts = f.split("/")
-  if (LAYERED.has(parts[0]) && parts.length > 2)
-    knownKeys.add(parts[0] === "app" ? parts[1].replace(/^\((.*)\)$/, "$1") : parts[1])
-}
+const { classify } = createSubsystemClassifier(files)
 for (const f of execFileSync("git", ["ls-files", "--", "packages/*/package.json"], { cwd: ROOT })
   .toString()
   .split("\n")) {

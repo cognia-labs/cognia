@@ -10,7 +10,7 @@
 
 import type { TwinDraft, TwinDraftKind, TwinDraftPayload, TwinDraftStatus } from "@/types/twin"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 function newId(): string {
   return "twd_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)

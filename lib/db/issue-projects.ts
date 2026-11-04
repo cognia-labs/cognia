@@ -30,7 +30,7 @@ import { deleteIssueEventsForIssues } from "./issue-events"
 import { deleteIssueRunsForIssues } from "./issue-runs"
 import { cascadeIssueWakeups } from "./issues"
 import { deleteIssueCyclesForWorkspace } from "./issue-cycles"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { resourceKey } from "@/lib/issues/sync/bindings"
 import { pluginResourceForStorage } from "@/lib/issues/sync/plugin-resources"
 

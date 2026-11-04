@@ -16,7 +16,7 @@ import {
   LIBRARY_OWNER_PREFIX,
 } from "@/lib/db/message-media-refs"
 import { fusionDatabaseName } from "@/lib/router-fusion/gate/database-name"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "@/lib/db/tombstones"
 import { purgeDatabaseAppData } from "@/lib/tauri/account-app-data"
 import { loggers } from "@cognia/logging"
 

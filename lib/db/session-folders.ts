@@ -8,7 +8,7 @@ import { getDb } from "./schema"
 import { resolveScopeProjectId } from "./project-scope"
 import { stampOrganizationalWrite } from "./session-row-stamps"
 import { assertSessionWritable } from "@/lib/chat/session-write-guard"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 /**
  * Conversation folders (conversation-list overhaul, Dexie v90). A lightweight,

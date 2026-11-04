@@ -510,6 +510,45 @@
           "path": "metrics.none"
         }
       ]
+    },
+    {
+      "id": "module-ownership",
+      "file": "scripts/gates/module-ownership.json",
+      "gate": "audit:modules",
+      "measures": [
+        {
+          "id": "transitional-subsystems",
+          "kind": "length",
+          "path": "subsystems"
+        }
+      ]
+    },
+    {
+      "id": "modules-baseline",
+      "file": "scripts/gates/modules-baseline.json",
+      "gate": "audit:modules",
+      "measures": [
+        {
+          "id": "direction",
+          "kind": "length",
+          "path": "direction"
+        },
+        {
+          "id": "cycles",
+          "kind": "eachValue",
+          "path": "cycles"
+        },
+        {
+          "id": "size",
+          "kind": "eachValue",
+          "path": "size"
+        },
+        {
+          "id": "vendor-neutral",
+          "kind": "length",
+          "path": "vendorNeutral"
+        }
+      ]
     }
   ],
   "notRatchets": [

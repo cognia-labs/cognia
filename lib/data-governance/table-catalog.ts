@@ -803,7 +803,7 @@ export type CompanionSyncProtocolTableName = (typeof COMPANION_SYNC_PROTOCOL_TAB
  * (`crates/cognia-companion-bus/src/sync_registry.rs`).
  *
  * - `tombstoned`: every delete path records a `syncTombstones` row
- *   (`lib/sync/tombstones.ts`) that the pull folds into `deleted_ids`.
+ *   (`lib/db/tombstones.ts`) that the pull folds into `deleted_ids`.
  * - `retention-pruned`: the Host prunes by age and the client ages rows out on
  *   the same window, so no delete needs to cross the wire.
  * - `never-deleted`: rows only change status; nothing deletes them.

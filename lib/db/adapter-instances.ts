@@ -9,7 +9,7 @@
 import type { AdapterInstanceRow } from "./connector-types"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { assertRunsHere, isOwnedElsewhere } from "@/lib/placement/ownership"
 import { hostAdapterInstanceWriter as hostWriter } from "./adapter-instance-remote-writer"
 import type { ItemOwner } from "@/types/placement/item-owner"

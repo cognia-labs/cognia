@@ -17,7 +17,7 @@
 import type { Twin, TwinEmbeddingIndexRecord, TwinEmbeddingOverride } from "@/types/twin"
 import { isRagEmbeddingProvider } from "@cognia/provider-embedding/embedding-catalog"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 function newId(): string {
   return "twn_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)

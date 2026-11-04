@@ -1488,14 +1488,14 @@
         "lib/db/media-generation-jobs.ts#listSessionVideoJobs",
         "lib/db/media-generation-jobs.ts#pruneSettledVideoJobs",
         "lib/db/sessions.ts#bulkDeleteSessions",
-        "lib/sync/tombstones.ts#pruneTombstones"
+        "lib/db/tombstones.ts#pruneTombstones"
       ],
       "unlinkedWriters": [
         "lib/db/media-generation-jobs.ts#createDexieMediaJobStore::insert",
         "lib/db/media-generation-jobs.ts#createDexieMediaJobStore::transition",
         "lib/db/media-generation-jobs.ts#createDexieMediaJobStore::update"
       ],
-      "evidence": "c3d50c348b3ed275"
+      "evidence": "b9b4715dabf73b5c"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/memoryJobs",
@@ -4396,7 +4396,7 @@
         "lib/scheduler/write-authority.ts#countTasksBySourceFromDb"
       ],
       "unlinkedWriters": [],
-      "evidence": "6be81d6abc915309"
+      "evidence": "f7ce341d0a43cb66"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/siteVersions",

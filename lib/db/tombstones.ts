@@ -24,7 +24,7 @@ import { preserveGeneratedVideoRecords } from "@/lib/db/files-library-items"
 import { getDb } from "@/lib/db/schema"
 import { uniqueIndexKeys } from "@/lib/db/unique-keys"
 
-import type { SyncTombstoneRow, SyncableTable } from "./types"
+import type { SyncTombstoneRow, SyncableTable } from "@/lib/sync/types"
 
 /** Default retention for tombstone rows — pruned on boot. */
 export const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000

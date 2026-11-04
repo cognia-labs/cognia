@@ -64,7 +64,7 @@ flowchart TB
     Registry[sync_registry.rs<br/>default_tables · 48]
     Bridge[sync_bridge.rs<br/>SyncBridge.pull · 30 s]
     Source[lib/sync/desktop-sync-source.ts<br/>readDexieDelta · finalizeDelta]
-    Tomb[lib/sync/tombstones.ts<br/>syncTombstones]
+    Tomb[lib/db/tombstones.ts<br/>syncTombstones]
     Hooks[host-table-invalidation.ts<br/>Dexie 钩子]
     Inval[host-invalidate.ts<br/>150 ms 合并]
     HostDexie[(Host Dexie)]
@@ -116,7 +116,7 @@ flowchart TB
 | 文件 | 作用 |
 | --- | --- |
 | `lib/sync/desktop-sync-source.ts` | `installDesktopSyncSource`：从 Dexie 应答 `companion://sync-pull-request`；`readDexieDelta`（每张表一个分支）、`readCursorDelta`（分页表）、`finalizeDelta`（墓碑与 `next_since`） |
-| `lib/sync/tombstones.ts` | `recordTombstones`、`readTombstonesSince`、`pruneTombstones`（保留 90 天） |
+| `lib/db/tombstones.ts` | `recordTombstones`、`readTombstonesSince`、`pruneTombstones`（保留 90 天） |
 | `lib/sync/host-table-invalidation.ts` | `SYNC_TABLE_SOURCES`，以及在任一同步表变化时发出通知的 Dexie 钩子 |
 | `lib/sync/host-invalidate.ts` | `publishSyncInvalidate`：按表 150 ms 合并 `sync://invalidate` |
 | `lib/headless/runtimes/desktop-sync-source.ts` | 无头 brain 的注册：同一个 source，换成 socket 桥 |
@@ -250,7 +250,7 @@ sequenceDiagram
 同步读取 Host 已有的表，另外自带三张表：
 
 - `hostSyncCursors`（`&[serverKey+table]`）：客户端按 Host、按表持久化的游标，重启后从中断处继续，不再拉全量快照。`serverKey` 按账户和 Host 划分命名空间，因此一部手机配对多个 Host 时互不干扰。
-- `syncTombstones`（`[table+id]`）：Host 在删除的同一事务里，为每次真正的用户删除记一行（`lib/sync/tombstones.ts`），并作为 `deleted_ids` 并入每次 delta。90 天后清理。
+- `syncTombstones`（`[table+id]`）：Host 在删除的同一事务里，为每次真正的用户删除记一行（`lib/db/tombstones.ts`），并作为 `deleted_ids` 并入每次 delta。90 天后清理。
 - `mobileOutboundQueue`：客户端的持久写入队列（见「已知限制」）。
 
 ## 配置项与扩展点

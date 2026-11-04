@@ -230,6 +230,10 @@ const REGISTRY = [
   { script: "audit:headless-registry", group: "audit" },
   // ADR-0250: exact member inventories ratchet convergence debt across layers.
   { script: "audit:convergence", group: "audit" },
+  // ADR-0250 §14: one owner per file, dependency direction (reporting until
+  // M1), cycle, size and vendor-neutral-framework ratchets. Its tests run in
+  // scripts:test:gates.
+  { script: "audit:modules", group: "audit" },
   { script: "audit:e2e-governance", group: "audit" },
   { script: "audit:docs-links", group: "audit" },
   { script: "audit:adr-catalog", group: "audit" },

@@ -12,7 +12,7 @@ import { workspaceIdForPath } from "@/lib/workspace/locate-workspace"
 import type { Project } from "@/types"
 import { getDb } from "./schema"
 import { getSettings, saveSettings } from "./settings"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 /** All persisted projects. Empty array when none have been saved yet. */
 export async function getAllProjects(): Promise<Project[]> {

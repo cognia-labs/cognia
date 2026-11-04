@@ -9,7 +9,7 @@
 import Dexie from "dexie"
 
 import type { PlatformKind } from "@/types/connectors/platform-kind"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 import type { PlatformIdentityRow } from "./connector-types"
 import { getDb } from "./schema"

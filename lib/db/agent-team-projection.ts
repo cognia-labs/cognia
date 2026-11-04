@@ -17,7 +17,7 @@
  */
 
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { loggers } from "@cognia/logging"
 import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agent-team"
 import {

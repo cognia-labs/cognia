@@ -28,7 +28,7 @@ import {
 } from "@cognia/memory/lifecycle/retrieval-feedback"
 import { buildRevisionSnapshot, isRevisionSnapshot } from "@cognia/memory/lifecycle/revision"
 import { getDb } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 
 export function newMemoryId(): string {
   return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`

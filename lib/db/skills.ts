@@ -7,7 +7,7 @@ import {
 import { WORKFLOW_RUNNER_TOOL_NAME } from "@/lib/workflow/publish/runner-tool"
 import { estimateCJKTokenCount } from "@cognia/rag/cjk-tokenizer"
 import { applyCapabilityOverlay } from "@/lib/workspace/capability-overlay"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { getDb } from "./schema"
 import {
   loadWorkspaceCapabilityOverlay,

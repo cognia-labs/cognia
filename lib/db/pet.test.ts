@@ -28,7 +28,7 @@ import {
 } from "./pet"
 import { __resetDbForTesting, getDb, whenSeeded } from "./schema"
 import { createDefaultProfile } from "@/lib/pet/defaults"
-import { readTombstonesSince } from "@/lib/sync/tombstones"
+import { readTombstonesSince } from "./tombstones"
 import {
   __resetHostInvalidateForTests,
   __setHostInvalidateDepsForTests,

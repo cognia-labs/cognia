@@ -1902,7 +1902,7 @@ export class CogniaDB extends Dexie {
   retrievalTombstones!: Table<RetrievalTombstoneRow, string>
   retrievalMigrationJournal!: Table<RetrievalMigrationJournalRow, string>
   retrievalRuntimeState!: Table<RetrievalRuntimeStateRow, "global">
-  // v61 — companion sync tombstones (deletions). See `lib/sync/tombstones.ts`.
+  // v61 — companion sync tombstones (deletions). See `lib/db/tombstones.ts`.
   syncTombstones!: Table<SyncTombstoneRow, [SyncableTable, string]>
   // v49 — Inbox telemetry ring buffer (cap 3000). See `lib/db/inbox-telemetry.ts`.
   inboxTelemetryEvents!: Table<InboxTelemetryEventRow, string>

@@ -310,6 +310,7 @@
     "audit:convergence:baseline": "node scripts/gates/check-convergence.mjs --write-baseline",
     "audit:convergence:report": "node scripts/gates/check-convergence.mjs --report",
     "audit:convergence:test": "node --test scripts/gates/check-convergence.test.mjs scripts/gates/convergence/counter.test.mjs",
+    "audit:modules": "node scripts/gates/check-modules.mjs",
     "audit:identity-vocabulary": "node scripts/gates/check-identity-vocabulary.mjs",
     "audit:identity-vocabulary:baseline": "node scripts/gates/check-identity-vocabulary.mjs --write-baseline",
     "audit:identity-vocabulary:test": "node --test scripts/gates/check-identity-vocabulary.test.mjs",

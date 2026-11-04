@@ -22,7 +22,7 @@ import type {
 import { OPEN_PLAN_STATUSES, isTerminalPlanStatus } from "@/types/agent/plan"
 import Dexie from "dexie"
 import { getDb, withDbReopenRetry } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { resolveScopeProjectId, resolveSessionProjectId } from "./project-scope"
 
 const EVENTS_PER_PLAN_CAP = 2000

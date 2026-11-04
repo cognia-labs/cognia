@@ -12,7 +12,7 @@
  */
 
 import { getDb } from "@/lib/db/schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import type { BotDeliveryStatus, BotEventDeliveryRow } from "@/lib/db/bot-types"
 import type { PluginBotRetryPolicy } from "@/types/plugin/plugin-bot"
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"

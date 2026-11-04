@@ -10,7 +10,7 @@ import type {
   TemplateMigrationJournalRecord,
   TemplateRepository,
 } from "@/lib/templates/repository"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { getDb } from "./schema"
 import type {
   TemplateDefinitionRow,

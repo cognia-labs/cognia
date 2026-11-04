@@ -17,7 +17,7 @@ import Dexie from "dexie"
 import type { Goal, GoalEvent, GoalEventKind, GoalEventPayload, GoalStatus } from "@/types/goal"
 import { isTerminalGoalStatus } from "@/types/goal"
 import { getDb, withDbReopenRetry } from "./schema"
-import { recordTombstones } from "@/lib/sync/tombstones"
+import { recordTombstones } from "./tombstones"
 import { DEFAULT_PROJECT_ID, resolveSessionProjectId } from "./project-scope"
 import { getSettings } from "./settings"
 
