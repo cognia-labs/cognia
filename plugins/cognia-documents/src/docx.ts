@@ -454,9 +454,7 @@ async function detectFeatures(zip: ZipLike, documentXml: string): Promise<DocxFe
   if (
     elements(documentXml, "tblPr").some((xml) => !matchesDefault(xml, defaults.table)) ||
     /<w:(tcPr|trPr)\b[^>]*>\s*<w:/.test(documentXml) ||
-    [...documentXml.matchAll(/<w:gridCol\b([^>]*)\/>/g)].some(
-      (match) => attr(match[1], "w:w") !== "100"
-    )
+    (await hasCustomColumnWidths(documentXml))
   )
     features.push("table-formatting")
   let tableDepth = 0
@@ -514,6 +512,50 @@ function readExportDefaults(): Promise<ExportDefaults> {
     exportDefaults = undefined
     throw error
   }))
+}
+
+const writerGrids = new Map<number, Promise<string[]>>()
+
+/**
+ * The grid column widths our writer gives a plain table of `columns` columns.
+ * The `docx` writer derives them from the table and section widths (9.9 splits
+ * the section's text width; 9.7 wrote 100 per column), so ask it rather than
+ * hard-coding a value a dependency update can stale.
+ */
+function writerGridWidths(columns: number): Promise<string[]> {
+  let grid = writerGrids.get(columns)
+  if (!grid) {
+    grid = (async () => {
+      const model = createDocument("Defaults")
+      model.blocks.push({
+        id: "b1",
+        type: "table",
+        rows: [Array.from({ length: columns }, () => "")],
+      })
+      const JSZip = (await import("jszip")).default
+      const zip = await JSZip.loadAsync(await exportDocx(model))
+      const xml = await zip.file("word/document.xml")!.async("string")
+      return gridWidths(elements(xml, "tblGrid")[0] ?? "")
+    })()
+    grid.catch(() => writerGrids.delete(columns))
+    writerGrids.set(columns, grid)
+  }
+  return grid
+}
+
+function gridWidths(grid: string): string[] {
+  return [...grid.matchAll(/<w:gridCol\b([^>]*)\/>/g)].map((match) => attr(match[1], "w:w") ?? "")
+}
+
+/** A table grid other than the one our writer would emit carries column widths the model drops. */
+async function hasCustomColumnWidths(documentXml: string): Promise<boolean> {
+  for (const grid of elements(documentXml, "tblGrid")) {
+    const widths = gridWidths(grid)
+    if (widths.length === 0) continue
+    const expected = await writerGridWidths(widths.length)
+    if (widths.some((width, index) => width !== expected[index])) return true
+  }
+  return false
 }
 
 function elements(xml: string, tag: string): string[] {

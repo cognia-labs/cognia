@@ -472,6 +472,30 @@ it("does not report reconstructed layout, tables, list definitions, and styles a
   expect((await importDocx(await exportDocx(model))).importedFeatures).toEqual([])
 })
 
+it("compares table column widths with the writer's grid for that column count", async () => {
+  for (const columns of [1, 2, 3, 7]) {
+    const model = applyDocumentOperations(createDocument("Grid"), [
+      { op: "appendTable", rows: [Array.from({ length: columns }, (_, index) => `c${index}`)] },
+    ])
+    const bytes = await exportDocx(model)
+    expect((await importDocx(bytes)).importedFeatures).not.toContain("table-formatting")
+    const zip = await JSZip.loadAsync(bytes)
+    const xml = await zip.file("word/document.xml")!.async("string")
+    let first = true
+    zip.file(
+      "word/document.xml",
+      xml.replace(/<w:gridCol\b[^>]*\/>/g, (match) => {
+        if (!first) return match
+        first = false
+        return '<w:gridCol w:w="1234"/>'
+      })
+    )
+    expect(
+      (await importDocx(await zip.generateAsync({ type: "uint8array" }))).importedFeatures
+    ).toContain("table-formatting")
+  }
+})
+
 it("round-trips deep headings, nested lists, quotes, and multi-line code", async () => {
   const model = applyDocumentOperations(createDocument("Rich"), [
     { op: "appendHeading", level: 5, text: "Level five" },
