@@ -44,18 +44,14 @@ scripts/
   benchmarks/     Host/sidecar JS runtime and code-index benchmarks
   certify/        billable vendor certification and bundle rollback (ADR-0090)
   plugin-eval/    plugin eval runner
-  router-fusion/  Router + Fusion live smoke (ADR-0188)
 ```
 
 Top-level files:
 
-| File                            | Purpose                                                                              |
-| ------------------------------- | ------------------------------------------------------------------------------------ |
-| `postinstall.mjs`               | Root `postinstall`: sidecar deps, linked package builds, VS Code ext-host sidecar.   |
-| `lark-entry-verify.mts`         | Feishu dual-entry verification harness (ADR-0091). `pnpm lark:verify-entry`.         |
-| `lark-live-smoke.mts`           | Live Lark adapter smoke against the real OpenAPI. Run by hand, see connector docs.   |
-| `provider-diagnostics-live.mjs` | Live provider diagnostics run through the sidecar. `pnpm provider-diagnostics:live`. |
-| `tsconfig.audit.json`           | `ts-node` project for the TypeScript gates; `include` reaches every subfolder.       |
+| File                  | Purpose                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| `postinstall.mjs`     | Root `postinstall`: sidecar deps, linked package builds, VS Code ext-host sidecar. |
+| `tsconfig.audit.json` | `ts-node` project for the TypeScript gates; `include` reaches every subfolder.     |
 
 ## Folders
 
@@ -121,7 +117,13 @@ review; it is not a general ignore file.
 Harnesses that drive real runtimes: Compose tiers (`compose:smoke*`), WebRTC
 pairing, Agent SDK hosts, the CLI/TUI, built-in agent streaming, desktop
 automation, and one harness per external ACP/CLI agent. `im-live/` is the live
-IM bot smoke (`pnpm im:*`). Several per-agent smokes were written to collect
+IM bot smoke (`pnpm im:*`). Live harnesses against real services:
+`lark-entry-verify.mts` (`pnpm lark:verify-entry`, ADR-0091),
+`lark-live-smoke.mts`, `provider-diagnostics-live.mjs`
+(`pnpm provider-diagnostics:live`) and `router-fusion-live.mjs`
+(`pnpm router-fusion:live-smoke`, ADR-0188). Editing anything here also
+triggers the Compose E2E workflow (`compose-e2e.yml` watches `scripts/smoke/**`).
+Several per-agent smokes were written to collect
 evidence for one audit and have no command. They are listed under
 [Run by hand](#run-by-hand) with the record that uses them.
 
@@ -189,10 +191,6 @@ runtime benchmarks), `certify/` (billable vendor certification, ADR-0090
 Phase 5) and `plugin-eval/`. Most need provider keys or spend money; read the
 header first.
 
-### Single-purpose folders
-
-`router-fusion/` (live smoke).
-
 ## Run by hand
 
 These scripts have no `package.json` command. They are either generators whose
@@ -211,7 +209,7 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `certify/run-vendor-certification.mjs`, `rollback-bundle.mjs` | Billable vendor certification and its rollback (ADR-0090).                                             |
 | `eval/toolsearch-cache-probe.mjs`                             | Wire-level tool-search cache experiment (`docs/evidence/2026-10-24-eval-tui-gap-audit.md`).            |
 | `benchmarks/code-index-workers.mjs`, `host-first-request.mjs` | Host runtime measurements (`docs/evidence/2026-11-03-bun-host-runtime.md`).                            |
-| `lark-live-smoke.mts`                                         | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
+| `smoke/lark-live-smoke.mts`                                   | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
 | `smoke/lume-sandbox.mjs`                                      | Lume sandbox smoke (`docs/development/lume-sandbox.md`).                                               |
 | `smoke/scheduler-tauri.mjs`                                   | Scheduler smoke in the desktop shell.                                                                  |
 | `smoke/tui-v41-live.mjs`                                      | TUI v4.1 acceptance (`docs/evidence/2026-10-22-tui-v41-acceptance.md`).                                |
@@ -274,6 +272,10 @@ old paths; this table maps them.
 | `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`            |
 | `ci/check-cognia-services.mjs`            | `gates/check-cognia-services.mjs`            |
 | `ci/check-browser-companion-contract.mjs` | `gates/check-browser-companion-contract.mjs` |
+| `router-fusion/live-smoke.mjs`            | `smoke/router-fusion-live.mjs`               |
+| `lark-live-smoke.mts`                     | `smoke/lark-live-smoke.mts`                  |
+| `lark-entry-verify.mts`                   | `smoke/lark-entry-verify.mts`                |
+| `provider-diagnostics-live.mjs`           | `smoke/provider-diagnostics-live.mjs`        |
 
 ## Known layout debt
 
@@ -284,8 +286,6 @@ new scripts and do not copy these patterns:
 - Gates outside `gates/`: `plugin/check-*.mjs`, kept with the rest of the
   plugin tooling while the plugin repository extraction is in progress.
 - Generators outside `sync/`: `build/gen-*.mjs`, `plugin/generate-*.mjs`.
-- Live smokes outside `smoke/`: `router-fusion/live-smoke.mjs` and the
-  top-level `lark-*.mts`.
 - Evaluation split across `eval/`, `benchmarks/`, `certify/` and
   `plugin-eval/`.
 - `bootstrap/` is a product asset: `lib/project-environment/bootstrap-presets.ts`

@@ -125,7 +125,7 @@ describe("tenant token purpose gate", () => {
         cwd: ROOT,
         ignore: ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**"],
       }),
-      "scripts/lark-live-smoke.mts",
+      "scripts/smoke/lark-live-smoke.mts",
     ]
     expect(files.length).toBeGreaterThan(100)
     expect(

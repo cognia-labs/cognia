@@ -1,4 +1,4 @@
-// node --test scripts/router-fusion/live-smoke.test.mjs
+// node --test scripts/smoke/router-fusion-live.test.mjs
 //
 // Proves the live smoke harness end to end through its real entry point —
 // the script `pnpm router-fusion:live-smoke` runs — without any provider:
@@ -13,9 +13,9 @@ import os from "node:os"
 import path from "node:path"
 import { after, describe, it } from "node:test"
 
-import { nodeIo, ROOT } from "./live-smoke.mjs"
+import { nodeIo, ROOT } from "./router-fusion-live.mjs"
 
-const SCRIPT = path.join(ROOT, "scripts/router-fusion/live-smoke.mjs")
+const SCRIPT = path.join(ROOT, "scripts/smoke/router-fusion-live.mjs")
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "live-smoke-test-"))
 const cleanup = [scratch]
 
@@ -44,7 +44,7 @@ describe("router-fusion:live-smoke", () => {
   it("is the package.json script, and that command runs the harness", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"))
     const command = pkg.scripts["router-fusion:live-smoke"]
-    assert.equal(command, "node scripts/router-fusion/live-smoke.mjs")
+    assert.equal(command, "node scripts/smoke/router-fusion-live.mjs")
     const [binary, script] = command.split(" ")
     assert.equal(binary, "node")
     const result = spawnSync(process.execPath, [path.join(ROOT, script), "--help"], {

@@ -1,7 +1,7 @@
 /**
  * `pnpm router-fusion:live-smoke` (ADR-0188 D4/D20, B5 WP-E3).
  *
- * `scripts/router-fusion/live-smoke.mjs` bundles this module with the CLI's
+ * `scripts/smoke/router-fusion-live.mjs` bundles this module with the CLI's
  * esbuild pipeline and calls `runLiveSmokeCli` with Node's file system behind
  * the `LiveSmokeIo` port; this module never imports a Node built-in itself.
  *

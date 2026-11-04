@@ -17,7 +17,7 @@
  * matrix is filled in against observed evidence rather than from memory.
  *
  * Usage:
- *   LARK_APP_ID=cli_… LARK_APP_SECRET=… npx tsx scripts/lark-entry-verify.mts
+ *   LARK_APP_ID=cli_… LARK_APP_SECRET=… npx tsx scripts/smoke/lark-entry-verify.mts
  *
  * Optional:
  *   LARK_TEST_CHAT_ID=oc_…   pin the chat to reconcile against
@@ -83,7 +83,7 @@ async function httpRequest(req: {
   }
 }
 
-const { setConnectorCommandInvoker } = await import("../lib/connectors/tauri/commands")
+const { setConnectorCommandInvoker } = await import("../../lib/connectors/tauri/commands")
 setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
   switch (name) {
     case "connectors_http_request":
@@ -101,19 +101,19 @@ setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknow
   }
 })
 
-const { probeBotIdentity } = await import("../lib/connectors/adapters/lark/whoami")
-const { getDb } = await import("../lib/db/schema")
+const { probeBotIdentity } = await import("../../lib/connectors/adapters/lark/whoami")
+const { getDb } = await import("../../lib/db/schema")
 const { seedLarkChatSurfaces, listBotChats } =
-  await import("../lib/connectors/adapters/lark/chat-seed")
-const { reconcileChatTabSurface } = await import("../lib/connectors/adapters/lark/chat-tabs")
-const { reconcileGroupMenuSurface } = await import("../lib/connectors/adapters/lark/group-menu")
-const { removeChatSurface } = await import("../lib/connectors/adapters/lark/surface-removal")
-const { getChatSurface, listChatSurfaces } = await import("../lib/db/lark-chat-surfaces")
+  await import("../../lib/connectors/adapters/lark/chat-seed")
+const { reconcileChatTabSurface } = await import("../../lib/connectors/adapters/lark/chat-tabs")
+const { reconcileGroupMenuSurface } = await import("../../lib/connectors/adapters/lark/group-menu")
+const { removeChatSurface } = await import("../../lib/connectors/adapters/lark/surface-removal")
+const { getChatSurface, listChatSurfaces } = await import("../../lib/db/lark-chat-surfaces")
 const { registerFeishuTenant, approveFeishuBind, listFeishuPrincipals } =
-  await import("../lib/connectors/principal/admin")
-const { createBindRequest } = await import("../lib/db/feishu-principals")
-const { resolveConnectorPrincipal } = await import("../lib/connectors/principal/resolve")
-const { larkMenuManifest } = await import("../lib/connectors/commands/registry")
+  await import("../../lib/connectors/principal/admin")
+const { createBindRequest } = await import("../../lib/db/feishu-principals")
+const { resolveConnectorPrincipal } = await import("../../lib/connectors/principal/resolve")
+const { larkMenuManifest } = await import("../../lib/connectors/commands/registry")
 
 const creds = { appId: APP_ID, appSecret: APP_SECRET }
 
@@ -209,9 +209,9 @@ if (!tenantKey) {
 console.log("\n2. Chat surfaces (real Feishu API)\n")
 
 const seedDeps = {
-  request: (await import("../lib/connectors/adapters/lark/http")).larkTenantRequest,
-  getAdapter: (await import("../lib/db/adapter-instances")).getAdapterInstance,
-  ensure: (await import("../lib/db/lark-chat-surfaces")).ensureChatSurface,
+  request: (await import("../../lib/connectors/adapters/lark/http")).larkTenantRequest,
+  getAdapter: (await import("../../lib/db/adapter-instances")).getAdapterInstance,
+  ensure: (await import("../../lib/db/lark-chat-surfaces")).ensureChatSurface,
   now: Date.now,
 }
 

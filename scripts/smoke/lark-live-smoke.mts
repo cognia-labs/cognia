@@ -8,7 +8,7 @@
  *
  * Usage (PowerShell):
  *   $env:LARK_APP_ID="cli_..."; $env:LARK_APP_SECRET="..."; \
- *     npx tsx scripts/lark-live-smoke.mts
+ *     npx tsx scripts/smoke/lark-live-smoke.mts
  *
  * Optional:
  *   LARK_TEST_CHAT_ID=oc_...   pin the target chat (skips list/create)
@@ -148,7 +148,7 @@ async function uploadFile(args: {
 }
 
 // ── Wire the invoker BEFORE importing any adapter module ────────────────────
-const { setConnectorCommandInvoker } = await import("../lib/connectors/tauri/commands")
+const { setConnectorCommandInvoker } = await import("../../lib/connectors/tauri/commands")
 setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
   switch (name) {
     case "connectors_http_request":
@@ -175,19 +175,19 @@ setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknow
 })
 
 // ── Import the real adapter stack (after invoker swap) ──────────────────────
-const { createLarkAdapter } = await import("../lib/connectors/adapters/lark/index")
-const { probeBotIdentity } = await import("../lib/connectors/adapters/lark/whoami")
-const { larkTenantRequest } = await import("../lib/connectors/adapters/lark/http")
-const { getTenantToken } = await import("../lib/connectors/adapters/lark/auth")
-const { getDb } = await import("../lib/db/schema")
+const { createLarkAdapter } = await import("../../lib/connectors/adapters/lark/index")
+const { probeBotIdentity } = await import("../../lib/connectors/adapters/lark/whoami")
+const { larkTenantRequest } = await import("../../lib/connectors/adapters/lark/http")
+const { getTenantToken } = await import("../../lib/connectors/adapters/lark/auth")
+const { getDb } = await import("../../lib/db/schema")
 // The contract module itself, not the `types/connectors/event` shim: tsx loads
 // the shim as CommonJS, and its `export *` re-exports are invisible to this ESM
 // file's named lookup (see scripts/build/dev-cli.mjs).
-const eventMod = await import("../packages/plugin-contract/src/types/connectors/event")
+const eventMod = await import("../../packages/plugin-contract/src/types/connectors/event")
 type AnyEvent =
-  import("../packages/plugin-contract/src/types/connectors/event").NormalizedInboundEvent
+  import("../../packages/plugin-contract/src/types/connectors/event").NormalizedInboundEvent
 type OutboundReq =
-  import("../packages/plugin-contract/src/types/connectors/outbound").OutboundRequest
+  import("../../packages/plugin-contract/src/types/connectors/outbound").OutboundRequest
 
 const creds = { appId: APP_ID, appSecret: APP_SECRET }
 
@@ -560,8 +560,8 @@ try {
 // then prove F1 — a balanced reroute to a sibling bot is reported as the
 // sibling's real delivery, not a false failure.
 {
-  const { startOutboundRunner } = await import("../lib/connectors/outbound-runner")
-  const { enqueueOutbound, waitForOutboundTerminal } = await import("../lib/db/outbound-jobs")
+  const { startOutboundRunner } = await import("../../lib/connectors/outbound-runner")
+  const { enqueueOutbound, waitForOutboundTerminal } = await import("../../lib/db/outbound-jobs")
 
   const runnerAbort = new AbortController()
   const adapters = new Map<string, typeof adapter>([[ADAPTER_ID, adapter]])

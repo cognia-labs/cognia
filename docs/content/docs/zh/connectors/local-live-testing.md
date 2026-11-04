@@ -5,7 +5,7 @@ description: "用真实 IM 会话驱动已配置的 Cognia Bot，区分 QQ Offic
 
 # 本地真实平台测试
 
-仓库中的其他连接器测试尚未验证完整的真实收发路径。mock E2E 使用模拟平台；`scripts/lark-live-smoke.mts` 调用真实飞书 API，但只覆盖出站，并以 Node 替代 Tauri。它们均未证明：真实平台推送消息后，消息经过真实传输层（飞书长连接和所有 Webhook 签名均在 Rust 侧）、准入门禁和 PII Gate，再由真实平台返回回复。
+仓库中的其他连接器测试尚未验证完整的真实收发路径。mock E2E 使用模拟平台；`scripts/smoke/lark-live-smoke.mts` 调用真实飞书 API，但只覆盖出站，并以 Node 替代 Tauri。它们均未证明：真实平台推送消息后，消息经过真实传输层（飞书长连接和所有 Webhook 签名均在 Rust 侧）、准入门禁和 PII Gate，再由真实平台返回回复。
 
 这套工具补的就是这个闭环。唯一被替换的是模型：用确定性 Fixture 顶替 Anthropic，断言因此稳定，跑多少次都不花钱。
 
