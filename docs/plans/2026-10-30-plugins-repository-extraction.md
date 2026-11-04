@@ -673,7 +673,7 @@ V26/V28、X14/X16 与 P1d 的其余边界不变：生产静态导出、真实 Ta
 
 **已知问题：**
 
-- `plugins/cognia-documents/src/docx.test.ts` 的 "does not report reconstructed layout…" 在两仓以相同方式失败（多报 `table-formatting`），属于既有失败，未放入排除列表。
+- `plugins/cognia-documents/src/docx.test.ts` 的 "does not report reconstructed layout…" 曾在两仓以相同方式失败（多报 `table-formatting`）：`09633f3fb6` 把 `docx` 从 9.7.2 升到 9.9.0 后，未指定列宽的表格 grid 改为按版心宽度均分（两列各 4513），导入检测仍硬编码 `100`。`22255f01c1` 改为按列数向 writer 取期望 grid，新仓库同步后 Jest 323/323 通过。
 - Host pin 曾再次失效：`d881d6f702`（ADR-0243 2A-0）改动了 `packages/plugin-contract/src/types/plugin/plugin.ts`，`sdkSourceSha256` 由 `b9e7682f…` 变为 `84065ee1…`。Host 自身的 producer 因此拒绝 ABI，`predev` / `prebuild` 无法 stage 插件。已在 `a401011b8b` 的干净检出中重建 Kit `8f9a0e383a0a`（`test-authoring-kit.mjs` 通过：76 个 frontend 包、346 个类型检查文件、19 组 helper suites、Python wheel 导入），Host pin 提交 `f236c394a5`；Kit 发布在 `authoring-kits` 提交 `75111729dc`，新仓库 lock 提交 `c66c0c5`。重新比对后，两仓集合的 1744 个文件与 `toolchain` 完全一致，manifest 只有 `source` 不同。
 
 **规则：** P4 之前不在新仓库修改 `host-sync-paths.txt` 所列文件，插件改动只进 Host 再同步；两仓差异只放在新仓库自己的配置与 `scripts/*.mjs` 中。新仓库提交使用 GitHub 账号身份（`277988694+MaxQian888@users.noreply.github.com`）。
