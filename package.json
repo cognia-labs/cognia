@@ -402,7 +402,6 @@
     "version:sync:check": "node scripts/sync/version-sync.mjs --check",
     "version:sync:test": "node --test scripts/sync/version-sync.test.mjs",
     "// 15 \u2500\u2500\u2500 Live smoke & manual harnesses (need real credentials or a running app) \u2500\u2500\u2500": "",
-    "smoke:acp-live": "node scripts/smoke/acp-live.mjs",
     "smoke:agent": "tsx scripts/smoke/agent.ts",
     "smoke:opencode-v2": "tsx scripts/smoke/opencode-v2-smoke.ts --adapter",
     "smoke:subagent-models": "tsx scripts/smoke/subagent-models.ts",

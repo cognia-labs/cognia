@@ -292,22 +292,21 @@ matching Cognia server setting and host runtime support are both active; ACP v2 
 
 ### Opt-in live agent smoke
 
-`pnpm smoke:acp-live` uses the official TypeScript SDK client against installed agent commands.
-The command skips safely when no target is configured. Supply one or more commands as JSON argv
-arrays so no shell parsing is involved:
+`pnpm smoke:agent` drives installed ACP agents through Cognia's own CLI host, sandbox and ACP
+adapter. Without `--live` it reads no credentials and sends no model request: it checks the version
+probe, the sandboxed connect, the ACP v1 handshake, session creation or an authentication refusal,
+reconnect, and list/load/delete where the agent supports them:
 
 ```bash
-ACP_GEMINI_COMMAND='["gemini", "<ACP args>"]' pnpm smoke:acp-live
-ACP_CODEX_COMMAND='["codex", "<ACP args>"]' pnpm smoke:acp-live
-ACP_CLAUDE_COMMAND='["claude", "<ACP args>"]' pnpm smoke:acp-live
+pnpm smoke:agent --list
+pnpm smoke:agent gemini-cli codex-acp claude-agent-acp
+pnpm smoke:agent --installed
 ```
 
-Use the ACP invocation supported by the locally installed agent version. The smoke initializes,
-creates a confined session, sends a no-tool prompt, records updates and the authoritative stop
-reason, rejects any unexpected permission request, and terminates the child process.
-The child receives only a minimal process environment. If authentication requires environment
-credentials, select them explicitly with the matching `ACP_GEMINI_ENV`, `ACP_CODEX_ENV`, or
-`ACP_CLAUDE_ENV` JSON object; unrelated ambient secrets are never forwarded.
+`--live` adds a real turn on the local login: the agent must echo a unique marker, report a stop
+reason and have every unexpected permission request denied. It spends model tokens. Runtime ids
+come from `protocol/external-agent-runtimes.json`; `--list` shows which ones are installed. The
+smoke needs the sandbox launcher (`pnpm cli:external-host:build`).
 
 ### Manual editor interoperability
 

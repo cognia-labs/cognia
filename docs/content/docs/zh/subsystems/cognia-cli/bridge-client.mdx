@@ -239,15 +239,15 @@ sequenceDiagram
 
 ### 可选的真实 agent smoke
 
-`pnpm smoke:acp-live` 使用官方 TypeScript SDK client 检查本机已安装的 agent command；没有配置目标时会安全跳过。用 JSON argv array 提供一个或多个命令，避免 shell 解析：
+`pnpm smoke:agent` 通过 Cognia 自己的 CLI host、沙箱和 ACP adapter 驱动本机已安装的 ACP agent。不加 `--live` 时不读取任何凭据、不发送模型请求：检查版本探测、沙箱内连接、ACP v1 握手、创建 session 或认证拒绝、重连，以及 agent 支持时的 list/load/delete：
 
 ```bash
-ACP_GEMINI_COMMAND='["gemini", "<ACP args>"]' pnpm smoke:acp-live
-ACP_CODEX_COMMAND='["codex", "<ACP args>"]' pnpm smoke:acp-live
-ACP_CLAUDE_COMMAND='["claude", "<ACP args>"]' pnpm smoke:acp-live
+pnpm smoke:agent --list
+pnpm smoke:agent gemini-cli codex-acp claude-agent-acp
+pnpm smoke:agent --installed
 ```
 
-请填写本机 agent 版本实际支持的 ACP invocation。Smoke 会完成 initialize、创建受限 session、发送禁止使用工具的 prompt、记录 update 与权威 stop reason、拒绝意外 permission request，最后终止子进程。子进程只接收最小化的 process environment。如认证依赖环境变量，请通过对应的 `ACP_GEMINI_ENV`、`ACP_CODEX_ENV` 或 `ACP_CLAUDE_ENV` JSON object 显式选择；不会转发无关的环境密钥。
+`--live` 会在本机登录态上跑一轮真实对话：agent 必须原样回显唯一标记、报告 stop reason，所有意外的 permission request 都会被拒绝。会消耗模型 token。Runtime id 来自 `protocol/external-agent-runtimes.json`，`--list` 会列出哪些已安装。Smoke 需要沙箱 launcher（`pnpm cli:external-host:build`）。
 
 ### 编辑器手工互操作检查
 

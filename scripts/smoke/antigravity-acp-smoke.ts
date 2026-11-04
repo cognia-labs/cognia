@@ -1,8 +1,9 @@
 /** Official Antigravity ACP through Cognia's real process host and OS sandbox.
  * Default: fresh file-only credential storage, no model prompts or real credentials.
  * --live-provider: explicit opt-in, requires GEMINI_API_KEY in this process.
- * A separate script is needed because generic acp-live bypasses Cognia's host,
- * companion validation, sandbox and native permission-mode reconciliation.
+ * Covers companion validation and native permission-mode reconciliation, which
+ * the generic `pnpm smoke:agent` lane does not; it belongs in a vendor module
+ * under scripts/smoke/agents/vendors/ once it can be run again.
  */
 import assert from "node:assert/strict"
 import fs from "node:fs"

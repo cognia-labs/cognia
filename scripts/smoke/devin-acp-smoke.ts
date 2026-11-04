@@ -1,7 +1,8 @@
 /**
  * Opt-in live Devin check through Cognia's ACP adapter and real CLI sandbox.
- * The SDK-only acp-live smoke cannot check Cognia's session state or host I/O;
- * external-cognia-parity-smoke instead checks the separate MCP bridge.
+ * Covers Devin's live session state and host I/O beyond the generic
+ * `pnpm smoke:agent` lane; external-cognia-parity-smoke instead checks the
+ * separate MCP bridge.
  * This spends real SWE-2 tokens and requires an installed, logged-in Devin CLI.
  */
 import fs from "node:fs"
