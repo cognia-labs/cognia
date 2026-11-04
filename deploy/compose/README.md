@@ -142,6 +142,14 @@ Rules that follow from how the pieces are scoped:
   that is not the default one.
 - **`COGNIA_BIND_ADDRESS=127.0.0.1`** keeps a secondary instance off the
   public interface when your own proxy fronts it.
+- **`COGNIA_TRUSTED_PROXIES`** (default `caddy`) names the reverse proxies
+  whose `X-Forwarded-For` the server believes: comma-separated addresses,
+  CIDRs or hostnames (re-resolved every 30 s). From those peers only, the
+  right-most entry is the client, so each browser gets its own pre-auth
+  rate-limit bucket instead of all sharing Caddy's. Behind your own proxy,
+  set it to that proxy's address. Name the proxy itself, never the whole
+  Docker network: direct clients of the published port reach the server from
+  that network too.
 - **Shared Docker daemon (T2).** Every runner container carries
   `cognia.deployment=<COGNIA_INSTANCE>`. The boot-time orphan sweep removes
   only containers with the same value, so instance A restarting never

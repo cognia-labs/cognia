@@ -566,6 +566,9 @@ fn build_router_for_mode(
     mode: super::deployment::DeploymentMode,
     origin_policy: super::web_origin::WebOriginPolicy,
 ) -> Router {
+    // Before the first request: a proxied request names its client only once
+    // the proxy's hostname has resolved.
+    cognia_companion_security::request_origin::init_trusted_proxies();
     // Unmetered public routes — no rate limit, no JWT. Used for service
     // discovery only; do not add anything sensitive here.
     let unmetered_public_routes = Router::new()

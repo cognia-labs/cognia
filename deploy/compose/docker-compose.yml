@@ -198,6 +198,11 @@ services:
       # removes containers with the same value, so two instances sharing one
       # Docker daemon never reap each other's live agents.
       COGNIA_DEPLOYMENT_ID: ${COGNIA_INSTANCE:-cognia}
+      # The proxies whose X-Forwarded-For names the client (comma-separated
+      # addresses, CIDRs or hostnames). Without it every browser behind Caddy
+      # shares Caddy's pre-auth rate-limit bucket. Name only the proxy itself:
+      # the published 27890 port is reachable from the same network.
+      COGNIA_TRUSTED_PROXIES: ${COGNIA_TRUSTED_PROXIES:-caddy}
       # Provider creds for the sidecar chat turn (optional — smoke SKIPs the chat step without them).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Admit the smoke's stub ACP agent through SpawnPolicy (R11). Leave unset in production.
