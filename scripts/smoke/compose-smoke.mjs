@@ -866,24 +866,14 @@ async function spawnPolicyDenial(token) {
 }
 
 async function webhookIngressShape() {
-  // Webhook ingress shares the per-source-IP pre-auth bucket with pairing
-  // (middleware::pre_auth_rate_limit), which this run has just drained from
-  // the same address. Wait out the advertised interval instead of assuming a
-  // fresh bucket.
-  let res
-  for (let attempt = 0; attempt < 4; attempt++) {
-    res = await fetch(`${SERVER_URL}/connectors/webhook/telegram/ghost`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    })
-    if (res.status !== 429) break
-    const problem = await res.json().catch(() => null)
-    const seconds = Number(
-      problem?.details?.retryAfterSeconds ?? res.headers.get("retry-after") ?? 3
-    )
-    await delay(Math.max(1, seconds) * 1000)
-  }
+  // Webhook deliveries are metered on their own ingress bucket
+  // (middleware::connector_ingress_rate_limit), so the pairing this run just
+  // did from the same address must not have spent it: no 429 here.
+  const res = await fetch(`${SERVER_URL}/connectors/webhook/telegram/ghost`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  })
   check(res.status === 404, `unregistered webhook adapter → 404 (got ${res.status})`)
   const body = await res.json().catch(() => null)
   check(body?.error === "adapter not registered", "webhook rejection shape is deterministic")

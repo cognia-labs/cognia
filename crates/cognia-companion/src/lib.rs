@@ -362,6 +362,28 @@ pub fn workflow_app_rate_limiter() -> Arc<rate_limit::RateLimiter> {
     Arc::clone(&WORKFLOW_APP_RATE_LIMITER)
 }
 
+/// Per-source-IP limiter for machine and polling ingress whose handler
+/// authenticates it: platform webhook deliveries (signature + replay guard
+/// per adapter) and polls of an exchange a bearer session already started.
+///
+/// A platform pushes every event of every chat from a few egress addresses,
+/// so the authentication bucket's 20 per minute would refuse a busy bot's
+/// events, and some platforms disable an endpoint that keeps failing. This
+/// bucket only bounds a flood from one source.
+///
+/// Bucket: 300 burst, refill 30 req/s (1,800 per minute).
+static INGRESS_RATE_LIMITER: once_cell::sync::Lazy<Arc<rate_limit::RateLimiter>> =
+    once_cell::sync::Lazy::new(|| {
+        rate_limit::RateLimiter::new(rate_limit::RateLimitConfig {
+            capacity: 300.0,
+            refill_per_sec: 30.0,
+        })
+    });
+
+pub fn ingress_rate_limiter() -> Arc<rate_limit::RateLimiter> {
+    Arc::clone(&INGRESS_RATE_LIMITER)
+}
+
 /// Process-global OIDC authenticator (ADR-0059 cloud/headless Logto mode).
 ///
 /// Built once from the environment: `None` unless BOTH `COGNIA_LOGTO_ISSUER`

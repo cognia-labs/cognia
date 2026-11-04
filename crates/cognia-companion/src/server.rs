@@ -971,7 +971,8 @@ fn build_router_for_mode(
     // Deliberately OUTSIDE the JWT middleware: webhook auth is the platform
     // HMAC/signature + replay guard inside `connectors::axum_app`. It still
     // sits inside the pre-auth per-source-IP rate limit and (below) the body
-    // cap. Events publish onto the EventBus → `/ws/events` → the brain's
+    // cap; webhook deliveries are metered on the ingress bucket, the rest on
+    // the authentication one. Events publish onto the EventBus → `/ws/events` → the brain's
     // connector runtime, retiring the cloudflared-tunnel requirement for
     // cloud installs. Nested after `with_state` because the connectors
     // router carries its own (already-resolved) `ConnectorsState`.
@@ -985,7 +986,7 @@ fn build_router_for_mode(
             ));
         let connectors_router =
             cognia_connectors::axum_app::build_router(services.connectors(), emitter)
-                .layer(from_fn(middleware::pre_auth_rate_limit));
+                .layer(from_fn(middleware::connector_ingress_rate_limit));
         router = router.nest("/connectors", connectors_router);
 
         // Lark dual-entry surface (plan 2026-07-24 P3): web SSO, entry-token
@@ -994,7 +995,7 @@ fn build_router_for_mode(
         // HS256 over the companion secret, and the app secret never leaves
         // the Rust process (code exchange happens in `lark_entry.rs`).
         let lark_router = crate::lark_entry::router(lark_entry_state)
-            .layer(from_fn(middleware::pre_auth_rate_limit));
+            .layer(from_fn(middleware::lark_entry_rate_limit));
         router = router.nest("/integrations/lark", lark_router);
 
         let mcp_oauth_router = services

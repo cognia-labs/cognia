@@ -584,6 +584,41 @@ pub async fn workflow_app_rate_limit(
     .await
 }
 
+/// The connectors nest: platform webhook deliveries go to the ingress bucket
+/// ([`super::ingress_rate_limiter`]); its OAuth callbacks, avatar staging and
+/// OneBot sockets stay on the authentication bucket. Paths are the nest's own
+/// (`/webhook/...`), as axum strips the `/connectors` prefix.
+pub async fn connector_ingress_rate_limit(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let webhook = request.uri().path().starts_with("/webhook/");
+    ingress_or_pre_auth(webhook, addr, request, next).await
+}
+
+/// The Lark entry nest: polls of a started intent (`/intent/{id}`, bearer
+/// authenticated, once a second for up to 30 s) go to the ingress bucket;
+/// sign-in, callbacks and entry resolution stay on the authentication bucket.
+pub async fn lark_entry_rate_limit(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let poll = request.uri().path().starts_with("/intent/");
+    ingress_or_pre_auth(poll, addr, request, next).await
+}
+
+async fn ingress_or_pre_auth(ingress: bool, addr: SocketAddr, request: Request, next: Next) -> Response {
+    if ingress {
+        source_rate_limit(&super::ingress_rate_limiter(), "too many requests from this source, slow down", addr, request, next)
+            .await
+    } else {
+        source_rate_limit(&super::pre_auth_rate_limiter(), "too many authentication attempts, slow down", addr, request, next)
+            .await
+    }
+}
+
 /// Charge one token from `limiter` to the request's source address.
 async fn source_rate_limit(
     limiter: &super::rate_limit::RateLimiter,
@@ -1200,6 +1235,62 @@ mod tests {
         let refused = refused.expect("the app bucket never refused");
         assert!(refused.headers().contains_key("retry-after"));
         assert_eq!(body_json(refused).await["code"], "rate_limited");
+    }
+
+    #[tokio::test]
+    async fn platform_webhooks_and_intent_polls_use_the_ingress_bucket_inside_their_nests() {
+        async fn ok_handler() -> impl IntoResponse {
+            Json(json!({ "ok": true }))
+        }
+        let router = Router::new()
+            .nest(
+                "/connectors",
+                Router::new()
+                    .route("/webhook/{kind}/{id}", axum::routing::post(ok_handler))
+                    .route("/oauth/lark/callback", get(ok_handler))
+                    .layer(from_fn(super::connector_ingress_rate_limit)),
+            )
+            .nest(
+                "/integrations/lark",
+                Router::new()
+                    .route("/intent/{id}", get(ok_handler))
+                    .route("/web/login", get(ok_handler))
+                    .layer(from_fn(super::lark_entry_rate_limit)),
+            );
+        let call = |method: &str, uri: &str, ip: &str| {
+            let mut request = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
+            let addr: SocketAddr = format!("{ip}:443").parse().unwrap();
+            request.extensions_mut().insert(ConnectInfo(addr));
+            request
+        };
+        // A busy bot: one platform address pushing far past the sign-in burst.
+        for index in 0..100 {
+            let response = router.clone().oneshot(call("POST", "/connectors/webhook/slack/a1", "203.0.113.70")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "webhook {index}");
+        }
+        // A Lark visitor polling its intent once a second for the full 30 s.
+        for index in 0..30 {
+            let response = router.clone().oneshot(call("GET", "/integrations/lark/intent/r1", "198.51.100.71")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "poll {index}");
+        }
+        // Sign-in routes in the same nests keep the strict bucket.
+        for (uri, ip) in [("/connectors/oauth/lark/callback", "198.51.100.72"), ("/integrations/lark/web/login", "198.51.100.73")] {
+            for index in 0..6 {
+                let response = router.clone().oneshot(call("GET", uri, ip)).await.unwrap();
+                let expected = if index < 5 { StatusCode::OK } else { StatusCode::TOO_MANY_REQUESTS };
+                assert_eq!(response.status(), expected, "{uri} request {index}");
+            }
+        }
+        // The ingress bucket is bounded too.
+        let mut refused = false;
+        for _ in 0..400 {
+            let response = router.clone().oneshot(call("POST", "/connectors/webhook/slack/a1", "203.0.113.74")).await.unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                refused = true;
+                break;
+            }
+        }
+        assert!(refused, "the ingress bucket never refused");
     }
 
     #[tokio::test]
