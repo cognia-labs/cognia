@@ -31,6 +31,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 
 import { Button } from "@/components/ui/button"
+import { NavigationIcon } from "@/components/shell/navigation-icon"
 import { DEFAULT_GLANCE_MOBILE_SHORTCUTS } from "@/lib/glance/mobile-layout"
 import {
   getMobileQuickActionCatalog,
@@ -125,7 +126,7 @@ export function MobileShortcutsEditor({ shortcuts, onChange }: MobileShortcutsEd
                 data-testid={`mobile-shortcuts-available-${item.id}`}
               >
                 <span aria-hidden className="size-10 shrink-0" />
-                <item.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                <NavigationIcon id={item.id} defaultArtwork={item.spotIcon} fallback={item.Icon} className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-[15px] text-muted-foreground">
                   {tActions(item.i18nKey)}
                 </span>
@@ -214,7 +215,7 @@ function ActiveRow({
       >
         <GripVerticalIcon aria-hidden className="size-4" />
       </button>
-      <item.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+      <NavigationIcon id={item.id} defaultArtwork={item.spotIcon} fallback={item.Icon} className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-[15px]">{label}</span>
       <Button
         type="button"

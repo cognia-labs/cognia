@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import type { GlancePluginModuleData } from "@/lib/glance/plugin-data"
@@ -15,6 +15,7 @@ import {
   type GlanceSnapshotV1,
 } from "@/lib/glance/snapshot"
 import type { GlanceModuleSize } from "@/types/glance/layout"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { GlanceProvider, type GlanceContextValue } from "../glance-context"
 import { GLANCE_PLUGIN_STANDARD_ROWS, GlancePluginModule } from "./glance-plugin-module"
@@ -109,6 +110,22 @@ function setup({
 }
 
 describe("GlancePluginModule", () => {
+  it.each(["compact", "standard"] as const)(
+    "switches its %s module glyph with the saved style",
+    (size) => {
+      useSettingsStore.setState({ settings: null })
+      const { container } = setup({ size })
+      expect(container.querySelector("[data-navigation-artwork] img")).toHaveAttribute(
+        "src",
+        "/icons/cognia-mobile-spots/webp/plugins.webp"
+      )
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+      expect(container.querySelector("img")).toBeNull()
+      expect(container.querySelector("svg.lucide-git-branch")).not.toBeNull()
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+      expect(container.querySelector("[data-navigation-artwork] img")).not.toBeNull()
+    }
+  )
   it("renders nothing for a module that is not in the catalogue (its plugin is off)", () => {
     const { container } = setup({ catalog: [] })
     expect(container).toBeEmptyDOMElement()

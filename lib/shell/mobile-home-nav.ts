@@ -9,7 +9,6 @@
  * the sidebar customizer (`@/lib/shell/sidebar-nav`).
  */
 
-import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import {
   BotIcon,
   CompassIcon,
@@ -21,6 +20,7 @@ import {
   SmartphoneIcon,
   ServerCogIcon,
   UserRoundIcon,
+  UsersIcon,
   WorkflowIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -40,7 +40,7 @@ export const MOBILE_QUICK_ACTION_ICONS: Record<string, LucideIcon> = {
   discover: CompassIcon,
   inbox: InboxIcon,
   twin: BotIcon,
-  squads: AgentTeamIcon,
+  squads: UsersIcon,
   // The same icon the Studio's own page header carries.
   templates: FileArchiveIcon,
   fleet: LayersIcon,
@@ -49,7 +49,7 @@ export const MOBILE_QUICK_ACTION_ICONS: Record<string, LucideIcon> = {
   me: UserRoundIcon,
 }
 
-/** id → spacious-card illustration. Dense editor rows keep the Lucide map above. */
+/** id → illustration used by shortcut tiles and editor rows in Anime mode. */
 export const MOBILE_QUICK_ACTION_SPOT_ICONS: Record<string, MobileSpotIconName> = {
   newChat: "chat",
   search: "discover",

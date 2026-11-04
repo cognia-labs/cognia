@@ -3,6 +3,7 @@
  */
 import { render, screen, fireEvent, act } from "@testing-library/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -162,7 +163,7 @@ describe("WorkspaceSwitcher", () => {
     expect(screen.getByTestId("workspace-switcher")).toHaveAttribute("aria-label", "none")
   })
 
-  it("shows the active workspace initial and 'active' label", () => {
+  it("themes the workspace and restores its initial in Ordinary", () => {
     act(() => {
       useProjectStore.setState({
         projects: [makeProject("p1", { name: "Backend", rootDir: "/srv" })],
@@ -172,7 +173,14 @@ describe("WorkspaceSwitcher", () => {
     renderSwitcher()
     const trigger = screen.getByTestId("workspace-switcher")
     expect(trigger).toHaveAttribute("aria-label", "active")
+    expect(trigger.querySelector("img")).toHaveAttribute(
+      "src",
+      "/icons/cognia-mobile-spots/webp/workspace.webp"
+    )
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
     expect(trigger).toHaveTextContent("B")
+    expect(trigger.querySelector("img")).toBeNull()
+    act(() => useSettingsStore.setState({ settings: null }))
   })
 
   it("wide variant spells the active name beside a folder and still switches", () => {

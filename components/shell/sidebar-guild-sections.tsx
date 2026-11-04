@@ -43,7 +43,6 @@ import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { loggers } from "@cognia/logging"
 import type { Team } from "@cognia/agent-config-types"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -62,7 +61,7 @@ import { Button } from "@/components/ui/button"
 import { teamSettingsHref } from "@/lib/settings/deep-link"
 import { cn } from "@/lib/utils"
 import { SidebarRow } from "./sidebar-nav-section"
-import { NavigationIcon } from "./navigation-icon"
+import { NavigationIcon, TeamNavigationIcon } from "./navigation-icon"
 import { CountPill } from "@/components/shared/count-pill"
 import { useShellNav } from "./use-shell-nav"
 
@@ -461,7 +460,7 @@ export function SidebarGuildSectionRows({
                   onClick={isDm ? switchToDm : () => switchToTeam(row.key)}
                   icon={
                     team ? (
-                      <AvatarBadge subject={team} size={16} textClassName="text-[9px]" />
+                      <TeamNavigationIcon team={team} size={16} textClassName="text-[9px]" />
                     ) : (
                       <NavigationIcon id="chat" fallback={MessagesSquareIcon} />
                     )

@@ -1,4 +1,4 @@
-import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
+import { UsersIcon } from "lucide-react"
 import {
   getMobileQuickActionCatalog,
   resolveMobileShortcuts,
@@ -86,6 +86,9 @@ describe("the retired agent-teams tile", () => {
   })
 })
 
-it("uses the shared anime artwork for Squads", () => {
-  expect(MOBILE_QUICK_ACTION_ICONS.squads).toBe(AgentTeamIcon)
+it("keeps the Squads fallback ordinary and supplies its separate anime artwork", () => {
+  expect(MOBILE_QUICK_ACTION_ICONS.squads).toBe(UsersIcon)
+  expect(getMobileQuickActionCatalog().find((item) => item.id === "squads")?.spotIcon).toBe(
+    "agent-teams"
+  )
 })

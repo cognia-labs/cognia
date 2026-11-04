@@ -15,6 +15,7 @@ import {
 } from "@/components/workspace/workspace-picker-list"
 import { useOverlaySide } from "./rail-overlay-side"
 import { useSidebarRowRoving } from "./sidebar-row-roving"
+import { NavigationIcon } from "./navigation-icon"
 
 /**
  * Rail entry point for the active workspace. The trigger shows the active
@@ -118,7 +119,12 @@ export function WorkspaceSwitcher({ variant = "rail", className }: WorkspaceSwit
                 aria-hidden
                 className="flex size-5 shrink-0 items-center justify-center rounded bg-foreground/5 text-muted-foreground group-data-[state=open]:text-foreground"
               >
-                <FolderIcon className="size-3.5" />
+                <NavigationIcon
+                  id="workspace"
+                  fallback={FolderIcon}
+                  size={20}
+                  className="size-3.5"
+                />
               </span>
               <span className="min-w-0 truncate text-xs font-medium">
                 {active?.name ?? t("none")}
@@ -147,11 +153,16 @@ export function WorkspaceSwitcher({ variant = "rail", className }: WorkspaceSwit
                     className
                   )}
                 >
-                  {initial ? (
-                    <span className="text-sm font-semibold">{initial}</span>
-                  ) : (
-                    <FolderIcon className="size-5" />
-                  )}
+                  <NavigationIcon
+                    id="workspace"
+                    fallback={
+                      initial ? (
+                        <span className="text-sm font-semibold">{initial}</span>
+                      ) : (
+                        <FolderIcon className="size-5" />
+                      )
+                    }
+                  />
                 </Button>
               </PopoverTrigger>
             </TooltipTrigger>

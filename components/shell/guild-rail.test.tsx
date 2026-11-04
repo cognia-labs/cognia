@@ -208,6 +208,7 @@ test("uses anime navigation by default and restores every ordinary icon live", a
     "guild-dm",
     "guild-canvas",
     "guild-open-settings",
+    "guild-more",
     ...DEFAULT_SIDEBAR_LAYOUT.pinned.map((id) => `guild-feature-${id}`),
   ].map((id) => screen.getByTestId(id))
   for (const button of buttons) expect(button.querySelector("img")).not.toBeNull()
@@ -230,6 +231,21 @@ test("uses anime navigation by default and restores every ordinary icon live", a
   )
   expect(entry.querySelector("img")).toHaveAttribute("src", expect.stringContaining("characters."))
   for (const button of buttons) expect(button.querySelector("img")).not.toBeNull()
+})
+
+test("themes team avatars in the collapsed rail and restores the saved emoji", () => {
+  teamsRef.current = [
+    { id: "team_builtin_brainstorm", name: "Brainstorm", avatarEmoji: "🧠" } as Team,
+  ]
+  render(withTooltipProvider(<GuildRail onCreateTeam={jest.fn()} onOpenSettings={jest.fn()} />))
+  const button = screen.getByRole("button", { name: "Brainstorm" })
+  expect(button.querySelector("img")).toHaveAttribute(
+    "src",
+    "/icons/cognia-mobile-spots/png/skills.png"
+  )
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+  expect(button.querySelector("img")).toBeNull()
+  expect(button).toHaveTextContent("🧠")
 })
 
 test("restores the collapsed home sidebar from directly below Settings", () => {

@@ -3468,6 +3468,21 @@ describe("title-bar projection", () => {
     )
   }
 
+  it("renders New chat in the saved navigation icon style", () => {
+    teamOrderSettingsStore.setState({ settings: null })
+    renderProjected()
+    const button = screen.getByRole("button", { name: "newChat" })
+    expect(button.querySelector("img")).toHaveAttribute(
+      "src",
+      "/icons/cognia-mobile-spots/png/chat.png"
+    )
+    act(() =>
+      teamOrderSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never })
+    )
+    expect(button.querySelector("img")).toBeNull()
+    expect(button.querySelector("svg")).toHaveClass("lucide-messages-square")
+  })
+
   it("keeps the sidebar unprojected and unmerged on the right edge", () => {
     sidebarSide = "right"
     renderProjected()
@@ -4396,6 +4411,21 @@ describe("scope tree (merged rail)", () => {
       </TitleBarOutletsProvider>
     )
   }
+
+  it("uses anime artwork for team scope headers and restores their emoji in Ordinary", () => {
+    teamOrderSettingsStore.setState({ settings: null })
+    renderMerged([], {}, [{ id: "team_builtin_brainstorm", name: "Brainstorm", avatarEmoji: "🧠" }])
+    const button = screen.getByRole("button", { name: "Brainstorm" })
+    expect(button.querySelector("img")).toHaveAttribute(
+      "src",
+      "/icons/cognia-mobile-spots/png/skills.png"
+    )
+    act(() =>
+      teamOrderSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never })
+    )
+    expect(button.querySelector("img")).toBeNull()
+    expect(button).toHaveTextContent("🧠")
+  })
 
   it("nests each squad's sessions under its own collapsible header", async () => {
     const user = userEvent.setup()

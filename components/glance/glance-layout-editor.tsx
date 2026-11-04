@@ -19,7 +19,7 @@
 
 import { createElement, useCallback, useId, useMemo, type CSSProperties } from "react"
 import { useTranslations } from "next-intl"
-import { EyeOffIcon, GripVerticalIcon, HouseIcon, PlusIcon } from "lucide-react"
+import { EyeOffIcon, GripVerticalIcon, HouseIcon, PlusIcon, PuzzleIcon } from "lucide-react"
 import {
   DndContext,
   KeyboardSensor,
@@ -38,6 +38,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 
 import { useReorderAnnouncements } from "@/components/shell/nav-sortable"
+import { NavigationIcon } from "@/components/shell/navigation-icon"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { resolveIcon } from "@/lib/a2ui/resolve-icon"
 import {
@@ -102,14 +103,19 @@ interface EntryView {
  * A module's icon. `createElement` rather than a capitalized local: the icon
  * is looked up from data, not a component this file defines per render.
  */
-function moduleIcon(name: string | null) {
-  const icon = name ? resolveIcon(name) : resolveIcon("puzzle")
-  return icon
-    ? createElement(icon, {
+function moduleIcon(id: GlanceEntryId, name: string | null, size: number) {
+  const icon = (name ? resolveIcon(name) : null) ?? PuzzleIcon
+  return (
+    <NavigationIcon
+      id={`glance:${id}`}
+      defaultArtwork={isPluginEntryId(id) ? "plugins" : undefined}
+      size={size}
+      fallback={createElement(icon, {
         "aria-hidden": true,
         className: "size-3.5 shrink-0 text-muted-foreground",
-      })
-    : null
+      })}
+    />
+  )
 }
 
 interface RowProps {
@@ -168,7 +174,7 @@ function SortableRow({ entry, view, label, density, pinned, onPin, onResize, onH
       >
         <GripVerticalIcon aria-hidden className={touch ? "size-4" : "size-3.5"} />
       </button>
-      {moduleIcon(view.icon)}
+      {moduleIcon(entry.id, view.icon, compact ? 20 : 28)}
       <span
         className={cn(
           "min-w-0 flex-1 truncate",
@@ -409,7 +415,7 @@ export function GlanceLayoutEditor<E extends GlanceLayoutEntry = GlanceLayoutEnt
                   )}
                 >
                   <span aria-hidden className={cn("shrink-0", touch ? "size-10" : "size-6")} />
-                  {moduleIcon(view.icon)}
+                  {moduleIcon(entry.id, view.icon, compact ? 20 : 28)}
                   <span
                     className={cn(
                       "min-w-0 flex-1 truncate text-muted-foreground",

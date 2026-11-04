@@ -119,7 +119,7 @@ import {
   ALL_WORKSPACES_SCOPE,
   type GuildUnreadScope,
 } from "@/hooks/shell/use-guild-unread"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
+import { NavigationIcon, TeamNavigationIcon } from "@/components/shell/navigation-icon"
 import { SidebarFooter } from "@/components/shell/sidebar-footer"
 import { WorkspaceContextBar } from "@/components/workspace/workspace-context-bar"
 import { requestCommandPalette } from "@/lib/shell/command-palette-request"
@@ -3218,7 +3218,7 @@ function SidebarNewConversationButton({ onNewDirect }: { onNewDirect: () => void
         onClick={onNewDirect}
         title={shortcut ? tRail("shortcutHint", { label, shortcut }) : label}
         aria-keyshortcuts={desktop ? toAriaKeyShortcuts(NEW_CHAT_ACCELERATOR) : undefined}
-        icon={<MessagesSquareIcon />}
+        icon={<NavigationIcon id="chat" fallback={MessagesSquareIcon} />}
         label={label}
         trailing={
           shortcut ? (
@@ -4865,7 +4865,7 @@ function ScopeTreeGroupSection({
           <ContextMenuTrigger asChild>
             <div
               className={cn(
-                "group/scope-head flex h-7 items-center gap-0.5 px-1 pb-0.5",
+                "group/scope-head flex h-7 items-center gap-0.5 px-1 pb-0.5 has-[[data-navigation-artwork]]:h-9",
                 STICKY_SECTION_HEADER,
                 "cursor-grab active:cursor-grabbing"
               )}
@@ -4876,12 +4876,12 @@ function ScopeTreeGroupSection({
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="min-w-0 flex-1 justify-start gap-1.5 px-1"
+                  className="min-w-0 flex-1 justify-start gap-1.5 px-1 has-[[data-navigation-artwork]]:h-9"
                   aria-label={muted ? railT("teamMuted", { name }) : name}
                   data-testid={`sidebar-scope-toggle-${scopeKey}`}
                 >
                   {team ? (
-                    <AvatarBadge subject={team} size={14} textClassName="text-[8px]" />
+                    <TeamNavigationIcon team={team} size={14} textClassName="text-[8px]" />
                   ) : (
                     <UsersIcon className="size-3.5 shrink-0 opacity-70" aria-hidden />
                   )}

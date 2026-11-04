@@ -17,6 +17,7 @@ import { useTranslations } from "next-intl"
 import { GaugeIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { NavigationIcon } from "@/components/shell/navigation-icon"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { useFleetSnapshot } from "@/hooks/fleet/use-fleet-snapshot"
 import { fleetStatusSummary } from "@/lib/fleet/format"
@@ -72,7 +73,7 @@ export function MobileGlanceTrigger({
         onSelect={() => setTimeout(() => setDrawerOpen(true), 0)}
         data-testid="mobile-action-glance"
       >
-        <GaugeIcon className="size-4" />
+        <NavigationIcon id="glance:quota" fallback={GaugeIcon} />
         <span>{t("title")}</span>
         <AttentionDot attention={attention} className="ms-auto" />
       </DropdownMenuItem>
@@ -89,7 +90,7 @@ export function MobileGlanceTrigger({
       onClick={() => setDrawerOpen(true)}
       data-testid="mobile-glance-trigger"
     >
-      <GaugeIcon className="size-5" />
+      <NavigationIcon id="glance:quota" fallback={GaugeIcon} className="size-5" />
       <AttentionDot attention={attention} className="absolute right-1 top-1" />
     </Button>
   )

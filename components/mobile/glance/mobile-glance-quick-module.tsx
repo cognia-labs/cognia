@@ -24,8 +24,10 @@ import {
   GlanceLinkButton,
   GlanceSection,
 } from "@/components/glance/glance-primitives"
-import { MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
-import { useIllustratedNavigationIcons } from "@/components/shell/navigation-icon"
+import {
+  NavigationIcon,
+  useIllustratedNavigationIcons,
+} from "@/components/shell/navigation-icon"
 import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { getMobileQuickActionCatalog, type MobileQuickActionItem } from "@/lib/shell/mobile-home-nav"
 import { MOBILE_SPRING, STAGGER_CHILD, STAGGER_CONTAINER } from "@/lib/ui/motion"
@@ -88,7 +90,7 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
                   onClick={() => dispatch(item)}
                   className="grid size-11 shrink-0 place-items-center rounded-lg text-foreground transition-colors active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
-                  <item.Icon aria-hidden className="size-5" />
+                  <NavigationIcon id={item.id} defaultArtwork={item.spotIcon} fallback={item.Icon} className="size-5" />
                 </button>
               )
             })}
@@ -149,11 +151,13 @@ export function MobileGlanceQuickModule({ size }: { size: GlanceModuleSize }) {
                     "size-12 text-foreground/85 group-hover:text-foreground group-active:bg-foreground/[0.07] group-active:text-foreground"
               )}
             >
-              {illustrated ? (
-                <MobileSpotIcon name={item.spotIcon} size={44} />
-              ) : (
-                <item.Icon aria-hidden className="size-6 stroke-[1.5]" />
-              )}
+              <NavigationIcon
+                id={item.id}
+                defaultArtwork={item.spotIcon}
+                fallback={item.Icon}
+                size={44}
+                className={illustrated ? "size-7" : "size-6 stroke-[1.5]"}
+              />
             </span>
             <span className="w-full truncate text-[11px] leading-tight text-muted-foreground group-active:text-foreground">
               {tActions(item.i18nKey)}

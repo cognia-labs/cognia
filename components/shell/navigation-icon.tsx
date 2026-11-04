@@ -1,8 +1,10 @@
 "use client"
 
-import type { ComponentType } from "react"
+import { isValidElement, type ComponentType, type ReactElement } from "react"
 
+import { AvatarBadge } from "@/components/desktop/avatar-badge"
 import { MobileSpotIcon, type MobileSpotIconName } from "@/components/mobile/mobile-spot-icon"
+import type { AvatarSubject } from "@/lib/ui/avatar"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import iconManifest from "@/public/icons/cognia-mobile-spots/icon-manifest.json"
 
@@ -11,6 +13,20 @@ const NAVIGATION_ARTWORK: Partial<Record<string, MobileSpotIconName>> = {
   chat: "chat",
   canvas: "canvas",
   settings: "preferences",
+  more: "sidebar",
+  "glance:fleet": "fleet",
+  "glance:quick": "shortcuts",
+  "glance:usage": "usage-cost",
+  "glance:activity": "performance",
+  "glance:recents": "command-history",
+  "glance:quota": "subscription",
+  "glance:agenda": "scheduler",
+  "glance:pet": "pet",
+  "cognia-config-governance:config-governance": "security",
+  team_builtin_brainstorm: "skills",
+  team_builtin_code_review_pair: "source-control",
+  team_builtin_doc_polishers: "instructions",
+  team_builtin_research_squad: "discover",
 }
 
 /**
@@ -26,24 +42,47 @@ export function useIllustratedNavigationIcons(): boolean {
 /** Keeps the rail, expanded rows and overflow menu on the same saved icon style. */
 export function NavigationIcon({
   id,
-  fallback: Fallback,
+  fallback,
+  defaultArtwork,
+  size = 28,
   className = "size-4",
 }: {
   id: string
-  fallback: ComponentType<{ className?: string }>
+  fallback: ComponentType<{ className?: string }> | ReactElement
+  /** Artwork for dynamic plugin/team entries absent from the built-in catalog. */
+  defaultArtwork?: MobileSpotIconName
+  size?: number
   className?: string
 }) {
   const anime = useIllustratedNavigationIcons()
-  const artwork = anime ? NAVIGATION_ARTWORK[id] : undefined
-  return artwork ? (
-    <span
-      data-navigation-artwork={id}
-      aria-hidden="true"
-      className="pointer-events-none relative flex size-7 shrink-0 items-center justify-center"
-    >
-      <MobileSpotIcon name={artwork} size={28} className="size-7 shrink-0" />
-    </span>
-  ) : (
-    <Fallback className={className} />
-  )
+  const artwork = anime ? (NAVIGATION_ARTWORK[id] ?? defaultArtwork) : undefined
+  if (artwork)
+    return (
+      <span
+        data-navigation-artwork={id}
+        aria-hidden="true"
+        className="pointer-events-none relative flex shrink-0 items-center justify-center"
+        style={{ width: size, height: size }}
+      >
+        <MobileSpotIcon name={artwork} size={size} className="size-full shrink-0" />
+      </span>
+    )
+  if (isValidElement(fallback)) return fallback
+  const Fallback = fallback
+  return <Fallback className={className} />
+}
+
+/** Team scopes use the same artwork in expanded rows and the collapsed rail. */
+export function TeamNavigationIcon({
+  team,
+  size = 16,
+  textClassName,
+}: {
+  team: AvatarSubject & { id: string }
+  size?: number
+  textClassName?: string
+}) {
+  const avatar = <AvatarBadge subject={team} size={size} textClassName={textClassName} />
+  if (team.avatarImageUrl) return avatar
+  return <NavigationIcon id={team.id} defaultArtwork="teams" fallback={avatar} />
 }

@@ -19,6 +19,7 @@ import {
 import { WorkspaceContextBar } from "@/components/workspace/workspace-context-bar"
 import { useProjectStore } from "@/stores/project/project-store"
 import { cn } from "@/lib/utils"
+import { NavigationIcon } from "@/components/shell/navigation-icon"
 
 /**
  * Active workspace in the mobile shell header, and the way to change it.
@@ -98,7 +99,9 @@ export function MobileWorkspaceChip({
               className
             )}
           >
-            <FolderIcon
+            <NavigationIcon
+              id="workspace"
+              fallback={FolderIcon}
               className={cn("shrink-0", title ? "size-4 text-muted-foreground" : "size-5")}
             />
             {/* The icon variant drops the name below 26rem, the same tier the

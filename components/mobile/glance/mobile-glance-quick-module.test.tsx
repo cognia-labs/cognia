@@ -89,6 +89,15 @@ beforeEach(() => {
 })
 
 describe("MobileGlanceQuickModule", () => {
+  it.each(["compact", "standard"] as const)("honors the saved icon style at %s size", (size) => {
+    const { container } = setup(["newChat", "squads", "inbox"], size)
+    expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(3)
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+    expect(container.querySelectorAll("img, image")).toHaveLength(0)
+    expect(container.querySelector("svg.lucide-users")).not.toBeNull()
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+    expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(3)
+  })
   describe("standard", () => {
     it("renders the layout's shortcuts in order as a labelled grid, skipping unknown ids", () => {
       setup(["workflows", "nope", "newChat", "me"])

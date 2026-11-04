@@ -116,6 +116,25 @@ beforeEach(() => {
 })
 
 describe("SidebarRow", () => {
+  it("themes plugin workspace entries and More using the saved preference", () => {
+    containers.push({
+      fullId: "cognia-config-governance:config-governance",
+      pluginId: "cognia-config-governance",
+      def: { id: "config-governance", title: "Config Governance", icon: "ShieldCheck" },
+    })
+    render(<SidebarNavSection />)
+    const plugin = screen.getByRole("button", { name: "Config Governance" })
+    const more = screen.getByRole("button", { name: "more" })
+    expect(plugin.querySelector("img")).toHaveAttribute(
+      "src",
+      "/icons/cognia-mobile-spots/webp/security.webp"
+    )
+    expect(more.querySelector("img")).not.toBeNull()
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+    expect(plugin.querySelector("img")).toBeNull()
+    expect(plugin).toContainElement(screen.getByTestId("icon-ShieldCheck"))
+    expect(more.querySelector("img")).toBeNull()
+  })
   it("uses the same live icon preference in the expanded navigation", () => {
     render(<SidebarNavSection />)
     const canvas = screen.getByTestId("sidebar-nav-canvas")
@@ -293,7 +312,12 @@ describe("SidebarNavSection", () => {
     const row = screen.getByTestId("sidebar-nav-view-container-p:v")
     expect(row).toHaveTextContent("Vault")
     expect(row).toHaveAttribute("aria-current", "page")
-    expect(screen.getByTestId("icon-box")).toBeInTheDocument()
+    expect(row.querySelector("img")).toHaveAttribute(
+      "src",
+      "/icons/cognia-mobile-spots/webp/plugins.webp"
+    )
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+    expect(row).toContainElement(screen.getByTestId("icon-box"))
   })
 
   it("More opens the overflow, navigates, and pins without navigating", async () => {

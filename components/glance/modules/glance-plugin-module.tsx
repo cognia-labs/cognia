@@ -20,6 +20,7 @@ import { useTranslations } from "next-intl"
 import { PuzzleIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { NavigationIcon } from "@/components/shell/navigation-icon"
 import { resolveIcon } from "@/lib/a2ui/resolve-icon"
 import { cn } from "@/lib/utils"
 import type { GlancePluginAction, GlancePluginTone } from "@/lib/glance/plugin-data"
@@ -90,10 +91,17 @@ export function GlancePluginModule({
 
   const title = def.title
   const icon = def.icon ? resolveIcon(def.icon) : null
-  const glyph = createElement(icon ?? PuzzleIcon, {
-    "aria-hidden": true,
-    className: "size-3.5 shrink-0 text-muted-foreground",
-  })
+  const glyph = (
+    <NavigationIcon
+      id={entryId}
+      defaultArtwork="plugins"
+      size={20}
+      fallback={createElement(icon ?? PuzzleIcon, {
+        "aria-hidden": true,
+        className: "size-3.5 shrink-0 text-muted-foreground",
+      })}
+    />
+  )
 
   if (size === "compact") {
     const first = data?.stats?.[0]

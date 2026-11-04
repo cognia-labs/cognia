@@ -42,8 +42,10 @@ jest.mock("@/components/workspace/workspace-picker-list", () => ({
 
 import { MobileWorkspaceChip } from "./mobile-workspace-chip"
 import { useProjectStore } from "@/stores/project/project-store"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 beforeEach(() => {
+  useSettingsStore.setState({ settings: null })
   pickerRender.mockClear()
   act(() => {
     useProjectStore.setState({ projects: [], activeProjectId: null, loaded: false })
@@ -53,6 +55,17 @@ beforeEach(() => {
 it("renders nothing when no workspace is active", () => {
   const { container } = render(<MobileWorkspaceChip />)
   expect(container).toBeEmptyDOMElement()
+})
+
+it.each(["icon", "title"] as const)("themes the workspace chip in its %s variant", (variant) => {
+  activateWorkspace()
+  render(<MobileWorkspaceChip variant={variant} />)
+  const chip = screen.getByTestId("mobile-workspace-chip")
+  expect(chip.querySelector("img")).toHaveAttribute("src", "/icons/cognia-mobile-spots/webp/workspace.webp")
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+  expect(chip.querySelector("img")).toBeNull()
+  expect(chip.querySelector("svg.lucide-folder")).not.toBeNull()
+  expect(chip).toHaveAccessibleName("switchLabel:Backend")
 })
 
 it("shows the active workspace name", () => {

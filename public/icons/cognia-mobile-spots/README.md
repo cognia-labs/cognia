@@ -18,9 +18,19 @@ All mobile Me entries and home shortcuts use the existing `MobileSpotIcon`
 component. Main navigation (the icon rail, expanded rows and More menu) and the
 settings sidebar default to anime artwork; Settings → Appearance → Style offers
 one Ordinary / Anime switch saved in `AppSettings.settingsIconStyle`.
-Chats, Canvas and Settings also follow this preference. Dynamic third-party plugin
-icons, provider logos, and the separate agent-role avatar set retain their own
-identity and are outside this feature-illustration inventory.
+Chats, New chat, Canvas, Settings, the workspace switcher, More, plugin workspace
+entries and team scopes also follow this preference. Config Governance uses the
+security illustration; other plugin entries use the plugins illustration.
+Built-in teams have distinct feature illustrations, and custom teams use the
+teams illustration. Ordinary mode restores the declared plugin glyphs and team
+emoji/initials. Explicitly chosen team images, provider logos, and the separate
+agent-role avatar set retain their own identity. Compact action controls such as
+search, filter, add and disclosure chevrons keep their control glyphs.
+Home & Glance also follows the preference: shown/addable module symbols,
+plugin module glyphs, active/available shortcut rows, compact shortcuts and the
+home shortcut grid all use the same saved style. The mobile workspace chip and
+Glance entry point follow it too; resize, reorder, pin and hide controls keep
+their action glyphs.
 
 - `style-spec.json` freezes the palette and construction system for later custom batches.
 - `icon-manifest.json` records assets and coverage mappings. `grid` and

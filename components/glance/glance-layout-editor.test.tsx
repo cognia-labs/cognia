@@ -1,8 +1,9 @@
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { mobileLayoutFromPreset } from "@/lib/glance/mobile-layout"
 import { layoutFromPreset } from "@/lib/glance/presets"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 import type {
   GlanceEntryId,
   GlanceLayoutEntry,
@@ -30,6 +31,8 @@ const NO_QUICK = ALL.filter((id) => id !== "quick")
 
 const ROW_HEIGHT = 40
 
+beforeEach(() => useSettingsStore.setState({ settings: null }))
+
 function renderEditor(
   props: Partial<React.ComponentProps<typeof GlanceLayoutEditor>> & {
     entries?: readonly GlanceLayoutEntry[]
@@ -53,6 +56,26 @@ function shownIds() {
 }
 
 describe("GlanceLayoutEditor", () => {
+  it.each(["compact", "comfortable", "touch"] as const)(
+    "uses the saved icon style for shown and addable modules at %s density",
+    (density) => {
+      const { container } = renderEditor({ density })
+      expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(ALL.length)
+      expect(row("fleet").querySelector("img")).toHaveAttribute(
+        "src",
+        "/icons/cognia-mobile-spots/webp/fleet.webp"
+      )
+      expect(screen.getByTestId("glance-editor-hidden-pet").querySelector("img")).toHaveAttribute(
+        "src",
+        "/icons/cognia-mobile-spots/webp/pet.webp"
+      )
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+      expect(container.querySelectorAll("img")).toHaveLength(0)
+      expect(row("fleet").querySelector("svg.lucide-radar")).not.toBeNull()
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+      expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(ALL.length)
+    }
+  )
   it("lists the shown modules in order, each with a reorder grip", () => {
     renderEditor()
     expect(shownIds()).toEqual(["fleet", "usage", "quota", "agenda", "activity", "quick"])
@@ -429,6 +452,15 @@ describe("GlanceLayoutEditor", () => {
       sizes: ["standard"],
       platforms: ["desktop", "mobile"],
     }
+
+    it("themes plugin modules with and without a declared glyph", () => {
+      const { container } = renderEditor({ plugins: [CI, TODO] })
+      expect(container.querySelectorAll('img[src$="/plugins.webp"]')).toHaveLength(2)
+      act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+      expect(container.querySelectorAll("img")).toHaveLength(0)
+      expect(container.querySelector("svg.lucide-git-branch")).not.toBeNull()
+      expect(container.querySelector("svg.lucide-puzzle")).not.toBeNull()
+    })
 
     it("offers a running plugin module the layout has never placed, tagged as a plugin", () => {
       renderEditor({ plugins: [CI] })

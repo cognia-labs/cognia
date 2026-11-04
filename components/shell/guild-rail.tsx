@@ -43,14 +43,13 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useUIStore } from "@/stores/ui"
-import { AvatarBadge } from "@/components/desktop/avatar-badge"
 import { MotionSelectionIndicator } from "@/components/chat/motion/motion-reveal"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { ResolvedRailIcon } from "@/components/shell/plugin-view-container-panel"
 import { useRouter } from "next/navigation"
 import { useShellNavModel } from "./use-shell-nav"
 import { MoreMenuContent } from "./more-menu"
-import { NavigationIcon } from "./navigation-icon"
+import { NavigationIcon, TeamNavigationIcon } from "./navigation-icon"
 import { NavItemContextMenu } from "./nav-item-menu"
 import { NavSortableItem, NavSortableList } from "./nav-sortable"
 import { OverlaySideContext, overlaySideFor, useOverlaySide } from "./rail-overlay-side"
@@ -412,8 +411,15 @@ export function GuildRail({
                                   className={RAIL_ICON_CLASS}
                                 />
                               ) : (
-                                <ResolvedRailIcon
-                                  name={mode.container.def.icon}
+                                <NavigationIcon
+                                  id={mode.id}
+                                  defaultArtwork="plugins"
+                                  fallback={
+                                    <ResolvedRailIcon
+                                      name={mode.container.def.icon}
+                                      className={RAIL_ICON_CLASS}
+                                    />
+                                  }
                                   className={RAIL_ICON_CLASS}
                                 />
                               )}
@@ -698,7 +704,9 @@ function RailMoreButton({
         />
       ) : null}
       <span className="relative flex items-center justify-center">
-        <EllipsisIcon className={cn(RAIL_ICON_CLASS, pending && "invisible")} />
+        <span className={cn("flex items-center justify-center", pending && "invisible")}>
+          <NavigationIcon id="more" fallback={EllipsisIcon} className={RAIL_ICON_CLASS} />
+        </span>
         {pending ? <Spinner className={cn(RAIL_ICON_CLASS, "absolute inset-0 m-auto")} /> : null}
       </span>
       {hasBadge ? (
@@ -887,7 +895,7 @@ function TeamButton({
       className="text-base"
       style={active ? { boxShadow: `inset 0 0 0 2px ${avatarColor(team)}` } : undefined}
     >
-      <AvatarBadge subject={team} size={28} textClassName="text-sm" />
+      <TeamNavigationIcon team={team} size={28} textClassName="text-sm" />
     </RailButton>
   )
 }

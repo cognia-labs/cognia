@@ -99,11 +99,11 @@ const team = (id: string, name: string): Team =>
   ({ id, name, memberIds: [], createdAt: new Date(), updatedAt: new Date() }) as unknown as Team
 const teams = [team("t-1", "Alpha"), team("t-2", "Beta")]
 
-it("switches Chats artwork with the shared preference and preserves team avatars", () => {
+it("switches Chats and team artwork with the shared preference", () => {
   render(<SidebarGuildSectionRows rows={guildSectionRows(teams)} activeKey="dm" />)
   const chats = screen.getByTestId("sidebar-guild-dm")
   expect(chats.querySelector("img")).not.toBeNull()
-  expect(screen.getByTestId("avatar-Alpha")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Alpha" }).querySelector("img")).not.toBeNull()
   act(() =>
     useSettingsStore.setState({
       settings: { ...useSettingsStore.getState().settings!, settingsIconStyle: "ordinary" },
@@ -167,7 +167,7 @@ describe("SidebarGuildSectionRows", () => {
     const alpha = screen.getByTestId("sidebar-guild-team-t-1")
     expect(dm).toHaveTextContent("directMessages")
     expect(alpha).toHaveTextContent("Alpha")
-    expect(screen.getByTestId("avatar-Alpha")).toBeInTheDocument()
+    expect(alpha.querySelector("img")).not.toBeNull()
     // A scope, not a disclosure: the row is the current page, and nothing
     // about it claims to have opened a panel.
     expect(alpha).toHaveAttribute("aria-current", "page")

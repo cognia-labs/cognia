@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, renderHook, screen, waitFor } from "@testing-library/react"
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 jest.mock("./mobile-glance-provider", () => ({ useMobileGlanceContext: jest.fn() }))
@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent } from "@/components/ui/dropdown-menu
 import { useFleetSnapshot } from "@/hooks/fleet/use-fleet-snapshot"
 import type { FleetSession } from "@/lib/fleet/types"
 import type { GlanceFleetSlice } from "@/lib/glance/snapshot"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { useMobileGlanceContext } from "./mobile-glance-provider"
 import { MobileGlanceFoldedDot, MobileGlanceTrigger, useGlanceAttention } from "./mobile-glance-trigger"
@@ -49,6 +50,7 @@ function arrange({
 }
 
 beforeEach(() => {
+  useSettingsStore.setState({ settings: null })
   setDrawerOpen.mockReset()
   arrange({})
 })
@@ -139,6 +141,17 @@ describe("MobileGlanceTrigger (menu)", () => {
     )
   }
 
+  it("themes its menu entry without changing the attention signal", async () => {
+    arrange({ slice: fleetSlice(2, 0) })
+    renderInMenu()
+    const item = await screen.findByRole("menuitem", { name: "Glance" })
+    expect(item.querySelector("img")).not.toBeNull()
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+    expect(item.querySelector("img")).toBeNull()
+    expect(item.querySelector("svg.lucide-gauge")).not.toBeNull()
+    expect(item).toContainElement(screen.getByTestId("mobile-glance-attention"))
+  })
+
   it("is a menu row that opens the drawer once the menu has closed", async () => {
     const user = userEvent.setup()
     renderInMenu()
@@ -157,6 +170,19 @@ describe("MobileGlanceTrigger (menu)", () => {
     expect(item).toContainElement(dot)
     expect(dot).toHaveAttribute("data-attention", "warn")
   })
+})
+
+it("switches the toolbar Glance icon live while retaining its attention dot", () => {
+  arrange({ slice: fleetSlice(2, 0) })
+  render(<MobileGlanceTrigger />)
+  const button = screen.getByRole("button", { name: "Open Glance — something needs your attention" })
+  expect(button.querySelector("img")).not.toBeNull()
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+  expect(button.querySelector("img")).toBeNull()
+  expect(button.querySelector("svg.lucide-gauge")).not.toBeNull()
+  expect(button).toContainElement(screen.getByTestId("mobile-glance-attention"))
+  act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+  expect(button.querySelector("img")).not.toBeNull()
 })
 
 describe("MobileGlanceFoldedDot", () => {

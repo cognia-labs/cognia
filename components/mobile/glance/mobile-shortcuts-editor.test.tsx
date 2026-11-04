@@ -2,15 +2,18 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { DEFAULT_GLANCE_MOBILE_SHORTCUTS } from "@/lib/glance/mobile-layout"
 import { MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
+import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { MobileShortcutsEditor } from "./mobile-shortcuts-editor"
 
 const ROW_HEIGHT = 44
+
+beforeEach(() => useSettingsStore.setState({ settings: null }))
 
 function renderEditor(shortcuts: readonly string[]) {
   const onChange = jest.fn<void, [string[]]>()
@@ -31,6 +34,15 @@ function availableIds(): string[] {
 }
 
 describe("MobileShortcutsEditor", () => {
+  it("themes both active and available shortcuts and restores ordinary glyphs live", () => {
+    const { container } = renderEditor(["newChat", "squads"])
+    expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(MOBILE_QUICK_ACTION_CATALOG.length)
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "ordinary" } as never }))
+    expect(container.querySelectorAll("img, image")).toHaveLength(0)
+    expect(container.querySelector("svg.lucide-users")).not.toBeNull()
+    act(() => useSettingsStore.setState({ settings: { settingsIconStyle: "anime" } as never }))
+    expect(container.querySelectorAll("[data-navigation-artwork]")).toHaveLength(MOBILE_QUICK_ACTION_CATALOG.length)
+  })
   it("lists the active shortcuts in their stored order, each with a named drag handle", () => {
     renderEditor(["workflows", "newChat", "me"])
     expect(activeIds()).toEqual(["workflows", "newChat", "me"])

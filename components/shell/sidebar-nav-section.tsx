@@ -232,7 +232,13 @@ export function SidebarNavSection({ className }: { className?: string }) {
                         isCanvas ? (
                           <NavigationIcon id="canvas" fallback={PencilRulerIcon} />
                         ) : (
-                          <ResolvedRailIcon name={mode.container.def.icon} className="size-4" />
+                          <NavigationIcon
+                            id={mode.id}
+                            defaultArtwork="plugins"
+                            fallback={
+                              <ResolvedRailIcon name={mode.container.def.icon} className="size-4" />
+                            }
+                          />
                         )
                       }
                       label={modeLabel(mode)}
@@ -303,7 +309,7 @@ export function SidebarNavSection({ className }: { className?: string }) {
                     ? `${t("more")}, ${t("badgeCount", { count: overflowBadge })}`
                     : undefined
                 }
-                icon={<EllipsisIcon />}
+                icon={<NavigationIcon id="more" fallback={EllipsisIcon} />}
                 label={t("more")}
                 trailing={
                   <>
