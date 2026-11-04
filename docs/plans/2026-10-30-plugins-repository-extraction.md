@@ -653,3 +653,29 @@ SDK/UI 在本任务冻结快照内实际构建；contract build、contract check
 **规则：** pin 只能在目标提交的干净检出中重建，不在共享工作树中运行 `--write-pin`；任何改动 SDK/UI/contract、`globals.css` 或 `pnpm-lock.yaml` 的提交都会使 pin 失效，需要随之刷新。
 
 V26/V28、X14/X16 与 P1d 的其余边界不变：生产静态导出、真实 Tauri/Capacitor/最低 iOS、已有用户状态的升级/中断/回滚与暂缓的全局检查仍未验收，P1 未通过，不启动 P2。
+
+## 27. P2 独立仓库建立（2026-11-04）
+
+用户决定在 P1 尚未全部通过时先做 P2，且只做 P2：建立带历史、可独立构建和测试的新仓库。Host 继续使用本地 `plugins/`，产品 pin 与构建入口不变，P3–P5 未开始。在 P4 之前，Host 的 `plugins/` 仍是唯一源码真相，新仓库只导入。
+
+| 项目        | 结果                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 仓库        | 公开仓库 [cognia-labs/cognia-plugins](https://github.com/cognia-labs/cognia-plugins)，AGPL-3.0-only；`main` 为 `672a45453b`                                                                                                                                                                                                                                           |
+| 历史        | `git filter-repo` 按 `host-sync-paths.txt` 过滤 Host `dev`：`plugins/` 与 producer/packager 及其测试（`scripts/plugin/{build-frontend-plugins,plugin-styles,bootstrap-authoring-kit}`、`scripts/plugin/artifacts/{produce,builtin-chunks,desktop-plugins}`）。`produce.test.mjs` 依赖 Host consumer，留在 Host                                                        |
+| Kit 传输    | Kit `e02ce9625c59` 的 15 个文件发布在 `authoring-kits` 孤立分支（提交 `6ea1099666`）；`authoring-kit.lock.json` 用固定提交的 raw URL 与 SHA-256 锁定，`scripts/bootstrap.mjs` 只用 Node 内置模块下载并逐文件校验，再把 `tooling/` 安装为 git-ignored 的 `scripts/build/*.mjs`                                                                                         |
+| 构建与产物  | `pnpm build` 产出 76 个 frontend ZIP，读取仓库外文件即失败；`pnpm produce --repository cognia-labs/cognia-plugins` 产出 schema 2 集合。为保持 producer 两仓逐字节相同，Host 增加 `--repository` 参数（`9ece5d27e5`），不再在新仓库改写该文件                                                                                                                          |
+| 测试归属    | Jest 两个 project（node/jsdom，`@swc/jest`）；kit 包 `.cjs` 入口 `require` ESM，需允许 transform；DOM polyfill 与 `usePluginTranslations` 测试端口在本仓库 setup 中绑定（Host 规则：当前 locale → 英文 → key）。`node:test` 套件由 `pnpm test:node` 运行，不进 Jest；Python 套件用 kit 的 SDK wheel，`uv --frozen` 不改写 `uv.lock`                                   |
+| Host-owned  | `host-integration-tests.json` 列出 40 个只能在 Host 运行的测试：导入 Host 模块或越出 `plugins/` 的相对路径、读取 Host 文件（catalog、distribution、`app/globals.css`）、依赖 Host 运行时端口（effort surface）、或比对按 Host workspace 源码构建的已提交 ZIP（两个 GitHub bot：kit 的 `github-bot-kit` dist 与 Host 源码产出的注释/class field 不同）。列表只减不增   |
+| 同步        | `scripts/sync-from-host.sh <Host checkout> [ref]` 重跑同一过滤；filter-repo 结果确定，上次过滤头必须是新头的祖先，否则停止且不合并。首次同步把 `9ece5d27e5` 的两个插件提交以 merge 导入，`plugins/` 树哈希与 Host `dev` 相同                                                                                                                                          |
+| Fresh clone | 从 GitHub 克隆后，经 https 下载 kit、`pnpm install --frozen-lockfile`，typecheck、Jest（322/323 suites）、`node:test`（22/22）、pytest（repowiki 327、laya-guard 72）、build、produce 全部完成，不读取 Host。首次克隆暴露 pnpm 11 拒绝未批准的安装脚本（`@parcel/watcher`、`@swc/core`、`esbuild`），已在 `pnpm-workspace.yaml` 的 `allowBuilds` 中按 Host 的选择批准 |
+| 比对        | fresh clone 集合与 Host 在 `9c378f0e4d` 用同一 Kit 产出的集合：1744 个文件的内容、hash、mode 全部一致；manifest 只有 `source`（repository/revision/sourceTree/lockfile）与 `toolchain.producerSha256` 不同。之后 Host 插件源码只改了一个不发布的测试文件，producer 只增加 `--repository`                                                                              |
+| CI          | `.github/workflows/ci.yml`：bootstrap → install → typecheck → Jest → `node:test` → pytest → build → produce，上传集合与 ZIP。按开发阶段约定，本轮未跟进远端 CI 结果                                                                                                                                                                                                   |
+
+**已知问题：**
+
+- `plugins/cognia-documents/src/docx.test.ts` 的 "does not report reconstructed layout…" 在两仓以相同方式失败（多报 `table-formatting`），属于既有失败，未放入排除列表。
+- Host pin 已再次失效：`d881d6f702`（ADR-0243 2A-0）改动了 `packages/plugin-contract/src/types/plugin/plugin.ts`，`sdkSourceSha256` 由 `b9e7682f…` 变为 `84065ee1…`。Host 自身的 producer 因此拒绝 ABI，`predev` / `prebuild` 无法 stage 插件。需要在该提交之后的干净检出中重建 Kit，发布到 `authoring-kits`，并同时更新 Host pin 与新仓库的 lock（§26 规则）。
+
+**规则：** P4 之前不在新仓库修改 `host-sync-paths.txt` 所列文件，插件改动只进 Host 再同步；两仓差异只放在新仓库自己的配置与 `scripts/*.mjs` 中。新仓库提交使用 GitHub 账号身份（`277988694+MaxQian888@users.noreply.github.com`）。
+
+P2 交付物已建立，但 §17–§26 记录的 P1 验收边界未变，P2 不改变产品 pin，不能据此启动 P4/P5。
