@@ -251,9 +251,7 @@ jest.mock("next-intl", () => ({
       "health.server": "Server",
       "health.lastHeartbeat": "Last heartbeat",
       "health.latency": "Latency",
-      "health.live": "Live",
       "health.checking": "Checking",
-      "health.offline": "Offline",
       "health.refresh": "Refresh status",
       "health.continueToChat": "Continue to chat",
       "health.noHeartbeat": "—",
@@ -812,14 +810,37 @@ describe("<PairOnboardingClient /> — web host (ADR-0059 C2)", () => {
     expect(screen.getByTestId("pair-host-probe")).toBeInTheDocument()
   })
 
-  it("puts the invitation-minting material in the panel, not in the form column", async () => {
+  it("puts the invitation-minting help under the form, not above it in the panel", async () => {
+    // In the panel it stacked a screen of commands above the field on a
+    // phone-width browser.
     render(<PairOnboardingClient />)
     await screen.findByTestId("pair-pair-step")
-    const panel = screen.getByTestId("pair-narrative-panel")
-    expect(panel).toContainElement(screen.getByTestId("pair-headless-help"))
-    expect(screen.getByTestId("pair-step-body")).not.toContainElement(
-      screen.getByTestId("pair-headless-help")
+    const help = screen.getByTestId("pair-headless-help")
+    expect(screen.getByTestId("pair-narrative-panel")).not.toContainElement(help)
+    expect(screen.getByTestId("pair-step-body")).toContainElement(help)
+    expect(
+      screen.getByTestId("pair-pair-step").compareDocumentPosition(help) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
+  it("drops the probe line and the invitation help once paired", async () => {
+    // The loopback probe only speaks for this computer: "no Host answered"
+    // beside "You're connected" to a Host elsewhere read as a contradiction.
+    window.localStorage.setItem(
+      "cognia.companion.config.v1",
+      JSON.stringify({
+        baseUrl: "http://test:7890",
+        devicePrivateKeyJwk: { kty: "EC", crv: "P-256", d: "device-private" },
+        deviceKeyThumbprint: "device-thumbprint",
+        deviceId: "dev-existing",
+        serverVersion: "9.9.9",
+      })
     )
+    render(<PairOnboardingClient />)
+    expect(await screen.findByTestId("pair-paired-step")).toBeInTheDocument()
+    expect(screen.queryByTestId("pair-host-probe")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("pair-headless-help")).not.toBeInTheDocument()
   })
 
   it("always offers a way back to the app, which works without a Host", async () => {

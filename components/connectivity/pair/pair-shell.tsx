@@ -23,15 +23,16 @@
  * panel (a headline that narrates the scene, one line under it, the stepper),
  * and a step body that opens with the step's own `GuideHeading`.
  *
- * # It scrolls as a page below `md`
+ * # The panel only narrates — phone and browser alike
  *
- * The one thing that differs, on purpose, is `overflow="scroll"`. On the web
- * the panel carries real material (how to mint an invitation), so below `md`
- * the panel and the body share one page scroll instead of the onboarding
- * band's capped height — a narrow browser window genuinely cannot show a
- * picture, a command and a form at once, and two nested scroll regions in that
- * space is worse than one honest page scroll. At `md` and up each column owns
- * its own overflow, as on `/onboarding`.
+ * The browser flow used to put how-to-mint-an-invitation material in the panel
+ * and switch the panel to a page-scrolling layout to fit it. Below `md` that
+ * stacked a scene, a command block and a storage notice above the form, so a
+ * phone-width browser opened on a screen of help with the field it came for
+ * below the fold — and kept showing that help after the pairing succeeded.
+ * Both clients now get the same height-capped band the phone's scan flow uses;
+ * step material lives in the step body, where the coordinator mounts it only
+ * on the step it belongs to.
  *
  * # It must own a definite height
  *
@@ -62,11 +63,6 @@ export interface PairShellProps {
   steps?: readonly PairStep[]
   /** The step's page heading, rendered at the top of the body. */
   heading?: { title: string; description?: string }
-  /**
-   * Panel material that is invariant across steps — on web, how to mint an
-   * invitation. Rendered under the stepper, inside the panel's own scroll.
-   */
-  aside?: ReactNode
   /** A live line about the far end (the loopback probe's verdict on web). */
   status?: ReactNode
   /** Recovery / mode context, rendered above the step body. */
@@ -86,7 +82,6 @@ export function PairShell({
   step,
   steps,
   heading,
-  aside,
   status,
   notice,
   bodyKey,
@@ -99,7 +94,6 @@ export function PairShell({
   return (
     <GuideShell
       testIdPrefix="pair"
-      overflow="scroll"
       bodyKey={bodyKey}
       dataAttributes={{ "data-client": client, "data-scene-state": sceneState }}
       windowBar={
@@ -108,7 +102,6 @@ export function PairShell({
       panel={
         <GuideNarrativePanel
           testIdPrefix="pair"
-          overflow="scroll"
           sceneKey={sceneState}
           scene={<PairScene state={sceneState} client={client} />}
           headline={client === "web" ? t("web.title") : t("title")}
@@ -116,7 +109,6 @@ export function PairShell({
           copyKey={sceneState}
           status={status}
           stepper={<PairStepper current={step} steps={steps} />}
-          aside={aside}
         />
       }
     >

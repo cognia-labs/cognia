@@ -16,7 +16,6 @@ import { ConnectionStateBadge } from "@/components/mobile/connection-state-badge
 import { DiscoverHelp } from "./discover-help"
 import { NotificationPermissionCta } from "@/components/mobile/notifications/notification-permission-cta"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -336,12 +335,6 @@ function ConnectionHealth({
         ? "checkingTitle"
         : "offlineTitle"
   const subtitleKey = healthState === "offline" ? "offlineSubtitle" : "connectedSubtitle"
-  const badgeKey =
-    healthState === "live"
-      ? "health.live"
-      : healthState === "checking"
-        ? "health.checking"
-        : "health.offline"
   return (
     <div className="flex flex-col gap-4" data-testid="pair-health-card" data-health={healthState}>
       <div className="flex items-start gap-3">
@@ -355,12 +348,9 @@ function ConnectionHealth({
           <p className="text-base font-semibold leading-tight">{t(titleKey)}</p>
           <p className="text-sm text-muted-foreground">{t(subtitleKey)}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <ConnectionStateBadge />
-          <Badge variant="outline" className="text-[10px] uppercase">
-            {t(badgeKey)}
-          </Badge>
-        </div>
+        {/* The transport badge alone: a second "LIVE" pill beside it only
+            repeated the dot and the title on the left. */}
+        <ConnectionStateBadge />
       </div>
       <dl
         className="flex flex-col divide-y divide-border/60 border-y border-border/60 text-sm"

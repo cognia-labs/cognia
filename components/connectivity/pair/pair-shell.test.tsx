@@ -89,10 +89,16 @@ it("puts Back in the window bar, and holds it while a pairing is in flight", () 
   expect(screen.getByTestId("pair-back")).toBeDisabled()
 })
 
-it("enters like the first-run flow and scrolls as one page below md", () => {
+it("enters like the first-run flow and keeps the panel a capped band below md", () => {
+  // The browser flow once switched the panel to a page-scrolling layout to fit
+  // invitation help, which stacked a screen of it above the form on a phone.
   renderShell()
   expect(screen.getByTestId("pair-shell")).toHaveClass("animate-in", "fade-in")
-  expect(screen.getByTestId("pair-narrative-panel")).toHaveAttribute("data-overflow", "scroll")
+  expect(screen.getByTestId("pair-narrative-panel")).toHaveClass(
+    "h-[30vh]",
+    "max-h-[15rem]",
+    "overflow-hidden"
+  )
 })
 
 it("narrates the scene state it is drawing", () => {
@@ -101,23 +107,28 @@ it("narrates the scene state it is drawing", () => {
   expect(screen.getByTestId("pair-narrative-body")).toHaveTextContent("narration.blocked")
 })
 
-it("renders the aside and the status inside the panel, not the body", () => {
-  renderShell({
-    aside: <div data-testid="aside-slot">how to mint one</div>,
-    status: <div data-testid="status-slot">reachable</div>,
-  })
-  const panel = screen.getByTestId("pair-narrative-panel")
-  expect(panel).toContainElement(screen.getByTestId("aside-slot"))
-  expect(panel).toContainElement(screen.getByTestId("status-slot"))
-  expect(screen.getByTestId("pair-step-body")).not.toContainElement(
-    screen.getByTestId("aside-slot")
+it("renders the status inside the panel and the step's material in the body", () => {
+  render(
+    <PairShell
+      client="web"
+      sceneState="armed"
+      step="pair"
+      bodyKey="pair"
+      status={<div data-testid="status-slot">reachable</div>}
+    >
+      <div data-testid="help-slot">how to mint one</div>
+    </PairShell>
   )
+  const panel = screen.getByTestId("pair-narrative-panel")
+  expect(panel).toContainElement(screen.getByTestId("status-slot"))
+  expect(panel).not.toContainElement(screen.getByTestId("help-slot"))
+  expect(screen.getByTestId("pair-step-body")).toContainElement(screen.getByTestId("help-slot"))
 })
 
-it("omits the aside and status slots when the caller has nothing for them", () => {
+it("omits the status slot when the caller has nothing for it", () => {
   renderShell({ client: "mobile" })
   expect(screen.getByTestId("pair-scene")).toHaveAttribute("data-client", "mobile")
-  expect(screen.queryByTestId("aside-slot")).not.toBeInTheDocument()
+  expect(screen.queryByTestId("status-slot")).not.toBeInTheDocument()
 })
 
 it("puts step-level context above the step body", () => {

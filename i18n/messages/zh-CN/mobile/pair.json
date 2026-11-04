@@ -13,8 +13,8 @@
   },
   "codeHint": "在桌面 PairDeviceCard 上、QR 旁边可以看到这组数字。当相机无法对焦（例如 Android 仿真器）时使用。",
   "codeLabel": "6 位数字配对码",
-  "connectedSubtitle": "链路已就绪——桌面会接受本机发出的请求。",
-  "connectedTitle": "已连接到桌面",
+  "connectedSubtitle": "链路已就绪——Host 会接受本设备发出的请求。",
+  "connectedTitle": "已连接到 Host",
   "diagnostics": {
     "collapse": "收起诊断",
     "expand": "展开诊断",
@@ -128,9 +128,7 @@
     "device": "设备",
     "lastHeartbeat": "最近心跳",
     "latency": "延迟",
-    "live": "在线",
     "noHeartbeat": "—",
-    "offline": "离线",
     "refresh": "刷新状态",
     "server": "服务器"
   },
@@ -187,7 +185,7 @@
     "unknown": "配对请求失败：{message}",
     "unreachable": "无法连接桌面服务器。请检查地址、Companion 是否已启用，以及当前网络能否访问该服务器。"
   },
-  "offlineSubtitle": "暂时无法联系到桌面，请确认桌面已唤醒且与手机处于同一网络。",
+  "offlineSubtitle": "暂时无法联系到 Host，请确认它正在运行且本设备可以访问。",
   "offlineTitle": "连接已断开",
   "payloadError": {
     "invalid": "无法解析该配对邀请——请从服务器完整复制 cgnp3|… 字符串后重新粘贴。",
@@ -281,7 +279,6 @@
     "developmentCommandHint": "在 `pnpm dev:web-headless` 运行时，于另一个终端执行此命令，然后把输出的邀请粘贴到下方。它会把邀请指向 {port} 端口的回环监听器——那是浏览器无需证书就能访问的唯一地址；单独运行 `pnpm dev:headless` 不会开启该端口。",
     "formCardDescription": "粘贴 Cognia 服务器签发的一次性 cgnp3 配对邀请。",
     "formCardTitle": "配对此浏览器",
-    "headlessDescription": "保持 Headless 服务运行，在另一个终端执行此命令，然后把输出的 cgnp3 邀请粘贴到下方。",
     "headlessTitle": "正在使用 Headless 服务器？",
     "httpsRequired": "浏览器配对必须使用 HTTPS，避免配对凭据以明文发送。请输入 HTTPS Companion 地址。",
     "intro": "使用 Cognia 服务器签发的一次性邀请连接此浏览器。",

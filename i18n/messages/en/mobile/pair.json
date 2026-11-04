@@ -13,8 +13,8 @@
   },
   "codeHint": "Find this code on the desktop PairDeviceCard, beside the QR. Useful when the camera can't focus on the QR (e.g. Android emulator).",
   "codeLabel": "6-digit pair code",
-  "connectedSubtitle": "Live link — your desktop accepts requests from this phone.",
-  "connectedTitle": "Connected to desktop",
+  "connectedSubtitle": "Live link — the Host accepts requests from this device.",
+  "connectedTitle": "Connected to your Host",
   "diagnostics": {
     "collapse": "Hide diagnostics",
     "expand": "Show diagnostics",
@@ -128,9 +128,7 @@
     "device": "Device",
     "lastHeartbeat": "Last heartbeat",
     "latency": "Latency",
-    "live": "Live",
     "noHeartbeat": "—",
-    "offline": "Offline",
     "refresh": "Refresh status",
     "server": "Server"
   },
@@ -187,7 +185,7 @@
     "unknown": "Pairing request failed: {message}",
     "unreachable": "Could not reach the desktop server. Check the URL, that Companion is enabled, and that the server is reachable from this network."
   },
-  "offlineSubtitle": "Couldn't reach the desktop — verify the desktop is awake and on the same network.",
+  "offlineSubtitle": "Couldn't reach the Host — check that it is running and reachable from this device.",
   "offlineTitle": "Connection lost",
   "payloadError": {
     "invalid": "That pairing invitation couldn't be decoded — copy the full cgnp3|… string from the server and paste it again.",
@@ -281,7 +279,6 @@
     "developmentCommandHint": "Run this in a second terminal while `pnpm dev:web-headless` is running, then paste the printed invitation below. It aims the invitation at the loopback listener on port {port} — the only address a browser reaches without a certificate. `pnpm dev:headless` on its own does not open that port.",
     "formCardDescription": "Paste the one-time cgnp3 invitation issued by your cognia server.",
     "formCardTitle": "Pair this browser",
-    "headlessDescription": "Run this in a second terminal while the headless server is running, then paste the printed cgnp3 invitation below.",
     "headlessTitle": "Using a headless server?",
     "httpsRequired": "Browser pairing requires HTTPS so the pair credential is never sent in cleartext. Use an HTTPS companion URL.",
     "intro": "Connect this browser with a one-time invitation issued by your cognia server.",

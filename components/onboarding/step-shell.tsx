@@ -62,7 +62,6 @@ export function StepShell({
   return (
     <GuideShell
       testIdPrefix="onboarding"
-      overflow="band"
       bodyKey={current}
       windowBar={<OnboardingWindowBar onBack={onBack} busy={busy} />}
       panel={

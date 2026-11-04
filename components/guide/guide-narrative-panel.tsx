@@ -6,19 +6,6 @@ import { GuideBrandMesh } from "./guide-brand-mesh"
 import { GUIDE_COPY_ENTER, GUIDE_SCENE_ENTER } from "./guide-motion"
 import { cn } from "@/lib/utils"
 
-/**
- * How the panel behaves below `md`, where it stacks above the step body.
- *
- *  - `band`   — a height-capped band (~30vh) with the body scrolling beneath
- *               it. Right when the panel carries only a picture and a line.
- *  - `scroll` — no cap; the panel and the body share one page scroll. Right
- *               when the panel carries real material (the web pairing flow's
- *               command block), which a capped band would clip.
- *
- * At `md` and up both are the same full-height column with its own scroll.
- */
-export type GuidePanelOverflow = "band" | "scroll"
-
 export interface GuideNarrativePanelProps {
   /** The picture. Drawn by the caller, from live state. */
   scene: ReactNode
@@ -34,9 +21,6 @@ export interface GuideNarrativePanelProps {
   status?: ReactNode
   /** Progress row. Rendered in its own band at the foot of the panel. */
   stepper?: ReactNode
-  /** Material invariant across steps, under the stepper, left-aligned. */
-  aside?: ReactNode
-  overflow?: GuidePanelOverflow
   /** Prefix for `${prefix}-narrative-panel`, `-scene-slot`, `-narrative-*`. */
   testIdPrefix: string
 }
@@ -71,10 +55,16 @@ export interface GuideNarrativePanelProps {
  * │  one line    │            │
  * │  status      │            │
  * │  ─ stepper ─ │            │
- * │  aside       │            │
  * └──────────────┴────────────┘
  *    26rem / 30rem
  * ```
+ *
+ * **Below `md` it is always a height-capped band.** The panel only narrates —
+ * a picture, a line, a status, the stepper — so it never needs more than a
+ * band, and the step's own material (forms, how-to commands) lives in the
+ * body where the user acts on it. A page-scrolling variant that let the panel
+ * carry real material pushed the `/pair` form under a screen of help text on
+ * a phone-width browser and is gone for that reason.
  */
 export function GuideNarrativePanel({
   scene,
@@ -84,24 +74,17 @@ export function GuideNarrativePanel({
   copyKey,
   status,
   stepper,
-  aside,
-  overflow = "band",
   testIdPrefix,
 }: GuideNarrativePanelProps) {
-  const band = overflow === "band"
-
   return (
     <aside
       data-testid={`${testIdPrefix}-narrative-panel`}
-      data-overflow={overflow}
       className={cn(
         "relative flex w-full shrink-0 flex-col border-b border-border/60",
-        band
-          ? // Bounded so a short viewport still leaves the step body usable.
-            "h-[30vh] max-h-[15rem] min-h-[9.5rem] overflow-hidden"
-          : "",
+        // Bounded so a short viewport still leaves the step body usable.
+        "h-[30vh] max-h-[15rem] min-h-[9.5rem] overflow-hidden",
         // Wide: a full-height column with a hairline trailing edge and a
-        // scroll of its own, so a long aside never pushes the body away.
+        // scroll of its own.
         "md:h-auto md:max-h-none md:w-[26rem] md:overflow-y-auto md:border-r md:border-b-0 lg:w-[30rem]"
       )}
     >
@@ -109,25 +92,14 @@ export function GuideNarrativePanel({
 
       {/* `justify-center-safe`: centred when it fits, top-aligned when the
           panel overflows — plain centring would clip the top unreachably.
-          Only the capped band may squeeze this block (its scene shrinks to
-          fit); everywhere else it keeps its content height and the panel
-          scrolls, or a long aside pushes the copy under the stepper. */}
-      <div
-        className={cn(
-          "relative flex flex-1 flex-col items-center justify-center-safe gap-4 px-6 py-5 md:gap-7 md:px-10 md:py-12",
-          band && "min-h-0 md:min-h-auto"
-        )}
-      >
+          The capped band may squeeze this block (its scene shrinks to fit). */}
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center-safe gap-3 px-6 py-4 md:min-h-auto md:gap-7 md:px-10 md:py-12">
         <div
           key={sceneKey}
           data-testid={`${testIdPrefix}-scene-slot`}
           className={cn(
-            "flex w-full items-center justify-center md:max-w-[20rem] md:flex-none",
-            // The band is height-capped, so the scene may flex down inside it;
-            // the page-scrolling panel is not, so the scene gets a width cap
-            // instead — a picture sized for the column would take half a phone
-            // screen to say what the line under it already says.
-            band ? "min-h-0 max-w-[15rem] flex-1" : "max-w-[8.5rem]",
+            // The band is height-capped, so the scene flexes down inside it.
+            "flex min-h-0 w-full max-w-[15rem] flex-1 items-center justify-center md:max-w-[20rem] md:flex-none",
             GUIDE_SCENE_ENTER
           )}
         >
@@ -149,12 +121,9 @@ export function GuideNarrativePanel({
           </p>
           {body && (
             <p
-              className={cn(
-                "max-w-[34ch] text-balance text-xs leading-relaxed text-muted-foreground md:text-sm",
-                // The supporting line is the first thing to go when the band
-                // is short — on a 375×667 phone it would push the scene out.
-                band && "hidden sm:block"
-              )}
+              // The supporting line is the first thing to go when the band is
+              // short — on a 375×667 phone it would push the scene out.
+              className="hidden max-w-[34ch] text-balance text-xs leading-relaxed text-muted-foreground sm:block md:text-sm"
               data-testid={`${testIdPrefix}-narrative-body`}
             >
               {body}
@@ -166,14 +135,8 @@ export function GuideNarrativePanel({
       </div>
 
       {stepper && (
-        <div className="relative flex shrink-0 justify-center px-6 pb-5 md:px-10 md:pb-10">
+        <div className="relative flex shrink-0 justify-center px-6 pb-4 md:px-10 md:pb-10">
           {stepper}
-        </div>
-      )}
-
-      {aside && (
-        <div className="relative flex shrink-0 flex-col gap-3 px-6 pb-6 md:px-10 md:pb-10">
-          {aside}
         </div>
       )}
     </aside>

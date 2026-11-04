@@ -61,7 +61,6 @@ export function NarrativePanel({
       headline={t(`narrative.${copyKey}.headline`)}
       body={t(`narrative.${copyKey}.body`)}
       copyKey={copyKey}
-      overflow="band"
       testIdPrefix="onboarding"
       stepper={
         showStepper && hasProgress ? (

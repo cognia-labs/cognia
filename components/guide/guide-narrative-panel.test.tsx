@@ -49,35 +49,26 @@ describe("GuideNarrativePanel", () => {
   })
 
   it("caps its height below `md` as a band, dropping the supporting line first", () => {
-    renderPanel({ overflow: "band" })
+    renderPanel()
     const panel = screen.getByTestId("flow-narrative-panel")
     expect(panel).toHaveClass("h-[30vh]", "overflow-hidden", "md:w-[26rem]", "md:border-r")
     expect(screen.getByTestId("flow-narrative-body")).toHaveClass("hidden", "sm:block")
   })
 
-  it("scrolls with the page below `md` when it carries real material", () => {
-    renderPanel({ overflow: "scroll" })
-    const panel = screen.getByTestId("flow-narrative-panel")
-    expect(panel).not.toHaveClass("h-[30vh]")
-    expect(panel).toHaveAttribute("data-overflow", "scroll")
-    expect(screen.getByTestId("flow-narrative-body")).not.toHaveClass("hidden")
-  })
-
-  it("puts status, stepper and aside inside the panel, and omits the ones not given", () => {
+  it("puts status and stepper inside the panel, and omits the ones not given", () => {
     const { unmount } = renderPanel({
       status: <div data-testid="status" />,
       stepper: <nav data-testid="stepper" />,
-      aside: <div data-testid="aside" />,
     })
     const panel = screen.getByTestId("flow-narrative-panel")
-    for (const id of ["status", "stepper", "aside"]) {
+    for (const id of ["status", "stepper"]) {
       expect(panel).toContainElement(screen.getByTestId(id))
     }
     unmount()
 
     renderPanel()
+    expect(screen.queryByTestId("status")).toBeNull()
     expect(screen.queryByTestId("stepper")).toBeNull()
-    expect(screen.queryByTestId("aside")).toBeNull()
   })
 
   it("omits the body line when there is none", () => {

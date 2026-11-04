@@ -32,7 +32,12 @@
  * for nobody.
  *
  * The probe now runs here on web and feeds two things: the scene the shell
- * draws, and a {@link HostProbeStatus} line beside the form.
+ * draws, and a {@link HostProbeStatus} line in the panel. Both belong to the
+ * pair step only: once paired, "is there a Host" is no longer the question,
+ * and the probe's loopback-only verdict ("no Host answered on this computer")
+ * would contradict a pairing made to any other machine. The headless how-to
+ * ({@link HeadlessInvitationHelp}) follows the same rule and sits under the
+ * form, collapsed, so the field leads on a phone-width browser.
  *
  * # Why the scene state is assembled here
  *
@@ -631,7 +636,7 @@ export function PairOnboardingClient() {
         heading={stepHeading}
         notice={recoveryNotice}
         status={
-          isWebHost ? (
+          isWebHost && step === "pair" ? (
             <HostProbeStatus
               state={hostState}
               baseUrl={webLoopback?.baseUrl ?? webScan.loopbackBlocked?.baseUrl}
@@ -640,7 +645,6 @@ export function PairOnboardingClient() {
             />
           ) : undefined
         }
-        aside={isWebHost ? <HeadlessInvitationHelp /> : undefined}
         back={back}
         busy={activity === "pairing"}
       >
@@ -668,6 +672,8 @@ export function PairOnboardingClient() {
             onActivityChange={setActivity}
           />
         ) : null}
+
+        {step === "pair" && isWebHost ? <HeadlessInvitationHelp /> : null}
 
         {step === "paired" && phase.kind === "paired" ? (
           <PairedStep

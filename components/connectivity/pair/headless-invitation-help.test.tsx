@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { DEFAULT_BROWSER_ACCESS_PORT } from "@/lib/connectivity/loopback-discovery"
@@ -20,13 +20,31 @@ beforeEach(() => {
   mockWriteClipboardText.mockResolvedValue(undefined)
 })
 
+/** Render the help expanded: it sits under the form, collapsed by default. */
+function renderOpen() {
+  const view = render(<HeadlessInvitationHelp />)
+  fireEvent.click(screen.getByTestId("pair-headless-toggle"))
+  return view
+}
+
+it("starts collapsed so the invitation field leads, with the storage warning outside the fold", () => {
+  // Open, the command tabs and hints stacked a screen of material over a
+  // phone-width page; most browser pairings come from a desktop invitation.
+  render(<HeadlessInvitationHelp />)
+  expect(screen.getByTestId("pair-headless-toggle")).toHaveAttribute("aria-expanded", "false")
+  expect(screen.queryByTestId("pair-headless-command")).not.toBeInTheDocument()
+  expect(screen.getByTestId("pair-web-storage-notice")).toBeInTheDocument()
+  fireEvent.click(screen.getByTestId("pair-headless-toggle"))
+  expect(screen.getByTestId("pair-headless-command")).toBeInTheDocument()
+})
+
 it("hands the web user an invitation aimed at a plane this browser can reach", () => {
   // `cognia-server pair` defaults to https://127.0.0.1:27890, and the pair
   // step refuses that invitation: `diagnoseTransport` / `web.httpsRequired`
   // exist precisely because a browser cannot validate the Host's self-signed
   // certificate. A development command that produced one would send the user
   // in a circle, so it must name the loopback listener explicitly.
-  render(<HeadlessInvitationHelp />)
+  renderOpen()
   const command = screen.getByTestId("pair-headless-command").textContent ?? ""
   expect(command).toContain(`--advertise-url http://127.0.0.1:${DEFAULT_BROWSER_ACCESS_PORT}`)
   expect(command).not.toContain("https://")
@@ -44,7 +62,7 @@ it("shows the command in full rather than cutting it mid-flag", () => {
   // It used to render `whitespace-nowrap overflow-x-auto`, which on the
   // two-column layout truncated the development command at `--device-name b:`
   // with no visible affordance — beside a copy button already showing a tick.
-  render(<HeadlessInvitationHelp />)
+  renderOpen()
   const command = screen.getByTestId("pair-headless-command")
   expect(command).toHaveClass("break-all")
   expect(command.className).not.toContain("whitespace-nowrap")
@@ -52,7 +70,7 @@ it("shows the command in full rather than cutting it mid-flag", () => {
 
 it("copies whichever deployment's command is showing", async () => {
   const user = userEvent.setup()
-  render(<HeadlessInvitationHelp />)
+  renderOpen()
 
   await user.click(screen.getByTestId("pair-copy-command"))
   expect(mockWriteClipboardText).toHaveBeenLastCalledWith(
@@ -77,13 +95,13 @@ it("copies whichever deployment's command is showing", async () => {
 
 it("renders exactly one command node, whatever tab is selected", async () => {
   // Three mounted `TabsContent` panes meant three nodes carrying one testid.
-  render(<HeadlessInvitationHelp />)
+  renderOpen()
   expect(screen.getAllByTestId("pair-headless-command")).toHaveLength(1)
   await userEvent.click(screen.getByRole("tab", { name: "commandMode.compose" }))
   expect(screen.getAllByTestId("pair-headless-command")).toHaveLength(1)
 })
 
 it("keeps the localStorage-credential warning unconditional", () => {
-  render(<HeadlessInvitationHelp />)
+  renderOpen()
   expect(screen.getByTestId("pair-web-storage-notice")).toHaveTextContent("storageNotice")
 })

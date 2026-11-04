@@ -1,13 +1,15 @@
 "use client"
 
 /**
- * How to mint an invitation, for the browser flow.
+ * How to mint an invitation from a headless Host, for the browser flow.
  *
- * Lives in the narrative panel rather than beside the field. It is invariant
- * material — the same three commands whatever state the pairing is in — and
- * putting it in the form's column is what made the web page a tall single
- * stack: the command block, the field, the decoded summary, the storage notice
- * and the error panel all competing for one column.
+ * Collapsed under the form, and only on the pair step. It used to sit in the
+ * narrative panel, open, which below `md` stacked a picture, three commands and
+ * a storage notice above the field the user came to paste into — and kept them
+ * on screen after the pairing had succeeded. Most browser pairings come from a
+ * desktop Host's invitation, so the headless recipe is one tap away rather than
+ * the first thing on the page. The localStorage warning stays outside the fold:
+ * it is about every web pairing, not the headless one.
  *
  * # The command must be readable, not merely present
  *
@@ -20,11 +22,13 @@
 
 import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CheckIcon, CopyIcon, InfoIcon, TerminalIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, CopyIcon, InfoIcon, TerminalIcon } from "lucide-react"
 
 import { Surface } from "@/components/surface/surface"
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
 import { DEFAULT_BROWSER_ACCESS_PORT } from "@/lib/connectivity/loopback-discovery"
 
@@ -54,6 +58,7 @@ export type HeadlessPairMode = keyof typeof HEADLESS_PAIR_COMMANDS
 
 export function HeadlessInvitationHelp() {
   const t = useTranslations("mobile.pair.web")
+  const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<HeadlessPairMode>("development")
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
@@ -73,95 +78,104 @@ export function HeadlessInvitationHelp() {
   }, [mode])
 
   return (
-    <Surface
-      layer="raised"
-      radius="panel"
-      className="border border-border/70 p-3.5"
-      data-testid="pair-headless-help"
-    >
-      <div className="flex items-start gap-2.5">
-        <TerminalIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">{t("headlessTitle")}</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {t("headlessDescription")}
+    <div className="flex flex-col gap-3" data-testid="pair-headless-help">
+      <Collapsible open={open} onOpenChange={setOpen} className="border-y border-border/60">
+        <CollapsibleTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            className="touch-target h-auto w-full justify-between gap-2 px-0 py-3 font-normal hover:bg-transparent"
+            data-testid="pair-headless-toggle"
+          >
+            <span className="flex items-center gap-2.5 text-sm font-medium">
+              <TerminalIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+              {t("headlessTitle")}
+            </span>
+            <ChevronDownIcon
+              aria-hidden="true"
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-180"
+              )}
+            />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pb-4">
+          <Tabs
+            value={mode}
+            onValueChange={(value) => {
+              setMode(value as HeadlessPairMode)
+              setCopied(false)
+            }}
+            className="gap-2"
+          >
+            <TabsList className="grid h-auto w-full grid-cols-3">
+              <TabsTrigger value="development" className="text-xs">
+                {t("commandMode.development")}
+              </TabsTrigger>
+              <TabsTrigger value="compose" className="text-xs">
+                {t("commandMode.compose")}
+              </TabsTrigger>
+              <TabsTrigger value="kubernetes" className="text-xs">
+                {t("commandMode.kubernetes")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {/* One command element outside the Tabs rather than three TabsContent
+              panes: the tab row selects which string to show, and mounting three
+              copies meant three nodes carrying the same testid. */}
+          <Surface
+            layer="base"
+            radius="control"
+            className="mt-2 flex items-start gap-2 border px-3 py-2"
+          >
+            <code
+              className="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all"
+              data-testid="pair-headless-command"
+            >
+              {HEADLESS_PAIR_COMMANDS[mode]}
+            </code>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="-mt-0.5 -mr-1 shrink-0"
+              onClick={() => void onCopyCommand()}
+              aria-label={copied ? t("commandCopied") : t("copyCommand")}
+              data-testid="pair-copy-command"
+            >
+              {copied ? (
+                <CheckIcon className="size-3.5" aria-hidden="true" />
+              ) : (
+                <CopyIcon className="size-3.5" aria-hidden="true" />
+              )}
+            </Button>
+          </Surface>
+
+          {copyFailed ? (
+            <p
+              role="alert"
+              className="mt-2 text-[11px] leading-relaxed text-destructive"
+              data-testid="pair-copy-command-failed"
+            >
+              {t("clipboardWriteFailed")}
+            </p>
+          ) : null}
+
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            {mode === "development"
+              ? t("developmentCommandHint", { port: DEFAULT_BROWSER_ACCESS_PORT })
+              : t("deploymentCommandHint")}
           </p>
-        </div>
-      </div>
-
-      <Tabs
-        value={mode}
-        onValueChange={(value) => {
-          setMode(value as HeadlessPairMode)
-          setCopied(false)
-        }}
-        className="mt-3 gap-2"
-      >
-        <TabsList className="grid h-auto w-full grid-cols-3">
-          <TabsTrigger value="development" className="text-xs">
-            {t("commandMode.development")}
-          </TabsTrigger>
-          <TabsTrigger value="compose" className="text-xs">
-            {t("commandMode.compose")}
-          </TabsTrigger>
-          <TabsTrigger value="kubernetes" className="text-xs">
-            {t("commandMode.kubernetes")}
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      {/* One command element outside the Tabs rather than three TabsContent
-          panes: the tab row selects which string to show, and mounting three
-          copies meant three nodes carrying the same testid. */}
-      <Surface
-        layer="base"
-        radius="control"
-        className="mt-2 flex items-start gap-2 border px-3 py-2"
-      >
-        <code
-          className="min-w-0 flex-1 font-mono text-[11px] leading-relaxed break-all"
-          data-testid="pair-headless-command"
-        >
-          {HEADLESS_PAIR_COMMANDS[mode]}
-        </code>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="-mt-0.5 -mr-1 shrink-0"
-          onClick={() => void onCopyCommand()}
-          aria-label={copied ? t("commandCopied") : t("copyCommand")}
-          data-testid="pair-copy-command"
-        >
-          {copied ? (
-            <CheckIcon className="size-3.5" aria-hidden="true" />
-          ) : (
-            <CopyIcon className="size-3.5" aria-hidden="true" />
-          )}
-        </Button>
-      </Surface>
-
-      {copyFailed ? (
-        <p
-          role="alert"
-          className="mt-2 text-[11px] leading-relaxed text-destructive"
-          data-testid="pair-copy-command-failed"
-        >
-          {t("clipboardWriteFailed")}
-        </p>
-      ) : null}
-
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-        {mode === "development"
-          ? t("developmentCommandHint", { port: DEFAULT_BROWSER_ACCESS_PORT })
-          : t("deploymentCommandHint")}
-      </p>
+        </CollapsibleContent>
+      </Collapsible>
 
       {/* The localStorage-credential warning. Standing context about how web
-          pairing works, not an event — so it is a line here rather than the
-          second full-width callout that used to push the form past the fold. */}
+          pairing works, not an event — so it is one quiet line rather than a
+          callout, and it stays outside the fold. */}
       <p
-        className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground"
+        className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground"
         data-testid="pair-web-storage-notice"
       >
         <InfoIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
@@ -170,6 +184,6 @@ export function HeadlessInvitationHelp() {
           {t("storageNotice")}
         </span>
       </p>
-    </Surface>
+    </div>
   )
 }

@@ -4,15 +4,12 @@ import type { ReactNode } from "react"
 
 import { GUIDE_BODY_ENTER, GUIDE_SHELL_ENTER } from "./guide-motion"
 import { cn } from "@/lib/utils"
-import type { GuidePanelOverflow } from "./guide-narrative-panel"
 
 export interface GuideShellProps {
   /** The row across the top — a `GuideWindowBar`. */
   windowBar: ReactNode
   /** The narrative half — a `GuideNarrativePanel`. */
   panel: ReactNode
-  /** Must match the panel's `overflow`; see {@link GuidePanelOverflow}. */
-  overflow?: GuidePanelOverflow
   /** Keys the body, so only it replays its entrance on a step change. */
   bodyKey: string
   children: ReactNode
@@ -57,15 +54,12 @@ export interface GuideShellProps {
 export function GuideShell({
   windowBar,
   panel,
-  overflow = "band",
   bodyKey,
   children,
   footer,
   testIdPrefix,
   dataAttributes,
 }: GuideShellProps) {
-  const band = overflow === "band"
-
   return (
     <div
       className={cn(
@@ -77,23 +71,11 @@ export function GuideShell({
     >
       {windowBar}
 
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col md:flex-row",
-          // The page-scrolling layout scrolls here below `md`, as one page;
-          // at `md` and up each column owns its own overflow instead.
-          !band && "overflow-y-auto md:overflow-hidden"
-        )}
-      >
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {panel}
 
-        <div className={cn("flex min-w-0 flex-1 flex-col", band && "min-h-0")}>
-          <div
-            className={cn(
-              "flex flex-1 flex-col",
-              band ? "min-h-0 overflow-y-auto" : "md:min-h-0 md:overflow-y-auto"
-            )}
-          >
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div
               key={bodyKey}
               className={cn(

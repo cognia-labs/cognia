@@ -68,10 +68,14 @@ describe("GuideShell", () => {
     expect(container.querySelector("footer")).toBeNull()
   })
 
-  it("scrolls as one page below `md` in the page-scrolling layout", () => {
-    renderShell({ overflow: "scroll" })
+  it("scrolls the step body under the panel, never the panel and body as one page", () => {
+    renderShell()
     const row = screen.getByTestId("panel").parentElement!
-    expect(row).toHaveClass("overflow-y-auto", "md:overflow-hidden")
+    expect(row).not.toHaveClass("overflow-y-auto")
+    expect(screen.getByTestId("flow-step-body").parentElement).toHaveClass(
+      "min-h-0",
+      "overflow-y-auto"
+    )
   })
 
   it("forwards the flow's own data hooks", () => {

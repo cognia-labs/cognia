@@ -26,6 +26,14 @@ const body = (
   </div>
 )
 
+/** The browser's pair step: the form, then the headless how-to under it. */
+const webBody = (
+  <>
+    {body}
+    <HeadlessInvitationHelp />
+  </>
+)
+
 /** A browser with nothing pasted yet, still probing this machine. */
 export const WebSearching: Story = {
   args: {
@@ -34,9 +42,8 @@ export const WebSearching: Story = {
     step: "pair",
     steps: ["pair", "paired"],
     bodyKey: "pair",
-    children: body,
+    children: webBody,
     status: <HostProbeStatus state="searching" />,
-    aside: <HeadlessInvitationHelp />,
   },
 }
 
