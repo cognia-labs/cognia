@@ -225,6 +225,7 @@ output is checked in, or harnesses tied to a specific record. Run them with
 | `eval/certify/run-vendor-certification.mjs`, `rollback-bundle.mjs` | Billable vendor certification and its rollback (ADR-0090).                                             |
 | `eval/toolsearch-cache-probe.mjs`                                  | Wire-level tool-search cache experiment (`docs/evidence/2026-10-24-eval-tui-gap-audit.md`).            |
 | `eval/benchmarks/code-index-workers.mjs`, `host-first-request.mjs` | Host runtime measurements (`docs/evidence/2026-11-03-bun-host-runtime.md`).                            |
+| `gates/convergence/subsystem-deps.mjs`                             | Subsystem dependency inventory (`docs/research/feature-module-analysis-2026-11-04.md`).                |
 | `smoke/lark-live-smoke.mts`                                        | Live Lark smoke (`docs/content/docs/en/connectors/local-live-testing.mdx`).                            |
 | `smoke/lume-sandbox.mjs`                                           | Lume sandbox smoke (`docs/development/lume-sandbox.md`).                                               |
 | `smoke/scheduler-tauri.mjs`                                        | Scheduler smoke in the desktop shell.                                                                  |
