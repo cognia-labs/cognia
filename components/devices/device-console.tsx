@@ -230,11 +230,7 @@ export function DeviceConsole() {
             onClearFilters={clearFilters}
             onSelect={select}
             notices={notices}
-            footer={
-              standalone ? (
-                <StandaloneFleetCard onAddHost={() => addHost.setOpen(true)} pairHref={pairHref} />
-              ) : null
-            }
+            footer={standalone ? <StandaloneFleetCard /> : null}
           />
         ),
         label: t("listPane.label"),

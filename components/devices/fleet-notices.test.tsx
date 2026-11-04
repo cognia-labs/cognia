@@ -35,7 +35,7 @@ describe("StandaloneFleetCard", () => {
    * itself; an unimplemented one is a silent lie.
    */
   it("says which half is missing, and carries the surface contract's reason", () => {
-    render(<StandaloneFleetCard onAddHost={jest.fn()} pairHref="/pair" />)
+    render(<StandaloneFleetCard />)
     expect(screen.getByTestId("devices-requires-host")).toHaveAttribute(
       "data-reason",
       standaloneDevicesRequiresHost.reason
@@ -43,11 +43,12 @@ describe("StandaloneFleetCard", () => {
     expect(screen.getByText("Only this device")).toBeInTheDocument()
   })
 
-  it("offers both ways out: add a host in place, or pair", async () => {
-    const onAddHost = jest.fn()
-    render(<StandaloneFleetCard onAddHost={onAddHost} pairHref="/pair" />)
-    await userEvent.click(screen.getByTestId("devices-standalone-add-host"))
-    expect(onAddHost).toHaveBeenCalled()
-    expect(screen.getByRole("link", { name: /Pair with a host/ })).toHaveAttribute("href", "/pair")
+  it("explains without repeating the header's pair and add-host actions", () => {
+    render(<StandaloneFleetCard />)
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+    expect(screen.queryByRole("link")).not.toBeInTheDocument()
+    expect(screen.getByTestId("devices-requires-host")).toHaveTextContent(
+      "Pair a device or add a host"
+    )
   })
 })

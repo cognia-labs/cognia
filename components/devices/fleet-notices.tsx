@@ -13,9 +13,8 @@
  * neither: the phone body never rendered these at all.
  */
 
-import Link from "next/link"
 import { useTranslations } from "next-intl"
-import { QrCodeIcon, ServerIcon, XIcon } from "lucide-react"
+import { LaptopIcon, XIcon } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -81,36 +80,24 @@ export function MissingDeviceLinkNotice({
  * rendering a one-row "fleet" with nothing to explain it. Under the single
  * row rather than above the device pane, because it is the list's empty state.
  *
- * Two ways out, both reachable from here. Adding a host is the one a browser
- * can act on without another device in hand, so it leads.
+ * It explains and does not act: pairing and adding a host are already the
+ * header's labelled actions (the phone's + menu), and repeating them here put
+ * two copies of the same two buttons on one screen.
  */
-export function StandaloneFleetCard({
-  onAddHost,
-  pairHref,
-}: {
-  onAddHost: () => void
-  pairHref: string
-}) {
+export function StandaloneFleetCard() {
   const t = useTranslations("devices")
   return (
     <div
-      className="rounded-lg bg-muted/50 p-3"
+      className="flex gap-2.5 rounded-lg border border-dashed px-3 py-2.5"
       data-testid="devices-requires-host"
       data-reason={standaloneDevicesRequiresHost.reason}
     >
-      <p className="text-xs font-medium">{t("standaloneTitle")}</p>
-      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{t("standaloneBody")}</p>
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
-        <Button size="sm" onClick={onAddHost} data-testid="devices-standalone-add-host">
-          <ServerIcon className="size-3.5" />
-          {t("actions.addHost")}
-        </Button>
-        <Button asChild size="sm" variant="ghost">
-          <Link href={pairHref}>
-            <QrCodeIcon className="size-3.5" />
-            {t("standalonePair")}
-          </Link>
-        </Button>
+      <LaptopIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <div className="min-w-0">
+        <p className="text-xs font-medium">{t("standaloneTitle")}</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          {t("standaloneBody")}
+        </p>
       </div>
     </div>
   )

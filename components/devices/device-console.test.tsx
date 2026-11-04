@@ -287,18 +287,17 @@ describe("DeviceConsole", () => {
    * generic branch for it, so an unimplemented "explain" is a silent lie.
    * See `standaloneDevicesRequiresHost`.
    */
-  it("says which half is missing when nothing is paired and there is no host", () => {
+  it("says which half is missing when nothing is paired and there is no host", async () => {
     platform = { tauri: false, capacitor: false, webCompanion: false }
     rows = [LOCAL]
     renderConsole()
     const alert = screen.getByTestId("devices-requires-host")
     expect(alert).toBeInTheDocument()
     expect(alert).toHaveAttribute("data-reason", standaloneDevicesRequiresHost.reason)
-    expect(screen.getByRole("link", { name: /pair/i })).toHaveAttribute(
-      "href",
-      standaloneDevicesRequiresHost.remedy
-    )
-    expect(screen.getByRole("link", { name: /Pair with a host/ })).toHaveAttribute("href", "/pair")
+    // The remedy is the header's own Pair action; the card does not repeat it.
+    expect(alert.querySelector("a, button")).toBeNull()
+    await userEvent.click(screen.getByRole("button", { name: "Pair a device" }))
+    expect(push).toHaveBeenCalledWith(standaloneDevicesRequiresHost.remedy)
     // The fleet's empty state, so it sits in the list under the one row.
     expect(screen.getByTestId("device-list-pane")).toContainElement(alert)
   })

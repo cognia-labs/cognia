@@ -16336,8 +16336,7 @@
       "viaHostBody": "This shell does not hold SSH credentials, so the paired host opens the connection with the key or password it keeps. Only hosts the host's own desktop has registered can be opened this way, and no host key is reported back over this transport.",
       "viaHostTitle": "Connected by the paired host"
     },
-    "standaloneBody": "Nothing is paired and this app is not running its own host, so there is no fleet to show and no host to ask about grants or lifecycle state. What is below describes this machine.",
-    "standalonePair": "Pair with a host",
+    "standaloneBody": "Nothing is paired and no host is running, so only this machine is listed. Pair a device or add a host to see more.",
     "standaloneTitle": "Only this device",
     "stat": {
       "capabilities": "Capabilities reported",

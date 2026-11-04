@@ -276,7 +276,7 @@ export function DevicesMobileBody() {
             }
             footer={
               standalone ? (
-                <StandaloneFleetCard onAddHost={() => addHost.setOpen(true)} pairHref={pairHref} />
+                <StandaloneFleetCard />
               ) : null
             }
           />
