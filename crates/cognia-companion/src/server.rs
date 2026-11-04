@@ -681,7 +681,7 @@ fn build_router_for_mode(
             "/api/apps/{app_slug}/human-input/{request_id}/submit",
             post(super::workflow_app_api::human_input_submit_handler),
         )
-        .layer(from_fn(middleware::pre_auth_rate_limit));
+        .layer(from_fn(middleware::workflow_app_rate_limit));
 
     // Dify 1.16 core Service API profile. The Bearer token is a hashed,
     // scoped Workflow App key resolved by the TypeScript control plane; the
@@ -731,13 +731,13 @@ fn build_router_for_mode(
             "/v1/messages/{message_id}/feedbacks",
             post(super::workflow_app_api::dify_message_feedback_handler),
         )
-        .layer(from_fn(middleware::pre_auth_rate_limit));
+        .layer(from_fn(middleware::workflow_app_rate_limit));
     let dify_upload_routes = Router::new()
         .route(
             "/v1/files/upload",
             post(super::workflow_app_api::dify_file_upload_handler),
         )
-        .layer(from_fn(middleware::pre_auth_rate_limit));
+        .layer(from_fn(middleware::workflow_app_rate_limit));
     let workflow_app_large_routes = Router::new()
         .route(
             "/api/apps/{app_slug}/batches",
@@ -747,7 +747,7 @@ fn build_router_for_mode(
             "/api/apps/{app_slug}/human-input/{request_id}/files",
             post(super::workflow_app_api::human_input_file_upload_handler),
         )
-        .layer(from_fn(middleware::pre_auth_rate_limit));
+        .layer(from_fn(middleware::workflow_app_rate_limit));
 
     // Canonical device routes — short-lived key-bound token + DPoP.
     //

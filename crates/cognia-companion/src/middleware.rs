@@ -556,11 +556,46 @@ pub async fn pre_auth_rate_limit(
     request: Request,
     next: Next,
 ) -> Response {
+    source_rate_limit(
+        &super::pre_auth_rate_limiter(),
+        "too many authentication attempts, slow down",
+        addr,
+        request,
+        next,
+    )
+    .await
+}
+
+/// [`pre_auth_rate_limit`] for the public Workflow App surface, on its own
+/// bucket ([`super::workflow_app_rate_limiter`]) so app traffic and sign-in
+/// never spend each other's budget.
+pub async fn workflow_app_rate_limit(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    source_rate_limit(
+        &super::workflow_app_rate_limiter(),
+        "too many requests to this application, slow down",
+        addr,
+        request,
+        next,
+    )
+    .await
+}
+
+/// Charge one token from `limiter` to the request's source address.
+async fn source_rate_limit(
+    limiter: &super::rate_limit::RateLimiter,
+    refusal: &str,
+    addr: SocketAddr,
+    request: Request,
+    next: Next,
+) -> Response {
     let origin = request_origin(listener_kind(&request), Some(addr.ip()), request.headers());
     if origin.direct_loopback {
         return next.run(request).await;
     }
-    let limiter = super::pre_auth_rate_limiter();
     let key = origin.client_ip.unwrap_or(addr.ip()).to_string();
     match limiter.check(&key) {
         RateLimitDecision::Accept => next.run(request).await,
@@ -568,14 +603,10 @@ pub async fn pre_auth_rate_limit(
             // `as_secs()` is fine, the limiter rounds up internally so the
             // value is at least 1. The document's `retryAfterSeconds` is what
             // becomes the `retry-after` header.
-            cognia_problem::Problem::with_status(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                "too many authentication attempts, slow down",
-            )
-            .retryable(true)
-            .with_detail_field("retryAfterSeconds", retry_after.as_secs())
-            .into_response()
+            cognia_problem::Problem::with_status(StatusCode::TOO_MANY_REQUESTS, "rate_limited", refusal)
+                .retryable(true)
+                .with_detail_field("retryAfterSeconds", retry_after.as_secs())
+                .into_response()
         }
     }
 }
@@ -1138,6 +1169,37 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status().as_u16(), 200, "loopback request {i}");
         }
+    }
+
+    #[tokio::test]
+    async fn workflow_app_traffic_and_sign_in_spend_separate_budgets() {
+        async fn ok_handler() -> impl IntoResponse {
+            Json(json!({ "ok": true }))
+        }
+        let app = Router::new()
+            .route("/metered", get(ok_handler))
+            .layer(from_fn(super::workflow_app_rate_limit));
+        let auth = build_metered_router();
+        // An app page polling run state: far past the 5-request sign-in burst.
+        for index in 0..60 {
+            let response = app.clone().oneshot(metered_request("198.51.100.150")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "app request {index}");
+        }
+        // The same visitor can still sign in.
+        let response = auth.clone().oneshot(metered_request("198.51.100.150")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // And the app bucket is bounded too.
+        let mut refused = None;
+        for _ in 0..200 {
+            let response = app.clone().oneshot(metered_request("198.51.100.151")).await.unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                refused = Some(response);
+                break;
+            }
+        }
+        let refused = refused.expect("the app bucket never refused");
+        assert!(refused.headers().contains_key("retry-after"));
+        assert_eq!(body_json(refused).await["code"], "rate_limited");
     }
 
     #[tokio::test]

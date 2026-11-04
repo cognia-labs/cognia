@@ -340,6 +340,28 @@ pub fn pre_auth_rate_limiter() -> Arc<rate_limit::RateLimiter> {
     Arc::clone(&PRE_AUTH_RATE_LIMITER)
 }
 
+/// Per-source-IP limiter for the public Workflow App / Chatflow surface.
+///
+/// Kept apart from [`PRE_AUTH_RATE_LIMITER`]: a published app polls run and
+/// batch state and streams events, which the authentication bucket's 20 per
+/// minute would refuse within seconds, and a visitor using an app must not
+/// spend their own sign-in budget doing so. Each app's own quota (requests,
+/// concurrency, tokens, cost) is enforced by the runtime; this bucket only
+/// bounds one source's raw request rate.
+///
+/// Bucket: 120 burst, refill 10 req/s (600 per minute).
+static WORKFLOW_APP_RATE_LIMITER: once_cell::sync::Lazy<Arc<rate_limit::RateLimiter>> =
+    once_cell::sync::Lazy::new(|| {
+        rate_limit::RateLimiter::new(rate_limit::RateLimitConfig {
+            capacity: 120.0,
+            refill_per_sec: 10.0,
+        })
+    });
+
+pub fn workflow_app_rate_limiter() -> Arc<rate_limit::RateLimiter> {
+    Arc::clone(&WORKFLOW_APP_RATE_LIMITER)
+}
+
 /// Process-global OIDC authenticator (ADR-0059 cloud/headless Logto mode).
 ///
 /// Built once from the environment: `None` unless BOTH `COGNIA_LOGTO_ISSUER`
