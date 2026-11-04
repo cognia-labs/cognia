@@ -495,6 +495,16 @@ The isolated checkout installs its own workspace links from the frozen lockfile 
 
 The staged ESLint/Prettier gate, agent-dsh typecheck, generated runtime catalog and ledger final check pass. The broader isolated checks remain limited: full lint reproduces the same 11 warnings in unchanged convergence/gate scripts; static-export reports 14 existing Node imports in unchanged agent-codebuff/agent-crush files; CLI typecheck lacks separately managed sidecar dependencies and the generated webclone runner, and also encountered `ENOSPC` writing its cache. The isolated `tauri-host` check stops at `E0786` invalid cached `zerofrom_derive` metadata. These results do not replace the earlier successful shared-tree CLI/Tauri-host checks or establish clean-checkout desktop acceptance. No unrelated source changes or shared Rust cache deletions are included to make these gates pass. Exact outputs are in `.cache/dsh-commit/quality-gates.json` and `.cache/dsh-commit/{static-export,cli-types,tauri-host}.log`.
 
+## Plugin compatibility follow-up — 2026-11-02
+
+The user requested compatibility and missing-support assessment for every plugin named in the preceding two ecosystem lists. This is a read-only product assessment under G1, O1 and O4; C4 and the protected startup boundary remain constraints. It does not authorize plugin installation or relaxing runtime ownership/module guards.
+
+The [complete compatibility matrix](../reports/2026-11-02-dsh-plugin-compatibility.md) covers 24 community projects (26 package declarations, because Design contains three packages), six previously named official groups and the explicit Custom plugin indexes group. Browser Use has three provider declarations: 35 package manifests were inspected overall. No original package can load unchanged through the current certified minimal composition. Existing Cognia tools/MCP/instruction routes are distinguished from native plugin support and from automatic lifecycle behavior.
+
+Current launcher boundary checks pass 7/7 and seven focused Jest suites pass 277/277. The actual pinned rc.2 upstream compatibility evaluator accepts 16 community declarations, finds seven with no relevant range, and rejects the three current Design packages. Routing Suite's root declaration passes despite its README targeting below 0.2.0; complete suite behavior remains uncertain. Exact rc.2 registry queries find eight of nine official package names; the current CUA bundle name returns 404, without an exhaustive search of older aliases. Inputs, outputs and 16 local source hashes are in `.cache/dsh-plugin-compatibility-20261101/`.
+
+Assessment outcome: the requested inventory and concrete support gaps are recorded. No third-party plugin code was installed or executed, no authenticated service or UI smoke was performed, and no full-plugin compatibility claim is made. Existing broader verification limits remain open. The selected next action is diagnosis/reporting only; any future implementation should preserve the existing guards, choose a pinned artifact, and validate the intended subset or complete plugin explicitly.
+
 ## G4 final implementation, review and verification — 2026-11-02
 
 ### Delivered contract

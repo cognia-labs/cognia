@@ -167,7 +167,7 @@ export function dshControlRootFor(dataRoot: string): string {
   return path.join(dataRoot, ".deepseek-harness-control")
 }
 
-export function canonicalDshPath(candidate: string): string {
+function canonicalDshPath(candidate: string): string {
   try {
     return fs.realpathSync(candidate)
   } catch (error) {
