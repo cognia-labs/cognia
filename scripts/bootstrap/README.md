@@ -314,7 +314,7 @@ The workflow in `.github/workflows/bootstrap-scripts.yml` runs Bash and PowerShe
 on Linux and PowerShell on Windows. Local verification uses macOS ARM, Bash
 3.2.57 and PowerShell 7.6.6 with both a synthetic HTTP provider and authenticated
 DeepSeek `deepseek-flash`. Windows/Linux execution has not been verified locally.
-The [live validation report](live-validation-2026-10-01.md) records eight passing
+The [live validation report](../../docs/reports/2026-10-01-bootstrap-live-validation.md) records eight passing
 scenarios, two repaired defects and an unresolved earlier privacy-gate block.
 
 Verified on 2026-10-01 after the preset expansion: Bash's full boundary suite
@@ -322,10 +322,10 @@ passed 67/67 tests (including 50 shared contracts); PowerShell passed 50/50
 shared and 10/10 specific contracts. Seven Cognia integration suites passed
 202/202 tests. The final authenticated preset flow passed 14/14 checks, including
 real editor/shell calls and pnpm initialization/reuse. See the
-[preset validation report](preset-validation-2026-10-01.md) for source hashes,
+[preset validation report](../../docs/reports/2026-10-01-bootstrap-preset-validation.md) for source hashes,
 measurements, repaired privacy false positives and repository-wide gate limits.
 
 The 2026-10-02 file/session expansion passed 10/10 acceptance checks with copied
 scripts and DeepSeek, including credential-free local commands and cross-runtime
-transcript resumption. See the [file/session validation report](file-session-validation-2026-10-02.md)
+transcript resumption. See the [file/session validation report](../../docs/reports/2026-10-02-bootstrap-file-session-validation.md)
 for final source hashes, regression results and evidence boundaries.

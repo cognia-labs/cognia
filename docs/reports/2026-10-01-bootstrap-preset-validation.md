@@ -52,7 +52,7 @@ installation claims.
 
 The final live task explicitly invokes both affected verification commands and
 passes. The older unretained privacy block in
-[the previous report](live-validation-2026-10-01.md) cannot be conclusively
+[the previous report](2026-10-01-bootstrap-live-validation.md) cannot be conclusively
 attributed to either newly reproduced cause.
 
 ## Cognia integration and browser evidence
