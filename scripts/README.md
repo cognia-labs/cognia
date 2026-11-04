@@ -27,6 +27,7 @@ scripts/
   test/           Jest / node --test entry points, sharding, coverage, fixture audits
   e2e/            static server for out/ and the E2E governance debt ledger
   smoke/          runtime smoke harnesses (Compose, WebRTC, ACP/CLI agents, TUI)
+    agents/       shared external-agent smoke kit, generic ACP lane, vendor modules
     im-live/      live IM bot smoke (Lark, Discord, Matrix, ...) with drivers/
     fixtures/     inputs for smoke harnesses
   dev/            developer CLIs: tauri dev wrapper, headless host, ports, DB reset
@@ -115,7 +116,18 @@ review; it is not a general ignore file.
 
 Harnesses that drive real runtimes: Compose tiers (`compose:smoke*`), WebRTC
 pairing, Agent SDK hosts, the CLI/TUI, built-in agent streaming, desktop
-automation, and one harness per external ACP/CLI agent. `im-live/` is the live
+automation and external agents.
+
+External agents run through `pnpm smoke:agent` (`agent.ts`, kit in `agents/`):
+`--list` shows every catalog runtime, whether it is installed and which lane
+covers it; `pnpm smoke:agent <runtime…>` or `--installed` runs the generic ACP
+lane (version probe, sandboxed connect, ACP v1 handshake, session or
+authentication refusal, reconnect, list/load/delete) plus the runtime's
+vendor module under `agents/vendors/`; `--live` adds real model turns on the
+local login. It needs the sandbox launcher (`pnpm cli:external-host:build`).
+New vendor checks belong in a vendor module, not a new top-level smoke.
+Vendor smokes not yet moved run through `build-and-run-smoke.mjs`
+(`pnpm smoke:external-parity --<lane>`). `im-live/` is the live
 IM bot smoke (`pnpm im:*`). Live harnesses against real services:
 `lark-entry-verify.mts` (`pnpm lark:verify-entry`, ADR-0091),
 `lark-live-smoke.mts`, `provider-diagnostics-live.mjs`

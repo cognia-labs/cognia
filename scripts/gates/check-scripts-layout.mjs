@@ -21,7 +21,7 @@
  * Config: scripts/gates/scripts-layout.json. Usage: pnpm audit:scripts-layout
  */
 
-import { readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, posix } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -168,7 +168,8 @@ export function auditScriptsLayout({ tracked, readText, config, readme }) {
 
   const callers = new Map()
   for (const source of tracked) {
-    if (NOT_A_CALLER.test(source)) continue
+    // The config names its manual entries; that is the registration, not a call.
+    if (NOT_A_CALLER.test(source) || source === CONFIG_PATH) continue
     const text = readText(source)
     if (text === null) continue
     if (!source.startsWith("scripts/") && !text.includes("scripts")) continue
@@ -204,10 +205,11 @@ export function auditScriptsLayout({ tracked, readText, config, readme }) {
   return { problems, checked: scriptPaths.filter(isCheckedScript).length, manual: manual.size }
 }
 
+/** Tracked files still present in the working tree (a pending deletion is gone). */
 function readTracked() {
   return execaSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, maxBuffer: 64 * 1024 * 1024 })
     .stdout.split("\0")
-    .filter(Boolean)
+    .filter((path) => path && existsSync(join(REPO_ROOT, path)))
 }
 
 function readTextFile(path) {

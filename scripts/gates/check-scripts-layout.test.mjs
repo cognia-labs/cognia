@@ -189,3 +189,22 @@ test("a manual entry covers a hand-run script and must stay exact", () => {
   assert.ok(problems.some((p) => p.includes("manual lists missing scripts/smoke/gone.mjs")))
   assert.ok(problems.some((p) => p.includes("package.json now calls it")))
 })
+
+test("the config's own manual list is not a caller", () => {
+  const problems = audit({
+    files: {
+      "scripts/README.md": "",
+      "scripts/smoke/live.mjs": "",
+      "scripts/gates/scripts-layout.json": `{"manual":[{"path":"scripts/smoke/live.mjs"}]}`,
+      "scripts/gates/check.mjs": "",
+      "package.json": "node scripts/gates/check.mjs",
+    },
+    config: {
+      ...CONFIG,
+      folders: { gates: "gates", smoke: "smokes" },
+      manual: [{ path: "scripts/smoke/live.mjs", why: "real service" }],
+    },
+    readme: README.replace("  build/   builds\n", "  gates/   gates\n"),
+  })
+  assert.deepEqual(problems, [])
+})
