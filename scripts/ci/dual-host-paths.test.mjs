@@ -27,6 +27,7 @@ test("runtime, companion crates, contracts and harness inputs select the lane", 
     ".github/actions/plugin-artifact-set/action.yml",
     ".github/workflows/dual-host.yml",
     "scripts/ci/dual-host-paths.mjs",
+    "scripts/ci/compose-pair.mjs",
     "playwright.dual-host.config.ts",
     "tests/e2e/mocks/anthropic/server.ts",
     "lib/dev/expose-test-globals.tsx",
@@ -123,6 +124,9 @@ test("workflow always reports its required status and uses the slim minimal stac
   // caddy depends on cognia-server: building it with only `tls` is an invalid project.
   assert.match(runs, /--profile server --profile tls build caddy/)
   assert.match(runs, /test:e2e:dual-host:web-headless/)
+  // pair prints cgnp4 behind a relay; the helper takes either shape or fails loudly.
+  assert.match(runs, /scripts\/ci\/compose-pair\.mjs cognia-server/)
+  assert.doesNotMatch(runs, /grep -Eo 'cgnp3/)
   // Both images take plugins only as the set produced before either builds.
   const produce = lane.steps.findIndex(
     (step) => step.uses === "./.github/actions/plugin-artifact-set"

@@ -14,6 +14,7 @@ on:
     paths:
       - "deploy/compose/**"
       - "scripts/smoke/compose-smoke.mjs"
+      - "scripts/ci/compose-pair.mjs"
       - "tests/real-e2e/**"
       - "playwright.web-headless.config.ts"
       # The service images are built from the pinned cognia-services revision.
@@ -32,6 +33,7 @@ on:
       - ".dockerignore"
       - "deploy/compose/**"
       - "scripts/smoke/**"
+      - "scripts/ci/compose-pair.mjs"
       - ".github/actions/plugin-artifact-set/**"
       - ".github/workflows/compose-e2e.yml"
   schedule:
@@ -215,41 +217,33 @@ jobs:
           COGNIA_SERVER_IMAGE: cognia-server:ci-full
         run: |
           set -euo pipefail
-          pair_payload="$(docker compose exec -T cognia-server \
-            cognia-server pair --device-name web-e2e --advertise-url https://cognia.localhost \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server web-e2e \
+            --advertise-url https://cognia.localhost)"
+          echo "::add-mask::$pair_payload"
           test -n "$pair_payload"
-          lifecycle_pair_payload="$(docker compose exec -T cognia-server \
-            cognia-server pair --device-name web-e2e-lifecycle \
-              --advertise-url https://cognia.localhost \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          lifecycle_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server web-e2e-lifecycle \
+            --advertise-url https://cognia.localhost)"
+          echo "::add-mask::$lifecycle_pair_payload"
           test -n "$lifecycle_pair_payload"
-          admin_pair_payload="$(docker compose exec -T cognia-server \
-            cognia-server pair --device-name web-e2e-admin \
-              --advertise-url https://cognia.localhost \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          admin_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server web-e2e-admin \
+            --advertise-url https://cognia.localhost)"
+          echo "::add-mask::$admin_pair_payload"
           test -n "$admin_pair_payload"
-          revokee_pair_payload="$(docker compose exec -T cognia-server \
-            cognia-server pair --device-name web-e2e-revokee \
-              --advertise-url https://cognia.localhost \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          revokee_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server web-e2e-revokee \
+            --advertise-url https://cognia.localhost)"
+          echo "::add-mask::$revokee_pair_payload"
           test -n "$revokee_pair_payload"
-          second_pair_payload="$(docker compose exec -T cognia-server-secondary \
-            cognia-server pair --device-name web-e2e-secondary \
-              --advertise-url https://127.0.0.1:27891 \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          second_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server-secondary web-e2e-secondary \
+            --advertise-url https://127.0.0.1:27891)"
+          echo "::add-mask::$second_pair_payload"
           test -n "$second_pair_payload"
-          oidc_member_pair_payload="$(docker compose exec -T cognia-server-oidc-member \
-            cognia-server pair --device-name web-e2e-oidc-member \
-              --tenant-id tenant-e2e-member \
-              --advertise-url https://127.0.0.1:27892 \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          oidc_member_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server-oidc-member web-e2e-oidc-member \
+            --tenant-id tenant-e2e-member --advertise-url https://127.0.0.1:27892)"
+          echo "::add-mask::$oidc_member_pair_payload"
           test -n "$oidc_member_pair_payload"
-          oidc_owner_pair_payload="$(docker compose exec -T cognia-server-oidc-owner \
-            cognia-server pair --device-name web-e2e-oidc-owner \
-              --tenant-id tenant-e2e-owner \
-              --advertise-url https://127.0.0.1:27893 \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          oidc_owner_pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server-oidc-owner web-e2e-oidc-owner \
+            --tenant-id tenant-e2e-owner --advertise-url https://127.0.0.1:27893)"
+          echo "::add-mask::$oidc_owner_pair_payload"
           test -n "$oidc_owner_pair_payload"
           cd ../..
           COGNIA_REAL_PAIR_PAYLOAD="$pair_payload" \

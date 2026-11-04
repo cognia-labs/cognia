@@ -28,6 +28,7 @@ const exact = new Set([
   ".github/workflows/dual-host.yml",
   "scripts/ci/dual-host-paths.mjs",
   "scripts/ci/dual-host-paths.test.mjs",
+  "scripts/ci/compose-pair.mjs",
   "playwright.dual-host.config.ts",
   "playwright.config.ts",
   "playwright.web-headless.config.ts",

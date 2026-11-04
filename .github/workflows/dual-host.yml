@@ -141,9 +141,9 @@ jobs:
         working-directory: deploy/compose
         run: |
           set -euo pipefail
-          pair_payload="$(docker compose exec -T cognia-server \
-            cognia-server pair --device-name dual-host-e2e --advertise-url https://cognia.localhost \
-            | grep -Eo 'cgnp3\|[A-Za-z0-9_-]+' | head -n 1)"
+          pair_payload="$(node ../../scripts/ci/compose-pair.mjs cognia-server dual-host-e2e \
+            --advertise-url https://cognia.localhost)"
+          echo "::add-mask::$pair_payload"
           test -n "$pair_payload"
           cd ../..
           COGNIA_REAL_PAIR_PAYLOAD="$pair_payload" \
