@@ -25,7 +25,7 @@ import {
  * The service lives in cognia-labs/cognia-services with its own release
  * cadence, and nothing generates these types from its contract. Reading the
  * published `openapi.yaml` (a byte-identical copy at the pinned revision,
- * enforced by `scripts/ci/check-cognia-services.mjs`) is the other half of the
+ * enforced by `scripts/gates/check-cognia-services.mjs`) is the other half of the
  * service's own `every_console_route_is_in_the_published_contract` test: that
  * one fails when a route leaves the document, this one fails when the document
  * and the TypeScript enums stop agreeing.

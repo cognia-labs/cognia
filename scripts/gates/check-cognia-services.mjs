@@ -7,13 +7,13 @@
  * a checkout of the pinned revision, verifies the contract copies the app
  * keeps beside its own code.
  *
- *   node scripts/ci/check-cognia-services.mjs
+ *   node scripts/gates/check-cognia-services.mjs
  *       pin consistency only (Cargo.toml, package.json, cli/package.json and
  *       both lockfiles)
- *   node scripts/ci/check-cognia-services.mjs --services-root <dir>
+ *   node scripts/gates/check-cognia-services.mjs --services-root <dir>
  *       also: the checkout is the pinned revision and every vendored
  *       contract copy matches it
- *   node scripts/ci/check-cognia-services.mjs --fetch [<dir>]
+ *   node scripts/gates/check-cognia-services.mjs --fetch [<dir>]
  *       clone the pinned revision into <dir> (default .cache/cognia-services)
  *       for local runs of the checks and suites that read service sources
  */

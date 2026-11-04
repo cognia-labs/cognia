@@ -1216,7 +1216,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: .cache/browser-companion/pnpm-lock.yaml
       - name: Verify Host and consumer contracts
-        run: node scripts/ci/check-browser-companion-contract.mjs --extension-root .cache/browser-companion
+        run: node scripts/gates/check-browser-companion-contract.mjs --extension-root .cache/browser-companion
       - name: Install standalone extension
         working-directory: .cache/browser-companion
         run: pnpm install --frozen-lockfile
@@ -1725,7 +1725,7 @@ jobs:
       - name: Checkout the pinned cognia-services
         uses: ./.github/actions/checkout-cognia-services
       - name: Verify the pin and the contract copies
-        run: node scripts/ci/check-cognia-services.mjs --services-root .cache/cognia-services
+        run: node scripts/gates/check-cognia-services.mjs --services-root .cache/cognia-services
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo build
@@ -1765,4 +1765,4 @@ jobs:
           COGNIA_SERVICES_ROOT: ${{ github.workspace }}/.cache/cognia-services
         run: node --test scripts/build/build-status-site.test.mjs
       - name: Pin check tests
-        run: node --test scripts/ci/check-cognia-services.test.mjs scripts/ci/services-extraction.test.mjs
+        run: node --test scripts/gates/check-cognia-services.test.mjs scripts/ci/services-extraction.test.mjs

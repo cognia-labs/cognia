@@ -23,7 +23,7 @@ runs:
       run: |
         node --input-type=module <<'NODE'
         import { appendFileSync } from "node:fs"
-        import { readPin } from "./scripts/ci/check-cognia-services.mjs"
+        import { readPin } from "./scripts/gates/check-cognia-services.mjs"
         const { revision } = await readPin(process.cwd())
         appendFileSync(process.env.GITHUB_OUTPUT, `revision=${revision}\n`)
         NODE

@@ -13,7 +13,7 @@ The extension declares the `agent-safe-v1` profile over envelope v1 and requires
 `integrations/browser-companion.json` pins an immutable commit in the organization repository. The product's existing `e2e-browser-extension` job now:
 
 1. Checks out the proposed product source and the pinned extension commit.
-2. Runs `scripts/ci/check-browser-companion-contract.mjs` to compare complete recursive portable client inventories and overlay bytes against the extension's vendor snapshot, check the Host safety profile, and verify the 220 product source/dependency inputs recorded in `provenance/host-contract.json`. Additions and removals also fail the check.
+2. Runs `scripts/gates/check-browser-companion-contract.mjs` to compare complete recursive portable client inventories and overlay bytes against the extension's vendor snapshot, check the Host safety profile, and verify the 220 product source/dependency inputs recorded in `provenance/host-contract.json`. Additions and removals also fail the check.
 3. Installs, checks, builds and tests the standalone extension, including Chromium and the archive content check. The consumer is nested under `.cache/browser-companion`; its test ignores are scoped to its own root so an ancestor cache/build directory cannot hide the suite. The external check script uses `pnpm run check` explicitly to keep root binary analysis separate.
 
 The change classifier includes all Rust paths and manifests, protocol definitions, shared client/overlay/engine, desktop companion API, the pin and the contract checker. These edits keep selecting the consumer lane even though extension source is no longer in this repository.
@@ -23,7 +23,7 @@ The consumer job needs no product Jest artifacts. If product planning fails or i
 For a local check, use an explicit checkout:
 
 ```sh
-node scripts/ci/check-browser-companion-contract.mjs --extension-root /path/to/cognia-browser-extension
+node scripts/gates/check-browser-companion-contract.mjs --extension-root /path/to/cognia-browser-extension
 ```
 
 An intentional protocol or overlay change requires a tested vendor refresh in the extension repository, then a pin update here. Host source, build-script and dependency changes also require compatibility review and a refreshed Host snapshot before updating the pin. This conservative source fence can require refreshes for unrelated Rust changes; it does not establish real-Host E2E behavior. Custom generators must keep their inputs in the checked inventory; external build inputs require an explicit gate extension. Normal extension install/build/test never reads the product checkout or fetches product source. The source snapshot records the product revision, dirty source state and SHA-256 of every imported file; uncommitted hardening is identified rather than attributed to an unrelated published revision.

@@ -230,7 +230,7 @@ test("CI impact distinguishes an ordinary UI edit from native and independent wo
   assert.equal(docs.frontend, false)
   for (const file of [
     "integrations/cognia-services.json",
-    "scripts/ci/check-cognia-services.mjs",
+    "scripts/gates/check-cognia-services.mjs",
     "protocol/cognia-services/diagnostic-openapi.yaml",
     "lib/diagnostic-service/types.ts",
     "crates/cognia-tenant-auth/fixtures/grant-wire-vector.json",
@@ -249,7 +249,7 @@ test("CI impact distinguishes an ordinary UI edit from native and independent wo
     assert.equal(classifyCiImpact([file]).mobile, true, file)
   for (const file of [
     "integrations/browser-companion.json",
-    "scripts/ci/check-browser-companion-contract.mjs",
+    "scripts/gates/check-browser-companion-contract.mjs",
     "lib/browser/overlay.injected.js",
     "lib/browser/extension-engine.ts",
     "crates/cognia-companion-security/src/security_store.rs",

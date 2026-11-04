@@ -86,7 +86,9 @@ Each gate keeps its data next to it: `*-baseline.json` ratchets may only fall
 a baseline needs a record under `baseline-exceptions/` (see its README).
 `lint-i18n.ts` reads `i18n-baseline.json` (grandfathered hard-coded strings,
 rewritten by `pnpm lint:i18n:baseline`) and `i18n-ignore.txt` (paths the scan
-skips).
+skips). `check-cognia-services.mjs` (`pnpm cognia-services:check`) and
+`check-browser-companion-contract.mjs` verify the pinned external repositories;
+CI runs them against a checkout under `.cache/`.
 Tests: `pnpm scripts:test:gates`.
 
 ### `sync/`
@@ -138,8 +140,7 @@ Developer CLIs: `tauri.mjs` (the `tauri dev` feature set), `headless.mjs` and
 
 Steps that only make sense inside a workflow: `change-plan.mjs` (which lanes a
 diff needs), `report/` (the CI report and PR comment), `feishu/` (Feishu
-notifications), the cognia-services pin check, the Browser Companion contract
-check, the Compose pair invitation, the Agent Host release handoff and macOS
+notifications), the Compose pair invitation, the Agent Host release handoff and macOS
 signing requirements.
 
 ### `release/`
@@ -262,15 +263,17 @@ Folders were consolidated on 2026-11-04 (plan:
 `docs/plans/2026-11-04-scripts-layout-phase2.md`). Older records still name the
 old paths; this table maps them.
 
-| Old path                                  | New path                            |
-| ----------------------------------------- | ----------------------------------- |
-| `i18n-baseline.json`                      | `gates/i18n-baseline.json`          |
-| `i18n-ignore.txt`                         | `gates/i18n-ignore.txt`             |
-| `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`         |
-| `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`      |
-| `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs` |
-| `pet/fetch-live2d-corpus.mjs`             | `dev/fetch-live2d-corpus.mjs`       |
-| `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`   |
+| Old path                                  | New path                                     |
+| ----------------------------------------- | -------------------------------------------- |
+| `i18n-baseline.json`                      | `gates/i18n-baseline.json`                   |
+| `i18n-ignore.txt`                         | `gates/i18n-ignore.txt`                      |
+| `pi/pin-extension.mjs`                    | `sync/pin-pi-extension.mjs`                  |
+| `pricing/build-catalog.mjs`               | `sync/build-price-catalog.mjs`               |
+| `pet/generate-compatibility-fixtures.mjs` | `sync/generate-live2d-fixtures.mjs`          |
+| `pet/fetch-live2d-corpus.mjs`             | `dev/fetch-live2d-corpus.mjs`                |
+| `screenshots/capture-pwa-screenshots.mjs` | `dev/capture-pwa-screenshots.mjs`            |
+| `ci/check-cognia-services.mjs`            | `gates/check-cognia-services.mjs`            |
+| `ci/check-browser-companion-contract.mjs` | `gates/check-browser-companion-contract.mjs` |
 
 ## Known layout debt
 
@@ -278,7 +281,8 @@ The layout above grew one subsystem at a time and still has overlaps that a
 later pass will fold together. Until then, follow the conventions above for
 new scripts and do not copy these patterns:
 
-- Gates outside `gates/`: `ci/check-*.mjs` and `plugin/check-*.mjs`.
+- Gates outside `gates/`: `plugin/check-*.mjs`, kept with the rest of the
+  plugin tooling while the plugin repository extraction is in progress.
 - Generators outside `sync/`: `build/gen-*.mjs`, `plugin/generate-*.mjs`.
 - Live smokes outside `smoke/`: `router-fusion/live-smoke.mjs` and the
   top-level `lark-*.mts`.

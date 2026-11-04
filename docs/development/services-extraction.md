@@ -20,7 +20,7 @@ Smaller contracts are kept as byte-identical copies beside the code that reads t
 
 `integrations/cognia-services.json` names the revision. The Cargo dependency, both `package.json` entries and both lockfiles must name the same one; `pnpm cognia-services:check` fails otherwise. The `cognia-services` lane in `test.yml` checks the pinned revision out under `.cache/cognia-services` and:
 
-1. runs `scripts/ci/check-cognia-services.mjs --services-root .cache/cognia-services`, which also compares every copy above against that checkout;
+1. runs `scripts/gates/check-cognia-services.mjs --services-root .cache/cognia-services`, which also compares every copy above against that checkout;
 2. runs the signaling room-id vector of the pinned crate;
 3. runs the suites that read service sources with `COGNIA_SERVICES_ROOT` set: tenant RLS against the diagnostic server migrations, diagnostic audit actions, and the status-site headers against the status Worker. Without the variable those suites skip, so a plain local run stays green.
 
@@ -31,7 +31,7 @@ For local runs, fetch the pinned revision and point the suites at it:
 ```sh
 pnpm cognia-services:fetch
 COGNIA_SERVICES_ROOT=$PWD/.cache/cognia-services pnpm test -- lib/diagnostic-service/types.test.ts
-node scripts/ci/check-cognia-services.mjs --services-root .cache/cognia-services
+node scripts/gates/check-cognia-services.mjs --services-root .cache/cognia-services
 ```
 
 ## Changing a contract

@@ -249,7 +249,7 @@ export function classifyCiImpact(changedFiles, mode = "incremental") {
       globalJS ||
       rust ||
       any(
-        /^(?:integrations\/browser-companion\.json|scripts\/ci\/check-browser-companion-contract\.mjs|src-tauri\/src\/lib\.rs)|^(?:protocol|packages|lib\/browser|lib\/browser-companion|src-tauri\/src\/companion_api|crates\/cognia-server|crates\/cognia-companion(?:-[^/]+)?)\//
+        /^(?:integrations\/browser-companion\.json|scripts\/gates\/check-browser-companion-contract\.mjs|src-tauri\/src\/lib\.rs)|^(?:protocol|packages|lib\/browser|lib\/browser-companion|src-tauri\/src\/companion_api|crates\/cognia-server|crates\/cognia-companion(?:-[^/]+)?)\//
       ),
     rust,
     gateway:
@@ -267,7 +267,7 @@ export function classifyCiImpact(changedFiles, mode = "incremental") {
     // The pinned cognia-labs/cognia-services consumer: the pin, its check, the
     // vendored contract copies, and the app code that reads them.
     cogniaServices: any(
-      /^(?:integrations\/cognia-services\.json|scripts\/ci\/check-cognia-services\.mjs|Cargo\.(?:toml|lock)|package\.json|pnpm-lock\.yaml|lib\/plugin\/character-pack\/__fixtures__\/jcs-vectors\.json)$|^(?:protocol\/cognia-services|lib\/diagnostic-service|crates\/cognia-tenant-auth)\//
+      /^(?:integrations\/cognia-services\.json|scripts\/gates\/check-cognia-services\.mjs|Cargo\.(?:toml|lock)|package\.json|pnpm-lock\.yaml|lib\/plugin\/character-pack\/__fixtures__\/jcs-vectors\.json)$|^(?:protocol\/cognia-services|lib\/diagnostic-service|crates\/cognia-tenant-auth)\//
     ),
     productionBuild:
       rust ||
