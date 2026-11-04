@@ -36,6 +36,7 @@ COPY crates ./crates
 COPY vendor/liteparse ./vendor/liteparse
 # sandboxd embeds the vendored Codex model catalog it builds task catalogs from.
 COPY cli/src/runtime/external/codex-catalog ./cli/src/runtime/external/codex-catalog
+COPY packages/agent-codex/catalog-data ./packages/agent-codex/catalog-data
 RUN cargo build --release --locked -p cognia-sandboxd --bin cognia-sandboxd \
     && cargo build --release --locked -p cognia-bootstrap-agent --bin cognia-bootstrap \
     && install -D -m 0755 target/release/cognia-bootstrap /out/common/bin/cognia-bootstrap \
