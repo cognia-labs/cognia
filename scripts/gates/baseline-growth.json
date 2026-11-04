@@ -290,7 +290,7 @@
     },
     {
       "id": "i18n-baseline",
-      "file": "scripts/i18n-baseline.json",
+      "file": "scripts/gates/i18n-baseline.json",
       "gate": "lint:i18n",
       "measures": [
         {

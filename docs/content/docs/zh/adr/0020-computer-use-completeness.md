@@ -186,7 +186,7 @@ lib/db/schema.ts — v32 marker (no migration)
 5. TypeScript SDK在能力合同宣传的路径上搭建的支架：`packages/plugin-sdk/src/api/native-anthropic-tool.ts`和`packages/plugin-sdk/src/context/index.ts`。
 6. `runtime-proof-audit.test.ts`锁`native-anthropic-tool`证明状态=`verified`。
 7. 设置→自动化同意覆盖层+全部五个标签页（总览、权限、白名单、审计、检查器）以及“角色电脑使用”开关和外部桥接`mcp:computer-use`范围描述，均通过新`automation.*`和现有`settings.*`命名空间下的`useTranslations()`完全连接i18n。插件`/cu`斜语命令通过`lib/i18n/plugin-i18n-registry`注册i18n捆绑。
-8. `i18n/messages/en.json` + `zh-CN.json` 对等性恢复。`scripts/i18n-baseline.json` 重新基底——JSX硬编码字符串数量从811降至698（~113字符串闭合）。
+8. `i18n/messages/en.json` + `zh-CN.json` 对等性恢复。`scripts/gates/i18n-baseline.json` 重新基底——JSX硬编码字符串数量从811降至698（~113字符串闭合）。
 9. 能力合同`hostBindings`更新以进行运行时无效审计。
 
 **仍然推迟（Non-Goals，单独记录）**

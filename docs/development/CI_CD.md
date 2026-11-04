@@ -266,7 +266,7 @@ the recorded list **may only shrink**, and anything new is a hard failure.
 
 | Gate                   | Baseline file                                | Regenerate with                                  |
 | ---------------------- | -------------------------------------------- | ------------------------------------------------ |
-| Hardcoded i18n strings | `scripts/i18n-baseline.json`                 | `pnpm lint:i18n:baseline`                        |
+| Hardcoded i18n strings | `scripts/gates/i18n-baseline.json`           | `pnpm lint:i18n:baseline`                        |
 | Co-located tests       | `scripts/gates/colocated-test-baseline.json` | `pnpm audit:colocated-tests -- --write-baseline` |
 | Clippy                 | `scripts/gates/clippy-baseline.json`         | `pnpm rust:clippy -- --write-baseline`           |
 | E2E governance         | `scripts/e2e/governance-exceptions.json`     | hand-edited, entries carry `reviewAfter`         |

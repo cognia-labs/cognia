@@ -661,7 +661,7 @@ const GATE_DEBT_FILES = [
   "scripts/gates/surface-baseline.json",
   "scripts/gates/unreachable-component-baseline.json",
   "scripts/gates/workspace-attribution-baseline.json",
-  "scripts/i18n-baseline.json",
+  "scripts/gates/i18n-baseline.json",
   "scripts/plugin/author-import-baseline.json",
   "scripts/plugin/sdk-standalone-baseline.json",
   "scripts/test/db-fixture-baseline.json",

@@ -9,7 +9,7 @@ no hard-coded user-facing strings in `.tsx`; all keys present in both
 `i18n/messages/en.json` and `i18n/messages/zh-CN.json`.
 
 Important context: `pnpm lint:i18n` enforces a _baseline count_
-(`scripts/i18n-baseline.json`, a tolerated count of legacy JSX findings).
+(`scripts/gates/i18n-baseline.json`, a tolerated count of legacy JSX findings).
 A change can add a hard-coded string and still pass the script if another one
 was removed elsewhere. Your job is the per-change review the script cannot do.
 

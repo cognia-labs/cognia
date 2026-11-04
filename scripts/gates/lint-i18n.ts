@@ -14,7 +14,7 @@
  *      user-facing (contain letters beyond a small allowed character class).
  *
  *      Existing tech-debt strings are snapshotted into
- *      `scripts/i18n-baseline.json` so the gate can be introduced without
+ *      `scripts/gates/i18n-baseline.json` so the gate can be introduced without
  *      blocking unrelated work. Any new finding above the baseline count
  *      fails the lint.
  *
@@ -80,8 +80,8 @@ interface BaselineFile {
 const REPO_ROOT = path.resolve(__dirname, "../..")
 const I18N_EN = path.join(REPO_ROOT, "i18n/messages/en.json")
 const I18N_ZH = path.join(REPO_ROOT, "i18n/messages/zh-CN.json")
-const BASELINE_PATH = path.join(REPO_ROOT, "scripts/i18n-baseline.json")
-const IGNORE_PATH = path.join(REPO_ROOT, "scripts/i18n-ignore.txt")
+const BASELINE_PATH = path.join(REPO_ROOT, "scripts/gates/i18n-baseline.json")
+const IGNORE_PATH = path.join(REPO_ROOT, "scripts/gates/i18n-ignore.txt")
 
 const SCAN_DIRS = ["components", "app", "hooks"]
 // Folders that are vendored / outside our authorship — never flag.

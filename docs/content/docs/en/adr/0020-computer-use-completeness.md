@@ -293,7 +293,7 @@ in a dedicated follow-up ADR.
    `/cu` slash command registers an i18n bundle via
    `lib/i18n/plugin-i18n-registry`.
 8. `i18n/messages/en.json` + `zh-CN.json` parity restored.
-   `scripts/i18n-baseline.json` rebased — JSX hardcoded-string count fell
+   `scripts/gates/i18n-baseline.json` rebased — JSX hardcoded-string count fell
    from 811 to 698 (~113 strings closed).
 9. Capability contract `hostBindings` updated for the runtime-proof audit.
 

@@ -53,15 +53,13 @@ scripts/
 
 Top-level files:
 
-| File                            | Purpose                                                                                    |
-| ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `postinstall.mjs`               | Root `postinstall`: sidecar deps, linked package builds, VS Code ext-host sidecar.         |
-| `lark-entry-verify.mts`         | Feishu dual-entry verification harness (ADR-0091). `pnpm lark:verify-entry`.               |
-| `lark-live-smoke.mts`           | Live Lark adapter smoke against the real OpenAPI. Run by hand, see connector docs.         |
-| `provider-diagnostics-live.mjs` | Live provider diagnostics run through the sidecar. `pnpm provider-diagnostics:live`.       |
-| `i18n-baseline.json`            | `gates/lint-i18n.ts`: grandfathered hard-coded strings. Rewritten by `lint:i18n:baseline`. |
-| `i18n-ignore.txt`               | `gates/lint-i18n.ts`: paths excluded from the hard-coded-string scan.                      |
-| `tsconfig.audit.json`           | `ts-node` project for the TypeScript gates; `include` reaches every subfolder.             |
+| File                            | Purpose                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `postinstall.mjs`               | Root `postinstall`: sidecar deps, linked package builds, VS Code ext-host sidecar.   |
+| `lark-entry-verify.mts`         | Feishu dual-entry verification harness (ADR-0091). `pnpm lark:verify-entry`.         |
+| `lark-live-smoke.mts`           | Live Lark adapter smoke against the real OpenAPI. Run by hand, see connector docs.   |
+| `provider-diagnostics-live.mjs` | Live provider diagnostics run through the sidecar. `pnpm provider-diagnostics:live`. |
+| `tsconfig.audit.json`           | `ts-node` project for the TypeScript gates; `include` reaches every subfolder.       |
 
 ## Folders
 
@@ -90,6 +88,9 @@ Each gate keeps its data next to it: `*-baseline.json` ratchets may only fall
 (`check-baseline-growth.mjs`, ratchets listed in `baseline-growth.json`), and
 `*-allowlist.json` / `*-exceptions.json` are reviewed exception lists. Raising
 a baseline needs a record under `baseline-exceptions/` (see its README).
+`lint-i18n.ts` reads `i18n-baseline.json` (grandfathered hard-coded strings,
+rewritten by `pnpm lint:i18n:baseline`) and `i18n-ignore.txt` (paths the scan
+skips).
 Tests: `pnpm scripts:test:gates`.
 
 ### `sync/`
@@ -256,6 +257,17 @@ delete the harness. It stays recoverable from git history.
   [Run by hand](#run-by-hand) with the record that uses it.
 - One-shot migrations are deleted once they have run. Dated reports and
   working notes belong in `docs/evidence/` or `docs/reports/`, not here.
+
+## Moved paths
+
+Folders were consolidated on 2026-11-04 (plan:
+`docs/plans/2026-11-04-scripts-layout-phase2.md`). Older records still name the
+old paths; this table maps them.
+
+| Old path             | New path                   |
+| -------------------- | -------------------------- |
+| `i18n-baseline.json` | `gates/i18n-baseline.json` |
+| `i18n-ignore.txt`    | `gates/i18n-ignore.txt`    |
 
 ## Known layout debt
 
