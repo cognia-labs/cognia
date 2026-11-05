@@ -19,6 +19,7 @@
  */
 
 import type { PlatformAdapter } from "@/types/connectors"
+import type { TransportMode } from "@/types/connectors/adapter"
 import type { Capability } from "@/types/connectors/capability"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
@@ -27,6 +28,7 @@ import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { AvatarSource, PlatformAvatarTarget } from "./platform-avatar"
 import type { StatusView } from "./commands/render"
 import type { ApprovalCardState } from "./hitl/approval-card-state"
+import type { PrincipalResolution, ResolvePrincipalInput } from "./principal/resolve"
 import { CONNECTOR_VENDORS } from "./adapters/_vendors"
 
 /** Something a contribution started that the runtime stops on teardown. */
@@ -61,6 +63,15 @@ export interface ConnectorVendorFinalReplyContext {
   locale?: string
   /** Recovered text to show when the run produced no answer segment. */
   fallbackAnswer?: string
+}
+
+/** What the bus hands a vendor's inbound principal resolution. */
+export interface ConnectorVendorInboundPrincipalInput {
+  event: NormalizedInboundEvent
+  adapterRow: AdapterInstanceRow
+  /** The running adapter's transports: whether identity evidence in the envelope is believable. */
+  transportModes?: readonly TransportMode[]
+  activeAccountId: string
 }
 
 export interface ConnectorVendorContribution {
@@ -126,6 +137,22 @@ export interface ConnectorVendorContribution {
       segments: MessageSegment[],
       context: ConnectorVendorFinalReplyContext
     ): Promise<MessageSegment[][] | undefined>
+  }
+  /**
+   * A principal registry that gates who may start a turn or click a card
+   * (`principal/resolve.ts`). Without one every sender is `legacy`.
+   */
+  readonly principals?: {
+    resolve(input: ResolvePrincipalInput): Promise<PrincipalResolution>
+    /** The bus's inbound resolution, which may heal what the first event can before failing closed. */
+    resolveInbound(input: ConnectorVendorInboundPrincipalInput): Promise<PrincipalResolution>
+    /** Park and answer an inbound event whose sender did not resolve. */
+    handleUnresolved(
+      event: NormalizedInboundEvent,
+      adapterRow: AdapterInstanceRow,
+      resolution: Exclude<PrincipalResolution, { status: "legacy" | "resolved" }>,
+      inboundJobId: string
+    ): Promise<void>
   }
   /** Run cards for the generic presentation runner (`run-presentation/runner.ts`). */
   readonly runPresentation?: {

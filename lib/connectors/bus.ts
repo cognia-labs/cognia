@@ -140,15 +140,8 @@ import {
   refreshConnectorConversationDeliveryTarget,
   stampConnectorConversationPrincipal,
 } from "@/lib/db/connector-conversation-state"
-import {
-  getActiveRuntimeAccountId,
-  readIdentityScope,
-  resolveConnectorPrincipal,
-} from "./principal/resolve"
-import { handleUnresolvedPrincipal } from "./principal/unbound"
-import { bootstrapFeishuRegistry } from "./principal/bootstrap"
-import { isForgeResistantTransport, selfBindSignedInOwner } from "./principal/self-bind"
-import { connectorsKeyringGet } from "./tauri/commands"
+import { getActiveRuntimeAccountId, type PrincipalResolution } from "./principal/resolve"
+import { connectorVendor } from "./vendor-contribution"
 import { recordConnectorMetric } from "./metrics"
 import {
   authorizeConnectorCallback,
@@ -782,66 +775,21 @@ export class ConnectorBus {
     // Recovery replays re-enter this pipeline, so recovered jobs re-resolve
     // against the current registry state (a principal disabled between crash
     // and replay is rejected here).
-    // A sender's union_id is recorded (bind requests, principal back-fill) and
-    // matched against an owner confirmation, so it is only believed when the
-    // transport authenticates more than a static token. On a token-only
-    // webhook one forged event could otherwise plant it permanently.
-    const transportModes = this.adapters.get(event.adapterId)?.meta.transportModes
-    const stampedScope = readIdentityScope(event.channelData)
-    const identityScope =
-      stampedScope?.unionId &&
-      !(await isForgeResistantTransport(event.adapterId, transportModes, connectorsKeyringGet))
-        ? { tenantKey: stampedScope.tenantKey, appId: stampedScope.appId }
-        : stampedScope
-    const resolveInput = {
-      platform: event.platform,
-      adapterRow,
-      remoteUserId: event.sender.remoteUserId,
-      identityScope,
-      activeAccountId: getActiveRuntimeAccountId(),
-    }
-    let principalResolution = await resolveConnectorPrincipal(resolveInput)
-    // Self-heal the one ordering hazard in registry seeding: the adapter's
-    // tenant_key is only learnable from inbound traffic, so an adapter that has
-    // never received an event boots with no tenant scope and the start-up
-    // bootstrap can only skip. The first event both reveals the tenant and
-    // arrives BEFORE anything seeded the registry, which would park an entire
-    // existing workspace on the very message that could have seeded it. The
-    // bootstrap is idempotent and no-ops once the tenant row exists.
-    if (principalResolution.status === "unbound") {
-      const seeded = await bootstrapFeishuRegistry({
-        adapterId: event.adapterId,
-        adapterRow,
-      }).catch(() => ({ status: "skipped" as const, reason: "flag_off" as const }))
-      if (seeded.status === "seeded") {
-        principalResolution = await resolveConnectorPrincipal(resolveInput)
-      }
-    }
-    // The signed-in owner, once they confirmed a bot principal as themselves,
-    // is not a stranger to this profile's other bots in the tenant: admit them
-    // (or re-admit a principal a sign-out unlinked) instead of handing them
-    // another bind code. Everyone else stays as resolved.
-    const selfBindable =
-      principalResolution.status === "unbound" ||
-      (principalResolution.status === "principal_disabled" &&
-        principalResolution.principal.status === "unlinked" &&
-        principalResolution.principal.selfBoundAt !== undefined)
-    if (selfBindable) {
-      const selfBound = await selfBindSignedInOwner({
-        adapterId: event.adapterId,
-        transportModes,
-        openId: event.sender.remoteUserId,
-        identityScope: resolveInput.identityScope,
-        fallbackAppId: adapterRow.lastWhoamiResult?.appId,
-        localAccountId: resolveInput.activeAccountId,
-        conversationKey: event.conversationKey,
-      }).catch(() => ({ status: "skipped" as const }))
-      if (selfBound.status === "bound") {
-        principalResolution = await resolveConnectorPrincipal(resolveInput)
-      }
-    }
+    // The platform's vendor resolves the sender against its registry, healing
+    // what the first event can heal (Lark seeds an unseeded registry and
+    // re-admits the signed-in owner) before it fails closed.
+    const principals = connectorVendor(event.platform)?.principals
+    const principalResolution: PrincipalResolution = principals
+      ? await principals.resolveInbound({
+          event,
+          adapterRow,
+          transportModes: this.adapters.get(event.adapterId)?.meta.transportModes,
+          activeAccountId: getActiveRuntimeAccountId(),
+        })
+      : { status: "legacy" }
     if (principalResolution.status !== "legacy" && principalResolution.status !== "resolved") {
-      await handleUnresolvedPrincipal(event, adapterRow, principalResolution, inboundJob.id)
+      // A non-legacy outcome only comes from a vendor registry, which answers it.
+      await principals?.handleUnresolved(event, adapterRow, principalResolution, inboundJob.id)
       return
     }
     if (principalResolution.status === "resolved") {

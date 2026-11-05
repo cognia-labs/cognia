@@ -17,7 +17,7 @@ import { loggers } from "@cognia/logging"
 import { listAdapterInstances } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { startDailySchedule, type DailyScheduleHandle } from "@/lib/connectors/daily-schedule"
-import { sweepStaleFeishuBindRequests } from "@/lib/connectors/principal/admin"
+import { sweepStaleFeishuBindRequests } from "@/lib/connectors/adapters/lark/principal/admin"
 import { sweepLarkChatSurfaces } from "./surface-sweep"
 
 export const SURFACE_SWEEP_INTERVAL_MS = 15 * 60 * 1000

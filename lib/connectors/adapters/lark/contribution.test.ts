@@ -44,6 +44,13 @@ jest.mock("./run-presentation/driver", () => ({
     card: { kind: "lark", payload: "f" },
   })),
 }))
+jest.mock("./principal/resolve", () => ({ resolveLarkPrincipal: jest.fn(async () => "resolved") }))
+jest.mock("./principal/inbound", () => ({
+  resolveLarkInboundPrincipal: jest.fn(async () => "inbound"),
+}))
+jest.mock("./principal/unbound", () => ({
+  handleUnresolvedPrincipal: jest.fn(async () => undefined),
+}))
 jest.mock("./surface-schedule", () => ({
   startLarkSurfaceSweep: jest.fn(),
   startBindRequestExpirySweep: jest.fn(),
@@ -63,6 +70,9 @@ import { larkReplyLocale } from "./card-kit"
 import { buildLarkResultCardSegment, withLarkResultCard } from "./result-card"
 import { buildLarkRunFallbackSegment } from "./run-presentation/driver"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import { resolveLarkPrincipal } from "./principal/resolve"
+import { resolveLarkInboundPrincipal } from "./principal/inbound"
+import { handleUnresolvedPrincipal } from "./principal/unbound"
 import type { RunProjectionSnapshot } from "@/types/execution/run"
 import type { StatusView } from "@/lib/connectors/commands/render"
 
@@ -248,5 +258,18 @@ describe("larkContribution", () => {
     expect(buildLarkRunFallbackSegment).toHaveBeenCalledWith(snapshot, "https://web.example", {
       title: "T",
     })
+  })
+
+  it("resolves principals through the Lark registry and answers unresolved senders", async () => {
+    const principals = larkContribution.principals!
+    const resolveInput = { platform: "lark" as const, adapterRow: row(), remoteUserId: "ou_1" }
+    await expect(principals.resolve(resolveInput)).resolves.toBe("resolved")
+    expect(resolveLarkPrincipal).toHaveBeenCalledWith(resolveInput)
+    const inbound = { event: event({}), adapterRow: row(), activeAccountId: "acct" }
+    await expect(principals.resolveInbound(inbound)).resolves.toBe("inbound")
+    expect(resolveLarkInboundPrincipal).toHaveBeenCalledWith(inbound)
+    const unbound = { status: "unbound" as const, openIdHash: "h" }
+    await principals.handleUnresolved(event({}), row(), unbound, "job-1")
+    expect(handleUnresolvedPrincipal).toHaveBeenCalledWith(event({}), row(), unbound, "job-1")
   })
 })

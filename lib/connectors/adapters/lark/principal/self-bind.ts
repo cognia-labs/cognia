@@ -50,7 +50,7 @@ import {
 } from "@/lib/db/feishu-principals"
 import { UserBindingRegistry } from "@/lib/identity/user-binding"
 import { bindLarkIdentityTo } from "./person"
-import { hashOpenId, type IdentityScope } from "./resolve"
+import { hashOpenId, type IdentityScope } from "@/lib/connectors/principal/resolve"
 
 export type SelfBindSkipReason =
   | "transport_untrusted"

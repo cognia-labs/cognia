@@ -35,7 +35,7 @@ import {
 import { assertSignedInIdentityOwner, type SignedInIdentity } from "./sign-in"
 import type { UserBindingRegistry } from "./user-binding"
 
-import { attachSignInToFeishuPrincipals } from "@/lib/connectors/principal/login-link"
+import { attachSignInToFeishuPrincipals } from "@/lib/connectors/adapters/lark/principal/login-link"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { signInToLogto } from "@/lib/logto/app-session"
 

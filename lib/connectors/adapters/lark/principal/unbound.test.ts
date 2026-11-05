@@ -3,7 +3,7 @@
 import "fake-indexeddb/auto"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { handleUnresolvedPrincipal, type UnresolvedPrincipalDependencies } from "./unbound"
-import { hashOpenId } from "./resolve"
+import { hashOpenId } from "@/lib/connectors/principal/resolve"
 
 const T0 = 1_753_000_000_000
 

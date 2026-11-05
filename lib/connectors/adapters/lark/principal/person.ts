@@ -43,7 +43,7 @@ import {
   type ExternalSubject,
 } from "@/lib/identity/external-person"
 
-import { hashOpenId } from "./resolve"
+import { hashOpenId } from "@/lib/connectors/principal/resolve"
 
 /** A Lark `open_id` is only meaningful inside one app of one tenant. */
 export function larkOpenIdTenant(tenantKey: string, appId: string): string {

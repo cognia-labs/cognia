@@ -2621,12 +2621,12 @@
       "reason": "The public integration executeAction payload requires the connector account key; an empty value delegates credential resolution to the host-authorized Bot binding."
     },
     {
-      "file": "lib/connectors/principal/self-bind.ts",
+      "file": "lib/connectors/adapters/lark/principal/self-bind.ts",
       "rule": "bareAccountId",
       "scope": "local-profile",
       "field": "AuditEntry.fields.accountId",
-      "contract": "lib/connectors/principal/self-bind.ts",
-      "test": "lib/connectors/principal/self-bind.test.ts",
+      "contract": "lib/connectors/adapters/lark/principal/self-bind.ts",
+      "test": "lib/connectors/adapters/lark/principal/self-bind.test.ts",
       "source": "accountId: input.localAccountId,",
       "occurrences": 1,
       "reason": "Persisted principal-bound audit events retain their existing local-profile attribution key; internal self-binding inputs use the qualified localAccountId name."

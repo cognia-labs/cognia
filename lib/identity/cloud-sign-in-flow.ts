@@ -34,7 +34,7 @@ import {
   type IdentityConflict,
   type LinkSignedInIdentitiesReport,
 } from "./link-signed-in-identities"
-import { attachSignInToFeishuPrincipals } from "@/lib/connectors/principal/login-link"
+import { attachSignInToFeishuPrincipals } from "@/lib/connectors/adapters/lark/principal/login-link"
 import { UserBindingRegistry } from "./user-binding"
 import { assertSignedInIdentityOwner } from "./sign-in"
 

@@ -312,14 +312,17 @@
     "lib/connectors/adapters/lark/entry/tokens.ts": {
       "bareAccountId": 5
     },
-    "lib/connectors/principal/admin.ts": {
+    "lib/connectors/adapters/lark/principal/admin.ts": {
       "bareAccountId": 12
     },
-    "lib/connectors/principal/bootstrap.ts": {
+    "lib/connectors/adapters/lark/principal/bootstrap.ts": {
       "bareAccountId": 7
     },
+    "lib/connectors/adapters/lark/principal/resolve.ts": {
+      "bareAccountId": 1
+    },
     "lib/connectors/principal/resolve.ts": {
-      "bareAccountId": 6
+      "bareAccountId": 5
     },
     "lib/data/destinations/config.ts": {
       "bareAccountId": 1

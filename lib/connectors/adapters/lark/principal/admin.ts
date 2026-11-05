@@ -43,7 +43,7 @@ import {
 import { isUserId } from "@/types/identity"
 import { bindLarkIdentityTo, resolveLarkPerson } from "./person"
 import { logtoSubjectForUser } from "./login-link"
-import { getActiveRuntimeAccountId, hashOpenId } from "./resolve"
+import { getActiveRuntimeAccountId, hashOpenId } from "@/lib/connectors/principal/resolve"
 import { revokeWebSessionsForPrincipal } from "@/lib/db/lark-entry"
 import type { UserBindingRow } from "@/lib/accounts/account-db"
 import { UserBindingRegistry } from "@/lib/identity/user-binding"

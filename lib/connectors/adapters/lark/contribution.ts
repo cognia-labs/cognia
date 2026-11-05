@@ -130,6 +130,18 @@ export const larkContribution: ConnectorVendorContribution = {
       return groups.length > 0 ? groups : undefined
     },
   },
+  principals: {
+    resolve: async (input) => (await import("./principal/resolve")).resolveLarkPrincipal(input),
+    resolveInbound: async (input) =>
+      (await import("./principal/inbound")).resolveLarkInboundPrincipal(input),
+    handleUnresolved: async (event, adapterRow, resolution, inboundJobId) =>
+      (await import("./principal/unbound")).handleUnresolvedPrincipal(
+        event,
+        adapterRow,
+        resolution,
+        inboundJobId
+      ),
+  },
   runPresentation: {
     // The milestone is a result card (state header, elapsed / details footer)
     // rather than a bare markdown bubble. The projected snapshot is already

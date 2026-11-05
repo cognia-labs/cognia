@@ -110,7 +110,7 @@ const { reconcileGroupMenuSurface } = await import("../../lib/connectors/adapter
 const { removeChatSurface } = await import("../../lib/connectors/adapters/lark/surface-removal")
 const { getChatSurface, listChatSurfaces } = await import("../../lib/db/lark-chat-surfaces")
 const { registerFeishuTenant, approveFeishuBind, listFeishuPrincipals } =
-  await import("../../lib/connectors/principal/admin")
+  await import("../../lib/connectors/adapters/lark/principal/admin")
 const { createBindRequest } = await import("../../lib/db/feishu-principals")
 const { resolveConnectorPrincipal } = await import("../../lib/connectors/principal/resolve")
 const { larkMenuManifest } = await import("../../lib/connectors/commands/registry")

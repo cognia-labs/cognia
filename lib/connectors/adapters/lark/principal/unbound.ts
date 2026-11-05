@@ -18,7 +18,7 @@ import { createBindRequest } from "@/lib/db/feishu-principals"
 import { markConnectorInboundJobHistoryOnly } from "@/lib/db/connector-inbound-jobs"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { buildLarkBindNoticeCard } from "@/lib/connectors/adapters/lark/command-cards"
-import { hashOpenId, type PrincipalResolution } from "./resolve"
+import { hashOpenId, type PrincipalResolution } from "@/lib/connectors/principal/resolve"
 
 export type UnresolvedPrincipalResolution = Exclude<
   PrincipalResolution,

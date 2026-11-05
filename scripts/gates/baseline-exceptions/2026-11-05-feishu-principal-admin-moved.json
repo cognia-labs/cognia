@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:lib/connectors/principal/admin.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "lib/connectors",
+  "repaymentPhase": "1",
+  "reason": "The Feishu principal module moved to lib/connectors/adapters/lark/principal/admin.ts (ADR-0250 §14 vendor-neutral frameworks). Its findings are counted under the new path; nothing new is admitted."
+}

@@ -30,12 +30,12 @@ import {
   rejectFeishuBind,
   setFeishuPrincipalEnabled,
   setFeishuTenantEnabled,
-} from "@/lib/connectors/principal/admin"
+} from "@/lib/connectors/adapters/lark/principal/admin"
 import {
   bindRequestMatchesOwner,
   readSignedInOwner,
   type SignedInOwner,
-} from "@/lib/connectors/principal/login-link"
+} from "@/lib/connectors/adapters/lark/principal/login-link"
 import { getActiveRuntimeAccountId } from "@/lib/connectors/principal/resolve"
 import type {
   AdapterInstanceRow,

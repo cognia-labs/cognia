@@ -39,7 +39,7 @@ import {
 } from "@/lib/connectors/adapters/lark/http"
 import { importLarkMessages } from "@/lib/connectors/adapters/lark/message-import"
 import { handlePlusCreate } from "@/lib/connectors/adapters/lark/plus-create"
-import { runPrincipalAdminIntent } from "@/lib/connectors/principal/admin-intent"
+import { runPrincipalAdminIntent } from "@/lib/connectors/adapters/lark/principal/admin-intent"
 import { hashOpenId, resolveConnectorPrincipal } from "@/lib/connectors/principal/resolve"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { readWorkbenchMode } from "./deep-links"

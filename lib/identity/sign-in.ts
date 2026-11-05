@@ -53,7 +53,7 @@ import {
   isSameBoundUser,
   type BindUserInput,
 } from "./user-binding"
-import { unlinkSelfBoundPrincipals } from "@/lib/connectors/principal/login-link"
+import { unlinkSelfBoundPrincipals } from "@/lib/connectors/adapters/lark/principal/login-link"
 
 import type { UserBindingRow } from "@/lib/accounts/account-db"
 

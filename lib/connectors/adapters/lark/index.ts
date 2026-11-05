@@ -62,7 +62,7 @@ import { handleMenuDisabledKey, handleMenuLink, handleMenuUnknownKey } from "./m
 import { reconcileChatTabSurface } from "./chat-tabs"
 import { reconcileGroupMenuSurface } from "./group-menu"
 import { sweepLarkChatSurfaces } from "./surface-sweep"
-import { bootstrapFeishuRegistry } from "@/lib/connectors/principal/bootstrap"
+import { bootstrapFeishuRegistry } from "@/lib/connectors/adapters/lark/principal/bootstrap"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { getBus } from "@/lib/connectors/bus"
 import type { LarkEventEnvelope } from "./parse"

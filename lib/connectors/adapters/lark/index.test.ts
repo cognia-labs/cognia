@@ -60,7 +60,7 @@ jest.mock("./inbound-media", () => ({
 // principal/bootstrap.test.ts; here we only prove the adapter CALLS it, since
 // an unwired bootstrap is exactly the failure this seam exists to prevent.
 const mockBootstrap = jest.fn(async () => ({ status: "skipped", reason: "flag_off" }) as const)
-jest.mock("@/lib/connectors/principal/bootstrap", () => ({
+jest.mock("@/lib/connectors/adapters/lark/principal/bootstrap", () => ({
   __esModule: true,
   bootstrapFeishuRegistry: (...args: unknown[]) => mockBootstrap(...(args as [])),
 }))

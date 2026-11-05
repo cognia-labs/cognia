@@ -22,7 +22,7 @@
 import type { AdapterInstanceRow, PlatformIdentityRow } from "@/lib/db/connector-types"
 import { createFeishuPrincipal, getFeishuTenant } from "@/lib/db/feishu-principals"
 import { getDb } from "@/lib/db/schema"
-import { isLarkPrincipalRegistryEnabled } from "../feature-flags"
+import { isLarkPrincipalRegistryEnabled } from "@/lib/connectors/feature-flags"
 import { registerFeishuTenant, withDefaults, type PrincipalAdminDependencies } from "./admin"
 import { resolveLarkPerson } from "./person"
 
