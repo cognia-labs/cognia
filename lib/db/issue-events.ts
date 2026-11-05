@@ -16,6 +16,8 @@
  * hook — same rule `lib/db/goals.ts` and `lib/db/plans.ts` follow.
  */
 
+import Dexie from "dexie"
+
 import { emitIssueEvent } from "@/lib/issues/event-bus"
 import type { IssueEvent, IssueEventPayload } from "@/types/issues"
 import { getDb } from "./schema"
@@ -62,6 +64,49 @@ export function __resetIssueEventClockForTesting(): void {
   lastAssignedTs = 0
 }
 
+/** Entries waiting for their root transaction to commit. Dropped with it. */
+const pendingByTransaction = new WeakMap<object, IssueEvent[]>()
+
+/**
+ * Publish appended entries once they are durable.
+ *
+ * An append inside a caller's transaction (a run settle, a multi-field edit,
+ * creating a project with its first issue) is not committed when `add`
+ * resolves: the transaction may still abort, and a subscriber reading other
+ * tables from inside its zone fails with "not part of transaction". So the
+ * entries wait for the ROOT transaction's `complete` (a nested transaction
+ * resolving is not a commit) and are published outside any transaction zone.
+ * An aborted transaction never fires `complete`, so its entries are never
+ * published. Same pattern as `lib/db/messages.ts` and
+ * `lib/db/memory-governance.ts`.
+ *
+ * Without an enclosing transaction of this database the write was its own
+ * auto-committed transaction, already visible to the next reader.
+ */
+function publishAfterCommit(events: readonly IssueEvent[]): void {
+  let transaction = Dexie.currentTransaction
+  while (transaction?.parent) transaction = transaction.parent
+  if (!transaction || transaction.db !== getDb()) {
+    for (const event of events) emitIssueEvent(event)
+    return
+  }
+  // One queue and one `complete` listener per transaction: Dexie runs a
+  // transaction's `complete` listeners newest first, which would publish a
+  // multi-append write backwards.
+  const queued = pendingByTransaction.get(transaction)
+  if (queued) {
+    queued.push(...events)
+    return
+  }
+  const queue = [...events]
+  pendingByTransaction.set(transaction, queue)
+  transaction.on("complete", () => {
+    Dexie.ignoreTransaction(() => {
+      for (const event of queue) emitIssueEvent(event)
+    })
+  })
+}
+
 /**
  * Append one entry. `kind` is derived from the payload rather than passed
  * separately, so the indexed column can never disagree with the payload's
@@ -76,7 +121,7 @@ export async function appendIssueEvent(input: AppendIssueEventInput): Promise<Is
     payload: input.payload,
   }
   await getDb().issueEvents.add(event)
-  emitIssueEvent(event)
+  publishAfterCommit([event])
   return event
 }
 
@@ -93,7 +138,7 @@ export async function appendIssueEvents(
     payload: input.payload,
   }))
   await getDb().issueEvents.bulkAdd(events)
-  for (const event of events) emitIssueEvent(event)
+  publishAfterCommit(events)
   return events
 }
 

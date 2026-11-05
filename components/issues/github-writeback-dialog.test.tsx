@@ -8,7 +8,13 @@ jest.mock("next-intl", () => ({
 }))
 
 const mockToastSuccess = jest.fn()
-jest.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => mockToastSuccess(...a) } }))
+const mockToastInfo = jest.fn()
+jest.mock("sonner", () => ({
+  toast: {
+    success: (...a: unknown[]) => mockToastSuccess(...a),
+    info: (...a: unknown[]) => mockToastInfo(...a),
+  },
+}))
 
 const mockResolveAccount = jest.fn()
 const mockRunWriteback = jest.fn()
@@ -23,6 +29,7 @@ jest.mock("@/lib/issues/github-writeback", () => {
   }
   return {
     GithubWritebackError,
+    isGithubWritebackPending: (job: { status: string }) => job.status !== "succeeded",
     resolveGithubWritebackAccount: (...a: unknown[]) => mockResolveAccount(...a),
     runGithubWriteback: (...a: unknown[]) => mockRunWriteback(...a),
   }
@@ -110,6 +117,40 @@ it("passes the confirmation through as the approval — nothing else may", async
   expect(mockToastSuccess).toHaveBeenCalledWith("writeback.success")
   expect(onCompleted).toHaveBeenCalledTimes(1)
   expect(props.onOpenChange).toHaveBeenCalledWith(false)
+})
+
+it("says a write still on its way is pending, without claiming success or re-syncing", async () => {
+  const user = userEvent.setup()
+  const onCompleted = jest.fn()
+  mockRunWriteback.mockResolvedValue({ id: "job-1", status: "queued" })
+  const { props } = renderDialog({ onCompleted })
+  await accountResolved()
+
+  await user.type(screen.getByTestId("writeback-body"), "looks good")
+  await user.click(screen.getByTestId("writeback-confirm"))
+
+  await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith("writeback.pending"))
+  expect(mockToastSuccess).not.toHaveBeenCalled()
+  expect(onCompleted).not.toHaveBeenCalled()
+  expect(props.onOpenChange).toHaveBeenCalledWith(false)
+})
+
+it("shows a refused job's own error and keeps the dialog open", async () => {
+  const user = userEvent.setup()
+  mockRunWriteback.mockRejectedValue(
+    new GithubWritebackError("rejected", "403 Resource not accessible")
+  )
+  const { props } = renderDialog()
+  await accountResolved()
+
+  await user.type(screen.getByTestId("writeback-body"), "hi")
+  await user.click(screen.getByTestId("writeback-confirm"))
+
+  await waitFor(() =>
+    expect(screen.getByTestId("writeback-error")).toHaveTextContent("403 Resource not accessible")
+  )
+  expect(mockToastSuccess).not.toHaveBeenCalled()
+  expect(props.onOpenChange).not.toHaveBeenCalledWith(false)
 })
 
 it("splits comma-separated labels and drops the empties", async () => {

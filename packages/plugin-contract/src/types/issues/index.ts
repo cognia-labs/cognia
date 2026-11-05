@@ -580,9 +580,16 @@ export type IssueEventPayload =
     }
   | { kind: "github_linked"; ref: IssueGithubRef; by: IssueActor }
   | {
+      /**
+       * A write-back the person confirmed landed on the linked GitHub issue.
+       * Recorded once per integration job (`jobId`), on every local issue
+       * linked to `ref`, when the job succeeds — at once, or later when it ran
+       * queued or retried (`lib/issues/github-writeback.ts`).
+       */
       kind: "github_write_back"
       action: "comment" | "label" | "close"
       ref: IssueGithubRef
+      jobId: string
       by: IssueActor
     }
   | { kind: "parent_changed"; from?: string; to?: string; by: IssueActor }

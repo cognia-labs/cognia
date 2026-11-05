@@ -4,7 +4,8 @@
  * Registers the five issue sources (local, the GitHub mirror, the two agent
  * engines, and the ADR-0149 collaboration mirror), installs the run bridge, the lifecycle → Notification
  * Center watcher and the issue wakeup bridge, seeds the starter label
- * catalogue, and reconciles the GitHub refresh schedule.
+ * catalogue, reconciles the GitHub refresh schedule, and records GitHub
+ * write-backs that settled while no window watched them.
  *
  * Lives in `lib/` rather than beside the React initializer because BOTH hosts
  * boot it: the desktop through `IssueTrackerInitializer`, and the cloud brain
@@ -88,6 +89,13 @@ export async function bootIssueTracker(options: BootIssueTrackerOptions = {}): P
   const disposeWakeups = installIssueWakeupBridge({
     onError: (error) => log.warn("issue-tracker: wakeup bridge error", { error: String(error) }),
   })
+  // Write-backs whose window closed between the write and its settle: record
+  // the ones that landed, keep watching the ones still on their way.
+  void import("@/lib/issues/github-writeback")
+    .then(({ reconcileGithubWritebacks }) => reconcileGithubWritebacks())
+    .catch((error) =>
+      log.warn("issue-tracker: write-back reconcile failed", { error: String(error) })
+    )
   void import("@/lib/issues/wakeups/executor")
     .then(({ registerIssueWakeupExecutor }) => registerIssueWakeupExecutor())
     .catch((error) =>
@@ -125,6 +133,9 @@ export async function bootIssueTracker(options: BootIssueTrackerOptions = {}): P
     }
   })
   return () => {
+    void import("@/lib/issues/github-writeback").then(({ stopGithubWritebackTracking }) =>
+      stopGithubWritebackTracking()
+    )
     disposeWakeups()
     disposeNotifications()
     disposeRunBridge()

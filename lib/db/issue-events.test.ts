@@ -2,7 +2,10 @@
  * @jest-environment jsdom
  */
 
+import { onIssueEvent } from "@/lib/issues/event-bus"
+import type { IssueEvent } from "@/types/issues"
 import { createDbTestFixture } from "./test-fixture"
+import { getDb } from "./schema"
 import {
   __resetIssueEventClockForTesting,
   appendIssueEvent,
@@ -66,6 +69,88 @@ describe("appendIssueEvents", () => {
 
     const listed = await listIssueEvents({ issueId: "i1" })
     expect(listed.map((e) => e.kind)).toEqual(["title_changed", "description_changed"])
+  })
+})
+
+describe("publishing to the bus", () => {
+  function collect() {
+    const seen: IssueEvent[] = []
+    const off = onIssueEvent((event) => seen.push(event))
+    return { seen, off }
+  }
+
+  it("publishes a stand-alone append as soon as it is written", async () => {
+    const { seen, off } = collect()
+    const event = await appendIssueEvent({ issueId: "i1", payload: { kind: "created", by: HUMAN } })
+    off()
+    expect(seen.map((e) => e.id)).toEqual([event.id])
+  })
+
+  it("holds entries written inside a transaction until it commits, in order", async () => {
+    const { seen, off } = collect()
+    const db = getDb()
+    let insideCount = -1
+    await db.transaction("rw", db.issueEvents, async () => {
+      await appendIssueEvent({ issueId: "i1", payload: { kind: "created", by: HUMAN } })
+      await appendIssueEvents([
+        { issueId: "i1", payload: { kind: "title_changed", from: "a", to: "b", by: HUMAN } },
+        { issueId: "i1", payload: { kind: "description_changed", by: HUMAN } },
+      ])
+      insideCount = seen.length
+    })
+    off()
+    expect(insideCount).toBe(0)
+    expect(seen.map((e) => e.kind)).toEqual(["created", "title_changed", "description_changed"])
+  })
+
+  it("waits for the root transaction, not a nested one", async () => {
+    const { seen, off } = collect()
+    const db = getDb()
+    let afterNested = -1
+    await db.transaction("rw", db.issueEvents, db.issues, async () => {
+      await db.transaction("rw", db.issueEvents, async () => {
+        await appendIssueEvent({ issueId: "i1", payload: { kind: "created", by: HUMAN } })
+      })
+      afterNested = seen.length
+    })
+    off()
+    expect(afterNested).toBe(0)
+    expect(seen).toHaveLength(1)
+  })
+
+  it("never publishes entries from a transaction that aborts", async () => {
+    const { seen, off } = collect()
+    const db = getDb()
+    await expect(
+      db.transaction("rw", db.issueEvents, async () => {
+        await appendIssueEvent({ issueId: "i1", payload: { kind: "created", by: HUMAN } })
+        throw new Error("abort")
+      })
+    ).rejects.toThrow("abort")
+    // Give a late `complete` every chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    off()
+    expect(seen).toEqual([])
+    expect(await listIssueEvents({ issueId: "i1" })).toEqual([])
+  })
+
+  it("lets a handler read other tables, because it runs outside the writer's zone", async () => {
+    const db = getDb()
+    const reads: Array<number | string> = []
+    const off = onIssueEvent(() => {
+      // `issueRuns` is not in the writer's scope: inside its zone this read
+      // would fail as "not part of transaction".
+      void db.issueRuns
+        .count()
+        .then((count) => reads.push(count))
+        .catch((error: unknown) => reads.push(String(error)))
+    })
+    await db.transaction("rw", db.issueEvents, async () => {
+      await appendIssueEvent({ issueId: "i1", payload: { kind: "created", by: HUMAN } })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    off()
+    expect(reads).toEqual([0])
   })
 })
 

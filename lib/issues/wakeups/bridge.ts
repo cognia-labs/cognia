@@ -16,10 +16,11 @@
  *     resume them), and ensures the parent's platform rule when an issue
  *     gains a parent.
  *
- * Entries are handled one at a time on a macrotask, after the writer's Dexie
- * transaction: the bus publishes from inside it, and reads of other tables
- * made in that zone would fail as "not part of transaction". One at a time
- * also keeps a burst in order, which the chain relies on.
+ * Entries are handled one at a time, as the bus delivers them. The bus only
+ * publishes once the writer's transaction has committed, outside its zone
+ * (`lib/db/issue-events.ts`), so the reads below see the committed rows and
+ * an aborted write never reaches a rule. One at a time keeps a burst in
+ * order, which the chain relies on.
  *
  * Before publishing, the bridge asks whether any active rule listens on the
  * issue (or its parent) at all, so an install with no wakeups pays two cheap
@@ -62,8 +63,6 @@ export interface IssueWakeupBridgeDeps {
   listRuns: (issueId: string) => Promise<IssueRun[]>
   pauseWakeupsForIssue: (issueId: string) => Promise<unknown>
   ensureChildrenDoneWakeup: (parentId: string) => Promise<unknown>
-  /** Defers a drain. Tests pass a synchronous one. */
-  schedule: (fn: () => void) => void
   onError: (error: unknown) => void
 }
 
@@ -96,7 +95,6 @@ function defaultDeps(onError: (error: unknown) => void): IssueWakeupBridgeDeps {
       (await import("./service")).pauseWakeupsForIssue(issueId),
     ensureChildrenDoneWakeup: async (parentId) =>
       (await import("./service")).ensureChildrenDoneWakeup(parentId),
-    schedule: (fn) => setTimeout(fn, 0),
     onError,
   }
 }
@@ -212,7 +210,7 @@ export function installIssueWakeupBridge(
   const unsubscribe = onIssueEvent((event) => {
     if (disposed) return
     queue.push(event)
-    if (!draining) deps.schedule(() => void drain())
+    void drain()
   })
 
   const dispose = () => {

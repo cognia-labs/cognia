@@ -24925,6 +24925,7 @@
       "linkSubmit": "Link",
       "linkTitle": "Link to a GitHub issue",
       "linkTrigger": "Link to GitHub…",
+      "pending": "Sent. GitHub has not confirmed it yet; it shows in the activity once it lands.",
       "reason": {
         "completed": "Completed",
         "not_planned": "Not planned"

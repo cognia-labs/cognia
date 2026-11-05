@@ -534,6 +534,8 @@ export function summarizeIssueEventPayload(payload: IssueEventPayload): string {
       return `run checked in: ${truncate(payload.note, ISSUE_WAKEUP_SUMMARY_MAX)}`
     case "artifact_linked":
       return `artifact linked: ${payload.label} (${payload.href})`
+    case "github_write_back":
+      return `${payload.action} pushed to GitHub ${payload.ref.repoFullName}#${payload.ref.number}`
     case "deliverable_accepted":
       return `delivered version accepted: ${payload.label} (${payload.digest})`
     case "label_added":

@@ -20,16 +20,40 @@
  * A confirmed write is also the person's under the outbound policy (ADR-0239
  * phase 2): it reaches the broker as a `person` caller, which records a human
  * receipt and is never held. An unconfirmed one is the plugin's, as before.
+ *
+ * Every board write-back carries an idempotency key under
+ * `ISSUE_WRITEBACK_KEY_PREFIX` (the plugin's write actions require one), and
+ * that prefix is how the trail finds them again: a write-back that succeeds
+ * appends one `github_write_back` entry to every local issue linked to the
+ * GitHub issue (`recordGithubWritebackJob`). A job that has not finished when
+ * the call returns — queued for another window, or waiting on a retry — is
+ * watched until it settles, and the boot sweep (`reconcileGithubWritebacks`)
+ * picks up any whose window closed first. The entry is keyed by the job, so
+ * the three paths record it once between them.
  */
+
+import Dexie from "dexie"
+import { loggers } from "@cognia/logging"
 
 import {
   approveIntegrationActionJob,
   executeIntegrationAction,
 } from "@/lib/integrations/action-runner"
-import { listIntegrationAccounts } from "@/lib/db/integrations"
+import {
+  getIntegrationActionJob,
+  isIntegrationActionJobTerminal,
+  listIntegrationAccounts,
+} from "@/lib/db/integrations"
+import { appendIssueEvent } from "@/lib/db/issue-events"
+import { listIssuesByExternalKey } from "@/lib/db/issues"
+import { getDb } from "@/lib/db/schema"
 import { GITHUB_DOT_COM } from "@/lib/github/host"
 import { githubReadAccountsFor } from "@/lib/integrations/github-read-credential"
+import { externalKeyOf } from "@/types/issues"
+import type { Issue, IssueActor, IssueEvent, IssueGithubRef } from "@/types/issues"
 import type { IntegrationAccount, IntegrationActionJob } from "@/types/plugin/plugin-integration"
+
+const log = loggers.store
 
 export const GITHUB_DELIVERY_PLUGIN_ID = "github-delivery"
 export const GITHUB_INTEGRATION_ID = "github"
@@ -96,6 +120,28 @@ export async function resolveGithubWritebackAccount(
   )
 }
 
+/**
+ * Prefix of the idempotency key on every board write-back job. The rest is
+ * the target, the action and a fresh attempt id: one confirmation is one
+ * write, and the action runner's own retries replay the job under its key.
+ */
+export const ISSUE_WRITEBACK_KEY_PREFIX = "issue-writeback:"
+
+export function issueWritebackKey(
+  target: GithubWritebackTarget,
+  kind: GithubWritebackAction["kind"],
+  attemptId: string
+): string {
+  return `${ISSUE_WRITEBACK_KEY_PREFIX}${target.repoFullName}#${target.number}:${kind}:${attemptId}`
+}
+
+/** The write-back each integration action records as. */
+const WRITEBACK_ACTION_BY_ID: Readonly<Record<string, GithubWritebackAction["kind"]>> = {
+  commentIssue: "comment",
+  labelIssue: "label",
+  closeIssue: "close",
+}
+
 /** Action id + payload for the underlying integration action. */
 export function toIntegrationAction(
   target: GithubWritebackTarget,
@@ -127,16 +173,35 @@ export interface RunGithubWritebackInput {
    * `awaiting_approval` for the integrations approval surface to pick up.
    */
   approval?: "user-confirmed"
-  /** Stable key so a retry of the same write is deduplicated upstream. */
-  idempotencyKey?: string
 }
 
 export interface RunGithubWritebackDeps {
   resolveAccount?: typeof resolveGithubWritebackAccount
   execute?: typeof executeIntegrationAction
   approve?: typeof approveIntegrationActionJob
+  /** The attempt id in the idempotency key. Tests pass a fixed one. */
+  newAttemptId?: () => string
+  /** Records a succeeded job on the trail. */
+  record?: (job: IntegrationActionJob) => Promise<unknown>
+  /** Watches a job that has not finished yet. */
+  track?: (jobId: string) => void
 }
 
+/** Statuses a job ends in without the write having landed. */
+const REJECTED_JOB_STATUSES: ReadonlySet<IntegrationActionJob["status"]> = new Set([
+  "failed",
+  "deadlettered",
+  "cancelled",
+])
+
+/**
+ * Run one write-back. Resolves with the job once GitHub accepted the write
+ * (`succeeded`) or the job is still on its way (`queued`, `running`,
+ * `retry_wait`, `awaiting_approval`: the caller says so, and the job is
+ * watched until it settles). A job that ended without the write landing
+ * throws `rejected` with the runner's error, so a failure never reads as a
+ * success.
+ */
 export async function runGithubWriteback(
   input: RunGithubWritebackInput,
   deps: RunGithubWritebackDeps = {}
@@ -144,6 +209,9 @@ export async function runGithubWriteback(
   const resolveAccount = deps.resolveAccount ?? resolveGithubWritebackAccount
   const execute = deps.execute ?? executeIntegrationAction
   const approve = deps.approve ?? approveIntegrationActionJob
+  const newAttemptId = deps.newAttemptId ?? (() => crypto.randomUUID())
+  const record = deps.record ?? recordGithubWritebackJob
+  const track = deps.track ?? trackGithubWritebackJob
 
   const account = await resolveAccount(
     input.target.repoFullName,
@@ -172,7 +240,7 @@ export async function runGithubWriteback(
         actionId,
         input: actionInput,
         source: "manual",
-        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+        idempotencyKey: issueWritebackKey(input.target, input.action.kind, newAttemptId()),
       },
       input.approval === "user-confirmed"
         ? {
@@ -193,9 +261,190 @@ export async function runGithubWriteback(
   }
 
   if (job.status === "awaiting_approval" && input.approval === "user-confirmed") {
-    return approve(job.id)
+    job = await approve(job.id)
+  }
+  if (REJECTED_JOB_STATUSES.has(job.status)) {
+    throw new GithubWritebackError(
+      "rejected",
+      job.error ?? `GitHub did not accept the write (job ${job.status})`
+    )
+  }
+  if (job.status === "succeeded") {
+    // The write landed; a trail entry that fails to write is retried by the
+    // boot sweep, so it must not turn a landed write into an error.
+    await record(job).catch((error: unknown) =>
+      log.warn("issue write-back: recording the trail entry failed", {
+        jobId: job.id,
+        error: String(error),
+      })
+    )
+  } else {
+    track(job.id)
   }
   return job
+}
+
+/** Whether `runGithubWriteback`'s job is still on its way rather than landed. */
+export function isGithubWritebackPending(job: IntegrationActionJob): boolean {
+  return job.status !== "succeeded"
+}
+
+/** The write-back person: confirmed in the dialog, or approved by a person later. */
+const WRITEBACK_ACTOR: IssueActor = { kind: "human" }
+
+function writebackTargetOf(job: IntegrationActionJob): GithubWritebackTarget | null {
+  const repoFullName = job.input.repoFullName
+  const number = job.input.issueNumber
+  if (typeof repoFullName !== "string" || typeof number !== "number") return null
+  return { repoFullName, number }
+}
+
+function isBoardWritebackJob(job: IntegrationActionJob): boolean {
+  return (
+    job.pluginId === GITHUB_DELIVERY_PLUGIN_ID &&
+    job.integrationId === GITHUB_INTEGRATION_ID &&
+    WRITEBACK_ACTION_BY_ID[job.actionId] !== undefined &&
+    (job.idempotencyKey?.startsWith(ISSUE_WRITEBACK_KEY_PREFIX) ?? false)
+  )
+}
+
+function githubRefFor(issue: Issue, target: GithubWritebackTarget): IssueGithubRef {
+  if (
+    issue.githubRef?.repoFullName === target.repoFullName &&
+    issue.githubRef.number === target.number
+  ) {
+    return issue.githubRef
+  }
+  const externalId = `${target.repoFullName}#${target.number}`
+  const url = issue.externalRefs?.find(
+    (ref) => ref.provider === "github" && ref.externalId === externalId
+  )?.url
+  return {
+    repoFullName: target.repoFullName,
+    number: target.number,
+    htmlUrl: url ?? `https://github.com/${target.repoFullName}/issues/${target.number}`,
+  }
+}
+
+/**
+ * Append the `github_write_back` entry for a succeeded board write-back job to
+ * every local issue linked to its GitHub issue, once per job. A GitHub issue
+ * nothing local links to has no trail to write to. The entry is stamped with
+ * the job's own completion time, so one recorded late (by the watcher or the
+ * boot sweep) still sits where the write happened.
+ *
+ * The check and the append share one transaction, so two windows recording
+ * the same job write it once.
+ */
+export async function recordGithubWritebackJob(job: IntegrationActionJob): Promise<IssueEvent[]> {
+  if (job.status !== "succeeded" || !isBoardWritebackJob(job)) return []
+  const action = WRITEBACK_ACTION_BY_ID[job.actionId]!
+  const target = writebackTargetOf(job)
+  if (!target) return []
+  const finishedAt = Date.parse(job.updatedAt)
+  const db = getDb()
+  return db.transaction("rw", db.issues, db.issueEvents, async () => {
+    const issues = await listIssuesByExternalKey(
+      externalKeyOf({ provider: "github", externalId: `${target.repoFullName}#${target.number}` })
+    )
+    const recorded: IssueEvent[] = []
+    for (const issue of issues) {
+      const existing = await db.issueEvents
+        .where("[issueId+ts]")
+        .between([issue.id, Dexie.minKey], [issue.id, Dexie.maxKey])
+        .filter(
+          (event) => event.payload.kind === "github_write_back" && event.payload.jobId === job.id
+        )
+        .first()
+      if (existing) continue
+      recorded.push(
+        await appendIssueEvent({
+          issueId: issue.id,
+          payload: {
+            kind: "github_write_back",
+            action,
+            ref: githubRefFor(issue, target),
+            jobId: job.id,
+            by: WRITEBACK_ACTOR,
+          },
+          ...(Number.isFinite(finishedAt) ? { ts: finishedAt } : {}),
+        })
+      )
+    }
+    return recorded
+  })
+}
+
+/** Jobs being watched until they settle, by id. */
+const tracked = new Map<string, { unsubscribe: () => void }>()
+
+/**
+ * Watch a board write-back job that has not finished, and record it if it
+ * succeeds. Idempotent per job; the watch ends when the job settles or is
+ * gone. A window that closes first leaves it to `reconcileGithubWritebacks`.
+ */
+export function trackGithubWritebackJob(jobId: string): void {
+  if (tracked.has(jobId)) return
+  const entry = { unsubscribe: () => {} }
+  tracked.set(jobId, entry)
+  const stop = () => {
+    entry.unsubscribe()
+    tracked.delete(jobId)
+  }
+  // `Dexie.liveQuery`, not the named import: see `lib/issues/notify.ts`.
+  const subscription = Dexie.liveQuery(() => getIntegrationActionJob(jobId)).subscribe({
+    next: (job) => {
+      if (!tracked.has(jobId)) return
+      if (!job) return stop()
+      if (!isIntegrationActionJobTerminal(job.status)) return
+      stop()
+      if (job.status !== "succeeded") return
+      void recordGithubWritebackJob(job).catch((error: unknown) =>
+        log.warn("issue write-back: recording a settled job failed", {
+          jobId,
+          error: String(error),
+        })
+      )
+    },
+    error: (error: unknown) => {
+      stop()
+      log.warn("issue write-back: watching a job failed", { jobId, error: String(error) })
+    },
+  })
+  entry.unsubscribe = () => subscription.unsubscribe()
+}
+
+/** Stop every watch. The boot teardown calls it. */
+export function stopGithubWritebackTracking(): void {
+  for (const entry of [...tracked.values()]) entry.unsubscribe()
+  tracked.clear()
+}
+
+/**
+ * Boot sweep: record every succeeded board write-back the trail is missing,
+ * and watch the ones still on their way. Covers a window that closed between
+ * a write and its settle.
+ */
+export async function reconcileGithubWritebacks(): Promise<{
+  recorded: number
+  tracking: number
+}> {
+  const jobs = await getDb()
+    .integrationActionJobs.where("[pluginId+integrationId]")
+    .equals([GITHUB_DELIVERY_PLUGIN_ID, GITHUB_INTEGRATION_ID])
+    .toArray()
+  let recorded = 0
+  let tracking = 0
+  for (const job of jobs) {
+    if (!isBoardWritebackJob(job)) continue
+    if (job.status === "succeeded") {
+      recorded += (await recordGithubWritebackJob(job)).length
+    } else if (!isIntegrationActionJobTerminal(job.status)) {
+      trackGithubWritebackJob(job.id)
+      tracking += 1
+    }
+  }
+  return { recorded, tracking }
 }
 
 export interface CreateGithubIssueInput {

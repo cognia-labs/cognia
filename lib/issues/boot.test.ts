@@ -15,6 +15,8 @@ const mockDisposeWakeups = jest.fn()
 const mockInstallIssueWakeupBridge = jest.fn((..._args: unknown[]) => mockDisposeWakeups)
 const mockRegisterIssueWakeupExecutor = jest.fn()
 const mockReconcileChildrenDoneWakeups = jest.fn().mockResolvedValue(0)
+const mockReconcileGithubWritebacks = jest.fn().mockResolvedValue({ recorded: 0, tracking: 0 })
+const mockStopGithubWritebackTracking = jest.fn()
 
 jest.mock("@/lib/issues/sources/local-source", () => ({
   registerLocalIssueSource: (...args: unknown[]) => mockRegisterLocalIssueSource(...args),
@@ -39,6 +41,10 @@ jest.mock("@/lib/issues/wakeups/executor", () => ({
 }))
 jest.mock("@/lib/issues/wakeups/service", () => ({
   reconcileChildrenDoneWakeups: () => mockReconcileChildrenDoneWakeups(),
+}))
+jest.mock("@/lib/issues/github-writeback", () => ({
+  reconcileGithubWritebacks: () => mockReconcileGithubWritebacks(),
+  stopGithubWritebackTracking: () => mockStopGithubWritebackTracking(),
 }))
 jest.mock("@/lib/issues/notify", () => ({
   installIssueNotifications: (...args: unknown[]) => mockInstallIssueNotifications(...args),
@@ -128,6 +134,20 @@ it("installs the wakeup bridge, registers its executor and reconciles parents' r
   )
 })
 
+it("records write-backs that settled while no window watched, and reports a failed sweep", async () => {
+  await bootIssueTracker()
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(mockReconcileGithubWritebacks).toHaveBeenCalledTimes(1)
+
+  mockReconcileGithubWritebacks.mockRejectedValueOnce(new Error("sweep boom"))
+  await bootIssueTracker()
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(mockWarn).toHaveBeenCalledWith(
+    "issue-tracker: write-back reconcile failed",
+    expect.objectContaining({ error: expect.stringContaining("sweep boom") })
+  )
+})
+
 describe("teardown", () => {
   // The brain stops its runtimes in reverse order on shutdown; a run bridge
   // still subscribed to Dexie afterwards would keep a closed database alive.
@@ -142,6 +162,8 @@ describe("teardown", () => {
 
     stop()
     expect(order).toEqual(["wakeups", "notifications", "run-bridge"])
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(mockStopGithubWritebackTracking).toHaveBeenCalledTimes(1)
   })
 
   it("does not dispose anything merely by booting", async () => {

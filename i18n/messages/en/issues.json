@@ -504,6 +504,7 @@
     "account": "Writing as {account}",
     "accountChecking": "Checking the connected account…",
     "success": "GitHub accepted the change.",
+    "pending": "Sent. GitHub has not confirmed it yet; it shows in the activity once it lands.",
     "error": {
       "no-account": "No enabled GitHub account is connected. Connect one in Settings → Connections.",
       "plugin-unavailable": "The GitHub delivery plugin is unavailable. Enable it, then try again."

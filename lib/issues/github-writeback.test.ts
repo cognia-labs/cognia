@@ -4,8 +4,11 @@ import {
   GITHUB_DELIVERY_PLUGIN_ID,
   GITHUB_INTEGRATION_ID,
   GithubWritebackError,
+  isGithubWritebackPending,
+  issueWritebackKey,
   resolveGithubWritebackAccount,
   runGithubWriteback,
+  stopGithubWritebackTracking,
   toIntegrationAction,
 } from "./github-writeback"
 import type { IntegrationAccount, IntegrationActionJob } from "@/types/plugin/plugin-integration"
@@ -14,6 +17,9 @@ const mockListAccounts = jest.fn()
 const mockHostForSession = jest.fn()
 jest.mock("@/lib/db/integrations", () => ({
   listIntegrationAccounts: (...args: unknown[]) => mockListAccounts(...args),
+  getIntegrationActionJob: async () => undefined,
+  isIntegrationActionJobTerminal: (status: string) =>
+    ["succeeded", "failed", "cancelled", "deadlettered"].includes(status),
 }))
 jest.mock("@/lib/integrations/github-auth", () => ({
   githubHostForSession: (...args: unknown[]) => mockHostForSession(...args),
@@ -40,6 +46,8 @@ const job = (over: Partial<IntegrationActionJob> = {}): IntegrationActionJob =>
   ({ id: "job-1", status: "awaiting_approval", ...over }) as IntegrationActionJob
 
 const target = { repoFullName: "acme/one", number: 7 }
+
+afterEach(stopGithubWritebackTracking)
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -218,10 +226,9 @@ describe("runGithubWriteback", () => {
       {
         target,
         action: { kind: "comment", body: "hi" },
-        idempotencyKey: "k1",
         credentialContext: { sessionId: "s", executionRunId: "run" },
       },
-      { resolveAccount: async () => account(), execute }
+      { resolveAccount: async () => account(), execute, newAttemptId: () => "a1" }
     )
 
     expect(execute).toHaveBeenCalledWith(
@@ -232,35 +239,123 @@ describe("runGithubWriteback", () => {
         actionId: "commentIssue",
         input: { repoFullName: "acme/one", issueNumber: 7, body: "hi" },
         source: "manual",
-        idempotencyKey: "k1",
+        idempotencyKey: "issue-writeback:acme/one#7:comment:a1",
       },
       undefined,
       { sessionId: "s", executionRunId: "run" }
     )
   })
 
-  it("omits idempotencyKey entirely when the caller has none", async () => {
+  it("always sends a key, because the plugin's write actions require one, fresh per write", async () => {
+    // Without one the action runner refused every board write-back with
+    // "requires an idempotency key".
     const execute = jest.fn().mockResolvedValue(job({ status: "succeeded" }))
-    await runGithubWriteback(
-      { target, action: { kind: "close" } },
-      { resolveAccount: async () => account(), execute }
-    )
+    const deps = { resolveAccount: async () => account(), execute }
+    await runGithubWriteback({ target, action: { kind: "close" } }, deps)
+    await runGithubWriteback({ target, action: { kind: "close" } }, deps)
 
-    expect(execute.mock.calls[0][1]).not.toHaveProperty("idempotencyKey")
+    const [first, second] = execute.mock.calls.map(
+      (call) => (call[1] as { idempotencyKey: string }).idempotencyKey
+    )
+    expect(first).toMatch(/^issue-writeback:acme\/one#7:close:/)
+    expect(second).toMatch(/^issue-writeback:acme\/one#7:close:/)
+    expect(first).not.toBe(second)
+    expect(issueWritebackKey(target, "label", "x")).toBe("issue-writeback:acme/one#7:label:x")
   })
+
+  it("records a write that landed, and does not watch it", async () => {
+    const landed = job({ status: "succeeded" })
+    const record = jest.fn().mockResolvedValue([])
+    const track = jest.fn()
+    const result = await runGithubWriteback(
+      { target, action: { kind: "comment", body: "hi" }, approval: "user-confirmed" },
+      { resolveAccount: async () => account(), execute: async () => landed, record, track }
+    )
+    expect(result).toBe(landed)
+    expect(isGithubWritebackPending(result)).toBe(false)
+    expect(record).toHaveBeenCalledWith(landed)
+    expect(track).not.toHaveBeenCalled()
+  })
+
+  it("keeps a landed write a success when its trail entry fails to write", async () => {
+    const landed = job({ status: "succeeded" })
+    await expect(
+      runGithubWriteback(
+        { target, action: { kind: "close" }, approval: "user-confirmed" },
+        {
+          resolveAccount: async () => account(),
+          execute: async () => landed,
+          record: async () => {
+            throw new Error("trail boom")
+          },
+          track: jest.fn(),
+        }
+      )
+    ).resolves.toBe(landed)
+  })
+
+  it.each(["queued", "running", "retry_wait"] as const)(
+    "watches a %s job until it settles instead of calling it done",
+    async (status) => {
+      const pending = job({ id: "job-p", status })
+      const record = jest.fn()
+      const track = jest.fn()
+      const result = await runGithubWriteback(
+        { target, action: { kind: "close" }, approval: "user-confirmed" },
+        {
+          resolveAccount: async () => account(),
+          execute: async () => pending,
+          approve: jest.fn(),
+          record,
+          track,
+        }
+      )
+      expect(isGithubWritebackPending(result)).toBe(true)
+      expect(track).toHaveBeenCalledWith("job-p")
+      expect(record).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["failed", "deadlettered", "cancelled"] as const)(
+    "throws when the job %s, so a refused write never reads as a success",
+    async (status) => {
+      const record = jest.fn()
+      const track = jest.fn()
+      await expect(
+        runGithubWriteback(
+          { target, action: { kind: "comment", body: "hi" }, approval: "user-confirmed" },
+          {
+            resolveAccount: async () => account(),
+            execute: async () => job({ status, error: status === "cancelled" ? undefined : "403" }),
+            record,
+            track,
+          }
+        )
+      ).rejects.toMatchObject({
+        code: "rejected",
+        message: status === "cancelled" ? "GitHub did not accept the write (job cancelled)" : "403",
+      })
+      expect(record).not.toHaveBeenCalled()
+      expect(track).not.toHaveBeenCalled()
+    }
+  )
 
   it("LEAVES the job parked when the caller has not confirmed", async () => {
     const execute = jest.fn().mockResolvedValue(job())
     const approve = jest.fn()
 
+    const track = jest.fn()
+
     const result = await runGithubWriteback(
       { target, action: { kind: "close" } },
-      { resolveAccount: async () => account(), execute, approve }
+      { resolveAccount: async () => account(), execute, approve, track }
     )
 
     // An irreversible external write must never happen without confirmation.
     expect(approve).not.toHaveBeenCalled()
     expect(result.status).toBe("awaiting_approval")
+    // A person approving it later still lands on the trail.
+    expect(track).toHaveBeenCalledWith("job-1")
   })
 
   it("approves only once the dialog has confirmed the exact payload", async () => {

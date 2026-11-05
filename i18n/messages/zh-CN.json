@@ -24925,6 +24925,7 @@
       "linkSubmit": "关联",
       "linkTitle": "关联 GitHub issue",
       "linkTrigger": "关联到 GitHub…",
+      "pending": "已发出，GitHub 尚未确认；落地后会出现在活动记录中。",
       "reason": {
         "completed": "已完成",
         "not_planned": "不再计划"

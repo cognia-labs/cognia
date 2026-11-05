@@ -40,6 +40,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   GithubWritebackError,
+  isGithubWritebackPending,
   resolveGithubWritebackAccount,
   runGithubWriteback,
   type GithubWritebackAction,
@@ -53,7 +54,11 @@ export interface GithubWritebackDialogProps {
   onOpenChange: (open: boolean) => void
   kind: GithubWritebackKind
   target: GithubWritebackTarget
-  /** Fired after GitHub accepted the write, so the caller can re-sync. */
+  /**
+   * Fired after GitHub accepted the write, so the caller can re-sync. Not for
+   * a write still on its way (queued for another window, waiting on a retry):
+   * there is nothing new to read yet, and the trail records it when it lands.
+   */
   onCompleted?: () => void
 }
 
@@ -127,15 +132,19 @@ export function GithubWritebackDialog({
     setBusy(true)
     setError(null)
     try {
-      await runGithubWriteback({
+      const job = await runGithubWriteback({
         credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
         target,
         action: buildAction(),
         connectorAccountId: account?.id,
         approval: "user-confirmed",
       })
-      toast.success(t("writeback.success"))
-      onCompleted?.()
+      if (isGithubWritebackPending(job)) {
+        toast.info(t("writeback.pending"))
+      } else {
+        toast.success(t("writeback.success"))
+        onCompleted?.()
+      }
       close()
     } catch (cause) {
       // A known refusal gets a localized explanation with a fix in it; anything

@@ -4,8 +4,12 @@
  * The trail in `issueEvents` is append-only and read back through Dexie
  * liveQuery, which serves the UI but gives a plugin, a workflow trigger or
  * the notification funnel nothing to subscribe to without polling a table.
- * `lib/db/issue-events.ts` publishes every appended entry here, after the
- * write has committed, so a subscriber only ever sees rows that exist.
+ * `lib/db/issue-events.ts` publishes every appended entry here once its
+ * write is durable: immediately for a write that was its own transaction, and
+ * on the enclosing root transaction's `complete` otherwise, outside any
+ * transaction zone. An entry from a transaction that aborts is never
+ * published. So a subscriber only ever sees rows that exist, and may read any
+ * table from its handler.
  *
  * Same shape as `lib/connectors/credentials-events.ts`: one `EventTarget`,
  * a typed `emit`, and `on*` returning a disposer. A throwing handler is
@@ -19,7 +23,7 @@ export type { IssueEventListener } from "@cognia/plugin-contract/lib/issues/even
 const EVENT_NAME = "issues:event"
 const bus: EventTarget = new EventTarget()
 
-/** Publish one committed trail entry. Called by the append path only. */
+/** Publish one committed trail entry. Called by the append path only, after commit. */
 export function emitIssueEvent(event: IssueEvent): void {
   bus.dispatchEvent(new CustomEvent<IssueEvent>(EVENT_NAME, { detail: event }))
 }

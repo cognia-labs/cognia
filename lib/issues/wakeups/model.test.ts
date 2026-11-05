@@ -468,6 +468,21 @@ describe("summarizeIssueEventPayload", () => {
       })
     ).toBe("delivered version accepted: Report (sha256:123)")
   })
+  it("names what a write-back pushed and where, so a rule's prompt can say it", () => {
+    expect(
+      summarizeIssueEventPayload({
+        kind: "github_write_back",
+        action: "close",
+        ref: {
+          repoFullName: "acme/app",
+          number: 7,
+          htmlUrl: "https://github.com/acme/app/issues/7",
+        },
+        jobId: "job-1",
+        by: { kind: "human" },
+      })
+    ).toBe("close pushed to GitHub acme/app#7")
+  })
   it("renders one line per kind", () => {
     expect(
       summarizeIssueEventPayload({

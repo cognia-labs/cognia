@@ -70,7 +70,6 @@ function deps(over: Partial<IssueWakeupBridgeDeps> = {}) {
     listRuns: async () => [run()],
     pauseWakeupsForIssue: async (id) => void paused.push(id),
     ensureChildrenDoneWakeup: async (id) => void ensured.push(id),
-    schedule: (fn) => fn(),
     onError: () => {},
     ...over,
   }
@@ -284,8 +283,9 @@ describe("installIssueWakeupBridge", () => {
     expect(installIssueWakeupBridge({ deps: harness.deps })).toBe(dispose)
     emitIssueEvent(statusEvent({ id: "a" }))
     emitIssueEvent(statusEvent({ id: "b" }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Handled as delivered (the bus only publishes after commit), without a
+    // macrotask hop: microtasks alone drain the queue.
+    for (let i = 0; i < 20; i += 1) await Promise.resolve()
     expect(harness.published.map((entry) => entry.data.eventId)).toEqual(["a", "b"])
     dispose()
     emitIssueEvent(statusEvent({ id: "c" }))
