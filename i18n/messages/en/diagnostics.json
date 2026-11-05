@@ -499,7 +499,7 @@
     },
     "personAgentAttachmentUnsupported": {
       "label": "The agent can't read this attachment",
-      "hint": "Agents on a shared Host can read text and images, but not documents such as PDFs. Remove the document, or paste the parts you need as text."
+      "hint": "Agents on a shared Host read text, images and the text of documents, but not videos. Remove the video, or describe what you need from it as text."
     },
     "hostRestarted": {
       "label": "Stopped because the Host restarted",
@@ -543,7 +543,15 @@
     },
     "memberSendUnsupported": {
       "label": "Your organization's Host can't take this message",
-      "hint": "Members send plain messages to the Host. This one carries something it can't take yet, such as a context resource, an @-addressed runtime or a re-run of an earlier turn. Your text is back in the composer."
+      "hint": "Members send messages, with their images and documents, to the Host. This one carries something it can't take yet, such as a context resource, an @-addressed runtime or a re-run of an earlier turn. Your text is back in the composer."
+    },
+    "memberAttachmentUnsupported": {
+      "label": "Your organization's Host can't take this attachment",
+      "hint": "Members can attach images and documents the Host accepts, within its size and count limits. Videos, and files of a type or size the Host refuses, can't be sent to it. Your message and attachments are back in the composer."
+    },
+    "memberAttachmentUploadFailed": {
+      "label": "An attachment didn't reach your organization's Host",
+      "hint": "Uploading a file to the Host failed, so the message wasn't sent. Your message and attachments are back in the composer; send it again."
     },
     "hostStateChannelUnavailable": {
       "label": "Couldn't reach your organization's Host",

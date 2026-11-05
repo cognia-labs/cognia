@@ -107,6 +107,27 @@ describe("uploadSessionAttachment", () => {
     expect(result.size).toBe(6)
   })
 
+  it("says which upload it opened and whether the Host already held the content", async () => {
+    const fresh = fakeHost()
+    const opened: Array<{ uploadId: string; complete: boolean }> = []
+    await uploadSessionAttachment(
+      "ses-1",
+      { name: "shot.png", mediaType: "image/png", bytes: bytes(5) },
+      { call: fresh.call, onStarted: (upload) => opened.push(upload) }
+    )
+    const held = fakeHost({ resumeOffset: 5, complete: true })
+    await uploadSessionAttachment(
+      "ses-1",
+      { name: "shot.png", mediaType: "image/png", bytes: bytes(5) },
+      { call: held.call, onStarted: (upload) => opened.push(upload) }
+    )
+
+    expect(opened).toEqual([
+      { uploadId: "upl_1", complete: false },
+      { uploadId: "upl_1", complete: true },
+    ])
+  })
+
   it("reuses a precomputed hash rather than re-reading the file", async () => {
     const host = fakeHost()
     const hash = "a".repeat(64)

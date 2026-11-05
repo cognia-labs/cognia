@@ -58,6 +58,8 @@ const HOST_REFUSAL_TO_DIAGNOSTIC: Readonly<Record<string, DiagnosticCode>> = {
   person_storage_failed: "personStorageFailed",
   // ADR-0253 §9: the member device's own refusals of a send.
   member_send_unsupported: "memberSendUnsupported",
+  member_attachment_unsupported: "memberAttachmentUnsupported",
+  member_attachment_upload_failed: "memberAttachmentUploadFailed",
   host_state_channel_unavailable: "hostStateChannelUnavailable",
 }
 

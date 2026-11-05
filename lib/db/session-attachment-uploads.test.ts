@@ -10,6 +10,7 @@ import {
   beginAttachmentUpload,
   commitAttachmentUpload,
   consumeAttachmentRefs,
+  holdAttachmentRefs,
   parseUploadRef,
   readAttachmentUploadMeta,
   rebindAttachmentUploads,
@@ -579,6 +580,88 @@ describe("session attachment uploads", () => {
     await getDb().hostStateActions.put(actionRow("completed"))
     await sweepAttachmentUploads(Date.now() + ATTACHMENT_OBJECT_TTL_MS + 1)
     expect(await getDb().sessionAttachmentUploads.get(init.uploadId)).toBeUndefined()
+  })
+
+  it("adr-0253 g25 holds a member turn's bytes, unstaged, until its submission settles", async () => {
+    const bytes = pngBytes(64)
+    const { init, committed, hash } = await uploadWhole({
+      sessionId: "ses-1",
+      deviceId: "dev-a",
+      bytes,
+    })
+    const submission = (dispatchState: "dispatched" | "settled") =>
+      ({ id: "work:hoststate:a1", dispatchState }) as never
+    await getDb().workSubmissions.put(submission("dispatched"))
+    await holdAttachmentRefs([committed.ref], "work:hoststate:a1")
+
+    const held = await getDb().sessionAttachmentUploads.get(init.uploadId)
+    expect(held).toMatchObject({ heldBy: "work:hoststate:a1", heldAt: expect.any(Number) })
+    // A retry after a Host restart builds the prompt from it again.
+    expect(await resolveAttachmentRef(committed.ref, { sessionId: "ses-1" })).not.toBeNull()
+    // It no longer counts as staged, and the same bytes in a new message get
+    // a row of their own rather than a ref the running turn will release.
+    const again = await beginAttachmentUpload({
+      sessionId: "ses-1",
+      deviceId: "dev-a",
+      name: "shot.png",
+      mediaType: "image/png",
+      size: bytes.byteLength,
+      hash,
+    })
+    expect(again.uploadId).not.toBe(init.uploadId)
+    expect(again.complete).toBe(false)
+    for (let index = 0; index < 4; index++) {
+      await beginAttachmentUpload({
+        sessionId: "ses-1",
+        deviceId: "dev-a",
+        name: `more-${index}.png`,
+        mediaType: "image/png",
+        size: 16,
+        hash: await sha256(pngBytes(200 + index)),
+      })
+    }
+    await expect(
+      beginAttachmentUpload({
+        sessionId: "ses-1",
+        deviceId: "dev-a",
+        name: "sixth.png",
+        mediaType: "image/png",
+        size: 16,
+        hash: await sha256(pngBytes(300)),
+      })
+    ).resolves.toMatchObject({ resumeOffset: 0 })
+    await getDb().sessionAttachmentUploads.delete(again.uploadId)
+
+    // A turn longer than the object TTL keeps its bytes while it runs…
+    await sweepAttachmentUploads(Date.now() + ATTACHMENT_OBJECT_TTL_MS + 1)
+    expect(await getDb().sessionAttachmentUploads.get(init.uploadId)).toBeDefined()
+    // …and once it settled without releasing them, the clock collects them.
+    await getDb().workSubmissions.put(submission("settled"))
+    await sweepAttachmentUploads(Date.now() + ATTACHMENT_OBJECT_TTL_MS + 1)
+    expect(await getDb().sessionAttachmentUploads.get(init.uploadId)).toBeUndefined()
+  })
+
+  it("does not hold a ref already consumed or never committed", async () => {
+    const { init, committed } = await uploadWhole({
+      sessionId: "ses-1",
+      deviceId: "dev-a",
+      bytes: pngBytes(64),
+    })
+    await consumeAttachmentRefs([committed.ref])
+    const partial = await beginAttachmentUpload({
+      sessionId: "ses-1",
+      deviceId: "dev-a",
+      name: "partial.png",
+      mediaType: "image/png",
+      size: 32,
+      hash: await sha256(pngBytes(32)),
+    })
+    await holdAttachmentRefs(
+      [committed.ref, `cognia-upload:${partial.uploadId}`, "not-a-ref"],
+      "work:hoststate:a1"
+    )
+    expect((await getDb().sessionAttachmentUploads.get(init.uploadId))?.heldAt).toBeUndefined()
+    expect((await getDb().sessionAttachmentUploads.get(partial.uploadId))?.heldAt).toBeUndefined()
   })
 
   it("drops everything a revoked device staged, and nothing anyone else did", async () => {

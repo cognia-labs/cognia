@@ -150,6 +150,11 @@ import {
   withdrawUnsentHostStateMessages,
   type WithdrawnHostStateMessage,
 } from "@/lib/db/mobile-outbound-queue"
+import {
+  MemberAttachmentUploadError,
+  memberTurnAttachments,
+  uploadMemberTurnAttachments,
+} from "@/lib/companion/member-turn-attachments"
 import { hostStateActionOfferedHere } from "@/lib/sync/host-state-offered-actions"
 import { restoreWithdrawnToComposer } from "@/lib/chat/restore-withdrawn"
 import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
@@ -365,7 +370,7 @@ import {
   type TranscriptRuntimeFence,
   withTranscriptRuntimeLock,
 } from "@/lib/chat/transcript/revision-events"
-import { hostStateSendEligible } from "./host-state-send-eligibility"
+import { hostStateSendEligible, type HostStateSendFacts } from "./host-state-send-eligibility"
 import type {
   ExternalTurnImage,
   TurnImagesWithheld,
@@ -512,6 +517,26 @@ export function externalTurnPrompt(
     images,
     omitted,
   }
+}
+
+/**
+ * What a member is told when a file of their turn did not reach their
+ * partition (ADR-0253 §9 G25). A Host refusal the diagnostics know (standing,
+ * a busy or stopped brain, a full staging area) keeps its own code; anything
+ * else reads as the upload failing.
+ */
+export function memberUploadDiagnostic(
+  error: MemberAttachmentUploadError,
+  sessionId: string
+): CogniaDiagnostic {
+  const inner = toDiagnostic(error.failure, { source: "chat", meta: { sessionId } })
+  if (inner.code !== "unknown") return inner
+  return createDiagnostic("memberAttachmentUploadFailed", {
+    source: "chat",
+    message: inner.message,
+    meta: { sessionId },
+    ...(inner.detail ? { detail: inner.detail } : {}),
+  })
 }
 
 /** What an external agent's prompt (text plus images) could not carry of a turn. */
@@ -2544,6 +2569,14 @@ export function useClaudeChat() {
           contentIsString: typeof content === "string",
           hasResourceContext: callOptions?.resourceContext !== undefined,
           attachmentCount: callOptions?.attachmentManifest?.length ?? 0,
+          attachmentsAsRefs:
+            getRuntimeSnapshot().host?.personPartition === true &&
+            memberTurnAttachments(
+              content,
+              callOptions?.attachmentManifest,
+              0,
+              getRuntimeSnapshot().host
+            ).kind === "files",
           builtinLane: turnLane.kind === "builtin",
           addressed: Boolean(turnRoute),
           // The same test that decides below whether another runtime's replies
@@ -3235,12 +3268,14 @@ export function useClaudeChat() {
       // reply line, the resource context) or folds text into one, so the
       // difference in length is what sits in front of the attachments.
       const providerSourceContent = callOptions?.sharedRequest ? turnContent : routedContent
-      const externalTurn = externalTurnPrompt(
-        effectiveContent,
-        turnManifest?.length ?? 0,
+      const leadingCount =
         Array.isArray(effectiveContent) && Array.isArray(providerSourceContent)
           ? effectiveContent.length - providerSourceContent.length
           : 0
+      const externalTurn = externalTurnPrompt(
+        effectiveContent,
+        turnManifest?.length ?? 0,
+        leadingCount
       )
       // A sealed Router + Fusion turn (one the check before the build did not
       // foresee as host-state) is dispatched here, where its run is created:
@@ -3250,32 +3285,62 @@ export function useClaudeChat() {
       // row is written; it never falls through to a direct send the Host
       // would refuse after the user row was already kept here.
       const memberOnPartition = getRuntimeSnapshot().host?.personPartition === true
+      // ADR-0253 §9 G25: a member's files cross as uploads into their own
+      // partition, and the intent names the refs. Decided here, on the final
+      // content, so a turn whose files the Host cannot take is refused before
+      // anything is written or uploaded.
+      const memberAttachments = memberOnPartition
+        ? memberTurnAttachments(
+            effectiveContent,
+            turnManifest,
+            leadingCount,
+            getRuntimeSnapshot().host
+          )
+        : ({ kind: "none" } as const)
+      const hostStateFacts: HostStateSendFacts = {
+        pairedHost: turnsRunOnPairedHost(),
+        personPartition: memberOnPartition,
+        fusionRun: Boolean(sendOptions.routerFusionRun),
+        routerFusionStamped: Boolean(sendOptions.routerFusion),
+        skipAppend,
+        contentIsString: typeof effectiveContent === "string",
+        hasResourceContext: callOptions?.resourceContext !== undefined,
+        attachmentCount: turnManifest?.length ?? 0,
+        attachmentsAsRefs: memberAttachments.kind === "files",
+        builtinLane: turnLane.kind === "builtin",
+        addressed: Boolean(turnRoute),
+        carriesForeignTurns: Boolean(foreignTurnsContext),
+        collaboration: Boolean(session?.collaboration),
+        standalone: isStandaloneChatMode(),
+      }
       const hostStateEligible =
         localAuthorization !== undefined &&
         sendOptions.execution?.runtimeAdapter !== "vscode-chat" &&
         !isSessionAside &&
-        hostStateSendEligible({
-          pairedHost: turnsRunOnPairedHost(),
-          personPartition: memberOnPartition,
-          fusionRun: Boolean(sendOptions.routerFusionRun),
-          routerFusionStamped: Boolean(sendOptions.routerFusion),
-          skipAppend,
-          contentIsString: typeof effectiveContent === "string",
-          hasResourceContext: callOptions?.resourceContext !== undefined,
-          attachmentCount: turnManifest?.length ?? 0,
-          builtinLane: turnLane.kind === "builtin",
-          addressed: Boolean(turnRoute),
-          carriesForeignTurns: Boolean(foreignTurnsContext),
-          collaboration: Boolean(session?.collaboration),
-          standalone: isStandaloneChatMode(),
-        })
+        hostStateSendEligible(hostStateFacts)
       if (memberOnPartition && !hostStateEligible) {
-        store
-          .getState()
-          .setSessionDiagnostic(
-            sessionId,
-            createDiagnostic("memberSendUnsupported", { source: "chat", meta: { sessionId } })
-          )
+        // Name the attachment as the reason only when it is the one thing in
+        // the way: the same turn without files would have gone out.
+        const attachmentRefused =
+          memberAttachments.kind === "unsupported" &&
+          memberAttachments.reason !== "shape" &&
+          localAuthorization !== undefined &&
+          sendOptions.execution?.runtimeAdapter !== "vscode-chat" &&
+          !isSessionAside &&
+          hostStateSendEligible({
+            ...hostStateFacts,
+            contentIsString: true,
+            attachmentCount: 0,
+          })
+        store.getState().setSessionDiagnostic(
+          sessionId,
+          attachmentRefused
+            ? createDiagnostic("memberAttachmentUnsupported", {
+                source: "chat",
+                meta: { sessionId, extra: { reason: memberAttachments.reason } },
+              })
+            : createDiagnostic("memberSendUnsupported", { source: "chat", meta: { sessionId } })
+        )
         // A person's own send is thrown, so the composer gives the text (and
         // its attachments) back; an automated turn has no composer to return
         // to and is refused like any other.
@@ -3291,6 +3356,12 @@ export function useClaudeChat() {
           const enqueueIntent = memberOnPartition
             ? enqueueHostStateIntentWhenAvailable
             : enqueueHostStateIntentIfAvailable
+          // Uploaded before the intent is queued: a ref must name bytes the
+          // partition already holds, or the Host refuses the message.
+          const attachmentRefs =
+            memberAttachments.kind === "files"
+              ? await uploadMemberTurnAttachments(sessionId, memberAttachments.files)
+              : []
           const queued = await enqueueIntent({
             sessionId,
             ...(callOptions?.backgroundDelivery
@@ -3299,9 +3370,11 @@ export function useClaudeChat() {
             action: {
               kind: "message.enqueue",
               messageId: userMsg.id,
-              // Only a plain-string turn is eligible: this is the whole of it.
+              // A plain-string turn is the whole of it; a member's turn with
+              // files is this text plus the files, which the Host extracts
+              // from the uploaded originals.
               text: externalTurn.request,
-              attachments: [],
+              attachments: attachmentRefs,
               ...(mentionRefs.length > 0 ? { mentions: mentionRefs } : {}),
               ...(callOptions?.promptPreamble
                 ? { promptPreamble: callOptions.promptPreamble }
@@ -3340,7 +3413,9 @@ export function useClaudeChat() {
                   source: "chat",
                   meta: { sessionId },
                 })
-              : toDiagnostic(error, { source: "chat", meta: { sessionId } })
+              : error instanceof MemberAttachmentUploadError
+                ? memberUploadDiagnostic(error, sessionId)
+                : toDiagnostic(error, { source: "chat", meta: { sessionId } })
           )
           // A member's send has no other path: the composer must get it back.
           if (memberOnPartition) {

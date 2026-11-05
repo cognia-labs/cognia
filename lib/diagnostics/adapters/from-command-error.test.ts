@@ -167,6 +167,14 @@ describe("multi-tenant Host refusals", () => {
     }
   })
 
+  it("adr-0253 g25 maps a member's attachment refusals to their own diagnostics", () => {
+    expect(diagnose("member_attachment_unsupported")).toBe("memberAttachmentUnsupported")
+    expect(DIAGNOSTIC_CODES.memberAttachmentUnsupported.retryable).toBe(false)
+    // The composer has the turn back; it is sent again from there.
+    expect(diagnose("member_attachment_upload_failed")).toBe("memberAttachmentUploadFailed")
+    expect(DIAGNOSTIC_CODES.memberAttachmentUploadFailed.retryable).toBe(false)
+  })
+
   it("p6e maps member agent turn failures to their own diagnostics", () => {
     expect(diagnose("person_agent_exited")).toBe("personAgentExited")
     expect(DIAGNOSTIC_CODES.personAgentExited.retryable).toBe(true)

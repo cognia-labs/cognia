@@ -1230,7 +1230,8 @@ describe("HostStateService", () => {
       sessionId: "session-1",
       messageId,
       text,
-      attachments: false,
+      attachments: [],
+      attachmentsLost: false,
       createdAt: 50,
       ...extra,
     })
@@ -1369,12 +1370,37 @@ describe("HostStateService", () => {
       expect(state).toMatchObject({ turn: "retryable-error", turnErrorCode: "host_restarted" })
     })
 
+    it("sends a retried turn again with the files its Host held for it (G25)", async () => {
+      await interruptedConversation()
+      const held = {
+        ref: "cognia-upload:upl_1",
+        name: "shot.png",
+        mediaType: "image/png",
+        size: 32,
+        hash: "a".repeat(64),
+      }
+      const hostRestart = recovery({
+        resumeEnabled: jest.fn(async () => true),
+        interruptedTurns: jest.fn(async (_sessionId: string) => [
+          turn("action-1", "m1", "first words", { attachments: [held] }),
+          turn("action-2", "m2", "second words"),
+        ]),
+      })
+      const { dispatchRuntime } = await restartWith(hostRestart)
+
+      expect(hostRestart.fail).not.toHaveBeenCalled()
+      expect(dispatchRuntime.mock.calls[0]?.[0]).toMatchObject({
+        actionId: "action-1",
+        action: { kind: "message.enqueue", text: "first words", attachments: [held] },
+      })
+    })
+
     it("ends a turn it cannot send again even when on", async () => {
       await interruptedConversation()
       const hostRestart = recovery({
         resumeEnabled: jest.fn(async () => true),
         interruptedTurns: jest.fn(async (_sessionId: string) => [
-          turn("action-1", "m1", "first words", { attachments: true }),
+          turn("action-1", "m1", "first words", { attachmentsLost: true }),
           turn("action-2", "m2", "second words"),
         ]),
       })
@@ -4657,6 +4683,48 @@ describe("HostState Agent RPC dispatcher", () => {
           : [envelope.eventId, envelope.event.kind]
       )
 
+    it("g25 holds a member's files until the turn settles, a queued turn's too", async () => {
+      await withBlobClones(async () => {
+        const store = await import("@/lib/db/session-attachment-uploads")
+        const first = await stageTestPng("session-1", 1)
+        const second = await stageTestPng("session-1", 2)
+        const withFile = (actionId: string, messageId: string, ref: string) =>
+          action(
+            {
+              kind: "message.enqueue",
+              messageId,
+              text: "look",
+              attachments: [{ name: "shot.png", mediaType: "image/png", size: 12, ref }],
+            },
+            { actionId }
+          )
+        await dispatcher(withFile("action-1", "m-1", first.ref))
+        expect(sendPromptMock.mock.calls[0]?.[1]).toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "image" })])
+        )
+        // Handed off, not consumed: a Host restart retries from these bytes.
+        expect(await getDb().sessionAttachmentUploads.get(first.uploadId)).toMatchObject({
+          heldBy: "work:hoststate:action-1",
+          bytes: expect.anything(),
+        })
+        expect(
+          await store.resolveAttachmentRef(first.ref, { sessionId: "session-1" })
+        ).not.toBeNull()
+
+        await dispatcher(withFile("action-2", "m-2", second.ref))
+        await flush()
+        expect(
+          (await getDb().sessionAttachmentUploads.get(second.uploadId))?.heldAt
+        ).toBeUndefined()
+        const { endPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+        endPersonChatTurn("session-1")
+        await flush()
+        expect((await getDb().sessionAttachmentUploads.get(second.uploadId))?.heldBy).toBe(
+          "work:hoststate:action-2"
+        )
+      })
+    })
+
     it("waits on the Host for the running turn to settle, then runs as the next turn", async () => {
       await dispatcher(enqueue("action-1", "m-1", "first"))
       expect(sendPromptMock).toHaveBeenCalledTimes(1)
@@ -4767,6 +4835,38 @@ describe("HostState Agent RPC dispatcher", () => {
       expect(buildSendOptionsMock).not.toHaveBeenCalled()
       expect(mintPersonModelTicket).not.toHaveBeenCalled()
       expect(markHostStateChatTurnStartedMock).toHaveBeenCalledWith("action-1")
+    })
+
+    it("g25 hands a member's agent the files of the turn and holds them until it settles", async () => {
+      await withBlobClones(async () => {
+        const { initializePersonChat } = await import("@/lib/headless/person-chat")
+        initializePersonChat("person-brain", {
+          COGNIA_PERSON_CHAT: "tool-less",
+          COGNIA_PERSON_EXECUTION: "sandboxed",
+        })
+        const staged = await stageTestPng("session-1", 3)
+        acceptHostStateChatTurnMock.mockResolvedValueOnce({ submissionId: "work:action-1" })
+        claimHostStateChatTurnForDispatchMock.mockResolvedValueOnce("claimed")
+        await createAgentRpcHostStateDispatcher()(
+          action({
+            kind: "message.enqueue",
+            messageId: "m-agent",
+            text: "what is on this screen?",
+            attachments: [{ name: "shot.png", mediaType: "image/png", size: 12, ref: staged.ref }],
+          })
+        )
+        const prompt = personAgentStartMock.mock.calls.at(-1)?.[0]?.prompt
+        expect(prompt).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "image" }),
+            { type: "text", text: "what is on this screen?" },
+          ])
+        )
+        expect(await getDb().sessionAttachmentUploads.get(staged.uploadId)).toMatchObject({
+          heldBy: "work:action-1",
+          bytes: expect.anything(),
+        })
+      })
     })
 
     it("p6e keeps tool-less chat when the org names no agent", async () => {
@@ -4928,3 +5028,53 @@ it("keeps personal marks when projecting a confirmed HostState transcript row", 
     hostState: { actionId: "action" },
   })
 })
+
+/**
+ * Run with a structuredClone that keeps Blobs: this suite's jsdom fallback is
+ * JSON-only, and the dispatcher saves an attachment's source as a Blob.
+ */
+async function withBlobClones(run: () => Promise<void>): Promise<void> {
+  const originalClone = globalThis.structuredClone
+  const withBlobs = (value: unknown): unknown => {
+    if (value === undefined || value === null || typeof value !== "object") return value
+    if (value instanceof Blob) return value
+    if (Array.isArray(value)) return value.map(withBlobs)
+    if (Object.getPrototypeOf(value) === Object.prototype)
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, withBlobs(item)]))
+    return originalClone(value)
+  }
+  const clone = jest
+    .spyOn(globalThis, "structuredClone")
+    .mockImplementation(withBlobs as typeof structuredClone)
+  try {
+    await run()
+  } finally {
+    clone.mockRestore()
+  }
+}
+
+/** Stage a small PNG into `sessionId` as a member's device does. */
+async function stageTestPng(
+  sessionId: string,
+  seed: number
+): Promise<{ uploadId: string; ref: string }> {
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, seed, 2, 3, 4])
+  const store = await import("@/lib/db/session-attachment-uploads")
+  const { sha256Bytes } = await import("@/lib/ocr/hash")
+  const init = await store.beginAttachmentUpload({
+    sessionId,
+    deviceId: "dev-1",
+    name: "shot.png",
+    mediaType: "image/png",
+    size: png.byteLength,
+    hash: await sha256Bytes(png),
+  })
+  await store.appendAttachmentChunk({
+    uploadId: init.uploadId,
+    deviceId: "dev-1",
+    offset: 0,
+    bytes: png,
+  })
+  const { ref } = await store.commitAttachmentUpload({ uploadId: init.uploadId, deviceId: "dev-1" })
+  return { uploadId: init.uploadId, ref }
+}

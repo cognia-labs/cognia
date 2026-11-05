@@ -463,6 +463,14 @@ export type DiagnosticCode =
    */
   | "memberSendUnsupported"
   /**
+   * ADR-0253 §9 G25: a member's attachment their partition cannot take (a
+   * video, a type or size the Host refuses, more files than it allows). The
+   * turn is refused before anything is uploaded and goes back to the composer.
+   */
+  | "memberAttachmentUnsupported"
+  /** ADR-0253 §9 G25: a member's attachment did not reach their partition. */
+  | "memberAttachmentUploadFailed"
+  /**
    * ADR-0253 §9: a member's send waited for the HostState channel to be
    * negotiated and confirmed, and it never was.
    */

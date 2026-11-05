@@ -8,7 +8,7 @@ import { getWorkSubmission } from "@/lib/db/work-submissions"
 import { acceptWorkSubmission, bindWorkExecutionContext } from "./service"
 import { TranscriptRuntimeRecoveryError } from "@/lib/claude/ipc"
 import { createStoredChatDispatch } from "./stored-chat-dispatch"
-import { HOST_STATE_ATTACHMENT_REFS_DETAIL } from "./host-adapter"
+import type { WorkAttachmentRefV1 } from "@cognia/agent-config-types/work-submission"
 
 const mockSendPrompt = jest.fn(async (..._args: unknown[]) => undefined)
 
@@ -35,7 +35,7 @@ const loadKey = async () => KEY
 
 async function seedReplayableSubmission(
   sendOptions: Record<string, unknown> = { cwd: "/original/workspace", model: "claude-sonnet-4-5" },
-  detail?: Record<string, unknown>
+  attachments: WorkAttachmentRefV1[] = []
 ) {
   await acceptWorkSubmission(
     {
@@ -54,7 +54,7 @@ async function seedReplayableSubmission(
       turnId: "turn-1",
       inputBatchId: "batch-1",
       submissionId: "submission-1",
-      input: { content: "frozen prompt", visibleMessageIds: ["message-1"], attachments: [] },
+      input: { content: "frozen prompt", visibleMessageIds: ["message-1"], attachments },
       now: NOW,
     },
     { loadKey }
@@ -68,7 +68,6 @@ async function seedReplayableSubmission(
         cwd: "/original/workspace",
         projectId: "project-1",
         sendOptions,
-        ...(detail ? { detail } : {}),
       },
       now: NOW,
     },
@@ -104,10 +103,16 @@ describe("stored chat dispatch", () => {
     )
   }, 30_000)
 
-  it("parks a HostState turn whose files the frozen input cannot carry", async () => {
-    const row = await seedReplayableSubmission(undefined, {
-      [HOST_STATE_ATTACHMENT_REFS_DETAIL]: 2,
-    })
+  it("parks a HostState turn whose staged uploads only the HostState path can resolve", async () => {
+    const row = await seedReplayableSubmission(undefined, [
+      {
+        assetId: "cognia-upload:upl_1",
+        digest: "a".repeat(64),
+        mediaType: "image/png",
+        size: 3,
+        fileName: "shot.png",
+      },
+    ])
     await expect(createStoredChatDispatch({ loadKey })(row)).resolves.toEqual({
       status: "recovery_required",
       errorCode: "frozen_input_attachments_unavailable",

@@ -643,3 +643,74 @@ describe("settleWorkSubmissionWithoutTranscript", () => {
     expect((await getWorkSubmission("submission-1"))?.terminalOutcome).toBe("cancelled")
   })
 })
+
+describe("settling a turn that held staged uploads (ADR-0253 G25)", () => {
+  async function stageHeld(): Promise<{ uploadId: string; ref: string }> {
+    const uploads = await import("@/lib/db/session-attachment-uploads")
+    const { sha256Bytes } = await import("@/lib/ocr/hash")
+    const bytes = new Uint8Array(32)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const init = await uploads.beginAttachmentUpload({
+      sessionId: "session-1",
+      deviceId: "device-1",
+      name: "shot.png",
+      mediaType: "image/png",
+      size: bytes.byteLength,
+      hash: await sha256Bytes(bytes),
+    })
+    await uploads.appendAttachmentChunk({
+      uploadId: init.uploadId,
+      deviceId: "device-1",
+      offset: 0,
+      bytes,
+    })
+    const committed = await uploads.commitAttachmentUpload({
+      uploadId: init.uploadId,
+      deviceId: "device-1",
+    })
+    await acceptWorkSubmission(
+      acceptInput({
+        input: {
+          ...frozenInput,
+          attachments: [
+            {
+              assetId: committed.ref,
+              digest: committed.hash,
+              mediaType: "image/png",
+              size: 32,
+              fileName: "shot.png",
+            },
+          ],
+        },
+      }),
+      deps
+    )
+    await uploads.holdAttachmentRefs([committed.ref], "submission-1")
+    return { uploadId: init.uploadId, ref: committed.ref }
+  }
+
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+
+  it.each([
+    [
+      "with a transcript",
+      () => settleWorkSubmission({ submissionId: "submission-1", outcome: "completed", now: NOW }),
+    ],
+    [
+      "without one",
+      () => settleWorkSubmissionWithoutTranscript("submission-1", "failed", NOW, "host_restarted"),
+    ],
+  ])("releases the bytes once the turn is sealed %s", async (_label, settle) => {
+    const { uploadId } = await stageHeld()
+    expect((await getDb().sessionAttachmentUploads.get(uploadId))?.bytes).toBeDefined()
+
+    expect(await settle()).toBe(true)
+
+    const row = await getDb().sessionAttachmentUploads.get(uploadId)
+    expect(row?.consumedAt).toEqual(expect.any(Number))
+    expect(row?.bytes).toBeUndefined()
+  })
+})

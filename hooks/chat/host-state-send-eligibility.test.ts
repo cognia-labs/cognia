@@ -9,6 +9,7 @@ const plain: HostStateSendFacts = {
   contentIsString: true,
   hasResourceContext: false,
   attachmentCount: 0,
+  attachmentsAsRefs: false,
   builtinLane: true,
   addressed: false,
   carriesForeignTurns: false,
@@ -32,6 +33,12 @@ describe("hostStateSendEligible", () => {
     ["block content", { contentIsString: false }],
     ["a workbench resource", { hasResourceContext: true }],
     ["attachments", { attachmentCount: 1 }],
+    // Only a person partition stages a member's uploads; an owner's files
+    // stay on the direct path even when they could be refs.
+    [
+      "an owner's attachments",
+      { attachmentCount: 1, contentIsString: false, attachmentsAsRefs: true },
+    ],
     ["another lane", { builtinLane: false }],
     ["an addressed turn", { addressed: true }],
     ["another runtime's replies", { carriesForeignTurns: true }],
@@ -47,5 +54,23 @@ describe("hostStateSendEligible", () => {
     // Everything else that keeps a turn on the direct path still does.
     expect(hostStateSendEligible({ ...member, attachmentCount: 1 })).toBe(false)
     expect(hostStateSendEligible({ ...member, routerFusionStamped: true })).toBe(false)
+  })
+
+  it("adr-0253 g25 carries a member's attachments as refs to their partition's uploads", () => {
+    const member = { ...plain, pairedHost: true, personPartition: true }
+    const withFiles = { ...member, contentIsString: false, attachmentCount: 2 }
+    expect(hostStateSendEligible({ ...withFiles, attachmentsAsRefs: true })).toBe(true)
+    // Files the partition cannot take, or content beyond them, stay refused.
+    expect(hostStateSendEligible({ ...withFiles, attachmentsAsRefs: false })).toBe(false)
+    expect(
+      hostStateSendEligible({ ...withFiles, attachmentsAsRefs: true, hasResourceContext: true })
+    ).toBe(false)
+    expect(hostStateSendEligible({ ...withFiles, attachmentsAsRefs: true, addressed: true })).toBe(
+      false
+    )
+    // Refs never stand in for block content that is not attachments.
+    expect(
+      hostStateSendEligible({ ...member, contentIsString: false, attachmentsAsRefs: true })
+    ).toBe(false)
   })
 })

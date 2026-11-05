@@ -26,7 +26,8 @@ const turn: InterruptedHostStateTurn = {
   sessionId: "session-1",
   messageId: "message-1",
   text: "hello",
-  attachments: false,
+  attachments: [],
+  attachmentsLost: false,
   createdAt: 10,
 }
 

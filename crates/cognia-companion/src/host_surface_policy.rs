@@ -147,6 +147,8 @@ mod tests {
             ("host_state_submit", "client.write"), ("host_feature_manifest", "client.read"),
             ("session_attach", "client.read"), ("session_detach", "client.read"),
             ("session_mark_read", "client.write"), ("session_mark_unread", "client.write"),
+            ("session_attachment_upload_init", "client.write"), ("session_attachment_upload_chunk", "client.write"),
+            ("session_attachment_upload_commit", "client.write"), ("session_attachment_upload_abort", "client.write"),
         ]);
         assert_eq!(policy.person_host_state_commands.len(), expected.len());
         for entry in &policy.person_host_state_commands {

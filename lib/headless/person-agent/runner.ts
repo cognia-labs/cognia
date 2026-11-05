@@ -294,8 +294,10 @@ export function personAgentPrompt(prompt: SendContent): {
         type: "image",
         source: { type: "base64", data: block.source.data, mediaType: block.source.media_type },
       })
-    // A document has no prompt slot in an external agent, and a partition
-    // has no file plane to drop it into the workspace with.
+    // A member's files reach the Host as uploads it extracts: documents
+    // arrive as text blocks, images as images (ADR-0253 §9 G25). What is
+    // left (a native video) has no prompt slot in an external agent, and a
+    // partition has no file plane to drop it into the workspace with.
     else throw new PersonAgentTurnError("person_agent_attachment_unsupported", block.type)
   }
   return { text: text.join("\n\n"), attachments }

@@ -1090,6 +1090,26 @@
       "reason": "P5d: submit the owner's data intents without a Host admin lease; runtime intents refuse execution_isolation_unavailable and workspace moves refuse workspace_unavailable per action. Legacy workspace.write and interactive approval remain outside a partition."
     },
     {
+      "arm": "session_attachment_upload_init",
+      "capability": "client.write",
+      "reason": "ADR-0253 G25: open an attachment upload in the caller's person brain only, bound to the calling device, for a member turn's message.enqueue ref; never the operator's upload store."
+    },
+    {
+      "arm": "session_attachment_upload_chunk",
+      "capability": "client.write",
+      "reason": "ADR-0253 G25: append bytes only to the calling device's open upload in the caller's person brain."
+    },
+    {
+      "arm": "session_attachment_upload_commit",
+      "capability": "client.write",
+      "reason": "ADR-0253 G25: commit the calling device's upload in the caller's person brain into a ref that brain's message.enqueue resolves."
+    },
+    {
+      "arm": "session_attachment_upload_abort",
+      "capability": "client.write",
+      "reason": "ADR-0253 G25: abort only the calling device's upload in the caller's person brain."
+    },
+    {
       "arm": "host_feature_manifest",
       "capability": "client.read",
       "reason": "P5d: discover the caller's partition hostStateScope and unavailable agent execution; retain host.observe and workspace standing outside a partitioned Host."

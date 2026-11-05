@@ -286,16 +286,24 @@ async function resolveOutboundAttachments(
   return { content: built.content, manifest: built.manifest }
 }
 
-/** Release the staged bytes behind refs the runtime has now received. */
-async function consumeAttachmentRefs(
-  attachments: readonly HostStateAttachmentRef[]
+/**
+ * The runtime has the files the refs name. An owner's staging copy is dead
+ * weight now and is released. A member's turn (`holdUntilSettled`, its work
+ * submission) keeps the bytes until it settles (ADR-0253 §9 G25): a Host
+ * restart retries the turn from the same refs, and the settlement releases
+ * them (`releaseSettledSubmissionAttachments`).
+ */
+async function releaseHandedOffAttachments(
+  attachments: readonly HostStateAttachmentRef[],
+  holdUntilSettled: string | null
 ): Promise<void> {
   const refs = attachments
     .map((attachment) => attachment.ref)
     .filter((ref): ref is string => typeof ref === "string" && ref.length > 0)
   if (refs.length === 0) return
   const store = await import("@/lib/db/session-attachment-uploads")
-  await store.consumeAttachmentRefs(refs)
+  if (holdUntilSettled) await store.holdAttachmentRefs(refs, holdUntilSettled)
+  else await store.consumeAttachmentRefs(refs)
 }
 
 /**
@@ -353,6 +361,10 @@ export function createAgentRpcHostStateDispatcher(
         let handedOff = false
         // Set when the turn waits behind a running one (tool-less member chat).
         let deferred: Promise<void> | null = null
+        // A member's turn (agent or tool-less chat) with a durable receipt
+        // keeps its staged files until it settles; see
+        // `releaseHandedOffAttachments`.
+        let holdUntilSettled: string | null = null
         let project: (envelope: AgentEventEnvelope) => Promise<void> = async () => {}
         const queueEvent = (
           sequence: number,
@@ -437,6 +449,7 @@ export function createAgentRpcHostStateDispatcher(
               }
             }
             const partitionChat = !personAgent && capability.chat === "tool-less"
+            if ((partitionChat || personAgent) && receipt) holdUntilSettled = receipt.submissionId
             const options =
               partitionChat || personAgent
                 ? undefined
@@ -545,16 +558,17 @@ export function createAgentRpcHostStateDispatcher(
             } else {
               await dispatch(options!)
             }
-            // Only now: the runtime has the file, so the staging copy is dead
-            // weight and the per-session staging slot should be freed. Before
-            // the send it is the only copy that exists.
-            if (!deferred) await consumeAttachmentRefs(action.action.attachments)
+            // Only now: the runtime has the file, so the per-session staging
+            // slot is freed. Before the send the staged copy is the only one.
+            if (!deferred)
+              await releaseHandedOffAttachments(action.action.attachments, holdUntilSettled)
           }
           if (durableLeaseLost) return
           if (deferred) {
             const { attachments } = action.action
+            const holdFor = holdUntilSettled
             const started = async () => {
-              await consumeAttachmentRefs(attachments)
+              await releaseHandedOffAttachments(attachments, holdFor)
               if (receipt && !durableLeaseLost) {
                 await workSubmissionAdapter.markHostStateChatTurnStarted(action.actionId)
               }
@@ -2550,8 +2564,10 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
    * left reading as pending. On: a turn the previous Host had started is sent
    * again after the transcript says so, since a tool effect of its first
    * attempt may repeat; queued messages, which never started, are simply
-   * delivered. A turn whose words cannot be read back, or whose attachments
-   * were already consumed, ends `host_restarted` either way.
+   * delivered. A turn is sent again with the files it carried, which its
+   * Host held for it until it settles (ADR-0253 §9 G25); one whose words
+   * cannot be read back, or whose files are no longer held, ends
+   * `host_restarted` either way.
    */
   async function finishRestartedTurns(channels: readonly RestartedChannel[]): Promise<void> {
     const restart = options.hostRestart
@@ -2580,7 +2596,7 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
     resume: boolean
   ): Promise<void> {
     for (const turn of channel.attempted) {
-      if (!resume || turn.text === null || turn.messageId === null || turn.attachments) {
+      if (!resume || turn.text === null || turn.messageId === null || turn.attachmentsLost) {
         await restart.fail(turn)
         continue
       }
@@ -2590,7 +2606,7 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
         clientId: "host-restart",
         messageId: turn.messageId,
         text: turn.text,
-        attachments: [],
+        attachments: turn.attachments,
       })
     }
     for (const item of channel.queued) {

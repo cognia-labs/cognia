@@ -91,6 +91,16 @@ export interface SessionAttachmentUploadRow {
   expiresAt: number
   /** Set once a message actually carried this ref, which pins it against GC. */
   consumedAt?: number
+  /**
+   * Set when a member's turn handed this ref to its runtime (ADR-0253 §9
+   * G25). The bytes stay until that turn's work submission (`heldBy`)
+   * settles, so a retry after a Host restart can build the same prompt
+   * again. A held row is no longer staged: it does not count against the
+   * staging ceiling, and a new upload of the same bytes gets its own row.
+   */
+  heldAt?: number
+  /** The work submission whose settlement releases a held row. */
+  heldBy?: string
 }
 
 export { ATTACHMENT_UPLOAD_CHUNK_BYTES }
@@ -198,8 +208,11 @@ export async function beginAttachmentUpload(
     .equals([input.sessionId, input.deviceId])
     .toArray()
 
+  // A held row belongs to a turn that is running; its settlement drops the
+  // bytes, so a second message must not name the same ref.
   const match = existing.find(
-    (row) => row.hash === hash && readStoredBytes(row.bytes) !== undefined
+    (row) =>
+      row.hash === hash && row.heldAt === undefined && readStoredBytes(row.bytes) !== undefined
   )
   if (match) {
     // Touch it so rejoining an upload keeps it alive; a client that resumes
@@ -220,7 +233,9 @@ export async function beginAttachmentUpload(
   // Only unconsumed rows count toward the ceiling: an attachment already sent
   // is no longer staged, and counting it would make the seventh message of a
   // conversation fail rather than the seventh file of a message.
-  const staged = existing.filter((row) => row.consumedAt === undefined).length
+  const staged = existing.filter(
+    (row) => row.consumedAt === undefined && row.heldAt === undefined
+  ).length
   if (staged >= maxConcurrent) throw new AttachmentUploadError("attachment_too_many")
 
   const uploadId = `upl_${crypto.randomUUID()}`
@@ -575,6 +590,37 @@ export async function consumeAttachmentRefs(
 }
 
 /**
+ * Keep refs a member's turn handed to its runtime until the turn settles
+ * (ADR-0253 §9 G25), instead of consuming them at the hand-off.
+ *
+ * The prompt was built from these bytes, but a Host restart ends the runtime
+ * that held it, and a retry builds the prompt again from the refs. The work
+ * submission's settlement releases them (`consumeAttachmentRefs`). Rows
+ * already consumed, or not committed, are left as they are.
+ */
+export async function holdAttachmentRefs(
+  refs: readonly string[],
+  submissionId: string,
+  now = Date.now()
+): Promise<void> {
+  const ids = refs.map(parseUploadRef).filter((id): id is string => id !== null)
+  if (ids.length === 0) return
+  const db = getDb()
+  await db.transaction("rw", db.sessionAttachmentUploads, async () => {
+    for (const uploadId of ids) {
+      const row = await db.sessionAttachmentUploads.get(uploadId)
+      if (!row || row.status !== "committed" || row.consumedAt !== undefined) continue
+      await db.sessionAttachmentUploads.update(uploadId, {
+        heldAt: row.heldAt ?? now,
+        heldBy: submissionId,
+        updatedAt: now,
+        expiresAt: now + ATTACHMENT_OBJECT_TTL_MS,
+      })
+    }
+  })
+}
+
+/**
  * Collect abandoned uploads and orphaned objects.
  *
  * Runs off `beginAttachmentUpload` rather than a timer: the collector only
@@ -587,8 +633,13 @@ export async function sweepAttachmentUploads(now = Date.now()): Promise<number> 
   const expired = await db.sessionAttachmentUploads.where("expiresAt").below(now).toArray()
   const unconsumed = expired.filter((row) => row.consumedAt === undefined)
   if (unconsumed.length === 0) return 0
-  const pinned = await uploadsHeldByUndispatchedMessages()
-  const collectable = unconsumed.filter((row) => !pinned.has(row.uploadId))
+  const [pinned, running] = await Promise.all([
+    uploadsHeldByUndispatchedMessages(),
+    uploadsHeldByOpenTurns(unconsumed),
+  ])
+  const collectable = unconsumed.filter(
+    (row) => !pinned.has(row.uploadId) && !running.has(row.uploadId)
+  )
   if (collectable.length === 0) return 0
   await db.sessionAttachmentUploads.bulkDelete(collectable.map((row) => row.uploadId))
   return collectable.length
@@ -616,6 +667,25 @@ async function uploadsHeldByUndispatchedMessages(): Promise<Set<string>> {
     }
   }
   return held
+}
+
+/**
+ * Held uploads whose turn has not settled. A turn may outlive the object TTL
+ * (a long agent run); its settlement, not the clock, releases the bytes. A
+ * submission that is gone has nothing left to release them, so the clock does.
+ */
+async function uploadsHeldByOpenTurns(
+  rows: readonly SessionAttachmentUploadRow[]
+): Promise<Set<string>> {
+  const held = rows.filter((row) => row.heldBy !== undefined)
+  if (held.length === 0) return new Set()
+  const submissions = getDb().workSubmissions
+  const open = new Set<string>()
+  for (const row of held) {
+    const submission = await submissions.get(row.heldBy!)
+    if (submission && submission.dispatchState !== "settled") open.add(row.uploadId)
+  }
+  return open
 }
 
 /** Drop every staged upload a device holds. Used on revoke / unpair. */

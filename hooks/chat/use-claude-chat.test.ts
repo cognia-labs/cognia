@@ -258,6 +258,14 @@ jest.mock("@/lib/db/mobile-outbound-queue", () => ({
     withdrawUnsentHostStateMessagesMock(sessionId),
 }))
 
+const uploadMemberTurnAttachmentsMock = jest.fn()
+jest.mock("@/lib/companion/member-turn-attachments", () => ({
+  ...jest.requireActual<typeof import("@/lib/companion/member-turn-attachments")>(
+    "@/lib/companion/member-turn-attachments"
+  ),
+  uploadMemberTurnAttachments: (...args: unknown[]) => uploadMemberTurnAttachmentsMock(...args),
+}))
+
 // Standalone (BYOK) chat — off by default so the sidecar-path suite is
 // unaffected; individual tests flip the flag.
 const standaloneFlag = { value: false }
@@ -1994,6 +2002,133 @@ describe("useClaudeChat — actions", () => {
         "sess-1",
         expect.objectContaining({ code: "memberSendUnsupported" })
       )
+    })
+
+    describe("with attachments (G25)", () => {
+      const shot = new Blob(["png"], { type: "image/png" })
+      const pic = {
+        type: "image" as const,
+        source: { type: "base64" as const, media_type: "image/png", data: "UElD" },
+      }
+      const manifest = [
+        { filename: "shot.png", mediaType: "image/png", kind: "image" as const, original: shot },
+      ]
+      const ref = {
+        name: "shot.png",
+        mediaType: "image/png",
+        size: 3,
+        hash: "a".repeat(64),
+        ref: "cognia-upload:upl_1",
+      }
+
+      beforeEach(() => {
+        uploadMemberTurnAttachmentsMock.mockReset()
+        setRuntimeSnapshot({
+          target: { id: "member-host", kind: "companion", platform: "web", hostKind: "cloud" },
+          vaultState: "unlocked",
+          connectionState: "online",
+          host: {
+            compatible: true,
+            operations: [
+              "host_state_submit",
+              "session_attachment_upload_init",
+              "session_attachment_upload_chunk",
+              "session_attachment_upload_commit",
+              "session_attachment_upload_abort",
+            ],
+            grants: [],
+            personPartition: true,
+          },
+        })
+      })
+
+      it("uploads the originals into the partition and enqueues the request with their refs", async () => {
+        uploadMemberTurnAttachmentsMock.mockResolvedValueOnce([ref])
+        enqueueHostStateIntentWhenAvailableMock.mockResolvedValueOnce({
+          id: "action-1",
+          status: "pending",
+        })
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+
+        await act(async () => {
+          await result.current.send([pic, { type: "text", text: "what is this?" }], undefined, {
+            attachmentManifest: manifest,
+          })
+        })
+
+        expect(uploadMemberTurnAttachmentsMock).toHaveBeenCalledWith("sess-1", [
+          { name: "shot.png", mediaType: "image/png", original: shot },
+        ])
+        expect(enqueueHostStateIntentWhenAvailableMock).toHaveBeenCalledWith({
+          sessionId: "sess-1",
+          action: expect.objectContaining({
+            kind: "message.enqueue",
+            text: "what is this?",
+            attachments: [ref],
+          }),
+        })
+        expect(sendPromptMock).not.toHaveBeenCalled()
+      })
+
+      it("refuses a file the partition cannot take before uploading anything", async () => {
+        const clip = new Blob(["v"], { type: "video/mp4" })
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+
+        let thrown: unknown
+        await act(async () => {
+          await result.current
+            .send([pic, { type: "text", text: "watch" }], undefined, {
+              attachmentManifest: [
+                { filename: "clip.mp4", mediaType: "video/mp4", kind: "video", original: clip },
+              ],
+            })
+            .catch((error: unknown) => {
+              thrown = error
+            })
+        })
+
+        expect(thrown).toEqual(new Error("member_send_unsupported"))
+        expect(uploadMemberTurnAttachmentsMock).not.toHaveBeenCalled()
+        expect(enqueueHostStateIntentWhenAvailableMock).not.toHaveBeenCalled()
+        expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+          "sess-1",
+          expect.objectContaining({
+            code: "memberAttachmentUnsupported",
+            meta: expect.objectContaining({ extra: { reason: "video" } }),
+          })
+        )
+      })
+
+      it("gives the turn back when an upload fails, and sends no intent", async () => {
+        const { MemberAttachmentUploadError } = jest.requireActual<
+          typeof import("@/lib/companion/member-turn-attachments")
+        >("@/lib/companion/member-turn-attachments")
+        const failure = new MemberAttachmentUploadError(new Error("socket closed"))
+        uploadMemberTurnAttachmentsMock.mockRejectedValueOnce(failure)
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+
+        let thrown: unknown
+        await act(async () => {
+          await result.current
+            .send([pic, { type: "text", text: "what is this?" }], undefined, {
+              attachmentManifest: manifest,
+            })
+            .catch((error: unknown) => {
+              thrown = error
+            })
+        })
+
+        expect(thrown).toBe(failure)
+        expect(enqueueHostStateIntentWhenAvailableMock).not.toHaveBeenCalled()
+        expect(sendPromptMock).not.toHaveBeenCalled()
+        expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+          "sess-1",
+          expect.objectContaining({ code: "memberAttachmentUploadFailed" })
+        )
+      })
     })
   })
 

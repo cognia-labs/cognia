@@ -72,6 +72,13 @@ export interface UploadSessionAttachmentOptions {
    */
   hash?: string
   onProgress?: (progress: AttachmentUploadProgress) => void
+  /**
+   * Told once, after init, which upload the bytes go to and whether the Host
+   * already held this content (`complete`). A caller that gives up on a send
+   * aborts only the uploads it opened: a `complete` one may be a ref another
+   * queued message of this session still names.
+   */
+  onStarted?: (upload: { uploadId: string; complete: boolean }) => void
   call?: AttachmentUploadCall
 }
 
@@ -126,6 +133,7 @@ export async function uploadSessionAttachment(
   })) as InitResponse
 
   const total = file.bytes.byteLength
+  options.onStarted?.({ uploadId: init.uploadId, complete: init.complete && Boolean(init.ref) })
   options.onProgress?.({
     uploadedBytes: Math.min(init.resumeOffset, total),
     totalBytes: total,

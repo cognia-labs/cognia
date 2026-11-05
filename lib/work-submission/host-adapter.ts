@@ -23,9 +23,11 @@
  * counter and the action id is already the dedup key the runtime command uses.
  */
 
-import type { HostStateAction } from "@cognia/agent-config-types/host-state"
-import type { WorkReceiptV1 } from "@cognia/agent-config-types/work-submission"
+import type { HostStateAction, HostStateAttachmentRef } from "@cognia/agent-config-types/host-state"
+import type { WorkAttachmentRefV1, WorkReceiptV1 } from "@cognia/agent-config-types/work-submission"
 import type { SendOptions } from "@cognia/agent-config-types"
+
+import { parseUploadRef, resolveAttachmentRef } from "@/lib/db/session-attachment-uploads"
 
 import {
   claimWorkSubmission,
@@ -58,12 +60,51 @@ export interface HostAdapterDeps extends WorkSubmissionServiceDeps, WorkRecovery
 }
 
 /**
- * `detail` key of a frozen HostState context whose turn carried attachment
- * refs. The frozen input holds the message text alone (a ref is not a content
- * address), so a replay from the ledger would send the words without the
- * files; the stored-chat replay refuses such a turn instead.
+ * The staged uploads a HostState turn's frozen input names (ADR-0253 §9 G25).
+ *
+ * A `message.enqueue` ref is frozen as an attachment whose `assetId` is the
+ * ref itself and whose `digest` is the hash the Host verified at commit: a
+ * content address over bytes the Host stages, not a claim of the client's.
+ * The bytes live in the upload store, not the ledger, so only the Host that
+ * staged them can send the turn again, and only while they are held.
  */
-export const HOST_STATE_ATTACHMENT_REFS_DETAIL = "hostStateAttachmentRefs"
+export function hostStateUploadRefs(attachments: readonly WorkAttachmentRefV1[]): string[] {
+  return attachments
+    .map((attachment) => attachment.assetId)
+    .filter((ref) => parseUploadRef(ref) !== null)
+}
+
+/** A display name the work-input guard accepts: never a path. */
+function frozenFileName(name: string): string {
+  const flat = name.replace(/[/\\\0]/g, "_").trim()
+  return flat === "" || flat === "." || flat === ".." ? "attachment" : flat
+}
+
+/**
+ * The turn's refs as content-addressed attachments, read from the upload
+ * store. A ref that no longer resolves is left out: the dispatch refuses the
+ * turn for it (`host_state_attachment_unavailable`), and nothing frozen here
+ * could stand in for the missing bytes.
+ */
+async function frozenHostStateAttachments(
+  sessionId: string,
+  attachments: readonly HostStateAttachmentRef[]
+): Promise<WorkAttachmentRefV1[]> {
+  const frozen: WorkAttachmentRefV1[] = []
+  for (const attachment of attachments) {
+    if (!attachment.ref || !parseUploadRef(attachment.ref)) continue
+    const row = await resolveAttachmentRef(attachment.ref, { sessionId })
+    if (!row) continue
+    frozen.push({
+      assetId: attachment.ref,
+      digest: row.hash,
+      mediaType: row.mediaType,
+      size: row.size,
+      fileName: frozenFileName(row.name),
+    })
+  }
+  return frozen
+}
 
 /** Deterministic per action, so a redelivered action maps to the same run. */
 export function hostStateRunId(actionId: string): string {
@@ -91,6 +132,7 @@ export async function acceptHostStateChatTurn(
   if (!sessionId) return null
 
   try {
+    const attachments = await frozenHostStateAttachments(sessionId, action.action.attachments)
     return await acceptWorkSubmission(
       {
         localAuthorization: LOCAL_PERSON_RUN,
@@ -113,11 +155,10 @@ export async function acceptHostStateChatTurn(
         input: {
           content: action.action.text,
           visibleMessageIds: [action.action.messageId],
-          // HostState attachment refs carry a display name and size but no
-          // content address, and the renderer gate already excludes any turn
-          // with attachments from this path. Recording them as frozen inputs
-          // would claim a fidelity the wire format cannot supply.
-          attachments: [],
+          // The staged uploads the turn names, by ref and verified hash. The
+          // text alone is not the turn: a retry after a Host restart resends
+          // these refs, and settling the turn releases their bytes.
+          attachments,
         },
       },
       deps
@@ -138,9 +179,6 @@ export async function bindHostStateChatTurnContext(
   if (action.action.kind !== "message.enqueue" || !action.sessionId) return false
   try {
     const runId = hostStateRunId(action.actionId)
-    const attachmentRefs = action.action.attachments.filter(
-      (attachment) => typeof attachment.ref === "string" && attachment.ref.length > 0
-    ).length
     const result = await bindWorkExecutionContext(
       {
         submissionId: hostStateSubmissionId(action.actionId),
@@ -149,9 +187,6 @@ export async function bindHostStateChatTurnContext(
         context: {
           ...(sendOptions.cwd ? { cwd: sendOptions.cwd } : {}),
           sendOptions,
-          ...(attachmentRefs > 0
-            ? { detail: { [HOST_STATE_ATTACHMENT_REFS_DETAIL]: attachmentRefs } }
-            : {}),
         },
       },
       deps
@@ -307,8 +342,14 @@ export interface InterruptedHostStateTurn {
   /** The member's message; `null` when the frozen input cannot be read. */
   messageId: string | null
   text: string | null
-  /** The turn carried attachment refs, which the frozen input cannot resend. */
-  attachments: boolean
+  /**
+   * The staged uploads the turn carried, to send again with its words. They
+   * are held until the turn settles (`holdAttachmentRefs`), so a retry reads
+   * the same bytes.
+   */
+  attachments: HostStateAttachmentRef[]
+  /** A file of the turn is no longer staged here; it cannot be sent again. */
+  attachmentsLost: boolean
   createdAt: number
 }
 
@@ -353,7 +394,8 @@ async function readInterruptedTurn(
     sessionId,
     messageId: null,
     text: null,
-    attachments: false,
+    attachments: [],
+    attachmentsLost: false,
     createdAt: row.createdAt,
   }
   try {
@@ -368,19 +410,26 @@ async function readInterruptedTurn(
     ) as { content?: unknown; visibleMessageIds?: unknown }
     const messageId = Array.isArray(input.visibleMessageIds) ? input.visibleMessageIds[0] : null
     if (typeof input.content !== "string" || typeof messageId !== "string") return turn
-    let attachments = false
-    if (bundle.contextBundle) {
-      const context = JSON.parse(
-        await openWorkSubmissionPayload(
-          bundle.contextBundle.envelope,
-          { accountId: row.accountId, submissionId: row.id, kind: "context-bundle" },
-          deps
-        )
-      ) as { detail?: Record<string, unknown> }
-      const refs = context.detail?.[HOST_STATE_ATTACHMENT_REFS_DETAIL]
-      attachments = typeof refs === "number" && refs > 0
+    const attachments: HostStateAttachmentRef[] = []
+    let attachmentsLost = false
+    for (const frozen of bundle.inputBatch.attachments) {
+      if (!parseUploadRef(frozen.assetId)) {
+        // Not a staged upload: nothing here can put it back into a prompt.
+        attachmentsLost = true
+        continue
+      }
+      const staged = await resolveAttachmentRef(frozen.assetId, { sessionId })
+      // Staged again under the same ref is the same bytes only if the hash agrees.
+      if (!staged || staged.hash !== frozen.digest) attachmentsLost = true
+      attachments.push({
+        name: frozen.fileName,
+        mediaType: frozen.mediaType,
+        size: frozen.size,
+        hash: frozen.digest,
+        ref: frozen.assetId,
+      })
     }
-    return { ...turn, messageId, text: input.content, attachments }
+    return { ...turn, messageId, text: input.content, attachments, attachmentsLost }
   } catch {
     return turn
   }

@@ -22,15 +22,38 @@ import {
   claimHostStateChatTurnForDispatch,
   failHostStateTurnAfterRestart,
   HOST_RESTARTED,
-  HOST_STATE_ATTACHMENT_REFS_DETAIL,
   hostStateRunId,
   hostStateSubmissionId,
   listHostStateTurnsInterruptedBefore,
   markHostStateChatTurnStarted,
   permitHostStateRedispatchAfterRestart,
   revokeHostStateRedispatchPermit,
+  hostStateUploadRefs,
   type HostAdapterDeps,
 } from "./host-adapter"
+import {
+  appendAttachmentChunk,
+  beginAttachmentUpload,
+  commitAttachmentUpload,
+  consumeAttachmentRefs,
+} from "@/lib/db/session-attachment-uploads"
+import { sha256Bytes } from "@/lib/ocr/hash"
+
+/** Stage a small PNG into `sessionId` the way a member's device does. */
+async function stagePng(sessionId: string, name = "shot.png"): Promise<string> {
+  const bytes = new Uint8Array(32)
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const init = await beginAttachmentUpload({
+    sessionId,
+    deviceId: "device-1",
+    name,
+    mediaType: "image/png",
+    size: bytes.byteLength,
+    hash: await sha256Bytes(bytes),
+  })
+  await appendAttachmentChunk({ uploadId: init.uploadId, deviceId: "device-1", offset: 0, bytes })
+  return (await commitAttachmentUpload({ uploadId: init.uploadId, deviceId: "device-1" })).ref
+}
 
 beforeAll(() => {
   if (!globalThis.crypto?.subtle) {
@@ -135,7 +158,6 @@ describe("acceptHostStateChatTurn", () => {
     await acceptHostStateChatTurn(action(), deps())
     const batch = await getDb().workInputBatches.get("input:hoststate:action-1")
     expect(batch?.visibleMessageIds).toEqual(["message-1"])
-    // Reference-only: HostState attachment refs carry no content address.
     expect(batch?.attachments).toEqual([])
     expect(JSON.stringify(batch?.envelope)).not.toContain("hello from mobile")
   }, 30_000)
@@ -223,27 +245,46 @@ describe("HostState live handoff", () => {
     expect((await getWorkSubmission("work:hoststate:action-1"))?.dispatchState).toBe("dispatched")
   }, 30_000)
 
-  it("records that the turn carried attachment refs its frozen input cannot replay", async () => {
-    const withFiles = action({
-      kind: "message.enqueue",
-      messageId: "message-1",
-      text: "look",
-      attachments: [{ ref: "upload:u1", name: "shot.png", mediaType: "image/png", size: 3 }],
-    })
-    expect(await bindHostStateChatTurnContext(withFiles, { model: "m" }, deps())).toBe(true)
+  it("adr-0253 g25 freezes the turn's staged uploads by ref and verified hash", async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    const ref = await stagePng("session-1", "a/b\\shot.png")
+    const receipt = await acceptHostStateChatTurn(
+      action({
+        kind: "message.enqueue",
+        messageId: "message-1",
+        text: "look",
+        attachments: [
+          { ref, name: "spoofed.exe", mediaType: "text/plain", size: 1 },
+          // Gone from the store: the dispatch refuses the turn for it.
+          { ref: "cognia-upload:upl_missing", name: "gone.png", mediaType: "image/png", size: 3 },
+        ],
+      }),
+      deps()
+    )
+    expect(receipt).not.toBeNull()
     const bundle = await getWorkSubmissionBundle("work:hoststate:action-1")
+    // The store's verified facts, not the client's labels; never a path.
+    expect(bundle?.inputBatch?.attachments).toEqual([
+      {
+        assetId: ref,
+        digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        mediaType: "image/png",
+        size: 32,
+        fileName: "a_b_shot.png",
+      },
+    ])
+    expect(hostStateUploadRefs(bundle!.inputBatch!.attachments)).toEqual([ref])
+    // The context no longer carries a side count of them.
+    expect(await bindHostStateChatTurnContext(action(), { model: "m" }, deps())).toBe(true)
     const context = JSON.parse(
       await openWorkSubmissionPayload(
-        bundle!.contextBundle!.envelope,
-        {
-          accountId: "account-1",
-          submissionId: "work:hoststate:action-1",
-          kind: "context-bundle",
-        },
+        (await getWorkSubmissionBundle("work:hoststate:action-1"))!.contextBundle!.envelope,
+        { accountId: "account-1", submissionId: "work:hoststate:action-1", kind: "context-bundle" },
         deps()
       )
     )
-    expect(context.detail).toEqual({ [HOST_STATE_ATTACHMENT_REFS_DETAIL]: 1 })
+    expect(context.detail).toBeUndefined()
   }, 30_000)
 })
 
@@ -398,7 +439,8 @@ describe("after a Host restart (ADR-0253 §7)", () => {
         sessionId: "session-1",
         messageId: "message-1",
         text: "hello from mobile",
-        attachments: false,
+        attachments: [],
+        attachmentsLost: false,
       }),
       expect.objectContaining({ actionId: "action-2", messageId: "message-2", text: "and then" }),
     ])
@@ -409,20 +451,42 @@ describe("after a Host restart (ADR-0253 §7)", () => {
     ).resolves.toEqual([])
   }, 30_000)
 
-  it("marks a turn whose attachments cannot be sent again, and leaves unreadable words null", async () => {
-    await bindHostStateChatTurnContext(
-      action({
-        kind: "message.enqueue",
-        messageId: "message-1",
-        text: "look",
-        attachments: [{ ref: "upload:u1", name: "shot.png", mediaType: "image/png", size: 3 }],
-      }),
-      { model: "m" },
+  it("carries a turn's staged uploads, and marks them lost once they are gone", async () => {
+    const ref = await stagePng("session-files")
+    await acceptHostStateChatTurn(
+      action(
+        {
+          kind: "message.enqueue",
+          messageId: "message-9",
+          text: "look",
+          attachments: [{ ref, name: "shot.png", mediaType: "image/png", size: 32 }],
+        },
+        { actionId: "action-9", sessionId: "session-files" }
+      ),
       deps()
     )
     const bootedAt = Date.now() + 60_000
-    const [withFiles] = await listHostStateTurnsInterruptedBefore("session-1", bootedAt, deps())
-    expect(withFiles).toMatchObject({ attachments: true, text: "hello from mobile" })
+    const [withFiles] = await listHostStateTurnsInterruptedBefore("session-files", bootedAt, deps())
+    expect(withFiles).toMatchObject({
+      text: "look",
+      attachments: [
+        {
+          ref,
+          name: "shot.png",
+          mediaType: "image/png",
+          size: 32,
+          hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
+      ],
+      attachmentsLost: false,
+    })
+    await consumeAttachmentRefs([ref])
+    const [consumed] = await listHostStateTurnsInterruptedBefore("session-files", bootedAt, deps())
+    expect(consumed).toMatchObject({ attachmentsLost: true })
+  }, 30_000)
+
+  it("leaves unreadable words null", async () => {
+    const bootedAt = Date.now() + 60_000
     // Another key cannot open the frozen input.
     const [unreadable] = await listHostStateTurnsInterruptedBefore("session-1", bootedAt, {
       loadKey: async () => new Uint8Array(32).fill(7),

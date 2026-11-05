@@ -39,6 +39,14 @@ export interface HostStateSendFacts {
   /** A context-workbench resource rides the turn. */
   hasResourceContext: boolean
   attachmentCount: number
+  /**
+   * A member's attachments can ride the intent as upload refs (ADR-0253 §9,
+   * G25): the content is exactly the attachments followed by the request, and
+   * the person partition takes every file (`memberTurnAttachments`). The Host
+   * builds the prompt from the uploaded originals, so nothing else the
+   * content holds may be lost by sending refs instead.
+   */
+  attachmentsAsRefs: boolean
   /** The turn runs on the session's built-in lane. */
   builtinLane: boolean
   /** The turn was addressed to a lane or member (`@handle`). */
@@ -61,9 +69,12 @@ export function hostStateSendEligible(facts: HostStateSendFacts): boolean {
     !facts.fusionRun &&
     !facts.routerFusionStamped &&
     !facts.skipAppend &&
-    facts.contentIsString &&
+    // The durable intent is the request text plus attachment refs. A plain
+    // string is the whole of a turn; a member's files cross as refs to
+    // uploads in their own partition, which no other caller stages into.
+    ((facts.contentIsString && facts.attachmentCount === 0) ||
+      (facts.personPartition && facts.attachmentCount > 0 && facts.attachmentsAsRefs)) &&
     !facts.hasResourceContext &&
-    facts.attachmentCount === 0 &&
     facts.builtinLane &&
     // The host runs a queued intent on the SESSION's lane with the session's
     // own character, and writes the intent's `text` as the user row. An

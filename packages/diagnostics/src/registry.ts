@@ -1069,6 +1069,23 @@ export const DIAGNOSTIC_CODES: Readonly<Record<DiagnosticCode, DiagnosticCodeSpe
     actions: [{ kind: "dismiss" }],
     icon: "plug",
   },
+  // ADR-0253 §9 G25: the composer has the turn back; the user changes the files.
+  memberAttachmentUnsupported: {
+    severity: "info",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "plug",
+  },
+  // The turn and its files are back in the composer, so the composer is where
+  // it is sent again; there is no row here to retry.
+  memberAttachmentUploadFailed: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "network",
+  },
   hostStateChannelUnavailable: {
     severity: "warning",
     retryable: false,

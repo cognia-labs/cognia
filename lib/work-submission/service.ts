@@ -64,6 +64,7 @@ import {
   type WorkSubmissionRow,
 } from "@/lib/db/work-submissions"
 
+import { releaseSettledSubmissionAttachments } from "./attachment-release"
 import { sealWorkSubmissionPayload, type WorkSubmissionCryptoDeps } from "./crypto"
 
 /**
@@ -543,6 +544,8 @@ export async function settleWorkSubmission(
     )
   })
 
+  // The staged uploads a member's turn held for a retry are dead weight now.
+  if (sealed) await releaseSettledSubmissionAttachments(input.submissionId)
   if (sealed && linkedIssue) {
     const { issueId, source } = linkedIssue
     void import("@/lib/issues/work-item-link")
@@ -577,5 +580,7 @@ export async function settleWorkSubmissionWithoutTranscript(
   now: number,
   errorCode?: string
 ): Promise<boolean> {
-  return settleWorkSubmissionRow(submissionId, outcome, now, errorCode)
+  const sealed = await settleWorkSubmissionRow(submissionId, outcome, now, errorCode)
+  if (sealed) await releaseSettledSubmissionAttachments(submissionId)
+  return sealed
 }
