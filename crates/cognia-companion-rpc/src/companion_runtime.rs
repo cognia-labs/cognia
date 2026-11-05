@@ -33,6 +33,13 @@ impl CompanionRuntime for RpcRuntime {
         (self.resolve)(state)?.cognia_data_dir().ok()
     }
 
+    fn execution_spawn_policy(
+        &self,
+        state: &SharedState,
+    ) -> Option<cognia_external_agent::presets::SpawnPolicy> {
+        (self.resolve)(state)?.remote_spawn_policy().ok()
+    }
+
     async fn prune_execution_bindings(&self, state: &SharedState) -> Result<(), cognia_problem::Problem> {
         let Some(host) = (self.resolve)(state) else { return Ok(()); };
         let directory = host.cognia_data_dir().map_err(|_| cognia_problem::Problem::with_status(

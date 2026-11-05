@@ -1255,8 +1255,9 @@ async function persistConfirmedState(
   const shown = chat.sessions[state.sessionId]?.errorDiagnostic ?? null
   if (failure) {
     // Shown once per failure: a member who dismissed it keeps it dismissed
-    // through every later snapshot of the same state.
-    if (!projectedFailureIds.has(failure.id)) {
+    // through every later snapshot of the same state, and through a restart
+    // of the Host or of this client (ADR-0253 G17).
+    if (!projectedFailures().has(failure.id)) {
       rememberProjectedFailure(failure.id)
       chat.setSessionDiagnostic(state.sessionId, failure)
     }
@@ -1279,15 +1280,54 @@ async function persistConfirmedState(
 
 const HOST_STATE_FAILURE_DIAGNOSTIC_PREFIX = "host-state-failure:"
 const MAX_PROJECTED_FAILURES = 256
-const projectedFailureIds = new Set<string>()
+const PROJECTED_FAILURES_STORAGE_KEY = "cognia.hostState.projectedFailures"
+let projectedFailureIds: Set<string> | null = null
+
+function failureStorage(): Storage | null {
+  return typeof localStorage === "undefined" ? null : localStorage
+}
+
+/**
+ * The failures this device has already put up as a banner.
+ *
+ * Kept in `localStorage`, not in memory alone: a banner is about what this
+ * device showed, and a reload or a relaunch (one a Host restart can cause)
+ * must not bring back a failure the member already saw and dismissed. Reads
+ * never throw — a corrupt value costs one banner reappearing.
+ */
+function projectedFailures(): Set<string> {
+  if (projectedFailureIds) return projectedFailureIds
+  let stored: string[] = []
+  try {
+    const parsed: unknown = JSON.parse(
+      failureStorage()?.getItem(PROJECTED_FAILURES_STORAGE_KEY) ?? "[]"
+    )
+    if (Array.isArray(parsed)) stored = parsed.filter((id): id is string => typeof id === "string")
+  } catch {
+    // Treated as empty.
+  }
+  projectedFailureIds = new Set(stored.slice(-MAX_PROJECTED_FAILURES))
+  return projectedFailureIds
+}
 
 function rememberProjectedFailure(id: string): void {
-  projectedFailureIds.add(id)
+  const ids = projectedFailures()
+  ids.add(id)
   // Insertion order: the oldest goes first.
-  for (const oldest of projectedFailureIds) {
-    if (projectedFailureIds.size <= MAX_PROJECTED_FAILURES) break
-    projectedFailureIds.delete(oldest)
+  for (const oldest of ids) {
+    if (ids.size <= MAX_PROJECTED_FAILURES) break
+    ids.delete(oldest)
   }
+  try {
+    failureStorage()?.setItem(PROJECTED_FAILURES_STORAGE_KEY, JSON.stringify([...ids]))
+  } catch {
+    // A full or blocked quota costs the memory across restarts, not the banner.
+  }
+}
+
+/** Forget the in-memory copy, as a relaunched client starts. Tests only. */
+export function __resetProjectedFailuresForTesting(): void {
+  projectedFailureIds = null
 }
 
 /**
@@ -1298,7 +1338,11 @@ function rememberProjectedFailure(id: string): void {
  * anything else keeps the plain error status, as before.
  *
  * The id is stable for one failure, so a later snapshot of the same state does
- * not replace the banner (and lose a dismissal) on every revision.
+ * not replace the banner (and lose a dismissal) on every revision. A failed
+ * turn is keyed by the send that started it; one no send started (a resumed
+ * turn, or one whose send aged out of the retained operations) by the
+ * transcript it failed on, which a Host restart or an unrelated mutation does
+ * not move. Never by `revision`, which moves on every snapshot.
  */
 function turnFailureDiagnostic(
   state: Extract<HostStateChannelState, { kind: "session" }>
@@ -1316,7 +1360,10 @@ function turnFailureDiagnostic(
       : undefined
   const [code, key] =
     failedTurn && state.turnErrorCode
-      ? [state.turnErrorCode, `turn:${lastSend?.actionId ?? state.revision}`]
+      ? [
+          state.turnErrorCode,
+          lastSend ? `turn:${lastSend.actionId}` : `turn:t${state.transcriptRevision}`,
+        ]
       : refusedSend?.errorCode
         ? [refusedSend.errorCode, `send:${refusedSend.actionId}`]
         : [undefined, undefined]

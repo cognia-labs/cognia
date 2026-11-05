@@ -595,10 +595,21 @@ impl ExecutionBindingLookup for HashMap<String, PlacementBinding> {
 /// The mount root is a separate Host authority from a caller's workspaceId.
 /// First assignment requires the existing Host-global administration action;
 /// ordinary execution permission never assigns an arbitrary Host directory.
-struct WorkspaceMounts { path: std::path::PathBuf, base: Option<std::path::PathBuf> }
+struct WorkspaceMounts {
+    path: std::path::PathBuf,
+    base: Option<std::path::PathBuf>,
+    /// The Host's own spawn policy, which placed every person workspace. A
+    /// person mount is checked against it, never against a policy rebuilt
+    /// from this store's directory (ADR-0253 G16).
+    person_policy: Option<cognia_external_agent::presets::SpawnPolicy>,
+}
 impl WorkspaceMounts {
     fn new(path: std::path::PathBuf, base: Option<std::path::PathBuf>) -> Self {
-        Self { path, base }
+        Self { path, base, person_policy: None }
+    }
+    fn with_person_policy(mut self, policy: Option<cognia_external_agent::presets::SpawnPolicy>) -> Self {
+        self.person_policy = policy;
+        self
     }
     fn read(&self) -> Result<HashMap<String, String>, Refusal> {
         match std::fs::read(&self.path) {
@@ -616,9 +627,8 @@ impl WorkspaceMounts {
     }
     fn authorized_root(&self, decision: &ExecutionAdmission, cwd: &str) -> Result<std::path::PathBuf, Refusal> {
         if let Some(person) = person_execution_owner(&decision.binding) {
-            let directory = self.path.parent().and_then(std::path::Path::parent).ok_or_else(|| unavailable("execution_binding_store_unavailable"))?;
-            let policy = cognia_external_agent::presets::SpawnPolicy::from_env(directory);
-            let root = cognia_external_agent::person_workspace::person_workspace_path(&policy, &person.account_id)
+            let policy = self.person_policy.as_ref().ok_or_else(|| unavailable("execution_isolation_unavailable"))?;
+            let root = cognia_external_agent::person_workspace::person_workspace_path(policy, &person.account_id)
                 .map_err(|_| forbidden("workspace_mount_forbidden"))?;
             let canonical = root.canonicalize().map_err(|_| forbidden("workspace_mount_forbidden"))?;
             let base = policy.workspaces_dir().canonicalize().map_err(|_| forbidden("workspace_mount_forbidden"))?;
@@ -674,12 +684,14 @@ pub async fn authorize_execution_mount(state: &crate::SharedState, cwd: &str) ->
     let Some(decision) = cognia_external_agent::spawn_authority::execution_admission() else { return Ok(()); };
     let root = state.runtime.execution_binding_root(state);
     let base = state.runtime.execution_workspace_base(state);
+    let policy = state.runtime.execution_spawn_policy(state);
     let cwd = cwd.to_owned();
     let result = tokio::task::spawn_blocking(move || {
         root.ok_or_else(|| unavailable("execution_binding_store_unavailable"))
             // Claim under the writer lock BEFORE a container can see the path.
             // Concurrent org creations cannot both run before one loses CAS.
-            .and_then(|root| WorkspaceMounts::new(root.join("companion/workspace-mounts.json"), base).persist(&decision, &cwd))
+            .and_then(|root| WorkspaceMounts::new(root.join("companion/workspace-mounts.json"), base)
+                .with_person_policy(policy).persist(&decision, &cwd))
     }).await.unwrap_or_else(|_| Err(unavailable("execution_binding_store_unavailable")));
     result.map_err(Problem::from)
 }
@@ -740,12 +752,14 @@ pub async fn persist_execution_binding(state: &crate::SharedState, command: &str
     // Capture typed authority before crossing the task-local boundary.
     let directory = state.runtime.execution_binding_root(state);
     let base = state.runtime.execution_workspace_base(state);
+    let policy = state.runtime.execution_spawn_policy(state);
     let key = record_id(command, args).map(|id| record_key(command, id));
     let cwd = cwd.to_owned();
     let result = tokio::task::spawn_blocking(move || {
         let directory = directory.ok_or_else(|| unavailable("execution_binding_store_unavailable"))?;
         let key = key.ok_or_else(|| forbidden("workspace_unresolved"))?;
-        WorkspaceMounts::new(directory.join("companion/workspace-mounts.json"), base).persist(&decision, &cwd)?;
+        WorkspaceMounts::new(directory.join("companion/workspace-mounts.json"), base)
+            .with_person_policy(policy).persist(&decision, &cwd)?;
         ExecutionBindings(directory.join("companion/execution-bindings.json"))
             .insert(&key, &decision.binding)
     }).await.unwrap_or_else(|_| Err(unavailable("execution_binding_store_unavailable")));
@@ -1017,8 +1031,13 @@ mod tests {
     fn p6d_person_mounts_and_record_purge_leave_other_partitions_intact() {
         let temp = tempfile::tempdir().unwrap();
         let policy = cognia_external_agent::presets::SpawnPolicy::from_env(temp.path());
-        let mounts = WorkspaceMounts::new(temp.path().join("companion/workspace-mounts.json"), None);
-        let store = ExecutionBindings(temp.path().join("companion/execution-bindings.json"));
+        // cognia-server keeps the binding store under `<data>/.cognia` and
+        // spawns with `<data>`'s policy: the check must use the Host's policy.
+        let store_dir = temp.path().join(".cognia");
+        let unwired = WorkspaceMounts::new(store_dir.join("companion/workspace-mounts.json"), None);
+        let mounts = WorkspaceMounts::new(store_dir.join("companion/workspace-mounts.json"), None)
+            .with_person_policy(Some(policy.clone()));
+        let store = ExecutionBindings(store_dir.join("companion/execution-bindings.json"));
         let a = crate::person_partition::PersonPartition::new("org_p6d_mount".into(), "usr_p6d_mount_a".into());
         let b = crate::person_partition::PersonPartition::new(a.org_id.clone(), "usr_p6d_mount_b".into());
         let mut roots = Vec::new();
@@ -1026,6 +1045,7 @@ mod tests {
             let (root, _) = cognia_external_agent::person_workspace::person_workspace_prepare(&policy, &person.account_id, None, 1024).unwrap();
             let decision = ExecutionAdmission { binding:PlacementBinding { org_id:person.org_id.clone(), actor_user_id:person.user_id.clone(),
                 workspace_id:format!("person:{}",person.account_id),run_id:person.account_id.clone() },actions:vec!["execution.request".into(),"workspace.write".into(),"credential.use".into()] };
+            assert_eq!(unwired.persist(&decision, root.to_str().unwrap()).unwrap_err().code, "execution_isolation_unavailable");
             mounts.persist(&decision, root.to_str().unwrap()).unwrap();
             store.insert(&format!("external-agent:{}",person.account_id), &decision.binding).unwrap();
             roots.push((root, decision));
@@ -1033,7 +1053,7 @@ mod tests {
         assert_eq!(mounts.authorize(&roots[0].1, roots[1].0.to_str().unwrap()).unwrap_err().code, "workspace_mount_forbidden");
         let child = roots[0].0.join("child"); std::fs::create_dir(&child).unwrap();
         mounts.authorize(&roots[0].1, child.to_str().unwrap()).unwrap();
-        person_remove_execution_records(temp.path(), &a).unwrap();
+        person_remove_execution_records(&store_dir, &a).unwrap();
         let records = store.read().unwrap();
         assert_eq!(records.len(), 1); assert_eq!(records.values().next().unwrap(), &roots[1].1.binding);
         let remaining = mounts.read().unwrap();

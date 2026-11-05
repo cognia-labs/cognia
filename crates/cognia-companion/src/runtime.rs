@@ -46,6 +46,10 @@ pub trait CompanionRuntime: Send + Sync + 'static {
         std::env::var_os("COGNIA_WORKSPACE_ROOTS_DIR").filter(|value| !value.is_empty()).map(Into::into)
     }
 
+    /// The spawn policy this Host places person workspaces with. A person
+    /// mount is checked against it; an unwired runtime refuses person mounts.
+    fn execution_spawn_policy(&self, _state: &SharedState) -> Option<cognia_external_agent::presets::SpawnPolicy> { None }
+
     /// Reconcile records whose backend process was already reaped. Called
     /// only before multi-tenant creation; single-user dispatch does no IO.
     async fn prune_execution_bindings(&self, _state: &SharedState) -> Result<(), cognia_problem::Problem> { Ok(()) }

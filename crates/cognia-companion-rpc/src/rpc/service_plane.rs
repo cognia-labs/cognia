@@ -193,6 +193,8 @@ fn tenant_execution_status(code: &str) -> Option<StatusCode> {
         | "workspace_unresolved"
         | "workspace_root_claimed"
         | "workspace_root_unconfigured" => Some(StatusCode::FORBIDDEN),
+        "agent_not_found" => Some(StatusCode::NOT_FOUND),
+        "agent_exited" => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -546,13 +548,38 @@ pub(super) async fn dispatch(
     ) {
         if let Some(decision) = cognia_external_agent::spawn_authority::execution_admission() {
             let agent_id: String = required_aliased(&args, "agent_id", "agentId")?;
+            let status = host.exec_backend().status(&agent_id).await;
             if matches!(
-                host.exec_backend().status(&agent_id).await,
+                status,
                 None | Some(
                     cognia_external_agent::process::ExternalAgentProcessState::Stopped
                         | cognia_external_agent::process::ExternalAgentProcessState::Failed
                 )
             ) {
+                // ADR-0253 G16: a member asking about its own run after it
+                // ended gets the run's end, not a permission refusal. Read the
+                // owner before the binding is forgotten; a run the backend no
+                // longer knows, or one this member does not own, is not found.
+                let owned_end = match (&person, status) {
+                    (Some(person), Some(end)) => host
+                        .exec_backend()
+                        .get_info(&agent_id)
+                        .await
+                        .ok()
+                        .and_then(|info| info.pointer("/placement/binding").cloned())
+                        .and_then(|binding| {
+                            serde_json::from_value::<
+                                cognia_external_agent::spawn_authority::PlacementBinding,
+                            >(binding)
+                            .ok()
+                        })
+                        .and_then(|binding| {
+                            cognia_companion::host_surface_gate::person_execution_owner(&binding)
+                        })
+                        .filter(|owner| owner == person)
+                        .map(|_| end),
+                    _ => None,
+                };
                 cognia_companion::host_surface_gate::forget_execution_binding(
                     state, name, &agent_id,
                 )
@@ -563,6 +590,17 @@ pub(super) async fn dispatch(
                         Json(RpcError::new(problem.code, problem.detail)),
                     )
                 })?;
+                if person.is_some() {
+                    return match (name, owned_end) {
+                        ("get_external_agent_status", Some(end)) => {
+                            Ok(Value::String(format!("{end:?}")))
+                        }
+                        // Stopping a run that already ended is done.
+                        ("kill_external_agent", Some(_)) => Ok(Value::Null),
+                        (_, Some(_)) => Err(tenant_execution_refusal("agent_exited")),
+                        (_, None) => Err(tenant_execution_refusal("agent_not_found")),
+                    };
+                }
                 return Err(tenant_execution_refusal("workspace_unresolved"));
             }
             let info = host
@@ -2966,6 +3004,10 @@ mod tests {
         pause_send: std::sync::atomic::AtomicBool,
         fail_kill: std::sync::atomic::AtomicBool,
         person_keep_running_after_kill: std::sync::atomic::AtomicBool,
+        /// Agents a kill left known to the backend as stopped (its record and
+        /// placement kept), as a backend that keeps exited runs listed does.
+        stopped: parking_lot::Mutex<std::collections::HashSet<String>>,
+        keep_stopped_after_kill: std::sync::atomic::AtomicBool,
         send_started: tokio::sync::Notify,
         send_resume: tokio::sync::Notify,
     }
@@ -3007,7 +3049,12 @@ mod tests {
             {
                 return Err("fixture_kill_failed".into());
             }
-            if !self
+            if self
+                .keep_stopped_after_kill
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                self.stopped.lock().insert(id.into());
+            } else if !self
                 .person_keep_running_after_kill
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
@@ -3024,6 +3071,9 @@ mod tests {
             &self,
             id: &str,
         ) -> Option<cognia_external_agent::process::ExternalAgentProcessState> {
+            if self.stopped.lock().contains(id) {
+                return Some(cognia_external_agent::process::ExternalAgentProcessState::Stopped);
+            }
             self.agents
                 .lock()
                 .contains_key(id)
@@ -3064,6 +3114,14 @@ mod tests {
         impl runtime::CompanionRuntime for Runtime {
             fn execution_binding_root(&self, _: &SharedState) -> Option<std::path::PathBuf> {
                 Some(self.0.clone())
+            }
+            fn execution_spawn_policy(
+                &self,
+                _: &SharedState,
+            ) -> Option<cognia_external_agent::presets::SpawnPolicy> {
+                Some(cognia_external_agent::presets::SpawnPolicy::from_env(
+                    &self.0,
+                ))
             }
             fn execution_workspace_base(&self, _: &SharedState) -> Option<std::path::PathBuf> {
                 self.0.parent().map(|parent| parent.join("workspaces"))
@@ -3704,7 +3762,12 @@ mod tests {
                         )
                         .await
                         .unwrap_err();
-                        assert_eq!(error.1.code, "workspace_unresolved");
+                        // ADR-0253 G16: a run the backend no longer knows is
+                        // not found, not a permission refusal.
+                        assert_eq!(
+                            (error.0, error.1.code.as_str()),
+                            (StatusCode::NOT_FOUND, "agent_not_found")
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -4243,24 +4306,84 @@ mod tests {
             assert!(!visible("__service__".into(), "operator"));
             assert!(!visible(format!("brain-{}", b.account_id), &b.account_id));
         }
-        person_scope(
-            Some(a.clone()),
-            with_execution_admission(
-                Some(decision),
-                dispatch(
-                    "kill_external_agent",
-                    serde_json::json!({"agentId":"p6d-agent"}),
-                    &state,
-                    &host,
-                    &format!("brain-{}", a.account_id),
-                    Some(&a.account_id),
-                    Some("person-brain"),
-                ),
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(backend.agents.lock().is_empty());
+        // ADR-0253 G16: after the run ends its owner reads the end, never a
+        // permission refusal; anyone else, or a run the backend forgot, is
+        // not found.
+        backend
+            .keep_stopped_after_kill
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let control = |who: PersonPartition, admission, command: &'static str| {
+            let state = state.clone();
+            let host = host.clone();
+            async move {
+                person_scope(
+                    Some(who.clone()),
+                    with_execution_admission(
+                        Some(admission),
+                        dispatch(
+                            command,
+                            serde_json::json!({"agentId":"p6d-agent","message":"late"}),
+                            &state,
+                            &host,
+                            &format!("brain-{}", who.account_id),
+                            Some(&who.account_id),
+                            Some("person-brain"),
+                        ),
+                    ),
+                )
+                .await
+            }
+        };
+        control(a.clone(), decision.clone(), "kill_external_agent")
+            .await
+            .unwrap();
+        assert_eq!(
+            control(a.clone(), decision.clone(), "get_external_agent_status")
+                .await
+                .unwrap(),
+            "Stopped"
+        );
+        assert_eq!(
+            control(a.clone(), decision.clone(), "kill_external_agent")
+                .await
+                .unwrap(),
+            Value::Null,
+            "stopping an ended run is done"
+        );
+        let exited = control(a.clone(), decision.clone(), "send_to_external_agent")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (exited.0, exited.1.code.as_str()),
+            (StatusCode::CONFLICT, "agent_exited")
+        );
+        let mut other = decision.clone();
+        other.binding.actor_user_id = b.user_id.clone();
+        other.binding.workspace_id = format!("person:{}", b.account_id);
+        for command in ["get_external_agent_status", "kill_external_agent"] {
+            let hidden = control(b.clone(), other.clone(), command)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (hidden.0, hidden.1.code.as_str()),
+                (StatusCode::NOT_FOUND, "agent_not_found")
+            );
+        }
+        backend.stopped.lock().clear();
+        backend.agents.lock().clear();
+        for command in [
+            "get_external_agent_status",
+            "kill_external_agent",
+            "send_to_external_agent",
+        ] {
+            let gone = control(a.clone(), decision.clone(), command)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (gone.0, gone.1.code.as_str()),
+                (StatusCode::NOT_FOUND, "agent_not_found")
+            );
+        }
         cognia_companion::org_credentials::OrgCredentials::delete(&a.org_id, "p6d-provider")
             .unwrap();
     }

@@ -53,6 +53,7 @@ import {
 import { createDiagnostic } from "@cognia/diagnostics"
 import { activateAccountDatabase, __resetDbForTesting, getDb } from "@/lib/db/schema"
 import {
+  __resetProjectedFailuresForTesting,
   createAgentRpcHostStateDispatcher,
   createHostStateService,
   HOST_STATE_DISPATCH_MAX_ATTEMPTS,
@@ -3299,6 +3300,56 @@ describe("HostStateService", () => {
       expect(slice()?.status).toBe("streaming")
       expect(slice()?.errorDiagnostic).toBeNull()
       sync.stop()
+      useChatStore.getState().setSessionStatus("session-1", "idle")
+    })
+
+    it("a failed turn no send started keeps one banner through later revisions (G17)", async () => {
+      const failed = {
+        ...createEmptyHostStateSession(channel, "session-1"),
+        revision: 3,
+        transcriptRevision: 7,
+        turn: "fatal-error" as const,
+        turnErrorCode: "member_usage_cap_reached",
+      }
+      const { sync, push } = await install(failed)
+      expect(slice()?.errorDiagnostic?.code).toBe("memberUsageCapReached")
+      useChatStore.getState().setSessionDiagnostic("session-1", null)
+      // Keyed by `revision`, every later snapshot put the banner back.
+      await push({ kind: "session.renamed", title: "Renamed", revision: 4 })
+      await push({ kind: "session.renamed", title: "Again", revision: 5 })
+      expect(slice()?.errorDiagnostic).toBeNull()
+      sync.stop()
+      useChatStore.getState().setSessionStatus("session-1", "idle")
+    })
+
+    it("a dismissed failure stays dismissed after this client relaunches (G17)", async () => {
+      const failed = {
+        ...createEmptyHostStateSession(channel, "session-1"),
+        revision: 3,
+        turn: "fatal-error" as const,
+        turnErrorCode: "member_usage_cap_reached",
+        operations: [send("send-relaunch")],
+      }
+      const first = await install(failed)
+      expect(slice()?.errorDiagnostic?.code).toBe("memberUsageCapReached")
+      useChatStore.getState().setSessionDiagnostic("session-1", null)
+      first.sync.stop()
+
+      // A relaunch starts with no memory but this device's storage.
+      __resetProjectedFailuresForTesting()
+      const second = await install(failed)
+      expect(slice()?.errorDiagnostic).toBeNull()
+      second.sync.stop()
+
+      // Unreadable storage costs one banner, never the projection.
+      localStorage.setItem("cognia.hostState.projectedFailures", "{not json")
+      __resetProjectedFailuresForTesting()
+      const third = await install({
+        ...failed,
+        operations: [send("send-after-corruption")],
+      })
+      expect(slice()?.errorDiagnostic?.code).toBe("memberUsageCapReached")
+      third.sync.stop()
       useChatStore.getState().setSessionStatus("session-1", "idle")
     })
 
