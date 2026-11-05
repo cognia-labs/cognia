@@ -3208,3 +3208,80 @@ async fn shared_live_http_checks_postgres_ownership_admission_and_never_inserts(
     drop(store);
     database.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL instance and COLLAB_RLS_ADMIN_DATABASE_URL / COLLAB_RLS_APP_DATABASE_URL"]
+async fn adr0253_standing_changes_and_suspension_hold_under_rls() {
+    use cognia_collab_server::standing::{OrgSuspensionChange, StandingChangeKind};
+    use cognia_collab_server::store::StoreError;
+    use cognia_tenant_auth::WorkspaceRole;
+
+    let (database, admin, owner, member, guest) = standing_fixture().await;
+    let org = owner.org_id.clone();
+    // The application role, under forced RLS, as the server runs.
+    let app_url = TestDatabase::url_for(&std::env::var("COLLAB_RLS_APP_DATABASE_URL").unwrap(), &database.name);
+    let app = PgStore::connect_with_options(&app_url, 2, PgConnectOptions {
+        migration_database_url: Some(&database.url),
+        ..PgConnectOptions::default()
+    }).await.unwrap();
+    let before = app.standing_changes_after(0, 500).await.unwrap().head;
+
+    // Every reducing mutation writes its row inside its own tenant scope.
+    app.set_workspace_member(&org, &owner.workspace_id, &member.user_id, WorkspaceRole::Viewer, standing_context(&owner.user_id)).await.unwrap();
+    app.remove_workspace_member(&org, &owner.workspace_id, &guest.user_id, standing_context(&owner.user_id)).await.unwrap();
+    app.offboard_org_member(&org, &member.user_id, standing_context(&owner.user_id)).await.unwrap();
+    let page = app.standing_changes_after(before, 500).await.unwrap();
+    let rows: Vec<_> = page.rows.iter().map(|row| (row.user_id.clone().unwrap(), row.workspace_id.clone(), row.kind)).collect();
+    assert_eq!(rows, vec![
+        (member.user_id.clone(), Some(owner.workspace_id.clone()), StandingChangeKind::WorkspaceRemoved),
+        (guest.user_id.clone(), Some(owner.workspace_id.clone()), StandingChangeKind::WorkspaceRemoved),
+        (member.user_id.clone(), None, StandingChangeKind::Offboarded),
+    ]);
+    assert!(page.rows.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert_eq!(page.head, page.rows.last().unwrap().seq);
+
+    // The application role can neither suspend an organization nor write a
+    // standing row outside its tenant scope or read one without the stream
+    // setting.
+    let (mut raw, connection) = tokio_postgres::connect(&app_url, NoTls).await.unwrap();
+    let raw_task = tokio::spawn(async move { connection.await.unwrap() });
+    let denied = raw.execute("INSERT INTO org_suspensions (org_id, suspended_at, suspended_by, reason) VALUES ($1, 1, 'owner', 'self')", &[&org]).await;
+    assert_eq!(denied.unwrap_err().code(), Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE));
+    let tx = raw.transaction().await.unwrap();
+    tx.execute("SELECT set_config('app.tenant_id', 'org_elsewhere', true)", &[]).await.unwrap();
+    assert!(tx.execute("INSERT INTO standing_changes (org_id, user_id, kind, created_at) VALUES ($1, 'usr_x', 'offboarded', 1)", &[&org]).await.is_err());
+    tx.rollback().await.unwrap();
+    assert_eq!(raw.query_one("SELECT count(*) FROM standing_changes", &[]).await.unwrap().get::<_, i64>(0), 0);
+    drop(raw);
+    raw_task.await.unwrap();
+
+    // The operator suspends: one row, every standing lookup refused, replays
+    // write nothing, resuming restores standing.
+    let operator = PgStore::connect_org_operator(&database.url, 2).await.unwrap();
+    let change = |suspend: bool, operation: &str| OrgSuspensionChange {
+        org_id: org.clone(), suspend, reason: "billing".into(), operation_id: operation.into(), principal: "operator".into(), now: 20,
+    };
+    let suspended = operator.set_org_suspension(change(true, "suspend-1")).await.unwrap();
+    assert!(suspended.suspended && suspended.changed);
+    assert!(app.org_suspended(&org).await.unwrap());
+    assert!(matches!(app.membership(&org, &owner.user_id, None).await, Err(StoreError::OrgSuspended)));
+    assert!(!operator.set_org_suspension(change(true, "suspend-1")).await.unwrap().changed);
+    assert!(matches!(operator.set_org_suspension(change(false, "suspend-1")).await, Err(StoreError::Policy(_))));
+    let mut missing = change(true, "suspend-missing");
+    missing.org_id = "org_missing".into();
+    assert!(matches!(operator.set_org_suspension(missing).await, Err(StoreError::NotFound)));
+    let resumed = operator.set_org_suspension(change(false, "resume-1")).await.unwrap();
+    assert!(!resumed.suspended && resumed.changed);
+    assert_eq!(app.membership(&org, &owner.user_id, None).await.unwrap().org_role, Some(cognia_tenant_auth::OrgRole::Owner));
+    let kinds: Vec<_> = app.standing_changes_after(page.head, 500).await.unwrap().rows.into_iter()
+        .map(|row| (row.user_id, row.kind)).collect();
+    assert_eq!(kinds, vec![(None, StandingChangeKind::OrgSuspended), (None, StandingChangeKind::OrgResumed)]);
+
+    // Retention removes rows and remembers how far it went.
+    assert!(app.prune_standing_changes(i64::MAX).await.unwrap() >= 5);
+    let pruned = app.standing_changes_after(0, 500).await.unwrap();
+    assert!(pruned.rows.is_empty());
+    assert!(pruned.pruned_through > page.head && pruned.head == pruned.pruned_through);
+    drop((app, admin, operator));
+    database.cleanup().await;
+}

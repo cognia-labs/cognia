@@ -574,6 +574,46 @@ Both tables are deployment-level and have no RLS. The application's role is
 SELECT-only; the migrator revokes its write privileges after blanket grants
 on every boot. Audit rows are append-only, with bounded change summaries.
 
+### Organization suspension
+
+Only the deployment operator suspends or resumes an organization (ADR-0253 §4).
+While suspended, every member request to the collaboration plane and to every
+Host answers `403 org_suspended`; membership, partition data, credentials and
+usage are kept. Use the same operator connection as rollout:
+
+```sh
+cognia-collab-server org status org_acme
+cognia-collab-server org suspend org_acme --reason 'Unpaid invoice' \
+  --operation-id suspend-2026-11-05-01
+cognia-collab-server org resume org_acme --reason 'Invoice paid' \
+  --operation-id resume-2026-11-06-01
+```
+
+A repeated operation id returns the original result and writes nothing; reusing
+it for another change is refused. Resuming restarts nothing by itself.
+
+Minimal operator grants:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON org_suspensions TO collab_rollout_operator;
+GRANT SELECT, INSERT ON org_suspension_audit TO collab_rollout_operator;
+GRANT SELECT ON orgs TO collab_rollout_operator;
+GRANT SELECT, INSERT ON standing_changes TO collab_rollout_operator;
+```
+
+The application's role can read `org_suspensions` but never write it, so an
+organization owner cannot lift their own suspension.
+
+### Standing changes for Hosts
+
+Every change that reduces or changes a person's standing (offboarding, a role
+change, a workspace removal or demotion, suspension, resumption) is written to
+`standing_changes` in the same transaction. Hosts follow them on
+`GET /internal/v1/standing-changes?after=<seq>` with their service credential,
+which sees only the organizations its `COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES`
+entry names. Rows are kept for seven days; a Host offline for longer receives a
+`resync` and re-checks every person it serves.
+
 ## Multi-tenant Host
 
 Set `COGNIA_DEPLOYMENT_MODE=multi-tenant`. Before serving, the Host requires a

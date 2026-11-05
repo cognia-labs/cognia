@@ -145,6 +145,11 @@ enum Command {
         #[command(subcommand)]
         command: RolloutCommand,
     },
+    /// Suspend, resume or show an organization (ADR-0253 §4). Operator only.
+    Org {
+        #[command(subcommand)]
+        command: OrgCommand,
+    },
     /// Report stale non-guest session standing; optionally repair in batches.
     AuditStanding {
         #[arg(long)]
@@ -152,6 +157,49 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         batch_size: usize,
     },
+}
+
+#[derive(Subcommand)]
+enum OrgCommand {
+    /// Refuse every member request for the organization, on this service and
+    /// on every Host. Membership, data and credentials are kept.
+    Suspend {
+        org_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        operation_id: String,
+    },
+    /// Lift a suspension. Nothing the suspension stopped restarts by itself.
+    Resume {
+        org_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        operation_id: String,
+    },
+    /// Whether the organization is suspended.
+    Status { org_id: String },
+}
+
+async fn run_org(command: OrgCommand, database_url: &str, max_connections: usize) -> anyhow::Result<()> {
+    let store = PgStore::connect_org_operator(database_url, max_connections).await?;
+    let (org_id, reason, operation_id, suspend) = match command {
+        OrgCommand::Status { org_id } => {
+            let output = serde_json::json!({ "orgId": org_id, "suspended": store.org_suspended(&org_id).await? });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+        OrgCommand::Suspend { org_id, reason, operation_id } => (org_id, reason, operation_id, true),
+        OrgCommand::Resume { org_id, reason, operation_id } => (org_id, reason, operation_id, false),
+    };
+    let principal = store.rollout_principal().await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as i64;
+    let output = store.set_org_suspension(cognia_collab_server::standing::OrgSuspensionChange {
+        org_id, suspend, reason, operation_id, principal, now,
+    }).await?;
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -222,6 +270,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(Command::Rollout { command }) = &args.command {
         let url = rollout_database_url(args.operator_database_url.as_deref(), args.database_url.as_deref())?;
         return run_rollout(command, url, args.db_max_connections).await;
+    }
+    if let Some(Command::Org { command }) = args.command {
+        let url = org_database_url(args.operator_database_url.as_deref(), args.database_url.as_deref())?;
+        return run_org(command, url, args.db_max_connections).await;
     }
     if let Some(Command::AuditStanding { apply, batch_size }) = args.command {
         let database_url = audit_database_url(args.operator_database_url.as_deref(), args.database_url.as_deref())?;
@@ -317,6 +369,8 @@ async fn main() -> anyhow::Result<()> {
         .with_internal_service_credential_scopes(service_scopes)
         .with_internal_service_credential(service_hashes);
 
+    // ADR-0253 §2: rows past retention go; a Host behind them resyncs.
+    let _retention = cognia_collab_server::standing::spawn_retention(state.clone());
     let (allowed_origins, rejected_origins) =
         cognia_collab_server::cors::parse_allowed_origins(args.allowed_origins.as_deref());
     for rejected in &rejected_origins {
@@ -371,6 +425,12 @@ fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn org_database_url<'a>(operator_url: Option<&'a str>, database_url: Option<&'a str>) -> anyhow::Result<&'a str> {
+    operator_url.or(database_url).ok_or_else(|| anyhow::anyhow!(
+        "org requires COLLAB_OPERATOR_DATABASE_URL or --database-url with write grants on org_suspensions"
+    ))
+}
+
 fn audit_database_url<'a>(operator_url: Option<&'a str>, database_url: Option<&'a str>) -> anyhow::Result<&'a str> {
     operator_url.or(database_url).ok_or_else(|| anyhow::anyhow!(
         "audit-standing requires COLLAB_OPERATOR_DATABASE_URL or --database-url with a SUPERUSER or BYPASSRLS role"
@@ -398,6 +458,22 @@ mod tests {
         assert_eq!(parsed.as_deref(), Some(hashes.as_str()));
         let parsed = cognia_collab_server::service_credentials::parse_scopes(args.internal_service_credential_scopes.as_deref(), parsed.as_deref()).unwrap().unwrap();
         assert_eq!(parsed[&"ab".repeat(32)], vec!["org_alpha"]);
+    }
+
+    #[test]
+    fn org_args_name_the_org_and_require_reason_and_operation() {
+        use clap::Parser;
+        use super::{Args, Command, OrgCommand};
+        let parse = |argv: &[&str]| Args::try_parse_from(std::iter::once("cognia-collab-server").chain(argv.iter().copied()));
+        let args = parse(&["org", "suspend", "org_acme", "--reason", "billing", "--operation-id", "op-1"]).unwrap();
+        assert!(matches!(args.command, Some(Command::Org { command: OrgCommand::Suspend { ref org_id, .. } }) if org_id == "org_acme"));
+        assert!(matches!(parse(&["org", "resume", "org_acme", "--reason", "paid", "--operation-id", "op-2"]).unwrap().command,
+            Some(Command::Org { command: OrgCommand::Resume { .. } })));
+        assert!(matches!(parse(&["org", "status", "org_acme"]).unwrap().command, Some(Command::Org { command: OrgCommand::Status { .. } })));
+        assert!(parse(&["org", "suspend", "org_acme", "--reason", "billing"]).is_err());
+        assert!(parse(&["org", "suspend", "--reason", "billing", "--operation-id", "op"]).is_err());
+        assert!(super::org_database_url(None, None).is_err());
+        assert_eq!(super::org_database_url(Some("op"), Some("app")).unwrap(), "op");
     }
 
     #[test]

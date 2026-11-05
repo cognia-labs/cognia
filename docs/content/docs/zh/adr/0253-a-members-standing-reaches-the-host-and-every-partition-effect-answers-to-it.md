@@ -114,7 +114,7 @@ Host 端：
 ### 4. 组织停用
 
 组织新增一个状态：`active` 或 `suspended`。
-- 只有部署 operator 能改它，方式是 `cognia-collab-server org suspend|resume <org>` 和对应的 operator 路由。组织 owner 不能停用或恢复自己的组织。
+- 只有部署 operator 能改它，方式是通过 operator 的数据库连接运行 `cognia-collab-server org suspend|resume <org>`，与功能灰度相同。没有 HTTP 路由：应用的数据库角色只能读取状态、不能写入，所以组织 owner 不能停用或恢复自己的组织，被攻破的服务器也不能。
 - 停用期间，成员对协作服务器和任何 Host 的每个请求都返回 `org_suspended`（403，不可重试），并产生第 3 节的效果。
 - 分区数据、组织凭据、用量和成员关系全部保留，恢复后照常使用。
 - 删除组织仍然留在计划的 P7。

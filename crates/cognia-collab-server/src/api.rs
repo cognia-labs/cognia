@@ -95,6 +95,10 @@ pub struct AppState {
     /// cannot have one asking about its members.
     pub internal_service_credential_sha256: Option<String>,
     pub internal_service_credential_scopes: Option<crate::service_credentials::CredentialScopes>,
+    /// ADR-0253 §4: which organizations the operator suspended, briefly cached.
+    pub org_status: Arc<crate::standing::OrgStatusCache>,
+    /// ADR-0253 §2: the standing streams this server holds open.
+    pub standing_streams: Arc<crate::standing::StandingStreams>,
 }
 
 /// Rollout gate and policy for the account control plane.
@@ -129,6 +133,8 @@ impl AppState {
             account_control: AccountControlConfig::default(),
             internal_service_credential_sha256: None,
             internal_service_credential_scopes: None,
+            org_status: Arc::new(crate::standing::OrgStatusCache::default()),
+            standing_streams: Arc::new(crate::standing::StandingStreams::default()),
             store,
             chat_store: chat_store.clone(),
             chat_hub: Arc::new(ChatHub::default()),
@@ -257,6 +263,10 @@ pub fn router(state: AppState) -> Router {
             "/internal/v1/orgs/{org_id}/workspaces/{workspace_id}/access/{user_id}",
             get(internal_workspace_access),
         )
+        .route(
+            "/internal/v1/standing-changes",
+            get(crate::standing::stream_standing_changes),
+        )
         .route("/v1/orgs/{org_id}/grants", axum::routing::post(mint_grant))
         .route("/v1/account/memberships", get(account_memberships))
         .route(
@@ -332,7 +342,10 @@ pub fn router(state: AppState) -> Router {
     } else {
         routes
     };
-    routes.layer(axum::middleware::from_fn_with_state(state.clone(), crate::admission::middleware)).with_state(state)
+    routes
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::standing::refuse_suspended_orgs))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::admission::middleware))
+        .with_state(state)
 }
 
 #[derive(Debug, Serialize)]
@@ -511,6 +524,7 @@ async fn internal_device_person(
                 Failure::CredentialScope => "host_service_credential_scope",
                 Failure::Oidc(_) => "oidc_authentication_failed",
                 Failure::UnlinkedIdentity => "oidc_identity_unlinked",
+                Failure::Store(StoreError::OrgSuspended) => "org_suspended",
                 _ => "host_identity_unavailable",
             };
             let status = error.into_response().status();
@@ -547,6 +561,10 @@ async fn resolve_device_person(
         return Err(Failure::UnlinkedIdentity);
     }
     require_service_credential(&state, &headers, Some(&selected.org_id))?;
+    // ADR-0253 §4: a suspended organization's members bind no device.
+    if state.store.org_suspended(&selected.org_id).await? {
+        return Err(StoreError::OrgSuspended.into());
+    }
     let mut person_headers = headers.clone();
     person_headers.insert(
         axum::http::header::AUTHORIZATION,
@@ -589,6 +607,11 @@ fn require_service_credential(
         return Err(Failure::CredentialScope);
     }
     Ok(())
+}
+
+/// The verified service credential's digest, or the refusal to send.
+pub(crate) fn service_credential(state: &AppState, headers: &HeaderMap) -> Result<String, Response> {
+    service_credential_hash(state, headers).map_err(IntoResponse::into_response)
 }
 
 fn service_credential_hash(state: &AppState, headers: &HeaderMap) -> Result<String, Failure> {
@@ -674,6 +697,9 @@ impl IntoResponse for Failure {
                 })),
             )
                 .into_response(),
+            Self::Store(StoreError::OrgSuspended) | Self::Auth(AuthError::Store(StoreError::OrgSuspended)) => {
+                crate::standing::org_suspended_response()
+            }
             other => other.into_non_conflict_response(),
         }
     }
@@ -5716,6 +5742,141 @@ mod tests {
 
     fn service_credential() -> String {
         format!("Bearer {SERVICE_CREDENTIAL}")
+    }
+
+    // ── ADR-0253: standing changes and suspension ───────────────────────
+
+    fn suspend(store: &InMemoryStore, suspend: bool, operation: &str) {
+        store.add_org(ORG, "Acme");
+        let mut tables = store.tables.write();
+        tables.standing.set_suspension(&crate::standing::OrgSuspensionChange {
+            org_id: ORG.into(), suspend, reason: "billing".into(), operation_id: operation.into(),
+            principal: "operator".into(), now: 5,
+        }, true).unwrap();
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_suspended_org_refuses_members_and_hosts_until_resumed() {
+        let store = seeded();
+        suspend(&store, true, "op-suspend");
+        let app = host_app(store.clone());
+        for (path, token) in [
+            (format!("/v1/orgs/{ORG}/issues"), token_for(&ada())),
+            (format!("/v1/orgs/{ORG}/memberships/me"), token_for(&ada())),
+            (format!("/internal/v1/orgs/{ORG}/access/{}", ada().as_str()), service_credential()),
+            (access_path(&ada()), service_credential()),
+            (format!("/internal/v1/orgs/{ORG}/people"), service_credential()),
+        ] {
+            let (status, body) = call(app.clone(), get(&path, &token)).await;
+            assert_eq!((status, body), (StatusCode::FORBIDDEN, serde_json::json!({"error":"org_suspended","code":"org_suspended"})), "{path}");
+        }
+        // The store refuses as well, for any path that resolves standing.
+        assert!(matches!(store.membership(ORG, ada().as_str(), None).await, Err(StoreError::OrgSuspended)));
+        // A grant names its org even on a route whose path does not.
+        let response = app.clone().oneshot(get("/v1/account/memberships", &token_for(&ada()))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        suspend(&store, false, "op-resume");
+        // The door caches status briefly; a fresh router reads it again.
+        let (status, _) = call(host_app(store), get(&format!("/internal/v1/orgs/{ORG}/access/{}", ada().as_str()), &service_credential())).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn adr0253_membership_mutations_write_standing_rows_in_order() {
+        let store = seeded();
+        store.add_org_member(ORG, "usr_owner", OrgRole::Owner);
+        store.add_user("usr_owner", "Owner");
+        store.add_workspace(ORG, "proj-1", "Project");
+        let context = || ownership_context_for("usr_owner");
+        store.set_org_member(ORG, bob().as_str(), OrgRole::Admin, context()).await.unwrap();
+        // The same role again changes nothing and writes nothing.
+        store.set_org_member(ORG, bob().as_str(), OrgRole::Admin, context()).await.unwrap();
+        store.set_workspace_member(ORG, "proj-1", bob().as_str(), WorkspaceRole::Maintainer, context()).await.unwrap();
+        store.set_workspace_member(ORG, "proj-1", bob().as_str(), WorkspaceRole::Viewer, context()).await.unwrap();
+        store.remove_workspace_member(ORG, "proj-1", ada().as_str(), context()).await.unwrap();
+        store.offboard_org_member(ORG, ada().as_str(), context()).await.unwrap();
+        let rows: Vec<_> = store.standing_changes_after(0, 50).await.unwrap().rows.into_iter()
+            .map(|row| (row.seq, row.user_id.unwrap(), row.workspace_id, row.kind.as_str())).collect();
+        assert_eq!(rows, vec![
+            (1, bob().to_string(), None, "role_changed"),
+            (2, bob().to_string(), Some("proj-1".into()), "workspace_removed"),
+            (3, ada().to_string(), Some("proj-1".into()), "workspace_removed"),
+            (4, ada().to_string(), None, "offboarded"),
+        ]);
+    }
+
+    fn ownership_context_for(actor: &str) -> crate::store::AuthorizationContext {
+        crate::store::AuthorizationContext {
+            actor_user_id: actor.into(), reason: "test".into(), request_id: "r".into(),
+            grant_id: None, source: serde_json::json!({}), now: 10,
+        }
+    }
+
+    async fn stream_lines(app: Router, path: &str, token: &str, count: usize) -> (StatusCode, Vec<serde_json::Value>) {
+        use futures_util::StreamExt;
+        let response = app.oneshot(get(path, token)).await.unwrap();
+        let status = response.status();
+        if status != StatusCode::OK { return (status, Vec::new()); }
+        assert_eq!(response.headers()["content-type"], "application/x-ndjson");
+        let mut body = response.into_body().into_data_stream();
+        let mut buffer = Vec::new();
+        let mut lines = Vec::new();
+        while lines.len() < count {
+            let chunk = tokio::time::timeout(Duration::from_secs(5), body.next()).await
+                .expect("a frame within the poll interval").expect("open stream").unwrap();
+            buffer.extend_from_slice(&chunk);
+            while let Some(end) = buffer.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = buffer.drain(..=end).collect();
+                lines.push(serde_json::from_slice(&line[..line.len() - 1]).unwrap());
+            }
+        }
+        (status, lines)
+    }
+
+    #[tokio::test]
+    async fn adr0253_the_standing_stream_authenticates_resyncs_chains_and_filters() {
+        let store = seeded();
+        {
+            let mut tables = store.tables.write();
+            tables.standing.record(ORG, Some(ada().as_str()), None, crate::standing::StandingChangeKind::Offboarded, 1);
+            tables.standing.record("org_other0000000000000000", Some("usr_x"), None, crate::standing::StandingChangeKind::RoleChanged, 2);
+            tables.standing.record(ORG, Some(bob().as_str()), Some("proj-1"), crate::standing::StandingChangeKind::WorkspaceRemoved, 3);
+        }
+        let path = "/internal/v1/standing-changes";
+        for token in ["", "Bearer wrong", &token_for(&ada())] {
+            let (status, _) = stream_lines(host_app(store.clone()), &format!("{path}?after=0"), token, 0).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{token}");
+        }
+        // No cursor: start at the head.
+        let (_, lines) = stream_lines(host_app(store.clone()), path, &service_credential(), 1).await;
+        assert_eq!(lines, vec![serde_json::json!({"type":"resync","seq":3})]);
+        // From a cursor: every row, chained by `prev`.
+        let (_, lines) = stream_lines(host_app(store.clone()), &format!("{path}?after=0"), &service_credential(), 3).await;
+        assert_eq!(lines[0], serde_json::json!({"type":"change","seq":1,"prev":0,"orgId":ORG,"userId":ada().as_str(),"kind":"offboarded","at":1}));
+        assert_eq!((lines[1]["seq"].clone(), lines[1]["prev"].clone()), (serde_json::json!(2), serde_json::json!(1)));
+        assert_eq!(lines[2]["workspaceId"], "proj-1");
+        // A credential scoped to one org never sees another's rows.
+        let scoped = {
+            let mut state = AppState::new(Arc::new(store.clone()), signer(), Arc::new(cognia_tenant_auth::oidc::TestAuthenticator));
+            state.now = Arc::new(|| 1_000);
+            router(state
+                .with_internal_service_credential(Some(sha256_hex(SERVICE_CREDENTIAL)))
+                .with_internal_service_credential_scopes(Some(std::collections::HashMap::from([(sha256_hex(SERVICE_CREDENTIAL), vec![ORG.to_owned()])]))))
+        };
+        let (_, lines) = stream_lines(scoped, &format!("{path}?after=0"), &service_credential(), 2).await;
+        assert_eq!(lines.iter().map(|line| (line["seq"].as_i64().unwrap(), line["prev"].as_i64().unwrap())).collect::<Vec<_>>(), vec![(1, 0), (3, 1)]);
+        // A row that commits while the stream is open arrives on it.
+        let live = store.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            live.tables.write().standing.record(ORG, None, None, crate::standing::StandingChangeKind::OrgSuspended, 9);
+        });
+        let (_, lines) = stream_lines(host_app(store.clone()), &format!("{path}?after=3"), &service_credential(), 1).await;
+        assert_eq!(lines[0], serde_json::json!({"type":"change","seq":4,"prev":3,"orgId":ORG,"kind":"org_suspended","at":9}));
+        // A cursor older than retention resyncs.
+        store.prune_standing_changes(5).await.unwrap();
+        let (_, lines) = stream_lines(host_app(store), &format!("{path}?after=1"), &service_credential(), 1).await;
+        assert_eq!(lines[0], serde_json::json!({"type":"resync","seq":4}));
     }
 
     #[tokio::test]

@@ -69,6 +69,9 @@ pub enum StoreError {
     Policy(String),
     #[error("the deployment bootstrap credential was already used")]
     BootstrapCredentialConsumed,
+    /// ADR-0253 §4: the deployment operator suspended this organization.
+    #[error("org_suspended")]
+    OrgSuspended,
 }
 
 impl From<ActorError> for StoreError {
@@ -781,6 +784,27 @@ pub trait Store: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<Membership, StoreError>;
 
+    /// ADR-0253 §4: whether the deployment operator suspended `org_id`.
+    async fn org_suspended(&self, org_id: &str) -> Result<bool, StoreError>;
+
+    /// ADR-0253 §4: suspend or resume an organization. Operator only: the
+    /// application role cannot write the table. Idempotent per operation id.
+    async fn set_org_suspension(
+        &self,
+        change: crate::standing::OrgSuspensionChange,
+    ) -> Result<crate::standing::OrgSuspensionOutcome, StoreError>;
+
+    /// ADR-0253 §2: committed standing changes after `after`, across
+    /// organizations, for the internal stream to filter by credential.
+    async fn standing_changes_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<crate::standing::StandingChangePage, StoreError>;
+
+    /// ADR-0253 §2: drop rows created before `created_before`.
+    async fn prune_standing_changes(&self, created_before: i64) -> Result<u64, StoreError>;
+
     /// The Logto organization `org_id` mirrors, if it mirrors one.
     ///
     /// Read inside `org_id`'s own RLS scope, so a caller naming an org they do
@@ -1143,6 +1167,8 @@ pub(crate) struct Tables {
     users: HashMap<String, String>,
     invitations: HashMap<String, (String, Invitation)>,
     pub(crate) authorization_audit: Vec<AuthorizationAuditEvent>,
+    /// ADR-0253 §2 and §4.
+    pub(crate) standing: crate::standing::MemoryStandingLog,
     issues: HashMap<String, Issue>,
     events: Vec<(String, IssueEvent)>,
     /// Plans always hold `steps: Some(..)` in here; `list_plans` strips them,
@@ -1426,6 +1452,7 @@ impl Store for InMemoryStore {
         workspace_id: Option<&str>,
     ) -> Result<Membership, StoreError> {
         let tables = self.tables.read();
+        if tables.standing.suspended(org_id) { return Err(StoreError::OrgSuspended); }
         Ok(Membership {
             org_role: tables
                 .org_memberships
@@ -1438,6 +1465,32 @@ impl Store for InMemoryStore {
                     .copied()
             }),
         })
+    }
+
+    async fn org_suspended(&self, org_id: &str) -> Result<bool, StoreError> {
+        Ok(self.tables.read().standing.suspended(org_id))
+    }
+
+    async fn set_org_suspension(
+        &self,
+        change: crate::standing::OrgSuspensionChange,
+    ) -> Result<crate::standing::OrgSuspensionOutcome, StoreError> {
+        let mut tables = self.tables.write();
+        let exists = tables.org_names.contains_key(&change.org_id)
+            || tables.org_memberships.keys().any(|(org, _)| *org == change.org_id);
+        tables.standing.set_suspension(&change, exists)
+    }
+
+    async fn standing_changes_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<crate::standing::StandingChangePage, StoreError> {
+        Ok(self.tables.read().standing.page(after, limit))
+    }
+
+    async fn prune_standing_changes(&self, created_before: i64) -> Result<u64, StoreError> {
+        Ok(self.tables.write().standing.prune(created_before))
     }
 
     async fn org_logto_id(&self, org_id: &str) -> Result<Option<String>, StoreError> {
@@ -1960,6 +2013,9 @@ impl Store for InMemoryStore {
             ensure_another_owner(&tables.org_memberships, org_id, user_id)?;
         }
         tables.org_memberships.insert(key, role);
+        if old != Some(role) {
+            tables.standing.record(org_id, Some(user_id), None, crate::standing::StandingChangeKind::RoleChanged, context.now);
+        }
         let affected = if old.is_some_and(OrgRole::can_traverse_workspaces) && role == OrgRole::Member {
             crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, false, context.now)
         } else { Vec::new() };
@@ -1992,6 +2048,9 @@ impl Store for InMemoryStore {
         if old == OrgRole::Owner { return Err(StoreError::OwnershipConflict); }
         tables.org_memberships.insert(target_key, OrgRole::Owner);
         tables.org_memberships.insert((org_id.into(), actor.clone()), previous_owner_role);
+        for user in [to_user_id, actor.as_str()] {
+            tables.standing.record(org_id, Some(user), None, crate::standing::StandingChangeKind::RoleChanged, context.now);
+        }
         let affected = if previous_owner_role == OrgRole::Member {
             crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, &actor, false, context.now)
         } else { Vec::new() };
@@ -2040,6 +2099,7 @@ impl Store for InMemoryStore {
             }
         }
         crate::chat_store::memory_revoke_offboarded_invites(&mut tables, org_id, user_id);
+        tables.standing.record(org_id, Some(user_id), None, crate::standing::StandingChangeKind::Offboarded, context.now);
         let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, None, user_id, true, context.now);
         tables.authorization_audit.push(membership_audit_event(
             org_id,
@@ -2079,7 +2139,11 @@ impl Store for InMemoryStore {
             user_id.to_owned(),
         );
         let old = tables.workspace_memberships.insert(key, role);
-        let affected = if old.is_some_and(|old| old.capability().permits(role.capability()) && old != role) {
+        let lowered = old.is_some_and(|old| old.capability().permits(role.capability()) && old != role);
+        if lowered {
+            tables.standing.record(org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now);
+        }
+        let affected = if lowered {
             crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, context.now)
         } else { Vec::new() };
         tables.authorization_audit.push(membership_audit_event(
@@ -2114,6 +2178,7 @@ impl Store for InMemoryStore {
                 user_id.to_owned(),
             ))
             .ok_or(StoreError::NotFound)?;
+        tables.standing.record(org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now);
         // Recomputed, not forced: the seat is already gone, and an org owner or
         // admin keeps the standing their org role gives them.
         let affected = crate::chat_store::memory_cleanup_standing(&mut tables, org_id, Some(workspace_id), user_id, false, context.now);
@@ -2763,6 +2828,20 @@ impl PgStore {
         Ok(store)
     }
 
+    /// ADR-0253 §4: the operator's connection for `org suspend|resume`. The
+    /// role needs write grants on `org_suspensions`, which the application
+    /// role never has; it binds the organization's tenant scope itself.
+    pub async fn connect_org_operator(database_url: &str, max_connections: usize) -> anyhow::Result<Self> {
+        let store = Self::query_pool(database_url, max_connections)?;
+        let row = store.pool.get().await?.query_one(
+            "SELECT to_regclass('public.org_suspensions') IS NOT NULL AND to_regclass('public.standing_changes') IS NOT NULL", &[],
+        ).await?;
+        if !row.get::<_, bool>(0) {
+            anyhow::bail!("organization status tables are missing; run the server once to migrate");
+        }
+        Ok(store)
+    }
+
     pub async fn rollout_principal(&self) -> Result<String, StoreError> {
         Ok(self.client().await?.query_one("SELECT current_user::text", &[])
             .await.map_err(policy_db_error)?.get(0))
@@ -2886,6 +2965,9 @@ impl PgStore {
                 "../migrations/0018_shared_chat_tool_detail.sql"
             ))
             .await?;
+        transaction
+            .batch_execute(include_str!("../migrations/0019_standing_changes.sql"))
+            .await?;
         if let Some((role, password)) = app_role {
             // PostgreSQL quotes both the identifier and password literal; no
             // operator-supplied text is interpolated as SQL syntax.
@@ -2913,7 +2995,8 @@ impl PgStore {
                  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {identifier}; \
                  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {identifier}; \
                  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO {identifier}; \
-                 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON deployment_feature_policies, deployment_feature_policy_audit FROM {identifier};"
+                 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON deployment_feature_policies, deployment_feature_policy_audit FROM {identifier}; \
+                 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON org_suspensions, org_suspension_audit FROM {identifier};"
             )).await?;
         }
         transaction.commit().await?;
@@ -3590,6 +3673,13 @@ impl Store for PgStore {
     ) -> Result<Membership, StoreError> {
         let mut client = self.client().await?;
         let transaction = self.scoped(&mut client, org_id).await?;
+        // ADR-0253 §4: a suspended organization has no standing to resolve.
+        let suspended: bool = transaction
+            .query_one("SELECT EXISTS (SELECT 1 FROM org_suspensions WHERE org_id = $1)", &[&org_id])
+            .await
+            .map_err(|error| StoreError::Database(error.to_string()))?
+            .get(0);
+        if suspended { return Err(StoreError::OrgSuspended); }
 
         let org_row = transaction
             .query_opt(
@@ -3627,6 +3717,132 @@ impl Store for PgStore {
             org_role,
             workspace_role,
         })
+    }
+
+    async fn org_suspended(&self, org_id: &str) -> Result<bool, StoreError> {
+        Ok(self.client().await?
+            .query_one("SELECT EXISTS (SELECT 1 FROM org_suspensions WHERE org_id = $1)", &[&org_id])
+            .await
+            .map_err(|error| StoreError::Database(error.to_string()))?
+            .get(0))
+    }
+
+    async fn set_org_suspension(
+        &self,
+        change: crate::standing::OrgSuspensionChange,
+    ) -> Result<crate::standing::OrgSuspensionOutcome, StoreError> {
+        crate::standing::validate_suspension_change(&change)?;
+        let mut client = self.client().await?;
+        // The tenant scope lets the operator write the organization's
+        // standing row under the same policy every mutation uses.
+        let transaction = self.scoped(&mut client, &change.org_id).await?;
+        let db = |error: tokio_postgres::Error| StoreError::Database(error.to_string());
+        // One operator change at a time per organization.
+        transaction
+            .execute("SELECT pg_advisory_xact_lock(hashtextextended('cognia.collab.org_suspension:' || $1, 0))", &[&change.org_id])
+            .await.map_err(db)?;
+        let action = if change.suspend { "suspend" } else { "resume" };
+        if let Some(row) = transaction
+            .query_opt("SELECT org_id, action FROM org_suspension_audit WHERE operation_id = $1", &[&change.operation_id])
+            .await.map_err(db)?
+        {
+            let (org, used): (String, String) = (row.get(0), row.get(1));
+            return if org == change.org_id && used == action {
+                Ok(crate::standing::OrgSuspensionOutcome { org_id: org, suspended: change.suspend, changed: false })
+            } else {
+                Err(StoreError::Policy("operation-id was already used for another change".into()))
+            };
+        }
+        let exists: bool = transaction
+            .query_one("SELECT EXISTS (SELECT 1 FROM orgs WHERE id = $1)", &[&change.org_id])
+            .await.map_err(db)?.get(0);
+        if !exists { return Err(StoreError::NotFound); }
+        let reason = change.reason.trim();
+        let changed = if change.suspend {
+            transaction.execute(
+                "INSERT INTO org_suspensions (org_id, suspended_at, suspended_by, reason) VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (org_id) DO NOTHING",
+                &[&change.org_id, &change.now, &change.principal, &reason],
+            ).await.map_err(db)? == 1
+        } else {
+            transaction.execute("DELETE FROM org_suspensions WHERE org_id = $1", &[&change.org_id])
+                .await.map_err(db)? == 1
+        };
+        transaction.execute(
+            "INSERT INTO org_suspension_audit (id, org_id, action, principal, reason, operation_id, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&uuid::Uuid::new_v4(), &change.org_id, &action, &change.principal, &reason, &change.operation_id, &change.now],
+        ).await.map_err(db)?;
+        if changed {
+            let kind = if change.suspend {
+                crate::standing::StandingChangeKind::OrgSuspended
+            } else {
+                crate::standing::StandingChangeKind::OrgResumed
+            };
+            crate::standing::pg_record(&transaction, &change.org_id, None, None, kind, change.now).await?;
+        }
+        transaction.commit().await.map_err(db)?;
+        Ok(crate::standing::OrgSuspensionOutcome { org_id: change.org_id, suspended: change.suspend, changed })
+    }
+
+    async fn standing_changes_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<crate::standing::StandingChangePage, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = self.settings_scoped(&mut client, &[("app.standing_stream", "read")]).await?;
+        let db = |error: tokio_postgres::Error| StoreError::Database(error.to_string());
+        // The head is read first: writers commit in sequence order, so every
+        // row at or below it is visible to the row query that follows.
+        let head: i64 = transaction
+            .query_one("SELECT COALESCE(MAX(seq), 0) FROM standing_changes", &[])
+            .await.map_err(db)?.get(0);
+        let pruned_through: i64 = transaction
+            .query_one("SELECT pruned_through FROM standing_change_retention WHERE id = 1", &[])
+            .await.map_err(db)?.get(0);
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = transaction
+            .query(
+                "SELECT seq, org_id, user_id, workspace_id, kind, created_at FROM standing_changes \
+                 WHERE seq > $1 ORDER BY seq LIMIT $2",
+                &[&after, &limit],
+            )
+            .await.map_err(db)?
+            .into_iter()
+            .map(|row| Ok(crate::standing::StandingChange {
+                seq: row.get("seq"),
+                org_id: row.get("org_id"),
+                user_id: row.get("user_id"),
+                workspace_id: row.get("workspace_id"),
+                kind: crate::standing::StandingChangeKind::parse(&row.get::<_, String>("kind"))?,
+                created_at: row.get("created_at"),
+            }))
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        transaction.commit().await.map_err(db)?;
+        Ok(crate::standing::StandingChangePage { rows, head: head.max(pruned_through), pruned_through })
+    }
+
+    async fn prune_standing_changes(&self, created_before: i64) -> Result<u64, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = self.settings_scoped(&mut client, &[("app.standing_stream", "prune")]).await?;
+        let db = |error: tokio_postgres::Error| StoreError::Database(error.to_string());
+        let row = transaction
+            .query_one(
+                "WITH removed AS (DELETE FROM standing_changes WHERE created_at < $1 RETURNING seq) \
+                 SELECT COUNT(*)::bigint, COALESCE(MAX(seq), 0) FROM removed",
+                &[&created_before],
+            )
+            .await.map_err(db)?;
+        let (removed, through): (i64, i64) = (row.get(0), row.get(1));
+        if removed > 0 {
+            transaction.execute(
+                "UPDATE standing_change_retention SET pruned_through = GREATEST(pruned_through, $1) WHERE id = 1",
+                &[&through],
+            ).await.map_err(db)?;
+        }
+        transaction.commit().await.map_err(db)?;
+        Ok(removed as u64)
     }
 
     async fn org_logto_id(&self, org_id: &str) -> Result<Option<String>, StoreError> {
@@ -4413,6 +4629,9 @@ impl Store for PgStore {
             )
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
+        if old.as_deref() != Some(role.as_str()) {
+            crate::standing::pg_record(&transaction, org_id, Some(user_id), None, crate::standing::StandingChangeKind::RoleChanged, context.now).await?;
+        }
         let affected = if old.as_deref().and_then(|r| OrgRole::parse(r).ok()).is_some_and(OrgRole::can_traverse_workspaces) && role == OrgRole::Member {
             crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, false, context.now).await?
         } else { Vec::new() };
@@ -4452,6 +4671,9 @@ impl Store for PgStore {
             "UPDATE org_memberships SET role=CASE WHEN user_id=$2 THEN 'owner' ELSE $4 END, updated_at=$5 WHERE org_id=$1 AND user_id IN ($2,$3)",
             &[&org_id, &to_user_id, &actor, &previous_owner_role.as_str(), &context.now],
         ).await.map_err(|e| StoreError::Database(e.to_string()))?;
+        for user in [to_user_id, actor.as_str()] {
+            crate::standing::pg_record(&transaction, org_id, Some(user), None, crate::standing::StandingChangeKind::RoleChanged, context.now).await?;
+        }
         let affected = if previous_owner_role == OrgRole::Member {
             crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, &actor, false, context.now).await?
         } else { Vec::new() };
@@ -4503,6 +4725,7 @@ impl Store for PgStore {
             )
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
+        crate::standing::pg_record(&transaction, org_id, Some(user_id), None, crate::standing::StandingChangeKind::Offboarded, context.now).await?;
         let affected = crate::chat_store::pg_cleanup_standing(&transaction, org_id, None, user_id, true, context.now).await?;
         transaction.execute("UPDATE chat_session_invites SET status='revoked' WHERE org_id=$1 AND status='pending' AND (target_user_id=$2 OR created_by_user_id=$2)", &[&org_id, &user_id]).await.map_err(|e| StoreError::Database(e.to_string()))?;
         let event = membership_audit_event(
@@ -4551,7 +4774,11 @@ impl Store for PgStore {
             )
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?;
-        let affected = if old.as_deref().and_then(|old| WorkspaceRole::parse(old).ok()).is_some_and(|old| old.capability().permits(role.capability()) && old != role) {
+        let lowered = old.as_deref().and_then(|old| WorkspaceRole::parse(old).ok()).is_some_and(|old| old.capability().permits(role.capability()) && old != role);
+        if lowered {
+            crate::standing::pg_record(&transaction, org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now).await?;
+        }
+        let affected = if lowered {
             crate::chat_store::pg_cleanup_standing(&transaction, org_id, Some(workspace_id), user_id, false, context.now).await?
         } else { Vec::new() };
         let event = membership_audit_event(
@@ -4590,6 +4817,7 @@ impl Store for PgStore {
             .await
             .map_err(|error| StoreError::Database(error.to_string()))?
             .ok_or(StoreError::NotFound)?;
+        crate::standing::pg_record(&transaction, org_id, Some(user_id), Some(workspace_id), crate::standing::StandingChangeKind::WorkspaceRemoved, context.now).await?;
         // Recomputed, not forced: the seat is already deleted in this
         // transaction, and an org owner or admin keeps the standing their org
         // role gives them.

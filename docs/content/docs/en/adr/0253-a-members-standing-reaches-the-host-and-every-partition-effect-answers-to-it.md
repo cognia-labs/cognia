@@ -82,7 +82,7 @@ Rejected alternatives:
 
 ### 4. Organization suspension
 
-An organization gets a status, `active` or `suspended`. Only the deployment operator changes it, with `cognia-collab-server org suspend|resume <org>` and the matching operator route. An organization owner cannot suspend or resume their own organization.
+An organization gets a status, `active` or `suspended`. Only the deployment operator changes it, with `cognia-collab-server org suspend|resume <org>` over the operator's database connection, as feature rollout does. There is no HTTP route: the application's database role can read the status but never write it, so an organization owner cannot suspend or resume their own organization, and neither can a compromised server.
 
 While suspended, every member request to the collaboration server and to any Host answers `org_suspended` (403, not retryable), and section 3's effects apply. Partition data, organization credentials, usage and membership are kept. Resuming restores normal use. Deleting an organization stays in plan P7.
 

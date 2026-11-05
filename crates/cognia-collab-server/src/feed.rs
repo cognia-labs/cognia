@@ -346,7 +346,7 @@ async fn decide(
                 cached.scope = scope;
                 cached.read_at = now;
             }
-            Err(AuthError::Forbidden) => return Delivery::Close,
+            Err(AuthError::Forbidden | AuthError::Store(crate::store::StoreError::OrgSuspended)) => return Delivery::Close,
             // Storage trouble: keep the last known scope rather than widen it
             // or drop the reader; the next frame tries again.
             Err(_) => {}
