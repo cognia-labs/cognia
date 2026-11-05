@@ -123,7 +123,10 @@ describe("DiagnosticsCard", () => {
     render(<DiagnosticsCard block={block} />)
     expect(screen.getByText("write 7 · read 3")).toBeInTheDocument()
     expect(screen.queryByText(/estimated/i)).not.toBeInTheDocument()
-    // costUsd null → no $ figure; durationMs 0 → no duration; no window bar.
+    // costUsd null → no $ figure but an unknown cost, never free (ADR-0253 §10);
+    // durationMs 0 → no duration; no window bar.
+    expect(screen.getByText("—")).toBeInTheDocument()
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
     expect(screen.queryByTestId("context-window-bar")).not.toBeInTheDocument()
   })
 

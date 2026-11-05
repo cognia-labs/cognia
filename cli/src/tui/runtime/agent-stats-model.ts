@@ -16,11 +16,11 @@ import type { DailyUsage } from "@/types/system/usage"
 import {
   aggregateByDay,
   aggregateByModel,
-  effectiveCostUsd,
+  effectiveCostUsdDetailed,
   type ModelUsageRow,
 } from "@/lib/usage/session-analytics"
 import { analyzeSession, type SessionReport } from "@/lib/analysis/session-report"
-import { formatCost, formatTokens } from "../format/usage"
+import { formatCostBucket, formatTokens } from "../format/usage"
 import { stringWidth, truncateToWidth } from "../markdown/width"
 
 /** One conversation + the usage rows derived from its imported `metadata.usage`. */
@@ -41,6 +41,11 @@ export interface ConvStatRow {
   toolCalls: number
   tokens: number
   costUsd: number
+  /** Billed turns (usage rows) behind `costUsd`. */
+  turns: number
+  /** Turns no pricing layer knew — `costUsd` is then a lower bound, or no price
+   * at all when every turn is unpriced (ADR-0253 §10). */
+  unpricedTurns: number
   updatedAt: number
 }
 
@@ -51,6 +56,8 @@ export interface SourceStat {
   messages: number
   tokens: number
   costUsd: number
+  turns: number
+  unpricedTurns: number
 }
 
 /** A single date bucket's conversation count. */
@@ -71,6 +78,10 @@ export interface AgentStatsOverview {
   toolCalls: number
   tokens: number
   costUsd: number
+  /** Billed turns across every conversation. */
+  turns: number
+  /** Of those, the turns nothing priced (see {@link ConvStatRow.unpricedTurns}). */
+  unpricedTurns: number
   /** Earliest conversation start (epoch ms), 0 when empty. */
   firstAt: number
   /** Latest conversation activity (epoch ms), 0 when empty. */
@@ -100,7 +111,10 @@ const MIN_TITLE_COLUMNS = 8
 export function convRowMetrics(row: ConvStatRow): string {
   const parts = [`${row.messageCount} msg`]
   if (row.tokens > 0) parts.push(`${formatTokens(row.tokens)} tok`)
-  if (row.costUsd > 0) parts.push(formatCost(row.costUsd))
+  // A priced $0 (or a conversation with no billed turns) says nothing worth a
+  // column; an unpriced one says "—" / "≥ $X" so it never reads as free.
+  if (row.costUsd > 0 || row.unpricedTurns > 0)
+    parts.push(formatCostBucket(row.costUsd, row.unpricedTurns, row.turns))
   return ` \u00b7 ${parts.join(" \u00b7 ")}`
 }
 
@@ -169,10 +183,16 @@ function tokensOf(rows: readonly SessionUsageRow[]): number {
   return n
 }
 
-function costOf(rows: readonly SessionUsageRow[]): number {
-  let c = 0
-  for (const r of rows) c += effectiveCostUsd(r)
-  return c
+/** Summed effective cost plus how many rows nothing priced (they add 0). */
+function costOf(rows: readonly SessionUsageRow[]): { cost: number; unpricedTurns: number } {
+  let cost = 0
+  let unpricedTurns = 0
+  for (const r of rows) {
+    const c = effectiveCostUsdDetailed(r)
+    cost += c.cost
+    if (!c.known) unpricedTurns += 1
+  }
+  return { cost, unpricedTurns }
 }
 
 /** Build the overview + conversation-row list. Pure; sorts by most-recent. */
@@ -193,7 +213,7 @@ export function buildAgentStats(
   for (const item of items) {
     const { conv, usageRows, source } = item
     const tokens = tokensOf(usageRows)
-    const cost = costOf(usageRows)
+    const { cost, unpricedTurns } = costOf(usageRows)
     const toolCounts = toolCountsOf(conv.messages)
     const convToolCalls = [...toolCounts.values()].reduce((a, b) => a + b, 0)
     const updatedAt = conv.session.updatedAt ?? 0
@@ -207,6 +227,8 @@ export function buildAgentStats(
       toolCalls: convToolCalls,
       tokens,
       costUsd: cost,
+      turns: usageRows.length,
+      unpricedTurns,
       updatedAt,
     })
 
@@ -222,11 +244,15 @@ export function buildAgentStats(
       messages: 0,
       tokens: 0,
       costUsd: 0,
+      turns: 0,
+      unpricedTurns: 0,
     }
     src.conversations += 1
     src.messages += conv.messages.length
     src.tokens += tokens
     src.costUsd += cost
+    src.turns += usageRows.length
+    src.unpricedTurns += unpricedTurns
     bySourceMap.set(source, src)
 
     for (const [name, n] of toolCounts) toolTotals.set(name, (toolTotals.get(name) ?? 0) + n)
@@ -237,12 +263,15 @@ export function buildAgentStats(
 
   rows.sort((a, b) => b.updatedAt - a.updatedAt)
 
+  const total = costOf(allUsage)
   const overview: AgentStatsOverview = {
     conversations: items.length,
     messages,
     toolCalls,
     tokens: tokensOf(allUsage),
-    costUsd: costOf(allUsage),
+    costUsd: total.cost,
+    turns: allUsage.length,
+    unpricedTurns: total.unpricedTurns,
     firstAt,
     lastAt,
     bySource: [...bySourceMap.values()].sort((a, b) => b.conversations - a.conversations),

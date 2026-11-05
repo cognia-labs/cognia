@@ -15,6 +15,7 @@ import { extractUsage, type UsageInfo } from "@/lib/claude/adapter"
 import type { SDKResultMessage } from "@cognia/agent-config-types"
 import { getDb } from "./schema"
 import { commitUsageRow } from "@/lib/usage/usage-ledger"
+import { isUnpricedUsageRow } from "@/lib/usage/session-analytics"
 import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
 import type { ExternalAgentTokenUsage } from "@/types/agent/external-agent"
 import type {
@@ -616,8 +617,14 @@ export interface SessionUsageTotals {
   durationMs: number
   /** Number of turns aggregated. */
   turns: number
+  /**
+   * Turns whose stored cost is not a known price (ADR-0253 §10). They add 0
+   * to `costUsd`, which is then a lower bound; with every turn unpriced it is
+   * no figure at all. Render through `formatBucketCost`.
+   */
+  unpricedTurns: number
   /** Per-model breakdown for the same window. */
-  byModel: Record<string, { tokens: number; costUsd: number; turns: number }>
+  byModel: Record<string, { tokens: number; costUsd: number; turns: number; unpricedTurns: number }>
 }
 
 const EMPTY_TOTALS: SessionUsageTotals = {
@@ -628,6 +635,7 @@ const EMPTY_TOTALS: SessionUsageTotals = {
   costUsd: 0,
   durationMs: 0,
   turns: 0,
+  unpricedTurns: 0,
   byModel: {},
 }
 
@@ -728,9 +736,11 @@ function aggregate(rows: SessionUsageRow[]): SessionUsageTotals {
     costUsd: 0,
     durationMs: 0,
     turns: 0,
+    unpricedTurns: 0,
     byModel: {},
   }
   for (const r of rows) {
+    const unpriced = isUnpricedUsageRow(r) ? 1 : 0
     totals.inputTokens += r.inputTokens
     totals.outputTokens += r.outputTokens
     totals.cacheCreationTokens += r.cacheCreationTokens
@@ -738,11 +748,13 @@ function aggregate(rows: SessionUsageRow[]): SessionUsageTotals {
     totals.costUsd += r.costUsd
     totals.durationMs += r.durationMs
     totals.turns += 1
+    totals.unpricedTurns += unpriced
     const model = r.model ?? "(unknown)"
-    const slot = totals.byModel[model] ?? { tokens: 0, costUsd: 0, turns: 0 }
+    const slot = totals.byModel[model] ?? { tokens: 0, costUsd: 0, turns: 0, unpricedTurns: 0 }
     slot.tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens
     slot.costUsd += r.costUsd
     slot.turns += 1
+    slot.unpricedTurns += unpriced
     totals.byModel[model] = slot
   }
   return totals

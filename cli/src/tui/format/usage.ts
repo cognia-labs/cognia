@@ -5,6 +5,7 @@
  */
 import { getModelContextWindow, tokensInWindow } from "@/lib/claude/usage"
 import { costFromTokensUsd } from "@/lib/usage/pricing"
+import { UNKNOWN_COST } from "@/lib/usage/session-analytics"
 import type { ModelPricing } from "@cognia/provider-types/provider"
 
 import type { SessionTotals, UsageInfo } from "../state/types"
@@ -18,6 +19,8 @@ export function emptySessionTotals(): SessionTotals {
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
     durationMs: 0,
+    turns: 0,
+    unpricedTurns: 0,
   }
 }
 
@@ -45,11 +48,6 @@ export function costFromUsage(usage: UsageInfo, pricing?: Partial<ModelPricing>)
 }
 
 /**
- * Fold one turn's usage into the running session totals (pure). When `usage`
- * carries no positive `totalCostUsd` (the common case for ai-sdk / subscription
- * providers) the cost is estimated from `pricing` so the footer keeps in sync.
- */
-/**
  * One turn's USD cost: the SDK-reported figure when present (paid API), else the
  * priced-from-tokens estimate (ai-sdk / subscription paths report `0`). Shared by
  * the session-total accumulator and the cost-trend sparkline so they never drift.
@@ -60,12 +58,29 @@ export function turnCostUsd(usage: UsageInfo, pricing?: Partial<ModelPricing>): 
     : costFromUsage(usage, pricing)
 }
 
+/**
+ * One turn's USD cost, or `null` when nothing priced it: the SDK reported no
+ * positive figure and no base rate is known for the model. The same rule
+ * {@link formatCostKnown} applies, per turn — a `0` from an unpriced model is
+ * "unknown", never "free" (ADR-0253 §10). Feeds the cost-trend history.
+ */
+export function knownTurnCostUsd(usage: UsageInfo, pricing?: Partial<ModelPricing>): number | null {
+  const cost = turnCostUsd(usage, pricing)
+  return cost > 0 || hasBaseRate(pricing) ? cost : null
+}
+
+/**
+ * Fold one turn's usage into the running session totals (pure). When `usage`
+ * carries no positive `totalCostUsd` (the common case for ai-sdk / subscription
+ * providers) the cost is estimated from `pricing` so the footer keeps in sync;
+ * a turn nothing priced counts in `unpricedTurns` instead of as free.
+ */
 export function accumulateUsage(
   totals: SessionTotals,
   usage: UsageInfo,
   pricing?: Partial<ModelPricing>
 ): SessionTotals {
-  const turnCost = turnCostUsd(usage, pricing)
+  const turnCost = knownTurnCostUsd(usage, pricing)
   const providerCost = usage.providerCost
   const providerCosts =
     providerCost && providerCost.currency
@@ -76,12 +91,14 @@ export function accumulateUsage(
         }
       : totals.providerCosts
   return {
-    costUsd: totals.costUsd + turnCost,
+    costUsd: totals.costUsd + (turnCost ?? 0),
     inputTokens: totals.inputTokens + (usage.inputTokens ?? 0),
     outputTokens: totals.outputTokens + (usage.outputTokens ?? 0),
     cacheReadTokens: totals.cacheReadTokens + (usage.cacheReadInputTokens ?? 0),
     cacheCreationTokens: totals.cacheCreationTokens + (usage.cacheCreationInputTokens ?? 0),
     durationMs: totals.durationMs + (usage.durationMs ?? 0),
+    turns: totals.turns + 1,
+    unpricedTurns: totals.unpricedTurns + (turnCost === null ? 1 : 0),
     ...(providerCosts === undefined ? {} : { providerCosts }),
   }
 }
@@ -270,7 +287,21 @@ function hasBaseRate(pricing?: Partial<ModelPricing>): boolean {
  */
 export function formatCostKnown(usd: number | undefined, known: boolean): string {
   if ((usd ?? 0) > 0 || known) return formatCost(usd)
-  return "—"
+  return UNKNOWN_COST
+}
+
+/**
+ * Cost of a bucket of turns, honest about the unpriced ones — the CLI's
+ * rendering of the shared `formatBucketCost` rule (ADR-0253 §10), kept in the
+ * CLI's own number format ({@link formatCost}: "$0.00", 4 decimals sub-cent)
+ * rather than the app's currency formatter ("Free", "<$0.01"). Every turn
+ * unpriced → "—"; some unpriced → "≥ $X" (the sum is a lower bound); none
+ * unpriced (or no turns yet) → the plain figure.
+ */
+export function formatCostBucket(usd: number, unpricedTurns: number, turns: number): string {
+  if (turns > 0 && unpricedTurns >= turns) return UNKNOWN_COST
+  if (unpricedTurns <= 0) return formatCost(usd)
+  return `≥ ${formatCost(usd)}`
 }
 
 /** Humanize a provider-denominated cost (Devin's ACU, plan credits, …). */
@@ -279,16 +310,32 @@ export function formatProviderCost(amount: number, currency: string): string {
 }
 
 /**
- * Session-cost display: USD when a dollar figure is known, otherwise the
- * provider's own units ("1.2 ACU"), otherwise "—". Never relabels.
+ * Session-cost display: USD when a dollar figure is known (a lower bound "≥ $X"
+ * when some turns were unpriced), otherwise the provider's own units
+ * ("1.2 ACU"), otherwise "—". Never relabels. `known` (the active model's
+ * pricing) only decides the empty session, before any turn has been counted.
  */
 export function formatSessionCost(totals: SessionTotals, known: boolean): string {
-  const usd = formatCostKnown(totals.costUsd, known)
-  if (usd !== "—") return usd
+  const usd =
+    totals.turns > 0
+      ? formatCostBucket(totals.costUsd, totals.unpricedTurns, totals.turns)
+      : formatCostKnown(totals.costUsd, known)
+  if (usd !== UNKNOWN_COST) return usd
   const parts = Object.entries(totals.providerCosts ?? {}).map(([currency, amount]) =>
     formatProviderCost(amount, currency)
   )
-  return parts.length > 0 ? parts.join(" + ") : "—"
+  return parts.length > 0 ? parts.join(" + ") : UNKNOWN_COST
+}
+
+/**
+ * The footer's cost read-out: the session bucket when totals are tracked, else
+ * the latest turn's own figure — which, carrying no price, is known only when
+ * the SDK reported a positive amount. Shared by {@link formatFooter} and the
+ * status bar's `cost` segment so the two never disagree.
+ */
+export function footerCost(totals?: SessionTotals, usage?: UsageInfo): string {
+  if (totals) return formatCostBucket(totals.costUsd, totals.unpricedTurns, totals.turns)
+  return usage ? formatCostKnown(usage.totalCostUsd, false) : formatCost(0)
 }
 
 export interface FooterModel {
@@ -327,14 +374,13 @@ export function formatFooter(opts: {
   const totalTokens = opts.totals
     ? opts.totals.inputTokens + opts.totals.outputTokens
     : (opts.usage?.inputTokens ?? 0) + (opts.usage?.outputTokens ?? 0)
-  const cost = opts.totals ? opts.totals.costUsd : opts.usage?.totalCostUsd
   return {
     model: opts.model ?? "default",
     provider: opts.provider,
     mode: opts.mode,
     tokens: formatTokens(totalTokens),
     contextPct: contextPercent(opts.usage, opts.model, opts.contextWindow),
-    cost: formatCost(cost),
+    cost: footerCost(opts.totals, opts.usage),
     cwd: shortenCwd(opts.cwd),
   }
 }
@@ -460,6 +506,19 @@ export interface ModelUsageRow {
 }
 
 /**
+ * One model's cost cell: USD when any dollar figure accrued ("≥ $X" when some of
+ * its turns were unpriced), else the provider's own units, else the bucket rule —
+ * "—" when every turn was unpriced, "$0.00" only when they were priced at zero.
+ */
+function modelCost(t: SessionTotals): string {
+  if (t.costUsd > 0) return formatCostBucket(t.costUsd, t.unpricedTurns, t.turns)
+  const provider = Object.entries(t.providerCosts ?? {})
+    .map(([currency, amount]) => formatProviderCost(amount, currency))
+    .join(" + ")
+  return provider || formatCostBucket(t.costUsd, t.unpricedTurns, t.turns)
+}
+
+/**
  * Build the per-model usage rows for the panel's "Usage by model" section,
  * mirroring Claude Code's `/usage` breakdown (input / output / cache read /
  * cache write + cost per model). Rows are sorted heaviest-first: by cost, then
@@ -480,12 +539,7 @@ export function modelUsageRows(modelTotals: Record<string, SessionTotals>): Mode
           t.cacheReadTokens > 0 || t.cacheCreationTokens > 0
             ? `${Math.round(cache.hitRate * 100)}%`
             : "—",
-        cost:
-          t.costUsd > 0
-            ? formatCost(t.costUsd)
-            : Object.entries(t.providerCosts ?? {})
-                .map(([currency, amount]) => formatProviderCost(amount, currency))
-                .join(" + ") || formatCost(0),
+        cost: modelCost(t),
         costUsd: t.costUsd,
         totalTokens: t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheCreationTokens,
       }

@@ -11,6 +11,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { AgentTask } from "@/types/agent/agent-task"
 import type { Issue } from "@/types/issues"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
+import { isUnpricedUsageRow } from "@/lib/usage/session-analytics"
 import type { AgentSessionSummaryRow } from "@/lib/db/agent-activity"
 
 /** A live conversation status, as the chat store reports it. */
@@ -69,7 +70,10 @@ export interface AgentStats {
   turns: number
   inputTokens: number
   outputTokens: number
+  /** Priced spend; turns without a known price add nothing to it. */
   costUsd: number
+  /** Turns without a known price: `costUsd` is then a lower bound (ADR-0253 §10). */
+  unpricedTurns: number
   completedTasks: number
   completedIssues: number
 }
@@ -153,6 +157,7 @@ export function deriveAgentActivity(input: AgentActivityInputs): AgentActivity {
     inputTokens: inWindow.reduce((sum, row) => sum + row.inputTokens, 0),
     outputTokens: inWindow.reduce((sum, row) => sum + row.outputTokens, 0),
     costUsd: inWindow.reduce((sum, row) => sum + row.costUsd, 0),
+    unpricedTurns: inWindow.filter(isUnpricedUsageRow).length,
     completedTasks: input.tasks.filter(
       (task) => task.status === "completed" && task.updatedAt >= since
     ).length,

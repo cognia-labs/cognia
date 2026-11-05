@@ -38,7 +38,7 @@ import {
   accumulateUsage,
   contextTokens,
   emptySessionTotals,
-  turnCostUsd,
+  knownTurnCostUsd,
 } from "../format/usage"
 import { resolveBackendModel } from "../../config/active-model"
 import {
@@ -174,13 +174,14 @@ function pushUsageHistory(history: number[], usage: UsageInfo): number[] {
   return next.length > USAGE_HISTORY_LIMIT ? next.slice(next.length - USAGE_HISTORY_LIMIT) : next
 }
 
-/** Append one turn's USD cost (SDK figure or priced estimate) to the history. */
+/** Append one turn's USD cost (SDK figure or priced estimate) to the history;
+ * `null` when nothing priced the turn. */
 function pushCostHistory(
-  history: number[],
+  history: (number | null)[],
   usage: UsageInfo,
   pricing?: Partial<ModelPricing>
-): number[] {
-  const next = [...history, turnCostUsd(usage, pricing)]
+): (number | null)[] {
+  const next = [...history, knownTurnCostUsd(usage, pricing)]
   return next.length > USAGE_HISTORY_LIMIT ? next.slice(next.length - USAGE_HISTORY_LIMIT) : next
 }
 

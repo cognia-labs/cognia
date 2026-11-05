@@ -28,7 +28,7 @@ export const FreshInstall: Story = {
       pendingDrafts: async () => 0,
       backupHealth: async () => ({ status: "never", lastSuccessAt: null }),
       storageBytes: async () => 8 * 1024 * 1024,
-      usageTotals: async () => ({ tokens: 0, costUsd: 0 }),
+      usageTotals: async () => ({ tokens: 0, costUsd: 0, turns: 0, unpricedTurns: 0 }),
     },
   },
 }
@@ -40,7 +40,7 @@ export const WithUsage: Story = {
       pendingDrafts: async () => 3,
       backupHealth: async () => ({ status: "ok", lastSuccessAt: Date.now() - 3 * 60 * 60 * 1000 }),
       storageBytes: async () => 256 * 1024 * 1024,
-      usageTotals: async () => ({ tokens: 1_840_000, costUsd: 6.42 }),
+      usageTotals: async () => ({ tokens: 1_840_000, costUsd: 6.42, turns: 312, unpricedTurns: 0 }),
     },
   },
 }
@@ -52,7 +52,7 @@ export const StaleBackup: Story = {
       pendingDrafts: async () => 0,
       backupHealth: async () => ({ status: "stale", lastSuccessAt: Date.now() - 20 * 86_400_000 }),
       storageBytes: async () => 96 * 1024 * 1024,
-      usageTotals: async () => ({ tokens: 120_000, costUsd: 0.51 }),
+      usageTotals: async () => ({ tokens: 120_000, costUsd: 0.51, turns: 40, unpricedTurns: 0 }),
     },
   },
 }

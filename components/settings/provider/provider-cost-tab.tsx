@@ -31,6 +31,7 @@ import {
   localDayString,
   type ProviderCostDailyRow,
 } from "@/lib/db/provider-cost-daily"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
 import { formatCostInCurrency, formatTokens } from "@/types/system/usage"
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
@@ -291,15 +292,33 @@ export function ProviderCostTab({ providerId }: ProviderCostTabProps) {
   // period-filtered rows for cost (matches what user is viewing)
   const totals = useMemo(() => {
     if (!providerStats) {
-      return { totalCost: 0, totalCalls: 0, avgCostPerCall: 0, totalTokens: 0 }
+      return {
+        totalCost: 0,
+        totalCalls: 0,
+        avgCostPerCall: 0,
+        totalTokens: 0,
+        modelsWithCalls: 0,
+        unpricedModels: 0,
+      }
     }
 
     const totalCalls = rows.reduce((acc, r) => acc + r.callCount, 0)
     const totalTokens = rows.reduce((acc, r) => acc + r.inputTokens + r.outputTokens, 0)
     const totalCost = rows.reduce((acc, r) => acc + (r.estimatedCost ?? 0), 0)
     const avgCostPerCall = totalCalls > 0 ? totalCost / totalCalls : 0
+    // A model with calls but no price adds nothing to the total, which is then
+    // a lower bound — or no figure at all when no model was priced (ADR-0253 §10).
+    const withCalls = rows.filter((r) => r.callCount > 0)
+    const unpricedModels = withCalls.filter((r) => r.estimatedCost === null).length
 
-    return { totalCost, totalCalls, avgCostPerCall, totalTokens }
+    return {
+      totalCost,
+      totalCalls,
+      avgCostPerCall,
+      totalTokens,
+      modelsWithCalls: withCalls.length,
+      unpricedModels,
+    }
   }, [rows, providerStats])
 
   // Show empty state when no provider data at all
@@ -329,11 +348,18 @@ export function ProviderCostTab({ providerId }: ProviderCostTabProps) {
 
       {/* ── Overview cards ────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 @3xl/provider-pane:grid-cols-4">
-        <OverviewCard label={t("costTab.monthlyCost")} value={formatCost(totals.totalCost)} />
+        <OverviewCard
+          label={t("costTab.monthlyCost")}
+          value={formatBucketCost(totals.totalCost, totals.unpricedModels, totals.modelsWithCalls)}
+        />
         <OverviewCard label={t("costTab.totalCalls")} value={String(totals.totalCalls)} />
         <OverviewCard
           label={t("costTab.avgCostPerCall")}
-          value={formatCost(totals.avgCostPerCall)}
+          value={formatBucketCost(
+            totals.avgCostPerCall,
+            totals.unpricedModels,
+            totals.modelsWithCalls
+          )}
         />
         <OverviewCard label={t("costTab.totalTokens")} value={formatTokens(totals.totalTokens)} />
       </div>
@@ -377,7 +403,9 @@ export function ProviderCostTab({ providerId }: ProviderCostTabProps) {
                   {formatTokens(row.outputTokens)}
                 </TableCell>
                 <TableCell className="px-3 py-2 text-right tabular-nums">
-                  {row.estimatedCost !== null ? formatCost(row.estimatedCost) : "N/A"}
+                  {row.estimatedCost !== null
+                    ? formatCost(row.estimatedCost)
+                    : t("comparison.noPrice")}
                 </TableCell>
               </TableRow>
             ))}

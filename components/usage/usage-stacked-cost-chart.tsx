@@ -18,6 +18,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recha
 import { useThemeColors } from "@/hooks/logging/use-theme-colors"
 import { paletteColor } from "@/lib/observability/chart-palette"
 import { CHART_MARGINS, TOOLTIP_STYLE } from "@/lib/observability/chart-config"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
 import { OTHER_SERIES_KEY, type DailyStack } from "@/lib/usage/usage-insights"
 import { formatCostInCurrency } from "@/types/system/usage"
 
@@ -38,6 +39,22 @@ function seriesField(index: number): string {
   return `s${index}`
 }
 
+/**
+ * One series' cost on one day, as the tooltip shows it: "—" when none of its
+ * turns has a known price and "≥" when some lack one, never "Free" for spend
+ * that was merely unpriced (ADR-0253 §10). `point` is the chart row, which
+ * carries each series' turn (`t<i>`) and unpriced-turn (`u<i>`) counts.
+ */
+export function formatSeriesCost(
+  value: number,
+  dataKey: unknown,
+  point: Record<string, unknown> | undefined
+): string {
+  const index = typeof dataKey === "string" ? /^s(\d+)$/.exec(dataKey)?.[1] : undefined
+  if (index === undefined || !point) return formatCostInCurrency(value, "USD")
+  return formatBucketCost(value, Number(point[`u${index}`] ?? 0), Number(point[`t${index}`] ?? 0))
+}
+
 export function UsageStackedCostChart({
   stack,
   labelFor,
@@ -54,6 +71,8 @@ export function UsageStackedCostChart({
         const point: Record<string, number | string> = { date: day.date, total: day.total }
         stack.keys.forEach((key, i) => {
           point[seriesField(i)] = day.values[key] ?? 0
+          point[`t${i}`] = day.turns[key] ?? 0
+          point[`u${i}`] = day.unpriced[key] ?? 0
         })
         return point
       }),
@@ -83,7 +102,14 @@ export function UsageStackedCostChart({
               contentStyle={TOOLTIP_STYLE.contentStyle}
               labelStyle={TOOLTIP_STYLE.labelStyle}
               itemStyle={TOOLTIP_STYLE.itemStyle}
-              formatter={(value, name) => [formatCostInCurrency(Number(value), "USD"), name]}
+              formatter={(value, name, item) => [
+                formatSeriesCost(
+                  Number(value),
+                  item?.dataKey,
+                  item?.payload as Record<string, unknown> | undefined
+                ),
+                name,
+              ]}
             />
             {stack.keys.map((key, i) => (
               <Bar

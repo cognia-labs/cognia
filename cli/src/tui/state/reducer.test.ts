@@ -2696,6 +2696,22 @@ describe("tuiReducer", () => {
     expect(s.costHistory).toEqual([0.1, 0.25])
   })
 
+  it("SET_USAGE records a turn nothing priced as unknown, not free (ADR-0253 §10)", () => {
+    // No SDK figure and no known rate for the model: the turn has no cost to plot.
+    let s = reduce(
+      { ...base(), modelMeta: undefined },
+      {
+        type: "SET_USAGE",
+        usage: { inputTokens: 100, outputTokens: 10 },
+      }
+    )
+    expect(s.costHistory).toEqual([null])
+    expect(s.sessionTotals).toMatchObject({ turns: 1, unpricedTurns: 1, costUsd: 0 })
+    s = reduce(s, { type: "SET_USAGE", usage: { inputTokens: 100, totalCostUsd: 0.2 } })
+    expect(s.costHistory).toEqual([null, 0.2])
+    expect(s.sessionTotals).toMatchObject({ turns: 2, unpricedTurns: 1, costUsd: 0.2 })
+  })
+
   it("TURN_COMMIT fallback usage also feeds the trend history", () => {
     const s = reduce(base(), {
       type: "TURN_COMMIT",

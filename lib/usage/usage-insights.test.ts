@@ -1,5 +1,6 @@
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import type { PricingResolver } from "./session-analytics"
+import type { DailyUsage } from "@/types/system/usage"
 import { summarizeSpend } from "./usage-report"
 import {
   OTHER_SERIES_KEY,
@@ -232,6 +233,20 @@ describe("buildDailyStack", () => {
     expect(stack.days[2].total).toBe(5)
   })
 
+  it("counts each series' turns and unpriced turns per day (ADR-0253 §10)", () => {
+    const stack = buildDailyStack(
+      [row({ model: "a", costUsd: 2, at: at(0) }), unpriced({ model: "a", at: at(0) })],
+      (r) => r.model ?? "",
+      1,
+      NOW
+    )
+    expect(stack.days[0]).toMatchObject({
+      values: { a: 2 },
+      turns: { a: 2 },
+      unpriced: { a: 1 },
+    })
+  })
+
   it("drops rows outside the range and omits other when nothing overflows", () => {
     const stack = buildDailyStack([row({ model: "a", at: at(10) })], (r) => r.model ?? "", 7, NOW)
     expect(stack.keys).toEqual(["a"])
@@ -250,6 +265,13 @@ describe("buildActivityMatrix", () => {
     expect(m.costUsd[1][9]).toBe(3)
     expect(m.peak).toEqual({ weekday: 1, hour: 9, turns: 2 })
     expect(m.maxTurns).toBe(2)
+  })
+
+  it("counts the turns of each cell no price is known for", () => {
+    const monday9 = new Date(2026, 4, 18, 9, 30).getTime()
+    const m = buildActivityMatrix([row({ at: monday9 }), unpriced({ at: monday9 })], priceFor)
+    expect(m.turns[1][9]).toBe(2)
+    expect(m.unpricedTurns[1][9]).toBe(1)
   })
 
   it("has no peak without rows", () => {
@@ -295,6 +317,13 @@ describe("detectSpendSpikes", () => {
     expect(spikes.map((s) => s.date)).toEqual(["2026-05-07", "2026-05-09"])
     expect(spikes[0].ratio).toBe(9)
     expect(spikes[0].medianUsd).toBe(1)
+    expect(spikes[0]).toMatchObject({ requests: 1, unpricedRequests: 0 })
+  })
+
+  it("keeps a spike day's unpriced requests so its cost reads as a lower bound", () => {
+    const daily: DailyUsage[] = days([1, 1, 1, 1, 1, 1, 9])
+    daily[6] = { ...daily[6], requests: 3, unpricedRequests: 2 }
+    expect(detectSpendSpikes(daily)[0]).toMatchObject({ requests: 3, unpricedRequests: 2 })
   })
 
   it("stays quiet with too few active days or cents-level noise", () => {

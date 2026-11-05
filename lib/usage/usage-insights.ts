@@ -302,6 +302,13 @@ export interface DailyStackDay {
   date: string
   /** Cost per series key on that day; every key is present, zero-filled. */
   values: Record<string, number>
+  /** Turns per series key on that day, zero-filled. */
+  turns: Record<string, number>
+  /**
+   * Turns per series key whose cost is unknown (ADR-0253 §10), zero-filled:
+   * when non-zero that series' figure is a lower bound.
+   */
+  unpriced: Record<string, number>
   total: number
 }
 
@@ -345,6 +352,8 @@ export function buildDailyStack(
     const day: DailyStackDay = {
       date,
       values: Object.fromEntries(keys.map((k) => [k, 0])),
+      turns: Object.fromEntries(keys.map((k) => [k, 0])),
+      unpriced: Object.fromEntries(keys.map((k) => [k, 0])),
       total: 0,
     }
     grid.push(day)
@@ -358,9 +367,11 @@ export function buildDailyStack(
     const raw = keyOf(row)
     const key = keptSet.has(raw) ? raw : OTHER_SERIES_KEY
     if (!(key in day.values)) continue
-    const cost = effectiveCostUsdDetailed(row, resolve).cost
-    day.values[key] += cost
-    day.total += cost
+    const cost = effectiveCostUsdDetailed(row, resolve)
+    day.values[key] += cost.cost
+    day.turns[key] += 1
+    if (!cost.known) day.unpriced[key] += 1
+    day.total += cost.cost
   }
   return { keys, days: grid }
 }
@@ -372,6 +383,8 @@ export interface ActivityMatrix {
   turns: number[][]
   /** Same grid, summed effective cost. */
   costUsd: number[][]
+  /** Same grid, turns whose cost is unknown (ADR-0253 §10). */
+  unpricedTurns: number[][]
   maxTurns: number
   /** Busiest cell by turns; ties go to the earlier weekday, then hour. */
   peak: { weekday: number; hour: number; turns: number } | null
@@ -384,12 +397,15 @@ export function buildActivityMatrix(
 ): ActivityMatrix {
   const turns = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
   const costUsd = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
+  const unpricedTurns = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
   for (const row of rows) {
     const d = new Date(row.at)
     const w = d.getDay()
     const h = d.getHours()
+    const cost = effectiveCostUsdDetailed(row, resolve)
     turns[w][h] += 1
-    costUsd[w][h] += effectiveCostUsdDetailed(row, resolve).cost
+    costUsd[w][h] += cost.cost
+    if (!cost.known) unpricedTurns[w][h] += 1
   }
   let maxTurns = 0
   let peak: ActivityMatrix["peak"] = null
@@ -401,7 +417,7 @@ export function buildActivityMatrix(
       }
     }
   }
-  return { turns, costUsd, maxTurns, peak }
+  return { turns, costUsd, unpricedTurns, maxTurns, peak }
 }
 
 /* ── Per-turn distribution ────────────────────────────────────────────── */
@@ -467,6 +483,9 @@ export interface SpendSpike {
   medianUsd: number
   /** `costUsd / medianUsd`. */
   ratio: number
+  requests: number
+  /** Requests that day without a known price: `costUsd` is then a lower bound. */
+  unpricedRequests: number
 }
 
 export interface SpikeOptions {
@@ -501,7 +520,14 @@ export function detectSpendSpikes(
   if (!(medianUsd > 0)) return []
   return active
     .filter((d) => d.cost >= medianUsd * factor && d.cost - medianUsd >= minExcessUsd)
-    .map((d) => ({ date: d.date, costUsd: d.cost, medianUsd, ratio: d.cost / medianUsd }))
+    .map((d) => ({
+      date: d.date,
+      costUsd: d.cost,
+      medianUsd,
+      ratio: d.cost / medianUsd,
+      requests: d.requests,
+      unpricedRequests: d.unpricedRequests ?? 0,
+    }))
     .sort((a, b) => b.ratio - a.ratio || a.date.localeCompare(b.date))
     .slice(0, limit)
 }

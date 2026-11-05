@@ -109,6 +109,8 @@ describe("buildStatusBar", () => {
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
           durationMs: 0,
+          turns: 1,
+          unpricedTurns: 1,
           providerCosts: { ACU: 12.5 },
         },
       }).map((s) => [s.id, s])
@@ -391,11 +393,39 @@ describe("buildStatusBar", () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       durationMs: 0,
+      turns: 2,
+      unpricedTurns: 0,
     }
     const segs = buildStatusBar({ config: base, usage, totals })
     const byId = Object.fromEntries(segs.map((s) => [s.id, s]))
     expect(byId.tokens.text).toBe("6.0k tok")
     expect(byId.cost.text).toBe("$2.00")
+  })
+
+  it("never shows an unpriced session as free: '—' when no turn was priced, '≥' when some were not", () => {
+    const cost = (costUsd: number, turns: number, unpricedTurns: number) =>
+      buildStatusBar({
+        config: base,
+        usage,
+        totals: {
+          costUsd,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          durationMs: 0,
+          turns,
+          unpricedTurns,
+        },
+      }).find((s) => s.id === "cost")?.text
+    expect(cost(0, 2, 2)).toBe("—")
+    expect(cost(2, 3, 1)).toBe("≥ $2.00")
+    expect(cost(0, 2, 0)).toBe("$0.00")
+  })
+
+  it("without totals, a latest turn that reported no cost reads as unknown", () => {
+    const segs = buildStatusBar({ config: base, usage: { inputTokens: 10, totalCostUsd: 0 } })
+    expect(segs.find((s) => s.id === "cost")?.text).toBe("—")
   })
 })
 
@@ -521,6 +551,8 @@ it("shows latest-turn output rate alongside cumulative tokens for external agent
       cacheCreationTokens: 0,
       costUsd: 0,
       durationMs: 12000,
+      turns: 1,
+      unpricedTurns: 1,
     },
   })
   expect(segments.find((s) => s.id === "tokens")?.text).toBe("20k tok · 40.0 tok/s avg")

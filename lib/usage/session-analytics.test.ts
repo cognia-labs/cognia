@@ -15,6 +15,7 @@ import {
   estimateCostFromTotals,
   fillDailyRange,
   filterByRange,
+  formatBucketCost,
   filterPreviousRange,
   HIGH_CONTEXT_THRESHOLD,
   NO_PROJECT_KEY,
@@ -328,6 +329,29 @@ describe("aggregateByDay", () => {
   })
 })
 
+describe("unpriced spend (ADR-0253 §10)", () => {
+  it("counts a day's requests no price is known for", () => {
+    const at = new Date(2026, 4, 30, 12).getTime()
+    const [day] = aggregateByDay(
+      [
+        row({ at, costUsd: 2, costKnown: true, costSource: "sdk" }),
+        row({ at, costUsd: 0, costKnown: false, costSource: "unknown" }),
+      ],
+      priceFor
+    )
+    expect(day).toMatchObject({ requests: 2, cost: 2, unpricedRequests: 1 })
+  })
+
+  it("renders an all-unpriced bucket as unknown and a partial one as a lower bound", () => {
+    expect(formatBucketCost(0, 3, 3)).toBe("—")
+    expect(formatBucketCost(1.5, 1, 3)).toBe("≥ $1.50")
+    expect(formatBucketCost(0, 1, 3)).toBe("≥ $0.00")
+    expect(formatBucketCost(0, 0, 3)).toBe("Free")
+    expect(formatBucketCost(1, 1, 2, "CNY")).toBe("≥ ¥7.25")
+    expect(formatBucketCost(0, 1, 2, "CNY")).toBe("≥ ¥0.00")
+  })
+})
+
 describe("fillDailyRange", () => {
   const LOCAL_NOW = new Date(2026, 4, 31, 15, 0, 0).getTime()
 
@@ -360,7 +384,13 @@ describe("fillDailyRange", () => {
     )
     const out = fillDailyRange(daily, 7, LOCAL_NOW)
     const hit = out.find((d) => d.date === "2026-05-30")
-    expect(hit).toEqual({ date: "2026-05-30", cost: 4, tokens: 7, requests: 1 })
+    expect(hit).toEqual({
+      date: "2026-05-30",
+      cost: 4,
+      tokens: 7,
+      requests: 1,
+      unpricedRequests: 0,
+    })
   })
 
   it("drops days that fall outside the window", () => {

@@ -29,6 +29,7 @@ describe("collectUsageCardStats", () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       costUsd: 0,
+      unpricedTurns: 0,
       durationMs: 0,
       turns: 0,
       sessions: 0,
@@ -66,6 +67,18 @@ describe("collectUsageCardStats", () => {
       row({ messageId: "c", model: "haiku", inputTokens: 10, outputTokens: 10 }),
     ]
     expect(collectUsageCardStats(rows).topModel).toBe("opus")
+  })
+})
+
+describe("unpriced spend on the card (ADR-0253 §10)", () => {
+  it("counts unpriced turns and never shows them as free", () => {
+    const stats = collectUsageCardStats([
+      row({ messageId: "a", costUsd: 0, costSource: "unknown", costKnown: false }),
+    ])
+    expect(stats.unpricedTurns).toBe(1)
+    const frag = renderUsageCardFragment({ stats, theme: "light", generatedAt: new Date(T0) })
+    expect(frag).toContain("—")
+    expect(frag).not.toContain("Free")
   })
 })
 

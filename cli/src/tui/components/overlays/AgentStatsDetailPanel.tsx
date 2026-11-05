@@ -16,10 +16,11 @@ import {
   usePanelScroll,
 } from "../../hooks/usePanelScroll"
 import { progressBar } from "../../format/status-bar"
-import { formatCost, formatElapsed, formatTokens } from "../../format/usage"
+import { formatCostBucket, formatElapsed, formatTokens } from "../../format/usage"
 import { useTheme } from "../../theme/context"
 import type { ThemePalette } from "../../theme/palette"
 import type { Assessment, AssessmentLevel, SessionReport } from "@/lib/analysis/session-report"
+import { UNKNOWN_COST } from "@/lib/usage/session-analytics"
 import { contentRows } from "../../layout/terminal-layout"
 import { panelColumns } from "../overlay-layout"
 import { truncateToWidth } from "../../markdown/width"
@@ -45,8 +46,18 @@ function num(params: Assessment["params"], key: string): number | string | undef
   return params?.[key]
 }
 
+/**
+ * The cost-per-commit figure, honest about unpriced turns: the analyzer divides
+ * the priced sum, so with every turn unpriced there is no figure ("—") and with
+ * some unpriced it is a lower bound ("≥ $X") — never a "$0" that reads as free.
+ */
+function costPerCommitFigure(cost: number | string | undefined, report: SessionReport): string {
+  if (report.turns > 0 && report.unpricedTurns >= report.turns) return UNKNOWN_COST
+  return `${report.unpricedTurns > 0 ? "≥ " : ""}$${cost ?? 0}`
+}
+
 /** A one-line detail phrase for an assessment, from its known params. */
-function assessmentDetail(a: Assessment): string {
+function assessmentDetail(a: Assessment, report: SessionReport): string {
   const p = a.params
   switch (a.id) {
     case "cacheEfficiency":
@@ -59,7 +70,7 @@ function assessmentDetail(a: Assessment): string {
       return `${num(p, "duplicates") ?? 0} duplicate calls`
     case "costPerCommit":
       return num(p, "commits")
-        ? `$${num(p, "cost") ?? 0}/commit · ${num(p, "commits")} commits`
+        ? `${costPerCommitFigure(num(p, "cost"), report)}/commit · ${num(p, "commits")} commits`
         : "no commits"
     case "overhead":
       return `${num(p, "turns") ?? 0} turns before first tool`
@@ -115,7 +126,9 @@ export function AgentStatsDetailPanel({
         <Text>
           <Text bold>{report.turns}</Text>
           <Text color={theme.muted}> turns · </Text>
-          <Text color={theme.success}>{formatCost(report.totalCostUsd)}</Text>
+          <Text color={theme.success}>
+            {formatCostBucket(report.totalCostUsd, report.unpricedTurns, report.turns)}
+          </Text>
           <Text color={theme.muted}> · </Text>
           {formatElapsed(report.durationSeconds * 1000)}
           {report.commitCount > 0 ? (
@@ -143,7 +156,9 @@ export function AgentStatsDetailPanel({
                   {" · "}
                   {formatTokens(m.inputTokens)} in · {formatTokens(m.outputTokens)} out ·{" "}
                 </Text>
-                <Text color={theme.success}>{formatCost(m.costUsd)}</Text>
+                <Text color={theme.success}>
+                  {formatCostBucket(m.costUsd, m.unpricedTurns, m.turns)}
+                </Text>
               </Text>
             ))}
           </Box>
@@ -182,7 +197,7 @@ export function AgentStatsDetailPanel({
               <Text key={a.id}>
                 {"  "}
                 <Text color={theme[style.color]}>{style.glyph}</Text> {ASSESSMENT_LABEL[a.id]}
-                <Text color={theme.muted}> — {assessmentDetail(a)}</Text>
+                <Text color={theme.muted}> — {assessmentDetail(a, report)}</Text>
               </Text>
             )
           })}

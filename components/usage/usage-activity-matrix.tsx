@@ -17,7 +17,7 @@ import { useLocale, useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
 import type { ActivityMatrix } from "@/lib/usage/usage-insights"
-import { formatCostInCurrency } from "@/types/system/usage"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
 
 /** `Date#getDay()` indices in Monday-first display order. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const
@@ -88,7 +88,11 @@ export function UsageActivityMatrix({
                   weekday: names[weekday],
                   hour,
                   turns,
-                  cost: formatCostInCurrency(matrix.costUsd[weekday][hour], "USD"),
+                  cost: formatBucketCost(
+                    matrix.costUsd[weekday][hour],
+                    matrix.unpricedTurns[weekday][hour],
+                    turns
+                  ),
                 })
                 return (
                   <span

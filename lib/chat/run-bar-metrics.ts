@@ -48,6 +48,11 @@ export interface RunBarUsageTotals {
   outputTokens: number
   /** Summed SDK-reported cost (USD). 0 when the channel reported none. */
   costUsd: number
+  /**
+   * Turns that reported no cost (ADR-0253 §10): with some priced, `costUsd` is a
+   * lower bound and the chip says so; it is never shown as free.
+   */
+  unpricedTurns: number
   /** Summed active generation time (ms). 0 when no turn reported a duration. */
   durationMs: number
   /**
@@ -62,6 +67,7 @@ export const EMPTY_RUN_BAR_USAGE: RunBarUsageTotals = {
   turns: 0,
   outputTokens: 0,
   costUsd: 0,
+  unpricedTurns: 0,
   durationMs: 0,
   contextFraction: 0,
 }
@@ -75,6 +81,7 @@ export function aggregateRunBarUsage(messages: readonly UIMessage[]): RunBarUsag
   let turns = 0
   let outputTokens = 0
   let costUsd = 0
+  let unpricedTurns = 0
   let durationMs = 0
   for (const msg of messages) {
     if (msg.role !== "assistant") continue
@@ -84,9 +91,10 @@ export function aggregateRunBarUsage(messages: readonly UIMessage[]): RunBarUsag
     turns += 1
     outputTokens += usage.outputTokens ?? 0
     costUsd += usage.totalCostUsd ?? 0
+    if (!((usage.totalCostUsd ?? 0) > 0)) unpricedTurns += 1
     durationMs += usage.durationMs ?? 0
   }
   const latest = getLatestUsage(messages as UIMessage[])
   const contextFraction = latest ? computeContextWindowUsage(latest, undefined).fraction : 0
-  return { turns, outputTokens, costUsd, durationMs, contextFraction }
+  return { turns, outputTokens, costUsd, unpricedTurns, durationMs, contextFraction }
 }

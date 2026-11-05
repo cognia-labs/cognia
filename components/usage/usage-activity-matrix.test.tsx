@@ -47,6 +47,18 @@ describe("UsageActivityMatrix", () => {
     )
   })
 
+  it("labels a slot without a known price as unknown, never free (ADR-0253 §10)", () => {
+    const monday9 = new Date(2026, 4, 18, 9, 15).getTime()
+    const matrix = buildActivityMatrix([
+      { ...row(monday9), costUsd: 0, costSource: "unknown", costKnown: false },
+    ])
+    render(<UsageActivityMatrix matrix={matrix} />)
+    expect(screen.getByTestId("usage-activity-matrix-cell-1-9")).toHaveAttribute(
+      "aria-label",
+      "Mon 9:00 · 1 turns · —"
+    )
+  })
+
   it("shows an empty hint without activity", () => {
     render(<UsageActivityMatrix matrix={buildActivityMatrix([])} />)
     expect(screen.getByTestId("usage-activity-matrix-empty")).toBeInTheDocument()

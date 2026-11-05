@@ -170,7 +170,7 @@ describe("<TodayStatsCard />", () => {
           sessionCount: async () => 1,
           pendingDrafts: async () => 0,
           lastBackupMs: async () => null,
-          usageTotals: async () => ({ tokens: 12_345, costUsd: 1.23 }),
+          usageTotals: async () => ({ tokens: 12_345, costUsd: 1.23, turns: 4, unpricedTurns: 0 }),
         }}
       />
     )
@@ -186,13 +186,29 @@ describe("<TodayStatsCard />", () => {
           sessionCount: async () => 1,
           pendingDrafts: async () => 0,
           lastBackupMs: async () => null,
-          usageTotals: async () => ({ tokens: 0, costUsd: 0 }),
+          usageTotals: async () => ({ tokens: 0, costUsd: 0, turns: 0, unpricedTurns: 0 }),
         }}
       />
     )
     await waitFor(() => {
       expect(screen.queryByTestId("stat-tile-usage-tokens")).not.toBeInTheDocument()
     })
+  })
+
+  it("never shows unpriced usage as free (ADR-0253 §10)", async () => {
+    render(
+      <TodayStatsCard
+        loaders={{
+          sessionCount: async () => 1,
+          pendingDrafts: async () => 0,
+          lastBackupMs: async () => null,
+          usageTotals: async () => ({ tokens: 500, costUsd: 0, turns: 2, unpricedTurns: 2 }),
+        }}
+      />
+    )
+    const tile = await screen.findByTestId("stat-tile-usage-cost")
+    expect(tile).toHaveTextContent("—")
+    expect(tile).not.toHaveTextContent("Free")
   })
 
   it('shows "Never" when no backup is recorded', async () => {

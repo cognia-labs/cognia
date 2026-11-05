@@ -62,7 +62,8 @@ import {
   type WelcomeStatsView,
 } from "@/lib/chat/welcome-stats-prefs"
 import type { ActivityStats } from "@/lib/usage/activity-stats"
-import { formatCostInCurrency, formatTokens } from "@/types/system/usage"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
+import { formatTokens } from "@/types/system/usage"
 import { cn } from "@/lib/utils"
 
 /** Icon per tile — the only per-tile presentation that isn't derived. */
@@ -102,7 +103,9 @@ function tileValue(
     case "tokens":
       return formatTokens(stats.totalTokens)
     case "cost":
-      return formatCostInCurrency(stats.costUsd, "USD")
+      // Unpriced turns make the figure a lower bound, or no figure at all —
+      // never "Free" (ADR-0253 §10).
+      return formatBucketCost(stats.costUsd, stats.unpricedTurns, stats.turns)
     case "activeDays":
       return fmt.number(stats.activeDays)
     case "currentStreak":
@@ -163,6 +166,7 @@ function ModelBreakdown({
     model: string
     turns: number
     costUsd: number
+    unpricedTurns: number
     inputTokens: number
     outputTokens: number
     cacheReadTokens: number
@@ -200,7 +204,7 @@ function ModelBreakdown({
             </span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
               {turnsLabel(m.turns)} · {formatTokens(m.tokens)} ·{" "}
-              {formatCostInCurrency(m.costUsd, "USD")}
+              {formatBucketCost(m.costUsd, m.unpricedTurns, m.turns)}
             </span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">

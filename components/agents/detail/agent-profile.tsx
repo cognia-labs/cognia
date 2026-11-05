@@ -45,6 +45,7 @@ import {
   agentTaskStatusToIssueStatus,
 } from "@/lib/issues/sources/agent-status-map"
 import { formatTokens, formatUsd } from "@/lib/observability/format-utils"
+import { UNKNOWN_COST } from "@/lib/usage/session-analytics"
 import { AgentRuntimeLabel, AgentStatusDot } from "../agent-visuals"
 import { AgentCapabilitiesSection } from "./agent-capabilities-section"
 import { AgentFactRow, AgentSection, AgentSectionEmpty } from "./agent-section"
@@ -263,7 +264,16 @@ export function AgentProfile({
                 label={t("stats.tokens")}
                 value={formatTokens((stats?.inputTokens ?? 0) + (stats?.outputTokens ?? 0))}
               />
-              <Stat label={t("stats.cost")} value={formatUsd(stats?.costUsd ?? 0)} />
+              {/* Turns without a known price leave a lower bound, or no figure
+                  at all; never "$0.00" for unpriced spend (ADR-0253 §10). */}
+              <Stat
+                label={t("stats.cost")}
+                value={
+                  stats && stats.turns > 0 && stats.unpricedTurns >= stats.turns
+                    ? UNKNOWN_COST
+                    : `${stats && stats.unpricedTurns > 0 ? "≥ " : ""}${formatUsd(stats?.costUsd ?? 0)}`
+                }
+              />
             </dl>
           </AgentSection>
 

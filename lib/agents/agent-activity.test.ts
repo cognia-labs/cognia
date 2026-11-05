@@ -173,11 +173,27 @@ describe("deriveAgentActivity", () => {
       inputTokens: 200,
       outputTokens: 100,
       costUsd: 0.75,
+      unpricedTurns: 0,
       completedTasks: 1,
       completedIssues: 1,
     })
     expect(activity.status).toBe("running")
     expect(activity.lastActiveAt).toBe(NOW - DAY)
+  })
+
+  it("counts the agent's turns without a known price (ADR-0253 §10)", () => {
+    const activity = deriveAgentActivity({
+      sessions: [],
+      tasks: [],
+      issues: [],
+      usage: [
+        usage(NOW - DAY, 0.25),
+        { ...usage(NOW - 2 * DAY, 0), costSource: "unknown", costKnown: false },
+      ],
+      runStatus: new Map(),
+      now: NOW,
+    })
+    expect(activity.stats).toMatchObject({ turns: 2, costUsd: 0.25, unpricedTurns: 1 })
   })
 
   it("has no last-active time for an agent that never ran", () => {

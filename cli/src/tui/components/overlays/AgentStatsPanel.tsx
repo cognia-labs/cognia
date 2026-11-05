@@ -19,7 +19,7 @@ import { panelColumns } from "../overlay-layout"
 import { OverlayFooter } from "../OverlayFooter"
 import { sparkline, stackedBar } from "../../format/charts"
 import { progressBar } from "../../format/status-bar"
-import { formatCost, formatTokens } from "../../format/usage"
+import { formatCostBucket, formatTokens } from "../../format/usage"
 import {
   convRowMetrics,
   convRowTitle,
@@ -125,7 +125,9 @@ export function AgentStatsPanel({
         <Text color={theme.muted}> msgs · </Text>
         <Text bold>{formatTokens(overview.tokens)}</Text>
         <Text color={theme.muted}> tok · </Text>
-        <Text color={theme.success}>{formatCost(overview.costUsd)}</Text>
+        <Text color={theme.success}>
+          {formatCostBucket(overview.costUsd, overview.unpricedTurns, overview.turns)}
+        </Text>
       </Text>
 
       {/* By source */}

@@ -327,7 +327,13 @@ export function GatewayLogViewer({
         />
         <SummaryTile
           label={t("summaryCost")}
-          value={totalCost === undefined ? t("costUnknown") : formatUsd(totalCost)}
+          // Rows the log could not price leave the total a lower bound
+          // (ADR-0253 §10).
+          value={
+            totalCost === undefined
+              ? t("costUnknown")
+              : `${pricedCosts.length < costs.size ? "≥ " : ""}${formatUsd(totalCost)}`
+          }
           testId="gateway-usage-cost"
         />
       </div>
@@ -802,13 +808,20 @@ function SessionUsageView({
             </div>
             <div>
               <dt className="text-muted-foreground">{t("summaryCost")}</dt>
-              <dd>
-                {format.number(result.totals.costUsd, {
-                  style: "currency",
-                  currency: "USD",
-                  minimumFractionDigits: 4,
-                  maximumFractionDigits: 4,
-                })}
+              <dd data-testid="gateway-session-usage-cost">
+                {/* A session none of whose turns has a known price has no
+                    figure; a partly priced one is a lower bound (ADR-0253 §10). */}
+                {result.totals.turns > 0 && result.totals.unpricedTurns >= result.totals.turns
+                  ? t("costUnknown")
+                  : `${result.totals.unpricedTurns > 0 ? "≥ " : ""}${format.number(
+                      result.totals.costUsd,
+                      {
+                        style: "currency",
+                        currency: "USD",
+                        minimumFractionDigits: 4,
+                        maximumFractionDigits: 4,
+                      }
+                    )}`}
               </dd>
             </div>
           </dl>

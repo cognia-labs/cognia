@@ -5,8 +5,13 @@
 // and rasterized to PNG (html2canvas-pro) for quick image sharing.
 
 import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { effectiveCostUsd, localDay, topModelByTokens } from "@/lib/usage/session-analytics"
-import { formatCost, formatDuration, formatTokens } from "@/types/system/usage"
+import {
+  effectiveCostUsdDetailed,
+  formatBucketCost,
+  localDay,
+  topModelByTokens,
+} from "@/lib/usage/session-analytics"
+import { formatDuration, formatTokens } from "@/types/system/usage"
 import { THEMES, type ThemeId, type ThemeTokens } from "@/lib/export/html/syntax-themes"
 import { getStylePreset } from "@/lib/export/html/style-presets"
 import { buildCardWallpaperCss } from "@/lib/export/html/theme-wallpaper"
@@ -17,6 +22,11 @@ export interface UsageCardStats {
   outputTokens: number
   cacheReadTokens: number
   costUsd: number
+  /**
+   * Turns no price is known for (ADR-0253 §10): `costUsd` is then a lower
+   * bound, and with every turn unpriced the card shows no figure.
+   */
+  unpricedTurns?: number
   durationMs: number
   /** Billable turns (rows). */
   turns: number
@@ -41,6 +51,7 @@ export function collectUsageCardStats(rows: readonly SessionUsageRow[]): UsageCa
   let outputTokens = 0
   let cacheReadTokens = 0
   let costUsd = 0
+  let unpricedTurns = 0
   let durationMs = 0
   let from: number | null = null
   let to: number | null = null
@@ -51,7 +62,9 @@ export function collectUsageCardStats(rows: readonly SessionUsageRow[]): UsageCa
     inputTokens += r.inputTokens
     outputTokens += r.outputTokens
     cacheReadTokens += r.cacheReadTokens
-    costUsd += effectiveCostUsd(r)
+    const cost = effectiveCostUsdDetailed(r)
+    costUsd += cost.cost
+    if (!cost.known) unpricedTurns += 1
     durationMs += r.durationMs
     sessions.add(r.sessionId)
     days.add(localDay(r.at))
@@ -67,6 +80,7 @@ export function collectUsageCardStats(rows: readonly SessionUsageRow[]): UsageCa
     outputTokens,
     cacheReadTokens,
     costUsd,
+    unpricedTurns,
     durationMs,
     turns: rows.length,
     sessions: sessions.size,
@@ -145,7 +159,7 @@ export function renderUsageCardFragment(options: UsageCardOptions): string {
 
   const tiles: { label: string; value: string }[] = [
     { label: labels.tokens, value: formatTokens(s.totalTokens) },
-    { label: labels.cost, value: formatCost(s.costUsd) },
+    { label: labels.cost, value: formatBucketCost(s.costUsd, s.unpricedTurns ?? 0, s.turns) },
     { label: labels.time, value: formatDuration(s.durationMs) },
     { label: labels.sessions, value: String(s.sessions) },
     { label: labels.signals, value: String(s.turns) },

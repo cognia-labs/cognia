@@ -13,9 +13,11 @@ import {
   emptySessionTotals,
   formatCost,
   formatElapsed,
+  formatCostBucket,
   formatFooter,
   formatTokens,
   hasCacheTelemetry,
+  knownTurnCostUsd,
   modelUsageRows,
   sessionCacheSummary,
   shortenCwd,
@@ -273,6 +275,8 @@ describe("usagePanelRows", () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       durationMs: 3000,
+      turns: 2,
+      unpricedTurns: 0,
     }
     const rows = usagePanelRows({ inputTokens: 10 }, "claude-x", totals)
     const labels = rows.map((r) => r.label)
@@ -291,6 +295,8 @@ describe("usagePanelRows", () => {
       cacheReadTokens: 300,
       cacheCreationTokens: 100,
       durationMs: 3000,
+      turns: 1,
+      unpricedTurns: 0,
     })
     expect(rows.find((r) => r.label === "Session prompt")?.value).toBe("500")
     expect(rows.find((r) => r.label === "Session cache hit")?.value).toBe("60%")
@@ -367,6 +373,8 @@ describe("cache summaries", () => {
         cacheReadTokens: 600,
         cacheCreationTokens: 200,
         durationMs: 0,
+        turns: 1,
+        unpricedTurns: 0,
       })
     ).toMatchObject({ promptTokens: 1000, reusedTokens: 600, hitRate: 0.6 })
   })
@@ -411,6 +419,8 @@ describe("session totals", () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       durationMs: 0,
+      turns: 0,
+      unpricedTurns: 0,
     })
   })
 
@@ -432,7 +442,37 @@ describe("session totals", () => {
       cacheReadTokens: 10,
       cacheCreationTokens: 5,
       durationMs: 1000,
+      turns: 2,
+      unpricedTurns: 0,
     })
+  })
+
+  it("counts a turn nothing priced as unpriced, adding 0 to the cost", () => {
+    // No SDK figure, no base rate: the 0 is unknown, not free.
+    let totals = accumulateUsage(emptySessionTotals(), { inputTokens: 100, totalCostUsd: 0 })
+    expect(totals).toMatchObject({ costUsd: 0, turns: 1, unpricedTurns: 1 })
+    // A priced turn after it leaves the earlier one unpriced.
+    totals = accumulateUsage(totals, { inputTokens: 1_000_000 }, { promptPer1M: 3 })
+    expect(totals).toMatchObject({ costUsd: 3, turns: 2, unpricedTurns: 1 })
+  })
+
+  it("treats a known zero rate (free model) as priced, and a positive SDK cost as priced", () => {
+    const free = accumulateUsage(
+      emptySessionTotals(),
+      { inputTokens: 100 },
+      { promptPer1M: 0, completionPer1M: 0 }
+    )
+    expect(free).toMatchObject({ costUsd: 0, turns: 1, unpricedTurns: 0 })
+    const sdk = accumulateUsage(emptySessionTotals(), { inputTokens: 100, totalCostUsd: 0.4 })
+    expect(sdk).toMatchObject({ costUsd: 0.4, turns: 1, unpricedTurns: 0 })
+  })
+
+  it("counts a provider-unit-only turn as unpriced in USD", () => {
+    const totals = accumulateUsage(emptySessionTotals(), {
+      outputTokens: 5,
+      providerCost: { amount: 1, currency: "ACU" },
+    })
+    expect(totals).toMatchObject({ costUsd: 0, turns: 1, unpricedTurns: 1 })
   })
 
   it("estimates cost from pricing when the SDK reports none", () => {
@@ -534,10 +574,84 @@ describe("formatFooter with totals", () => {
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
         durationMs: 0,
+        turns: 3,
+        unpricedTurns: 0,
       },
     })
     expect(f.tokens).toBe("5.0k")
     expect(f.cost).toBe("$1.50")
+  })
+
+  const footerWith = (totals: Partial<SessionTotals>) =>
+    formatFooter({
+      provider: "p",
+      mode: "default",
+      cwd: "/w",
+      totals: { ...emptySessionTotals(), ...totals },
+    }).cost
+
+  it("renders '—' when every turn was unpriced, never '$0.00'", () => {
+    expect(footerWith({ costUsd: 0, turns: 2, unpricedTurns: 2 })).toBe("—")
+  })
+
+  it("renders a lower bound when only some turns were priced", () => {
+    expect(footerWith({ costUsd: 1.5, turns: 3, unpricedTurns: 1 })).toBe("≥ $1.50")
+  })
+
+  it("keeps '$0.00' for an empty session and for turns priced at zero", () => {
+    expect(footerWith({})).toBe("$0.00")
+    expect(footerWith({ costUsd: 0, turns: 2, unpricedTurns: 0 })).toBe("$0.00")
+  })
+
+  it("without totals, a latest turn with no reported cost is unknown", () => {
+    const cost = (usage?: UsageInfo) =>
+      formatFooter({ provider: "p", mode: "default", cwd: "/w", usage }).cost
+    expect(cost({ inputTokens: 10, totalCostUsd: 0 })).toBe("—")
+    expect(cost({ inputTokens: 10, totalCostUsd: 0.02 })).toBe("$0.020")
+    expect(cost(undefined)).toBe("$0.00")
+  })
+})
+
+describe("formatCostBucket", () => {
+  it.each([
+    [0, 0, 0, "$0.00"],
+    [0.25, 0, 2, "$0.250"],
+    [0, 0, 2, "$0.00"],
+    [0.25, 1, 2, "≥ $0.250"],
+    [0, 1, 2, "≥ $0.00"],
+    [0, 2, 2, "—"],
+    [0, 3, 2, "—"],
+  ])("(%f, %i unpriced of %i) → %s", (usd, unpriced, turns, expected) => {
+    expect(formatCostBucket(usd, unpriced, turns)).toBe(expected)
+  })
+})
+
+describe("knownTurnCostUsd", () => {
+  it("returns null when nothing priced the turn", () => {
+    expect(knownTurnCostUsd({ inputTokens: 10, totalCostUsd: 0 })).toBeNull()
+  })
+
+  it("returns the SDK figure or the priced estimate, including a known zero", () => {
+    expect(knownTurnCostUsd({ inputTokens: 10, totalCostUsd: 0.2 })).toBe(0.2)
+    expect(knownTurnCostUsd({ inputTokens: 1_000_000 }, { promptPer1M: 3 })).toBeCloseTo(3, 6)
+    expect(knownTurnCostUsd({ inputTokens: 10 }, { promptPer1M: 0 })).toBe(0)
+  })
+})
+
+describe("Session cost row", () => {
+  const sessionCost = (totals: Partial<SessionTotals>) =>
+    usagePanelRows({ inputTokens: 10 }, "m", { ...emptySessionTotals(), ...totals }).find(
+      (r) => r.label === "Session cost"
+    )?.value
+
+  it("follows the bucket rule once turns have been counted", () => {
+    expect(sessionCost({ costUsd: 0, turns: 2, unpricedTurns: 2 })).toBe("—")
+    expect(sessionCost({ costUsd: 0.25, turns: 2, unpricedTurns: 1 })).toBe("≥ $0.250")
+    expect(sessionCost({ costUsd: 0.25, turns: 2, unpricedTurns: 0 })).toBe("$0.250")
+  })
+
+  it("falls back to provider units when every turn was unpriced in USD", () => {
+    expect(sessionCost({ turns: 1, unpricedTurns: 1, providerCosts: { ACU: 2 } })).toBe("2 ACU")
   })
 })
 
@@ -627,6 +741,25 @@ describe("modelUsageRows", () => {
       b: totals({ inputTokens: 500, costUsd: 0 }),
     })
     expect(rows.map((r) => r.model)).toEqual(["b", "a"])
+  })
+
+  it("renders '—' for an all-unpriced model and '≥ $X' for a partly priced one", () => {
+    const rows = modelUsageRows({
+      mystery: totals({ inputTokens: 100, costUsd: 0, turns: 2, unpricedTurns: 2 }),
+      mixed: totals({ inputTokens: 100, costUsd: 0.25, turns: 2, unpricedTurns: 1 }),
+      free: totals({ inputTokens: 100, costUsd: 0, turns: 1, unpricedTurns: 0 }),
+    })
+    const cost = (model: string) => rows.find((r) => r.model === model)?.cost
+    expect(cost("mystery")).toBe("—")
+    expect(cost("mixed")).toBe("≥ $0.250")
+    expect(cost("free")).toBe("$0.00")
+  })
+
+  it("prefers provider units over '—' for a model priced only in its own unit", () => {
+    const rows = modelUsageRows({
+      devin: totals({ inputTokens: 100, turns: 1, unpricedTurns: 1, providerCosts: { ACU: 3 } }),
+    })
+    expect(rows[0].cost).toBe("3 ACU")
   })
 })
 

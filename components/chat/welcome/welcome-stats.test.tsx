@@ -42,6 +42,7 @@ const STATS: ActivityStats = {
   sessions: 7,
   totalTokens: 1_500_000,
   costUsd: 12.5,
+  unpricedTurns: 0,
   durationMs: 60_000,
   activeDays: 5,
   currentStreak: 3,
@@ -64,6 +65,7 @@ function mockHook(over: Partial<ReturnType<typeof useActivityStats>> = {}) {
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
         costUsd: 10,
+        unpricedTurns: 0,
         durationMs: 0,
         reasoningTokens: 0,
       },
@@ -75,6 +77,7 @@ function mockHook(over: Partial<ReturnType<typeof useActivityStats>> = {}) {
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
         costUsd: 2.5,
+        unpricedTurns: 0,
         durationMs: 0,
         reasoningTokens: 0,
       },
@@ -115,6 +118,17 @@ describe("<WelcomeStats />", () => {
     expect(screen.getByTestId("welcome-stat-topModel")).toHaveTextContent("claude-opus-5")
     // Peak hour is locale-formatted rather than a hard-coded clock string.
     expect(screen.getByTestId("welcome-stat-peakHour")).toHaveTextContent("7")
+  })
+
+  it("never shows unpriced spend as free (ADR-0253 §10)", () => {
+    mockHook({ stats: { ...STATS, costUsd: 0, unpricedTurns: 42 } })
+    const { unmount } = render(<WelcomeStats />)
+    expect(screen.getByTestId("welcome-stat-cost")).toHaveTextContent("—")
+    expect(screen.getByTestId("welcome-stat-cost")).not.toHaveTextContent("Free")
+    unmount()
+    mockHook({ stats: { ...STATS, unpricedTurns: 2 } })
+    render(<WelcomeStats />)
+    expect(screen.getByTestId("welcome-stat-cost")).toHaveTextContent("≥ $12.50")
   })
 
   it("draws tiles as borderless tonal fills with tabular figures", () => {
@@ -245,6 +259,30 @@ describe("<WelcomeStats />", () => {
       expect(screen.getByTestId("welcome-stats-models")).toBeInTheDocument()
       expect(screen.getByTestId("welcome-stats-model-claude-opus-5")).toHaveTextContent("$10.00")
       expect(screen.queryByTestId("welcome-stats-grid")).not.toBeInTheDocument()
+    })
+
+    it("shows a model none of whose turns has a price as unknown, never free", () => {
+      storeState.settings = { welcomeStats: { view: "models" } }
+      mockHook({
+        models: [
+          {
+            model: "org-model",
+            turns: 3,
+            inputTokens: 1000,
+            outputTokens: 100,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            costUsd: 0,
+            unpricedTurns: 3,
+            durationMs: 0,
+            reasoningTokens: 0,
+          },
+        ],
+      })
+      render(<WelcomeStats />)
+      const row = screen.getByTestId("welcome-stats-model-org-model")
+      expect(row).toHaveTextContent("—")
+      expect(row).not.toHaveTextContent("Free")
     })
 
     it("names each model, keeps its id on hover, and names a turn without one", () => {

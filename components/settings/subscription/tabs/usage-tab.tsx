@@ -124,6 +124,7 @@ import {
   formatTokens,
   formatTokensPerSec,
   tokensPerSecond,
+  type DailyUsage,
 } from "@/types/system/usage"
 import { useAnthropicUsage } from "@/lib/subscription/anthropic/hooks"
 import { useAccounts } from "@/lib/subscription/core/hooks"
@@ -157,6 +158,7 @@ import {
   filterByRange,
   filterPreviousRange,
   formatBucketCost,
+  formatDayCost,
   parseLocalDay,
   toUsageCsv,
   toUsageJson,
@@ -1551,7 +1553,11 @@ function InsightsCard({
                       day: "numeric",
                       weekday: "short",
                     }),
-                    cost: formatCost(spike.costUsd),
+                    cost: formatDayCost({
+                      cost: spike.costUsd,
+                      requests: spike.requests,
+                      unpricedRequests: spike.unpricedRequests,
+                    }),
                     ratio: spike.ratio >= 10 ? Math.round(spike.ratio) : spike.ratio.toFixed(1),
                   })}
                 </p>
@@ -1692,13 +1698,22 @@ function CostOverTimeCard({
               <YAxis
                 width={48}
                 tick={{ fontSize: 11 }}
-                tickFormatter={(v) => formatCostInCurrency(Number(v), "USD")}
+                tickFormatter={(v) =>
+                  Number(v) === 0 ? "0" : formatCostInCurrency(Number(v), "USD")
+                }
               />
               <Tooltip
                 contentStyle={TOOLTIP_STYLE.contentStyle}
                 labelStyle={TOOLTIP_STYLE.labelStyle}
                 itemStyle={TOOLTIP_STYLE.itemStyle}
-                formatter={(value) => formatCostInCurrency(Number(value), "USD")}
+                // A day without a known price reads "—", never "Free" (ADR-0253 §10).
+                formatter={(value, _name, item) =>
+                  formatDayCost({
+                    requests: 0,
+                    ...(item?.payload as DailyUsage | undefined),
+                    cost: Number(value),
+                  })
+                }
               />
               <Bar
                 dataKey="cost"

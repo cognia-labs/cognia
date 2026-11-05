@@ -15,7 +15,12 @@
  */
 
 import type { SessionUsageRow, UsageSurface } from "@/lib/db/session-usage"
-import { formatCost, type DailyUsage } from "@/types/system/usage"
+import {
+  CURRENCIES,
+  formatCostInCurrency,
+  type CurrencyCode,
+  type DailyUsage,
+} from "@/types/system/usage"
 import type { ModelPricing } from "@cognia/provider-types/provider"
 import {
   DEFAULT_CACHE_READ_MULT,
@@ -127,6 +132,17 @@ export function effectiveCostUsdDetailed(
     known: true,
     source: "priced",
   }
+}
+
+/**
+ * Whether a stored row's `costUsd` is not a known price, without pricing it
+ * again (for readers that sum stored figures). A frozen row says so itself
+ * (`costKnown`); a row written before costs were frozen is known only when it
+ * carries a positive figure, since its zero cannot be told from free. The same
+ * rule {@link effectiveCostUsdDetailed} applies to frozen rows (ADR-0253 §10).
+ */
+export function isUnpricedUsageRow(row: SessionUsageRow): boolean {
+  return row.costSource !== undefined ? row.costKnown !== true : !(row.costUsd > 0)
 }
 
 /**
@@ -243,10 +259,19 @@ export const UNKNOWN_COST = "—"
  * transcript card rendered the marker and the Usage dashboard did not, so the
  * same rows claimed a settled total in one view and a lower bound in the other.
  */
-export function formatBucketCost(costUsd: number, unpricedTurns: number, turns: number): string {
+export function formatBucketCost(
+  costUsd: number,
+  unpricedTurns: number,
+  turns: number,
+  currency: CurrencyCode = "USD"
+): string {
   if (turns > 0 && unpricedTurns >= turns) return UNKNOWN_COST
-  const base = formatCost(costUsd)
-  return unpricedTurns > 0 ? `≥ ${base}` : base
+  if (unpricedTurns === 0) return formatCostInCurrency(costUsd, currency)
+  // A lower bound of nothing priced yet reads "≥ $0.00", never "≥ Free".
+  if (costUsd > 0) return `≥ ${formatCostInCurrency(costUsd, currency)}`
+  const config = CURRENCIES[currency]
+  const zero = (0).toFixed(config.decimals)
+  return `≥ ${config.symbolPosition === "prefix" ? `${config.symbol}${zero}` : `${zero}${config.symbol}`}`
 }
 
 /** Bucket rows by model, descending by cost (ties: total tokens, then name). */
@@ -399,13 +424,22 @@ export function aggregateByDay(
   const map = new Map<string, DailyUsage>()
   for (const r of rows) {
     const date = localDay(r.at)
-    const slot = map.get(date) ?? { date, tokens: 0, cost: 0, requests: 0 }
+    const slot = map.get(date) ?? { date, tokens: 0, cost: 0, requests: 0, unpricedRequests: 0 }
+    const cost = effectiveCostUsdDetailed(r, resolve)
     slot.tokens += r.inputTokens + r.outputTokens + r.cacheReadTokens
-    slot.cost += effectiveCostUsd(r, resolve)
+    slot.cost += cost.cost
     slot.requests += 1
+    if (!cost.known) slot.unpricedRequests = (slot.unpricedRequests ?? 0) + 1
     map.set(date, slot)
   }
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+/** One day's cost from {@link aggregateByDay}, by {@link formatBucketCost}'s rules. */
+export function formatDayCost(
+  day: Pick<DailyUsage, "cost" | "requests" | "unpricedRequests">
+): string {
+  return formatBucketCost(day.cost, day.unpricedRequests ?? 0, day.requests)
 }
 
 /**

@@ -117,6 +117,25 @@ describe("StatusBarToday", () => {
     expect(chip.getAttribute("aria-label")).toContain("summary:")
   })
 
+  it("calls an unpriced day's cost unknown in the popover, never free (ADR-0253 §10)", async () => {
+    const user = userEvent.setup()
+    rowsResult = [row({ costSource: "unknown", costKnown: false })]
+    render(<StatusBarToday />)
+    await user.click(screen.getByTestId("status-today"))
+    const details = await screen.findByTestId("status-today-details")
+    expect(details).toHaveTextContent("cost—")
+    expect(details).not.toHaveTextContent("Free")
+  })
+
+  it("marks a partly priced day's cost as a lower bound", () => {
+    rowsResult = [
+      row({ messageId: "a", costUsd: 0.5, costSource: "sdk", costKnown: true }),
+      row({ messageId: "b", costSource: "unknown", costKnown: false }),
+    ]
+    render(<StatusBarToday />)
+    expect(screen.getByTestId("status-today").getAttribute("aria-label")).toContain("≥ $0.50")
+  })
+
   it("breaks the day down in its popover and links to the usage page", async () => {
     const user = userEvent.setup()
     rowsResult = [

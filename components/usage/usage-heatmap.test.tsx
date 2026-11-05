@@ -128,6 +128,28 @@ describe("<UsageHeatmap />", () => {
     expect(screen.getByTestId("usage-cost-heatmap-total").textContent).toContain("$3.00")
   })
 
+  it("never labels a day or window without a known price as free (ADR-0253 §10)", () => {
+    render(
+      <UsageHeatmap
+        daily={daily([
+          { date: dayKey(NOW), cost: 0, requests: 2, unpricedRequests: 2 },
+          { date: dayKey(NOW - DAY_MS), cost: 1, requests: 2, unpricedRequests: 1 },
+        ])}
+        rangeDays={7}
+        now={NOW}
+      />
+    )
+    const unpriced = screen.getByTestId(`usage-cost-heatmap-cell-${dayKey(NOW)}`)
+    expect(unpriced.getAttribute("aria-label")).toContain("—")
+    expect(unpriced.getAttribute("aria-label")).not.toContain("Free")
+    expect(
+      screen
+        .getByTestId(`usage-cost-heatmap-cell-${dayKey(NOW - DAY_MS)}`)
+        .getAttribute("aria-label")
+    ).toContain("≥ $1.00")
+    expect(screen.getByTestId("usage-cost-heatmap-total").textContent).toContain("≥ $1.00")
+  })
+
   it("namespaces its test ids so two surfaces can render side by side", () => {
     render(<UsageHeatmap daily={daily([])} rangeDays={7} now={NOW} testIdPrefix="welcome-heat" />)
     expect(screen.getByTestId("welcome-heat")).toBeInTheDocument()

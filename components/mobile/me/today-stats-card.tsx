@@ -12,9 +12,18 @@ import { totalsByAllSessions } from "@/lib/db/session-usage"
 import { getLatestSuccessful, listBackupHistory } from "@/lib/db/backup-history"
 import { computeBackupHealth, type BackupHealthResult } from "@/lib/data/backup-health"
 import { formatBytes, getStorageUsage } from "@/lib/storage/usage"
-import { formatCostInCurrency, formatTokens } from "@/types/system/usage"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
+import { formatTokens } from "@/types/system/usage"
 import { useSettingsStore } from "@/stores/settings"
 import { cn } from "@/lib/utils"
+
+/** All recorded usage: tokens, priced spend, and how many turns had no price. */
+export interface UsageTotals {
+  tokens: number
+  costUsd: number
+  turns: number
+  unpricedTurns: number
+}
 
 export interface TodayStatsCardProps {
   /** Override loaders — primarily for tests. */
@@ -28,7 +37,7 @@ export interface TodayStatsCardProps {
     backupHealth?: () => Promise<BackupHealthResult>
     storageBytes?: () => Promise<number | null>
     /** Cumulative token + estimated cost across all persisted sessions. */
-    usageTotals?: () => Promise<{ tokens: number; costUsd: number }>
+    usageTotals?: () => Promise<UsageTotals>
   }
   className?: string
 }
@@ -41,6 +50,8 @@ interface Stats {
   storageBytes: number | null
   usageTokens: number
   usageCost: number
+  usageTurns: number
+  usageUnpricedTurns: number
 }
 
 const initial: Stats = {
@@ -51,6 +62,8 @@ const initial: Stats = {
   storageBytes: null,
   usageTokens: 0,
   usageCost: 0,
+  usageTurns: 0,
+  usageUnpricedTurns: 0,
 }
 
 const defaultLoaders = {
@@ -68,15 +81,19 @@ const defaultLoaders = {
     })
   },
   storageBytes: async () => (await getStorageUsage()).totalBytes,
-  usageTotals: async (): Promise<{ tokens: number; costUsd: number }> => {
+  usageTotals: async (): Promise<UsageTotals> => {
     const map = await totalsByAllSessions()
     let tokens = 0
     let costUsd = 0
+    let turns = 0
+    let unpricedTurns = 0
     for (const totals of map.values()) {
       tokens += totals.inputTokens + totals.outputTokens + totals.cacheReadTokens
       costUsd += totals.costUsd
+      turns += totals.turns
+      unpricedTurns += totals.unpricedTurns
     }
-    return { tokens, costUsd }
+    return { tokens, costUsd, turns, unpricedTurns }
   },
 }
 
@@ -112,7 +129,7 @@ export function TodayStatsCard({ loaders, className }: TodayStatsCardProps) {
       pd().catch(() => 0),
       bh().catch((): BackupHealthResult => ({ status: "never", lastSuccessAt: null })),
       sb().catch(() => null),
-      ut().catch(() => ({ tokens: 0, costUsd: 0 })),
+      ut().catch((): UsageTotals => ({ tokens: 0, costUsd: 0, turns: 0, unpricedTurns: 0 })),
     ]).then(([sessions, drafts, backup, storageBytes, usage]) => {
       if (cancelled) return
       setStats({
@@ -123,6 +140,8 @@ export function TodayStatsCard({ loaders, className }: TodayStatsCardProps) {
         storageBytes,
         usageTokens: usage.tokens,
         usageCost: usage.costUsd,
+        usageTurns: usage.turns,
+        usageUnpricedTurns: usage.unpricedTurns,
       })
     })
     return () => {
@@ -195,7 +214,9 @@ export function TodayStatsCard({ loaders, className }: TodayStatsCardProps) {
           },
           {
             label: t("usageCost"),
-            value: formatCostInCurrency(stats.usageCost, "USD"),
+            // Unpriced turns make it a lower bound, or no figure at all;
+            // never "Free" (ADR-0253 §10).
+            value: formatBucketCost(stats.usageCost, stats.usageUnpricedTurns, stats.usageTurns),
             testId: "stat-tile-usage-cost",
           },
         ]

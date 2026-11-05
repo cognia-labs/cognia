@@ -113,6 +113,67 @@ describe("AgentStatsDetailPanel", () => {
   })
 })
 
+describe("unpriced cost", () => {
+  beforeEach(() => __resetInk())
+
+  const commitMessages = [
+    {
+      id: "a",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-Bash",
+          state: "output-available",
+          input: { command: "git commit -m x" },
+          output: "ok",
+        },
+      ],
+    },
+  ] as unknown as UIMessage[]
+  const usageRow = (messageId: string, at: number, priced: boolean) => ({
+    messageId,
+    sessionId: "s",
+    at,
+    model: "mystery-model",
+    inputTokens: 100,
+    outputTokens: 50,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 0,
+    ...(priced
+      ? { costUsd: 0.5, costKnown: true, costSource: "sdk" as const }
+      : { costUsd: 0, costKnown: false, costSource: "unknown" as const }),
+  })
+  const textOf = (rows: ReturnType<typeof usageRow>[]) => {
+    const report = analyzeSession({ messages: commitMessages, usageRows: rows })
+    const { container } = render(
+      <AgentStatsDetailPanel report={report} title="t" onClose={() => {}} viewportRows={60} />
+    )
+    return container.textContent ?? ""
+  }
+
+  it("renders '—' for the total, the model and the per-commit cost when nothing was priced", () => {
+    const text = textOf([usageRow("a", 1000, false)])
+    expect(text).not.toContain("$0.00")
+    expect(text).toContain("turns · —")
+    expect(text).toMatch(/out · —/)
+    expect(text).toContain("—/commit")
+  })
+
+  it("renders a lower bound when only some turns were priced", () => {
+    const text = textOf([usageRow("a", 1000, true), usageRow("b", 2000, false)])
+    expect(text).toContain("turns · ≥ $0.500")
+    expect(text).toContain("out · ≥ $0.500")
+    expect(text).toContain("≥ $0.5/commit")
+  })
+
+  it("renders plain figures when every turn was priced", () => {
+    const text = textOf([usageRow("a", 1000, true)])
+    expect(text).toContain("turns · $0.500")
+    expect(text).not.toContain("≥")
+  })
+})
+
 describe("title row", () => {
   beforeEach(() => __resetInk())
 

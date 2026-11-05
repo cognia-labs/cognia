@@ -58,6 +58,8 @@ jest.mock("@/lib/subscription/limits/hooks", () => ({
 const useAccountsMock = jest.fn()
 jest.mock("@/lib/subscription/core/hooks", () => ({
   useAccounts: (provider: string) => useAccountsMock(provider),
+  // The quota panel reads the provider definitions; none is a subscription here.
+  useSubscriptionProviders: () => [],
 }))
 
 jest.mock("@/components/settings/subscription/balance-card", () => ({

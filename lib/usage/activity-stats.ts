@@ -3,7 +3,7 @@
  * chat welcome dashboard (`components/chat/welcome/welcome-stats.tsx`) shows.
  *
  * Nothing here re-derives a figure the Subscription → Usage tab already owns:
- * cost goes through {@link effectiveCostUsd}, the top model through
+ * cost goes through {@link effectiveCostUsdDetailed}, the top model through
  * {@link topModelByTokens}, and every calendar bucket through the shared
  * {@link localDay}. That is deliberate — the welcome page and the usage tab read
  * the same table, so they must never disagree about "how many tokens" or "how
@@ -15,7 +15,7 @@
 
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import {
-  effectiveCostUsd,
+  effectiveCostUsdDetailed,
   localDay,
   parseLocalDay,
   topModelByTokens,
@@ -31,8 +31,13 @@ export interface ActivityStats {
   sessions: number
   /** Input + output + cache-read tokens, matching `aggregateByDay`'s `tokens`. */
   totalTokens: number
-  /** Summed {@link effectiveCostUsd} — SDK figure when present, else priced. */
+  /** Summed {@link effectiveCostUsdDetailed} — SDK figure when present, else priced. */
   costUsd: number
+  /**
+   * Turns no price is known for (ADR-0253 §10). They add nothing to `costUsd`,
+   * which is then a lower bound; render it with `formatBucketCost`.
+   */
+  unpricedTurns: number
   /** Summed SDK-reported generation time. 0 when no turn reported one. */
   durationMs: number
   /** Distinct LOCAL calendar days carrying at least one turn. */
@@ -56,6 +61,7 @@ export const EMPTY_ACTIVITY_STATS: ActivityStats = {
   sessions: 0,
   totalTokens: 0,
   costUsd: 0,
+  unpricedTurns: 0,
   durationMs: 0,
   activeDays: 0,
   currentStreak: 0,
@@ -144,13 +150,16 @@ export function collectActivityStats(
 
   let totalTokens = 0
   let costUsd = 0
+  let unpricedTurns = 0
   let durationMs = 0
   const sessions = new Set<string>()
   const days = new Set<string>()
 
   for (const r of rows) {
     totalTokens += r.inputTokens + r.outputTokens + r.cacheReadTokens
-    costUsd += effectiveCostUsd(r, resolve)
+    const cost = effectiveCostUsdDetailed(r, resolve)
+    costUsd += cost.cost
+    if (!cost.known) unpricedTurns += 1
     durationMs += r.durationMs
     sessions.add(r.sessionId)
     days.add(localDay(r.at))
@@ -161,6 +170,7 @@ export function collectActivityStats(
     sessions: sessions.size,
     totalTokens,
     costUsd,
+    unpricedTurns,
     durationMs,
     activeDays: days.size,
     currentStreak: currentRun(days, localDay(now)),

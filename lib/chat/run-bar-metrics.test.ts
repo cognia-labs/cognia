@@ -63,6 +63,7 @@ describe("aggregateRunBarUsage", () => {
     expect(totals.turns).toBe(2)
     expect(totals.outputTokens).toBe(500)
     expect(totals.costUsd).toBeCloseTo(0.03)
+    expect(totals.unpricedTurns).toBe(0)
     expect(totals.durationMs).toBe(10_000)
   })
 
@@ -81,8 +82,17 @@ describe("aggregateRunBarUsage", () => {
       turns: 0,
       outputTokens: 0,
       costUsd: 0,
+      unpricedTurns: 0,
       durationMs: 0,
       contextFraction: 0,
     })
+  })
+
+  it("counts the turns that reported no cost (ADR-0253 §10)", () => {
+    const totals = aggregateRunBarUsage([
+      assistant({ outputTokens: 10, totalCostUsd: 0.01 }),
+      assistant({ outputTokens: 10 }),
+    ])
+    expect(totals).toMatchObject({ turns: 2, costUsd: 0.01, unpricedTurns: 1 })
   })
 })

@@ -125,6 +125,7 @@ describe("GatewayLogViewer", () => {
       inputTokens: 25,
       outputTokens: 5,
       costUsd: 0.01,
+      unpricedTurns: 0,
       cacheReadTokens: 10,
       cacheCreationTokens: 0,
     })
@@ -135,6 +136,7 @@ describe("GatewayLogViewer", () => {
         inputTokens: 25,
         outputTokens: 5,
         costUsd: 0.01,
+        unpricedTurns: 0,
         cacheReadTokens: 10,
         cacheCreationTokens: 0,
       },
@@ -239,7 +241,29 @@ describe("GatewayLogViewer", () => {
     liveRows = [row(), row({ id: "r2" })]
     render(<GatewayLogViewer />)
 
-    expect(screen.getByTestId("gateway-usage-cost")).toHaveTextContent("$0.5000")
+    // The unpriced row leaves the total a lower bound (ADR-0253 §10).
+    expect(screen.getByTestId("gateway-usage-cost")).toHaveTextContent("≥ $0.5000")
+  })
+
+  it("says a session's cost is unknown when none of its turns had a price", async () => {
+    liveUsage = {
+      status: "ok",
+      totals: {
+        turns: 2,
+        inputTokens: 25,
+        outputTokens: 5,
+        costUsd: 0,
+        unpricedTurns: 2,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      },
+    }
+    liveRows = [row({ sessionId: "native/session" })]
+    const user = userEvent.setup()
+    render(<GatewayLogViewer />)
+    await user.click(screen.getByRole("radio", { name: "logViewSessions" }))
+    await user.click(screen.getByRole("button", { name: "sessionUsageOpen" }))
+    expect(screen.getByTestId("gateway-session-usage-cost")).toHaveTextContent("costUnknown")
   })
 
   it("says the cost is unknown when no row could be priced", () => {

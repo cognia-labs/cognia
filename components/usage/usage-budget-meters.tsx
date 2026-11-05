@@ -32,7 +32,7 @@ import {
 } from "@/lib/usage/cost-budget"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { CostBudgetLevel, CostBudgetVerdict } from "@/lib/usage/cost-budget"
-import { formatCost } from "@/types/system/usage"
+import { formatUsd } from "@/lib/observability/format-utils"
 import { cn } from "@/lib/utils"
 import type { LimitsMeterStatus } from "@/types/subscription"
 
@@ -119,7 +119,9 @@ function BudgetMeterRow({ verdict }: { verdict: CostBudgetVerdict }) {
       <div className="flex items-baseline justify-between gap-2 text-xs">
         <span className="min-w-0 truncate">{label}</span>
         <span className={cn("shrink-0 font-mono tabular-nums", LEVEL_TEXT[verdict.level])}>
-          {formatCost(verdict.usedUsd)} / {formatCost(verdict.limitUsd)}
+          {/* Money counted toward a limit: nothing counted yet is "$0.00", never
+              "Free" (ADR-0253 §10). */}
+          {formatUsd(verdict.usedUsd)} / {formatUsd(verdict.limitUsd)}
           {" · "}
           {formatBudgetRatio(verdict.ratio)}
         </span>

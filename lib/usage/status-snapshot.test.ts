@@ -2,6 +2,7 @@ import type { SessionUsageRow } from "@/lib/db/session-usage"
 import {
   buildUsageCardMarkdown,
   buildUsageStatusSnapshot,
+  formatCompactBucketUsd,
   formatCompactTokens,
   formatCompactUsd,
   formatShortStatus,
@@ -151,5 +152,37 @@ describe("buildUsageCardMarkdown", () => {
   it("omits the models line when empty", () => {
     const md = buildUsageCardMarkdown(buildUsageStatusSnapshot([], { now: NOW }), { now: NOW })
     expect(md).not.toContain("Models:")
+  })
+})
+
+describe("unpriced spend (ADR-0253 §10)", () => {
+  const unpriced = (o: Partial<SessionUsageRow> = {}) =>
+    row({ costUsd: 0, costSource: "unknown", costKnown: false, ...o })
+
+  it("counts unpriced turns in the window and per model", () => {
+    const snap = buildUsageStatusSnapshot([row({ model: "a" }), unpriced({ model: "b" })], {
+      window: "today",
+      now: NOW,
+    })
+    expect(snap).toMatchObject({ turns: 2, unpricedTurns: 1, costUsd: 0.5 })
+    expect(snap.topModels.find((m) => m.model === "b")).toMatchObject({
+      turns: 1,
+      unpricedTurns: 1,
+    })
+  })
+
+  it("never posts unpriced spend as $0", () => {
+    expect(formatCompactBucketUsd(0, 2, 2)).toBe("—")
+    expect(formatCompactBucketUsd(0.5, 1, 2)).toBe("≥$0.50")
+    expect(formatCompactBucketUsd(0.5, 0, 2)).toBe("$0.50")
+    const snap = buildUsageStatusSnapshot([unpriced({ inputTokens: 1_000_000, outputTokens: 0 })], {
+      window: "today",
+      now: NOW,
+    })
+    // The badge drops a cost it does not know; the card says it is unknown.
+    expect(formatShortStatus(snap)).toBe("AI 1M")
+    const md = buildUsageCardMarkdown(snap, { now: NOW })
+    expect(md).toContain("Cost / 成本: **—**")
+    expect(md).not.toContain("$0")
   })
 })

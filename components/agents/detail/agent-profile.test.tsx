@@ -97,6 +97,7 @@ function activity(over: Partial<AgentActivity> = {}): AgentActivity {
       inputTokens: 0,
       outputTokens: 0,
       costUsd: 0,
+      unpricedTurns: 0,
       completedTasks: 0,
       completedIssues: 0,
     },
@@ -304,6 +305,7 @@ describe("AgentProfile — side column", () => {
           inputTokens: 1000,
           outputTokens: 500,
           costUsd: 1.25,
+          unpricedTurns: 0,
           completedTasks: 2,
           completedIssues: 1,
         },
@@ -315,6 +317,27 @@ describe("AgentProfile — side column", () => {
     // completed = tasks + issues
     expect(within(stats).getByText("Completed").nextElementSibling).toHaveTextContent("3")
     expect(within(stats).getByText("Cost").nextElementSibling).toHaveTextContent("$1.25")
+  })
+
+  it.each([
+    ["no figure when no turn had a price", { costUsd: 0, unpricedTurns: 3 }, "—"],
+    ["a lower bound when some turns had none", { costUsd: 1.25, unpricedTurns: 1 }, "≥ $1.25"],
+  ])("shows %s, never $0.00 for unpriced spend (ADR-0253 §10)", (_label, cost, expected) => {
+    renderProfile({
+      activity: activity({
+        stats: {
+          conversations: 1,
+          turns: 3,
+          inputTokens: 10,
+          outputTokens: 5,
+          completedTasks: 0,
+          completedIssues: 0,
+          ...cost,
+        },
+      }),
+    })
+    const stats = screen.getByTestId("agent-stats")
+    expect(within(stats).getByText("Cost").nextElementSibling).toHaveTextContent(expected)
   })
 
   it("passes Edit through to the capabilities only when given", () => {

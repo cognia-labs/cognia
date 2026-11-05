@@ -181,5 +181,17 @@ describe("collectActivityStats", () => {
       { now: NOW, resolve: () => ({ promptPer1M: 3, completionPer1M: 15 }) }
     )
     expect(stats.costUsd).toBeCloseTo(3)
+    expect(stats.unpricedTurns).toBe(0)
+  })
+
+  it("counts the turns no price is known for (ADR-0253 §10)", () => {
+    const stats = collectActivityStats(
+      [
+        row({ messageId: "a", costUsd: 2, costSource: "sdk", costKnown: true }),
+        row({ messageId: "b", costUsd: 0, costSource: "unknown", costKnown: false }),
+      ],
+      { now: NOW, resolve: () => null }
+    )
+    expect(stats).toMatchObject({ turns: 2, costUsd: 2, unpricedTurns: 1 })
   })
 })

@@ -31,6 +31,7 @@ jest.mock("next-intl", () => ({
       "comparison.batchOutputPrice": "Batch Output Price",
       "comparison.audioInputPrice": "Audio Input Price",
       "comparison.audioOutputPrice": "Audio Output Price",
+      "comparison.noPrice": "N/A",
     }
     return map[key] ?? key
   },
@@ -221,6 +222,11 @@ describe("ProviderCostTab", () => {
       expect(screen.queryByText("No usage data yet")).not.toBeInTheDocument()
       expect(screen.getByText("llama3")).toBeInTheDocument()
       expect(screen.queryByText("gpt-4o")).not.toBeInTheDocument()
+      // No model here has a price: the totals say so instead of "Free"
+      // (ADR-0253 §10), and the row says it has no price.
+      expect(screen.getAllByText("—")).toHaveLength(2)
+      expect(screen.queryByText("Free")).not.toBeInTheDocument()
+      expect(screen.getByText("N/A")).toBeInTheDocument()
     } finally {
       mockDailyRows.length = 0
     }

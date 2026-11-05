@@ -80,6 +80,29 @@ describe("UsageBudgetMeters", () => {
     expect(provider).toHaveTextContent("$90.00 / $100.00")
   })
 
+  it("shows nothing counted toward a limit as $0.00, never free (ADR-0253 §10)", () => {
+    status.mockReturnValue(
+      state({
+        configured: true,
+        verdicts: [
+          {
+            scopeKey: "day:*",
+            period: "day",
+            target: "*",
+            usedUsd: 0,
+            limitUsd: 20,
+            ratio: 0,
+            level: "ok",
+          },
+        ],
+      })
+    )
+    render(<UsageBudgetMeters />)
+    const scope = screen.getByTestId("usage-budget-scope-day:*")
+    expect(scope).toHaveTextContent("$0.00 / $20.00")
+    expect(scope).not.toHaveTextContent("Free")
+  })
+
   it("caps the bar at its track while the text still reports the overshoot", () => {
     status.mockReturnValue(
       state({

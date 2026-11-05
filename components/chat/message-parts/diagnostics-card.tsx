@@ -20,6 +20,7 @@ import { useTranslations } from "next-intl"
 import { CoinsIcon, MessagesSquareIcon } from "lucide-react"
 import { Surface } from "@/components/surface/surface"
 import { ContextWindowHeader, UsageRow } from "@/components/chat/context-usage-indicator"
+import { UNKNOWN_COST } from "@/lib/usage/session-analytics"
 import {
   DIAGNOSTICS_TINT,
   UsageDiagnosticsCard,
@@ -148,6 +149,10 @@ function CostCard({ block }: { block: CostDiagnosticsBlock }) {
               </span>
             }
           />
+        ) : block.metricTurns > 0 ? (
+          // Turns ran but none reported or priced a cost: say it is unknown
+          // rather than dropping the row, which reads as free (ADR-0253 §10).
+          <UsageRow label={t("cost")} slot={UNKNOWN_COST} />
         ) : null}
         {block.durationMs > 0 ? (
           <UsageRow

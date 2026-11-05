@@ -117,11 +117,39 @@ describe("buildAgentStats", () => {
     // tokens = sum(input + output + cacheRead)
     expect(overview.tokens).toBe(370)
     expect(overview.costUsd).toBeCloseTo(0.05, 5)
+    expect(overview).toMatchObject({ turns: 2, unpricedTurns: 0 })
     expect(overview.convsPerDay).toHaveLength(2)
     // rows sorted newest-first → the later "Second" leads.
     expect(rows[0].title).toBe("Second")
     expect(rows[0].toolCalls).toBe(1)
     expect(rows[1].toolCalls).toBe(2)
+  })
+
+  it("carries unpriced turns per conversation, per source and overall", () => {
+    // A row the ledger could not price: its 0 is unknown, not free.
+    const unpriced = (messageId: string, sessionId: string) =>
+      row({ messageId, sessionId, costUsd: 0, costKnown: false, costSource: "unknown" })
+    const a = conv("codex", "a", [{ role: "user" }], { createdAt: 1, updatedAt: 2 })
+    a.usageRows = [unpriced("u1", a.conv.session.id), unpriced("u2", a.conv.session.id)]
+    const b = conv("codex", "b", [{ role: "user" }], { createdAt: 1, updatedAt: 1 })
+    b.usageRows = [
+      unpriced("u3", b.conv.session.id),
+      row({ messageId: "u4", sessionId: b.conv.session.id, costUsd: 0.25 }),
+    ]
+
+    const { overview, rows } = buildAgentStats([a, b])
+    expect(rows.find((r) => r.title === "a")).toMatchObject({
+      costUsd: 0,
+      turns: 2,
+      unpricedTurns: 2,
+    })
+    expect(rows.find((r) => r.title === "b")).toMatchObject({
+      costUsd: 0.25,
+      turns: 2,
+      unpricedTurns: 1,
+    })
+    expect(overview.bySource[0]).toMatchObject({ turns: 4, unpricedTurns: 3 })
+    expect(overview).toMatchObject({ costUsd: 0.25, turns: 4, unpricedTurns: 3 })
   })
 
   it("handles empty input", () => {
@@ -196,12 +224,23 @@ describe("convRowMetrics / convRowTitle", () => {
     toolCalls: 8,
     tokens: 128_000,
     costUsd: 1.24,
+    turns: 3,
+    unpricedTurns: 0,
     updatedAt: 0,
   }
 
   it("drops the metrics a row has nothing to say about", () => {
     expect(convRowMetrics({ ...base, tokens: 0, costUsd: 0 })).toBe(" \u00b7 42 msg")
     expect(convRowMetrics(base)).toBe(" \u00b7 42 msg \u00b7 128k tok \u00b7 $1.24")
+  })
+
+  it("shows an unpriced conversation as '—' and a partly priced one as a lower bound", () => {
+    expect(convRowMetrics({ ...base, costUsd: 0, unpricedTurns: 3 })).toBe(
+      " \u00b7 42 msg \u00b7 128k tok \u00b7 \u2014"
+    )
+    expect(convRowMetrics({ ...base, unpricedTurns: 1 })).toBe(
+      " \u00b7 42 msg \u00b7 128k tok \u00b7 \u2265 $1.24"
+    )
   })
 
   it("cuts an ASCII title to the columns left beside the metrics", () => {

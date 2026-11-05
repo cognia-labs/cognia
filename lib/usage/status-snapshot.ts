@@ -15,8 +15,9 @@
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import {
   aggregateByModel,
-  effectiveCostUsd,
+  effectiveCostUsdDetailed,
   filterByRange,
+  UNKNOWN_COST,
   type PricingResolver,
 } from "@/lib/usage/session-analytics"
 import { resolveModelPricingUsd } from "@/lib/usage/pricing"
@@ -35,8 +36,19 @@ export interface UsageStatusSnapshot {
   totalTokens: number
   /** Effective cost (SDK figure when present, else priced from tokens). */
   costUsd: number
+  /**
+   * Turns no price is known for (ADR-0253 §10): `costUsd` is then a lower
+   * bound, and with every turn unpriced it is no figure at all.
+   */
+  unpricedTurns: number
   /** Top models by cost, descending (for the card tier). */
-  topModels: Array<{ model: string; tokens: number; costUsd: number }>
+  topModels: Array<{
+    model: string
+    tokens: number
+    costUsd: number
+    turns: number
+    unpricedTurns: number
+  }>
 }
 
 /** Window start for a presence window. `today` = local midnight. */
@@ -76,6 +88,7 @@ export function buildUsageStatusSnapshot(
     cacheCreationTokens: 0,
     totalTokens: 0,
     costUsd: 0,
+    unpricedTurns: 0,
     topModels: [],
   }
   for (const r of inRange) {
@@ -83,7 +96,9 @@ export function buildUsageStatusSnapshot(
     snap.outputTokens += r.outputTokens
     snap.cacheReadTokens += r.cacheReadTokens
     snap.cacheCreationTokens += r.cacheCreationTokens
-    snap.costUsd += effectiveCostUsd(r, resolve)
+    const cost = effectiveCostUsdDetailed(r, resolve)
+    snap.costUsd += cost.cost
+    if (!cost.known) snap.unpricedTurns += 1
   }
   snap.totalTokens = snap.inputTokens + snap.outputTokens + snap.cacheReadTokens
   snap.topModels = aggregateByModel(inRange, resolve)
@@ -92,6 +107,8 @@ export function buildUsageStatusSnapshot(
       model: m.model,
       tokens: m.inputTokens + m.outputTokens + m.cacheReadTokens,
       costUsd: m.costUsd,
+      turns: m.turns,
+      unpricedTurns: m.unpricedTurns,
     }))
   return snap
 }
@@ -116,6 +133,21 @@ export function formatCompactUsd(v: number): string {
   if (v < 1) return `$${v.toFixed(2)}`
   if (v < 100) return `$${trimZero(v)}`
   return `$${Math.round(v)}`
+}
+
+/**
+ * Compact cost of a bucket, honest about unpriced turns: "—" when none of its
+ * turns has a price, "≥ $X" when some lack one, never "$0" for spend that was
+ * merely unpriced (ADR-0253 §10).
+ */
+export function formatCompactBucketUsd(
+  costUsd: number,
+  unpricedTurns: number,
+  turns: number
+): string {
+  if (turns > 0 && unpricedTurns >= turns) return UNKNOWN_COST
+  const base = formatCompactUsd(costUsd)
+  return unpricedTurns > 0 ? `≥${base}` : base
 }
 
 /**
@@ -151,8 +183,12 @@ export function formatShortStatus(
   const maxUnits = opts.maxUnits ?? 20
   const prefix = opts.prefix ?? "AI"
   const tokens = formatCompactTokens(snap.totalTokens)
-  const cost = formatCompactUsd(snap.costUsd)
-  const candidates = [`${prefix} ${tokens} ${cost}`, `${prefix} ${tokens}`, tokens]
+  // A window with no priced turn says nothing about cost rather than "$0".
+  const unpriced = snap.turns > 0 && snap.unpricedTurns >= snap.turns
+  const cost = formatCompactBucketUsd(snap.costUsd, snap.unpricedTurns, snap.turns)
+  const candidates = unpriced
+    ? [`${prefix} ${tokens}`, tokens]
+    : [`${prefix} ${tokens} ${cost}`, `${prefix} ${tokens}`, tokens]
   for (const c of candidates) {
     if (weightedLength(c) <= maxUnits) return c
   }
@@ -179,13 +215,16 @@ export function buildUsageCardMarkdown(
     `**Token Usage / 用量统计** — ${WINDOW_LABEL[snap.window]}`,
     "",
     `- Tokens: **${formatCompactTokens(snap.totalTokens)}** (in ${formatCompactTokens(snap.inputTokens)} / out ${formatCompactTokens(snap.outputTokens)} / cache ${formatCompactTokens(snap.cacheReadTokens)})`,
-    `- Cost / 成本: **${formatCompactUsd(snap.costUsd)}**`,
+    `- Cost / 成本: **${formatCompactBucketUsd(snap.costUsd, snap.unpricedTurns, snap.turns)}**`,
     `- Turns / 轮次: ${snap.turns}`,
   ]
   if (snap.topModels.length > 0) {
     lines.push(
       `- Models: ${snap.topModels
-        .map((m) => `${m.model} ${formatCompactTokens(m.tokens)} (${formatCompactUsd(m.costUsd)})`)
+        .map(
+          (m) =>
+            `${m.model} ${formatCompactTokens(m.tokens)} (${formatCompactBucketUsd(m.costUsd, m.unpricedTurns, m.turns)})`
+        )
         .join(" · ")}`
     )
   }

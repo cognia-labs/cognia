@@ -58,6 +58,8 @@ describe("UsagePanel", () => {
             cacheReadTokens: 64_800_000,
             cacheCreationTokens: 1_200_000,
             durationMs: 0,
+            turns: 4,
+            unpricedTurns: 0,
           },
           "claude-haiku-4-5": {
             costUsd: 0.55,
@@ -66,6 +68,8 @@ describe("UsagePanel", () => {
             cacheReadTokens: 2_900_000,
             cacheCreationTokens: 141_400,
             durationMs: 0,
+            turns: 2,
+            unpricedTurns: 0,
           },
         }}
         onClose={() => {}}
@@ -91,6 +95,8 @@ describe("UsagePanel", () => {
           cacheReadTokens: 300,
           cacheCreationTokens: 100,
           durationMs: 0,
+          turns: 1,
+          unpricedTurns: 0,
         }}
         onClose={() => {}}
       />
@@ -116,6 +122,8 @@ describe("UsagePanel", () => {
             cacheReadTokens: 0,
             cacheCreationTokens: 0,
             durationMs: 0,
+            turns: 1,
+            unpricedTurns: 0,
           },
         }}
         onClose={() => {}}
@@ -135,6 +143,22 @@ describe("UsagePanel", () => {
     )
     const text = container.textContent ?? ""
     expect(text).toContain("Cost trend")
+  })
+
+  it("leaves unpriced turns out of the cost trend and counts them (ADR-0253 §10)", () => {
+    const { container } = render(
+      <UsagePanel costHistory={[0.01, null, 0.03, null]} onClose={() => {}} />
+    )
+    const text = container.textContent ?? ""
+    expect(text).toContain("Cost trend")
+    // An unknown turn never drags the floor to $0.00.
+    expect(text).toContain("$0.010–$0.030/turn")
+    expect(text).toContain("2 unpriced")
+  })
+
+  it("says nothing about cost when no turn was priced", () => {
+    const { container } = render(<UsagePanel costHistory={[null, null, 0.02]} onClose={() => {}} />)
+    expect(container.textContent).not.toContain("Cost trend")
   })
 
   it("hides the cost trend when every turn priced to zero", () => {

@@ -25,7 +25,7 @@ import {
   cacheSummary,
   contextPercent,
   contextTokens,
-  formatCost,
+  footerCost,
   formatProviderCost,
   formatTokens,
   outputTokensPerSecond,
@@ -225,8 +225,9 @@ function segmentText(
       // The built-in rate card only applies to the built-in backend — for
       // external agents, show what the provider itself reported in its own
       // unit (Devin: "12 ACU"), never a re-priced dollar figure.
-      if (isBuiltinBackend(config.agentBackend))
-        return formatCost(totals ? totals.costUsd : usage?.totalCostUsd)
+      // Unpriced turns never read as free: "—" when none was priced, "≥ $X"
+      // when some were not (ADR-0253 §10).
+      if (isBuiltinBackend(config.agentBackend)) return footerCost(totals, usage)
       {
         const session = totals?.providerCosts ? Object.entries(totals.providerCosts)[0] : undefined
         if (session) return formatProviderCost(session[1], session[0])

@@ -42,8 +42,12 @@ import { cn } from "@/lib/utils"
 
 import { useThemeColors } from "@/hooks/logging/use-theme-colors"
 import { paletteColor } from "@/lib/observability/chart-palette"
-import { fillDailyRange, parseLocalDay } from "@/lib/usage/session-analytics"
-import { formatCostInCurrency } from "@/types/system/usage"
+import {
+  fillDailyRange,
+  formatBucketCost,
+  formatDayCost,
+  parseLocalDay,
+} from "@/lib/usage/session-analytics"
 import type { DailyUsage } from "@/types/system/usage"
 
 /**
@@ -123,10 +127,14 @@ export function UsageHeatmap({
   const maxCost = useMemo(() => cells.reduce((max, c) => Math.max(max, c.cost), 0), [cells])
   const totals = useMemo(
     () =>
-      cells.reduce((acc, c) => ({ cost: acc.cost + c.cost, requests: acc.requests + c.requests }), {
-        cost: 0,
-        requests: 0,
-      }),
+      cells.reduce(
+        (acc, c) => ({
+          cost: acc.cost + c.cost,
+          requests: acc.requests + c.requests,
+          unpriced: acc.unpriced + (c.unpricedRequests ?? 0),
+        }),
+        { cost: 0, requests: 0, unpriced: 0 }
+      ),
     [cells]
   )
 
@@ -155,18 +163,19 @@ export function UsageHeatmap({
   // Every date reaching here came out of `cells`, and the calendar skips its
   // week-padding slots (`ContributionGraphCalendar` never yields an undefined
   // activity), so the lookup always hits — the fallback only exists so a future
-  // change to the primitive degrades to a $0 label instead of throwing.
+  // change to the primitive degrades to a $0 label instead of throwing. A day
+  // whose requests have no known price reads "—", never "Free" (ADR-0253 §10).
   const cellLabel = (date: string) => {
-    const cell = byDate.get(date) ?? { cost: 0, requests: 0 }
+    const cell = byDate.get(date) ?? { cost: 0, requests: 0, unpricedRequests: 0 }
     return t("heatmap.cell", {
       date: dayFormat.format(parseLocalDay(date)),
-      cost: formatCostInCurrency(cell.cost, "USD"),
+      cost: formatDayCost(cell),
       requests: cell.requests,
     })
   }
 
   const totalLabel = t("heatmap.total", {
-    cost: formatCostInCurrency(totals.cost, "USD"),
+    cost: formatBucketCost(totals.cost, totals.unpriced, totals.requests),
     days: cells.length,
     requests: totals.requests,
   })

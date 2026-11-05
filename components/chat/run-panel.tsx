@@ -113,12 +113,8 @@ import {
   type RunBarUsageTotals,
 } from "@/lib/chat/run-bar-metrics"
 import type { RunStatusBarSettings } from "@cognia/agent-config-types"
-import {
-  formatCostInCurrency,
-  formatTokens,
-  formatTokensPerSec,
-  tokensPerSecond,
-} from "@/types/system/usage"
+import { formatBucketCost } from "@/lib/usage/session-analytics"
+import { formatTokens, formatTokensPerSec, tokensPerSecond } from "@/types/system/usage"
 import { TaskProgressChip, useSessionTaskChip } from "@/components/tasks/task-progress-chip"
 import { useConversationActivity } from "@/hooks/connectors/use-conversation-activity"
 import { useConversationAssignmentEvents } from "@/hooks/connectors/use-conversation-assignment-events"
@@ -498,7 +494,9 @@ function RunBarMetrics({
     }
   }
   if (cfg.showCost && usageReady && totals.costUsd > 0) {
-    chips.push(<span key="cost">{formatCostInCurrency(totals.costUsd)}</span>)
+    chips.push(
+      <span key="cost">{formatBucketCost(totals.costUsd, totals.unpricedTurns, totals.turns)}</span>
+    )
   }
   if (cfg.showContextPct && usageReady) {
     chips.push(

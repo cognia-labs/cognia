@@ -338,6 +338,15 @@ export interface SessionTotals {
   cacheReadTokens: number
   cacheCreationTokens: number
   durationMs: number
+  /** Turns folded into these totals. */
+  turns: number
+  /**
+   * Turns nothing priced: the SDK reported no positive cost and the model had no
+   * known rate. They add `0` to `costUsd`, so with `unpricedTurns > 0` the sum
+   * is a lower bound, and with every turn unpriced it is not a price at all —
+   * rendered "≥ $X" / "—", never "$0.00" (ADR-0253 §10).
+   */
+  unpricedTurns: number
   /**
    * Cumulative provider-reported costs keyed by the provider's own currency
    * label (Devin reports `ACU`, plan credits report `CREDIT`). Kept out of
@@ -1020,8 +1029,9 @@ export interface TuiState {
    * usage panel's token-trend sparkline. Oldest → newest. */
   usageHistory: number[]
   /** Per-turn USD cost (SDK figure or priced estimate), capped — feeds the usage
-   * panel's cost-trend sparkline. Oldest → newest, index-aligned with usageHistory. */
-  costHistory: number[]
+   * panel's cost-trend sparkline. Oldest → newest, index-aligned with usageHistory.
+   * `null` marks a turn nothing priced (unknown, not free). */
+  costHistory: (number | null)[]
   /** Per-tool call/error tallies this session — feeds the usage panel's
    * "top tools" breakdown. Keyed by the raw tool name. */
   toolStats: Record<string, ToolStat>

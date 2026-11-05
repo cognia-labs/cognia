@@ -25,6 +25,7 @@ import {
 } from "./session-usage"
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
+import { isUnpricedUsageRow } from "@/lib/usage/session-analytics"
 import type { SDKResultMessage } from "@cognia/agent-config-types"
 
 const dbFixture = createDbTestFixture()
@@ -459,6 +460,27 @@ describe("totalsBySession", () => {
     expect(totals.turns).toBe(0)
     expect(totals.costUsd).toBe(0)
     expect(totals.byModel).toEqual({})
+  })
+
+  it("counts the turns whose stored cost is not a known price (ADR-0253 §10)", async () => {
+    await upsertSessionUsage(
+      row("m1", "s1", { costUsd: 0.5, costSource: "sdk", costKnown: true, model: "a" })
+    )
+    await upsertSessionUsage(
+      row("m2", "s1", { costUsd: 0, costSource: "unknown", costKnown: false, model: "b" })
+    )
+    const totals = await totalsBySession("s1")
+    expect(totals).toMatchObject({ turns: 2, unpricedTurns: 1, costUsd: 0.5 })
+    expect(totals.byModel.a.unpricedTurns).toBe(0)
+    expect(totals.byModel.b.unpricedTurns).toBe(1)
+  })
+
+  it("reads an unfrozen row as priced only when it carries a positive figure", () => {
+    expect(isUnpricedUsageRow(row("x", "s", { costUsd: 0.1 }))).toBe(false)
+    expect(isUnpricedUsageRow(row("y", "s", { costUsd: 0 }))).toBe(true)
+    expect(
+      isUnpricedUsageRow(row("z", "s", { costUsd: 0, costSource: "sdk", costKnown: true }))
+    ).toBe(false)
   })
 
   it("buckets unknown model under '(unknown)'", async () => {

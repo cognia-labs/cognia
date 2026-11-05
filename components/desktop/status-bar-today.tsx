@@ -26,9 +26,9 @@ import { useClientLiveQuery } from "@/hooks/data"
 import { getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import { collectActivityStats } from "@/lib/usage/activity-stats"
-import { startOfLocalDay } from "@/lib/usage/session-analytics"
+import { formatBucketCost, startOfLocalDay } from "@/lib/usage/session-analytics"
 import { useUIStore } from "@/stores/ui/ui-store"
-import { formatCostInCurrency, formatTokens } from "@/types/system/usage"
+import { formatTokens } from "@/types/system/usage"
 
 /** How often the day boundary is re-read. A minute is plenty for "today". */
 const CLOCK_TICK_MS = 60_000
@@ -53,7 +53,10 @@ export function StatusBarToday() {
   if (!rows || stats.turns === 0) return null
 
   const tokens = formatTokens(stats.totalTokens)
-  const cost = stats.costUsd > 0 ? formatCostInCurrency(stats.costUsd, "USD") : null
+  // A day whose turns have no known price is "—", never "Free"; a partly
+  // priced one is a lower bound (ADR-0253 §10).
+  const fullCost = formatBucketCost(stats.costUsd, stats.unpricedTurns, stats.turns)
+  const cost = stats.costUsd > 0 ? fullCost : null
   const summary = cost ? t("summaryWithCost", { tokens, cost }) : t("summary", { tokens })
 
   return (
@@ -85,7 +88,7 @@ export function StatusBarToday() {
           data-testid="status-today-details"
         >
           <Figure label={t("tokens")} value={tokens} />
-          <Figure label={t("cost")} value={cost ?? formatCostInCurrency(0, "USD")} />
+          <Figure label={t("cost")} value={fullCost} />
           <Figure label={t("sessions")} value={numberFormat.format(stats.sessions)} />
           <Figure label={t("turns")} value={numberFormat.format(stats.turns)} />
           <div className="col-span-2 flex min-w-0 items-baseline justify-between gap-2">

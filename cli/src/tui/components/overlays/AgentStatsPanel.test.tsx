@@ -11,11 +11,29 @@ const overview: AgentStatsOverview = {
   toolCalls: 3,
   tokens: 12000,
   costUsd: 0.5,
+  turns: 2,
+  unpricedTurns: 0,
   firstAt: 1000,
   lastAt: 2000,
   bySource: [
-    { source: "claude-code", conversations: 1, messages: 3, tokens: 8000, costUsd: 0.3 },
-    { source: "codex", conversations: 1, messages: 2, tokens: 4000, costUsd: 0.2 },
+    {
+      source: "claude-code",
+      conversations: 1,
+      messages: 3,
+      tokens: 8000,
+      costUsd: 0.3,
+      turns: 1,
+      unpricedTurns: 0,
+    },
+    {
+      source: "codex",
+      conversations: 1,
+      messages: 2,
+      tokens: 4000,
+      costUsd: 0.2,
+      turns: 1,
+      unpricedTurns: 0,
+    },
   ],
   byModel: [
     {
@@ -55,6 +73,8 @@ const rows: ConvStatRow[] = [
     toolCalls: 2,
     tokens: 8000,
     costUsd: 0.3,
+    turns: 1,
+    unpricedTurns: 0,
     updatedAt: 2000,
   },
   {
@@ -65,6 +85,8 @@ const rows: ConvStatRow[] = [
     toolCalls: 1,
     tokens: 4000,
     costUsd: 0.2,
+    turns: 1,
+    unpricedTurns: 0,
     updatedAt: 1000,
   },
 ]
@@ -91,6 +113,31 @@ describe("AgentStatsPanel", () => {
     expect(text).toContain("First convo")
     expect(text).toContain("Second convo")
     expect(text).toContain("CC")
+  })
+
+  it("shows the priced total plainly when every turn was priced", () => {
+    expect(wrap().container.textContent ?? "").toContain("$0.500")
+  })
+
+  it("never shows unpriced usage as free: '—' overall, '≥' when partly priced", () => {
+    const unpricedRows: ConvStatRow[] = [
+      { ...rows[0], costUsd: 0, turns: 2, unpricedTurns: 2 },
+      { ...rows[1], costUsd: 0.2, turns: 2, unpricedTurns: 1 },
+    ]
+    const none = wrap({
+      overview: { ...overview, costUsd: 0, turns: 4, unpricedTurns: 4 },
+      rows: unpricedRows,
+    }).container.textContent
+    expect(none).not.toContain("$0.00")
+    expect(none).toContain("tok · —")
+    // The first row is fully unpriced → "—"; the second is a lower bound.
+    expect(none).toContain("8.0k tok · —")
+    expect(none).toContain("≥ $0.200")
+    __resetInk()
+    const partial = wrap({
+      overview: { ...overview, costUsd: 0.2, turns: 4, unpricedTurns: 3 },
+    }).container.textContent
+    expect(partial).toContain("≥ $0.200")
   })
 
   it("renders an empty list state", () => {
@@ -136,6 +183,8 @@ describe("AgentStatsPanel", () => {
         toolCalls: 0,
         tokens: 0,
         costUsd: 0,
+        turns: 0,
+        unpricedTurns: 0,
         updatedAt: 1,
       },
       {
@@ -146,6 +195,8 @@ describe("AgentStatsPanel", () => {
         toolCalls: 0,
         tokens: 0,
         costUsd: 0,
+        turns: 0,
+        unpricedTurns: 0,
         updatedAt: 0,
       },
     ]

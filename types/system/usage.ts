@@ -55,8 +55,14 @@ export interface UsageRecord {
 export interface DailyUsage {
   date: string
   tokens: number
+  /** Priced spend; a request no price is known for adds nothing here. */
   cost: number
   requests: number
+  /**
+   * Requests whose cost is unknown (ADR-0253 §10): when non-zero, `cost` is a
+   * lower bound, and when it equals `requests` the day has no price at all.
+   */
+  unpricedRequests?: number
 }
 
 export interface ProviderUsage {

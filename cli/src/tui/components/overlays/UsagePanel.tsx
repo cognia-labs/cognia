@@ -71,21 +71,27 @@ function TokenTrend({ history }: { history: number[] }) {
   )
 }
 
-function CostTrend({ history }: { history: number[] }) {
+function CostTrend({ history }: { history: (number | null)[] }) {
   const theme = useTheme()
-  // Need ≥2 points, and at least one priced turn — an all-zero series (free /
-  // unpriced model) would just render a flat baseline with "$0.00" bounds.
-  if (history.length < 2 || history.every((c) => c <= 0)) return null
-  const min = Math.min(...history)
-  const max = Math.max(...history)
+  // Only priced turns have a cost to plot — an unpriced turn (`null`) is
+  // unknown, not $0, so it never drags the minimum down (ADR-0253 §10). Need
+  // ≥2 priced points, and at least one above zero — an all-zero series (free
+  // model) would just render a flat baseline with "$0.00" bounds. With no
+  // priced turn the panel says nothing about cost at all.
+  const priced = history.filter((c): c is number => c !== null)
+  if (priced.length < 2 || priced.every((c) => c <= 0)) return null
+  const unpriced = history.length - priced.length
+  const min = Math.min(...priced)
+  const max = Math.max(...priced)
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.muted}>Cost trend</Text>
       <Text>
-        <Text color={theme.success}>{sparkline(history, 40)}</Text>
+        <Text color={theme.success}>{sparkline(priced, 40)}</Text>
         <Text color={theme.muted} dimColor>
           {"  "}
           {formatCost(min)}–{formatCost(max)}/turn
+          {unpriced > 0 ? ` · ${unpriced} unpriced` : ""}
         </Text>
       </Text>
     </Box>
@@ -242,8 +248,9 @@ export function UsagePanel({
   pricing?: Partial<ModelPricing>
   /** Per-turn token history for the trend sparkline (oldest → newest). */
   usageHistory?: number[]
-  /** Per-turn USD cost history for the cost-trend sparkline (oldest → newest). */
-  costHistory?: number[]
+  /** Per-turn USD cost history for the cost-trend sparkline (oldest → newest);
+   * `null` marks an unpriced turn. */
+  costHistory?: (number | null)[]
   /** Per-tool call/error tallies for the "top tools" breakdown. */
   toolStats?: Record<string, ToolStat>
   /** Per-model cumulative totals for the "Usage by model" breakdown. */
