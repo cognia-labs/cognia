@@ -30,6 +30,7 @@ import { statusCategoryOf } from "@/types/issues"
 import type { IssueSourceAdapter, IssueSourceQuery, UnifiedIssueItem } from "@/types/issues/unified"
 import { makeUnifiedIssueId, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
 
+import { observeIssueList } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
 /**
@@ -94,19 +95,24 @@ export function toUnifiedCollabIssue(row: CollabIssueMirrorRow): UnifiedIssueIte
   }
 }
 
+async function listCollabMirrorIssues(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
+  // `projectId` is the workspace, and the mirror stores the server's
+  // `workspaceId` — the same id space (ADR-0149 §1 kept `projectId` as the
+  // workspace key rather than renaming it).
+  const rows = await listCollabIssues({
+    workspaceId: query.projectId,
+    ...(query.issueProjectId ? { issueProjectId: query.issueProjectId } : {}),
+  })
+  return rows.map(toUnifiedCollabIssue)
+}
+
 export const collabIssueSource: IssueSourceAdapter = {
   kind: "collab",
   label: "Shared",
-  async list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
-    // `projectId` is the workspace, and the mirror stores the server's
-    // `workspaceId` — the same id space (ADR-0149 §1 kept `projectId` as the
-    // workspace key rather than renaming it).
-    const rows = await listCollabIssues({
-      workspaceId: query.projectId,
-      ...(query.issueProjectId ? { issueProjectId: query.issueProjectId } : {}),
-    })
-    return rows.map(toUnifiedCollabIssue)
-  },
+  list: listCollabMirrorIssues,
+  // A pull writes the mirror, so a shared issue another member filed or moved
+  // appears without anyone touching a local row.
+  subscribe: (query, observer) => observeIssueList(() => listCollabMirrorIssues(query), observer),
   async mutate(sourceId, action) {
     const row = await getCollabIssue(sourceId)
     if (!row || !Number.isSafeInteger(row.revision)) {

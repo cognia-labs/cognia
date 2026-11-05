@@ -23966,6 +23966,7 @@
         "pickedUp": "Picked up {identifier} from {column}."
       },
       "empty": "No issues",
+      "lane": "{name}, {count, plural, one {# issue} other {# issues}}",
       "runningCard": "An agent is working on this issue"
     },
     "bulk": {
@@ -24247,10 +24248,14 @@
       "createQueued": "Queued: {title}",
       "cyclesEmpty": "No cycles yet",
       "cyclesEmptyHint": "Cycles are planned on a larger screen. They show up here once they exist.",
+      "filteredEmpty": "No issues match these filters",
       "projectsEmptyHint": "Projects are created on a larger screen. They show up here once they exist.",
       "queued": "Queued for {identifier}",
       "queuedHint": "Changes are sent to your host and appear here after the next sync.",
-      "sendComment": "Send"
+      "sendComment": "Send",
+      "showIssues": "Show this device's issues",
+      "unavailableSource": "{source} issues can't be opened on this device.",
+      "unavailableSourceHint": "Open it on a computer signed in to this workspace."
     },
     "notify": {
       "actor": {

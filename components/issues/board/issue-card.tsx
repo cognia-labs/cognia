@@ -29,6 +29,7 @@ import { Badge } from "@/components/ui/badge"
 import { actorKey } from "@/lib/issues/board-model"
 import type { IssuePlanningHint } from "@/lib/issues/planning-hints"
 import type { SquadRunRef } from "@/lib/issues/run/running"
+import type { IssueListDensity } from "@/lib/issues/views"
 import { cn } from "@/lib/utils"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
@@ -40,6 +41,12 @@ import { PlanningBadges } from "../planning/planning-badges"
 
 export interface IssueCardVisualProps {
   item: UnifiedIssueItem
+  /**
+   * `compact` tightens the card and drops the label row, so a dense board
+   * shows more cards per column. Everything that says what state the issue is
+   * in (status, run, triage, wakeup, priority, planning, squad) stays.
+   */
+  density?: IssueListDensity
   /** Blocked, sub-issue progress, due state. Absent hint prints nothing. */
   hint?: IssuePlanningHint
   /** Resolved label rows for `item.labelIds`; unresolved ids are simply absent. */
@@ -67,6 +74,7 @@ export interface IssueCardVisualProps {
  */
 export function IssueCardVisual({
   item,
+  density = "comfortable",
   hint,
   labels,
   projectName,
@@ -81,14 +89,17 @@ export function IssueCardVisual({
 }: IssueCardVisualProps) {
   const t = useTranslations("issues")
 
+  const compact = density === "compact"
   const assigneeLabel = item.assignee
     ? (item.assignee.label ?? t(`actor.${item.assignee.kind}`))
     : t("actor.unassigned")
 
   return (
     <div
+      data-density={density}
       className={cn(
-        "group flex w-full flex-col gap-2 rounded-lg border border-transparent bg-card shadow-(--card-shadow) p-3 text-left shadow-xs",
+        "group flex w-full flex-col rounded-lg border border-transparent bg-card shadow-(--card-shadow) text-left shadow-xs",
+        compact ? "gap-1 px-2.5 py-2" : "gap-2 p-3",
         "motion-safe:transition-[box-shadow,opacity] motion-safe:duration-150",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         !overlay && "hover:shadow-sm",
@@ -138,12 +149,19 @@ export function IssueCardVisual({
         ) : null}
       </header>
 
-      <h3 className="line-clamp-2 text-sm font-semibold leading-snug">{item.title}</h3>
+      <h3
+        className={cn(
+          "text-sm font-semibold leading-snug",
+          compact ? "line-clamp-1" : "line-clamp-2"
+        )}
+      >
+        {item.title}
+      </h3>
 
       <PlanningBadges item={item} hint={hint} />
 
-      {labels && labels.length > 0 ? (
-        <div className="flex flex-wrap gap-1">
+      {!compact && labels && labels.length > 0 ? (
+        <div className="flex flex-wrap gap-1" data-testid={`issue-card-labels-${item.unifiedId}`}>
           {labels.map((label) => (
             <LabelChip key={label.id} label={label} className="h-5 text-[10px]" />
           ))}
@@ -173,6 +191,7 @@ export function IssueCardVisual({
 
 export interface IssueCardProps {
   item: UnifiedIssueItem
+  density?: IssueListDensity
   hint?: IssuePlanningHint
   labels?: readonly LabelRow[]
   projectName?: string
@@ -185,6 +204,7 @@ export interface IssueCardProps {
 
 export function IssueCard({
   item,
+  density,
   hint,
   labels,
   projectName,
@@ -231,6 +251,7 @@ export function IssueCard({
     >
       <IssueCardVisual
         item={item}
+        density={density}
         hint={hint}
         labels={labels}
         projectName={projectName}

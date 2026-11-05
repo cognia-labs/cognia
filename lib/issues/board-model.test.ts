@@ -203,23 +203,41 @@ describe("sortIssueColumn", () => {
 })
 
 describe("buildIssueSwimlanes", () => {
-  it("groups by assignee and appends the unassigned lane last", () => {
-    const lanes = buildIssueSwimlanes([
-      item({ assignee: AGENT }),
-      item(),
-      item({ assignee: HUMAN }),
-    ])
-    expect(lanes.map((l) => l.assigneeKey)).toEqual(["agent:a1", "human:self", null])
+  it("draws one lane per assignee with the unassigned lane last, matching the list", () => {
+    const items = [item({ assignee: AGENT }), item(), item({ assignee: HUMAN })]
+    const lanes = buildIssueSwimlanes(items, "assignee")!
+    expect(lanes.map((l) => l.key)).toEqual(["agent:a1", "human:self", ""])
+    expect(lanes.map((l) => l.key)).toEqual(buildIssueGroups(items, "assignee").map((g) => g.key))
     expect(lanes.at(-1)!.itemCount).toBe(1)
   })
 
-  it("omits the unassigned lane when everything is assigned", () => {
-    const lanes = buildIssueSwimlanes([item({ assignee: AGENT })])
-    expect(lanes.map((l) => l.assigneeKey)).toEqual(["agent:a1"])
+  it("gives every lane the six status columns, empty ones included", () => {
+    const [lane] = buildIssueSwimlanes([item({ priority: "high", status: "done" })], "priority")!
+    expect(lane!.key).toBe("high")
+    expect(lane!.columns.map((c) => c.status)).toEqual([...ISSUE_BOARD_COLUMN_ORDER])
+    expect(lane!.columns.find((c) => c.status === "done")!.items).toHaveLength(1)
+    expect(lane!.columns.find((c) => c.status === "todo")!.items).toEqual([])
   })
 
-  it("carries the actor through for rendering", () => {
-    expect(buildIssueSwimlanes([item({ assignee: AGENT })])[0].actor).toEqual(AGENT)
+  it("orders priority lanes by urgency and puts the no-project lane last", () => {
+    expect(
+      buildIssueSwimlanes(
+        [item({ priority: "low" }), item({ priority: "urgent" })],
+        "priority"
+      )!.map((l) => l.key)
+    ).toEqual(["urgent", "low"])
+    expect(
+      buildIssueSwimlanes(
+        [item({ issueProjectId: undefined }), item({ issueProjectId: "p1" })],
+        "project"
+      )!.map((l) => l.key)
+    ).toEqual(["p1", ""])
+  })
+
+  it("draws no lanes for status or none, nor for an empty board", () => {
+    expect(buildIssueSwimlanes([item()], "status")).toBeNull()
+    expect(buildIssueSwimlanes([item()], "none")).toBeNull()
+    expect(buildIssueSwimlanes([], "assignee")).toBeNull()
   })
 })
 
@@ -326,8 +344,13 @@ describe("resolveIssueDrop", () => {
     expect(resolveIssueDrop(a.unifiedId, b.unifiedId, indexOf([a, b]), AT_REST)).toEqual({
       type: "reorder",
       unifiedId: a.unifiedId,
-      targetIndex: 1,
+      overUnifiedId: b.unifiedId,
     })
+  })
+
+  it("ignores a drop on a card the board does not hold", () => {
+    const a = item({ status: "todo", order: 0 })
+    expect(resolveIssueDrop(a.unifiedId, "local:elsewhere", indexOf([a]), AT_REST)).toBeNull()
   })
 
   it("denies a move on a federated row", () => {

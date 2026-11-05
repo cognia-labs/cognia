@@ -13,6 +13,8 @@ jest.mock("@/components/chat/motion/motion-reveal", () => ({
 
 // Capture DndContext's handlers so a drag can be simulated without a pointer.
 let dndHandlers: Record<string, (event: unknown) => void> = {}
+/** Every DndContext rendered, in order — one per swimlane. */
+const dndHandlerList: Array<Record<string, (event: unknown) => void>> = []
 let dndAccessibility: {
   announcements?: Record<string, (event: unknown) => string | undefined>
   screenReaderInstructions?: { draggable?: string }
@@ -24,6 +26,7 @@ const droppableCalls: Array<{ id: string; disabled?: boolean }> = []
 jest.mock("@dnd-kit/core", () => ({
   DndContext: ({ children, accessibility, autoScroll, ...handlers }: Record<string, unknown>) => {
     dndHandlers = handlers as Record<string, (event: unknown) => void>
+    dndHandlerList.push(dndHandlers)
     dndAccessibility = (accessibility ?? {}) as typeof dndAccessibility
     dndAutoScroll = autoScroll
     return <div data-testid="dnd-context">{children as React.ReactNode}</div>
@@ -100,6 +103,7 @@ const ALL_EXPANDED: Partial<Record<IssueStatus, boolean>> = Object.fromEntries(
 beforeEach(() => {
   seq = 0
   dndHandlers = {}
+  dndHandlerList.length = 0
   dndAccessibility = {}
   dndAutoScroll = undefined
   keyboardSensorOptions = undefined
@@ -494,6 +498,136 @@ describe("IssueBoard", () => {
           )
         ).toBeUndefined()
       })
+    })
+  })
+
+  describe("swimlanes", () => {
+    const AGENT = { kind: "agent" as const, id: "a1", label: "Reviewer" }
+
+    /** The DndContext of the last render pass for each lane, in lane order. */
+    function laneContexts(laneCount: number) {
+      return dndHandlerList.slice(-laneCount)
+    }
+
+    it("draws the columns once, with no lanes, for status and none", () => {
+      for (const groupBy of ["status", "none"] as const) {
+        const { unmount } = render(
+          <IssueBoard items={[item({ assignee: AGENT })]} groupBy={groupBy} />
+        )
+        expect(screen.queryByTestId(/^issue-lane-/)).toBeNull()
+        expect(screen.getByTestId("issue-column-todo")).toBeInTheDocument()
+        unmount()
+      }
+    })
+
+    it("draws one lane per assignee in the list's order, unassigned last", () => {
+      render(
+        <IssueBoard
+          items={[item(), item({ assignee: AGENT }), item({ assignee: AGENT, status: "done" })]}
+          groupBy="assignee"
+          assigneeLabels={new Map([["agent:a1", "Reviewer"]])}
+        />
+      )
+      const lanes = screen.getAllByTestId(/^issue-lane-[^-]+$|^issue-lane-agent:a1$/)
+      expect(lanes.map((lane) => lane.dataset.testid)).toEqual([
+        "issue-lane-agent:a1",
+        "issue-lane-none",
+      ])
+      expect(lanes[0]).toHaveTextContent("Reviewer")
+      expect(screen.getByTestId("issue-lane-agent:a1-count")).toHaveTextContent("2")
+      expect(screen.getByTestId("issue-lane-none")).toHaveTextContent("actor.unassigned")
+      // Every lane carries all six columns, empty ones included.
+      expect(screen.getByTestId("issue-lane-none-column-done")).toBeInTheDocument()
+      expect(screen.getByTestId("issue-lane-agent:a1-column-done-count")).toHaveTextContent("1")
+      expect(screen.getByTestId("issue-board")).toHaveAttribute("data-group-by", "assignee")
+    })
+
+    it("switches lanes with the grouping", () => {
+      const items = [item({ priority: "urgent" }), item({ priority: "low", assignee: AGENT })]
+      const { rerender } = render(<IssueBoard items={items} groupBy="priority" />)
+      expect(screen.getByTestId("issue-lane-urgent")).toHaveTextContent("priority.urgent")
+      expect(screen.getByTestId("issue-lane-low")).toBeInTheDocument()
+
+      rerender(<IssueBoard items={items} groupBy="project" projectNamesById={new Map()} />)
+      expect(screen.queryByTestId("issue-lane-urgent")).toBeNull()
+      expect(screen.getByTestId("issue-lane-none")).toHaveTextContent("toolbar.groupBy.none")
+
+      rerender(<IssueBoard items={items} groupBy="status" />)
+      expect(screen.queryByTestId(/^issue-lane-/)).toBeNull()
+    })
+
+    it("shows the bare columns for an empty board instead of an empty lane", () => {
+      render(<IssueBoard items={[]} groupBy="assignee" />)
+      expect(screen.queryByTestId(/^issue-lane-/)).toBeNull()
+      expect(screen.getByTestId("issue-column-todo")).toBeInTheDocument()
+    })
+
+    it("moves a card within its own lane, changing status only", () => {
+      const onDrop = jest.fn()
+      const mine = item({ assignee: AGENT, status: "todo" })
+      const other = item({ status: "todo" })
+      render(<IssueBoard items={[mine, other]} groupBy="assignee" onDrop={onDrop} />)
+      const [agentLane] = laneContexts(2)
+      act(() =>
+        agentLane!.onDragEnd?.({ active: { id: mine.unifiedId }, over: { id: "col:done" } })
+      )
+      expect(onDrop).toHaveBeenCalledWith({ type: "move", unifiedId: mine.unifiedId, to: "done" })
+    })
+
+    it("never resolves a drop onto a card from another lane", () => {
+      const onDrop = jest.fn()
+      const mine = item({ assignee: AGENT, status: "todo" })
+      const other = item({ status: "done" })
+      render(<IssueBoard items={[mine, other]} groupBy="assignee" onDrop={onDrop} />)
+      const [agentLane] = laneContexts(2)
+      act(() =>
+        agentLane!.onDragEnd?.({ active: { id: mine.unifiedId }, over: { id: other.unifiedId } })
+      )
+      expect(onDrop).not.toHaveBeenCalled()
+    })
+
+    it("reorders onto a card in the same lane by naming that card", () => {
+      const onDrop = jest.fn()
+      const a = item({ assignee: AGENT, order: 0 })
+      const b = item({ assignee: AGENT, order: 1 })
+      render(<IssueBoard items={[a, b]} groupBy="assignee" onDrop={onDrop} />)
+      const [agentLane] = laneContexts(1)
+      act(() => agentLane!.onDragEnd?.({ active: { id: a.unifiedId }, over: { id: b.unifiedId } }))
+      expect(onDrop).toHaveBeenCalledWith({
+        type: "reorder",
+        unifiedId: a.unifiedId,
+        overUnifiedId: b.unifiedId,
+      })
+    })
+
+    it("gives every lane its own keyboard movement, which moves within that lane", () => {
+      const onDrop = jest.fn()
+      const top = item({ assignee: AGENT })
+      const bottom = item({ status: "in_progress" })
+      render(<IssueBoard items={[top, bottom]} groupBy="assignee" onDrop={onDrop} />)
+      const contexts = laneContexts(2)
+      expect(contexts).toHaveLength(2)
+      expect(keyboardSensorOptions?.coordinateGetter).toBeInstanceOf(Function)
+      // A keyboard drag ends through the same handler a pointer drag does.
+      act(() =>
+        contexts[1]!.onDragEnd?.({
+          active: { id: bottom.unifiedId },
+          over: { id: "col:in_review" },
+        })
+      )
+      expect(onDrop).toHaveBeenCalledWith({
+        type: "move",
+        unifiedId: bottom.unifiedId,
+        to: "in_review",
+      })
+    })
+
+    it("hands the density to every card", () => {
+      render(
+        <IssueBoard items={[item({ assignee: AGENT })]} groupBy="assignee" density="compact" />
+      )
+      const card = screen.getByTestId(/^issue-card-local:/)
+      expect(card.querySelector("[data-density]")).toHaveAttribute("data-density", "compact")
     })
   })
 

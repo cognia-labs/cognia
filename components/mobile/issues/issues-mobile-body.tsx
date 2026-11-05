@@ -9,6 +9,12 @@
  * the few that matter away from a desk (spec 2026-09-06 D8): a new issue from
  * the header's plus button, and status, assignee and a comment from the detail
  * sheet. Each is a queued job for the host, never a local write.
+ *
+ * Deep links arrive with the same parameters the desktop board reads
+ * (`app/issues/page.tsx`): `?project=`, `?cycle=` and `?assignee=` narrow the
+ * list, shown as removable chips, and `?id=` opens the issue. The phone holds
+ * only the local issue tables, so a link to a GitHub, shared or agent row
+ * (`?source=`) says this device cannot open it instead of opening nothing.
  */
 
 import { PlusIcon } from "lucide-react"
@@ -29,21 +35,63 @@ import { TrackerTabs } from "@/components/issues/tracker-tabs"
 import { MobileBackButton } from "@/components/mobile/shell/mobile-back-button"
 import { Button } from "@/components/ui/button"
 import { listLabels } from "@/lib/db/labels"
-import { buildIssueGroups } from "@/lib/issues/board-model"
+import { ActiveFilterChips } from "@/components/issues/filter-bar/active-filter-chips"
+import {
+  actorKey,
+  applyIssueFilter,
+  buildIssueGroups,
+  EMPTY_ISSUE_FILTER,
+  isIssueFilterActive,
+  type IssueBoardFilter,
+} from "@/lib/issues/board-model"
+import {
+  collectActiveFilterChips,
+  removeFilterChip,
+  setSoleFilterValue,
+} from "@/lib/issues/filter-chips"
+import { listActiveIssueRunIssueIds } from "@/lib/db/issue-runs"
 import { toUnifiedIssue } from "@/lib/issues/sources/local-source"
 import { useProjectStore } from "@/stores/project/project-store"
 import { IssueCreateSheet } from "./issue-create-sheet"
 import { IssueDetailSheet } from "./issue-detail-sheet"
 import type { IssueCycle, IssueStatus } from "@/types/issues"
+import type { IssueSourceKind } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
 import { cn } from "@/lib/utils"
 
 export interface IssuesMobileBodyProps {
   /** Deep-linked issue id from `/issues?id=…`. */
   initialSelectedId?: string
+  /** `?source=`: which source the deep-linked id belongs to. Absent means local. */
+  initialSelectedSource?: IssueSourceKind
+  /** `?project=`: narrow to one delivery container. */
+  initialProjectId?: string
+  /** `?cycle=`: narrow to one cycle. */
+  initialCycleId?: string
+  /** `?assignee=`: narrow to one assignee, an `actorKey`. */
+  initialAssignee?: string
 }
 
-export function IssuesMobileBody({ initialSelectedId }: IssuesMobileBodyProps) {
+/** The filter a deep link asks for, applied once when the page opens. */
+function deepLinkFilter({
+  initialProjectId,
+  initialCycleId,
+  initialAssignee,
+}: IssuesMobileBodyProps): IssueBoardFilter {
+  let filter = EMPTY_ISSUE_FILTER
+  if (initialProjectId) filter = setSoleFilterValue(filter, "issueProjectIds", initialProjectId)
+  if (initialCycleId) filter = setSoleFilterValue(filter, "cycleIds", initialCycleId)
+  if (initialAssignee) filter = setSoleFilterValue(filter, "assignees", initialAssignee)
+  return filter
+}
+
+export function IssuesMobileBody(props: IssuesMobileBodyProps) {
+  const { initialSelectedId, initialSelectedSource } = props
+  /** A deep link to a row this device has no copy of: GitHub, shared, agent boards. */
+  const linkedElsewhere =
+    initialSelectedId && initialSelectedSource && initialSelectedSource !== "local"
+      ? initialSelectedSource
+      : undefined
   const t = useTranslations("issues")
   const projectId = useProjectStore((s) => s.activeProjectId)
 
@@ -68,6 +116,14 @@ export function IssuesMobileBody({ initialSelectedId }: IssuesMobileBodyProps) {
     deps: [],
     initial: [] as LabelRow[],
     table: "labels",
+  }).data
+  /** Issues an agent run holds, from this phone's synced copy of the runs. */
+  const runningIds = useDexieFirstQuery({
+    query: () =>
+      projectId ? listActiveIssueRunIssueIds(projectId) : Promise.resolve(new Set<string>()),
+    deps: [projectId],
+    initial: new Set<string>(),
+    table: "issueRuns",
   }).data
   const cycles = useDexieFirstQuery({
     query: () => (projectId ? listIssueCycles({ projectId }) : Promise.resolve([])),
@@ -98,19 +154,35 @@ export function IssuesMobileBody({ initialSelectedId }: IssuesMobileBodyProps) {
     () => buildPlanningHints(unified, cyclesById),
     [unified, cyclesById]
   )
-  const groups = useMemo(() => buildIssueGroups(unified, "status"), [unified])
+  const [filter, setFilter] = useState<IssueBoardFilter>(() => deepLinkFilter(props))
+  const filtered = useMemo(() => applyIssueFilter(unified, filter), [unified, filter])
+  const chips = useMemo(() => collectActiveFilterChips(filter), [filter])
+  /** `actorKey` to display name, from the rows on this phone, for the assignee chip. */
+  const assigneeLabels = useMemo(() => {
+    const labels = new Map<string, string>()
+    for (const item of unified) {
+      const key = actorKey(item.assignee)
+      if (key && item.assignee && !labels.has(key)) {
+        labels.set(key, item.assignee.label ?? t(`actor.${item.assignee.kind}`))
+      }
+    }
+    return labels
+  }, [unified, t])
+  const groups = useMemo(() => buildIssueGroups(filtered, "status"), [filtered])
   const total = groups.reduce((sum, group) => sum + group.items.length, 0)
+  const [showLinkedElsewhere, setShowLinkedElsewhere] = useState(Boolean(linkedElsewhere))
 
   /**
    * The deep link used to set a highlight and stop there — `?id=` tinted a row
    * that nothing could open. It now seeds the detail sheet, so a link from a
    * notification actually arrives somewhere.
    */
-  const [openId, setOpenId] = useState<string | undefined>(initialSelectedId)
+  const [openId, setOpenId] = useState<string | undefined>(
+    linkedElsewhere ? undefined : initialSelectedId
+  )
   const [createOpen, setCreateOpen] = useState(false)
   const openItem =
-    groups.flatMap((group) => group.items).find((candidate) => candidate.sourceId === openId) ??
-    null
+    unified.find((candidate) => candidate.sourceId === openId) ?? null
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-testid="issues-mobile-body">
@@ -137,13 +209,52 @@ export function IssuesMobileBody({ initialSelectedId }: IssuesMobileBodyProps) {
           </Button>
         </div>
         <TrackerTabs active="issues" compact />
+        {chips.length > 0 ? (
+          <ActiveFilterChips
+            chips={chips}
+            projectNamesById={projectNamesById}
+            cycleNamesById={cycleNamesById}
+            assigneeLabels={assigneeLabels}
+            labelsById={labelsById}
+            onRemove={(chip) => setFilter((current) => removeFilterChip(current, chip))}
+            onClearAll={() => setFilter(EMPTY_ISSUE_FILTER)}
+          />
+        ) : null}
       </header>
 
-      {total === 0 && issuesQuery.isSyncing ? (
+      {showLinkedElsewhere && linkedElsewhere ? (
+        <div
+          className="flex flex-col items-center gap-3 px-6 py-16 text-center"
+          data-testid="issues-mobile-unavailable"
+        >
+          <p className="text-sm font-medium">
+            {t("mobile.unavailableSource", { source: t(`source.${linkedElsewhere}`) })}
+          </p>
+          <p className="text-sm text-muted-foreground">{t("mobile.unavailableSourceHint")}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setShowLinkedElsewhere(false)}
+            data-testid="issues-mobile-unavailable-dismiss"
+          >
+            {t("mobile.showIssues")}
+          </Button>
+        </div>
+      ) : total === 0 && issuesQuery.isSyncing ? (
         // "No issues" and "this phone has not pulled the board yet" are
         // different answers, and until these tables synced the second was
         // always rendered as the first.
         <ListSkeleton rows={3} testId="issues-mobile-skeleton" className="p-4" />
+      ) : total === 0 && isIssueFilterActive(filter) && unified.length > 0 ? (
+        <div
+          className="flex flex-col items-center gap-3 px-6 py-16 text-center"
+          data-testid="issues-mobile-filtered-empty"
+        >
+          <p className="text-sm text-muted-foreground">{t("mobile.filteredEmpty")}</p>
+          <Button size="sm" variant="outline" onClick={() => setFilter(EMPTY_ISSUE_FILTER)}>
+            {t("toolbar.clearFilters")}
+          </Button>
+        </div>
       ) : total === 0 ? (
         <div
           className="flex flex-col items-center gap-3 px-6 py-16 text-center"
@@ -259,6 +370,7 @@ export function IssuesMobileBody({ initialSelectedId }: IssuesMobileBodyProps) {
         cycleNamesById={cycleNamesById}
         items={unified}
         hint={openItem ? planningHints.get(openItem.unifiedId) : undefined}
+        runActive={openItem ? (runningIds?.has(openItem.sourceId) ?? false) : false}
       />
     </div>
   )

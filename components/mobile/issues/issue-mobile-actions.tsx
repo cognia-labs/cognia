@@ -10,6 +10,12 @@
  * Only a local issue has a write path. A row federated in from GitHub or an
  * agent board is edited in that system, so the block stays off for it and the
  * read-only badge stays on.
+ *
+ * The status picker offers what the desktop board would accept
+ * (`allowedIssueMoveTargets`), judged against this phone's synced copy of the
+ * issue's runs: a move the host's run lock would refuse is not offered, rather
+ * than queued and refused later. The host still decides; the copy can lag a
+ * pull behind.
  */
 
 import { SendHorizontalIcon } from "lucide-react"
@@ -29,14 +35,17 @@ import {
   queueIssueAction,
   type RemoteIssueAction,
 } from "@/lib/issues/remote-write"
-import { ISSUE_STAGE_MAX, ISSUE_STATUSES, isIssueStage, type IssueStatus } from "@/types/issues"
+import { allowedIssueMoveTargets } from "@/lib/issues/state-machine"
+import { ISSUE_STAGE_MAX, isIssueStage, type IssueStatus } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 
 export interface IssueMobileActionsProps {
   item: UnifiedIssueItem
+  /** An agent run holds this issue, per the phone's synced `issueRuns`. */
+  runActive?: boolean
 }
 
-export function IssueMobileActions({ item }: IssueMobileActionsProps) {
+export function IssueMobileActions({ item, runActive = false }: IssueMobileActionsProps) {
   const t = useTranslations("issues")
   const [comment, setComment] = useState("")
   // The stage box commits on blur or Enter, not per keystroke: each commit is
@@ -57,6 +66,12 @@ export function IssueMobileActions({ item }: IssueMobileActionsProps) {
       setBusy(null)
     }
   }
+
+  // The current status first (the select shows it), then every legal target.
+  const statusOptions: IssueStatus[] = [
+    item.status,
+    ...allowedIssueMoveTargets(item.capabilities, item.status, { runActive }),
+  ]
 
   function commitStage() {
     if (stageDraft === null) return
@@ -95,12 +110,17 @@ export function IssueMobileActions({ item }: IssueMobileActionsProps) {
             }}
             data-testid="issues-mobile-status"
           >
-            {ISSUE_STATUSES.map((status) => (
+            {statusOptions.map((status) => (
               <option key={status} value={status}>
                 {t(`status.${status}`)}
               </option>
             ))}
           </NativeSelect>
+          {runActive ? (
+            <p className="text-xs text-muted-foreground" data-testid="issues-mobile-status-running">
+              {t("board.runningCard")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

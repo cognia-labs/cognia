@@ -164,7 +164,11 @@ export function applyIssueSort(
 
 // ── view preferences ────────────────────────────────────────────────────────
 
-/** Row height for the list layout. */
+/**
+ * How tightly issues are drawn: row height in the list, card size on the
+ * board (`compact` drops a card's label row). One setting for both layouts,
+ * so switching a view between them keeps the density it was given.
+ */
 export const ISSUE_LIST_DENSITIES = ["comfortable", "compact"] as const
 
 export type IssueListDensity = (typeof ISSUE_LIST_DENSITIES)[number]

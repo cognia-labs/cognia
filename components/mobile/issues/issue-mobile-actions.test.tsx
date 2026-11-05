@@ -18,12 +18,13 @@ jest.mock("@/components/issues/assignee-picker", () => ({
   },
 }))
 
-import { selectOption } from "@/lib/testing/select-option"
+import { getNativeSelect, selectOption } from "@/lib/testing/select-option"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { toast } from "sonner"
 import { statusCategoryOf } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import { FULL_ISSUE_CAPABILITIES } from "@/types/issues/unified"
+import { allowedIssueMoveTargets } from "@/lib/issues/state-machine"
 import { IssueMobileActions } from "./issue-mobile-actions"
 
 function item(over: Partial<UnifiedIssueItem> = {}): UnifiedIssueItem {
@@ -73,6 +74,41 @@ describe("IssueMobileActions", () => {
       await selectOption(screen.getByTestId("issues-mobile-status"), "todo")
     })
     expect(mockQueue).not.toHaveBeenCalled()
+  })
+
+  it("offers only the moves the board would accept, judged against the synced runs", () => {
+    const optionsOf = () =>
+      Array.from(
+        getNativeSelect(screen.getByTestId("issues-mobile-status")).options,
+        (option) => option.value
+      )
+    const { rerender } = render(<IssueMobileActions item={item()} />)
+    expect(optionsOf()).toEqual([
+      "todo",
+      ...allowedIssueMoveTargets(FULL_ISSUE_CAPABILITIES, "todo", { runActive: false }),
+    ])
+    expect(optionsOf()).toContain("in_progress")
+    expect(screen.queryByTestId("issues-mobile-status-running")).not.toBeInTheDocument()
+
+    rerender(<IssueMobileActions item={item()} runActive />)
+    expect(optionsOf()).toEqual([
+      "todo",
+      ...allowedIssueMoveTargets(FULL_ISSUE_CAPABILITIES, "todo", { runActive: true }),
+    ])
+    expect(optionsOf()).not.toContain("in_progress")
+    expect(screen.getByTestId("issues-mobile-status-running")).toHaveTextContent(
+      "board.runningCard"
+    )
+  })
+
+  it("keeps the current status first and offered exactly once", () => {
+    render(<IssueMobileActions item={item({ status: "in_review" })} />)
+    const values = Array.from(
+      getNativeSelect(screen.getByTestId("issues-mobile-status")).options,
+      (option) => option.value
+    )
+    expect(values[0]).toBe("in_review")
+    expect(values.filter((value) => value === "in_review")).toHaveLength(1)
   })
 
   it("queues an assignee change through the shared picker", async () => {

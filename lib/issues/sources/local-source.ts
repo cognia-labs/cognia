@@ -25,6 +25,7 @@ import {
   setIssueAssignee,
   updateIssue,
 } from "@/lib/db/issues"
+import { observeIssueList } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
 import { issueHref } from "@/lib/issues/hrefs"
@@ -70,16 +71,19 @@ export function toUnifiedIssue(issue: Issue): UnifiedIssueItem {
   }
 }
 
+async function listLocalIssues(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
+  const rows = await listIssues({
+    projectId: query.projectId,
+    ...(query.issueProjectId ? { issueProjectId: query.issueProjectId } : {}),
+  })
+  return rows.map(toUnifiedIssue)
+}
+
 export const localIssueSource: IssueSourceAdapter = {
   kind: "local",
   label: "Local",
-  async list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
-    const rows = await listIssues({
-      projectId: query.projectId,
-      ...(query.issueProjectId ? { issueProjectId: query.issueProjectId } : {}),
-    })
-    return rows.map(toUnifiedIssue)
-  },
+  list: listLocalIssues,
+  subscribe: (query, observer) => observeIssueList(() => listLocalIssues(query), observer),
   async mutate(sourceId, action, by) {
     await mutateLocalIssue(sourceId, action, by)
   },

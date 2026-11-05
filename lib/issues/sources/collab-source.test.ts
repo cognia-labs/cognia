@@ -5,6 +5,7 @@
 import { replaceCollabIssues } from "@/lib/db/collab-issue-mirror"
 import type { CollabIssueMirrorRow } from "@/lib/db/collab-issue-mirror-types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
+import type { IssueSourceAdapter, IssueSourceQuery } from "@/types/issues/unified"
 import { createIssueSourceRegistry } from "./registry"
 
 import {
@@ -140,6 +141,33 @@ describe("collabIssueSource.list", () => {
 
   it("returns nothing when the mirror is empty, without throwing", async () => {
     expect(await collabIssueSource.list({ projectId: "proj-1" })).toEqual([])
+  })
+})
+
+/** Subscribe and collect each delivery's source ids. */
+function follow(source: { subscribe: IssueSourceAdapter["subscribe"] }, query: IssueSourceQuery) {
+  const batches: string[][] = []
+  const errors: unknown[] = []
+  const stop = source.subscribe(query, {
+    next: (items) => batches.push(items.map((item) => item.sourceId)),
+    error: (error) => errors.push(error),
+  })
+  return { batches, errors, stop }
+}
+
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+describe("collabIssueSource.subscribe", () => {
+  it("follows a pull that replaces the mirror", async () => {
+    const seen = follow(collabIssueSource, { projectId: "proj-1" })
+    await settle()
+    expect(seen.batches).toEqual([[]])
+    await replaceCollabIssues({ orgId: ORG }, [row({ id: "iss_pulled" })])
+    await settle()
+    expect(seen.batches.at(-1)).toEqual(["iss_pulled"])
+    seen.stop()
   })
 })
 

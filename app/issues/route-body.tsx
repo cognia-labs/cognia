@@ -15,7 +15,7 @@ export interface RouteBodyProps {
 export default function RouteBody(props: RouteBodyProps) {
   const compact = useCompactLayout()
   return compact ? (
-    <IssuesMobileBody initialSelectedId={props.initialSelectedId} />
+    <IssuesMobileBody {...props} />
   ) : (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
       <IssueConsole {...props} />

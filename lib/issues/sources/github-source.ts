@@ -19,6 +19,7 @@ import type { IssueStatus } from "@/types/issues"
 import { statusCategoryOf } from "@/types/issues"
 import type { IssueSourceAdapter, IssueSourceQuery, UnifiedIssueItem } from "@/types/issues/unified"
 import { makeUnifiedIssueId, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
+import { observeIssueList } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
 /**
@@ -80,28 +81,33 @@ export function toUnifiedGithubIssue(row: GithubIssueMirrorRow): UnifiedIssueIte
   }
 }
 
+async function listGithubMirrorIssues(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
+  if (query.issueProjectId) {
+    const rows = await listGithubIssues({ issueProjectId: query.issueProjectId })
+    return rows.map(toUnifiedGithubIssue)
+  }
+
+  // Mirror rows are keyed by repo and delivery container — NOT by workspace.
+  // So the workspace-wide read has to resolve this workspace's containers
+  // first and filter to those; listing every bound row would put another
+  // workspace's GitHub issues on this board.
+  const containers = await listIssueProjects({ projectId: query.projectId })
+  if (containers.length === 0) return []
+  const allowed = new Set(containers.map((container) => container.id))
+
+  const rows = await listGithubIssues({})
+  return rows
+    .filter((row) => row.issueProjectId !== undefined && allowed.has(row.issueProjectId))
+    .map(toUnifiedGithubIssue)
+}
+
 export const githubIssueSource: IssueSourceAdapter = {
   kind: "github",
   label: "GitHub",
-  async list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
-    if (query.issueProjectId) {
-      const rows = await listGithubIssues({ issueProjectId: query.issueProjectId })
-      return rows.map(toUnifiedGithubIssue)
-    }
-
-    // Mirror rows are keyed by repo and delivery container — NOT by workspace.
-    // So the workspace-wide read has to resolve this workspace's containers
-    // first and filter to those; listing every bound row would put another
-    // workspace's GitHub issues on this board.
-    const containers = await listIssueProjects({ projectId: query.projectId })
-    if (containers.length === 0) return []
-    const allowed = new Set(containers.map((container) => container.id))
-
-    const rows = await listGithubIssues({})
-    return rows
-      .filter((row) => row.issueProjectId !== undefined && allowed.has(row.issueProjectId))
-      .map(toUnifiedGithubIssue)
-  },
+  list: listGithubMirrorIssues,
+  // A refresh, a write-back's re-read and a container rebinding all write the
+  // mirror or `issueProjects`, both of which this read touches.
+  subscribe: (query, observer) => observeIssueList(() => listGithubMirrorIssues(query), observer),
 }
 
 export function registerGithubIssueSource(

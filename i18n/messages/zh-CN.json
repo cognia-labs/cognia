@@ -23966,6 +23966,7 @@
         "pickedUp": "已从{column}拾起 {identifier}。"
       },
       "empty": "暂无议题",
+      "lane": "{name}，{count} 个议题",
       "runningCard": "有 Agent 正在处理这个议题"
     },
     "bulk": {
@@ -24247,10 +24248,14 @@
       "createQueued": "已排队：{title}",
       "cyclesEmpty": "还没有迭代",
       "cyclesEmptyHint": "迭代需要在大屏设备上规划，规划后会自动显示在这里。",
+      "filteredEmpty": "没有符合筛选条件的议题",
       "projectsEmptyHint": "项目需要在大屏设备上创建，创建后会自动显示在这里。",
       "queued": "已排队：{identifier}",
       "queuedHint": "更改会发送到你的主机，下次同步后在此显示。",
-      "sendComment": "发送"
+      "sendComment": "发送",
+      "showIssues": "查看本设备上的议题",
+      "unavailableSource": "此设备无法打开{source}议题。",
+      "unavailableSourceHint": "请在登录此工作区的电脑上打开。"
     },
     "notify": {
       "actor": {

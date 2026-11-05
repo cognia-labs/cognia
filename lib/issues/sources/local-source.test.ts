@@ -3,9 +3,10 @@
  */
 
 import { createDbTestFixture } from "@/lib/db/test-fixture"
-import { createIssue } from "@/lib/db/issues"
+import { createIssue, reorderIssues } from "@/lib/db/issues"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { FULL_ISSUE_CAPABILITIES } from "@/types/issues/unified"
+import type { IssueSourceAdapter, IssueSourceQuery } from "@/types/issues/unified"
 import { createIssueSourceRegistry } from "./registry"
 import {
   issueHref,
@@ -38,6 +39,55 @@ function make(over: Partial<Parameters<typeof createIssue>[0]> = {}) {
     ...over,
   })
 }
+
+/** Subscribe and collect each delivery's source ids. */
+function follow(source: { subscribe: IssueSourceAdapter["subscribe"] }, query: IssueSourceQuery) {
+  const batches: string[][] = []
+  const errors: unknown[] = []
+  const stop = source.subscribe(query, {
+    next: (items) => batches.push(items.map((item) => item.sourceId)),
+    error: (error) => errors.push(error),
+  })
+  return { batches, errors, stop }
+}
+
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+describe("localIssueSource.subscribe", () => {
+  it("delivers the workspace's issues, then again after a write", async () => {
+    const seen = follow(localIssueSource, { projectId: "w1" })
+    await settle()
+    expect(seen.batches).toEqual([[]])
+    const created = await make({ title: "Live" })
+    await settle()
+    expect(seen.batches.at(-1)).toEqual([created.id])
+    seen.stop()
+    await make({ title: "After stop" })
+    await settle()
+    expect(seen.batches.at(-1)).toEqual([created.id])
+  })
+})
+
+describe("localIssueSource.subscribe after a reorder", () => {
+  it("delivers the new order through the registry at once", async () => {
+    const first = await make({ title: "First", status: "todo" })
+    const second = await make({ title: "Second", status: "todo" })
+    const registry = createIssueSourceRegistry()
+    registerLocalIssueSource(registry)
+    const orders: string[][] = []
+    const stop = registry.subscribeAll({ projectId: "w1" }, (snapshot) =>
+      orders.push(snapshot.items.map((item) => item.sourceId))
+    )
+    await settle()
+    expect(orders.at(-1)).toEqual([first.id, second.id])
+    await reorderIssues([{ sourceId: second.id, order: first.order - 1 }])
+    await settle()
+    expect(orders.at(-1)).toEqual([second.id, first.id])
+    stop()
+  })
+})
 
 describe("issueHref", () => {
   it("uses a query param, because a static export has no dynamic [id] route", () => {
@@ -132,8 +182,11 @@ describe("registerLocalIssueSource", () => {
     const registry = createIssueSourceRegistry()
     registerLocalIssueSource(registry)
 
-    const { items, errors } = await registry.listAll({ projectId: "w1" })
-    expect(errors).toEqual([])
-    expect(items.map((i) => i.identifier)).toEqual(["MERC-1"])
+    const snapshots: Array<{ items: { identifier: string }[]; errors: unknown[] }> = []
+    const stop = registry.subscribeAll({ projectId: "w1" }, (snapshot) => snapshots.push(snapshot))
+    await settle()
+    stop()
+    expect(snapshots.at(-1)?.errors).toEqual([])
+    expect(snapshots.at(-1)?.items.map((i) => i.identifier)).toEqual(["MERC-1"])
   })
 })

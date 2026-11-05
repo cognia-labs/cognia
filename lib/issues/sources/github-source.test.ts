@@ -6,6 +6,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { upsertGithubIssues } from "@/lib/db/github-issue-mirror"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import type { GithubIssueMirrorRow } from "@/lib/db/github-issue-mirror-types"
+import type { IssueSourceAdapter, IssueSourceQuery } from "@/types/issues/unified"
 import { createIssueSourceRegistry } from "./registry"
 import {
   githubIssueSource,
@@ -147,6 +148,34 @@ describe("githubIssueSource.list", () => {
   it("returns nothing when the workspace has no containers at all", async () => {
     await upsertGithubIssues([mirrorRow({ issueProjectId: "p-elsewhere" })])
     expect(await githubIssueSource.list({ projectId: "w-empty" })).toEqual([])
+  })
+})
+
+/** Subscribe and collect each delivery's source ids. */
+function follow(source: { subscribe: IssueSourceAdapter["subscribe"] }, query: IssueSourceQuery) {
+  const batches: string[][] = []
+  const errors: unknown[] = []
+  const stop = source.subscribe(query, {
+    next: (items) => batches.push(items.map((item) => item.sourceId)),
+    error: (error) => errors.push(error),
+  })
+  return { batches, errors, stop }
+}
+
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+describe("githubIssueSource.subscribe", () => {
+  it("follows a refresh that writes the mirror", async () => {
+    const container = await createIssueProject({ projectId: "w1", name: "Mine" })
+    const seen = follow(githubIssueSource, { projectId: "w1" })
+    await settle()
+    expect(seen.batches).toEqual([[]])
+    await upsertGithubIssues([mirrorRow({ number: 9, issueProjectId: container.id })])
+    await settle()
+    expect(seen.batches.at(-1)).toEqual(["o/r#9"])
+    seen.stop()
   })
 })
 

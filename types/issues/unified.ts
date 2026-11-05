@@ -167,18 +167,31 @@ export interface IssueSourceQuery {
   issueProjectId?: string
 }
 
+/** Receives a source's rows each time they change, or why it could not read them. */
+export interface IssueSourceObserver {
+  next(items: UnifiedIssueItem[]): void
+  error(error: unknown): void
+}
+
 /**
  * One federated backend. Registered in `lib/issues/sources/registry.ts`.
  *
  * `list` is expected to read from local storage (Dexie / an in-memory store),
  * not from the network — network refresh is a separate concern owned by each
  * source's own sync path (for GitHub, a scheduler executor).
+ *
+ * `subscribe` is what the board reads: it delivers the current rows, then the
+ * rows again after every change to whatever `list` read (a Dexie write, an
+ * Agent Team store update), until the returned function is called. A board
+ * that polled `list` on its own schedule missed every federated change that
+ * did not also touch a local issue.
  */
 export interface IssueSourceAdapter {
   readonly kind: IssueSourceKind
   /** Display label for the source badge and the filter menu. */
   readonly label: string
   list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]>
+  subscribe(query: IssueSourceQuery, observer: IssueSourceObserver): () => void
   mutate?(sourceId: string, action: IssueSourceMutation, by: IssueActor): Promise<void>
 }
 

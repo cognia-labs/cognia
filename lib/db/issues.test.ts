@@ -359,6 +359,21 @@ describe("reorderIssues", () => {
     expect((await getIssue(b.id))!.order).toBe(0)
   })
 
+  it("moves updatedAt for a reordered row and leaves an unchanged one alone", async () => {
+    const a = await make({ status: "todo" })
+    const b = await make({ status: "todo" })
+    const before = (await getIssue(b.id))!
+    await reorderIssues(
+      [
+        { sourceId: a.id, order: before.order + 5 },
+        { sourceId: b.id, order: before.order },
+      ],
+      9_999_999_999_999
+    )
+    expect((await getIssue(a.id))!.updatedAt).toBe(9_999_999_999_999)
+    expect((await getIssue(b.id))!.updatedAt).toBe(before.updatedAt)
+  })
+
   it("ignores unknown ids and an empty change set", async () => {
     await expect(reorderIssues([])).resolves.toBeUndefined()
     await expect(reorderIssues([{ sourceId: "nope", order: 3 }])).resolves.toBeUndefined()

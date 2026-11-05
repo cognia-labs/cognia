@@ -11,6 +11,14 @@
  * overlay portal and keyboard movement belong to the shared primitive; the
  * collapsed strip's issue-aware rail is injected through `renderCollapsed`
  * (`./issue-collapsed-rail.tsx`) while the board keeps the droppable shell.
+ *
+ * SWIMLANES. Grouping by assignee, priority or project draws one row of status
+ * columns per group (`buildIssueSwimlanes`), in the list's group order. Each
+ * lane is its own `KanbanBoard`, so a card moves between columns inside its
+ * lane and never between lanes: a drop changes status and nothing else, the
+ * same as the list's grouping, which only shows the field. A reorder carries
+ * the card it was dropped on, and the console places it within the whole
+ * column, because a lane holds only part of one.
  */
 
 import { useCallback, useMemo, type ReactNode } from "react"
@@ -22,18 +30,22 @@ import {
   type KanbanColumnModel,
   type KanbanDragState,
 } from "@/components/board/kanban-board"
+import { useIssueGroupLabel } from "@/hooks/issues/use-issue-group-label"
 import {
   buildIssueColumns,
+  buildIssueSwimlanes,
   columnDropId,
   resolveIssueDrop,
   resolveIssueDropPreview,
+  type IssueBoardColumn,
   type IssueDropAction,
+  type IssueGroupBy,
 } from "@/lib/issues/board-model"
 import { allowedIssueMoveTargets } from "@/lib/issues/state-machine"
 import type { IssuePlanningHint } from "@/lib/issues/planning-hints"
 import type { SquadRunRef } from "@/lib/issues/run/running"
 import type { IssueWakeupCue } from "@/lib/issues/wakeups/model"
-import { resolveColumnCollapsed } from "@/lib/issues/views"
+import { resolveColumnCollapsed, type IssueListDensity } from "@/lib/issues/views"
 import type { IssueStatus } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
@@ -68,13 +80,110 @@ export interface IssueBoardProps {
   onAddIssue?: (status: IssueStatus) => void
   /** Wraps each card, so the console can attach the shared context menu. */
   renderItemMenu?: (item: UnifiedIssueItem, children: ReactNode) => ReactNode
+  /**
+   * The view's grouping. `assignee`, `priority` and `project` draw swimlanes;
+   * `status` and `none` draw the columns once.
+   */
+  groupBy?: IssueGroupBy
+  /** Card size: `compact` drops the label row and tightens the card. */
+  density?: IssueListDensity
+  /** `actorKey` to display name, for the assignee lanes' headings. */
+  assigneeLabels?: ReadonlyMap<string, string>
 }
 
 const itemId = (item: UnifiedIssueItem) => item.unifiedId
 const itemLabel = (item: UnifiedIssueItem) => item.identifier
 
 export function IssueBoard({
-  items,
+  groupBy = "status",
+  density = "comfortable",
+  assigneeLabels,
+  ...props
+}: IssueBoardProps) {
+  const t = useTranslations("issues")
+  const lanes = useMemo(() => buildIssueSwimlanes(props.items, groupBy), [props.items, groupBy])
+  const allColumns = useMemo(
+    () => (lanes ? null : buildIssueColumns(props.items)),
+    [lanes, props.items]
+  )
+  const laneLabel = useIssueGroupLabel(groupBy, {
+    projectNamesById: props.projectNamesById,
+    assigneeLabels,
+  })
+
+  if (!lanes) {
+    return (
+      <IssueLaneBoard
+        {...props}
+        columns={allColumns ?? []}
+        density={density}
+        testId="issue-board"
+        testIdPrefix="issue"
+        className="h-full"
+      />
+    )
+  }
+
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col overflow-y-auto"
+      data-testid="issue-board"
+      data-group-by={groupBy}
+    >
+      {lanes.map((lane) => {
+        const slug = lane.key || "none"
+        const label = laneLabel(lane.key)
+        return (
+          <section
+            key={slug}
+            aria-label={t("board.lane", { name: label, count: lane.itemCount })}
+            data-testid={`issue-lane-${slug}`}
+            className="border-b last:border-b-0"
+          >
+            <header className="sticky left-0 flex items-center gap-2 px-4 pt-3">
+              <h2 className="truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {label}
+              </h2>
+              <span
+                className="text-xs tabular-nums text-muted-foreground"
+                data-testid={`issue-lane-${slug}-count`}
+              >
+                {lane.itemCount}
+              </span>
+            </header>
+            <IssueLaneBoard
+              {...props}
+              columns={lane.columns}
+              density={density}
+              testId={`issue-lane-board-${slug}`}
+              testIdPrefix={`issue-lane-${slug}`}
+            />
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
+interface IssueLaneBoardProps extends Omit<
+  IssueBoardProps,
+  "items" | "groupBy" | "density" | "assigneeLabels"
+> {
+  /** This lane's columns; every item a drop can name is in one of them. */
+  columns: readonly IssueBoardColumn[]
+  density: IssueListDensity
+  testId: string
+  testIdPrefix: string
+  className?: string
+}
+
+/** One row of status columns: the whole board, or one swimlane of it. */
+function IssueLaneBoard({
+  columns: laneColumns,
+  density,
+  testId,
+  testIdPrefix,
+  className,
   labelsById,
   projectNamesById,
   runningIds,
@@ -88,14 +197,19 @@ export function IssueBoard({
   onDrop,
   onAddIssue,
   renderItemMenu,
-}: IssueBoardProps) {
+}: IssueLaneBoardProps) {
   const t = useTranslations("issues")
 
   const columns = useMemo<IssueColumn[]>(
-    () => buildIssueColumns(items).map((column) => ({ id: column.status, items: column.items })),
-    [items]
+    () => laneColumns.map((column) => ({ id: column.status, items: column.items })),
+    [laneColumns]
   )
-  const itemsById = useMemo(() => new Map(items.map((item) => [item.unifiedId, item])), [items])
+  /** Only this lane's items: a drop or preview never reaches into another lane. */
+  const itemsById = useMemo(
+    () =>
+      new Map(laneColumns.flatMap((column) => column.items.map((item) => [item.unifiedId, item]))),
+    [laneColumns]
+  )
 
   const isRunning = useCallback(
     (unifiedId: string) => runningIds?.has(unifiedId) ?? false,
@@ -194,6 +308,7 @@ export function IssueBoard({
       renderCard={(item) => (
         <IssueCard
           item={item}
+          density={density}
           hint={planningHints?.get(item.unifiedId)}
           labels={labelsOf(item)}
           projectName={projectNameOf(item)}
@@ -208,6 +323,7 @@ export function IssueBoard({
         <div className="w-66" data-testid="issue-drag-overlay">
           <IssueCardVisual
             item={item}
+            density={density}
             hint={planningHints?.get(item.unifiedId)}
             labels={labelsOf(item)}
             projectName={projectNameOf(item)}
@@ -229,9 +345,9 @@ export function IssueBoard({
       onDrop={handleDrop}
       emptyText={t("board.empty")}
       accessibility={accessibility}
-      testId="issue-board"
-      testIdPrefix="issue"
-      className="h-full"
+      testId={testId}
+      testIdPrefix={testIdPrefix}
+      className={className}
     />
   )
 }

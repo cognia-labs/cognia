@@ -2,9 +2,15 @@
  * @jest-environment jsdom
  */
 
-jest.mock("@/stores/agent/agent-team-store", () => ({
-  useAgentTeamStore: {
-    getState: () => ({
+// `Dexie.liveQuery` never delivers without an IndexedDB, even for a read that
+// touches no table, and `subscribe` runs under it.
+import "fake-indexeddb/auto"
+
+jest.mock("@/stores/agent/agent-team-store", () => {
+  const listeners = new Set<(state: unknown) => void>()
+  const store = {
+    listeners,
+    state: {
       teams: {
         "team-1": { id: "team-1", name: "Squad", status: "idle", projectId: "w1" },
         "team-2": { id: "team-2", name: "Other", status: "idle", projectId: "w2" },
@@ -35,9 +41,20 @@ jest.mock("@/stores/agent/agent-team-store", () => ({
           order: 0,
         },
       },
-    }),
-  },
-}))
+    } as Record<string, unknown>,
+    getState: () => store.state,
+    subscribe: (listener: (state: unknown) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    /** Test seam: replace state and notify, as a zustand `set` does. */
+    setState: (next: Record<string, unknown>) => {
+      store.state = { ...store.state, ...next }
+      for (const listener of listeners) listener(store.state)
+    },
+  }
+  return { useAgentTeamStore: store }
+})
 jest.mock("@/lib/db/issue-runs", () => ({ mapIssueRunsByTarget: async () => new Map() }))
 
 import type { AgentTeam, AgentTeamTask } from "@/types/agent/agent-team"
@@ -51,6 +68,10 @@ import {
   teamTaskIssueId,
   toUnifiedTeamTask,
 } from "./agent-team-source"
+
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+}
 
 function team(over: Partial<AgentTeam> = {}): AgentTeam {
   return { id: "team-1", name: "Squad", status: "executing", projectId: "w1", ...over } as AgentTeam
@@ -228,6 +249,72 @@ describe("list", () => {
     expect(items.map((i) => i.sourceId)).toEqual(["a"])
     expect(items[0].assignee).toEqual({ kind: "team", id: "team-1", label: "Squad" })
     expect(await agentTeamIssueSource.list({ projectId: "w3" })).toEqual([])
+  })
+
+  it("subscribes: a store change reported by watchTeams re-reads the teams", async () => {
+    let tasks = [task({ id: "tt-1" })]
+    let notify: () => void = () => {}
+    const stopWatch = jest.fn()
+    const source = createAgentTeamIssueSource({
+      readTeams: async () => [{ team: team(), tasks }],
+      runsByTarget: async () => new Map(),
+      originRefsOf: async () => new Map(),
+      readRoster: async () => new Map(),
+      readLabelIds: async () => new Map(),
+      watchTeams: (fire) => {
+        notify = fire
+        return stopWatch
+      },
+    })
+    const batches: string[][] = []
+    const stop = source.subscribe(
+      { projectId: "w1" },
+      { next: (items) => batches.push(items.map((i) => i.sourceId)), error: () => {} }
+    )
+    await settle()
+    expect(batches).toEqual([["tt-1"]])
+
+    tasks = [task({ id: "tt-1" }), task({ id: "tt-2", order: 2 })]
+    notify()
+    await settle()
+    expect(batches.at(-1)).toEqual(["tt-1", "tt-2"])
+    stop()
+    expect(stopWatch).toHaveBeenCalledTimes(1)
+  })
+
+  it("follows the real store by default, ignoring writes that leave the projected slices alone", async () => {
+    const { useAgentTeamStore } = jest.requireMock("@/stores/agent/agent-team-store") as {
+      useAgentTeamStore: {
+        state: Record<string, unknown>
+        listeners: Set<unknown>
+        setState: (next: Record<string, unknown>) => void
+      }
+    }
+    const original = useAgentTeamStore.state
+    const batches: string[][] = []
+    const stop = agentTeamIssueSource.subscribe(
+      { projectId: "w1" },
+      { next: (items) => batches.push(items.map((i) => i.sourceId)), error: () => {} }
+    )
+    await settle()
+    expect(batches.at(-1)).toEqual(["a"])
+    expect(useAgentTeamStore.listeners.size).toBe(1)
+    const deliveries = batches.length
+
+    useAgentTeamStore.setState({ selectedTeamId: "team-1" })
+    await settle()
+    expect(batches).toHaveLength(deliveries)
+
+    const tasks = original.tasks as Record<string, AgentTeamTask>
+    useAgentTeamStore.setState({
+      tasks: { ...tasks, c: { ...tasks.a!, id: "c", title: "C", order: 1 } },
+    })
+    await settle()
+    expect(batches.at(-1)).toEqual(["a", "c"])
+
+    stop()
+    expect(useAgentTeamStore.listeners.size).toBe(0)
+    useAgentTeamStore.setState(original)
   })
 
   it("registers into the source registry under its kind", () => {

@@ -185,6 +185,25 @@ describe("IssueCard", () => {
     expect(screen.getByTestId("label-chip-l1")).toBeInTheDocument()
   })
 
+  it("drops the label row and tightens the title when compact, keeping state glyphs", () => {
+    const labels = [
+      { id: "l1", scope: "issue" as const, name: "bug", sortOrder: 0, createdAt: 0, updatedAt: 0 },
+    ]
+    const busy = item({ labelIds: ["l1"], priority: "urgent", triage: "pending" })
+    const { rerender } = render(<IssueCard item={busy} labels={labels} running density="compact" />)
+    expect(screen.queryByTestId("label-chip-l1")).toBeNull()
+    expect(screen.getByText(busy.title)).toHaveClass("line-clamp-1")
+    expect(screen.getByTestId("issue-card-running-local:i1")).toBeInTheDocument()
+    expect(screen.getByTestId("issue-card-triage-local:i1")).toBeInTheDocument()
+    expect(
+      screen.getByTestId("issue-card-local:i1").querySelector("[data-density]")
+    ).toHaveAttribute("data-density", "compact")
+
+    rerender(<IssueCard item={busy} labels={labels} running />)
+    expect(screen.getByTestId("label-chip-l1")).toBeInTheDocument()
+    expect(screen.getByText(busy.title)).toHaveClass("line-clamp-2")
+  })
+
   it("marks itself while dragging so the board can dim it", () => {
     mockUseSortable.mockReturnValue({
       attributes: {},

@@ -196,10 +196,38 @@ jest.mock("@/lib/issues/run/running", () => ({
   loadIssueViewerContext: () => Promise.resolve(viewerForTest),
 }))
 
+/**
+ * The board's live read. Each subscription asks `mockListAll` for its first
+ * snapshot (so a test sets the rows with `mockResolvedValue`), and
+ * `pushSnapshot` delivers a later one to every live subscriber, as a source
+ * change does.
+ */
 const mockListAll = jest.fn()
-jest.mock("@/lib/issues/sources/registry", () => ({
-  getIssueSourceRegistry: () => ({ listAll: (...a: unknown[]) => mockListAll(...a) }),
-}))
+const mockLiveBoards = new Set<(snapshot: unknown) => void>()
+function pushSnapshot(snapshot: { items: unknown[]; errors: unknown[] }) {
+  act(() => {
+    for (const deliver of mockLiveBoards) deliver(snapshot)
+  })
+}
+jest.mock("@/lib/issues/sources/registry", () => {
+  const registry = {
+    subscribeAll: (query: unknown, onChange: (snapshot: unknown) => void) => {
+      let live = true
+      const deliver = (snapshot: unknown) => {
+        if (live) onChange(snapshot)
+      }
+      mockLiveBoards.add(deliver)
+      void Promise.resolve(mockListAll(query)).then((snapshot) => {
+        if (snapshot) deliver(snapshot)
+      })
+      return () => {
+        live = false
+        mockLiveBoards.delete(deliver)
+      }
+    },
+  }
+  return { getIssueSourceRegistry: () => registry }
+})
 
 const mockRunSync = jest.fn().mockResolvedValue({ repoCount: 0, results: [], failures: [] })
 jest.mock("@/lib/issues/sync-runner", () => ({
@@ -373,6 +401,28 @@ describe("IssueConsole", () => {
       await waitFor(() => expect(mockListAll).toHaveBeenCalledWith({ projectId: "w1" }))
     })
 
+    it("follows a federated change with no local write and no re-read", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [] })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      await waitFor(() => expect((boardProps.items as unknown[]).length).toBe(1))
+      pushSnapshot({
+        items: [item(), item({ unifiedId: "agent-team:t1", kind: "agent-team", sourceId: "t1" })],
+        errors: [],
+      })
+      expect((boardProps.items as Array<{ unifiedId: string }>).map((i) => i.unifiedId)).toContain(
+        "agent-team:t1"
+      )
+      expect(mockListAll).toHaveBeenCalledTimes(1)
+    })
+
+    it("stops following the sources on unmount", async () => {
+      const { unmount } = render(<IssueConsole />)
+      await waitFor(() => expect(mockLiveBoards.size).toBe(1))
+      unmount()
+      expect(mockLiveBoards.size).toBe(0)
+    })
+
     it("does not query when no workspace is active", async () => {
       activeProjectId = null
       render(<IssueConsole />)
@@ -507,6 +557,26 @@ describe("IssueConsole", () => {
       await waitFor(() =>
         expect((railProps.viewCounts as Record<string, number>)["my-agents"]).toBe(1)
       )
+    })
+
+    it("draws my-agents as assignee swimlanes, with names, and follows Display changes", async () => {
+      viewerForTest = { selfKey: "human:self", agentKeys: ["agent:a1"] }
+      mockListAll.mockResolvedValue({
+        items: [item({ assignee: { kind: "agent", id: "a1", label: "Scout" } })],
+        errors: [],
+      })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      expect(boardProps.groupBy).toBe("status")
+      callProp(railProps, "onSelectView", "my-agents")
+      await waitFor(() => expect(boardProps.groupBy).toBe("assignee"))
+      expect(boardProps.density).toBe("comfortable")
+      expect((boardProps.assigneeLabels as Map<string, string>).get("agent:a1")).toBe("Scout")
+
+      act(() => useIssueViewStore.getState().setDensity("my-agents", "compact"))
+      act(() => useIssueViewStore.getState().setGroupBy("my-agents", "priority"))
+      await waitFor(() => expect(boardProps.groupBy).toBe("priority"))
+      expect(boardProps.density).toBe("compact")
     })
 
     it("counts every view from the unfiltered scope", async () => {
@@ -681,9 +751,9 @@ describe("IssueConsole", () => {
   })
 
   describe("drops", () => {
-    it("persists a same-column reorder", async () => {
+    it("persists a same-column reorder onto the card it was dropped on", async () => {
       mockListAll.mockResolvedValue({
-        items: [item(), item({ sourceId: "i2" })],
+        items: [item(), item({ sourceId: "i2", order: 1 })],
         errors: [],
       })
       render(<IssueConsole />)
@@ -691,9 +761,55 @@ describe("IssueConsole", () => {
       callProp(boardProps, "onDrop", {
         type: "reorder",
         unifiedId: "local:i1",
-        targetIndex: 1,
+        overUnifiedId: "local:i2",
       })
-      await waitFor(() => expect(mockReorderIssues).toHaveBeenCalled())
+      await waitFor(() =>
+        expect(mockReorderIssues).toHaveBeenCalledWith([
+          { sourceId: "i2", order: 0 },
+          { sourceId: "i1", order: 1 },
+        ])
+      )
+    })
+
+    it("places a lane's reorder among the whole column, not the lane", async () => {
+      // Lane "agent:a1" shows i1 and i3; i2 (another lane) sits between them in
+      // the column. Dropping i1 on i3 must land after i3 in the full column.
+      const agent = { kind: "agent" as const, id: "a1" }
+      mockListAll.mockResolvedValue({
+        items: [
+          item({ sourceId: "i1", order: 0, assignee: agent }),
+          item({ sourceId: "i2", order: 1 }),
+          item({ sourceId: "i3", order: 2, assignee: agent }),
+        ],
+        errors: [],
+      })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      callProp(boardProps, "onDrop", {
+        type: "reorder",
+        unifiedId: "local:i1",
+        overUnifiedId: "local:i3",
+      })
+      await waitFor(() =>
+        expect(mockReorderIssues).toHaveBeenCalledWith([
+          { sourceId: "i2", order: 0 },
+          { sourceId: "i3", order: 1 },
+          { sourceId: "i1", order: 2 },
+        ])
+      )
+    })
+
+    it("ignores a reorder onto a card no longer on the board", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [] })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      callProp(boardProps, "onDrop", {
+        type: "reorder",
+        unifiedId: "local:i1",
+        overUnifiedId: "local:gone",
+      })
+      await act(async () => undefined)
+      expect(mockReorderIssues).not.toHaveBeenCalled()
     })
 
     it("reports a denial returned by the write boundary itself, not just by the reducer", async () => {
@@ -993,18 +1109,18 @@ describe("IssueConsole", () => {
       expect(detailProps.labelsById).toBeInstanceOf(Map)
     })
 
-    it("still re-reads the sources when the refetch itself fails", async () => {
+    it("says so when the refetch after a write-back fails, without re-reading", async () => {
       mockRunSync.mockRejectedValueOnce(new Error("offline"))
       mockListAll.mockResolvedValue({ items: [item()], errors: [] })
       render(<IssueConsole />)
       await screen.findByTestId("board-stub")
       callProp(boardProps, "onSelect", "local:i1")
       await screen.findByTestId("detail-stub")
-      const before = mockListAll.mock.calls.length
       await act(async () => {
         await (detailProps.onWritebackCompleted as () => Promise<void>)()
       })
-      await waitFor(() => expect(mockListAll.mock.calls.length).toBeGreaterThan(before))
+      // The live read already follows the mirror; nothing re-subscribes.
+      expect(mockListAll).toHaveBeenCalledTimes(1)
       // The write landed; the stale mirror is said, not swallowed.
       expect(toastCalls).toContainEqual(["warning", "writeback.refreshFailed:offline"])
     })

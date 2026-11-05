@@ -10,6 +10,7 @@ let projectsResult: unknown[] = []
 let labelsResult: unknown[] = []
 let eventsResult: unknown[] = []
 let runsResult: unknown[] = []
+let runningResult: Set<string> = new Set()
 let isSyncing = false
 // The body reads each table dexie-first now, so mounting also kicks a
 // targeted pull. The stub dispatches on the query source the same way the
@@ -29,7 +30,9 @@ jest.mock("@/hooks/data/use-dexie-first-query", () => ({
           ? eventsResult
           : source.includes("listIssueRuns")
             ? runsResult
-            : issuesResult
+            : source.includes("listActiveIssueRunIssueIds")
+              ? runningResult
+              : issuesResult
     return { data, isSyncing, lastSyncedAt: null, error: null }
   },
 }))
@@ -48,8 +51,12 @@ jest.mock("./issue-create-sheet", () => ({
     return props.open ? <div data-testid="create-sheet-stub" /> : null
   },
 }))
+let actionsProps: Record<string, unknown> = {}
 jest.mock("./issue-mobile-actions", () => ({
-  IssueMobileActions: () => <div data-testid="actions-stub" />,
+  IssueMobileActions: (props: Record<string, unknown>) => {
+    actionsProps = props
+    return <div data-testid="actions-stub" />
+  },
 }))
 jest.mock("@/lib/db/issue-projects", () => ({ listIssueProjects: jest.fn() }))
 jest.mock("@/lib/db/labels", () => ({ listLabels: jest.fn() }))
@@ -93,6 +100,8 @@ beforeEach(() => {
   labelsResult = []
   eventsResult = []
   runsResult = []
+  runningResult = new Set()
+  actionsProps = {}
   isSyncing = false
   mockActiveProjectId = "w1"
 })
@@ -210,6 +219,94 @@ describe("IssuesMobileBody", () => {
       render(<IssuesMobileBody initialSelectedId="ghost" />)
       expect(screen.queryByTestId("issues-mobile-detail")).not.toBeInTheDocument()
     })
+  })
+
+  describe("deep-link filters", () => {
+    const AGENT = { kind: "agent" as const, id: "a1", label: "Scout" }
+
+    it("narrows to the linked container, cycle and assignee, shown as chips", () => {
+      issuesResult = [
+        issue({ issueProjectId: "p1", cycleId: "c1", assignee: AGENT }),
+        issue({ issueProjectId: "p1", cycleId: "c2", assignee: AGENT }),
+        issue({ issueProjectId: "p2", cycleId: "c1", assignee: AGENT }),
+        issue({ issueProjectId: "p1", cycleId: "c1" }),
+      ]
+      render(
+        <IssuesMobileBody initialProjectId="p1" initialCycleId="c1" initialAssignee="agent:a1" />
+      )
+      expect(screen.getByTestId("issues-mobile-row-i1")).toBeInTheDocument()
+      for (const id of ["i2", "i3", "i4"]) {
+        expect(screen.queryByTestId(`issues-mobile-row-${id}`)).not.toBeInTheDocument()
+      }
+      expect(screen.getByTestId("issue-filter-chip-assignees:agent:a1")).toHaveTextContent("Scout")
+      expect(screen.getByTestId("issue-filter-chip-issueProjectIds:p1")).toBeInTheDocument()
+      expect(screen.getByTestId("issue-filter-chip-cycleIds:c1")).toBeInTheDocument()
+    })
+
+    it("lets a chip be removed, widening the list again", () => {
+      issuesResult = [issue({ issueProjectId: "p1" }), issue({ issueProjectId: "p2" })]
+      render(<IssuesMobileBody initialProjectId="p1" />)
+      expect(screen.queryByTestId("issues-mobile-row-i2")).not.toBeInTheDocument()
+      fireEvent.click(screen.getByTestId("issue-filter-chip-remove-issueProjectIds:p1"))
+      expect(screen.getByTestId("issues-mobile-row-i2")).toBeInTheDocument()
+      expect(screen.queryByTestId("issue-filter-chips")).not.toBeInTheDocument()
+    })
+
+    it("says the filter matched nothing rather than that there are no issues", () => {
+      issuesResult = [issue({ issueProjectId: "p1" })]
+      render(<IssuesMobileBody initialProjectId="p-none" />)
+      expect(screen.getByTestId("issues-mobile-filtered-empty")).toHaveTextContent(
+        "mobile.filteredEmpty"
+      )
+      expect(screen.queryByTestId("issues-mobile-empty")).not.toBeInTheDocument()
+      fireEvent.click(screen.getByText("toolbar.clearFilters"))
+      expect(screen.getByTestId("issues-mobile-row-i1")).toBeInTheDocument()
+    })
+
+    it("still opens a deep-linked issue the filter would hide", async () => {
+      issuesResult = [issue({ issueProjectId: "p2" })]
+      render(<IssuesMobileBody initialSelectedId="i1" initialProjectId="p1" />)
+      expect(await screen.findByTestId("issues-mobile-detail")).toBeInTheDocument()
+    })
+  })
+
+  describe("rows this device cannot open", () => {
+    it.each(["github", "collab", "agent-team", "agent-task"] as const)(
+      "says a %s link cannot be opened here, and opens nothing",
+      (source) => {
+        issuesResult = [issue()]
+        render(<IssuesMobileBody initialSelectedId="i1" initialSelectedSource={source} />)
+        expect(screen.getByTestId("issues-mobile-unavailable")).toBeInTheDocument()
+        expect(screen.queryByTestId("issues-mobile-detail")).not.toBeInTheDocument()
+        expect(screen.queryByTestId("issues-mobile-row-i1")).not.toBeInTheDocument()
+      }
+    )
+
+    it("shows this device's issues once dismissed", () => {
+      issuesResult = [issue()]
+      render(<IssuesMobileBody initialSelectedId="o/r#1" initialSelectedSource="github" />)
+      fireEvent.click(screen.getByTestId("issues-mobile-unavailable-dismiss"))
+      expect(screen.getByTestId("issues-mobile-row-i1")).toBeInTheDocument()
+    })
+
+    it("treats an explicit local source like no source at all", async () => {
+      issuesResult = [issue()]
+      render(<IssuesMobileBody initialSelectedId="i1" initialSelectedSource="local" />)
+      expect(screen.queryByTestId("issues-mobile-unavailable")).not.toBeInTheDocument()
+      expect(await screen.findByTestId("issues-mobile-detail")).toBeInTheDocument()
+    })
+  })
+
+  it("tells the actions when an agent run holds the open issue", async () => {
+    issuesResult = [issue(), issue()]
+    runningResult = new Set(["i2"])
+    const { unmount } = render(<IssuesMobileBody initialSelectedId="i2" />)
+    await screen.findByTestId("actions-stub")
+    expect(actionsProps.runActive).toBe(true)
+    unmount()
+    render(<IssuesMobileBody initialSelectedId="i1" />)
+    await screen.findByTestId("actions-stub")
+    expect(actionsProps.runActive).toBe(false)
   })
 
   it("marks an unassigned row explicitly", () => {

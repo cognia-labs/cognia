@@ -23,6 +23,7 @@ import { mapIssueRunsByTarget } from "@/lib/db/issue-runs"
 import { agentTeamWorkspaceHref } from "@/lib/issues/run/agent-team-adapter"
 import { subAgentPriorityToIssuePriority, teamTaskStatusToIssueStatus } from "./agent-status-map"
 import { agentSourceLabel, loadOriginIssueRefs, type OriginIssueRef } from "./agent-task-source"
+import { observeIssueList, type IssueListTrigger } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
 export const AGENT_TEAM_SOURCE_LABEL = "Agent Team"
@@ -101,6 +102,12 @@ export interface AgentTeamSourceDeps {
   readRoster: () => Promise<Map<string, string>>
   /** Lower-cased label name to id, so a task tag can reach the board's filter. */
   readLabelIds: () => Promise<Map<string, string>>
+  /**
+   * Fires when the teams, tasks or roster `readTeams` / `readRoster` read have
+   * changed. The store is memory Dexie cannot observe, so without this the
+   * board would only notice a team task moving when a Dexie row also changed.
+   */
+  watchTeams: IssueListTrigger
 }
 
 async function defaultReadTeams(projectId: string) {
@@ -139,53 +146,93 @@ async function defaultReadLabelIds(): Promise<Map<string, string>> {
   }
 }
 
+/**
+ * Watch the three store slices this source projects. The store is imported
+ * lazily (as the reads above do), so the watch begins once it has loaded and
+ * fires once then: the first read may have run against a store that was still
+ * hydrating. The subscription is unselected and fires on every store write, so
+ * it compares slice identities before notifying.
+ */
+function defaultWatchTeams(notify: () => void): () => void {
+  let disposed = false
+  let unsubscribe: (() => void) | undefined
+  void import("@/stores/agent/agent-team-store")
+    .then(({ useAgentTeamStore }) => {
+      if (disposed) return
+      let seen = useAgentTeamStore.getState()
+      unsubscribe = useAgentTeamStore.subscribe((state) => {
+        if (
+          state.teams === seen.teams &&
+          state.tasks === seen.tasks &&
+          state.teammates === seen.teammates
+        ) {
+          return
+        }
+        seen = state
+        notify()
+      })
+      notify()
+    })
+    .catch(() => undefined)
+  return () => {
+    disposed = true
+    unsubscribe?.()
+  }
+}
+
 const defaultDeps: AgentTeamSourceDeps = {
   readTeams: defaultReadTeams,
   runsByTarget: (projectId) => mapIssueRunsByTarget(projectId, "agent-team"),
   originRefsOf: loadOriginIssueRefs,
   readRoster: defaultReadRoster,
   readLabelIds: defaultReadLabelIds,
+  watchTeams: defaultWatchTeams,
 }
 
 export function createAgentTeamIssueSource(
   overrides: Partial<AgentTeamSourceDeps> = {}
 ): IssueSourceAdapter {
   const deps = { ...defaultDeps, ...overrides }
+  const list = async (query: IssueSourceQuery): Promise<UnifiedIssueItem[]> => {
+    const teams = await deps.readTeams(query.projectId)
+    if (teams.length === 0) return []
+    // Origin comes from the task's own metadata first (stamped by the run
+    // adapter), falling back to the run row for tasks whose metadata was
+    // lost — both point at the same issue.
+    const runs = await deps.runsByTarget(query.projectId)
+    const runByTaskId = new Map<string, IssueRun>()
+    for (const run of runs.values()) {
+      const taskId = run.targetRef?.taskId
+      if (taskId) runByTaskId.set(taskId, run)
+    }
+    const issueIds = new Set<string>()
+    for (const { tasks } of teams) {
+      for (const task of tasks) {
+        const id = teamTaskIssueId(task) ?? runByTaskId.get(task.id)?.issueId
+        if (id) issueIds.add(id)
+      }
+    }
+    const origins = await deps.originRefsOf([...issueIds])
+    const [roster, labelIdsByName] = await Promise.all([deps.readRoster(), deps.readLabelIds()])
+    const items: UnifiedIssueItem[] = []
+    for (const { team, tasks } of teams) {
+      for (const task of tasks) {
+        const issueId = teamTaskIssueId(task) ?? runByTaskId.get(task.id)?.issueId
+        const origin = issueId ? origins.get(issueId) : undefined
+        if (query.issueProjectId && origin?.issueProjectId !== query.issueProjectId) continue
+        items.push(toUnifiedTeamTask(task, team, origin, roster, labelIdsByName))
+      }
+    }
+    return items
+  }
   return {
     kind: "agent-team",
     label: AGENT_TEAM_SOURCE_LABEL,
-    async list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
-      const teams = await deps.readTeams(query.projectId)
-      if (teams.length === 0) return []
-      // Origin comes from the task's own metadata first (stamped by the run
-      // adapter), falling back to the run row for tasks whose metadata was
-      // lost — both point at the same issue.
-      const runs = await deps.runsByTarget(query.projectId)
-      const runByTaskId = new Map<string, IssueRun>()
-      for (const run of runs.values()) {
-        const taskId = run.targetRef?.taskId
-        if (taskId) runByTaskId.set(taskId, run)
-      }
-      const issueIds = new Set<string>()
-      for (const { tasks } of teams) {
-        for (const task of tasks) {
-          const id = teamTaskIssueId(task) ?? runByTaskId.get(task.id)?.issueId
-          if (id) issueIds.add(id)
-        }
-      }
-      const origins = await deps.originRefsOf([...issueIds])
-      const [roster, labelIdsByName] = await Promise.all([deps.readRoster(), deps.readLabelIds()])
-      const items: UnifiedIssueItem[] = []
-      for (const { team, tasks } of teams) {
-        for (const task of tasks) {
-          const issueId = teamTaskIssueId(task) ?? runByTaskId.get(task.id)?.issueId
-          const origin = issueId ? origins.get(issueId) : undefined
-          if (query.issueProjectId && origin?.issueProjectId !== query.issueProjectId) continue
-          items.push(toUnifiedTeamTask(task, team, origin, roster, labelIdsByName))
-        }
-      }
-      return items
-    },
+    list,
+    // Runs, origin issues and labels are Dexie rows the live read observes;
+    // the teams themselves live in the store, which `watchTeams` follows.
+    subscribe: (query, observer) =>
+      observeIssueList(() => list(query), observer, [deps.watchTeams]),
   }
 }
 

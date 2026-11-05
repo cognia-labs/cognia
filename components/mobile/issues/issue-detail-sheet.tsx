@@ -47,6 +47,8 @@ export interface IssueDetailSheetProps {
   /** Every local item, so parent and blockers print identifiers, not ids. */
   items?: readonly UnifiedIssueItem[]
   hint?: IssuePlanningHint
+  /** An agent run holds the open issue, per the phone's synced `issueRuns`. */
+  runActive?: boolean
 }
 
 export function IssueDetailSheet({
@@ -57,6 +59,7 @@ export function IssueDetailSheet({
   cycleNamesById,
   items = [],
   hint,
+  runActive = false,
 }: IssueDetailSheetProps) {
   const t = useTranslations("issues")
 
@@ -307,7 +310,7 @@ export function IssueDetailSheet({
               ) : null}
 
               {localId ? (
-                <IssueMobileActions item={item} />
+                <IssueMobileActions item={item} runActive={runActive} />
               ) : (
                 // Says what mobile cannot do with a federated row, instead of
                 // leaving the user hunting for controls.

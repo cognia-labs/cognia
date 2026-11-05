@@ -57,7 +57,7 @@ import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
 import { useIssueShortcuts } from "@/hooks/issues/use-issue-shortcuts"
-import { listIssues } from "@/lib/db/issues"
+import { useUnifiedIssues } from "@/hooks/issues/use-unified-issues"
 import { moveIssueRecord, reorderIssueRecords } from "@/lib/issues/service"
 import { followQueuedCreate } from "@/lib/issues/shared-create"
 import { listIssueProjects } from "@/lib/db/issue-projects"
@@ -85,7 +85,6 @@ import {
   SELF_ACTOR_KEY,
   type SquadRunRef,
 } from "@/lib/issues/run/running"
-import { getIssueSourceRegistry } from "@/lib/issues/sources/registry"
 import { summarizeWakeupCues, type IssueWakeupCue } from "@/lib/issues/wakeups/model"
 import { listWorkspaceIssueWakeups } from "@/lib/issues/wakeups/service"
 import { runWorkspaceGithubSync } from "@/lib/issues/sync-runner"
@@ -261,12 +260,6 @@ export function IssueConsole({
   )
   const searchRef = useRef<HTMLInputElement>(null)
 
-  // Reactivity tick: any local write re-emits and re-runs the registry fan-out.
-  const localRows = useClientLiveQuery(
-    () => (projectId ? listIssues({ projectId }) : Promise.resolve([])),
-    [projectId],
-    []
-  )
   const projects = useClientLiveQuery(
     () => (projectId ? listIssueProjects({ projectId }) : Promise.resolve([])),
     [projectId],
@@ -279,8 +272,14 @@ export function IssueConsole({
     [] as IssueCycle[]
   )
 
-  const [federated, setFederated] = useState<UnifiedIssueItem[]>([])
-  const [sourceErrors, setSourceErrors] = useState(0)
+  /**
+   * Every source's rows, live. One subscription feeds the board, the counts,
+   * progress and the conflicts panel, so a federated change (an Agent Team
+   * task moving, a collaboration pull, a mirror refresh) reaches all of them
+   * without a local write to wake it.
+   */
+  const unified = useUnifiedIssues(projectId ?? undefined)
+  const sourceErrors = unified.errors.length
   /** Who counts as "my agents and squads" — every local Character and AgentTeam. */
   const [viewer, setViewer] = useState<IssueViewerContext>(INITIAL_VIEWER)
   /** Local issue ids with an active run — the "N agents working" pill. */
@@ -308,35 +307,8 @@ export function IssueConsole({
     [projectId],
     new Map<string, IssueWakeupCue>()
   )
-  /**
-   * Manual re-read trigger for the federated sources. A GitHub write-back
-   * changes nothing local, so `localSignature` cannot notice it — without this
-   * a user would comment, watch nothing happen, and comment again.
-   */
-  const [federatedTick, setFederatedTick] = useState(0)
-
-  /**
-   * Reactivity tick as a VALUE, not an array identity.
-   *
-   * Depending on `localRows` directly makes the fan-out effect re-run on any
-   * render where the hook hands back a fresh array — and since the effect
-   * calls `setFederated`, that is a render loop.
-   */
-  const localSignature = useMemo(
-    () => (localRows ?? []).map((row) => `${row.id}:${row.updatedAt}`).join("|"),
-    [localRows]
-  )
-
   useEffect(() => {
-    if (!projectId) return
     let cancelled = false
-    getIssueSourceRegistry()
-      .listAll({ projectId })
-      .then((result) => {
-        if (cancelled) return
-        setFederated(result.items)
-        setSourceErrors(result.errors.length)
-      })
     void loadIssueViewerContext()
       .then((context) => {
         if (!cancelled) setViewer(context)
@@ -345,10 +317,15 @@ export function IssueConsole({
     return () => {
       cancelled = true
     }
-  }, [projectId, localSignature, federatedTick])
+  }, [projectId])
 
   /** Federated rows are only meaningful inside a workspace. */
-  const visibleFederated = projectId ? federated : EMPTY_ITEMS
+  const visibleFederated = projectId ? unified.items : EMPTY_ITEMS
+  /** The local source's rows: progress, cycle tallies and identifiers count only these. */
+  const localItems = useMemo(
+    () => visibleFederated.filter((item) => item.kind === "local"),
+    [visibleFederated]
+  )
 
   /**
    * Local labels PLUS ephemeral rows for GitHub's namespaced ids. Without the
@@ -500,9 +477,9 @@ export function IssueConsole({
     () =>
       computeProgressFromIssues(
         (projects ?? []).map((project) => project.id),
-        localRows ?? []
+        localItems
       ),
-    [projects, localRows]
+    [projects, localItems]
   )
   /** Blocked, sub-issue progress and due state, once per board pass. */
   const planningHints = useMemo(
@@ -512,9 +489,9 @@ export function IssueConsole({
   const cycleTallies = useMemo(
     () =>
       new Map(
-        (cycles ?? []).map((cycle) => [cycle.id, cycleProgress(cycle.id, localRows ?? [])] as const)
+        (cycles ?? []).map((cycle) => [cycle.id, cycleProgress(cycle.id, localItems)] as const)
       ),
-    [cycles, localRows]
+    [cycles, localItems]
   )
 
   const selected = sorted.find((item) => item.unifiedId === selectedId)
@@ -572,8 +549,8 @@ export function IssueConsole({
   )
   /** Local issue id to its printed identifier, for the conflicts panel. */
   const identifiersById = useMemo(
-    () => new Map((localRows ?? []).map((row) => [row.id, row.identifier])),
-    [localRows]
+    () => new Map(localItems.map((item) => [item.sourceId, item.identifier])),
+    [localItems]
   )
 
   /**
@@ -593,7 +570,6 @@ export function IssueConsole({
       })
       const { level, message } = syncSummaryMessage(summarizeSync(result), t)
       toast[level](message)
-      setFederatedTick((tick) => tick + 1)
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -702,8 +678,9 @@ export function IssueConsole({
   )
 
   /**
-   * Pull the change we just made back down from GitHub, then re-run the
-   * federated fan-out. Round-tripping rather than patching the row locally is
+   * Pull the change we just made back down from GitHub; the mirror write it
+   * makes reaches the board through the GitHub source's subscription.
+   * Round-tripping rather than patching the row locally is
    * deliberate: GitHub is the source of truth for these rows, and a local
    * optimistic edit would be a second one.
    */
@@ -723,7 +700,6 @@ export function IssueConsole({
         )
       )
     }
-    setFederatedTick((tick) => tick + 1)
   }
 
   /**
@@ -764,12 +740,16 @@ export function IssueConsole({
 
     const item = sorted.find((candidate) => candidate.unifiedId === action.unifiedId)
     if (!item) return
+    // The whole column, not the lane the drop happened in: a swimlane shows
+    // a slice of it, and the order written must place the card among all of it.
     const column = buildIssueColumns(sorted).find((candidate) => candidate.status === item.status)
     if (!column) return
+    const targetIndex = column.items.findIndex(
+      (candidate) => candidate.unifiedId === action.overUnifiedId
+    )
+    if (targetIndex === -1) return
     try {
-      await reorderIssueRecords(
-        reorderIssueColumn(column.items, action.unifiedId, action.targetIndex)
-      )
+      await reorderIssueRecords(reorderIssueColumn(column.items, action.unifiedId, targetIndex))
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))
     }
@@ -961,6 +941,9 @@ export function IssueConsole({
       {prefs.layout === "board" ? (
         <IssueBoard
           items={sorted}
+          groupBy={prefs.groupBy}
+          density={prefs.density}
+          assigneeLabels={assigneeLabels}
           labelsById={labelsById}
           projectNamesById={projectNamesById}
           runningIds={runningUnifiedIds}

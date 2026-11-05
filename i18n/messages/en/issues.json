@@ -41,6 +41,7 @@
   },
   "board": {
     "empty": "No issues",
+    "lane": "{name}, {count, plural, one {# issue} other {# issues}}",
     "agentsWorking": "{count, plural, =0 {0 agents working} one {# agent working} other {# agents working}}",
     "awaitingReview": "{count, plural, =0 {} one {# awaiting review} other {# awaiting review}}",
     "columnActions": "Column actions",
@@ -849,7 +850,11 @@
     "createQueued": "Queued: {title}",
     "projectsEmptyHint": "Projects are created on a larger screen. They show up here once they exist.",
     "cyclesEmpty": "No cycles yet",
-    "cyclesEmptyHint": "Cycles are planned on a larger screen. They show up here once they exist."
+    "cyclesEmptyHint": "Cycles are planned on a larger screen. They show up here once they exist.",
+    "unavailableSource": "{source} issues can't be opened on this device.",
+    "unavailableSourceHint": "Open it on a computer signed in to this workspace.",
+    "showIssues": "Show this device's issues",
+    "filteredEmpty": "No issues match these filters"
   },
   "activityWakeupDelivery": {
     "run": "started a run",

@@ -19,9 +19,9 @@
 import { useTranslations } from "next-intl"
 import { useEffect, useRef, type ReactNode } from "react"
 
+import { useIssueGroupLabel } from "@/hooks/issues/use-issue-group-label"
 import type { IssueGroup, IssueGroupBy } from "@/lib/issues/board-model"
 import type { IssueListDensity } from "@/lib/issues/views"
-import type { IssuePriority, IssueStatus } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import type { LabelRow } from "@/types/labels"
 import type { IssuePlanningHint } from "@/lib/issues/planning-hints"
@@ -84,27 +84,7 @@ export function IssueList({
     row?.scrollIntoView({ block: "nearest" })
   }, [cursorId])
 
-  /** Localize a raw group key. `""` is the catch-all bucket. */
-  function groupLabel(key: string): string {
-    if (key === "") {
-      return groupBy === "assignee" ? t("actor.unassigned") : t("toolbar.groupBy.none")
-    }
-    switch (groupBy) {
-      case "status":
-        return t(`status.${key as IssueStatus}`)
-      case "priority":
-        return t(`priority.${key as IssuePriority}`)
-      case "project":
-        return projectNamesById?.get(key) ?? key
-      case "assignee":
-        if (key.startsWith("human:")) return t("actor.human")
-        // The cached display name, then the actor kind — never the raw id,
-        // which is what a bare `key.split(":")[1]` used to render.
-        return assigneeLabels?.get(key) ?? t(`actor.${key.split(":")[0] as "agent" | "team"}`)
-      default:
-        return key
-    }
-  }
+  const groupLabel = useIssueGroupLabel(groupBy, { projectNamesById, assigneeLabels })
 
   const total = groups.reduce((sum, group) => sum + group.items.length, 0)
   if (total === 0) {

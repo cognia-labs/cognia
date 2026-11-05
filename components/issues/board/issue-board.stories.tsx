@@ -157,3 +157,21 @@ export const WithProjectChips: Story = {
 export const SelectedCard: Story = {
   args: { items: POPULATED, selectedId: "local:s2" },
 }
+
+/** Grouped by assignee: one row of columns per owner, the unassigned lane last. */
+export const AssigneeSwimlanes: Story = {
+  args: {
+    items: POPULATED.map((candidate, index) =>
+      index % 2 === 0
+        ? { ...candidate, assignee: { kind: "agent" as const, id: "a1", label: "Reviewer" } }
+        : candidate
+    ),
+    groupBy: "assignee",
+    assigneeLabels: new Map([["agent:a1", "Reviewer"]]),
+  },
+}
+
+/** Compact cards: the label row goes, every state glyph stays. */
+export const Compact: Story = {
+  args: { items: POPULATED, density: "compact" },
+}

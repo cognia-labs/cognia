@@ -64,6 +64,10 @@ function run(over: Partial<IssueRun> = {}): IssueRun {
   }
 }
 
+async function settle() {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
 describe("toUnifiedAgentTask", () => {
   it("projects the task read-only with the agent as assignee", () => {
     const item = toUnifiedAgentTask(task())
@@ -161,6 +165,51 @@ describe("list", () => {
     expect(await loadOriginIssueRefs([issue.id, "nope"])).toEqual(
       new Map([[issue.id, { identifier: "MERC-1", issueProjectId: project.id }]])
     )
+  })
+
+  it("subscribes against Dexie: a new task and a run binding both re-deliver", async () => {
+    const project = await createIssueProject({ projectId: "w1", name: "M", key: "MERC" })
+    const issue = await createIssue({
+      projectId: "w1",
+      issueProjectId: project.id,
+      title: "t",
+      createdBy: { kind: "human" },
+    })
+    const labels: Array<Array<string | undefined>> = []
+    const stop = agentTaskIssueSource.subscribe(
+      { projectId: "w1" },
+      {
+        next: (items) => labels.push(items.map((item) => item.origin.sourceLabel)),
+        error: (error) => {
+          throw error
+        },
+      }
+    )
+    await settle()
+    expect(labels).toEqual([[]])
+
+    const stored = await createAgentTask({
+      id: "agent-task:live",
+      agentId: "c",
+      projectId: "w1",
+      title: "live",
+      description: "",
+    })
+    await settle()
+    expect(labels.at(-1)).toEqual(["Agent Task"])
+
+    await claimIssueRun({
+      status: "running",
+      issueId: issue.id,
+      projectId: "w1",
+      adapterId: "agent-task",
+      kind: "agent-task",
+      targetId: stored.id,
+      by: { kind: "human" },
+    })
+    await settle()
+    expect(labels.at(-1)).toEqual(["Agent Task · MERC-1"])
+    stop()
   })
 
   it("registers into the source registry under its kind", () => {

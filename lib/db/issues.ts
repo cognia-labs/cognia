@@ -344,7 +344,8 @@ export async function moveIssue(input: MoveIssueInput): Promise<IssueMoveError |
 
 /** Persist a manual reorder produced by `reorderIssueColumn`. */
 export async function reorderIssues(
-  changes: ReadonlyArray<{ sourceId: string; order: number }>
+  changes: ReadonlyArray<{ sourceId: string; order: number }>,
+  now = Date.now()
 ): Promise<void> {
   if (changes.length === 0) return
   const db = getDb()
@@ -352,7 +353,12 @@ export async function reorderIssues(
     for (const change of changes) {
       const row = await db.issues.get(change.sourceId)
       if (!row || row.order === change.order) continue
-      await db.issues.put({ ...row, order: change.order })
+      // A reorder is a change to the row like any other, so `updatedAt` moves
+      // with it: a paired phone pulls the rows whose `updatedAt` passed its
+      // cursor (`lib/sync/desktop-sync-source.ts`), and a reorder that left it
+      // alone never reached the phone. No trail entry: position is not part of
+      // an issue's history.
+      await db.issues.put({ ...row, order: change.order, updatedAt: now })
     }
   })
 }

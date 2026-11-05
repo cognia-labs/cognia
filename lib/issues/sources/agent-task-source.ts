@@ -23,6 +23,7 @@ import { listAgentTasksByProject } from "@/lib/db/agent-tasks"
 import { mapIssueRunsByTarget } from "@/lib/db/issue-runs"
 import { agentTaskBoardHref } from "@/lib/agents/routes"
 import { agentTaskPriorityToIssuePriority, agentTaskStatusToIssueStatus } from "./agent-status-map"
+import { observeIssueList } from "./live"
 import { getIssueSourceRegistry, type IssueSourceRegistry } from "./registry"
 
 export const AGENT_TASK_SOURCE_LABEL = "Agent Task"
@@ -101,29 +102,33 @@ export function createAgentTaskIssueSource(
   overrides: Partial<AgentTaskSourceDeps> = {}
 ): IssueSourceAdapter {
   const deps = { ...defaultDeps, ...overrides }
+  const list = async (query: IssueSourceQuery): Promise<UnifiedIssueItem[]> => {
+    const [tasks, runs] = await Promise.all([
+      deps.listTasks(query.projectId),
+      deps.runsByTarget(query.projectId),
+    ])
+    const origins = await deps.originRefsOf([
+      ...new Set([...runs.values()].map((run) => run.issueId)),
+    ])
+    const items: UnifiedIssueItem[] = []
+    for (const task of tasks) {
+      const run = runs.get(task.id)
+      const origin = run ? origins.get(run.issueId) : undefined
+      // AgentTasks know no delivery container of their own; under a
+      // container-scoped query only the rows dispatched from that
+      // container's issues belong.
+      if (query.issueProjectId && origin?.issueProjectId !== query.issueProjectId) continue
+      items.push(toUnifiedAgentTask(task, origin))
+    }
+    return items
+  }
   return {
     kind: "agent-task",
     label: AGENT_TASK_SOURCE_LABEL,
-    async list(query: IssueSourceQuery): Promise<UnifiedIssueItem[]> {
-      const [tasks, runs] = await Promise.all([
-        deps.listTasks(query.projectId),
-        deps.runsByTarget(query.projectId),
-      ])
-      const origins = await deps.originRefsOf([
-        ...new Set([...runs.values()].map((run) => run.issueId)),
-      ])
-      const items: UnifiedIssueItem[] = []
-      for (const task of tasks) {
-        const run = runs.get(task.id)
-        const origin = run ? origins.get(run.issueId) : undefined
-        // AgentTasks know no delivery container of their own; under a
-        // container-scoped query only the rows dispatched from that
-        // container's issues belong.
-        if (query.issueProjectId && origin?.issueProjectId !== query.issueProjectId) continue
-        items.push(toUnifiedAgentTask(task, origin))
-      }
-      return items
-    },
+    list,
+    // Tasks, their issue runs and the originating issues are all Dexie rows,
+    // so one live read covers a task changing status and a run binding to it.
+    subscribe: (query, observer) => observeIssueList(() => list(query), observer),
   }
 }
 

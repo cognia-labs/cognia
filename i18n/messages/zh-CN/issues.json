@@ -41,6 +41,7 @@
   },
   "board": {
     "empty": "暂无议题",
+    "lane": "{name}，{count} 个议题",
     "agentsWorking": "{count, plural, =0 {0 个 Agent 在工作} other {# 个 Agent 在工作}}",
     "awaitingReview": "{count, plural, =0 {} other {# 个待评审}}",
     "columnActions": "列操作",
@@ -849,7 +850,11 @@
     "createQueued": "已排队：{title}",
     "projectsEmptyHint": "项目需要在大屏设备上创建，创建后会自动显示在这里。",
     "cyclesEmpty": "还没有迭代",
-    "cyclesEmptyHint": "迭代需要在大屏设备上规划，规划后会自动显示在这里。"
+    "cyclesEmptyHint": "迭代需要在大屏设备上规划，规划后会自动显示在这里。",
+    "unavailableSource": "此设备无法打开{source}议题。",
+    "unavailableSourceHint": "请在登录此工作区的电脑上打开。",
+    "showIssues": "查看本设备上的议题",
+    "filteredEmpty": "没有符合筛选条件的议题"
   },
   "activityWakeupDelivery": {
     "run": "启动了运行",

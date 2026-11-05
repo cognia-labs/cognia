@@ -175,58 +175,6 @@ export function buildIssueColumns(items: readonly UnifiedIssueItem[]): IssueBoar
   }))
 }
 
-export interface IssueSwimlane {
-  /** `actorKey` of the lane owner, or null for the unassigned lane. */
-  assigneeKey: string | null
-  actor?: IssueActor
-  columns: IssueBoardColumn[]
-  itemCount: number
-}
-
-/**
- * Group items into per-assignee lanes. Assigned lanes come first, ordered by
- * key for determinism; an unassigned lane is appended when anything has no
- * owner. Empty lanes are dropped.
- */
-export function buildIssueSwimlanes(items: readonly UnifiedIssueItem[]): IssueSwimlane[] {
-  const byOwner = new Map<string | null, UnifiedIssueItem[]>()
-  const actorByKey = new Map<string, IssueActor>()
-
-  for (const item of items) {
-    const key = actorKey(item.assignee)
-    if (key && item.assignee && !actorByKey.has(key)) actorByKey.set(key, item.assignee)
-    const bucket = byOwner.get(key) ?? []
-    bucket.push(item)
-    byOwner.set(key, bucket)
-  }
-
-  const lanes: IssueSwimlane[] = []
-  const assignedKeys = [...byOwner.keys()].filter((k): k is string => k !== null).sort()
-
-  for (const key of assignedKeys) {
-    const laneItems = byOwner.get(key)
-    if (!laneItems || laneItems.length === 0) continue
-    const actor = actorByKey.get(key)
-    lanes.push({
-      assigneeKey: key,
-      ...(actor ? { actor } : {}),
-      columns: buildIssueColumns(laneItems),
-      itemCount: laneItems.length,
-    })
-  }
-
-  const unassigned = byOwner.get(null)
-  if (unassigned && unassigned.length > 0) {
-    lanes.push({
-      assigneeKey: null,
-      columns: buildIssueColumns(unassigned),
-      itemCount: unassigned.length,
-    })
-  }
-
-  return lanes
-}
-
 // ── list grouping (Display menu) ────────────────────────────────────────────
 
 export const ISSUE_GROUP_BY_OPTIONS = ["status", "assignee", "priority", "project", "none"] as const
@@ -288,6 +236,42 @@ export function buildIssueGroups(
     .sort((a, b) => order(a.key) - order(b.key) || a.key.localeCompare(b.key))
 }
 
+// ── board swimlanes ─────────────────────────────────────────────────────────
+
+/** The grouping axes the board draws as swimlanes. Status is the columns themselves. */
+export const ISSUE_SWIMLANE_AXES: ReadonlySet<IssueGroupBy> = new Set([
+  "assignee",
+  "priority",
+  "project",
+])
+
+export interface IssueSwimlane {
+  /** The group key (`buildIssueGroups`); `""` is the catch-all lane. */
+  key: string
+  columns: IssueBoardColumn[]
+  itemCount: number
+}
+
+/**
+ * The board's lanes for a grouping: one row of status columns per group, in
+ * the same order and with the same catch-all as the list's groups, so the
+ * two layouts of one view agree. `status` and `none` have no lanes (status IS
+ * the columns) and return null; so does an empty board, which draws its
+ * columns once with no lane heading. A lane only exists for a group that has
+ * an item.
+ */
+export function buildIssueSwimlanes(
+  items: readonly UnifiedIssueItem[],
+  groupBy: IssueGroupBy
+): IssueSwimlane[] | null {
+  if (!ISSUE_SWIMLANE_AXES.has(groupBy) || items.length === 0) return null
+  return buildIssueGroups(items, groupBy).map((group) => ({
+    key: group.key,
+    columns: buildIssueColumns(group.items),
+    itemCount: group.items.length,
+  }))
+}
+
 // ── run hint ────────────────────────────────────────────────────────────────
 
 export interface IssueRunHint {
@@ -325,12 +309,17 @@ export function parseDndId(
 
 export type IssueDropAction =
   | { type: "move"; unifiedId: string; to: IssueStatus }
-  | { type: "reorder"; unifiedId: string; targetIndex: number }
+  /**
+   * Same-column reorder onto `overUnifiedId`'s place. The card, not an index:
+   * a swimlane shows a slice of the column, so only the caller holding the
+   * whole column can say which position that is.
+   */
+  | { type: "reorder"; unifiedId: string; overUnifiedId: string }
   | { type: "denied"; unifiedId: string; reason: IssueMoveDenial }
 
 /**
  * Resolve a dnd-kit drag-end into a board action, or null for a no-op.
- * Dropping on a card in the same column → reorder to that card's index;
+ * Dropping on a card in the same column → reorder onto that card;
  * dropping on another column (or a card inside it) → guarded move.
  */
 export function resolveIssueDrop(
@@ -355,12 +344,8 @@ export function resolveIssueDrop(
     if (!item.capabilities.canMove) {
       return { type: "denied", unifiedId: item.unifiedId, reason: "federated-read-only" }
     }
-    const column = sortIssueColumn(
-      [...itemsById.values()].filter((candidate) => candidate.status === item.status)
-    )
-    const targetIndex = column.findIndex((candidate) => candidate.unifiedId === over.unifiedId)
-    if (targetIndex === -1) return null
-    return { type: "reorder", unifiedId: item.unifiedId, targetIndex }
+    if (!itemsById.has(over.unifiedId)) return null
+    return { type: "reorder", unifiedId: item.unifiedId, overUnifiedId: over.unifiedId }
   }
 
   const verdict = canMoveIssue(item.capabilities, item.status, targetStatus, context)

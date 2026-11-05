@@ -4,7 +4,7 @@
  * Shape follows `lib/scheduler/task-scheduler.ts:registerTaskExecutor`
  * (last-write-wins registration + registration-wait listeners, because
  * adapters register from deferred boot chunks). It deliberately does NOT
- * follow `lib/issues/sources/registry.ts`'s swallow-and-report `listAll`: a
+ * follow `lib/issues/sources/registry.ts`'s swallow-and-report `subscribeAll`: a
  * dispatch that fails must fail loudly, never turn into a silent queued row.
  *
  * The orchestrations live here because every entry point (detail panel Run
