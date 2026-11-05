@@ -17,7 +17,7 @@ description: ADR-0022 的 F 路径主干 —— agentTeamManager.start、runTeam
   `action.team.task.dispatch` 节点（`built-ins.ts:1537-1590`），后者针对已注册的上下文调用
   `dispatchTeammate`。`abortTeam`（`agent-team-runtime.ts:530`）触发持有于
   `inflightControllers`（`:99`）中的按团队 `AbortController`。依赖项由
-  有序的小队引导（`lib/agent-team/bootstrap.ts`，由 `SquadBootstrapInitializer` 挂载）在启动时接线。
+  有序的小队引导（`lib/agent-team/bootstrap.ts`，即 `squads` 模块在每个宿主上的 `agent-team-runtime`）在启动时接线。
   自 ADR-0169 起 UI 从不直接调用生命周期：每次启动都经 `startSquadRun`，每道门都经 Action Review 契约。
 </TLDR>
 

@@ -242,7 +242,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **UI 层贡献：** `slots`（插槽名取自 `CANONICAL_EXTENSION_POINTS`）、`settingsSections`、`effects`。
 
 已有规则管着的字段，按已有规则来：
-- **`runtimes`** 声明运行时的身份和重要性，外加每个宿主一个适配器，也就是把 §2 的适配矩阵写成数据。brain 适配器沿用 `HeadlessRuntime.start` 的签名。`HeadlessHost`（`brain`、`person-brain`）不扩充，不让桌面冒充 brain。
+- **`runtimes`** 声明运行时的身份和重要性，外加每个宿主一个适配器，也就是把 §2 的适配矩阵写成数据。每个适配器都是一个模块路径。brain 适配器沿用 `HeadlessRuntime.start` 的签名，并写明它在哪些 brain 档位上启动（`hosts`）。`HeadlessHost`（`brain`、`person-brain`）不扩充，不让桌面冒充 brain。
 - **`effects`** 放需要 React 上下文、路由、i18n 或 toast 的副作用，它们不是运行时。一个初始化器属于哪种，以 `runtime-initializers` 清单为准。
 - **`settings.keys`** 声明模块拥有哪些扁平 `AppSettings` 键。线上格式不变，`packages/agent-config-types/src/settings-sync.ts` 仍是同步来源。模块通过一个视图读自己的键。ADR-0068 S5 的 store 切分按这份归属来切。
 - **`capabilityContributions`** 只产出 `AgentCapabilityGrantV1`，由现有的解析链按阶段施加（ADR-0198）。没有排序数字，也不修改 `SendOptions`。需要新阶段的贡献，先修订 ADR-0198。
@@ -252,7 +252,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 
 **生成注册表，永不进仓。**
 - `scripts/build/gen-module-registry.mjs` 为每个宿主生成一份注册表：`lib/modules/generated/{brain,desktop,mobile}.ts` 和 `components/modules/generated/ui.ts`，里面只有懒加载入口。按宿主拆开，brain 就看不到任何桌面专用的入口。
-- M2 之前，宿主层只有一份与宿主无关的 `lib/modules/generated/host.ts`。M1 生成的字段在所有宿主上都一样适用；设置分区能否访问，和内置分区一样在运行时由 `requires`、`profiles` 决定。到 M2 出现第一个按宿主区分的字段 `runtimes.adapters` 时，这份文件再按宿主拆开。每份注册表 import 的就是 manifest 本身（数据加懒加载入口），外壳读取的是 `lib/modules/registry.ts` 和 `components/modules/registry.ts`。
+- 宿主层只有一份与宿主无关的 `lib/modules/generated/host.ts`。其中的字段在所有宿主上都一样适用；设置分区能否访问，和内置分区一样在运行时由 `requires`、`profiles` 决定。第一个按宿主区分的字段 `runtimes.adapters` 没有让它拆开（M2）：适配器是模块路径，生成器把每个宿主的懒加载 import 写进该宿主自己的运行时注册表。`host.ts` 和 `ui.ts` import 的就是 manifest 本身（数据加懒加载入口），外壳读取的是 `lib/modules/registry.ts` 和 `components/modules/registry.ts`。
 - 这些文件加入 `.gitignore`，由 `postinstall`、`predev`、`prebuild`、`prestorybook`、`scripts/test/jest.mjs`、`typecheck-root.mjs` 和 CLI 构建生成，brain 的 Docker 构建和 CI 跑的正是这些入口。提交进仓的聚合文件会冲突，现在提交进仓的 companion 命令目录就是这样。在共享工作区里重新生成，还会把其他会话尚未提交的 manifest 一起写进提交。
 - 注册表按顺序迁移：M1 迁设置分区、搜索 provider 和 slash 命令；M2 迁插槽、导航、运行时与副作用、表归属；M3 迁提示词、能力授予贡献和设置键；插件宿主 API 随 §9 迁移。
 - 一份注册表改为生成之后，再往里手写条目，G5 就会失败。
@@ -280,6 +280,17 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 共享的访问器留在 `lib/db/`。模块通过它 import 的 `lib/db/` 文件访问到的表算作已访问，所以认领一张表不会逼着访问器搬家。
   - 只有一个 manifest 模块 import 的 `lib/db/` 文件归这个模块所有，由它在 `owns` 里认领（G4）。只被其他数据文件 import 的文件原地不动。G7 的 `singleUserDataModules` 统计剩下的单一使用者文件，它们的模块还没有 manifest（本切片时为 37）。
   - `eval` 认领了它的 20 张 `eval*` 表和 `lib/db/eval-dataset-versions.ts`。harness 采纳和工作流部署门禁中的三处直接读取已记入基线，偿还方式是改走 eval 的 `api`。
+- **M2 为运行时和副作用定下的规则。**
+  - 适配器写成模块路径，不写懒加载入口：manifest 旁边的 `./runtime/<name>`，或 `@/…`。brain 会打包 `host.ts`（数据目录要读它），如果在那里写懒加载 import，桌面适配器就会进入 brain 的模块图，`check-headless-registry` 也会把桌面专属的副作用当成 brain 已调用。所以生成器把每个宿主的懒加载 import 分别写进 `lib/modules/generated/{brain,desktop,mobile}.ts`，每个宿主只 import 自己那一份。
+  - brain 适配器写作 `{ module, hosts }`。它的 `start` 就是 `HeadlessRuntime.start`，`hosts` 写明 brain 档位。`ModuleHost` 仍是 `brain`、`desktop`、`mobile`。写了 `person-brain` 的运行时还要加入 `PERSON_BRAIN_RUNTIMES`，由 roster 的测试钉住。`lib/headless/runtimes/modules.ts` 紧接在初始化器那一批之后注册每个 brain 适配器，所以每个 brain 适配器在构造上就会在 brain 上被调用。
+  - 桌面和手机适配器通过 `ModuleRuntimeHost`（`components/providers/initializers/module-runtime-host.tsx`）启动。桌面构建（Tauri 和浏览器）读 `desktop.ts`；Capacitor 构建解析到 `lib/modules/runtimes.mobile.ts`，读 `mobile.ts`。运行时可以写明它等待的延迟启动组（`boot`：`core-chat`、`workflow-automation`、`integrations` 或 `knowledge-agents`）。主启动区和每个组各挂一个宿主。
+  - 渲染端的一次运行在账户解锁后启动；切换账户时，等上一次的拆除完成后再重启。一个运行时失败不影响其他运行时，拆除按相反顺序进行，桌宠的浮层窗口什么都不启动。
+  - 没有适配器的宿主要在 `absent` 里写明原因，模块门禁强制要求。于是 `check-headless-registry` 对初始化器的要求（没有 brain 对应项的副作用必须写原因）对模块运行时同样成立。门禁还检查适配器能解析、导出了 `start`，以及运行时名称在各模块之间不重复。
+  - 休眠：`experimental` 模块的运行时在任何宿主上都不启动，由针对每份注册表的测试钉住。
+  - 试点：
+    - `squads` 接管了小队引导这一对：`SquadBootstrapInitializer` 和 brain 自己注册的 `agent-team-runtime`。现在它是一个与宿主无关的适配器，在三个宿主上运行，并保留 brain 运维人员重启它时用的名称。
+    - `eval` 接管了在线评测的消费循环，只在渲染端宿主上运行。manifest 写明了 brain 为什么没有适配器，它在 `runtime-initializers` 清单里的那一项已偿还。
+  - `effects` 只做形状校验：每项一个名称，加一个懒加载入口。目前没有模块声明副作用，所以渲染它们的宿主和插槽一样，随第一个使用者（`pet` 试点）落地。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
@@ -313,8 +324,8 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | G1 归属 | 每个非测试源文件恰好有一个所有者；`owner` 与 `.github/CODEOWNERS` 一致 | 过渡归属表的行数，只降不升 | M0，阻断 |
 | G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（M0 时 1,124；M1 列出外壳工具包后为 1,088），只降不升 | M0 只报告；自 M1 起阻断 |
 | G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件，或 `types/**`；`api` 文件不能是 barrel（只有一条再导出的文件，即代码搬进 package 后留在原路径的转发文件，不算）。只判进出有 manifest 的模块的 import；仍在过渡表里的子系统等有了 manifest 再纳入，在此之前它的行（kernel 成员则为其 UI 模块）可以列 `api` | 违规 import，按 `文件 -> 目标` 记指纹（M1 时为 0），只降不升 | M1 |
-| G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用。M1 里：`dependsOn` 恰好等于 manifest 所在模块的文件实际 import 到的模块；声明的表或键必须存在、被本模块文件访问，且只有一个认领者。M2 起：通过 import 的 `lib/db/` 文件访问到的表算作已访问；只有一个 manifest 模块 import 的 `lib/db/` 文件由它认领；模块的文件访问另一个模块认领的表，记为一条 `tableAccess`。运行时相关的条款等 manifest 有了 `runtimes` 和 `effects`（M2）再生效 | 不一致为 0；`tableAccess` 只减不增 | M1 |
-| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令；自 M2 起覆盖导航（图标、插画、取值范围、完整 key）和插槽名 |
+| G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用。M1 里：`dependsOn` 恰好等于 manifest 所在模块的文件实际 import 到的模块；声明的表或键必须存在、被本模块文件访问，且只有一个认领者。M2 起：通过 import 的 `lib/db/` 文件访问到的表算作已访问；只有一个 manifest 模块 import 的 `lib/db/` 文件由它认领；模块的文件访问另一个模块认领的表，记为一条 `tableAccess`；每个运行时适配器都能解析并导出 `start`，没有适配器的宿主在 `absent` 里写明原因，roster 注册每个 brain 适配器，所以每个都在 brain 上被调用 | 不一致为 0；`tableAccess` 只减不增 | M1 |
+| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令；自 M2 起覆盖导航（图标、插画、取值范围、完整 key）、插槽名、按宿主分开的运行时注册表和副作用的形状 |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
 | G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表在 manifest 之外急加载的文件数（M1 时为 1：`lib/modules/define.ts`），以及从 M2 起没有 manifest 认领的核心表数（380）和只被一个尚无 manifest 的模块 import 的 `lib/db/` 文件数（37） | 只降不升；例外要有记录 | M0 |
 | G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（M0 时 166，大多在 connectors 框架里；M1 做完飞书后 107），只降不升。目录 import 框架文件和实现入口文件以外的东西，也算一项 | M0 |

@@ -21,8 +21,8 @@ It also covers the `action.team.run` and `action.team.task.dispatch` node execut
   `action.team.task.dispatch` node (`built-ins.ts:1537-1590`), which calls `dispatchTeammate` against
   the registered context. `abortTeam` (`agent-team-runtime.ts:530`) fires the per-team
   `AbortController` held in `inflightControllers` (`:99`). Deps are wired once at startup by
-  the ordered Squad bootstrap (`lib/agent-team/bootstrap.ts`, mounted by
-  `SquadBootstrapInitializer`). Since ADR-0169 the UI never calls the lifecycle directly: every
+  the ordered Squad bootstrap (`lib/agent-team/bootstrap.ts`, the `squads` module's
+  `agent-team-runtime` on every host). Since ADR-0169 the UI never calls the lifecycle directly: every
   launch goes through `startSquadRun`, and every gate through the Action Review contract.
 </TLDR>
 

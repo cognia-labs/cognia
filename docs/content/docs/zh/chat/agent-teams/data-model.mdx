@@ -157,7 +157,7 @@ export function partializeAgentTeamState(state: AgentTeamState) {
 1. **绝不写入不是自己所对应的那个数据库。** 锁定账户时会*先*清掉 Dexie 选择再清 store，否则一个仍然活着的订阅就会看到一个指向别人数据库的空 store，然后把里面每一行都删掉。
 2. **hydration 失败就整体停用镜像。** 删除是由「镜像里有、内存里没有」推导出来的，而如果 hydration 抛过错，内存就是表的一个未知子集。
 
-模板和 `defaultConfig` 不在镜像范围内。小队模板按设计是跨 profile 共享的，由统一模板平台拥有。桥由有序的小队引导（`lib/agent-team/bootstrap.ts`，由 `components/providers/initializers/squad-bootstrap-initializer.tsx` 挂载）启动，引导先等它水合完成，再安装运行时、导入旧历史、恢复活跃运行。在引导翻转就绪之前到达的启动请求会以 `runtime_not_ready` 被拒绝，绝不竞态。
+模板和 `defaultConfig` 不在镜像范围内。小队模板按设计是跨 profile 共享的，由统一模板平台拥有。桥由有序的小队引导（`lib/agent-team/bootstrap.ts`，作为 `squads` 模块的 `agent-team-runtime` 在每个宿主上启动，声明在 `lib/squads/module.ts`）启动，引导先等它水合完成，再安装运行时、导入旧历史、恢复活跃运行。在引导翻转就绪之前到达的启动请求会以 `runtime_not_ready` 被拒绝，绝不竞态。
 
 ### 运行记录（ADR-0169）
 

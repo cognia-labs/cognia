@@ -160,7 +160,7 @@ Dexie is authoritative for definitions from persist v8 on. `dexie-bridge.ts` sub
 1. **Never write to a database it was not built against.** Locking an account clears the Dexie selection *before* the store, so a live subscription would otherwise observe an empty store pointed at another account's database and delete every row in it.
 2. **A failed hydration disables the mirror entirely.** Deletes are derived from "in the mirror, absent from memory", and if hydration threw then memory is an unknown subset of the tables.
 
-Templates and `defaultConfig` are not mirrored. Squad templates are profile-shared by design and the unified template platform owns them. The bridge is started by the ordered Squad bootstrap (`lib/agent-team/bootstrap.ts`, mounted by `components/providers/initializers/squad-bootstrap-initializer.tsx`), which awaits its hydration before it installs the runtime, imports legacy history and recovers live runs. A launch that arrives before the bootstrap flips ready is refused with `runtime_not_ready`, never raced.
+Templates and `defaultConfig` are not mirrored. Squad templates are profile-shared by design and the unified template platform owns them. The bridge is started by the ordered Squad bootstrap (`lib/agent-team/bootstrap.ts`, started on every host as the `squads` module's `agent-team-runtime`, declared in `lib/squads/module.ts`), which awaits its hydration before it installs the runtime, imports legacy history and recovers live runs. A launch that arrives before the bootstrap flips ready is refused with `runtime_not_ready`, never raced.
 
 ### Run records (ADR-0169)
 
