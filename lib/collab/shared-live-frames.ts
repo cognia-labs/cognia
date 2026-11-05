@@ -68,8 +68,12 @@ function resetDrawn(session: LiveSession, messageId?: string): void {
   clearSilence(session)
   session.ended.add(drawn.messageId)
   session.drawn = undefined
+  // Built from the reply's ids alone: a patch's `extend` or a settled frame's
+  // `afterRevision` never rides on a reset.
   emit(session, {
-    ...drawn,
+    sessionId: drawn.sessionId,
+    messageId: drawn.messageId,
+    replyTo: drawn.replyTo,
     seq: drawn.seq + 1,
     base: 0,
     keyframe: true,

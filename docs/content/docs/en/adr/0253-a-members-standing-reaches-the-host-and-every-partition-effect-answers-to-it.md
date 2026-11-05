@@ -145,6 +145,15 @@ Account sync (ADR-0215) and the paired-Host channel both replicate sessions, mes
 - When an agent reports zero input tokens, the brain books the gateway ledger's figure for that turn instead.
 - An organization model's deployment profile may carry input and output prices. Without them the built-in catalog is used by model id. Without either, usage is shown as unpriced, never as free.
 
+### 11. A long live reply keeps streaming
+
+A member's live reply (`transcript://live`, and a shared run's live frames under ADR-0241) used to stop once it passed the 200 KiB frame budget: a growing text part was resent whole, and the periodic keyframe could no longer fit. The frame contract (`protocol/transcript-live-frame-v1.json`) gains two rules, checked the same way by the codec, the Host bridge and the collaboration server:
+
+- A patch may carry `extend`: text appended to the kept part at `base`, with `parts` replacing what follows it. A streaming text or reasoning part costs its new characters.
+- `settled` may be a patch. A keyframe too large to send gives way to a patch, so a device that is following draws the reply to its end. A device that missed a frame, or joined after the reply outgrew keyframes, drops the reply at `settled` and reads the transcript.
+
+A frame is still never over 200 KiB. When even the patch is too large, the reply ends with `reset`, as before.
+
 ## Consequences
 
 - A departure, a demotion or a suspension takes effect within one stream round trip, and within 30 seconds if the stream is down.

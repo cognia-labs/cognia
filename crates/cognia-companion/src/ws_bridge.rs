@@ -1622,8 +1622,9 @@ const TRANSCRIPT_LIVE_MAX_ID: usize = 256;
 ///
 /// A member's devices draw the in-flight reply of their agent turn from these
 /// frames: `parts` from index `base` replace the previous frame's tail, and a
-/// `keyframe` (base 0) carries the whole message. `settled` is the final
-/// keyframe, and may name `afterRevision`, the transcript revision persisted
+/// `keyframe` (base 0) carries the whole message. A patch's `extend` appends
+/// text to the kept part at `base` (ADR-0253 G15). `settled` is the final
+/// frame, and may name `afterRevision`, the transcript revision persisted
 /// before it; `reset` (no parts) tells devices to drop the live reply and read
 /// the persisted transcript. The frame is rebuilt from these keys only, and a
 /// frame that is malformed, inconsistent or over the size ceiling is refused.
@@ -1655,9 +1656,13 @@ fn transcript_live_envelope(event: &Value) -> Option<Value> {
         Some(_) if state == "settled" => Some(count("afterRevision", 0)? as u64),
         Some(_) => return None,
     };
+    let extend = match event.get("extend") {
+        None => None,
+        Some(_) if keyframe || state == "reset" => return None,
+        Some(text) => Some(text.as_str().filter(|text| !text.is_empty())?.to_string()),
+    };
     if parts.iter().any(|part| !part.is_object())
         || (keyframe && base != 0)
-        || (state == "settled" && !keyframe)
         || (state == "reset" && !parts.is_empty())
         || serde_json::to_vec(event).ok()?.len() > TRANSCRIPT_LIVE_MAX_BYTES
     {
@@ -1669,6 +1674,9 @@ fn transcript_live_envelope(event: &Value) -> Option<Value> {
     });
     if let Some(revision) = after_revision {
         envelope["afterRevision"] = Value::from(revision);
+    }
+    if let Some(text) = extend {
+        envelope["extend"] = Value::from(text);
     }
     Some(envelope)
 }
@@ -2971,6 +2979,14 @@ mod tests {
         extra["leak"] = json!("x");
         let rebuilt = transcript_live_envelope(&extra).expect("accepted");
         assert_eq!(rebuilt, live_frame());
+        // ADR-0253 G15: an appending patch keeps its text; a settled patch
+        // ends a reply too large for a final keyframe.
+        let mut appended = live_frame();
+        appended["extend"] = json!("lo");
+        assert_eq!(transcript_live_envelope(&appended), Some(appended.clone()));
+        let settled_patch = json!({ "sessionId": "s1", "messageId": "m", "replyTo": "u", "seq": 5,
+            "base": 1, "keyframe": false, "state": "settled", "parts": [], "extend": "!", "afterRevision": 9 });
+        assert_eq!(transcript_live_envelope(&settled_patch), Some(settled_patch.clone()));
         let settled = json!({ "sessionId": "s1", "messageId": "m", "replyTo": "u", "seq": 4, "base": 0,
             "keyframe": true, "state": "settled", "parts": [], "afterRevision": 9 });
         assert_eq!(transcript_live_envelope(&settled), Some(settled.clone()));
@@ -2987,11 +3003,14 @@ mod tests {
             with("parts", json!(["text"])),
             // Only the final frame names the revision it precedes.
             with("afterRevision", json!(4)),
-            // A keyframe always carries the whole message; `settled` is one.
+            // A keyframe always carries the whole message.
             json!({ "sessionId": "s1", "messageId": "m", "replyTo": "u", "seq": 1, "base": 2,
                 "keyframe": true, "state": "streaming", "parts": [] }),
+            // `extend` appends to a kept part: never on a keyframe or a reset.
+            with("extend", json!("")),
+            with("extend", json!(1)),
             json!({ "sessionId": "s1", "messageId": "m", "replyTo": "u", "seq": 1, "base": 0,
-                "keyframe": false, "state": "settled", "parts": [] }),
+                "keyframe": true, "state": "streaming", "parts": [], "extend": "x" }),
             // `reset` drops the live reply; it carries nothing to draw.
             json!({ "sessionId": "s1", "messageId": "m", "replyTo": "u", "seq": 1, "base": 0,
                 "keyframe": true, "state": "reset", "parts": [{ "type": "text", "text": "x" }] }),

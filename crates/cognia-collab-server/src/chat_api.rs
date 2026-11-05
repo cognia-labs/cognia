@@ -2487,8 +2487,11 @@ fn is_live_frame(frame: &LiveFrame) -> bool {
         && matches!(state, "streaming" | "settled" | "reset")
         && parts.iter().all(serde_json::Value::is_object)
         && (!keyframe || frame["base"].as_f64() == Some(0.0))
-        && (state != "settled" || keyframe)
         && (state != "reset" || parts.is_empty())
+        // ADR-0253 G15: `extend` appends to a kept part, only on a patch.
+        && frame.get("extend").is_none_or(|text| {
+            text.as_str().is_some_and(|text| !text.is_empty()) && !keyframe && state != "reset"
+        })
         && (frame.get("afterRevision").is_none()
             || (state == "settled" && count("afterRevision", 0)))
         && serde_json::to_vec(frame).is_ok_and(|bytes| bytes.len() <= TRANSCRIPT_LIVE_MAX_BYTES)
@@ -4652,9 +4655,18 @@ id: "created".into(), org_id: NOTICE_ORG.into(), workspace_id: "workspace".into(
         frame["state"] = serde_json::json!("settled");
         frame["afterRevision"] = serde_json::json!(0);
         assert!(is_live_frame(&frame));
+        // A reply too large for a final keyframe settles on a patch.
         frame["keyframe"] = serde_json::json!(false);
+        assert!(is_live_frame(&frame));
+        frame["extend"] = serde_json::json!("end");
+        assert!(is_live_frame(&frame));
+        frame["extend"] = serde_json::json!("");
         assert!(!is_live_frame(&frame));
+        frame.as_object_mut().unwrap().remove("extend");
         frame["keyframe"] = serde_json::json!(true);
+        frame["extend"] = serde_json::json!("end");
+        assert!(!is_live_frame(&frame));
+        frame.as_object_mut().unwrap().remove("extend");
         frame["afterRevision"] = serde_json::json!(-1);
         assert!(!is_live_frame(&frame));
         frame = live_frame();

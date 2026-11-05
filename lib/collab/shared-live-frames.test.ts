@@ -1,4 +1,4 @@
-import type { TranscriptLiveFrame } from "@/lib/chat/transcript/live-frames"
+import { isTranscriptLiveFrame, type TranscriptLiveFrame } from "@/lib/chat/transcript/live-frames"
 import {
   endSharedLive,
   noteSharedLiveEvent,
@@ -58,6 +58,25 @@ it("resets a streaming reply after six silent seconds, and refuses it afterwards
   expect(states().at(-1)).toEqual(["a", "reset"])
   publishSharedLiveFrame(S, frame({ seq: 9 }))
   expect(states()).toHaveLength(3)
+})
+
+it("a reset that ends an appending patch is a valid reset frame (ADR-0253 G15)", () => {
+  const { seen } = listen()
+  publishSharedLiveFrame(S, frame())
+  publishSharedLiveFrame(S, frame({ seq: 2, base: 0, keyframe: false, parts: [], extend: "!" }))
+  jest.advanceTimersByTime(SHARED_LIVE_SILENCE_MS)
+  const reset = seen.at(-1)!
+  expect(reset).toEqual({
+    sessionId: S,
+    messageId: "a",
+    replyTo: "u",
+    seq: 3,
+    base: 0,
+    keyframe: true,
+    state: "reset",
+    parts: [],
+  })
+  expect(isTranscriptLiveFrame(reset)).toBe(true)
 })
 
 it("resets the drawn reply on its redaction and refuses a late keyframe for it", () => {

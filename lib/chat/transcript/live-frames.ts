@@ -9,17 +9,26 @@
  * - A **patch** keeps the first `base` parts of the previous frame and
  *   replaces the rest with `parts`. Projected parts are replaced, not edited,
  *   so a part that did not change is the same object and stays in the prefix.
+ * - A patch with `extend` keeps part `base` too and appends `extend` to its
+ *   `text`; `parts` replace what follows it. A streaming text or reasoning
+ *   part only grows, so it costs its new characters, not its whole text: a
+ *   reply far over the frame budget keeps streaming (ADR-0253 G15).
  * - A **keyframe** (`base` 0) carries the whole message. The first frame of a
  *   reply is one, then one every {@link TRANSCRIPT_LIVE_KEYFRAME_MS}, so a
- *   device that joined late or missed a frame catches up within that.
- * - `settled` is the final keyframe, sent just before the brain writes the
- *   reply for good. Its `afterRevision` is the transcript revision the brain
+ *   device that joined late or missed a frame catches up within that. A
+ *   periodic keyframe over the budget is skipped for a patch: a device that
+ *   is following keeps following, one that is not reads the transcript.
+ * - `settled` is the final frame, sent just before the brain writes the reply
+ *   for good: a keyframe, or a patch when the whole reply is over the budget
+ *   (a device that cannot apply that patch drops the reply and reads the
+ *   transcript). Its `afterRevision` is the transcript revision the brain
  *   had persisted before it, so a device keeps drawing the finished reply
- *   until its timeline has read past that revision. `reset` means "stop drawing this reply live": a frame
- *   over {@link TRANSCRIPT_LIVE_FRAME_MAX_BYTES} is never sent, and the
- *   device reads the persisted transcript instead.
+ *   until its timeline has read past that revision. `reset` means "stop
+ *   drawing this reply live": when even the patch, or the reply's first or
+ *   final keyframe, is over {@link TRANSCRIPT_LIVE_FRAME_MAX_BYTES} nothing
+ *   is sent, and the device reads the persisted transcript instead.
  *
- * The Host rebuilds every frame from these keys, refuses one over 256 KiB,
+ * The Host rebuilds every frame from these keys, refuses one over 200 KiB,
  * delivers it only to the person's own devices and never replays it
  * (`crates/cognia-companion/src/ws_bridge.rs`). A frame is a view of the
  * reply, never its record: the persisted message stays authoritative.
@@ -51,8 +60,10 @@ export interface TranscriptLiveFrame {
   base: number
   keyframe: boolean
   state: TranscriptLiveFrameState
-  /** The parts from index `base` on. */
+  /** The parts from index `base` on; with `extend`, from `base + 1` on. */
   parts: TranscriptLivePart[]
+  /** Patches only: text appended to the kept part at `base`. */
+  extend?: string
   /** `settled` only: the transcript revision persisted before this frame. */
   afterRevision?: number
 }
@@ -82,14 +93,41 @@ export function isTranscriptLiveFrame(value: unknown): value is TranscriptLiveFr
   )
     return false
   if (frame.keyframe && frame.base !== 0) return false
-  if (frame.state === "settled" && !frame.keyframe) return false
   if (frame.state === "reset" && frame.parts.length > 0) return false
   if (
     frame.afterRevision !== undefined &&
     (frame.state !== "settled" || !isCount(frame.afterRevision, 0))
   )
     return false
+  if (
+    frame.extend !== undefined &&
+    (typeof frame.extend !== "string" ||
+      frame.extend.length === 0 ||
+      frame.keyframe ||
+      frame.state === "reset")
+  )
+    return false
   return true
+}
+
+function textOf(part: TranscriptLivePart): string | undefined {
+  const text = (part as { text?: unknown }).text
+  return typeof text === "string" ? text : undefined
+}
+
+/**
+ * What `next` appends to `previous`'s text, when that is all that changed: ""
+ * for an equal part, `null` when anything else differs.
+ */
+function textExtension(previous: TranscriptLivePart, next: TranscriptLivePart): string | null {
+  const before = textOf(previous)
+  const after = textOf(next)
+  if (before === undefined || after === undefined || !after.startsWith(before)) return null
+  const rest = (part: TranscriptLivePart) => {
+    const { text: _text, ...others } = part as { text?: unknown }
+    return JSON.stringify(others)
+  }
+  return rest(previous) === rest(next) ? after.slice(before.length) : null
 }
 
 function byteLength(text: string): number {
@@ -150,23 +188,44 @@ export function createTranscriptLiveEncoder(options: TranscriptLiveEncoderOption
       const keyframeDue = sent === null || now - lastKeyframeAt >= keyframeMs
       if (suppressed && state === "streaming" && now - lastKeyframeAt < keyframeMs) return null
       const keyframe = state === "settled" || suppressed || keyframeDue
-      let base = 0
-      if (!keyframe && sent) {
-        const limit = Math.min(sent.length, parts.length)
-        while (base < limit && sent[base] === parts[base]) base += 1
-        if (base === parts.length && base === sent.length) return null
+      const fits = (candidate: TranscriptLiveFrame) =>
+        byteLength(JSON.stringify(candidate)) <= maxBytes
+      const accept = (candidate: TranscriptLiveFrame) => {
+        suppressed = false
+        sent = parts
+        return candidate
       }
-      if (keyframe) lastKeyframeAt = now
-      const candidate = frame(state, base, parts.slice(base), keyframe)
+      if (keyframe) {
+        lastKeyframeAt = now
+        const candidate = frame(state, 0, [...parts], true)
+        if (state === "settled" && afterRevision !== undefined)
+          candidate.afterRevision = afterRevision
+        if (fits(candidate)) return accept(candidate)
+        seq -= 1
+        // A keyframe too large to send gives way to a patch, so the devices
+        // already following keep following, to the end. A reply's first
+        // keyframe has no patch to give way to.
+        if (suppressed || sent === null) return suppressed ? null : reset()
+      }
+      const previous = sent ?? []
+      const limit = Math.min(previous.length, parts.length)
+      let base = 0
+      while (
+        base < limit &&
+        (previous[base] === parts[base] || textExtension(previous[base]!, parts[base]!) === "")
+      )
+        base += 1
+      // A settled reply is always announced, changed or not.
+      if (state === "streaming" && base === parts.length && base === previous.length) return null
+      const extension = base < limit ? textExtension(previous[base]!, parts[base]!) : null
+      const candidate = extension
+        ? { ...frame(state, base, parts.slice(base + 1), false), extend: extension }
+        : frame(state, base, parts.slice(base), false)
       if (state === "settled" && afterRevision !== undefined)
         candidate.afterRevision = afterRevision
-      if (byteLength(JSON.stringify(candidate)) > maxBytes) {
-        seq -= 1
-        return suppressed ? null : reset()
-      }
-      suppressed = false
-      sent = parts
-      return candidate
+      if (fits(candidate)) return accept(candidate)
+      seq -= 1
+      return reset()
     },
     /** End the live reply without content: no parts, or a reply never sent. */
     reset(): TranscriptLiveFrame | null {
@@ -215,14 +274,36 @@ export function applyTranscriptLiveFrame(
   }
   if (frame.seq <= current.seq) return current
   if (frame.keyframe) return fresh()
-  if (current.stale) return current
-  if (frame.seq !== current.seq + 1 || frame.base > current.parts.length) {
-    return { ...current, stale: true }
+  // A reply that ended on a patch this device cannot apply is not drawn
+  // further: the transcript has it.
+  const unreadable = (): TranscriptLiveTurn | null =>
+    state === "settled" ? null : { ...current, stale: true }
+  if (current.stale) return state === "settled" ? null : current
+  if (frame.seq !== current.seq + 1 || frame.base > current.parts.length) return unreadable()
+  const settledKeys =
+    frame.afterRevision !== undefined ? { afterRevision: frame.afterRevision } : {}
+  if (frame.extend !== undefined) {
+    const extended = current.parts[frame.base]
+    const text = extended ? textOf(extended) : undefined
+    // Nothing to append to: this device's copy is not the brain's.
+    if (!extended || text === undefined) return unreadable()
+    return {
+      ...current,
+      seq: frame.seq,
+      parts: [
+        ...current.parts.slice(0, frame.base),
+        { ...extended, text: text + frame.extend } as TranscriptLivePart,
+        ...frame.parts,
+      ],
+      state,
+      ...settledKeys,
+    }
   }
   return {
     ...current,
     seq: frame.seq,
     parts: [...current.parts.slice(0, frame.base), ...frame.parts],
     state,
+    ...settledKeys,
   }
 }

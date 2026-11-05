@@ -49,6 +49,9 @@ describe("isTranscriptLiveFrame", () => {
 
   it("p6e accepts the shape the Host admits and nothing looser", () => {
     expect(isTranscriptLiveFrame(frame)).toBe(true)
+    // G15: an appending patch, and a reply that settles on a patch.
+    expect(isTranscriptLiveFrame({ ...frame, extend: "more" })).toBe(true)
+    expect(isTranscriptLiveFrame({ ...frame, state: "settled", afterRevision: 3 })).toBe(true)
     for (const bad of [
       null,
       { ...frame, sessionId: "" },
@@ -60,8 +63,12 @@ describe("isTranscriptLiveFrame", () => {
       { ...frame, parts: ["x"] },
       { ...frame, parts: [[]] },
       { ...frame, keyframe: true },
-      { ...frame, state: "settled" },
       { ...frame, state: "reset", keyframe: true, base: 0 },
+      // `extend` appends to a kept part: text, on a patch, never on a reset.
+      { ...frame, extend: "" },
+      { ...frame, extend: 1 },
+      { ...frame, keyframe: true, base: 0, extend: "x" },
+      { ...frame, state: "reset", parts: [], extend: "x" },
       // Only the final frame names the revision it precedes.
       { ...frame, afterRevision: 3 },
       { ...frame, state: "settled", keyframe: true, base: 0, afterRevision: -1 },
@@ -140,6 +147,68 @@ describe("createTranscriptLiveEncoder", () => {
     )
   })
 
+  it("g15 sends a growing text part as the text it gained", () => {
+    const { encode } = encoder()
+    const tool = {
+      type: "dynamic-tool",
+      toolCallId: "c1",
+      state: "input-available",
+    } as unknown as TranscriptLivePart
+    encode.next([tool, text("Hello")])
+    expect(encode.next([tool, text("Hello, world")])).toEqual(
+      expect.objectContaining({ seq: 2, base: 1, keyframe: false, extend: ", world", parts: [] })
+    )
+    // A part that is equal, though not the same object, is unchanged.
+    expect(encode.next([tool, text("Hello, world")])).toBeNull()
+    // Anything but the text changed: the part is resent.
+    const finished = { type: "text", text: "Hello, world!", state: "done" } as TranscriptLivePart
+    const resent = encode.next([tool, finished])
+    expect(resent).toEqual(expect.objectContaining({ base: 1, parts: [finished] }))
+    expect(resent).not.toHaveProperty("extend")
+    // Text that was rewritten rather than extended is resent too.
+    expect(encode.next([tool, text("Bye")])).not.toHaveProperty("extend")
+  })
+
+  it("g15 keeps a reply far over the frame budget streaming to the end", () => {
+    const { encode, advance } = encoder({ maxBytes: 600 })
+    const sent: Array<TranscriptLiveFrame | null> = []
+    let reply = ""
+    for (let step = 0; step < 60; step++) {
+      reply += `${step}`.padEnd(100, ".")
+      advance(250)
+      sent.push(encode.next([text("intro"), text(reply)]))
+    }
+    const settled = encode.next([text("intro"), text(reply)], "settled", 12)
+    sent.push(settled)
+    // 6 KB of reply, never a frame over 600 bytes, never a reset.
+    expect(reply.length).toBe(6_000)
+    for (const frame of sent) {
+      expect(frame).not.toBeNull()
+      expect(frame!.state).not.toBe("reset")
+      expect(new TextEncoder().encode(JSON.stringify(frame)).length).toBeLessThanOrEqual(600)
+      expect(isTranscriptLiveFrame(frame)).toBe(true)
+    }
+    expect(settled).toEqual(
+      expect.objectContaining({ keyframe: false, state: "settled", afterRevision: 12 })
+    )
+    expect(draw(sent)).toEqual(
+      expect.objectContaining({
+        parts: [text("intro"), text(reply)],
+        state: "settled",
+        afterRevision: 12,
+        stale: false,
+      })
+    )
+  })
+
+  it("g15 resets when even the patch is over the budget", () => {
+    const { encode } = encoder({ maxBytes: 400 })
+    encode.next([text("a")])
+    expect(encode.next([text("a"), text("x".repeat(500))])).toEqual(
+      expect.objectContaining({ state: "reset", parts: [] })
+    )
+  })
+
   it("p6e resets only a reply it has started", () => {
     const { encode } = encoder()
     expect(encode.reset()).toBeNull()
@@ -177,6 +246,31 @@ describe("applyTranscriptLiveFrame", () => {
     advance(TRANSCRIPT_LIVE_KEYFRAME_MS)
     const caught = applyTranscriptLiveFrame(gap, encode.next([a, text("d")])!)
     expect(caught).toEqual(expect.objectContaining({ stale: false, parts: [a, text("d")] }))
+  })
+
+  it("g15 drops an oversized reply that settles on a patch this device cannot apply", () => {
+    const { encode, advance } = encoder({ maxBytes: 400 })
+    const frames: Array<TranscriptLiveFrame | null> = []
+    let reply = ""
+    for (let step = 0; step < 8; step++) {
+      reply += "y".repeat(80)
+      advance(250)
+      frames.push(encode.next([text(reply)]))
+    }
+    const settled = encode.next([text(reply)], "settled", 4)!
+    expect(settled.keyframe).toBe(false)
+    // A device that missed one patch holds what it has, then lets go at the end.
+    const gap = draw([frames[0]!, ...frames.slice(2)])
+    expect(gap?.stale).toBe(true)
+    expect(applyTranscriptLiveFrame(gap, settled)).toBeNull()
+    // One that joined after the reply outgrew keyframes never draws it.
+    expect(applyTranscriptLiveFrame(null, settled)).toBeNull()
+    // An append onto a part that is not text cannot be drawn.
+    const odd = applyTranscriptLiveFrame(
+      { ...draw([frames[0]!])!, parts: [{ type: "step-start" } as TranscriptLivePart] },
+      frames[1]!
+    )
+    expect(odd?.stale).toBe(true)
   })
 
   it("p6e joins late only at a keyframe and ignores replays and old frames", () => {
