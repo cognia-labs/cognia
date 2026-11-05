@@ -224,17 +224,134 @@ export const S = [Block, shell]
   assert.deepEqual(result.measures.direction, ["components/pet/section.tsx -> settings"])
 })
 
-test("G2: only a shell lists api files, and only files it owns", () => {
-  const table = ownership({ pet: "module", settings: "shell" })
+test("api files: owned by the row, never foundation's, and a kernel member lists only its UI", () => {
+  const table = ownership({ pet: "module", settings: "shell", base: "foundation", chat: "kernel" })
   table.subsystems.pet.api = ["lib/pet/p.ts"]
   table.subsystems.settings.api = ["lib/pet/p.ts"]
+  table.subsystems.base.api = ["lib/base/b.ts"]
+  table.subsystems.chat.api = ["lib/chat/c.ts", "components/chat/v.tsx"]
   const result = run({
     [OWNERSHIP_FILE]: table,
     "lib/pet/p.ts": "export const p = 1\n",
+    "lib/base/b.ts": "export const b = 1\n",
+    "lib/chat/c.ts": "export const c = 1\n",
+    "components/chat/v.tsx": "export const v = 1\n",
     "components/settings/s.ts": "export const s = 1\n",
   })
-  assert.ok(result.errors.some((e) => e.includes('"pet": only a shell lists `api` files')))
-  assert.ok(result.errors.some((e) => e.includes('"settings" lists api file lib/pet/p.ts')))
+  assert.deepEqual(result.errors.sort(), [
+    `${OWNERSHIP_FILE}: "base": only a shell, a module or a kernel member's UI lists \`api\` files, as a list`,
+    `${OWNERSHIP_FILE}: "chat" lists api file lib/chat/c.ts, which is not in its UI module`,
+    `${OWNERSHIP_FILE}: "settings" lists api file lib/pet/p.ts, which it does not own`,
+  ])
+})
+
+// ------------------------------------------------------------ public API and declarations
+
+const DEFINE = "export const defineHostModule = (m) => m\n"
+// These fixtures carry no generated registries (G5), so only G3/G4 errors are read.
+const declarationErrors = (result) => result.errors.filter((error) => /^G[34] /.test(error))
+const hostManifest = (id, fields = "") => `import { defineHostModule } from "@/lib/modules/define"
+export default defineHostModule({ id: "${id}", kind: "module", stage: "beta"${fields ? `, ${fields}` : ""} })
+`
+
+test("G3: imports into or out of a manifest module reach only api files or types", () => {
+  const table = ownership({ modules: "kernel", pet: "module", twin: "module", chat: "kernel" })
+  table.subsystems.pet.api = ["lib/pet/public.ts"]
+  const result = run({
+    [OWNERSHIP_FILE]: table,
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest(
+      "crew",
+      'dependsOn: ["pet", "chat"], api: ["lib/crew/api.ts"]'
+    ),
+    "lib/crew/run.ts": `import { a } from "@/lib/pet/public"
+import { b } from "@/lib/pet/private"
+import type { T } from "@/types/pet/t"
+import { v } from "@/components/chat/v"
+export const run = [a, b, v]
+`,
+    "lib/crew/api.ts": "export const api = 1\n",
+    "lib/crew/inner.ts": "export const inner = 1\n",
+    "lib/pet/public.ts": "export const a = 1\n",
+    "lib/pet/private.ts": "export const b = 1\n",
+    "types/pet/t.ts": "export type T = 1\n",
+    "components/chat/v.tsx": "export const v = 1\n",
+    "lib/twin/use.ts": `import { api } from "@/lib/crew/api"
+import { inner } from "@/lib/crew/inner"
+import { b } from "@/lib/pet/private"
+export const use = [api, inner, b]
+`,
+  })
+  assert.deepEqual(declarationErrors(result), [])
+  // twin -> pet is between two table subsystems, so G3 does not judge it yet.
+  assert.deepEqual(result.measures.publicApi, [
+    "lib/crew/run.ts -> components/chat/v.tsx",
+    "lib/crew/run.ts -> lib/pet/private.ts",
+    "lib/twin/use.ts -> lib/crew/inner.ts",
+  ])
+})
+
+test("G3: an api file may forward one module but never be a barrel", () => {
+  const table = ownership({ modules: "kernel", pet: "module" })
+  table.subsystems.pet.api = ["lib/pet/shim.ts", "lib/pet/index.ts"]
+  const result = run({
+    [OWNERSHIP_FILE]: table,
+    "lib/modules/define.ts": DEFINE,
+    "lib/pet/shim.ts": `export * from "./impl"\n`,
+    "lib/pet/index.ts": `export * from "./impl"\nexport { b } from "./other"\n`,
+    "lib/pet/impl.ts": "export const a = 1\n",
+    "lib/pet/other.ts": "export const b = 1\n",
+  })
+  assert.deepEqual(declarationErrors(result), [
+    'G3 lib/pet/index.ts: "pet" lists a barrel as api; list the files it re-exports instead',
+  ])
+})
+
+test("G4: dependsOn names exactly the modules a manifest's files import", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel", pet: "module", twin: "module", ui: "shell" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest("crew", 'dependsOn: ["twin", "ui"]'),
+    "lib/crew/run.ts": `import { p } from "@/lib/pet/p"\nimport type { T } from "@/types/twin/t"\nexport const run = p\n`,
+    "lib/pet/p.ts": "export const p = 1\n",
+    "types/twin/t.ts": "export type T = 1\n",
+    "lib/twin/x.ts": "export const x = 1\n",
+    "components/ui/s.tsx": "export const s = 1\n",
+  })
+  assert.deepEqual(declarationErrors(result), [
+    'G4 lib/crew/module.ts: dependsOn names "twin", which no file of "crew" imports',
+    'G4 lib/crew/module.ts: dependsOn names "ui", a shell; only modules are depended on',
+    'G4 lib/crew/module.ts: "crew" imports module "pet" but its dependsOn does not name it',
+  ])
+})
+
+test("G4: declared tables and settings keys exist, are touched, and have one owner", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({
+      modules: "kernel",
+      "data-governance": "foundation",
+      "settings-store": "kernel",
+    }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/data-governance/table-catalog.ts": `export const CORE_TABLE_NAMES = ["crews", "notes", "pets"] as const\n`,
+    "stores/settings/settings-store.ts": `interface SettingsState { crewMode: string; petName: string }\nexport const s = 1\n`,
+    "lib/crew/module.ts": hostManifest(
+      "crew",
+      'tables: ["crews", "notes", "ghosts"], settings: { keys: ["crewMode", "petName", "nope"] }'
+    ),
+    "lib/crew/run.ts": `export const run = (db, settings) => [db.crews.toArray(), db.table("notes"), settings.crewMode]\n`,
+    "lib/pet/module.ts": hostManifest("pet", 'tables: ["crews"], settings: { keys: ["petName"] }'),
+    "lib/pet/run.ts": `export const run = (db, { petName }) => [db.crews, petName]\n`,
+  })
+  assert.deepEqual(declarationErrors(result).sort(), [
+    'G4 lib/crew/module.ts: declares settings key "nope", which no file of "crew" touches',
+    'G4 lib/crew/module.ts: declares settings key "petName", which no file of "crew" touches',
+    'G4 lib/crew/module.ts: declares table "ghosts", which no file of "crew" touches',
+    'G4 lib/crew/module.ts: settings key "nope" is not in SettingsState (stores/settings/settings-store.ts)',
+    'G4 lib/crew/module.ts: table "ghosts" is not in CORE_TABLE_NAMES (lib/data-governance/table-catalog.ts)',
+    'G4 lib/pet/module.ts: settings key "petName" is also claimed by "crew"',
+    'G4 lib/pet/module.ts: table "crews" is also claimed by "crew"',
+  ])
 })
 
 // ------------------------------------------------------------ generation
@@ -447,6 +564,7 @@ const MEASURES = {
     settingsStoreImporters: 5,
     registryEagerFiles: 3,
   },
+  publicApi: ["lib/a/x.ts -> lib/b/y.ts"],
   vendorNeutral: ["x :: vendor file"],
 }
 
@@ -458,6 +576,19 @@ test("G2 fails on an edge the baseline does not have, since M1", () => {
   const paid = compare({ ...MEASURES, direction: ["a -> b"] }, MEASURES)
   assert.deepEqual(paid.failures, [])
   assert.ok(paid.hints.includes("direction: 1 baselined item(s) repaid"))
+})
+
+test("G3 fails on an import the baseline does not have and hints when one is repaid", () => {
+  const grown = compare(
+    { ...MEASURES, publicApi: [...MEASURES.publicApi, "lib/a/x.ts -> lib/c/z.ts"] },
+    MEASURES
+  )
+  assert.equal(grown.failures.length, 1)
+  assert.ok(grown.failures[0].startsWith("G3 public API: 1 new import(s)"))
+  assert.ok(grown.failures[0].endsWith("\n  lib/a/x.ts -> lib/c/z.ts"))
+  const paid = compare({ ...MEASURES, publicApi: [] }, MEASURES)
+  assert.deepEqual(paid.failures, [])
+  assert.ok(paid.hints.includes("publicApi: 1 baselined item(s) repaid"))
 })
 
 test("G6, G7 and G8 fail on growth and hint when paid down", () => {
@@ -491,6 +622,7 @@ test("main writes a baseline, then passes against it", () => {
     assert.equal(main(["--root", root, "--write-baseline"], silent), 0)
     const baseline = JSON.parse(readFileSync(join(root, BASELINE_FILE), "utf8"))
     assert.deepEqual(baseline.direction, ["lib/chat/a.ts -> pet"])
+    assert.deepEqual(baseline.publicApi, [])
     assert.equal(main(["--root", root], silent), 0)
   } finally {
     rmSync(root, { recursive: true, force: true })

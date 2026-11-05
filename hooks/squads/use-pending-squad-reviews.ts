@@ -16,7 +16,7 @@
  */
 
 import { getDb } from "@/lib/db/schema"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import type { ExecutionRunInterrupt, SquadReviewKind } from "@/types/execution/run"
 
 export interface PendingSquadReview {

@@ -12,7 +12,7 @@ import { useProjectStore } from "@/stores/project/project-store"
 import type { AgentTeam, AgentTeammate, TeamStatus } from "@/types/agent/agent-team"
 
 let mirroredCount: number | undefined = 0
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => mirroredCount }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => mirroredCount }))
 
 // Durable Squad reviews (ADR-0169). The hook only ever yields PENDING rows, so
 // the helper below models what the table would answer, not a UI mirror.

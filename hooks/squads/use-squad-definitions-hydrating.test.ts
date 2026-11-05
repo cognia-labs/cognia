@@ -8,7 +8,7 @@ import { act, renderHook } from "@testing-library/react"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 
 let mockCount: number | undefined = undefined
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => mockCount }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => mockCount }))
 
 let settle!: () => void
 let fail!: (error: unknown) => void

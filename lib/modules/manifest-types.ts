@@ -120,16 +120,21 @@ export interface HostModuleManifest {
 
   /** Path prefixes owned beyond `{lib,components,hooks,stores,types,app}/<id>/`. */
   owns?: readonly string[]
-  /** Modules this one may import through their `api` files. Acyclic. */
+  /**
+   * The modules this one imports, through their `api` files: exactly those its
+   * files import (G4). A kernel member is named for its UI module. Acyclic.
+   */
   dependsOn?: readonly string[]
-  /** Concrete public files other modules may import. Never a barrel. */
+  /** Concrete public files other modules may import (G3). Never a barrel. */
   api?: readonly string[]
   provides?: readonly ModulePortProvision[]
   /** Ports this module needs; a trailing `?` marks an optional one (`"ocr?"`). */
   requires?: readonly string[]
 
   runtimes?: readonly ModuleRuntime[]
+  /** `SettingsState` keys this module owns; its files read each, and no other module claims one (G4). */
   settings?: { keys: readonly string[]; load?: LazyModule }
+  /** `CORE_TABLE_NAMES` tables this module owns; its files access each, and no other module claims one (G4). */
   tables?: readonly string[]
   /** Built-in tools together with their permission rules. */
   tools?: ModuleContribution

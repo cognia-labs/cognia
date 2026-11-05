@@ -33,7 +33,7 @@ import {
 } from "@/lib/agent/squad-presence"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getDb } from "@/lib/db/schema"
 import type { TeamStatus } from "@/types/agent/agent-team"
 import { usePendingSquadReviews } from "./use-pending-squad-reviews"

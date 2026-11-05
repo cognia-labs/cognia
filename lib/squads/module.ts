@@ -13,6 +13,20 @@ export default defineHostModule({
   // slot names it (`components/settings/squads/squad-detail-panel.tsx`), owned
   // from here, with the Squad templates panel only that section embeds.
   owns: ["components/settings/squads/", "components/settings/agent/agent-team-templates-section"],
+  // What the Squad screens build on (G4 checks this equals what they import).
+  dependsOn: [
+    "agent",
+    "agent-runs",
+    "agent-team",
+    "data",
+    "fleet",
+    "plugin",
+    "share",
+    "templates",
+    "usage",
+  ],
+  // The Squad review count the chat composer and the context workbench show.
+  api: ["hooks/squads/use-pending-squad-reviews.ts"],
   searchProviders: () => import("./search-provider"),
   slashCommands: [
     {

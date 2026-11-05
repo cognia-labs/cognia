@@ -18,5 +18,21 @@ export default defineHostModule({
   stage: "stable",
   acceptance: { realSmoke: "pending" },
   owns: ["lib/ai/eval/", "lib/plugin/eval/", "components/settings/eval/"],
+  // Eval targets run chats, Squads, workflows and the twin; the routing lab
+  // embeds router-fusion's panel; harness adoption applies recommendations.
+  dependsOn: ["agent-team", "harness", "router-fusion", "twin", "workflow"],
+  // What other modules use: artifact encryption (workflow blobs, knowledge,
+  // quality, human input, perf captures), the online policy cache (logging),
+  // tabular import (issues), recommendation application (harness), the
+  // routing experiment (router-fusion), the twin benchmark and the eval node.
+  api: [
+    "lib/ai/eval/artifact-crypto.ts",
+    "lib/ai/eval/import/parse-tabular.ts",
+    "lib/ai/eval/online/policy-cache.ts",
+    "lib/ai/eval/recommendation-application.ts",
+    "lib/ai/eval/routing-experiment.ts",
+    "lib/ai/eval/service.ts",
+    "lib/ai/eval/twin-benchmark.ts",
+  ],
   messages: "eval",
 })

@@ -20,7 +20,7 @@
 
 import { useEffect, useState } from "react"
 
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getDb } from "@/lib/db/schema"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { whenAgentTeamDexieBridgeHydrated } from "@/stores/agent/agent-team-store/dexie-bridge"

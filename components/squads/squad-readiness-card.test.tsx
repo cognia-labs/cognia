@@ -44,7 +44,7 @@ jest.mock("@/lib/db/project-environments", () => ({
   versionMatchesEnvironment: jest.requireActual("@/lib/db/project-environments")
     .versionMatchesEnvironment,
 }))
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (query: () => Promise<unknown>, deps: unknown[], initial: unknown) => {
     const React = jest.requireActual("react") as typeof import("react")
     const [value, setValue] = React.useState<unknown>(initial)

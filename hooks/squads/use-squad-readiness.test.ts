@@ -7,7 +7,7 @@ jest.mock("@/lib/agent-team/squad-readiness", () => ({
 }))
 // `useClientLiveQuery` is a thin wrapper over dexie's `useLiveQuery`. Running
 // the querier directly is enough to pin the hook's own contract.
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (query: () => Promise<unknown>, deps: unknown[], initial: unknown) => {
     const React = jest.requireActual("react") as typeof import("react")
     const [value, setValue] = React.useState<unknown>(initial)

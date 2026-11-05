@@ -24,6 +24,20 @@
  *                  is listed as that shell's `api` in the ownership table, and
  *                  importing it is not an edge. The generated registries are
  *                  the sanctioned inversion and are not source files here.
+ *   G3 public API  an import between two modules where either has a manifest
+ *                  reaches only a file the target lists as `api` (its
+ *                  manifest's, or its table row's), or `types/**`. An `api`
+ *                  file is never a barrel. Existing violations are baselined
+ *                  (fingerprint `file -> target`); a new one fails. Imports
+ *                  among subsystems still in the table join as each gains a
+ *                  manifest.
+ *   G4 declared    a manifest's `dependsOn` names exactly the modules its files
+ *      = actual    import (types/** aside), its `tables` exist and are
+ *                  accessed by its files and claimed by no other module, and
+ *                  its `settings.keys` are `SettingsState` members its files
+ *                  read and no other module claims. Blocking, 0 mismatches.
+ *                  The runtime clauses (brain adapters, runtime-initializers)
+ *                  apply once manifests carry `runtimes` and `effects` (M2).
  *   G5 generation  manifests are data only, their lazy entries resolve, and
  *                  `lib/modules/generated/host.ts` and
  *                  `components/modules/generated/ui.ts` equal what
@@ -40,8 +54,6 @@
  *                  issue sync, backup, scheduling) name no vendor and import
  *                  no vendor implementation. Existing violations are
  *                  baselined; a new one fails.
- *
- * G3 (public API) and G4 (declared equals actual) arrive later in M1.
  *
  * Usage:
  *   node scripts/gates/check-modules.mjs                    # check
@@ -351,20 +363,51 @@ export function resolveOwnership(ctx, files, table, manifests) {
       errors.push(`${OWNERSHIP_FILE}: "${key}" owns no file — remove the row`)
 
   // A shell's contribution kit: files modules build their contributions with.
+  // A module's `api` (its manifest's, or its table row's): the files other
+  // modules may import (G3).
   const shellApi = new Set()
-  for (const [key, row] of Object.entries(table.subsystems ?? {})) {
-    if (row.api === undefined) continue
-    if (row.class !== "shell" || !Array.isArray(row.api)) {
-      errors.push(`${OWNERSHIP_FILE}: "${key}": only a shell lists \`api\` files, as a list`)
-      continue
-    }
-    for (const file of row.api) {
-      if (owners.get(file)?.owner !== key)
-        errors.push(`${OWNERSHIP_FILE}: "${key}" lists api file ${file}, which it does not own`)
-      else shellApi.add(file)
+  const moduleApi = new Map()
+  const listApi = (key, files, source) => {
+    for (const file of files) {
+      const owned = owners.get(file)
+      if (owned?.owner !== key)
+        errors.push(`${source}: "${key}" lists api file ${file}, which it does not own`)
+      else if (registry.get(key).class === "shell") shellApi.add(file)
+      else if (owned.class !== "module")
+        // A kernel member lists api only for its UI module: modules import its lib freely.
+        errors.push(`${source}: "${key}" lists api file ${file}, which is not in its UI module`)
+      else {
+        if (!moduleApi.has(key)) moduleApi.set(key, new Set())
+        moduleApi.get(key).add(file)
+      }
     }
   }
-  return { owners, registry, shellApi, errors }
+  for (const [key, row] of Object.entries(table.subsystems ?? {})) {
+    if (row.api === undefined) continue
+    if (row.class === "foundation" || !Array.isArray(row.api)) {
+      errors.push(
+        `${OWNERSHIP_FILE}: "${key}": only a shell, a module or a kernel member's UI lists \`api\` files, as a list`
+      )
+      continue
+    }
+    listApi(key, row.api, OWNERSHIP_FILE)
+  }
+  for (const [id, { file, manifest }] of manifests.host)
+    if (Array.isArray(manifest.api)) listApi(id, manifest.api, file)
+  return { owners, registry, shellApi, moduleApi, errors }
+}
+
+/**
+ * A file that only re-exports, from two or more modules: a barrel, which an
+ * `api` list never names (G3). One re-export is a forwarder, such as the shim a
+ * move into a package leaves at the old path, and pulls in nothing extra.
+ */
+export function isBarrel(sourceFile) {
+  const statements = sourceFile.statements
+  return (
+    statements.length > 1 &&
+    statements.every((statement) => ts.isExportDeclaration(statement) && statement.moduleSpecifier)
+  )
 }
 
 // ---------------------------------------------------------------- graphs
@@ -425,28 +468,42 @@ function dependsOnErrors(manifests, registry) {
 
 // ------------------------------------------------------------ measures
 
-function settingsStateMembers(ctx) {
-  if (!ctx.exists(SETTINGS_STORE_FILE)) return 0
+/** `SettingsState` members, inherited ones included: the flat `AppSettings` keys. */
+function settingsStateMemberList(ctx) {
+  if (!ctx.exists(SETTINGS_STORE_FILE)) return []
   const sourceFile = ctx.ast(SETTINGS_STORE_FILE)
   const interfaces = new Map()
   for (const statement of sourceFile.statements)
     if (ts.isInterfaceDeclaration(statement)) interfaces.set(statement.name.text, statement)
-  const count = (name, seen = new Set()) => {
+  const collect = (name, seen = new Set()) => {
     const declaration = interfaces.get(name)
-    if (!declaration || seen.has(name)) return 0
+    if (!declaration || seen.has(name)) return []
     seen.add(name)
-    let total = declaration.members.length
+    const members = [...declaration.members]
     for (const clause of declaration.heritageClauses ?? [])
       for (const type of clause.types)
-        if (ts.isIdentifier(type.expression)) total += count(type.expression.text, seen)
-    return total
+        if (ts.isIdentifier(type.expression)) members.push(...collect(type.expression.text, seen))
+    return members
   }
-  return count("SettingsState")
+  return collect("SettingsState")
 }
 
-function coreTableCount(ctx) {
-  if (!ctx.exists(TABLE_CATALOG_FILE)) return 0
-  let total = 0
+function settingsStateMembers(ctx) {
+  return settingsStateMemberList(ctx).length
+}
+
+function settingsStateKeys(ctx) {
+  const keys = new Set()
+  for (const member of settingsStateMemberList(ctx)) {
+    const name = member.name
+    if (name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name))) keys.add(name.text)
+  }
+  return keys
+}
+
+function coreTableNames(ctx) {
+  if (!ctx.exists(TABLE_CATALOG_FILE)) return []
+  let names = []
   const visit = (node) => {
     if (
       ts.isVariableDeclaration(node) &&
@@ -456,12 +513,96 @@ function coreTableCount(ctx) {
     ) {
       const array = unwrap(node.initializer)
       if (ts.isArrayLiteralExpression(array))
-        total = array.elements.filter((element) => ts.isStringLiteralLike(element)).length
+        names = array.elements
+          .filter((element) => ts.isStringLiteralLike(element))
+          .map((element) => element.text)
     }
     ts.forEachChild(node, visit)
   }
   visit(ctx.ast(TABLE_CATALOG_FILE))
-  return total
+  return names
+}
+
+function coreTableCount(ctx) {
+  return coreTableNames(ctx).length
+}
+
+/**
+ * Names a file reads: property names (`db.agentTeams`, `settings.locale`),
+ * destructured names and string literals (`db.table("x")`, `get("key")`). G4
+ * asks only whether a declared table or key is touched at all, so a broad
+ * reading is the right one: it can miss nothing a module really uses.
+ */
+function namesRead(sourceFile) {
+  const names = new Set()
+  const visit = (node) => {
+    if (ts.isPropertyAccessExpression(node)) names.add(node.name.text)
+    else if (ts.isStringLiteralLike(node)) names.add(node.text)
+    else if (ts.isBindingElement(node)) {
+      const name = node.propertyName ?? node.name
+      if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) names.add(name.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+/**
+ * G4: what each manifest declares equals what its files do. `actualDeps` maps a
+ * module to the modules its files import (`types/**` aside).
+ */
+export function declaredErrors(ctx, manifests, registry, owners, actualDeps) {
+  const errors = []
+  const filesOf = new Map()
+  for (const [file, { owner }] of owners) {
+    if (!filesOf.has(owner)) filesOf.set(owner, [])
+    filesOf.get(owner).push(file)
+  }
+  const tables = new Set(coreTableNames(ctx))
+  const keys = settingsStateKeys(ctx)
+  const claims = { table: new Map(), "settings key": new Map() }
+  for (const [id, { file, manifest }] of manifests.host) {
+    const declared = new Set(manifest.dependsOn ?? [])
+    const actual = actualDeps.get(id) ?? new Set()
+    for (const target of declared) {
+      const cls = registry.get(target)?.class
+      if (cls === "foundation" || cls === "shell")
+        errors.push(
+          `G4 ${file}: dependsOn names "${target}", a ${cls}; only modules are depended on`
+        )
+      else if (cls && !actual.has(target))
+        errors.push(`G4 ${file}: dependsOn names "${target}", which no file of "${id}" imports`)
+    }
+    for (const target of [...actual].sort())
+      if (!declared.has(target))
+        errors.push(
+          `G4 ${file}: "${id}" imports module "${target}" but its dependsOn does not name it`
+        )
+
+    const declaredTables = manifest.tables ?? []
+    const declaredKeys = manifest.settings?.keys ?? []
+    if (!declaredTables.length && !declaredKeys.length) continue
+    // The manifests name every table and key they declare, so they do not count.
+    const read = new Set()
+    for (const owned of filesOf.get(id) ?? [])
+      if (!manifestKind(owned)) for (const name of namesRead(ctx.ast(owned))) read.add(name)
+    const check = (kind, name, known, catalog) => {
+      if (known.size && !known.has(name))
+        errors.push(`G4 ${file}: ${kind} "${name}" is not in ${catalog}`)
+      const first = claims[kind].get(name)
+      if (first && first !== id)
+        errors.push(`G4 ${file}: ${kind} "${name}" is also claimed by "${first}"`)
+      else claims[kind].set(name, id)
+      if (!read.has(name))
+        errors.push(`G4 ${file}: declares ${kind} "${name}", which no file of "${id}" touches`)
+    }
+    for (const table of declaredTables)
+      check("table", table, tables, `CORE_TABLE_NAMES (${TABLE_CATALOG_FILE})`)
+    for (const key of declaredKeys)
+      check("settings key", key, keys, `SettingsState (${SETTINGS_STORE_FILE})`)
+  }
+  return errors
 }
 
 function vendorBranches(sourceFile) {
@@ -528,6 +669,7 @@ export function computeModules(ctx) {
     owners,
     registry,
     shellApi,
+    moduleApi,
     errors: ownershipErrors,
   } = resolveOwnership(ctx, files, table, manifests)
   const errors = [
@@ -537,7 +679,16 @@ export function computeModules(ctx) {
     ...registryErrors(ctx, manifests),
   ]
 
+  for (const [id, files] of moduleApi)
+    for (const file of files)
+      if (isBarrel(ctx.ast(file)))
+        errors.push(
+          `G3 ${file}: "${id}" lists a barrel as api; list the files it re-exports instead`
+        )
+
   const direction = []
+  const publicApi = []
+  const actualDeps = new Map()
   const libGraph = new Map()
   const vendorNeutral = []
   const settingsImporters = new Set()
@@ -563,9 +714,23 @@ export function computeModules(ctx) {
       }
       if (catalog && !catalogMayImport(catalog, target))
         vendorNeutral.push(`${file} :: catalog imports ${target}`)
-      if (record.typeOnly || !source) continue
+      if (!source) continue
       const destination = owners.get(target)
       if (!destination || destination.node === source.node) continue
+      // G3/G4: an import between two modules, one of which has a manifest.
+      if (
+        source.class === "module" &&
+        destination.class === "module" &&
+        (manifests.host.has(source.owner) || manifests.host.has(destination.owner)) &&
+        !target.startsWith("types/")
+      ) {
+        if (manifests.host.has(source.owner) && source.owner !== destination.owner) {
+          if (!actualDeps.has(source.owner)) actualDeps.set(source.owner, new Set())
+          actualDeps.get(source.owner).add(destination.owner)
+        }
+        if (!moduleApi.get(destination.owner)?.has(target)) publicApi.push(`${file} -> ${target}`)
+      }
+      if (record.typeOnly) continue
       const contributionKit = destination.class === "shell" && shellApi.has(target)
       if (RANK[source.class] < RANK[destination.class] && !contributionKit)
         direction.push(`${file} -> ${destination.node}`)
@@ -579,6 +744,8 @@ export function computeModules(ctx) {
         vendorNeutral.push(`${file} :: compares "${literal}"`)
   }
 
+  errors.push(...declaredErrors(ctx, manifests, registry, owners, actualDeps))
+
   const classCount = (cls) => [...registry.values()].filter((entry) => entry.class === cls).length
   return {
     errors,
@@ -587,6 +754,7 @@ export function computeModules(ctx) {
     registry,
     measures: {
       direction: sorted(direction),
+      publicApi: sorted([...new Set(publicApi)]),
       cycles: { largestLibComponent: largestComponent(libGraph).largest },
       size: {
         modules: classCount("module"),
@@ -605,7 +773,7 @@ export function computeModules(ctx) {
 }
 
 const BASELINE_NOTE =
-  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
+  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
 
 /** Compare the computed measures with the baseline. */
 export function compare(measures, baseline) {
@@ -627,6 +795,13 @@ export function compare(measures, baseline) {
         .map((edge) => `  ${edge}`)
         .join("\n")}`
     )
+  const publicApi = listDelta("publicApi", measures.publicApi, baseline.publicApi)
+  if (publicApi.added.length)
+    failures.push(
+      `G3 public API: ${publicApi.added.length} new import(s) of a file the target module does not list as \`api\` — import one of its api files, or list the file in its manifest's \`api\` (or its row's in ${OWNERSHIP_FILE}) when it is meant to be public\n${publicApi.added
+        .map((item) => `  ${item}`)
+        .join("\n")}`
+    )
   const vendor = listDelta("vendorNeutral", measures.vendorNeutral, baseline.vendorNeutral)
   if (vendor.added.length)
     failures.push(
@@ -634,7 +809,7 @@ export function compare(measures, baseline) {
         .map((item) => `  ${item}`)
         .join("\n")}`
     )
-  for (const delta of [direction, vendor])
+  for (const delta of [direction, publicApi, vendor])
     if (delta.repaid.length)
       hints.push(`${delta.name}: ${delta.repaid.length} baselined item(s) repaid`)
   const numbers = [
@@ -659,6 +834,7 @@ export function baselineDocument(measures) {
     cycles: measures.cycles,
     size: measures.size,
     direction: measures.direction,
+    publicApi: measures.publicApi,
     vendorNeutral: measures.vendorNeutral,
   }
 }
@@ -684,7 +860,7 @@ export function main(argv = [], output = console) {
     if (result.errors.length) {
       for (const error of result.errors) output.error(`  ${error}`)
       output.error(
-        `[modules] refusing to write a baseline while G1/G5/G6 has ${result.errors.length} error(s)`
+        `[modules] refusing to write a baseline while G1/G3/G4/G5/G6 has ${result.errors.length} error(s)`
       )
       return 1
     }
@@ -715,7 +891,7 @@ export function main(argv = [], output = console) {
     output.log(`[modules] paid down — ${hint}; run --write-baseline to lock it in`)
   if (result.errors.length || failures.length) {
     if (result.errors.length) {
-      output.error(`[modules] G1/G5/G6: ${result.errors.length} error(s)`)
+      output.error(`[modules] G1/G3/G4/G5/G6: ${result.errors.length} error(s)`)
       for (const error of result.errors) output.error(`  ${error}`)
     }
     for (const failure of failures) output.error(`[modules] ${failure}`)

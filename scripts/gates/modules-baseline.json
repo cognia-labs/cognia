@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
+  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
   "cycles": {
     "largestLibComponent": 168
   },
@@ -1092,6 +1092,7 @@
     "types/index.ts -> review",
     "types/index.ts -> workspace"
   ],
+  "publicApi": [],
   "vendorNeutral": [
     "lib/connectors/adapter-context.ts :: compares \"wechat-oa\"",
     "lib/connectors/adapter-context.ts :: compares \"wechat-personal\"",

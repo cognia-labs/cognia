@@ -104,7 +104,7 @@ jest.mock("@/hooks/agent-runs/use-agent-runs", () => ({
 // `useClientLiveQuery` asks Dexie whether the mirror holds anything, to tell
 // "not loaded yet" from "none". Answering 0 keeps every case here on the
 // loaded path. The loading path is the hook's own case.
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => 0 }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => 0 }))
 
 // The dialog and the drawer are surfaces with their own suites. Here they only
 // have to show they were opened, and hand back what they made.

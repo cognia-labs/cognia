@@ -20,7 +20,7 @@
  * skeleton on screen for good.
  */
 
-import { useClientLiveQuery } from "@/hooks/data"
+import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { squadRunIdFromExecutionRunId } from "@/hooks/squads/use-pending-squad-reviews"
 import { getDb } from "@/lib/db/schema"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"

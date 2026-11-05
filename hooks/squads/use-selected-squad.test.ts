@@ -9,7 +9,7 @@ import type { AgentTeam } from "@/types/agent/agent-team"
 
 let mockStored: boolean | undefined = undefined
 const queries: unknown[][] = []
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: (_query: unknown, deps: unknown[]) => {
     queries.push(deps)
     return mockStored

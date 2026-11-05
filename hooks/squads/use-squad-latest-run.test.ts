@@ -8,7 +8,7 @@ import { renderHook } from "@testing-library/react"
 import type { ExecutionRun } from "@/types/execution/run"
 
 let liveValue: unknown = undefined
-jest.mock("@/hooks/data", () => ({
+jest.mock("@/hooks/data/use-client-live-query", () => ({
   useClientLiveQuery: () => liveValue,
 }))
 
