@@ -33,11 +33,16 @@
  *                  manifest.
  *   G4 declared    a manifest's `dependsOn` names exactly the modules its files
  *      = actual    import (types/** aside), its `tables` exist and are
- *                  accessed by its files and claimed by no other module, and
- *                  its `settings.keys` are `SettingsState` members its files
- *                  read and no other module claims. Blocking, 0 mismatches.
- *                  The runtime clauses (brain adapters, runtime-initializers)
- *                  apply once manifests carry `runtimes` and `effects` (M2).
+ *                  accessed by its files (or the data modules they import)
+ *                  and claimed by no other module, and its `settings.keys`
+ *                  are `SettingsState` members its files read and no other
+ *                  module claims. A `lib/db/` data module only one manifest
+ *                  module uses must be claimed by it. Blocking, 0 mismatches.
+ *                  Since M2, another module accessing a claimed table
+ *                  directly is a violation, baselined (`tableAccess`,
+ *                  fingerprint `file -> table`); a new one fails. The runtime
+ *                  clauses (brain adapters, runtime-initializers) apply once
+ *                  manifests carry `runtimes` and `effects`.
  *   G5 generation  manifests are data only, their lazy entries resolve, and
  *                  `lib/modules/generated/host.ts` and
  *                  `components/modules/generated/ui.ts` equal what
@@ -47,7 +52,8 @@
  *   G6 cycles      `dependsOn` across manifests is acyclic (blocking), and the
  *                  largest strongly connected component of the lib/ owner
  *                  graph may only shrink.
- *   G7 size        module count, experimental modules, Dexie tables,
+ *   G7 size        module count, experimental modules, Dexie tables, tables
+ *                  no manifest claims, data modules with a single user,
  *                  `SettingsState` members, settings-store importers and the
  *                  files the generated registries load eagerly may only shrink.
  *   G8 vendors     framework directories (IM connectors, cloud documents,
@@ -107,6 +113,10 @@ export const SPOT_ICON_FILE = "components/mobile/mobile-spot-icon.tsx"
 /** `CANONICAL_EXTENSION_POINTS`, which a UI manifest's `slots` keys must be. */
 export const EXTENSION_POINTS_FILE =
   "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts"
+
+/** The data layer: `lib/db/` data modules a subsystem claims once it is their only user. */
+export const DATA_LAYER = "db"
+export const DATA_LAYER_PATH = "lib/db/"
 
 export const CLASSES = ["foundation", "kernel", "module", "shell"]
 const RANK = { foundation: 0, kernel: 1, module: 2, shell: 3 }
@@ -557,10 +567,6 @@ function coreTableNames(ctx) {
   return names
 }
 
-function coreTableCount(ctx) {
-  return coreTableNames(ctx).length
-}
-
 /**
  * Names a file reads: property names (`db.agentTeams`, `settings.locale`),
  * destructured names and string literals (`db.table("x")`, `get("key")`). G4
@@ -582,11 +588,60 @@ function namesRead(sourceFile) {
   return names
 }
 
+/** The calls that return the Dexie database. */
+const DB_ACCESSORS = new Set(["getDb", "rawDb"])
+
+/**
+ * Tables a file accesses directly: `db.<table>` (also `x.db.<table>`),
+ * `getDb().<table>` (also `rawDb()`) and `.table("<table>")`, the spellings the
+ * Dexie layer uses. Narrower than
+ * {@link namesRead}, because a table accessed from the wrong module is a
+ * violation, and an unrelated `foo.sessions` must not read as one.
+ */
+export function tableAccesses(sourceFile) {
+  const names = new Set()
+  const isDb = (node) =>
+    (ts.isIdentifier(node) && node.text === "db") ||
+    (ts.isPropertyAccessExpression(node) && node.name.text === "db") ||
+    (ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      DB_ACCESSORS.has(node.expression.text))
+  const visit = (node) => {
+    if (ts.isPropertyAccessExpression(node) && isDb(node.expression)) names.add(node.name.text)
+    else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "table" &&
+      node.arguments.length >= 1 &&
+      ts.isStringLiteralLike(node.arguments[0])
+    )
+      names.add(node.arguments[0].text)
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+/** Every core table a manifest claims, with its claimant (the first, when two claim one). */
+function tableClaims(manifests) {
+  const claims = new Map()
+  for (const [id, { manifest }] of manifests.host)
+    for (const table of manifest.tables ?? []) if (!claims.has(table)) claims.set(table, id)
+  return claims
+}
+
 /**
  * G4: what each manifest declares equals what its files do. `actualDeps` maps a
  * module to the modules its files import (`types/**` aside).
  */
-export function declaredErrors(ctx, manifests, registry, owners, actualDeps) {
+export function declaredErrors(
+  ctx,
+  manifests,
+  registry,
+  owners,
+  actualDeps,
+  data = { imports: new Map(), users: new Map() }
+) {
   const errors = []
   const filesOf = new Map()
   for (const [file, { owner }] of owners) {
@@ -621,6 +676,10 @@ export function declaredErrors(ctx, manifests, registry, owners, actualDeps) {
     const read = new Set()
     for (const owned of filesOf.get(id) ?? [])
       if (!manifestKind(owned)) for (const name of namesRead(ctx.ast(owned))) read.add(name)
+    // A table the module reaches through a shared data module it imports is
+    // touched too: the accessor stays in the data layer while others use it.
+    for (const dataModule of data.imports.get(id) ?? [])
+      for (const name of tableAccesses(ctx.ast(dataModule))) read.add(name)
     const check = (kind, name, known, catalog) => {
       if (known.size && !known.has(name))
         errors.push(`G4 ${file}: ${kind} "${name}" is not in ${catalog}`)
@@ -635,6 +694,16 @@ export function declaredErrors(ctx, manifests, registry, owners, actualDeps) {
       check("table", table, tables, `CORE_TABLE_NAMES (${TABLE_CATALOG_FILE})`)
     for (const key of declaredKeys)
       check("settings key", key, keys, `SettingsState (${SETTINGS_STORE_FILE})`)
+  }
+  // A data module only one manifest module uses moves with its owner.
+  for (const [dataModule, users] of data.users) {
+    if (users.size !== 1) continue
+    const [user] = users
+    const manifest = manifests.host.get(user)
+    if (manifest)
+      errors.push(
+        `G4 ${dataModule}: only "${user}" uses this data module; claim it in ${manifest.file} \`owns\` (or move it under lib/${user}/)`
+      )
   }
   return errors
 }
@@ -726,8 +795,16 @@ export function computeModules(ctx) {
   const libGraph = new Map()
   const vendorNeutral = []
   const settingsImporters = new Set()
+  // Direct table access per file, and who imports each data-layer module.
+  const accessByFile = new Map()
+  const dataUsers = new Map()
+  const dataImports = new Map()
   for (const file of files) {
     const source = owners.get(file)
+    if (source) {
+      const accessed = tableAccesses(ctx.ast(file))
+      if (accessed.size) accessByFile.set(file, accessed)
+    }
     const framework = frameworkOf(file)
     const catalog = catalogOf(file)
     if (framework && VENDOR_SEGMENT.test(file.slice(framework.path.length)))
@@ -750,6 +827,16 @@ export function computeModules(ctx) {
         vendorNeutral.push(`${file} :: catalog imports ${target}`)
       if (!source) continue
       const destination = owners.get(target)
+      if (
+        destination?.owner === DATA_LAYER &&
+        target.startsWith(DATA_LAYER_PATH) &&
+        target !== file
+      ) {
+        if (!dataUsers.has(target)) dataUsers.set(target, new Set())
+        dataUsers.get(target).add(source.owner)
+        if (!dataImports.has(source.owner)) dataImports.set(source.owner, new Set())
+        dataImports.get(source.owner).add(target)
+      }
       if (!destination || destination.node === source.node) continue
       // G3/G4: an import between two modules, one of which has a manifest.
       if (
@@ -778,7 +865,26 @@ export function computeModules(ctx) {
         vendorNeutral.push(`${file} :: compares "${literal}"`)
   }
 
-  errors.push(...declaredErrors(ctx, manifests, registry, owners, actualDeps))
+  errors.push(
+    ...declaredErrors(ctx, manifests, registry, owners, actualDeps, {
+      imports: dataImports,
+      users: dataUsers,
+    })
+  )
+
+  // G4: a claimed table is accessed directly only by its own module. The data
+  // layer, the kernel and the shells are not judged; another module is.
+  const claims = tableClaims(manifests)
+  const tableAccess = []
+  for (const [file, accessed] of accessByFile) {
+    const source = owners.get(file)
+    if (source.class !== "module") continue
+    for (const table of accessed) {
+      const claimant = claims.get(table)
+      if (claimant && claimant !== source.owner) tableAccess.push(`${file} -> ${table}`)
+    }
+  }
+  const coreTables = coreTableNames(ctx)
 
   const classCount = (cls) => [...registry.values()].filter((entry) => entry.class === cls).length
   return {
@@ -789,13 +895,19 @@ export function computeModules(ctx) {
     measures: {
       direction: sorted(direction),
       publicApi: sorted([...new Set(publicApi)]),
+      tableAccess: sorted(tableAccess),
       cycles: { largestLibComponent: largestComponent(libGraph).largest },
       size: {
         modules: classCount("module"),
         experimental: [...manifests.host.values()].filter(
           ({ manifest }) => manifest.stage === "experimental"
         ).length,
-        tables: coreTableCount(ctx),
+        tables: coreTables.length,
+        unclaimedTables: coreTables.filter((table) => !claims.has(table)).length,
+        // A data module only other data modules use stays where it is.
+        singleUserDataModules: [...dataUsers.values()].filter(
+          (users) => users.size === 1 && !users.has(DATA_LAYER)
+        ).length,
         settingsStateMembers: settingsStateMembers(ctx),
         settingsStoreImporters: settingsImporters.size,
         registryEagerFiles: registryEagerFiles(ctx, manifests),
@@ -807,7 +919,7 @@ export function computeModules(ctx) {
 }
 
 const BASELINE_NOTE =
-  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
+  "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down."
 
 /** Compare the computed measures with the baseline. */
 export function compare(measures, baseline) {
@@ -836,6 +948,13 @@ export function compare(measures, baseline) {
         .map((item) => `  ${item}`)
         .join("\n")}`
     )
+  const tableAccess = listDelta("tableAccess", measures.tableAccess, baseline.tableAccess)
+  if (tableAccess.added.length)
+    failures.push(
+      `G4 table access: ${tableAccess.added.length} new direct access(es) to a table another module claims — go through that module's api, or claim the table where it belongs\n${tableAccess.added
+        .map((item) => `  ${item}`)
+        .join("\n")}`
+    )
   const vendor = listDelta("vendorNeutral", measures.vendorNeutral, baseline.vendorNeutral)
   if (vendor.added.length)
     failures.push(
@@ -843,7 +962,7 @@ export function compare(measures, baseline) {
         .map((item) => `  ${item}`)
         .join("\n")}`
     )
-  for (const delta of [direction, publicApi, vendor])
+  for (const delta of [direction, publicApi, tableAccess, vendor])
     if (delta.repaid.length)
       hints.push(`${delta.name}: ${delta.repaid.length} baselined item(s) repaid`)
   const numbers = [
@@ -869,6 +988,7 @@ export function baselineDocument(measures) {
     size: measures.size,
     direction: measures.direction,
     publicApi: measures.publicApi,
+    tableAccess: measures.tableAccess,
     vendorNeutral: measures.vendorNeutral,
   }
 }

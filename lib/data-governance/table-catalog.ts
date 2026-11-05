@@ -1,3 +1,5 @@
+import { HOST_MODULES } from "@/lib/modules/generated/host"
+import type { HostModuleManifest } from "@/lib/modules/manifest-types"
 import type { StorageCategory } from "@/lib/storage/types"
 
 export type DataTableRole = "authoritative" | "projection" | "cache" | "audit" | "queue"
@@ -30,6 +32,11 @@ export interface DataRetentionPolicy {
 
 export interface DataTableCatalogEntry {
   name: string
+  /**
+   * The module whose manifest claims the table (`tables`, ADR-0250 §14), or,
+   * for a table no manifest claims yet, the transitional owner
+   * {@link legacyOwnerFor} infers from its name.
+   */
   owner: string
   role: DataTableRole
   sensitivity: DataSensitivity
@@ -1371,7 +1378,43 @@ const STORAGE_CATEGORY_OVERRIDES: Partial<Record<CoreTableName, StorageCategory>
   backupHistory: "backupHistory",
 }
 
-function ownerFor(name: CoreTableName): string {
+/**
+ * Table → module, from the `tables` every module manifest claims. Read from
+ * the generated registry itself: this catalog is data-layer plumbing, below
+ * the kernel's `lib/modules/registry.ts`, and the registry is plain data plus
+ * lazy entries. The module gate guarantees one claimant per table.
+ */
+const MANIFEST_TABLE_OWNERS: ReadonlyMap<string, string> = new Map(
+  (HOST_MODULES as readonly HostModuleManifest[]).flatMap((manifest) =>
+    (manifest.tables ?? []).map((table) => [table, manifest.id] as const)
+  )
+)
+
+/** The module that claims `name` in its manifest, if one does. */
+export function manifestTableOwner(name: string): string | undefined {
+  return MANIFEST_TABLE_OWNERS.get(name)
+}
+
+/**
+ * The transitional owner of a table no manifest claims: a few named
+ * subsystems, else a guess from the name's prefix. Every claim a module adds
+ * replaces one guess, and the module gate's `unclaimedTables` count only falls.
+ */
+function legacyOwnerFor(name: CoreTableName): string {
+  if (
+    name === "authConnections" ||
+    name === "authAttempts" ||
+    name === "connectionBindings" ||
+    name === "syncLeases" ||
+    name === "externalSyncCursors" ||
+    name === "externalSyncSeen"
+  )
+    return "plugin-auth"
+  if (name === "remoteDocumentConnections") return "docs-providers"
+  return prefixOwnerFor(name)
+}
+
+function prefixOwnerFor(name: CoreTableName): string {
   const prefix = name.match(
     /^(agentTeam|agent|artifact|workflow|provider|plugin|connector|integration|twin|wiki|eval|site|pet|browser|canvas|memory|retrieval|session|chat|template|knowledgeBase)/
   )?.[1]
@@ -2044,17 +2087,7 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
       : "account"
   return {
     name,
-    owner:
-      name === "authConnections" ||
-      name === "authAttempts" ||
-      name === "connectionBindings" ||
-      name === "syncLeases" ||
-      name === "externalSyncCursors" ||
-      name === "externalSyncSeen"
-        ? "plugin-auth"
-        : name === "remoteDocumentConnections"
-          ? "docs-providers"
-          : ownerFor(name),
+    owner: manifestTableOwner(name) ?? legacyOwnerFor(name),
     role,
     sensitivity,
     contentProtection: contentProtectionFor(name, sensitivity, accountScope),

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
+  "note": "Measures of the module gate (scripts/gates/check-modules.mjs, ADR-0250 §14). Every one may only fall: `direction` (G2, blocking since M1), `publicApi` (G3, blocking since M1), `tableAccess` (G4, blocking since M2), `cycles` (G6), `size` (G7) and `vendorNeutral` (G8). scripts/gates/check-baseline-growth.mjs compares this file against the merge base. Rewrite it with `--write-baseline` only after paying a measure down.",
   "cycles": {
     "largestLibComponent": 168
   },
@@ -8,6 +8,8 @@
     "modules": 136,
     "experimental": 0,
     "tables": 400,
+    "unclaimedTables": 380,
+    "singleUserDataModules": 37,
     "settingsStateMembers": 151,
     "settingsStoreImporters": 573,
     "registryEagerFiles": 1
@@ -1093,6 +1095,11 @@
     "types/index.ts -> workspace"
   ],
   "publicApi": [],
+  "tableAccess": [
+    "lib/harness/runtime/adoption.ts -> evalConfigurationApplies",
+    "lib/workflow/quality/deployment-gate.ts -> evalDatasets",
+    "lib/workflow/quality/deployment-gate.ts -> evalRuns"
+  ],
   "vendorNeutral": [
     "lib/connectors/adapter-context.ts :: compares \"wechat-oa\"",
     "lib/connectors/adapter-context.ts :: compares \"wechat-personal\"",

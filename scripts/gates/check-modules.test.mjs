@@ -20,6 +20,7 @@ import {
   largestComponent,
   main,
   readManifest,
+  tableAccesses,
   validateHostManifest,
   validateUiManifest,
 } from "./check-modules.mjs"
@@ -355,6 +356,107 @@ test("G4: declared tables and settings keys exist, are touched, and have one own
   ])
 })
 
+function astOf(source) {
+  return ts.createSourceFile("x.ts", source, ts.ScriptTarget.Latest, true)
+}
+
+test("tableAccesses reads the Dexie spellings and nothing else", () => {
+  const source = `
+const db = getDb()
+export const reads = [
+  db.crews.toArray(),
+  this.db.notes,
+  getDb().pets.get(1),
+  rawDb().logs,
+  tx.table("runs"),
+  other.sessions,
+  db,
+  getOther().tasks,
+  tx.table(name),
+]
+`
+  assert.deepEqual([...tableAccesses(astOf(source))].sort(), [
+    "crews",
+    "logs",
+    "notes",
+    "pets",
+    "runs",
+  ])
+})
+
+/** A tree where "crew" claims tables and the data layer serves several modules. */
+function tableTree(extra = {}) {
+  return {
+    [OWNERSHIP_FILE]: ownership({
+      modules: "kernel",
+      "data-governance": "foundation",
+      db: "foundation",
+      chat: "kernel",
+      twin: "module",
+    }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/data-governance/table-catalog.ts": `export const CORE_TABLE_NAMES = ["crews", "notes", "pets", "runs"] as const\n`,
+    "lib/crew/module.ts": hostManifest("crew", 'tables: ["crews", "notes"]'),
+    "lib/crew/run.ts": `import { notes } from "@/lib/db/notes"\nimport { both } from "@/lib/db/both"\nexport const run = () => [getDb().crews, notes, both]\n`,
+    // Reaches "notes" for crew (and twin), so crew's claim is touched.
+    "lib/db/notes.ts": `import { inner } from "./inner"\nexport const notes = () => [getDb().notes.toArray(), inner]\n`,
+    // Only another data module uses it: it stays in the data layer.
+    "lib/db/inner.ts": `export const inner = 1\n`,
+    // Two modules use it: it is shared.
+    "lib/db/both.ts": `export const both = () => getDb().runs\n`,
+    "lib/pet/module.ts": hostManifest("pet"),
+    "lib/pet/run.ts": `import { both } from "@/lib/db/both"\nimport { pets } from "@/lib/db/pets"\nexport const run = (db) => [db.crews, db.pets, both, pets]\n`,
+    // Only pet uses it, and pet has a manifest: it must claim it.
+    "lib/db/pets.ts": `export const pets = () => getDb().pets\n`,
+    // A module without a manifest using a data module alone is only counted.
+    "lib/twin/run.ts": `import { notes } from "@/lib/db/notes"\nimport { solo } from "@/lib/db/solo"\nexport const run = () => [notes, solo, getDb().notes]\n`,
+    "lib/db/solo.ts": `export const solo = 1\n`,
+    // The data layer and the kernel are not judged.
+    "lib/db/backup.ts": `export const all = () => [getDb().crews, getDb().notes]\n`,
+    "lib/chat/clear.ts": `export const clear = () => getDb().crews.clear()\n`,
+    ...extra,
+  }
+}
+
+test("G4: a module touches a claimed table through a data module it imports", () => {
+  const result = run(tableTree())
+  assert.ok(
+    !declarationErrors(result).some((error) => error.startsWith("G4 lib/crew/module.ts")),
+    declarationErrors(result).join("\n")
+  )
+})
+
+test("G4: a data module only one manifest module uses must be claimed by it", () => {
+  const result = run(tableTree())
+  assert.deepEqual(
+    declarationErrors(result).filter((error) => error.startsWith("G4 lib/db/")),
+    [
+      'G4 lib/db/pets.ts: only "pet" uses this data module; claim it in lib/pet/module.ts `owns` (or move it under lib/pet/)',
+    ]
+  )
+  const claimed = run(
+    tableTree({
+      "lib/pet/module.ts": hostManifest("pet", 'owns: ["lib/pet/", "lib/db/pets.ts"]'),
+    })
+  )
+  assert.deepEqual(
+    declarationErrors(claimed).filter((error) => error.startsWith("G4 lib/db/")),
+    []
+  )
+})
+
+test("G4: another module's direct access to a claimed table is measured; the data layer and kernel are not", () => {
+  const result = run(tableTree())
+  assert.deepEqual(result.measures.tableAccess, [
+    "lib/pet/run.ts -> crews",
+    "lib/twin/run.ts -> notes",
+  ])
+  assert.equal(result.measures.size.tables, 4)
+  assert.equal(result.measures.size.unclaimedTables, 2)
+  // solo (twin alone) and pets (pet alone); inner is only the data layer's.
+  assert.equal(result.measures.size.singleUserDataModules, 2)
+})
+
 // ------------------------------------------------------------ generation
 
 const HOST_MANIFEST = `import { defineHostModule } from "@/lib/modules/define"
@@ -635,6 +737,8 @@ test("G7: tables, SettingsState members and settings-store importers are counted
     modules: 0,
     experimental: 0,
     tables: 3,
+    unclaimedTables: 3,
+    singleUserDataModules: 0,
     settingsStateMembers: 3,
     settingsStoreImporters: 1,
     registryEagerFiles: 0,
@@ -694,11 +798,14 @@ const MEASURES = {
     modules: 2,
     experimental: 0,
     tables: 3,
+    unclaimedTables: 2,
+    singleUserDataModules: 1,
     settingsStateMembers: 4,
     settingsStoreImporters: 5,
     registryEagerFiles: 3,
   },
   publicApi: ["lib/a/x.ts -> lib/b/y.ts"],
+  tableAccess: ["lib/a/x.ts -> notes"],
   vendorNeutral: ["x :: vendor file"],
 }
 
@@ -723,6 +830,27 @@ test("G3 fails on an import the baseline does not have and hints when one is rep
   const paid = compare({ ...MEASURES, publicApi: [] }, MEASURES)
   assert.deepEqual(paid.failures, [])
   assert.ok(paid.hints.includes("publicApi: 1 baselined item(s) repaid"))
+})
+
+test("G4 fails on a table access the baseline does not have and hints when one is repaid", () => {
+  const grown = compare(
+    { ...MEASURES, tableAccess: [...MEASURES.tableAccess, "lib/c/z.ts -> crews"] },
+    MEASURES
+  )
+  assert.equal(grown.failures.length, 1)
+  assert.ok(grown.failures[0].startsWith("G4 table access: 1 new direct access(es)"))
+  assert.ok(grown.failures[0].endsWith("\n  lib/c/z.ts -> crews"))
+  const paid = compare({ ...MEASURES, tableAccess: [] }, MEASURES)
+  assert.deepEqual(paid.failures, [])
+  assert.ok(paid.hints.includes("tableAccess: 1 baselined item(s) repaid"))
+  const unclaimed = compare(
+    { ...MEASURES, size: { ...MEASURES.size, unclaimedTables: 3, singleUserDataModules: 2 } },
+    MEASURES
+  )
+  assert.deepEqual(unclaimed.failures, [
+    "G7 size.unclaimedTables: 3 > baseline 2",
+    "G7 size.singleUserDataModules: 2 > baseline 1",
+  ])
 })
 
 test("G6, G7 and G8 fail on growth and hint when paid down", () => {

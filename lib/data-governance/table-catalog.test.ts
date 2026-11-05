@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto"
 
 import { CogniaDB } from "@/lib/db/schema"
+import { hostModules } from "@/lib/modules/registry"
 import {
   ACCOUNT_SYNC_TABLES,
   COMPANION_SYNC_DELETE_STRATEGY,
@@ -11,6 +12,7 @@ import {
   PORTABLE_BACKUP_BINDINGS,
   PORTABLE_BACKUP_TABLES,
   centralRetentionExecutorIds,
+  manifestTableOwner,
   policyForTable,
   tableNamesForCategory,
 } from "./table-catalog"
@@ -723,5 +725,40 @@ it("keeps Host auth metadata device-local and secrets externalized", () => {
   expect(policyForTable("authAttempts")).toMatchObject({
     backupPolicy: { mode: "ephemeral" },
     retentionPolicy: { mode: "ttl", enforcement: "domain" },
+  })
+})
+
+/**
+ * ADR-0250 §14: a module claims its tables in its manifest, and the catalog's
+ * owner follows the claim. A table no manifest claims keeps the transitional
+ * guess until one does.
+ */
+describe("table owners", () => {
+  const claims = hostModules().flatMap((manifest) =>
+    (manifest.tables ?? []).map((table) => [table, manifest.id] as const)
+  )
+
+  it("names the claiming module for every table a manifest claims", () => {
+    expect(claims.length).toBeGreaterThan(0)
+    for (const [table, module] of claims) {
+      expect([table, manifestTableOwner(table)]).toEqual([table, module])
+      expect([table, policyForTable(table as (typeof CORE_TABLE_NAMES)[number])?.owner]).toEqual([
+        table,
+        module,
+      ])
+    }
+  })
+
+  it("is eval's for the eval tables, which eval's manifest claims", () => {
+    for (const table of CORE_TABLE_NAMES.filter((name) => name.startsWith("eval")))
+      expect([table, policyForTable(table)?.owner]).toEqual([table, "eval"])
+  })
+
+  it("keeps the transitional owner for a table no manifest claims", () => {
+    expect(manifestTableOwner("petProfile")).toBeUndefined()
+    expect(policyForTable("petProfile")?.owner).toBe("pet")
+    expect(manifestTableOwner("syncLeases")).toBeUndefined()
+    expect(policyForTable("syncLeases")?.owner).toBe("plugin-auth")
+    expect(manifestTableOwner("no-such-table")).toBeUndefined()
   })
 })

@@ -17,7 +17,15 @@ export default defineHostModule({
   kind: "module",
   stage: "stable",
   acceptance: { realSmoke: "pending" },
-  owns: ["lib/ai/eval/", "lib/plugin/eval/", "components/settings/eval/"],
+  // `eval-dataset-versions.ts` has no other user, so it moves with eval; the
+  // other `lib/db/eval-*` accessors stay in the data layer, which logging,
+  // harness and workflow reach them through.
+  owns: [
+    "lib/ai/eval/",
+    "lib/plugin/eval/",
+    "components/settings/eval/",
+    "lib/db/eval-dataset-versions.ts",
+  ],
   // Eval targets run chats, Squads, workflows and the twin; the routing lab
   // embeds router-fusion's panel; harness adoption applies recommendations.
   dependsOn: ["agent-team", "harness", "router-fusion", "twin", "workflow"],
@@ -33,6 +41,30 @@ export default defineHostModule({
     "lib/ai/eval/routing-experiment.ts",
     "lib/ai/eval/service.ts",
     "lib/ai/eval/twin-benchmark.ts",
+  ],
+  // Every `eval*` table. Another module that reads one directly is a
+  // `tableAccess` entry in the module baseline (ADR-0250 §14, G4).
+  tables: [
+    "evalAdjudications",
+    "evalAssets",
+    "evalCases",
+    "evalConfigurationApplies",
+    "evalDatasetVersions",
+    "evalDatasets",
+    "evalExperiments",
+    "evalObservations",
+    "evalOnlineBudget",
+    "evalOnlinePolicies",
+    "evalOnlineQueue",
+    "evalProjects",
+    "evalRecommendations",
+    "evalReviewBatches",
+    "evalReviewVotes",
+    "evalRunCaseResults",
+    "evalRuns",
+    "evalSamples",
+    "evalScores",
+    "evalTasks",
   ],
   nav: [
     {

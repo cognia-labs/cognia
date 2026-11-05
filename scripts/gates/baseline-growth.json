@@ -539,6 +539,11 @@
           "path": "publicApi"
         },
         {
+          "id": "table-access",
+          "kind": "length",
+          "path": "tableAccess"
+        },
+        {
           "id": "cycles",
           "kind": "eachValue",
           "path": "cycles"
