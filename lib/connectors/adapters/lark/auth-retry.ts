@@ -13,80 +13,17 @@
  * clears the cache entry for the same `(appId, appSecret)` pair and
  * retries the call exactly once. Anything else propagates unchanged.
  *
- * The detection is intentionally broad — it inspects both `LarkApiError`
- * instances (thrown by the adapter's `doRequest`) and plain `Error`
- * objects whose message embeds a Lark error code (which is what the
- * Rust-side `connectors_lark_upload_*` commands surface).
+ * What counts as an invalidation is the protocol library's
+ * (`@cognia/feishu-protocol`: `isLarkTatInvalidation`,
+ * `isLarkUserTokenInvalidation`); these wrappers own the retry, because they
+ * hold the token cache and the user's refresh token.
  */
 
 import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { isLarkTatInvalidation, isLarkUserTokenInvalidation } from "@cognia/feishu-protocol"
 import { clearTokenCache, refreshUserToken } from "./auth"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
-
-/** Lark error codes signalling the tenant access token is no longer valid. */
-export const TAT_INVALIDATION_CODES: ReadonlySet<number> = new Set([
-  99991663, // invalid access_token (most common)
-  99991664, // invalid app_id (returned when token signature is rejected)
-  99991668, // app_access_token expired (variant code)
-])
-
-export interface LarkApiErrorInit {
-  status: number
-  code: number | null
-  message: string
-  headers?: Record<string, string>
-}
-
-/**
- * Typed error thrown by Lark adapter call sites so refresh logic can
- * distinguish HTTP-layer failures from Lark business-error codes.
- */
-export class LarkApiError extends Error {
-  readonly status: number
-  readonly code: number | null
-  readonly retryAfterMs?: number
-
-  constructor(init: LarkApiErrorInit) {
-    super(init.message)
-    this.name = "LarkApiError"
-    this.status = init.status
-    this.code = init.code
-    if (init.status === 429 || init.code === 99991400) {
-      const reset = Object.entries(init.headers ?? {})
-        .find(([name]) => name.toLowerCase() === "x-ogw-ratelimit-reset")?.[1]
-        ?.trim()
-      const milliseconds = reset ? Number(reset) * 1000 : Number.NaN
-      if (Number.isFinite(milliseconds) && milliseconds >= 0) {
-        this.retryAfterMs = Math.ceil(milliseconds)
-      }
-    }
-  }
-}
-
-/**
- * Return true when the error looks like the Lark tenant access token has
- * been invalidated server-side. Matches HTTP 401, Lark error codes in
- * `TAT_INVALIDATION_CODES`, and substring patterns on plain `Error`
- * messages from the Rust-side upload commands.
- */
-export function isLarkTatInvalidation(err: unknown): boolean {
-  if (err instanceof LarkApiError) {
-    if (err.status === 401) return true
-    if (err.code !== null && TAT_INVALIDATION_CODES.has(err.code)) return true
-    return false
-  }
-  if (err instanceof Error) {
-    const msg = err.message
-    if (/(^|\s)401(\b|\D)/.test(msg)) return true
-    for (const code of TAT_INVALIDATION_CODES) {
-      if (msg.includes(`code=${code}`) || msg.includes(`code: ${code}`)) {
-        return true
-      }
-    }
-  }
-  return false
-}
 
 export interface TatRefreshContext {
   appId: string
@@ -118,32 +55,6 @@ export async function withTatRefresh<T>(
 // ---------------------------------------------------------------------------
 // User access token refresh (send-as-user path)
 // ---------------------------------------------------------------------------
-
-/** Lark error codes signalling the user access token is no longer valid. */
-export const USER_TOKEN_INVALIDATION_CODES: ReadonlySet<number> = new Set([
-  99991677, // invalid user access token
-  99991668, // access token expired (variant)
-])
-
-/**
- * Return true when the error looks like the Lark USER access token was
- * invalidated (HTTP 401, or a code in `USER_TOKEN_INVALIDATION_CODES`).
- */
-export function isLarkUserTokenInvalidation(err: unknown): boolean {
-  if (err instanceof LarkApiError) {
-    if (err.status === 401) return true
-    if (err.code !== null && USER_TOKEN_INVALIDATION_CODES.has(err.code)) return true
-    return false
-  }
-  if (err instanceof Error) {
-    const msg = err.message
-    if (/(^|\s)401(\b|\D)/.test(msg)) return true
-    for (const code of USER_TOKEN_INVALIDATION_CODES) {
-      if (msg.includes(`code=${code}`) || msg.includes(`code: ${code}`)) return true
-    }
-  }
-  return false
-}
 
 export interface UserTokenRefreshContext {
   brand?: "feishu" | "lark"

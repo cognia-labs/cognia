@@ -7,6 +7,11 @@ packages:
   - mobile
   - cli
   - packages/*
+  # Source-only for now, consumed through the `@cognia/feishu-protocol` path
+  # alias like `@cognia/time`. Listing it would add a lockfile importer, which
+  # invalidates the plugin authoring-kit pin; drop this line at the next kit
+  # repin (lib/plugin/distribution/authoring-kit.json).
+  - "!packages/feishu-protocol"
   - services/workspace-runtime
 
 # fake-timers only restores a global on uninstall if it was an OWN property at

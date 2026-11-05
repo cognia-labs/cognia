@@ -1,10 +1,10 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import {
   LARK_SLASH_COMMANDS_PATH,
   larkSlashCommandManifest,
   syncLarkSlashCommands,
   type LarkSlashRequest,
 } from "./slash-commands"
-import { LarkApiError } from "./auth-retry"
 import { CONTROL_COMMAND_SPECS } from "@/lib/connectors/commands/registry"
 import { parseControlCommand } from "@/lib/connectors/commands/parse"
 

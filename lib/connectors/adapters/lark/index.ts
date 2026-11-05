@@ -1,3 +1,4 @@
+import { extractLarkCode, LARK_PERMISSION_CODES, LarkApiError } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   admitPersonalCredential,
@@ -48,7 +49,6 @@ import {
   connectorsLarkUploadImage,
 } from "@/lib/connectors/tauri/commands"
 import { larkCallbackToast } from "./callback-toast"
-import { extractLarkCode, LARK_PERMISSION_CODES } from "./http"
 import { LARK_A2UI_CAPABILITY, LARK_CAPS } from "./capability"
 import {
   parseLarkEventEnvelope,
@@ -81,7 +81,7 @@ import {
   sniffReceiveId,
 } from "./serialize"
 import { fetchLarkUserInfo, getTenantToken, getUserAccessToken } from "./auth"
-import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
+import { withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { createLarkChatManagement } from "./chat-management"
 import { resolveLarkMediaKeys } from "./upload"
 import { isLarkResultTemplatePayload } from "./result-card"

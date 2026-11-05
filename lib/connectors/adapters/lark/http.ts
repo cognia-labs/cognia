@@ -12,8 +12,9 @@
 
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { LarkApiError, extractLarkCode, isLarkPermissionDenied } from "@cognia/feishu-protocol"
 import { getTenantToken } from "./auth"
-import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
+import { withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
@@ -64,23 +65,6 @@ async function rawRequest(
     })
   }
   return parsed
-}
-
-/**
- * Best-effort extraction of the Lark business error code from an HTTP
- * response body. Lark surfaces its error code inside the JSON body even on
- * HTTP >= 400 responses (e.g. `{"code":99991663,...}` in a 400), so callers
- * that classify errors (TAT refresh, retryability mapping) must read it from
- * here rather than relying on the HTTP status alone.
- */
-export function extractLarkCode(body: string | undefined | null): number | null {
-  if (!body) return null
-  try {
-    const parsed = JSON.parse(body) as { code?: unknown }
-    return typeof parsed.code === "number" ? parsed.code : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -142,21 +126,12 @@ export async function larkUserRequest(
   )
 }
 
-/**
- * Lark permission-denied error codes → typed scope error.
- * 99991672 is the canonical "app has no permission (scope)" family; a bare
- * HTTP 403 from the gateway means the same thing with less detail.
- */
-export const LARK_PERMISSION_CODES: ReadonlySet<number> = new Set([99991672, 99991679, 1248006])
-
+/** A permission-denied Lark failure (`isLarkPermissionDenied`) as a typed scope error. */
 export function classifyScopeError(
   err: unknown,
   requiredScope: string
 ): ChatManagementScopeError | null {
-  if (!(err instanceof LarkApiError)) return null
-  const permissionDenied =
-    err.status === 403 || (err.code !== null && LARK_PERMISSION_CODES.has(err.code))
-  if (!permissionDenied) return null
+  if (!isLarkPermissionDenied(err)) return null
   return new ChatManagementScopeError(
     `Lark app is missing scope ${requiredScope} — enable it in the Lark developer console → Permissions, then re-publish the app. (${err.message})`,
     requiredScope,

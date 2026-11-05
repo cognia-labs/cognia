@@ -23,8 +23,8 @@
  * millisecond numbers. Both are normalised to epoch ms numbers here.
  */
 
+import { LarkApiError, readAllLarkPages, type LarkPage } from "@cognia/feishu-protocol"
 import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { isTauri } from "@/lib/tauri"
@@ -195,12 +195,6 @@ export interface LarkTask {
   updatedAt?: number
 }
 
-interface Paged<T> {
-  items?: T[]
-  page_token?: string
-  has_more?: boolean
-}
-
 function msString(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined
   if (typeof value === "string" && value && value !== "0") {
@@ -254,25 +248,13 @@ export function normalizeLarkTask(raw: RawTask): LarkTask | null {
   }
 }
 
-async function readAll<T>(
+function readAll<T>(
   api: LarkAuthedApi,
   path: string,
   cap: number,
   pageSize: number = PAGE
 ): Promise<{ items: T[]; truncated: boolean }> {
-  const items: T[] = []
-  let token: string | undefined
-  for (let guard = 0; guard < 50; guard += 1) {
-    const separator = path.includes("?") ? "&" : "?"
-    const page = await api.get<Paged<T>>(
-      `${path}${separator}page_size=${pageSize}${token ? `&page_token=${encodeURIComponent(token)}` : ""}`
-    )
-    items.push(...(page.items ?? []))
-    if (items.length >= cap) return { items: items.slice(0, cap), truncated: true }
-    if (!page.has_more || !page.page_token) return { items, truncated: false }
-    token = page.page_token
-  }
-  return { items, truncated: true }
+  return readAllLarkPages<T>(api, path, { cap, pageSize })
 }
 
 export async function listLarkTasklists(api: LarkAuthedApi): Promise<LarkTasklistSummary[]> {
@@ -339,7 +321,7 @@ export async function listLarkTasklistTasksPage(
   tasklistGuid: string,
   token?: string
 ): Promise<{ tasks: LarkTask[]; nextPage?: string }> {
-  const page = await api.get<Paged<{ guid?: string }>>(
+  const page = await api.get<LarkPage<{ guid?: string }>>(
     `/open-apis/task/v2/tasklists/${encodeURIComponent(tasklistGuid)}/tasks?user_id_type=open_id&page_size=${PAGE}${token ? `&page_token=${encodeURIComponent(token)}` : ""}`
   )
   if (page.has_more && !page.page_token) throw new Error("Lark task page token missing")
@@ -502,7 +484,11 @@ export async function listBitableRecords(
   let truncated = false
   for (let guard = 0; guard < 20; guard += 1) {
     const page = await api.post<
-      Paged<{ record_id?: string; fields?: Record<string, unknown>; last_modified_time?: number }>
+      LarkPage<{
+        record_id?: string
+        fields?: Record<string, unknown>
+        last_modified_time?: number
+      }>
     >(
       `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(
         tableId
@@ -533,7 +519,7 @@ export async function listBitableRecordsPage(
   token?: string
 ): Promise<{ records: BitableRecord[]; nextPage?: string }> {
   const page = await api.post<
-    Paged<{ record_id?: string; fields?: Record<string, unknown>; last_modified_time?: number }>
+    LarkPage<{ record_id?: string; fields?: Record<string, unknown>; last_modified_time?: number }>
   >(
     `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/search?page_size=${MAX_BITABLE_PAGE}${token ? `&page_token=${encodeURIComponent(token)}` : ""}`,
     {}

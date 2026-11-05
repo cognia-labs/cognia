@@ -19,6 +19,11 @@
  */
 
 import {
+  isLarkUserTokenInvalidation,
+  larkDeployment,
+  readLarkEnvelope,
+} from "@cognia/feishu-protocol"
+import {
   admitPersonalCredential,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -33,15 +38,9 @@ import {
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { getTenantToken } from "./auth"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
-import { larkDeployment } from "./auth"
 import { resolveLarkConnection } from "./host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
-import {
-  LarkApiError,
-  isLarkUserTokenInvalidation,
-  withTatRefresh,
-  withUserTokenRefresh,
-} from "./auth-retry"
+import { withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 
 export const LARK_API_BASE = "https://open.feishu.cn"
 
@@ -61,12 +60,6 @@ export class LarkAccessError extends Error {
     this.code = code
     this.account = account
   }
-}
-
-interface LarkEnvelope<T> {
-  code: number
-  msg?: string
-  data?: T
 }
 
 /** JSON calls bound to one resolved identity. Paths are absolute (`/open-apis/...`). */
@@ -207,21 +200,7 @@ export async function withLarkAuthedApi<T>(
       })
       await assertCurrent()
       throwIfRequestAborted(opts.signal)
-      let parsed: LarkEnvelope<R> | null = null
-      try {
-        parsed = resp.body ? (JSON.parse(resp.body) as LarkEnvelope<R>) : null
-      } catch {
-        // Non-JSON body — fall through to the status check below.
-      }
-      if (resp.status >= 400 || !parsed || parsed.code !== 0) {
-        throw new LarkApiError({
-          status: resp.status,
-          headers: resp.headers,
-          code: parsed?.code ?? null,
-          message: `Lark ${path} failed: code=${parsed?.code ?? "?"}, msg=${parsed?.msg ?? resp.body?.slice(0, 200) ?? "unknown"}`,
-        })
-      }
-      return parsed.data as R
+      return readLarkEnvelope<R>(resp, path)
     }
 
     const bindApi = (authHeader: string): LarkAuthedApi => ({

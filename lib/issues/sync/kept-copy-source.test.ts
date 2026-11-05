@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { createIssueProject } from "@/lib/db/issue-projects"
@@ -8,7 +9,6 @@ import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import { reconcileBinding } from "./engine"
 import { captureIssueSyncSource, resolveIssueResourceSource } from "./kept-copy-source"
 import { createLarkTaskSyncProvider } from "./providers/lark-task"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import { createLarkBitableSyncProvider } from "./providers/lark-bitable"
 import { listPublishTargets, publishIssue } from "@/lib/issues/publish"

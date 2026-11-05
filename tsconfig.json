@@ -57,6 +57,8 @@
       "@cognia/primitives/*": ["./packages/primitives/src/*"],
       "@cognia/time": ["./packages/time/src/index.ts"],
       "@cognia/time/*": ["./packages/time/src/*"],
+      "@cognia/feishu-protocol": ["./packages/feishu-protocol/src/index.ts"],
+      "@cognia/feishu-protocol/*": ["./packages/feishu-protocol/src/*"],
       "@cognia/github-bot-kit": ["./packages/github-bot-kit/src/index.ts"],
       "@cognia/github-bot-kit/*": ["./packages/github-bot-kit/src/*"],
       "@cognia/sync-protocol": ["./node_modules/@cognia/sync-protocol/src/index.ts"],

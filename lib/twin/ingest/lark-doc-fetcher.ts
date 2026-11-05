@@ -20,8 +20,8 @@
  * call. No model calls happen here.
  */
 
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import {
   LarkAccessError,
   withLarkAuthedApi,

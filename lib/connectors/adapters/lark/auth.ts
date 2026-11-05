@@ -1,88 +1,27 @@
 /**
- * Lark tenant access token cache + OAuth flow — Task 88, extended at
- * ADR-0009 v41 / A4 to close the Phase 2 marker by landing the
- * code → user-access-token exchange.
+ * The host's Feishu/Lark credentials: the tenant access token cache, and the
+ * connected user's access token with its refresh and rotation.
  *
- * Lark requires a tenant-access-token (TAT) for most API calls. The token
- * has a short TTL (typically 7200 s). We cache it in memory and refresh when
- * expired.
- *
- * OAuth 2.0 flow (aligned with Feishu's current authorization-code spec):
- *  1. Build the authorize URL with `buildLarkOAuthUrl` — hits
- *     `accounts.feishu.cn/open-apis/authen/v1/authorize` with `client_id`,
- *     `response_type=code`, `scope`, `state` and a PKCE `code_challenge`.
- *  2. Direct the user to the URL; they approve in Lark.
- *  3. Lark redirects to `redirect_uri?code=...&state=...`.
- *  4. Caller verifies `state`, then calls `exchangeCodeForUserAccessToken`
- *     with `client_id` + `client_secret` + the PKCE `code_verifier` to swap
- *     the code for a user access token + refresh token via the v2
- *     `authen/v2/oauth/token` endpoint (no tenant token needed).
- *  5. Refresh with `refreshUserAccessToken` before the TTL elapses. A
- *     `refresh_token` is only issued when the `offline_access` scope is
- *     granted (see `LARK_SENDAS_SCOPES`).
- *  6. The token endpoints return only tokens; `fetchLarkUserInfo` resolves the
- *     connected user's identity (open_id / name / …) for the UI.
+ * The protocol itself (deployments, scopes, the authorize URL, the token and
+ * user-info requests, their errors) is `@cognia/feishu-protocol`. This file
+ * binds it to the desktop's HTTP bridge (`connectorsHttpRequest`; open.feishu.cn
+ * sends no CORS headers) and to the host keyring, which hold what the protocol
+ * library must not: tokens and state.
  */
 
 import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import {
+  LarkOAuthError,
+  exchangeCodeForUserAccessToken as requestCodeExchange,
+  fetchLarkUserInfo as requestUserInfo,
+  refreshUserAccessToken as requestTokenRefresh,
+  requestTenantAccessToken,
+  type FeishuBrand,
+  type LarkUserAccessTokenResult,
+  type LarkUserInfo,
+} from "@cognia/feishu-protocol"
 import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import { CODE_CHALLENGE_METHOD } from "./pkce"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
-
-/** One deployment definition for authorization identity and every API endpoint. */
-export function larkDeployment(brand: "feishu" | "lark" = "feishu") {
-  const domain = brand === "lark" ? "larksuite.com" : "feishu.cn"
-  return { issuer: `https://accounts.${domain}`, apiBase: `https://open.${domain}` }
-}
-
-/**
- * Scopes requested for the send-as-user flow. `offline_access` is mandatory —
- * Feishu only issues a `refresh_token` when it is granted. Sending as a user
- * requires both `im:message` and `im:message.send_as_user`. The exact set must be
- * enabled + approved for the app in the Lark console (Permissions), and the
- * granted scopes must cover these.
- */
-export const LARK_SENDAS_SCOPES = "offline_access im:message im:message.send_as_user"
-
-/** Read-only cloud-document consent, requested explicitly from the connection UI. */
-export const LARK_DOC_READ_SCOPES = [
-  "search:docs:read",
-  "drive:drive:readonly",
-  "docs:doc:readonly",
-  "docx:document:readonly",
-  "sheets:spreadsheet:readonly",
-  "bitable:app:readonly",
-  "wiki:wiki:readonly",
-].join(" ")
-
-export function hasLarkDocumentSearchScope(scopes: readonly string[]): boolean {
-  return scopes.some((scope) =>
-    ["drive:drive.search:readonly", "drive:drive", "search:docs:read"].includes(scope)
-  )
-}
-
-/**
- * Scopes the issue tracker's Lark Task sync needs on the USER identity
- * (spec 2026-09-06 D10). Account-selected tracker resources explicitly use
- * this user identity; they do not switch to bot-owned tasklists when the
- * person's grant is absent. Requested when connecting a tracker account.
- */
-export const LARK_TASK_SCOPES =
-  "task:task:read task:task:write task:tasklist:read task:section:read"
-
-/** Bitable read and write for the tracker's table binding. */
-export const LARK_BITABLE_SCOPES = "bitable:app"
-
-/** Merge scope strings, deduplicated, order preserved. */
-export function mergeLarkScopes(...groups: Array<string | undefined>): string {
-  const seen = new Set<string>()
-  for (const group of groups) {
-    for (const scope of (group ?? "").split(/\s+/)) {
-      if (scope) seen.add(scope)
-    }
-  }
-  return [...seen].join(" ")
-}
 
 // ---------------------------------------------------------------------------
 // Token cache
@@ -96,13 +35,6 @@ interface TokenCacheEntry {
 // In-memory cache keyed by "appId:appSecret"
 const tokenCache = new Map<string, TokenCacheEntry>()
 
-interface TenantTokenResponse {
-  code: number
-  tenant_access_token?: string
-  expire?: number
-  msg?: string
-}
-
 /**
  * Fetch and cache a Lark tenant access token.
  *
@@ -115,7 +47,7 @@ interface TenantTokenResponse {
  * @throws Error if the Lark API returns a non-zero code
  */
 export async function getTenantAccessToken(
-  opts: { appId: string; appSecret: string; brand?: "feishu" | "lark" },
+  opts: { appId: string; appSecret: string; brand?: FeishuBrand },
   purpose: TenantTokenPurposeV1
 ): Promise<string> {
   void purpose
@@ -127,25 +59,10 @@ export async function getTenantAccessToken(
     return cached.token
   }
 
-  const resp = await connectorsHttpRequest({
-    url: `${larkDeployment(opts.brand).apiBase}/open-apis/auth/v3/tenant_access_token/internal`,
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({ app_id: opts.appId, app_secret: opts.appSecret }),
-  })
-
-  const parsed = JSON.parse(resp.body) as TenantTokenResponse
-
-  if (parsed.code !== 0 || !parsed.tenant_access_token) {
-    throw new Error(
-      `Lark tenant_access_token failed: code=${parsed.code}, msg=${parsed.msg ?? "unknown"}`
-    )
-  }
-
-  const ttlSec = parsed.expire ?? 7200
+  const fresh = await requestTenantAccessToken({ ...opts, transport: connectorsHttpRequest })
   const entry: TokenCacheEntry = {
-    token: parsed.tenant_access_token,
-    expiresAtMs: now + ttlSec * 1000,
+    token: fresh.token,
+    expiresAtMs: now + fresh.expiresInSec * 1000,
   }
   tokenCache.set(cacheKey, entry)
 
@@ -154,7 +71,7 @@ export async function getTenantAccessToken(
 
 /** The only production entry to the token cache. Purpose is a label, never a cache key. */
 export function getTenantToken(
-  opts: { appId: string; appSecret: string; brand?: "feishu" | "lark" },
+  opts: { appId: string; appSecret: string; brand?: FeishuBrand },
   purpose: TenantTokenPurposeV1
 ): Promise<string> {
   // Deliberately no policy, logging, or purpose-specific credential selection.
@@ -171,242 +88,37 @@ export function clearTokenCache(appId: string, appSecret: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth URL builder
-// ---------------------------------------------------------------------------
-
-export interface LarkOAuthUrlInput {
-  brand?: "feishu" | "lark"
-  /** The app's App ID — sent as the OAuth 2.0 `client_id`. */
-  appId: string
-  redirectUri: string
-  state: string
-  /** Space-separated scopes (e.g. `LARK_SENDAS_SCOPES`). */
-  scope?: string
-  /** PKCE challenge = base64url(SHA-256(verifier)); pairs with S256. */
-  codeChallenge?: string
-}
-
-/**
- * Build the Lark OAuth 2.0 authorization URL.
- *
- * Directs the user to Feishu's authorize endpoint with `client_id` +
- * `response_type=code` (both required by the current spec), the requested
- * scopes, and — when supplied — the PKCE `code_challenge`. After the user
- * approves, Lark redirects to `redirectUri?code=<code>&state=<state>`. The
- * caller verifies `state` on redirect.
- */
-export function buildLarkOAuthUrl(input: LarkOAuthUrlInput): string {
-  const params = new URLSearchParams()
-  params.set("client_id", input.appId)
-  params.set("response_type", "code")
-  params.set("redirect_uri", input.redirectUri)
-  params.set("state", input.state)
-  if (input.scope) params.set("scope", input.scope)
-  if (input.codeChallenge) {
-    params.set("code_challenge", input.codeChallenge)
-    params.set("code_challenge_method", CODE_CHALLENGE_METHOD)
-  }
-  return `${larkDeployment(input.brand).issuer}/open-apis/authen/v1/authorize?${params.toString()}`
-}
-
-// ---------------------------------------------------------------------------
-// OAuth code-exchange (Phase 2 — closed at ADR-0009 v41 / A4)
+// OAuth requests over the host transport
 // ---------------------------------------------------------------------------
 
 /**
- * Tokens returned by Lark's `authen/v2/oauth/token` endpoint. Stored in the
- * keyring by the caller (`oauth-handler.ts`) under `<adapterId>:user_token` +
- * `<adapterId>:user_refresh_token` so each configured Lark adapter can operate
- * on behalf of its own paired user. The v2 endpoint returns tokens only —
- * identity is resolved separately via `fetchLarkUserInfo`.
+ * Exchange the authorization `code` for a user token pair. The caller
+ * (`oauth-handler.ts`) stores the pair in the host keyring.
  */
-export interface LarkUserAccessTokenResult {
-  accessToken: string
-  refreshToken: string
-  /** Seconds until `accessToken` expires (Lark default is 7200 s). */
-  expiresInSec: number
-  /** Seconds until `refreshToken` expires (Lark default is 31104000 s — 360 d). */
-  refreshExpiresInSec: number
-  tokenType: string
-  scope?: string
-}
-
-/** Connected-user identity resolved from `fetchLarkUserInfo`. */
-export interface LarkUserInfo {
-  openId: string
-  tenantKey?: string
-  unionId?: string
-  name?: string
-  avatarUrl?: string
-  email?: string
-  enterpriseEmail?: string
-}
-
-/**
- * `authen/v2/oauth/token` response. OAuth 2.0-flat: tokens at the top level,
- * with a Feishu `code` (0 = success) and `error`/`error_description` on failure.
- */
-interface LarkTokenV2Response {
-  code?: number
-  error?: string
-  error_description?: string
-  access_token?: string
-  refresh_token?: string
-  token_type?: string
-  expires_in?: number
-  refresh_token_expires_in?: number
-  scope?: string
-}
-
-interface LarkUserInfoResponse {
-  code: number
-  msg?: string
-  data?: {
-    open_id?: string
-    tenant_key?: string
-    union_id?: string
-    name?: string
-    avatar_url?: string
-    email?: string
-    enterprise_email?: string
-  }
-}
-
-/**
- * Parse + validate a v2 token response into the internal token shape. Throws
- * with Feishu's own `error_description`/`error`/code when the exchange failed.
- */
-export class LarkOAuthError extends Error {
-  constructor(
-    readonly code: string | undefined,
-    message: string
-  ) {
-    super(message)
-    this.name = "LarkOAuthError"
-  }
-}
-function parseTokenV2Response(rawBody: string, context: string): LarkUserAccessTokenResult {
-  const parsed = JSON.parse(rawBody) as LarkTokenV2Response
-  if (
-    (parsed.code !== undefined && parsed.code !== 0) ||
-    !parsed.access_token ||
-    !parsed.refresh_token
-  ) {
-    const detail =
-      parsed.error_description ??
-      parsed.error ??
-      (parsed.code !== undefined ? `code=${parsed.code}` : "unknown")
-    throw new LarkOAuthError(parsed.error, `Lark ${context} failed: ${detail}`)
-  }
-  return {
-    accessToken: parsed.access_token,
-    refreshToken: parsed.refresh_token,
-    expiresInSec: parsed.expires_in ?? 7200,
-    refreshExpiresInSec: parsed.refresh_token_expires_in ?? 31_104_000,
-    tokenType: parsed.token_type ?? "Bearer",
-    scope: parsed.scope,
-  }
-}
-
-/**
- * Exchange the authorization `code` Lark redirected to our callback for a
- * `user_access_token` + `refresh_token` pair via the v2 OAuth token endpoint.
- *
- * The v2 endpoint takes `client_id` + `client_secret` in the JSON body (no
- * tenant token / Bearer header). `redirect_uri` must match the value sent to
- * the authorize endpoint, and `code_verifier` must match the PKCE challenge.
- *
- * Throws when Lark returns a non-zero `code` / OAuth `error`; the detail is
- * propagated so OAuth UI surfaces can show the user a meaningful error.
- */
-export async function exchangeCodeForUserAccessToken(opts: {
-  brand?: "feishu" | "lark"
-  /** Authorization code from the redirect URL. */
+export function exchangeCodeForUserAccessToken(opts: {
+  brand?: FeishuBrand
   code: string
   appId: string
   appSecret: string
-  /** Must match the redirect_uri sent to the authorize endpoint. */
   redirectUri: string
-  /** PKCE verifier matching the challenge sent to authorize. */
   codeVerifier?: string
 }): Promise<LarkUserAccessTokenResult> {
-  const body: Record<string, string> = {
-    grant_type: "authorization_code",
-    client_id: opts.appId,
-    client_secret: opts.appSecret,
-    code: opts.code,
-    redirect_uri: opts.redirectUri,
-  }
-  if (opts.codeVerifier) body.code_verifier = opts.codeVerifier
-
-  const resp = await connectorsHttpRequest({
-    url: `${larkDeployment(opts.brand).apiBase}/open-apis/authen/v2/oauth/token`,
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(body),
-  })
-  return parseTokenV2Response(resp.body, "oauth/token access")
+  return requestCodeExchange({ ...opts, transport: connectorsHttpRequest })
 }
 
-/**
- * Refresh a Lark `user_access_token` using its `refresh_token` via the v2
- * token endpoint. Lark may rotate the refresh token (return a new
- * `refresh_token`); callers MUST persist whatever comes back rather than
- * re-using the old refresh token.
- */
-export async function refreshUserAccessToken(opts: {
-  brand?: "feishu" | "lark"
+/** Refresh a user access token; the caller must persist the rotated pair. */
+export function refreshUserAccessToken(opts: {
+  brand?: FeishuBrand
   refreshToken: string
   appId: string
   appSecret: string
 }): Promise<LarkUserAccessTokenResult> {
-  const resp = await connectorsHttpRequest({
-    url: `${larkDeployment(opts.brand).apiBase}/open-apis/authen/v2/oauth/token`,
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      client_id: opts.appId,
-      client_secret: opts.appSecret,
-      refresh_token: opts.refreshToken,
-    }),
-  })
-  return parseTokenV2Response(resp.body, "oauth/token refresh")
+  return requestTokenRefresh({ ...opts, transport: connectorsHttpRequest })
 }
 
-/**
- * Resolve the connected user's identity (open_id / name / email / …) from a
- * `user_access_token` via `authen/v1/user_info`. Called once after the code
- * exchange so the UI can render "Connected as Alice". Sensitive fields
- * (email, enterprise_email) are only present when the app was granted the
- * matching scope — the caller tolerates their absence.
- */
-export async function fetchLarkUserInfo(
-  accessToken: string,
-  brand?: "feishu" | "lark"
-): Promise<LarkUserInfo> {
-  const resp = await connectorsHttpRequest({
-    url: `${larkDeployment(brand).apiBase}/open-apis/authen/v1/user_info`,
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: `Bearer ${accessToken}`,
-    },
-  })
-  const parsed = JSON.parse(resp.body) as LarkUserInfoResponse
-  if (parsed.code !== 0 || !parsed.data) {
-    throw new Error(`Lark user_info failed: code=${parsed.code}, msg=${parsed.msg ?? "unknown"}`)
-  }
-  const d = parsed.data
-  return {
-    openId: d.open_id ?? "",
-    tenantKey: d.tenant_key,
-    unionId: d.union_id,
-    name: d.name,
-    avatarUrl: d.avatar_url,
-    email: d.email,
-    enterpriseEmail: d.enterprise_email,
-  }
+/** Resolve the connected user's identity for the UI ("Connected as Alice"). */
+export function fetchLarkUserInfo(accessToken: string, brand?: FeishuBrand): Promise<LarkUserInfo> {
+  return requestUserInfo({ accessToken, brand, transport: connectorsHttpRequest })
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +156,7 @@ export async function getUserAccessToken(
  * Throws when no refresh token is stored or Lark rejects it.
  */
 export async function refreshUserToken(opts: {
-  brand?: "feishu" | "lark"
+  brand?: FeishuBrand
   credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   connectionAuthorization?: import("@/lib/plugin/auth/connection-manager").HostConnectionCredentialAuthorization
   adapterId: string

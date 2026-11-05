@@ -1,3 +1,4 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import {
   LARK_FORBIDDEN_CODES,
   LarkIngestError,
@@ -6,7 +7,6 @@ import {
   normalizeCliPayload,
   resolveLarkWikiNode,
 } from "./lark-doc-fetcher"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import type { TauriHttpRequest } from "@/lib/connectors/tauri/commands"
 import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { inspect } from "node:util"

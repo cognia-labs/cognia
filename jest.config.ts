@@ -191,6 +191,7 @@ const projectCommon: Config = {
     "^@cognia/agent-trace(.*)$": "<rootDir>/packages/agent-trace/src$1",
     "^@cognia/primitives(.*)$": "<rootDir>/packages/primitives/src$1",
     "^@cognia/time(.*)$": "<rootDir>/packages/time/src$1",
+    "^@cognia/feishu-protocol(.*)$": "<rootDir>/packages/feishu-protocol/src$1",
     "^@cognia/github-bot-kit(.*)$": "<rootDir>/packages/github-bot-kit/src$1",
     // Owned by cognia-labs/cognia-services, installed at the pinned revision.
     "^@cognia/sync-protocol(.*)$": "<rootDir>/node_modules/@cognia/sync-protocol/src$1",

@@ -1,5 +1,5 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { LarkAccessError } from "@/lib/connectors/adapters/lark/authed-api"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { LarkIngestError } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { DocsProviderError } from "@/lib/docs-providers/types"
 import { toDocsProviderError } from "./errors"

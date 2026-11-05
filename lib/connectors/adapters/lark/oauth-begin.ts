@@ -18,10 +18,15 @@
  * browser is reachable from where it runs.
  */
 
+import {
+  buildLarkOAuthUrl,
+  computeCodeChallenge,
+  generateCodeVerifier,
+  LARK_SENDAS_SCOPES,
+  mergeLarkScopes,
+} from "@cognia/feishu-protocol"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import { computeCodeChallenge, generateCodeVerifier } from "./pkce"
 import { buildLarkOAuthState } from "./oauth-handler"
-import { buildLarkOAuthUrl, LARK_SENDAS_SCOPES, mergeLarkScopes } from "./auth"
 import { setLarkOAuthPending } from "./oauth-pending"
 
 export interface BeginLarkOAuthInput {

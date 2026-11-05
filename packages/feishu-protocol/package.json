@@ -1,0 +1,25 @@
+{
+  "name": "@cognia/feishu-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Feishu/Lark OpenAPI protocol: deployments, scopes, PKCE, OAuth and tenant-token requests, the response envelope, error codes and paging. No credentials, no state; the caller supplies the HTTP transport.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "cognia-source": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "cognia-source": "./src/*.ts",
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  }
+}

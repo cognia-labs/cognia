@@ -1,4 +1,5 @@
 /** Lark's Rust credential controller adapted to the Host connection contract (ADR-0246 P5a). */
+import { larkDeployment } from "@cognia/feishu-protocol"
 import { liveQuery } from "dexie"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import {
@@ -32,7 +33,7 @@ import {
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { connectorListen, type ConnectorUnlistenFn } from "@/lib/connectors/events"
-import { fetchLarkUserInfo, larkDeployment, refreshUserToken } from "./auth"
+import { fetchLarkUserInfo, refreshUserToken } from "./auth"
 import type { LarkConnectedUser } from "./oauth-handler"
 import { beginLarkOAuth } from "./oauth-begin"
 import { CONNECTOR_OAUTH_STATE_KEY } from "@/lib/connectors/oauth-state"

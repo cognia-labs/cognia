@@ -1,3 +1,4 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
@@ -48,7 +49,6 @@ import {
   type TauriHttpRequest,
 } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
-import { LarkApiError } from "./auth-retry"
 import { LARK_API_BASE, LarkAccessError, withLarkAuthedApi } from "./authed-api"
 import { readLarkSpreadsheet } from "@/lib/docs-providers/providers/lark/sheets"
 import { readLarkBitable } from "@/lib/docs-providers/providers/lark/bitable"

@@ -18,9 +18,9 @@ jest.mock("./auth", () => {
   }
 })
 
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { clearTokenCache, getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
-import { LarkApiError } from "./auth-retry"
 import { classifyScopeError, larkTenantRequest, larkUserRequest } from "./http"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"

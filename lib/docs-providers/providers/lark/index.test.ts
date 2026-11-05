@@ -15,6 +15,7 @@ jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
   fetchLarkDocAsRawSource: jest.fn(),
 }))
 
+import { LarkApiError } from "@cognia/feishu-protocol"
 import {
   listLarkConnections,
   larkConnectionAdapter,
@@ -30,7 +31,6 @@ import {
   withLarkAuthedApi,
   type LarkAuthedApi,
 } from "@/lib/connectors/adapters/lark/authed-api"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { LarkIngestError, fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { DocsProviderError } from "@/lib/docs-providers/types"

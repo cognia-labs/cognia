@@ -2,6 +2,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   observeTenantServiceData: jest.fn(),
 }))
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 jest.mock("./http", () => ({
   ...jest.requireActual("./http"),
@@ -10,7 +11,6 @@ jest.mock("./http", () => ({
 }))
 
 import { larkTenantRequest, larkUserRequest } from "./http"
-import { LarkApiError } from "./auth-retry"
 import { createLarkChatManagement } from "./chat-management"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 

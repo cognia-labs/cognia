@@ -1,6 +1,6 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
-import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { assertIssueSyncSource } from "../kept-copy-source"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"

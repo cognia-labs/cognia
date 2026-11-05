@@ -1,3 +1,4 @@
+import { LarkApiError } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   connectorsHttpRequest,
@@ -6,60 +7,20 @@ import {
   connectorsLarkUserAuth,
 } from "@/lib/connectors/tauri/commands"
 import {
-  LARK_SENDAS_SCOPES,
-  LARK_DOC_READ_SCOPES,
-  LARK_TASK_SCOPES,
-  LARK_BITABLE_SCOPES,
-  hasLarkDocumentSearchScope,
-  mergeLarkScopes,
   getTenantAccessToken,
   getTenantToken,
   clearTokenCache,
-  buildLarkOAuthUrl,
   exchangeCodeForUserAccessToken,
   refreshUserAccessToken,
   fetchLarkUserInfo,
   getUserAccessToken,
   refreshUserToken,
-  larkDeployment,
 } from "./auth"
-import { LarkApiError, withUserTokenRefresh } from "./auth-retry"
+import { withUserTokenRefresh } from "./auth-retry"
 
 const mockHttp = connectorsHttpRequest as jest.Mock
 const mockKeyringGet = connectorsKeyringGet as jest.Mock
 const mockKeyringSet = connectorsKeyringSet as jest.Mock
-
-it("derives each deployment's issuer and endpoints together", async () => {
-  expect(larkDeployment()).toEqual({
-    issuer: "https://accounts.feishu.cn",
-    apiBase: "https://open.feishu.cn",
-  })
-  expect(larkDeployment("lark")).toEqual({
-    issuer: "https://accounts.larksuite.com",
-    apiBase: "https://open.larksuite.com",
-  })
-  expect(
-    new URL(
-      buildLarkOAuthUrl({
-        appId: "app",
-        redirectUri: "https://callback.test",
-        state: "state",
-        brand: "lark",
-      })
-    ).origin
-  ).toBe("https://accounts.larksuite.com")
-})
-
-it("requests read-only document scopes and distinguishes search grants from IM-only grants", () => {
-  expect(LARK_DOC_READ_SCOPES.split(" ").every((scope) => /:read(?:only)?$/.test(scope))).toBe(true)
-  expect(LARK_DOC_READ_SCOPES.split(" ")).toContain("search:docs:read")
-  expect(hasLarkDocumentSearchScope(["drive:drive:readonly"])).toBe(false)
-  expect(hasLarkDocumentSearchScope(["drive:drive.search:readonly"])).toBe(true)
-  expect(hasLarkDocumentSearchScope(LARK_SENDAS_SCOPES.split(" "))).toBe(false)
-  expect(hasLarkDocumentSearchScope(LARK_DOC_READ_SCOPES.split(" "))).toBe(true)
-  expect(hasLarkDocumentSearchScope(["search:docs:read"])).toBe(true)
-  expect(hasLarkDocumentSearchScope(["drive:drive"])).toBe(true)
-})
 
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
@@ -147,95 +108,6 @@ describe("getTenantAccessToken", () => {
     const body = JSON.parse(call.body) as { app_id: string; app_secret: string }
     expect(body.app_id).toBe("cli_abc")
     expect(body.app_secret).toBe("sec_xyz")
-  })
-})
-
-describe("mergeLarkScopes", () => {
-  it("joins groups, drops repeats and blanks, and keeps first-seen order", () => {
-    expect(
-      mergeLarkScopes("offline_access im:message", undefined, " task:task:read  im:message ")
-    ).toBe("offline_access im:message task:task:read")
-    expect(mergeLarkScopes()).toBe("")
-  })
-})
-
-describe("buildLarkOAuthUrl", () => {
-  it("requests the selected tracker account's user scopes explicitly", () => {
-    const url = new URL(
-      buildLarkOAuthUrl({
-        appId: "cli_tracker",
-        redirectUri: "https://relay.example/oauth/lark/callback",
-        state: "tracker-state",
-        scope: mergeLarkScopes("offline_access", LARK_TASK_SCOPES, LARK_BITABLE_SCOPES),
-      })
-    )
-    expect(url.searchParams.get("scope")?.split(" ")).toEqual(
-      expect.arrayContaining([
-        "offline_access",
-        "task:task:read",
-        "task:task:write",
-        "task:tasklist:read",
-        "task:section:read",
-        "bitable:app",
-      ])
-    )
-  })
-  it("requests both mandatory user-send permissions and refresh access for send-as-user", () => {
-    const url = new URL(
-      buildLarkOAuthUrl({
-        appId: "cli_send_as_user",
-        redirectUri: "https://relay.example/oauth/lark/callback",
-        state: "send-as-state",
-        scope: LARK_SENDAS_SCOPES,
-      })
-    )
-
-    expect(url.searchParams.get("scope")?.split(" ")).toEqual([
-      "offline_access",
-      "im:message",
-      "im:message.send_as_user",
-    ])
-  })
-
-  it("builds an OAuth 2.0 authorize URL with client_id + response_type", () => {
-    const url = buildLarkOAuthUrl({
-      appId: "cli_my_app",
-      redirectUri: "https://relay.example/oauth/lark/callback",
-      state: "random-state-123",
-      scope: "offline_access im:message",
-      codeChallenge: "challenge-abc",
-    })
-    expect(url).toContain("accounts.feishu.cn")
-    expect(url).toContain("authen/v1/authorize")
-    expect(url).toContain("client_id=cli_my_app")
-    expect(url).toContain("response_type=code")
-    expect(url).toContain("state=random-state-123")
-    // scope is space-separated → URL-encoded to +/%20
-    expect(decodeURIComponent(new URL(url).searchParams.get("scope") ?? "")).toBe(
-      "offline_access im:message"
-    )
-    expect(url).toContain("code_challenge=challenge-abc")
-    expect(url).toContain("code_challenge_method=S256")
-  })
-
-  it("omits scope and PKCE params when not supplied", () => {
-    const url = buildLarkOAuthUrl({
-      appId: "cli_app",
-      redirectUri: "https://relay.example/cb",
-      state: "s",
-    })
-    expect(url).not.toContain("scope=")
-    expect(url).not.toContain("code_challenge")
-  })
-
-  it("URL-encodes the redirect_uri", () => {
-    const url = buildLarkOAuthUrl({
-      appId: "cli_app",
-      redirectUri: "https://relay.example/oauth/lark/callback?foo=bar",
-      state: "s",
-    })
-    expect(url).not.toContain("/callback?foo=bar")
-    expect(url).toContain("redirect_uri=")
   })
 })
 

@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { larkDeployment } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
@@ -33,7 +34,7 @@ import { waitFor } from "@testing-library/react"
 jest.mock("./oauth-begin", () => ({ beginLarkOAuth: jest.fn() }))
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
 jest.mock("@/lib/connectors/events", () => ({ connectorListen: jest.fn(async () => jest.fn()) }))
-import { larkDeployment, refreshUserToken } from "./auth"
+import { refreshUserToken } from "./auth"
 import { withAuthLock } from "@/lib/plugin/auth/connection-credentials"
 import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
 import {

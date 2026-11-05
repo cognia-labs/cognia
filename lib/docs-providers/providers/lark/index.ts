@@ -11,6 +11,7 @@
  * the shared `withLarkAuthedApi` harness that the doc fetcher itself now uses.
  */
 
+import { hasLarkDocumentSearchScope } from "@cognia/feishu-protocol"
 import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import {
@@ -21,7 +22,6 @@ import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { localTransport } from "@/lib/tauri/transport-instance"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
-import { hasLarkDocumentSearchScope } from "@/lib/connectors/adapters/lark/auth"
 import { fetchLarkDocAsRawSource, resolveLarkWikiNode } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { parseLarkResourceUrl } from "@/lib/twin/ingest/lark-url"
 import { clampDocText, MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"

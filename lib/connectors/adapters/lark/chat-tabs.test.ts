@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import { LarkApiError } from "@cognia/feishu-protocol"
 import "fake-indexeddb/auto"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { getChatSurface } from "@/lib/db/lark-chat-surfaces"
@@ -10,7 +11,6 @@ import {
   reconcileChatTabSurface,
   runSurfaceLocked,
 } from "./chat-tabs"
-import { LarkApiError } from "./auth-retry"
 
 const ADAPTER_ID = "lark-tabs-1"
 const CHAT_ID = "oc_chat_1"

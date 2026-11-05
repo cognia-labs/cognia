@@ -32,6 +32,7 @@ export const HOST_INDEPENDENT_PACKAGES = [
   "agent-codebuff",
   "agent-claude-code",
   "agent-orchestration",
+  "feishu-protocol",
 ]
 
 // The report is a data-only view. Dataset configuration belongs to eval's

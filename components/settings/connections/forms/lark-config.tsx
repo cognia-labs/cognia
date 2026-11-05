@@ -17,6 +17,7 @@
  * the OS keyring.
  */
 
+import { LARK_DOC_READ_SCOPES, mergeLarkScopes } from "@cognia/feishu-protocol"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { CheckCircle2Icon, ExternalLinkIcon, LoaderIcon, XCircleIcon } from "lucide-react"
@@ -41,7 +42,6 @@ import { Switch } from "@/components/ui/switch"
 import { openUrl } from "@/lib/native/opener"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { beginLarkOAuth } from "@/lib/connectors/adapters/lark/oauth-begin"
-import { LARK_DOC_READ_SCOPES, mergeLarkScopes } from "@/lib/connectors/adapters/lark/auth"
 import type { ConnectedScopes } from "@/lib/connectors/oauth-scope-audit"
 import type { LarkConnectedUser } from "@/lib/connectors/adapters/lark/oauth-handler"
 import { CONNECTOR_OAUTH_STATE_KEY } from "@/lib/connectors/oauth-registry"
