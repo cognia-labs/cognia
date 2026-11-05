@@ -114,7 +114,7 @@ describe("RunDetail", () => {
 
     wrap()
     await waitFor(() => expect(screen.getByTestId("run-usage-pill")).toBeInTheDocument())
-    expect(screen.getByTestId("run-usage-pill").textContent).toContain("1.5k tok")
+    expect(screen.getByTestId("run-usage-pill").textContent).toContain("1.5K tok")
     expect(screen.getByTestId("run-usage-pill").textContent).toContain("$0.020 est.")
   })
 

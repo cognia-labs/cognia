@@ -5,15 +5,16 @@
  * spend into the member's partition; the welcome dashboard (streaks, heatmap,
  * per-model breakdown) reads it from this mirror. Rows arrive keyed by `id`,
  * the reply's message id (`sessionUsageWireRow`), and are stored as the Host
- * holds them under that `messageId`. A turn this device also booked while its
- * chat view rendered it has the same key, so the Host's row replaces it
- * rather than counting the turn twice. Deleted conversations tombstone their
+ * holds them under that `messageId`, committed through the usage ledger. A turn
+ * this device also booked while its chat view rendered it has the same key, so
+ * the Host's row replaces it rather than counting the turn twice. Deleted conversations tombstone their
  * rows; the 90-day retention sweep runs on this device as on the Host.
  */
 
 import { getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import type { Transport } from "@/lib/tauri/transport-types"
+import { commitUsageRows } from "@/lib/usage/usage-ledger"
 
 import type { SyncCursor, SyncOutcome } from "../types"
 import { runSyncHandler } from "./base"
@@ -47,7 +48,9 @@ export async function applySessionUsageRows(
   })
   if (stored.length === 0) return
   assertCurrent()
-  await getDb().sessionUsage.bulkPut(stored)
+  // Through the ledger, not a bare put (ADR-0253 D07): a Host row that replaces
+  // one this device booked moves the budget projection by the difference.
+  await commitUsageRows(stored, { assertCurrent })
 }
 
 export function syncSessionUsage(transport: Transport, cursor: SyncCursor): Promise<SyncOutcome> {

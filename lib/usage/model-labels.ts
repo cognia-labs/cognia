@@ -13,14 +13,13 @@
  */
 
 import type { CustomProviderSettings, UserProviderSettings } from "@cognia/provider-types/provider"
-import { resolveModelDisplayName } from "@/lib/ai/model-options"
+import { resolveModelDisplayName, type OrgModelNames } from "@/lib/ai/model-options"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 
 /** The bucket `aggregateByModel` files a row without a model id under. */
 export const UNKNOWN_MODEL_KEY = "(unknown)"
 
-/** An org deployment's model names, by provider then model id. */
-export type OrgModelNames = Readonly<Record<string, Readonly<Record<string, string>>>>
+export type { OrgModelNames }
 
 export interface ModelLabelContext {
   orgNames?: OrgModelNames | null
@@ -66,13 +65,14 @@ export function usageModelLabel(
   context: ModelLabelContext = {}
 ): string | null {
   if (model === UNKNOWN_MODEL_KEY) return null
-  const orgName = providerId ? context.orgNames?.[providerId]?.[model]?.trim() : undefined
-  if (orgName) return orgName
   return resolveModelDisplayName(
     providerId,
     model,
     context.providerSettings,
-    context.customProviders
+    context.customProviders,
+    undefined,
+    // Absent: the member's partition's names, as everywhere else.
+    context.orgNames
   )
 }
 

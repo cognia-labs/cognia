@@ -42,7 +42,7 @@ describe("UsageEfficiencyPanel", () => {
       />
     )
     expect(screen.getByTestId("x-cache-none")).toBeInTheDocument()
-    expect(screen.getByText(/2.0K cached tokens/)).toBeInTheDocument()
+    expect(screen.getByText(/2K cached tokens/)).toBeInTheDocument()
     expect(screen.getByTestId("x-distribution-empty")).toBeInTheDocument()
   })
 })

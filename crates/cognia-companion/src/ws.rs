@@ -779,8 +779,8 @@ mod tests {
     #[test]
     fn p6c_ws_live_and_replay_predicate_precedes_service_sidecar_exception() {
         let bus = EventBus::new();
-        let frame = bus.publish_person_to("claude://message".into(), json!({"sessionId":"p6c-ws"}),
-            "brain-pb_owner".into(), "pb_owner".into());
+        let frame = bus.publish_person("claude://message".into(), json!({"sessionId":"p6c-ws"}),
+            "pb_owner".into());
         assert!(frame.visible_to_connection("__service__", ConnectionScope::Service));
         assert!(!person_frame_visible(&frame, Some("operator"), "__service__", ConnectionScope::Service));
         assert!(person_frame_visible(&frame, Some("pb_owner"), "brain-pb_owner", ConnectionScope::Device));
@@ -803,19 +803,13 @@ mod tests {
             panic!("device subscription");
         };
         for i in 0..600 {
-            bus.publish_person_to(
+            bus.publish_person(
                 "external-agent://stdout".into(),
                 json!({"data":i}),
-                "brain-pb_owner".into(),
                 "pb_owner".into(),
             );
             bus.publish_person_ephemeral("transcript://live".into(), json!({}), "pb_other".into());
-            bus.publish_person_to(
-                "external-agent://stdout".into(),
-                json!({}),
-                "owner-device".into(),
-                "pb_owner".into(),
-            );
+            bus.publish("external-agent://stdout".into(), json!({}));
         }
         assert!(matches!(
             device.recv().await,
@@ -873,7 +867,7 @@ mod tests {
             .route("/internal/events", axum::routing::any(internal_ws_handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                crate::middleware::require_device_jwt,
+                crate::middleware::require_service_jwt,
             ))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -914,10 +908,9 @@ mod tests {
         // No await: the current-thread runtime cannot drain the socket's bus
         // receiver until this entire over-capacity burst has been published.
         for chunk in chunks {
-            let frame = bus.publish_person_to(
+            let frame = bus.publish_person(
                 "external-agent://stdout".into(),
                 json!({"data":chunk}),
-                format!("brain-{}", person.account_id),
                 person.account_id.clone(),
             );
             expected_seqs.push(frame.seq);
@@ -980,7 +973,7 @@ mod tests {
             .route("/internal/events", axum::routing::any(internal_ws_handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                crate::middleware::require_device_jwt,
+                crate::middleware::require_service_jwt,
             ))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1130,7 +1123,7 @@ mod tests {
             .route("/internal/events", axum::routing::any(internal_ws_handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                crate::middleware::require_device_jwt,
+                crate::middleware::require_service_jwt,
             ))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

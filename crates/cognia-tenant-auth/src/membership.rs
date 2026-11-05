@@ -207,8 +207,12 @@ mod tests {
             source.contains("via: \"org-admin\""),
             "the org-admin traversal branch changed"
         );
+        // Owner and admin traverse: `allowsOrgRole` ranks by `ORG_ROLES`,
+        // most privileged first, so "admin or above" is exactly those two.
         assert!(
-            source.contains("return role === \"owner\" || role === \"admin\""),
+            source.contains("return allowsOrgRole(role, \"admin\")")
+                && source.contains("export const ORG_ROLES = [\"owner\", \"admin\", \"member\"] as const")
+                && source.contains("return ORG_ROLES.indexOf(role) <= ORG_ROLES.indexOf(required)"),
             "canTraverseWorkspaces changed which org roles may traverse"
         );
     }

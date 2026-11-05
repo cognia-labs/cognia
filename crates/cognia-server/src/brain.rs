@@ -416,8 +416,9 @@ impl BrainSupervisor {
             // ADR-0253 §7: a turn this partition's brain left in flight before
             // this instant was interrupted by the Host restarting.
             env.push(("COGNIA_HOST_BOOTED_AT".into(), cognia_companion::person_partition::host_booted_at_ms().to_string()));
-            // P6d: Host capability advertisement. The TS brain deliberately
-            // does not consume COGNIA_PERSON_EXECUTION until P6e (Rule 7).
+            // Host capability advertisement: the person brain installs its
+            // agent runtime only when this Host can sandbox it
+            // (`lib/headless/runtimes/person-agent.ts`).
             if cognia_companion::host_surface_gate::person_execution_available().await {
                 env.push(("COGNIA_PERSON_EXECUTION".into(), "sandboxed".into()));
             }

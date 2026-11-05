@@ -28,13 +28,13 @@ export interface PersonAgentsManifest {
   /**
    * Per provider, the model ids its deployment serves: every provider in
    * `allowedAgents`, then every other provider the org holds a key for, which
-   * tool-less chat can run on. A Host older than that names only the first.
+   * tool-less chat can run on. A provider absent here serves nothing.
    */
   models: Record<string, string[]>
   /**
    * Per provider, the display name its deployment gives a served model,
    * keyed by model id. Only names that differ from the id; a model absent
-   * here is shown by its id. A Host older than that sends none.
+   * here is shown by its id. Absent when the deployment names none.
    */
   modelNames?: Record<string, Record<string, string>>
   /** The member's own UTC month; `monthlyTokens: null` means no cap. */
@@ -329,10 +329,26 @@ export interface HostFeatureManifestV2 extends HostFeatureManifestBase {
     eventStreamReady: 1
   }
   operations: HostRuntimeOperationDescriptor[]
-  deviceGrants: string[]
+  /**
+   * The caller device's capabilities, as the Host's own authorization reads
+   * them. Absent when the Host could not read them: unknown, and the Host's
+   * refusal decides. Empty: the device holds none (ADR-0253 D05).
+   */
+  deviceGrants?: string[]
 }
 
 export type HostFeatureManifest = HostFeatureManifestV1 | HostFeatureManifestV2
+
+/**
+ * Whether a manifest came from a person brain on a multi-tenant Host: the
+ * caller's own partition (P5d). The manifest-level half of ADR-0253 D04; the
+ * runtime snapshot asks it through `isMemberOnPartition`.
+ */
+export function manifestIsPersonPartition(
+  manifest: HostFeatureManifest | null | undefined
+): manifest is HostFeatureManifestV2 & { personPartition: true } {
+  return manifest?.schemaVersion === 2 && manifest.personPartition === true
+}
 
 const DEFAULT_LIMITS: HostFeatureLimits = Object.freeze({
   rpcJsonBodyBytes: 64 * 1024,
@@ -595,7 +611,8 @@ export function buildLocalHostFeatureManifest({
   personChat?: "tool-less" | "none"
   /** Declared only alongside `personPartition`. */
   personAgents?: PersonAgentsManifest
-  deviceGrants?: string[]
+  /** `null`: the caller's grants are unknown, and the manifest names none. */
+  deviceGrants?: string[] | null
   operationHealth?: Readonly<Record<string, HostOperationHealth>>
 }): HostFeatureManifestV2 {
   const features: HostFeatureManifestV2["features"] = {
@@ -1105,7 +1122,7 @@ export function buildLocalHostFeatureManifest({
           .map((operation) => [operation.name, operation])
       ).values(),
     ],
-    deviceGrants: [...new Set(deviceGrants)],
+    ...(deviceGrants === null ? {} : { deviceGrants: [...new Set(deviceGrants)] }),
     limits: { ...DEFAULT_LIMITS },
   }
 }
@@ -1227,9 +1244,10 @@ export function parseHostFeatureManifest(value: unknown): HostFeatureManifest | 
           typeof transportCapabilities !== "object" ||
           transportCapabilities.eventStreamReady !== 1)) ||
       !Array.isArray(v2.operations) ||
-      !Array.isArray(v2.deviceGrants) ||
-      !v2.deviceGrants.every((grant) => typeof grant === "string" && grant.length > 0) ||
-      new Set(v2.deviceGrants).size !== v2.deviceGrants.length
+      (v2.deviceGrants !== undefined &&
+        (!Array.isArray(v2.deviceGrants) ||
+          !v2.deviceGrants.every((grant) => typeof grant === "string" && grant.length > 0) ||
+          new Set(v2.deviceGrants).size !== v2.deviceGrants.length))
     ) {
       return null
     }
@@ -1283,4 +1301,40 @@ export function hostSupportsExternalAgentModelPlans(
     "external-agent.process-plane",
     EXTERNAL_AGENT_MODEL_PLAN_OPERATION
   )
+}
+
+/** What a Host said of one of this device's capabilities. */
+export type DeviceGrantAnswer = "holds" | "lacks" | "unknown"
+
+/**
+ * The one grant gate (ADR-0253 D05): what a Host said of `capability` for this
+ * device.
+ *
+ * `declared` is the `deviceGrants` a Host put in its feature manifest for the
+ * caller: the SecurityStore capability snapshot the Host's own
+ * `missing_capability` refusal checks (`inject_caller_device_grants`), so a
+ * surface can stop asking for what it will be refused. No list (a v1
+ * manifest, no manifest yet, a Host that could not read its store) is
+ * `unknown`, and an unknown device keeps asking: the Host's 403 stays the
+ * authority. A list, empty included, is the Host's answer: a capability not
+ * on it is `lacks`.
+ *
+ * Not for `org.policy.manage`. The Host grants that from the caller's live org
+ * role, not the device's grants (P6b), so an org admin's manifest never lists
+ * it.
+ */
+export function deviceGrantAnswer(
+  declared: readonly string[] | null | undefined,
+  capability: string
+): DeviceGrantAnswer {
+  if (!Array.isArray(declared)) return "unknown"
+  return declared.includes(capability) ? "holds" : "lacks"
+}
+
+/** Whether a Host has said this device does NOT hold `capability`. */
+export function deviceLacksCapability(
+  declared: readonly string[] | null | undefined,
+  capability: string
+): boolean {
+  return deviceGrantAnswer(declared, capability) === "lacks"
 }

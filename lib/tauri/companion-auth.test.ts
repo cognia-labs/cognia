@@ -9,6 +9,7 @@ import {
   companionErrorCode,
   devicePlatformLabel,
   fetchCompanionAuthConfig,
+  isMultiTenantAuthConfig,
   issueSocketTicket,
   parseCompanionAuthConfig,
   registerCompanionDevice,
@@ -712,6 +713,20 @@ describe("auth config version 5 (host name)", () => {
     for (const absent of [undefined, null, 42, "", " \n\u0000 "]) {
       expect(reportedHostName(absent)).toBeUndefined()
     }
+  })
+})
+
+describe("isMultiTenantAuthConfig (ADR-0253 D10)", () => {
+  const base = {
+    hostId: "h",
+    signaling: { url: "wss://s", iceServers: [] },
+  }
+  const oidc = { issuer: "i", audience: "a", webClientId: "w", scopes: [] }
+
+  it("d10 is true only for a multi-tenant deployment with an issuer", () => {
+    expect(isMultiTenantAuthConfig({ ...base, deploymentMode: "multi-tenant", oidc })).toBe(true)
+    expect(isMultiTenantAuthConfig({ ...base, deploymentMode: "multi-tenant" })).toBe(false)
+    expect(isMultiTenantAuthConfig({ ...base, deploymentMode: "single-user", oidc })).toBe(false)
   })
 })
 

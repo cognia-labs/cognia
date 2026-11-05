@@ -80,9 +80,11 @@ describe("createSessionOnPairedHost", () => {
     expect(awaitSettlement).not.toHaveBeenCalled()
   })
 
-  it("stays local against a Host too old to know the intent", async () => {
+  it("adr-0253 o06 throws a submit the Host could not read, never creating locally", async () => {
     const { deps: d } = deps({ outcome: "rejected", code: "host_state_invalid_submit_request" })
-    await expect(createSessionOnPairedHost(session(), {}, d)).resolves.toBe("local")
+    await expect(createSessionOnPairedHost(session(), {}, d)).rejects.toMatchObject({
+      code: "host_state_invalid_submit_request",
+    })
   })
 
   it("treats a redelivered create the Host already applied as created", async () => {

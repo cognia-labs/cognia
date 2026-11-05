@@ -14,7 +14,8 @@
 //     had no price reads "≥$x", and one where none had a price is left out.
 
 import { lastLocalDays } from "@/lib/glance/build-usage"
-import { formatCompactTokens, formatCompactUsd } from "@/lib/usage/status-snapshot"
+import { formatCompactUsd } from "@/lib/usage/status-snapshot"
+import { formatTokens } from "@/types/system/usage"
 import type {
   UsageGlanceBucket,
   UsageGlanceMetric,
@@ -199,7 +200,7 @@ function usageText(
     unpriced += bucket.unpricedTurns
   }
   if (turns === 0) return null
-  if (field.metric === "tokens") return formatCompactTokens(tokens)
+  if (field.metric === "tokens") return formatTokens(tokens)
   if (unpriced >= turns) return null
   const money = formatCompactUsd(cost)
   return unpriced > 0 ? `≥${money}` : money

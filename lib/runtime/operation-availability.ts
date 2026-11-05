@@ -1,5 +1,5 @@
 import type { HostFeatureLimits, PersonAgentsManifest } from "@/lib/platform/host-feature-manifest"
-import { deviceLacksCapability } from "@/lib/devices/grant-capabilities"
+import { deviceGrantAnswer, deviceLacksCapability } from "@/lib/platform/host-feature-manifest"
 import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
 import type { RuntimeTarget } from "./runtime-target"
 
@@ -12,8 +12,12 @@ export interface HostRuntimeSnapshot {
   compatible: boolean
   /** Exact command operations advertised as implemented and healthy. */
   operations: readonly string[]
-  /** Command-manifest capability grants currently held by this device. */
-  grants: readonly string[]
+  /**
+   * Command-manifest capability grants currently held by this device, as the
+   * Host's manifest names them. Absent when the Host did not say: unknown,
+   * and the Host's refusal decides (ADR-0253 D05).
+   */
+  grants?: readonly string[]
   /**
    * Ceilings the host published with its manifest.
    *
@@ -150,7 +154,7 @@ export function resolveOperationAvailability(
       ? { state: "read-only", reason: "operation-unavailable" }
       : { state: "unsupported", reason: "operation-unavailable" }
   }
-  if (!host.grants.includes(descriptor.capability)) {
+  if (deviceGrantAnswer(host.grants, descriptor.capability) === "lacks") {
     return {
       state: "requires-grant",
       reason: "missing-grant",
@@ -180,8 +184,8 @@ export function resolveOperationAvailability(
  * negotiates at boot, and until that lands its grants are unknown. A surface
  * that read "unknown" as "ask" sent its read at once and the Host refused it
  * (`missing_capability`, final) a moment before the manifest said the same.
- * So a companion target with no manifest yet waits. One whose manifest names
- * no grants, or that is incompatible, still asks, and the Host's answer
+ * So a companion target with no manifest yet waits. One whose manifest does
+ * not say (no grant list, or incompatible) still asks, and the Host's answer
  * decides. A native host (no target) and a standalone client have no manifest
  * to wait for, so without one they ask.
  */
@@ -235,7 +239,7 @@ export function resolveUserActionAvailability(
     snapshot.target?.kind === "companion" &&
     descriptor?.approval === "interactive" &&
     (!snapshot.host?.operations.includes("host_admin_lease_issue") ||
-      !snapshot.host.grants.includes("host.admin"))
+      deviceGrantAnswer(snapshot.host.grants, "host.admin") === "lacks")
   ) {
     return {
       state: "requires-grant",

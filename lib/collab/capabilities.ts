@@ -27,7 +27,14 @@
 
 import { CollabError, type CollabClient } from "./client"
 
-import type { OrgRole, WorkspaceAccessVia, WorkspaceRole } from "@/types/identity"
+import {
+  ORG_ROLES,
+  WORKSPACE_ACCESS_VIA,
+  WORKSPACE_ROLES,
+  type OrgRole,
+  type WorkspaceAccessVia,
+  type WorkspaceRole,
+} from "@/types/identity"
 
 export const ORG_CAPABILITIES_SCHEMA_VERSION = 1
 
@@ -126,10 +133,6 @@ export class OrgCapabilitiesParseError extends Error {
   }
 }
 
-const ORG_ROLES: readonly OrgRole[] = ["owner", "admin", "member"]
-const WORKSPACE_ROLES: readonly WorkspaceRole[] = ["maintainer", "member", "viewer"]
-const ACCESS_VIA: readonly WorkspaceAccessVia[] = ["membership", "org-admin"]
-
 function oneOf<T extends string>(values: readonly T[], value: unknown): T | null {
   return typeof value === "string" && (values as readonly string[]).includes(value)
     ? (value as T)
@@ -195,7 +198,7 @@ export function parseOrgCapabilities(
   const standing: CollabStanding = {
     orgRole: oneOf(ORG_ROLES, standingRaw.orgRole),
     workspaceRole: oneOf(WORKSPACE_ROLES, standingRaw.workspaceRole),
-    via: oneOf(ACCESS_VIA, standingRaw.via),
+    via: oneOf(WORKSPACE_ACCESS_VIA, standingRaw.via),
     guest: standingRaw.guest === true,
   }
 

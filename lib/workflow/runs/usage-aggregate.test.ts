@@ -1,4 +1,4 @@
-import { aggregateRunUsage, formatCostUsd, formatTokens } from "./usage-aggregate"
+import { aggregateRunUsage, formatCostUsd } from "./usage-aggregate"
 import type { WorkflowRunEventRow } from "@/types/workflow/visual"
 
 function usageEvent(stepId: string, ts: number, payload: unknown): WorkflowRunEventRow {
@@ -99,19 +99,6 @@ describe("aggregateRunUsage", () => {
     ])
     expect(s.perStep.n1.totalTokens).toBe(7)
     expect(Object.keys(s.perStep)).toEqual(["n1"])
-  })
-})
-
-describe("formatTokens", () => {
-  it.each([
-    [0, "0"],
-    [950, "950"],
-    [1500, "1.5k"],
-    [12_340, "12k"],
-    [4_200_000, "4.2M"],
-    [-1, "—"],
-  ])("formats %d as %s", (input, expected) => {
-    expect(formatTokens(input)).toBe(expected)
   })
 })
 

@@ -27,6 +27,7 @@ import {
   resolveRuntimeRecovery,
   type RuntimeRecoveryDestination,
 } from "@/lib/runtime/recovery-resolver"
+import { isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 
 export interface ChatRuntimeGate {
   availability: OperationAvailability
@@ -49,7 +50,7 @@ export function useChatRuntimeGate(): ChatRuntimeGate {
       // member's composer. The member's brain declares `agent_send` healthy
       // exactly when it runs partition chat; the device's turn itself goes
       // in as a HostState `message.enqueue` (`host-state-send-eligibility.ts`).
-      command: snapshot.host?.personPartition ? "agent_send" : "claude_send",
+      command: isMemberOnPartition(snapshot) ? "agent_send" : "claude_send",
       localExecutorAvailable: snapshot.target?.kind === "standalone",
       readOnlyFallback: true,
     })

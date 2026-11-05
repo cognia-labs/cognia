@@ -33,7 +33,7 @@ describe("ContextCompositionDonut", () => {
     expect(screen.getByTestId("context-composition-center")).toHaveTextContent("60%")
     expect(screen.getByRole("img")).toHaveAttribute(
       "aria-label",
-      "Context window: 60.0K of 100.0K tokens"
+      "Context window: 60K of 100K tokens"
     )
     expect(screen.getByTestId("context-composition-caption")).toHaveTextContent(
       "Shares of the whole window"
@@ -43,7 +43,7 @@ describe("ContextCompositionDonut", () => {
   it("lists the largest groups in the legend", () => {
     render(<ContextCompositionDonut breakdown={live} centerLabel="60%" />)
     const legend = screen.getByTestId("context-composition-legend")
-    expect(legend.querySelectorAll("li")[0]).toHaveTextContent("40.0K")
+    expect(legend.querySelectorAll("li")[0]).toHaveTextContent("40K")
   })
 
   it("says when the shares are of the attributed transcript only", () => {

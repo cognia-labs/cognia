@@ -18,7 +18,7 @@ describe("TokenMixBar", () => {
         }}
       />
     )
-    expect(screen.getByTestId("token-mix-input")).toHaveTextContent("1.0K10%")
+    expect(screen.getByTestId("token-mix-input")).toHaveTextContent("1K10%")
     expect(screen.getByTestId("token-mix-cacheRead")).toHaveTextContent("8.5K85%")
     expect(screen.getByTestId("token-mix-cacheWrite")).toHaveTextContent("00%")
     const segments = screen.getByRole("img").querySelectorAll("[data-segment]")

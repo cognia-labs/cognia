@@ -82,8 +82,10 @@ describe("executionWorkersAccess", () => {
     tauri.mockReturnValue(false)
     expect(executionWorkersAccess(paired(host(["host.observe", "agent.run"])))).toBe("lacks")
     expect(executionWorkersAccess(paired(host(["host.observe", "host.admin"])))).toBe("ask")
+    // An empty list is the Host's answer (ADR-0253 D05).
+    expect(executionWorkersAccess(paired(host([])))).toBe("lacks")
     // Unknown grants still ask; the Host's refusal decides.
-    expect(executionWorkersAccess(paired(host([])))).toBe("ask")
+    expect(executionWorkersAccess(paired({ compatible: true, operations: [] }))).toBe("ask")
     expect(executionWorkersAccess(paired({ compatible: false, operations: [], grants: [] }))).toBe(
       "ask"
     )

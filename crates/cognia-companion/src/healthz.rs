@@ -379,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn healthz_does_not_require_authorization_header() {
         // Build a router with NO middleware applied — the public route is
-        // intentionally outside `require_device_jwt`. We assert the
+        // intentionally outside every auth middleware. We assert the
         // handler itself succeeds on a plain GET with no headers.
         let router = build_router(test_state());
         let req = Request::builder()

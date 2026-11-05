@@ -729,7 +729,7 @@ describe("locked nodes", () => {
         usage: { inputTokens: 12000, outputTokens: 340, totalTokens: 12340, costUsd: 0.0042 },
       },
     })
-    expect(screen.getByTestId("wf-node-usage-tokens")).toHaveTextContent("12k")
+    expect(screen.getByTestId("wf-node-usage-tokens")).toHaveTextContent("12.3K")
     expect(screen.getByTestId("wf-node-usage-cost")).toHaveTextContent("$0.0042")
   })
 

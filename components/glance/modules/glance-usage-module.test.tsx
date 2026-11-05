@@ -12,7 +12,7 @@ import {
   type GlanceSnapshotV1,
   type GlanceUsageSlice,
 } from "@/lib/glance/snapshot"
-import { formatCompactTokens } from "@/lib/usage/status-snapshot"
+import { formatTokens } from "@/types/system/usage"
 
 import { GlanceProvider, type GlanceContextValue } from "../glance-context"
 import { GlanceUsageModule } from "./glance-usage-module"
@@ -97,8 +97,8 @@ describe("GlanceUsageModule", () => {
   describe("compact", () => {
     it("shows today and 7 day tokens and routes to the usage page", async () => {
       const { route, user } = setup(makeUsage(), "compact")
-      expect(screen.getByText(formatCompactTokens(1_500))).toBeInTheDocument()
-      expect(screen.getByText(formatCompactTokens(20_000))).toBeInTheDocument()
+      expect(screen.getByText(formatTokens(1_500))).toBeInTheDocument()
+      expect(screen.getByText(formatTokens(20_000))).toBeInTheDocument()
       expect(screen.getByRole("img", { name: "Tokens over the last 7 days" })).toBeInTheDocument()
       await user.click(screen.getByRole("button", { name: "Open usage" }))
       expect(route).toHaveBeenCalledWith({ kind: "open-owner", owner: "usage" })
@@ -120,8 +120,8 @@ describe("GlanceUsageModule", () => {
       expect(within(section).getByText("Today")).toBeInTheDocument()
       expect(within(section).getByText("7 days")).toBeInTheDocument()
       expect(within(section).getByText("30 days")).toBeInTheDocument()
-      expect(within(section).getByText("1.5k")).toBeInTheDocument()
-      expect(within(section).getByText("20k")).toBeInTheDocument()
+      expect(within(section).getByText("1.5K")).toBeInTheDocument()
+      expect(within(section).getByText("20K")).toBeInTheDocument()
       expect(within(section).getByText("1.2M")).toBeInTheDocument()
     })
 
@@ -170,7 +170,7 @@ describe("GlanceUsageModule", () => {
     it("shows the top model with its tokens, or a no-usage line", () => {
       const { unmount } = setup(makeUsage())
       expect(screen.getByText("claude-sonnet")).toBeInTheDocument()
-      expect(screen.getByText("900k")).toBeInTheDocument()
+      expect(screen.getByText("900K")).toBeInTheDocument()
       unmount()
       setup(makeUsage({ topModel: null }))
       expect(screen.getByText("No usage in the last 30 days")).toBeInTheDocument()
@@ -295,7 +295,7 @@ describe("GlanceUsageModule", () => {
       expect(screen.getByRole("radio", { name: "All tools" })).toBeChecked()
       expect(send).not.toHaveBeenCalled()
       // The stats are replaced by the notice while it is open.
-      expect(screen.queryByText("1.5k")).not.toBeInTheDocument()
+      expect(screen.queryByText("1.5K")).not.toBeInTheDocument()
     })
 
     it("sends set-usage-scope all-tools once the consent is confirmed", async () => {
@@ -313,7 +313,7 @@ describe("GlanceUsageModule", () => {
       await user.click(screen.getByRole("button", { name: "Not now" }))
       expect(send).not.toHaveBeenCalled()
       expect(screen.queryByText(/reads the session files/)).not.toBeInTheDocument()
-      expect(screen.getByText("1.5k")).toBeInTheDocument()
+      expect(screen.getByText("1.5K")).toBeInTheDocument()
       expect(screen.getByRole("radio", { name: "Cognia" })).toBeChecked()
     })
 

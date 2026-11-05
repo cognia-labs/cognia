@@ -1,7 +1,7 @@
 //! P5 person authority and the server-installed fleet boundary.
 //! Never deserialized from RPC arguments. Desktop Hosts install no fleet and
-//! retain host_data_unpartitioned. Model-backed pet arms are intentionally
-//! dormant until P6 supplies partition-scoped credentials.
+//! retain host_data_unpartitioned. A person brain's pet arms answer
+//! `headless-host`: the pet keeps no per-person surface on a Host.
 use std::{future::Future, sync::Arc};
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -340,7 +340,7 @@ mod tests {
             "p5-device", "Web", "pem", "thumb", "member", 101).unwrap();
         let partition = PersonPartition::new(person.org_id.to_string(), person.user_id.to_string());
         let bus = crate::event_bus::EventBus::new();
-        let frame = bus.publish_person_to("sync://invalidate".into(), serde_json::json!({"table":"messages"}), "p5-device".into(), partition.account_id);
+        let frame = bus.publish_person("sync://invalidate".into(), serde_json::json!({"table":"messages"}), partition.account_id);
         assert!(event_visible_in_store(&frame, "p5-device", Some("tenant-p5"), &store));
         assert!(event_visible_in_store(&frame, "p5-device", None, &store));
         assert!(!event_visible_in_store(&frame, "someone-else", Some("tenant-p5"), &store));
@@ -377,10 +377,6 @@ mod tests {
         let bus = crate::event_bus::EventBus::new();
         let event = bus.publish_person("claude://message-added".into(), serde_json::json!({"sessionId":"s"}), partition.account_id.clone());
         assert_eq!(push_devices_in_store(&event, &registry, &store), vec!["ada-phone", "ada-tablet"]);
-        let addressed = bus.publish_person_to("claude://message-added".into(), serde_json::json!({}), "ada-tablet".into(), partition.account_id.clone());
-        assert_eq!(push_devices_in_store(&addressed, &registry, &store), vec!["ada-tablet"]);
-        let misaddressed = bus.publish_person_to("claude://message-added".into(), serde_json::json!({}), "bob-phone".into(), partition.account_id.clone());
-        assert!(push_devices_in_store(&misaddressed, &registry, &store).is_empty());
         // A device moved to someone else stops being woken by this partition.
         store.assign_device_user("tenant-push", "ada-tablet", Some(bob.user_id.as_str()), 102).unwrap();
         assert_eq!(push_devices_in_store(&event, &registry, &store), vec!["ada-phone"]);

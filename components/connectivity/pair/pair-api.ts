@@ -4,6 +4,7 @@ import { decodePairPayload, type DecodeOutcome, type PairPayload } from "@/lib/q
 import {
   authConfigIssuerKind,
   fetchCompanionAuthConfig,
+  isMultiTenantAuthConfig,
   registerCompanionDevice,
   type PairOidcSession,
   type AuthFetcher,
@@ -157,7 +158,7 @@ async function resolveOidcSession(
     payload.fingerprint || undefined,
     fetcher
   )
-  if (config.deploymentMode !== "multi-tenant" || !config.oidc) {
+  if (!isMultiTenantAuthConfig(config)) {
     throw new Error("server OIDC configuration is unavailable")
   }
   // The session this mints outlives the pairing: the cloud sign-in gate finds

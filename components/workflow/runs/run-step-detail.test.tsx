@@ -112,7 +112,7 @@ describe("RunStepDetail", () => {
       ev({ ts: 20, type: "step_completed", payload: { output: { completion: "done" } } }),
     ])
     expect(screen.getByText("Tokens (in / out)")).toBeInTheDocument()
-    expect(screen.getByText("1.5k (1.2k / 300)")).toBeInTheDocument()
+    expect(screen.getByText("1.5K (1.2K / 300)")).toBeInTheDocument()
     expect(screen.getByText("$0.0042 est.")).toBeInTheDocument()
     expect(screen.getByText("openai · gpt-x")).toBeInTheDocument()
   })

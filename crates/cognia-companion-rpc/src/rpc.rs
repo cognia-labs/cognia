@@ -2668,21 +2668,20 @@ fn inject_caller_device_grants(
                 Value::String(opaque_host_id(state)),
             );
         }
-        let grants = tenant_id
+        // ADR-0253 D05: absent means unknown, empty means the device holds
+        // nothing. A store that cannot be read (or no tenant to read it for)
+        // leaves the field out, and a client-supplied one never survives; an
+        // inactive device holds nothing.
+        map.remove("callerDeviceGrants");
+        let snapshot = tenant_id
             .and_then(|tenant_id| {
                 cognia_companion::security_store::security_store().map(|store| (tenant_id, store))
             })
-            .and_then(|(tenant_id, store)| {
-                store
-                    .capability_snapshot(tenant_id, device_id)
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .map(Value::String)
-            .collect();
-        map.insert("callerDeviceGrants".to_string(), Value::Array(grants));
+            .and_then(|(tenant_id, store)| store.capability_snapshot(tenant_id, device_id).ok());
+        if let Some(grants) = snapshot {
+            let grants = grants.unwrap_or_default().into_iter().map(Value::String).collect();
+            map.insert("callerDeviceGrants".to_string(), Value::Array(grants));
+        }
     }
     args
 }

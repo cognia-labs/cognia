@@ -59,7 +59,12 @@ import { getOrgMembership, resolveWorkspaceAccessFor } from "@/lib/db/identity"
 import { UserBindingRegistry } from "@/lib/identity/user-binding"
 
 import type { CollabInvitation, IssuedCollabInvitation } from "@/lib/collab/client"
-import type { EffectiveWorkspaceAccess, OrgRole } from "@/types/identity"
+import {
+  allowsCapability,
+  allowsOrgRole,
+  type EffectiveWorkspaceAccess,
+  type OrgRole,
+} from "@/types/identity"
 
 export type MembershipAdminUnavailableReason = "not-configured" | "not-signed-in" | "no-org"
 
@@ -287,13 +292,13 @@ export function useMembershipAdmin(
   const fromServer = capabilities.status === "ready" ? capabilities.capabilities : null
   const canManageOrg = fromServer
     ? hasAction(fromServer, "org.members.manage")
-    : orgRole === "owner" || orgRole === "admin"
+    : allowsOrgRole(orgRole, "admin")
   const canManageWorkspace = fromServer
     ? hasAction(fromServer, "workspace.members.manage")
-    : access?.capability === "manage"
+    : allowsCapability(access, "manage")
   const canTransferOwnership = fromServer
     ? hasAction(fromServer, "org.ownership.transfer")
-    : orgRole === "owner"
+    : allowsOrgRole(orgRole, "owner")
 
   // A role or ownership write can change the writer's own standing (stepping
   // down after a transfer is the obvious one), so ask again once it settles.

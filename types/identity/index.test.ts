@@ -5,6 +5,7 @@ import {
   WORKSPACE_CAPABILITIES,
   WORKSPACE_ROLES,
   allowsCapability,
+  allowsOrgRole,
   canTraverseWorkspaces,
   capabilityForRole,
   externalIdentityId,
@@ -174,5 +175,17 @@ describe("personStandingFrom", () => {
         )
       }
     }
+  })
+})
+
+describe("allowsOrgRole (ADR-0253 D11)", () => {
+  it("d11 ranks Org roles: the owner clears admin, nobody without a role clears any", () => {
+    expect(allowsOrgRole("owner", "admin")).toBe(true)
+    expect(allowsOrgRole("admin", "admin")).toBe(true)
+    expect(allowsOrgRole("member", "admin")).toBe(false)
+    expect(allowsOrgRole("admin", "owner")).toBe(false)
+    expect(allowsOrgRole("owner", "owner")).toBe(true)
+    expect(allowsOrgRole(null, "member")).toBe(false)
+    expect(allowsOrgRole(undefined, "member")).toBe(false)
   })
 })

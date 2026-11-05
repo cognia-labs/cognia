@@ -203,7 +203,7 @@ it("withholds HostState submit until the migration stage is authoritative", () =
   expect(snapshot.operations).toContain("host_state_status")
 })
 
-it("keeps v1 hosts usable by deriving grants from their advertised operations", () => {
+it("adr-0253 d05 leaves a v1 host's grants unknown rather than reading them off its operations", () => {
   const v2 = buildLocalHostFeatureManifest({ platform: "tauri" })
   const v1 = {
     schemaVersion: 1 as const,
@@ -217,14 +217,27 @@ it("keeps v1 hosts usable by deriving grants from their advertised operations", 
   const snapshot = runtimeHostSnapshotFromManifest(v1)
 
   expect(snapshot?.operations).toContain("claude_send")
-  expect(snapshot?.grants).toContain("agent.run")
+  expect(snapshot?.grants).toBeUndefined()
+})
+
+it("adr-0253 d05 carries a v2 host's empty grant list, and none when it names none", () => {
+  expect(
+    runtimeHostSnapshotFromManifest(
+      buildLocalHostFeatureManifest({ platform: "headless", deviceGrants: [] })
+    ).grants
+  ).toEqual([])
+  expect(
+    "grants" in
+      runtimeHostSnapshotFromManifest(
+        buildLocalHostFeatureManifest({ platform: "headless", deviceGrants: null })
+      )
+  ).toBe(false)
 })
 
 it("fails closed for malformed manifests", () => {
   expect(runtimeHostSnapshotFromManifest({ schemaVersion: 2 })).toEqual({
     compatible: false,
     operations: [],
-    grants: [],
   })
 })
 
@@ -238,7 +251,6 @@ it("negotiates the protocol overlap instead of treating every parsed v2 host as 
   expect(runtimeHostSnapshotFromManifest(incompatible)).toEqual({
     compatible: false,
     operations: [],
-    grants: [],
   })
 })
 

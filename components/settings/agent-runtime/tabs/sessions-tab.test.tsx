@@ -293,7 +293,7 @@ describe("SessionsTab — SDK-bound conversations", () => {
     const row = screen.getByTestId("sdk-bound-row-s1")
     expect(within(row).getByText(expectedCost)).toBeInTheDocument()
     expect(within(row).getByText("2")).toBeInTheDocument()
-    expect(within(row).getByText("3.0K")).toBeInTheDocument()
+    expect(within(row).getByText("3K")).toBeInTheDocument()
 
     // No recorded turn is not "$0.00". The cost cell is the one before actions.
     const quiet = screen.getByTestId("sdk-bound-row-s2")

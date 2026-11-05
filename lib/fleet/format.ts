@@ -4,6 +4,7 @@
  * translatable labels live in the components.
  */
 
+import { resolveModelDisplayName } from "@/lib/ai/model-options"
 import type { FleetSession, FleetStatus, IslandGeometry } from "./types"
 
 /** Island geometry with every field defaulted — the shape callers can rely on. */
@@ -193,9 +194,13 @@ export function formatModelLabel(model: string | null | undefined): string | nul
   if (lower.includes("haiku")) return "Haiku"
   if (lower.includes("gemini")) return "Gemini"
   if (lower.includes("grok")) return "Grok"
-  // Generic fallback: drop a provider prefix (`openai/…`), a trailing release
-  // date (`-20241022` / `-2024-10-22`), uppercase a leading `gpt`, then cap.
-  let label = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw
+  // Any other model the one resolver can name (ADR-0253 D08) is shown by that
+  // name. Generic fallback for the rest: drop a provider prefix (`openai/…`),
+  // a trailing release date (`-20241022` / `-2024-10-22`), uppercase a
+  // leading `gpt`, then cap.
+  const resolved = resolveModelDisplayName(undefined, raw)
+  let label =
+    resolved !== raw ? resolved : raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw
   label = label.replace(/-?\d{4}-\d{2}-\d{2}$/, "").replace(/-?\d{8}$/, "")
   label = label.replace(/^gpt/i, "GPT").trim() || raw
   return label.length > 22 ? `${label.slice(0, 21)}…` : label

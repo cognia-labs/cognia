@@ -143,7 +143,8 @@ export interface WorkspaceMembership {
 }
 
 /** How someone came to have access — the difference matters in an audit log. */
-export type WorkspaceAccessVia = "membership" | "org-admin"
+export const WORKSPACE_ACCESS_VIA = ["membership", "org-admin"] as const
+export type WorkspaceAccessVia = (typeof WORKSPACE_ACCESS_VIA)[number]
 
 export interface EffectiveWorkspaceAccess {
   role: WorkspaceRole
@@ -238,8 +239,18 @@ export function externalIdentityId(
 }
 
 /** True when the role may traverse into a Workspace they were never recruited into. */
+/**
+ * Does this Org role clear the bar? Ranked like the capabilities: `owner`
+ * clears `admin`. `null` (no membership) never does. The one Org-role check
+ * (ADR-0253 D11): an admin manages members, only the owner hands ownership on.
+ */
+export function allowsOrgRole(role: OrgRole | null | undefined, required: OrgRole): boolean {
+  if (!role) return false
+  return ORG_ROLES.indexOf(role) <= ORG_ROLES.indexOf(required)
+}
+
 export function canTraverseWorkspaces(role: OrgRole): boolean {
-  return role === "owner" || role === "admin"
+  return allowsOrgRole(role, "admin")
 }
 
 export function capabilityForRole(role: WorkspaceRole): WorkspaceCapability {

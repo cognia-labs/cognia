@@ -101,11 +101,11 @@ describe("StatusBarToday", () => {
     ]
     render(<StatusBarToday />)
     const chip = screen.getByTestId("status-today")
-    expect(chip).toHaveTextContent("3.0K")
+    expect(chip).toHaveTextContent("3K")
     expect(chip).toHaveTextContent("$0.75")
     expect(chip).toHaveAttribute(
       "aria-label",
-      `label:${JSON.stringify({ summary: `summaryWithCost:${JSON.stringify({ tokens: "3.0K", cost: "$0.75" })}` })}`
+      `label:${JSON.stringify({ summary: `summaryWithCost:${JSON.stringify({ tokens: "3K", cost: "$0.75" })}` })}`
     )
   })
 

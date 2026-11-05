@@ -128,7 +128,11 @@ describe("formatModelLabel", () => {
     expect(formatModelLabel("openai/gpt-4o")).toBe("GPT-4o")
     expect(formatModelLabel("gpt-5-codex")).toBe("GPT-5-codex")
     expect(formatModelLabel("o1-preview-2024-09-12")).toBe("o1-preview")
-    expect(formatModelLabel("deepseek-chat")).toBe("deepseek-chat")
+    expect(formatModelLabel("my-local-model-20250101")).toBe("my-local-model")
+  })
+
+  it("adr0253 d08 names any other model the one resolver knows", () => {
+    expect(formatModelLabel("deepseek-chat")).toBe("DeepSeek Chat (Legacy)")
   })
 
   it("caps overly long labels and returns null for empty input", () => {

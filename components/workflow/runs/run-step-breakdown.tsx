@@ -23,7 +23,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { computeStepBreakdown } from "@/lib/workflow/runs/step-breakdown"
 import { formatDurationMs } from "./format"
-import { formatCostUsd, formatTokens } from "@/lib/workflow/runs/usage-aggregate"
+import { formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
+import { formatTokens } from "@/types/system/usage"
 
 export function RunStepBreakdown({
   workflow,

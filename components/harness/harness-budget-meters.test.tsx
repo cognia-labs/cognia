@@ -25,7 +25,7 @@ describe("HarnessBudgetMeters", () => {
     )
     const meters = screen.getByTestId("harness-budget-meters")
     expect(meters.querySelector('[data-dimension="cost"]')).toHaveTextContent("$1.25+ of $5.00")
-    expect(meters.querySelector('[data-dimension="tokens"]')).toHaveTextContent("2.0K of 4.00M")
+    expect(meters.querySelector('[data-dimension="tokens"]')).toHaveTextContent("2K of 4M")
     expect(meters.querySelector('[data-dimension="modelCalls"]')).toHaveTextContent("7 of 40")
     expect(meters.querySelector('[data-dimension="wallTime"]')).toHaveTextContent("1.0m of 120.0m")
     expect(screen.getByText(/lower bound/)).toBeInTheDocument()

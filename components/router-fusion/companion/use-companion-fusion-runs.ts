@@ -15,6 +15,7 @@ import { useCallback, useMemo, useState } from "react"
 
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { ROUTER_FUSION_COMPANION_CAPABILITY } from "@/lib/devices/grant-capabilities"
+import { deviceGrantAnswer } from "@/lib/platform/host-feature-manifest"
 import type { HostRuntimeSnapshot } from "@/lib/runtime/operation-availability"
 import type {
   CompanionRunMode,
@@ -27,7 +28,8 @@ const REQUIRED_OPERATIONS = ["execution_run_create", "execution_run_get", "execu
 export function companionFusionAvailable(host: HostRuntimeSnapshot | null | undefined): boolean {
   if (!host?.compatible) return false
   if (!REQUIRED_OPERATIONS.every((operation) => host.operations.includes(operation))) return false
-  return host.grants.includes(ROUTER_FUSION_COMPANION_CAPABILITY)
+  // A run needs the grant on record: a Host that names no grants offers none.
+  return deviceGrantAnswer(host.grants, ROUTER_FUSION_COMPANION_CAPABILITY) === "holds"
 }
 
 export interface CompanionFusionRuns {

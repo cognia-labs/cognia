@@ -21,6 +21,7 @@ import {
   type PricingResolver,
 } from "@/lib/usage/session-analytics"
 import { resolveModelPricingUsd } from "@/lib/usage/pricing"
+import { formatTokens } from "@/types/system/usage"
 import type { UsagePresenceWindow } from "@/types/connectors/presence"
 
 export interface UsageStatusSnapshot {
@@ -113,15 +114,6 @@ export function buildUsageStatusSnapshot(
   return snap
 }
 
-/** 1234 → "1.2k", 1_234_567 → "1.2M". Whole numbers below 1000 unchanged. */
-export function formatCompactTokens(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return "0"
-  if (n < 1000) return String(Math.round(n))
-  if (n < 1_000_000) return trimZero(n / 1000) + "k"
-  if (n < 1_000_000_000) return trimZero(n / 1_000_000) + "M"
-  return trimZero(n / 1_000_000_000) + "B"
-}
-
 function trimZero(v: number): string {
   const s = v.toFixed(1)
   return s.endsWith(".0") ? s.slice(0, -2) : s
@@ -182,7 +174,7 @@ export function formatShortStatus(
 ): string {
   const maxUnits = opts.maxUnits ?? 20
   const prefix = opts.prefix ?? "AI"
-  const tokens = formatCompactTokens(snap.totalTokens)
+  const tokens = formatTokens(snap.totalTokens)
   // A window with no priced turn says nothing about cost rather than "$0".
   const unpriced = snap.turns > 0 && snap.unpricedTurns >= snap.turns
   const cost = formatCompactBucketUsd(snap.costUsd, snap.unpricedTurns, snap.turns)
@@ -214,7 +206,7 @@ export function buildUsageCardMarkdown(
   const lines = [
     `**Token Usage / 用量统计** — ${WINDOW_LABEL[snap.window]}`,
     "",
-    `- Tokens: **${formatCompactTokens(snap.totalTokens)}** (in ${formatCompactTokens(snap.inputTokens)} / out ${formatCompactTokens(snap.outputTokens)} / cache ${formatCompactTokens(snap.cacheReadTokens)})`,
+    `- Tokens: **${formatTokens(snap.totalTokens)}** (in ${formatTokens(snap.inputTokens)} / out ${formatTokens(snap.outputTokens)} / cache ${formatTokens(snap.cacheReadTokens)})`,
     `- Cost / 成本: **${formatCompactBucketUsd(snap.costUsd, snap.unpricedTurns, snap.turns)}**`,
     `- Turns / 轮次: ${snap.turns}`,
   ]
@@ -223,7 +215,7 @@ export function buildUsageCardMarkdown(
       `- Models: ${snap.topModels
         .map(
           (m) =>
-            `${m.model} ${formatCompactTokens(m.tokens)} (${formatCompactBucketUsd(m.costUsd, m.unpricedTurns, m.turns)})`
+            `${m.model} ${formatTokens(m.tokens)} (${formatCompactBucketUsd(m.costUsd, m.unpricedTurns, m.turns)})`
         )
         .join(" · ")}`
     )

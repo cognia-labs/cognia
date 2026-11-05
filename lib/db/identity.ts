@@ -100,10 +100,6 @@ export async function listOrgMembers(orgId: string): Promise<OrgMembership[]> {
   return getDb().orgMemberships.where("orgId").equals(orgId).toArray()
 }
 
-export async function listOrgsForUser(userId: string): Promise<OrgMembership[]> {
-  return getDb().orgMemberships.where("userId").equals(userId).toArray()
-}
-
 export async function removeOrgMembership(orgId: string, userId: string): Promise<void> {
   await getDb().orgMemberships.delete(orgMembershipId(orgId, userId))
 }

@@ -11,18 +11,28 @@
  * Recorded per Host scope (`runtimeTargetId`) by every installed HostState
  * sync, counted so a second installer for the same target (the boot provider
  * and the outbound runner both install one) does not lose the answer when the
- * other stops. No record, or a Host that sent no list, means "not restricted":
- * the grants and the Host's own refusal stay the authority, exactly as before.
+ * other stops. No record yet means "not known": the grants and the Host's own
+ * refusal stay the authority. An owner's Host that sends no list restricts
+ * nothing. A person partition always names what it offers (P5d), so one whose
+ * answer carries no list offers nothing here, rather than everything.
  */
 
 import type { HostStateIntentKind } from "@cognia/agent-config-types/host-state"
-import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
+import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 
 interface Offered {
-  /** `undefined`: the Host named no restriction. */
+  /** `undefined`: an owner's Host named no restriction. */
   actions: readonly HostStateIntentKind[] | undefined
   installs: number
+}
+
+/** What an answer offers: its list, or for a person partition without one, nothing. */
+function answered(
+  actions: readonly HostStateIntentKind[] | undefined
+): readonly HostStateIntentKind[] | undefined {
+  if (actions) return [...actions]
+  return isMemberOnPartition() ? [] : undefined
 }
 
 const offered = new Map<string, Offered>()
@@ -41,7 +51,7 @@ export function publishOfferedHostStateActions(
 ): void {
   const current = offered.get(runtimeTargetId)
   offered.set(runtimeTargetId, {
-    actions: actions ? [...actions] : undefined,
+    actions: answered(actions),
     installs: (current?.installs ?? 0) + 1,
   })
   changed()
@@ -54,7 +64,7 @@ export function refreshOfferedHostStateActions(
 ): void {
   const current = offered.get(runtimeTargetId)
   if (!current) return
-  const next = actions ? [...actions] : undefined
+  const next = answered(actions)
   if (JSON.stringify(next) === JSON.stringify(current.actions)) return
   offered.set(runtimeTargetId, { ...current, actions: next })
   changed()
@@ -72,7 +82,8 @@ export function retractOfferedHostStateActions(runtimeTargetId: string): void {
 
 /**
  * Whether the Host offers `kind` to this caller on `runtimeTargetId`. Unknown
- * (no sync installed, no list sent, no target named) reads as offered.
+ * (no sync installed, no target named) and an owner's unrestricted answer
+ * read as offered.
  */
 export function hostStateActionOffered(
   kind: HostStateIntentKind,

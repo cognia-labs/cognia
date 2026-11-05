@@ -167,9 +167,11 @@ describe("hostGrantGate", () => {
   })
 
   it("asks when the grants are unknown and the Host's answer decides", () => {
+    expect(hostGrantGate(snapshot({ host: { compatible: true, operations: [] } }), "x")).toBe("ask")
+    // ADR-0253 D05: an empty list is the Host's answer, not "unknown".
     expect(
       hostGrantGate(snapshot({ host: { compatible: true, operations: [], grants: [] } }), "x")
-    ).toBe("ask")
+    ).toBe("lacks")
     expect(
       hostGrantGate(
         snapshot({ host: { compatible: false, operations: [], grants: ["agent.run"] } }),

@@ -147,8 +147,8 @@ mod tests {
     async fn every_error_response_is_a_problem_document() {
         let (_guard, router) = desktop_router().await;
         let service = service_jwt();
-        let device =
-            crate::jwt::issue_device_jwt(SECRET, "device-a", ACCOUNT_ID).expect("device token");
+        let device = crate::jwt::issue_scoped_jwt_for_test(SECRET, "device", "device-a", ACCOUNT_ID)
+            .expect("device-scoped token");
 
         // 401: no bearer on the device plane.
         let response = send(

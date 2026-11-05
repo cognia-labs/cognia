@@ -28,7 +28,8 @@ import {
 import { nodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 import { tNode } from "@/lib/workflow/i18n/node-translate"
 import { reduceStepStream } from "@/hooks/workflow/use-step-stream"
-import { formatCostUsd, formatTokens } from "@/lib/workflow/runs/usage-aggregate"
+import { formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
+import { formatTokens } from "@/types/system/usage"
 import { formatDurationMs } from "./format"
 
 const CATEGORY_BADGE = {

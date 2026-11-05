@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use parking_lot::RwLock;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -133,20 +134,97 @@ pub struct OidcConfig {
     pub jwks_ttl: Duration,
 }
 
+// ---------------------------------------------------------------------------
+// The one JWKS cache and JWT verifier (ADR-0253 D01)
+// ---------------------------------------------------------------------------
+//
+// Every OIDC resource server in the workspace verifies through these two:
+// this crate's [`OidcAuthenticator`] and the companion's device-registration
+// verifier, which adds its device-specific checks (required scopes, group
+// mapping) on top. They used to be two full copies that had already drifted:
+// one checked the discovery document's issuer, the other did not.
+
+/// Why a JWT failed verification against a JWKS.
+#[derive(Debug, thiserror::Error)]
+pub enum JwtVerifyError {
+    #[error("token header has no `kid`")]
+    MissingKid,
+    #[error("no JWKS key matches kid `{0}`")]
+    UnknownKid(String),
+    #[error("JWKS key `{kid}` has an unsupported or missing signing algorithm")]
+    UnsupportedKeyAlgorithm { kid: String },
+    #[error("could not build a decoding key from JWK `{kid}`: {source}")]
+    Jwk {
+        kid: String,
+        #[source]
+        source: jsonwebtoken::errors::Error,
+    },
+    #[error("token signature, format, or reserved-claim validation failed: {0}")]
+    Invalid(#[from] jsonwebtoken::errors::Error),
+}
+
+/// What a verified token must say about where it came from and for whom.
+#[derive(Clone, Copy, Debug)]
+pub struct JwtExpectations<'a> {
+    pub issuer: &'a str,
+    pub audience: &'a str,
+    /// Clock-skew leeway in seconds applied to `exp`.
+    pub leeway_secs: u64,
+    /// Reserved claims that must be present, e.g. `["exp", "iss", "aud"]`.
+    pub required_claims: &'a [&'a str],
+}
+
+/// Verify `token` against an already-fetched JWKS. **No network.**
+///
+/// The signing key is the one whose `kid` matches the token header, and the
+/// algorithm is taken from that **JWKS entry**, never from the attacker-chosen
+/// token header, so an algorithm-confusion token is refused before verify.
+pub fn verify_jwt<T: DeserializeOwned>(
+    jwks: &JwkSet,
+    token: &str,
+    expect: &JwtExpectations<'_>,
+) -> Result<T, JwtVerifyError> {
+    let header = decode_header(token)?;
+    let kid = header.kid.ok_or(JwtVerifyError::MissingKid)?;
+    let jwk = jwks
+        .find(&kid)
+        .ok_or_else(|| JwtVerifyError::UnknownKid(kid.clone()))?;
+    let algorithm = algorithm_for_jwk(jwk)
+        .ok_or_else(|| JwtVerifyError::UnsupportedKeyAlgorithm { kid: kid.clone() })?;
+    let key = DecodingKey::from_jwk(jwk).map_err(|source| JwtVerifyError::Jwk {
+        kid: kid.clone(),
+        source,
+    })?;
+    // `Validation::new(algorithm)` pins the accepted algorithms to exactly it.
+    let mut validation = Validation::new(algorithm);
+    validation.leeway = expect.leeway_secs;
+    validation.validate_exp = true;
+    validation.validate_nbf = false;
+    validation.set_issuer(&[expect.issuer]);
+    validation.set_audience(&[expect.audience]);
+    validation.set_required_spec_claims(expect.required_claims);
+    Ok(decode::<T>(token, &key, &validation)?.claims)
+}
+
+/// Builds the HTTP client a fetch to one URL goes through. Injected so a
+/// caller with its own egress policy (a proxy, a bypass list) applies it.
+pub type JwksClientFactory = Arc<dyn Fn(&str) -> Result<reqwest::Client, String> + Send + Sync>;
+
+/// The client a cache without an egress policy uses: bounded, because the
+/// fetch is reachable from a request's path and an issuer that connects but
+/// never answers must not stall it for the OS TCP timeout.
+pub fn default_jwks_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Deserialize)]
 struct DiscoveryDocument {
     issuer: String,
     jwks_uri: String,
-}
-
-#[derive(Deserialize)]
-struct RawClaims {
-    sub: String,
-    exp: i64,
-    #[serde(default)]
-    scope: String,
-    #[serde(flatten)]
-    extra: serde_json::Map<String, Value>,
 }
 
 struct CachedJwks {
@@ -154,91 +232,120 @@ struct CachedJwks {
     fetched_at: Instant,
 }
 
-pub struct OidcAuthenticator {
-    config: OidcConfig,
-    client: reqwest::Client,
+/// Fetches and caches an issuer's JWKS: discovery document → `jwks_uri` →
+/// key set, kept for `ttl`. The discovery document must name the configured
+/// issuer (trailing slash aside); one that names another is refused.
+pub struct JwksCache {
+    issuer: String,
+    ttl: Duration,
+    client: JwksClientFactory,
     cached: RwLock<Option<CachedJwks>>,
 }
 
-impl OidcAuthenticator {
-    pub fn new(config: OidcConfig) -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10))
-            .build()?;
-        Ok(Self {
-            config,
+impl JwksCache {
+    /// A cache fetching through `client`, which is asked once per fetched URL.
+    pub fn new(issuer: impl Into<String>, ttl: Duration, client: JwksClientFactory) -> Self {
+        Self {
+            issuer: issuer.into(),
+            ttl,
             client,
             cached: RwLock::new(None),
-        })
+        }
     }
 
-    async fn jwks(&self) -> Result<Arc<JwkSet>, AuthError> {
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// The issuer's key set, fetched (and cached) when absent or stale. A
+    /// concurrent fetch at worst repeats work and stores an equally fresh copy,
+    /// which keeps the lock off the network round-trip.
+    pub async fn jwks(&self) -> Result<Arc<JwkSet>, String> {
         if let Some(cached) = self.cached.read().as_ref() {
-            if cached.fetched_at.elapsed() < self.config.jwks_ttl {
+            if cached.fetched_at.elapsed() < self.ttl {
                 return Ok(Arc::clone(&cached.value));
             }
         }
-        let discovery_url = format!(
-            "{}/.well-known/openid-configuration",
-            self.config.issuer.trim_end_matches('/')
-        );
-        let discovery: DiscoveryDocument = self
-            .client
-            .get(&discovery_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| AuthError::Discovery(error.to_string()))?
-            .json()
-            .await
-            .map_err(|error| AuthError::Discovery(error.to_string()))?;
-        if discovery.issuer.trim_end_matches('/') != self.config.issuer.trim_end_matches('/') {
-            return Err(AuthError::Discovery("discovery issuer mismatch".into()));
-        }
-        let jwks: JwkSet = self
-            .client
-            .get(&discovery.jwks_uri)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| AuthError::Discovery(error.to_string()))?
-            .json()
-            .await
-            .map_err(|error| AuthError::Discovery(error.to_string()))?;
-        let value = Arc::new(jwks);
+        let value = Arc::new(self.fetch().await?);
         *self.cached.write() = Some(CachedJwks {
             value: Arc::clone(&value),
             fetched_at: Instant::now(),
         });
         Ok(value)
     }
+
+    async fn fetch(&self) -> Result<JwkSet, String> {
+        let discovery_url = format!(
+            "{}/.well-known/openid-configuration",
+            self.issuer.trim_end_matches('/')
+        );
+        let discovery: DiscoveryDocument = (self.client)(&discovery_url)
+            .map_err(|error| format!("client for {discovery_url}: {error}"))?
+            .get(&discovery_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| format!("GET {discovery_url}: {error}"))?
+            .json()
+            .await
+            .map_err(|error| format!("parse discovery document: {error}"))?;
+        if discovery.issuer.trim_end_matches('/') != self.issuer.trim_end_matches('/') {
+            return Err("discovery issuer mismatch".into());
+        }
+        (self.client)(&discovery.jwks_uri)
+            .map_err(|error| format!("client for {}: {error}", discovery.jwks_uri))?
+            .get(&discovery.jwks_uri)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| format!("GET {}: {error}", discovery.jwks_uri))?
+            .json()
+            .await
+            .map_err(|error| format!("parse JWKS: {error}"))
+    }
+}
+
+#[derive(Deserialize)]
+struct RawClaims {
+    sub: String,
+    #[serde(default)]
+    scope: String,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
+}
+
+pub struct OidcAuthenticator {
+    config: OidcConfig,
+    cache: JwksCache,
 }
 
 impl OidcAuthenticator {
+    pub fn new(config: OidcConfig) -> anyhow::Result<Self> {
+        let client = default_jwks_client().map_err(anyhow::Error::msg)?;
+        let factory: JwksClientFactory = Arc::new(move |_| Ok(client.clone()));
+        let cache = JwksCache::new(config.issuer.clone(), config.jwks_ttl, factory);
+        Ok(Self { config, cache })
+    }
+
     async fn verify(&self, token: &str) -> Result<RawClaims, AuthError> {
+        // Cheap pre-check before any network I/O: a token without a `kid`
+        // cannot name a JWKS key, so it never triggers a fetch.
         let header = decode_header(token).map_err(|error| AuthError::Invalid(error.to_string()))?;
-        let kid = header
-            .kid
-            .ok_or_else(|| AuthError::Invalid("missing kid".into()))?;
-        let jwks = self.jwks().await?;
-        let jwk = jwks
-            .find(&kid)
-            .ok_or_else(|| AuthError::Invalid("unknown kid".into()))?;
-        let algorithm = algorithm_for_jwk(jwk)
-            .ok_or_else(|| AuthError::Invalid("unsupported signing algorithm".into()))?;
-        let key =
-            DecodingKey::from_jwk(jwk).map_err(|error| AuthError::Invalid(error.to_string()))?;
-        let mut validation = Validation::new(algorithm);
-        validation.leeway = 60;
-        validation.set_issuer(&[self.config.issuer.as_str()]);
-        validation.set_audience(&[self.config.audience.as_str()]);
-        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
-        let raw = decode::<RawClaims>(token, &key, &validation)
-            .map_err(|error| AuthError::Invalid(error.to_string()))?
-            .claims;
-        let _ = raw.exp;
-        Ok(raw)
+        if header.kid.is_none() {
+            return Err(AuthError::Invalid("missing kid".into()));
+        }
+        let jwks = self.cache.jwks().await.map_err(AuthError::Discovery)?;
+        verify_jwt(
+            &jwks,
+            token,
+            &JwtExpectations {
+                issuer: &self.config.issuer,
+                audience: &self.config.audience,
+                leeway_secs: 60,
+                required_claims: &["exp", "iss", "aud", "sub"],
+            },
+        )
+        .map_err(|error| AuthError::Invalid(error.to_string()))
     }
 
     fn tenant_of(&self, raw: &RawClaims) -> Option<String> {
@@ -357,6 +464,40 @@ mod tests {
         };
         assert_eq!(claims.scopes.len(), 2);
         assert!(claims.has_scope("a"));
+    }
+
+    #[test]
+    fn d01_the_shared_verifier_names_a_missing_or_unknown_key_before_verifying() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        let claims = serde_json::json!({"sub": "s", "exp": 4_102_444_800_i64});
+        let expect = JwtExpectations {
+            issuer: "https://idp.test",
+            audience: "aud",
+            leeway_secs: 60,
+            required_claims: &["exp", "iss", "aud"],
+        };
+        let empty = JwkSet { keys: vec![] };
+        let no_kid = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(b"k"),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_jwt::<serde_json::Value>(&empty, &no_kid, &expect),
+            Err(JwtVerifyError::MissingKid)
+        ));
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("gone".into());
+        let unknown = encode(&header, &claims, &EncodingKey::from_secret(b"k")).unwrap();
+        assert!(matches!(
+            verify_jwt::<serde_json::Value>(&empty, &unknown, &expect),
+            Err(JwtVerifyError::UnknownKid(kid)) if kid == "gone"
+        ));
+        assert!(matches!(
+            verify_jwt::<serde_json::Value>(&empty, "not.a.jwt", &expect),
+            Err(JwtVerifyError::Invalid(_))
+        ));
     }
 
     #[test]

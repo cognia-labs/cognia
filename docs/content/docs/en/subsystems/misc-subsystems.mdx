@@ -149,11 +149,11 @@ Key file: `lib/push/push-notifications.ts`.
 
 `lib/qr/` handles two paths: "pairing QR" and "scanning".
 
-`pair-payload.ts` defines `PairQrPayload`: `{ baseUrl, pairJwt, v? }` — desktop Settings → Companion renders this QR, and the phone scans it to prefill the pairing form. `pair-qr.ts` provides encode / decode utilities (`parsePairQrPayload(raw)` returns `null` on bad input, callers fall back to "let the user paste").
+`pair-payload.ts` defines `PairPayload`, the one-shot `cgnp3|<base64url>` pairing invitation (`encodePairPayload` / `decodePairPayload`; a bad input decodes to an error outcome, and callers fall back to "let the user paste"). Desktop Settings → Companion renders it as a QR code, and the phone scans it to prefill the pairing form. `pair-link.ts` carries the same invitation in a `/pair` link (the `#payload=` fragment), so a browser never copies a code by hand.
 
-`barcode-scanner.ts` is a thin wrapper around `@capacitor-mlkit/barcode-scanning`: dynamic `import()` avoids web bundle parsing of the native plugin; returns a unified `ScanOutcome` (`scanned + raw` / `permission_denied` / `cancelled` / `unsupported` / `error`). The mobile side calls it once per scan, then passes the raw result through `parsePairQrPayload` to check if it's a pairing QR.
+`barcode-scanner.ts` is a thin wrapper around `@capacitor-mlkit/barcode-scanning`: dynamic `import()` avoids web bundle parsing of the native plugin; returns a unified `ScanOutcome` (`scanned + raw` / `permission_denied` / `cancelled` / `unsupported` / `error`). The mobile side calls it once per scan, then passes the raw result through `decodePairPayload` to check if it's a pairing QR.
 
-Key files: `lib/qr/{pair-payload,pair-qr,barcode-scanner}.ts`.
+Key files: `lib/qr/{pair-payload,pair-link,barcode-scanner}.ts`.
 
 ## Network & Proxy
 

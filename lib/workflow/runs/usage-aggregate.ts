@@ -85,14 +85,6 @@ export function aggregateRunUsage(events: WorkflowRunEventRow[]): RunUsageSummar
   }
 }
 
-/** Compact token figure: 950 → "950", 12_340 → "12.3k", 4_200_000 → "4.2M". */
-export function formatTokens(count: number): string {
-  if (!Number.isFinite(count) || count < 0) return "—"
-  if (count < 1000) return String(count)
-  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`
-  return `${(count / 1_000_000).toFixed(1)}M`
-}
-
 /** "$0.0042" style estimate; sub-cent costs keep enough precision to read. */
 export function formatCostUsd(cost: number | undefined): string {
   if (cost === undefined || !Number.isFinite(cost) || cost < 0) return "—"

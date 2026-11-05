@@ -2229,12 +2229,15 @@ async function hostFeatureManifest(
     import("@/lib/platform/host-feature-manifest"),
     import("@/lib/platform/detect"),
   ])
+  // The Host injects the caller's grants when it could read them; without
+  // them the manifest names none, so the device reads its grants as unknown
+  // rather than as a default it may not hold (ADR-0253 D05).
   const callerDeviceGrants = payload.callerDeviceGrants
   const deviceGrants =
     Array.isArray(callerDeviceGrants) &&
     callerDeviceGrants.every((grant) => typeof grant === "string" && grant.length > 0)
       ? callerDeviceGrants
-      : undefined
+      : null
   const platform = detectPlatform()
   if (partition) {
     const active = getActiveRuntimeTargetContext()

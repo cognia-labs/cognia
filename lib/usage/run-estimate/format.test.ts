@@ -24,7 +24,7 @@ describe("formatRunEstimate", () => {
     expect(out.summary).toBe(
       [
         "cost(typical=$2.10,low=$0.80,high=$5.40)",
-        "tokens(typical=180.0K,low=50.0K,high=520.0K)",
+        "tokens(typical=180K,low=50K,high=520K)",
         "duration(typical=12m,low=5m,high=28m)",
       ].join(" · ")
     )
@@ -106,6 +106,6 @@ describe("formatRunProgress", () => {
         { ...base, metric: "tokens", spent: 7000, typical: 1000, high: 5000, overRange: true },
         t
       ).text
-    ).toBe("progress.overRange.tokens(spent=7.0K,typical=1.0K,high=5.0K)")
+    ).toBe("progress.overRange.tokens(spent=7K,typical=1K,high=5K)")
   })
 })

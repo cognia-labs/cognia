@@ -63,6 +63,7 @@ import {
   authConfigSocialProviders,
   authConfigWebOrigin,
   fetchCompanionAuthConfig,
+  isMultiTenantAuthConfig,
   parseCompanionAuthConfig,
   type CompanionAuthConfig,
 } from "@/lib/tauri/companion-auth"
@@ -300,7 +301,7 @@ export async function discoverDeployment(
       }
       throw error
     }
-    if (config.deploymentMode !== "multi-tenant" || !config.oidc) {
+    if (!isMultiTenantAuthConfig(config)) {
       return nothingElse(deps, "single-user")
     }
     return {

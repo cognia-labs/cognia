@@ -27,11 +27,12 @@
  * order the list exists to keep.
  */
 
+import { manifestIsPersonPartition } from "@/lib/platform/host-feature-manifest"
 import type { RemoteDesktopHostRef } from "@/lib/remote-desktop/types"
 import type { HostRuntimeSnapshot } from "@/lib/runtime/operation-availability"
 
 import { dispatchTargetRef } from "./build-device-rows"
-import { deviceLacksCapability } from "./grant-capabilities"
+import { deviceLacksCapability } from "@/lib/platform/host-feature-manifest"
 import type { DeviceKind, DeviceRow } from "./types"
 
 export type DeviceSectionId =
@@ -211,8 +212,7 @@ export function managementRefOf(row: DeviceRow): string | null {
 
 /** Whether this row's manifest came from a person brain on a multi-tenant Host. */
 function servesPersonPartition(row: DeviceRow): boolean {
-  const manifest = row.featureManifest
-  return manifest?.schemaVersion === 2 && manifest.personPartition === true
+  return manifestIsPersonPartition(row.featureManifest)
 }
 
 /**

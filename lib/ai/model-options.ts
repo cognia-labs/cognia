@@ -11,6 +11,7 @@ import type {
   ProviderModelDiscoveryEntry,
 } from "@cognia/provider-types/provider"
 import { getModelDisplayName } from "@/lib/ai/icons"
+import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { getCachedOpenRouterCatalogModels } from "@cognia/provider-core/providers/openrouter-catalog-sync"
 import {
   getCatalogModelMetadata,
@@ -162,11 +163,25 @@ export function resolveModelMeta(
   return result
 }
 
+/** An org deployment's model names, by provider then model id. */
+export type OrgModelNames = Readonly<Record<string, Readonly<Record<string, string>>>>
+
 /**
- * Resolve a model id to its human-readable display name from the
- * synchronously-available metadata, preferring the most authoritative source:
- * the user's custom-provider metadata, then the built-in `PROVIDERS` catalog,
- * then the user's live `/v1/models` discovery, then the curated alias table in
+ * The names the member's org deployment gives the models it serves, when this
+ * device is a member on their person partition; `null` anywhere else.
+ */
+export function memberOrgModelNames(): OrgModelNames | null {
+  const host = getRuntimeSnapshot().host
+  return isMemberOnPartition() ? (host?.personAgents?.modelNames ?? null) : null
+}
+
+/**
+ * The one model-name resolver (ADR-0253 D08): a model id to its human-readable
+ * display name from the synchronously-available metadata, preferring the most
+ * authoritative source: the org deployment's name for a model it serves a
+ * member (`orgNames`, by default the member's partition's), then the user's
+ * custom-provider metadata, then the built-in `PROVIDERS` catalog, then the
+ * user's live `/v1/models` discovery, then the curated alias table in
  * `lib/ai/icons.ts` (which itself falls back to the raw id). Provider-scoped so
  * a model id is resolved against the provider it belongs to.
  */
@@ -175,8 +190,11 @@ export function resolveModelDisplayName(
   modelId: string,
   providerSettings?: Record<string, UserProviderSettings>,
   customProviders?: CustomProviderSettings[],
-  catalog = getAllProviders()
+  catalog = getAllProviders(),
+  orgNames: OrgModelNames | null = memberOrgModelNames()
 ): string {
+  const orgName = providerId ? orgNames?.[providerId]?.[modelId]?.trim() : undefined
+  if (orgName) return orgName
   if (providerId) {
     const cp = customProviders?.find((c) => c.id === providerId)
     const live = (cp?.discoveredModels ?? providerSettings?.[providerId]?.discoveredModels)?.find(

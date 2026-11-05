@@ -25,7 +25,7 @@
 //! # Connection lifecycle
 //!
 //! 1. The brain connects with its **service-scope** JWT (loopback-only,
-//!    enforced by `require_device_jwt`); this handler additionally rejects
+//!    enforced by `require_service_jwt`); this handler additionally rejects
 //!    non-service scopes before the upgrade.
 //! 2. The brain must send `hello` within [`HELLO_TIMEOUT`]; the server
 //!    validates `protocol == 1` and the account, replies `hello_ack`, and
@@ -864,9 +864,9 @@ pub fn resolve_bridge_transport(state: &SharedState) -> Result<Arc<dyn BridgeTra
 
 /// Axum handler for `GET /internal/bridge`.
 ///
-/// `require_device_jwt` has already verified the JWT (and enforced loopback
+/// `require_service_jwt` has already verified the JWT (and enforced loopback
 /// for service scope); this handler additionally rejects non-service scopes —
-/// a paired phone must never become the data plane.
+/// a person brain must never become the data plane.
 pub async fn ws_bridge_handler(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
@@ -1862,7 +1862,7 @@ mod tests {
         deny_list::DenyList,
         event_bus::EventBus,
         idempotency::IdempotencyCache,
-        jwt::{issue_device_jwt, issue_service_jwt},
+        jwt::{issue_scoped_jwt_for_test, issue_service_jwt},
         middleware, push, rate_limit,
         sync_bridge::SyncBridge,
         sync_registry::SyncTableRegistry,
@@ -1987,7 +1987,7 @@ mod tests {
             )
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&state),
-                middleware::require_device_jwt,
+                middleware::require_service_jwt,
             ))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2321,7 +2321,8 @@ mod tests {
         let _guard = lock_slot().await;
         let state = test_state();
         let addr = serve_bridge(state).await;
-        let device = issue_device_jwt(SECRET, "phone-1", ACCOUNT_ID).expect("device jwt");
+        let device = issue_scoped_jwt_for_test(SECRET, "device", "phone-1", ACCOUNT_ID)
+            .expect("device-scoped jwt");
         let result = tokio_tungstenite::connect_async(authorized_request(addr, &device)).await;
         assert!(
             result.is_err(),

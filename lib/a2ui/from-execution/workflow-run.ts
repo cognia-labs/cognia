@@ -10,7 +10,8 @@
  */
 
 import { createAppMessages, type GeneratedApp } from "@/lib/a2ui/app-generator"
-import { aggregateRunUsage, formatCostUsd, formatTokens } from "@/lib/workflow/runs/usage-aggregate"
+import { aggregateRunUsage, formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
+import { formatTokens } from "@/types/system/usage"
 import { computeStepBreakdown } from "@/lib/workflow/runs/step-breakdown"
 import type { A2UIChartDataPoint, A2UITableColumn } from "@/types/a2ui/schema"
 import type { WorkflowRunEventRow, WorkflowRunRow } from "@/types/workflow/visual"

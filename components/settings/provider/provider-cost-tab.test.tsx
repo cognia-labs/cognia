@@ -276,7 +276,7 @@ describe("ProviderCostTab", () => {
     // Total tokens: 500000 + 200000 = 700000. Abbreviated by the shared
     // `types/system/usage` formatter, which always keeps one decimal, so this
     // panel now reads the same way as the Usage dashboard and the /usage card.
-    expect(screen.getByText("700.0K")).toBeInTheDocument()
+    expect(screen.getByText("700K")).toBeInTheDocument()
   })
 
   // ── 3. Per-model cost table ───────────────────────────────────────────────
@@ -357,8 +357,8 @@ describe("ProviderCostTab", () => {
   it("renders input and output token columns in cost table", () => {
     render(<ProviderCostTab providerId="openai" />)
     // Input: 500000, Output: 200000, through the shared abbreviator.
-    expect(screen.getByText("500.0K")).toBeInTheDocument()
-    expect(screen.getByText("200.0K")).toBeInTheDocument()
+    expect(screen.getByText("500K")).toBeInTheDocument()
+    expect(screen.getByText("200K")).toBeInTheDocument()
   })
 
   it("renders column headers for the cost table", () => {

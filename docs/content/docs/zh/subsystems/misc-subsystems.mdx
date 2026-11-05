@@ -129,11 +129,11 @@ export interface PushDelivery {
 
 `lib/qr/` 处理"配对二维码"与"扫码"两条路径。
 
-`pair-payload.ts` 定义 `PairQrPayload`：`{ baseUrl, pairJwt, v? }` —— 桌面 Settings → Companion 渲染这种 QR，手机扫码 prefill 配对表。`pair-qr.ts` 提供编码 / 解码工具（`parsePairQrPayload(raw)` 错的输入返回 `null`，调用方据此 fallback 到"让用户粘贴"）。
+`pair-payload.ts` 定义 `PairPayload`，即一次性的 `cgnp3|<base64url>` 配对邀请（`encodePairPayload` / `decodePairPayload`；错的输入解码为错误结果，调用方据此 fallback 到"让用户粘贴"）。桌面 Settings → Companion 把它渲染成 QR，手机扫码 prefill 配对表。`pair-link.ts` 把同一份邀请放进 `/pair` 链接（`#payload=` 片段），浏览器无需手动复制。
 
-`barcode-scanner.ts` 是 `@capacitor-mlkit/barcode-scanning` 的薄壳：动态 `import()` 避免 Web bundle 解析 native plugin；统一返回 `ScanOutcome`（`scanned + raw` / `permission_denied` / `cancelled` / `unsupported` / `error`）。手机端调一次拿一次 raw，再过 `parsePairQrPayload` 判断是不是配对二维码。
+`barcode-scanner.ts` 是 `@capacitor-mlkit/barcode-scanning` 的薄壳：动态 `import()` 避免 Web bundle 解析 native plugin；统一返回 `ScanOutcome`（`scanned + raw` / `permission_denied` / `cancelled` / `unsupported` / `error`）。手机端调一次拿一次 raw，再过 `decodePairPayload` 判断是不是配对二维码。
 
-关键文件：`lib/qr/{pair-payload,pair-qr,barcode-scanner}.ts`。
+关键文件：`lib/qr/{pair-payload,pair-link,barcode-scanner}.ts`。
 
 ## Network & Proxy
 

@@ -79,7 +79,7 @@ describe("SessionCostTimeline", () => {
       "Turn 3 alone carried 80%"
     )
     expect(screen.getByTestId("session-cost-growth")).toHaveTextContent(
-      "Context grew 3.0× from the first turn to the last (10.0K → 30.0K)"
+      "Context grew 3.0× from the first turn to the last (10K → 30K)"
     )
   })
 

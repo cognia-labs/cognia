@@ -2,11 +2,7 @@
 
 import { getGoalRuntime } from "@/lib/goal/runtime"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
-import {
-  runTitleTask,
-  shouldGenerateTitle,
-  isPlaceholderTitle,
-} from "@/lib/ai/generation/run-title-task"
+import { runTitleTask, shouldGenerateTitle } from "@/lib/ai/generation/run-title-task"
 import { markTitleFailed, clearTitleRetry } from "@/lib/ai/generation/title-retry"
 import { smartContentPreview } from "@/lib/ai/generation/smart-preview"
 import { generateTurnLabel } from "@/lib/ai/generation/turn-label"
@@ -17,7 +13,12 @@ import type { LoopStatus } from "@/types/loop"
 import type { GoalStatus } from "@/types/goal"
 import type { PlanStatus } from "@/types/agent/plan"
 import { updateMessageMetadata } from "@/lib/db/messages"
-import { getSession, updateSession } from "@/lib/db/sessions"
+import { getSession } from "@/lib/db/sessions"
+import {
+  autoSessionTitlesWrittenHere,
+  sessionTitleStillAuto,
+  writeAutoSessionTitle,
+} from "@/lib/chat/session-title-writes"
 import { runTurnMemory } from "@/lib/memory/run-turn-memory"
 import type { MessageReplyTo, SendContent, SendOptions } from "@cognia/agent-config-types"
 import { useChatStore } from "@/stores/chat"
@@ -58,9 +59,7 @@ export async function applyInstantTitle(sessionId: string, content: SendContent)
   // reference would otherwise be titled after the envelope's opening tag.
   const preview = smartContentPreview(stripPromptPreambleFromContent(content), 40)
   if (!preview) return
-  const fresh = await getSession(sessionId).catch(() => undefined)
-  if (fresh && !isPlaceholderTitle(fresh.title)) return
-  await updateSession(sessionId, { title: preview, titleAuto: true })
+  await writeAutoSessionTitle(sessionId, preview, { overPlaceholderOnly: true })
 }
 
 /**
@@ -88,7 +87,8 @@ export function runUtilityModelTasks(sessionId: string, messages: UIMessage[]): 
           titleEnabled: titleCfg?.enabled,
           assistantCount,
           titleAuto: sessionRow.titleAuto,
-        })
+        }) &&
+        (await autoSessionTitlesWrittenHere(sessionId))
       ) {
         const firstUser = messages.find((m) => m.role === "user")
         const firstAssistant = messages.find((m) => m.role === "assistant")
@@ -106,11 +106,10 @@ export function runUtilityModelTasks(sessionId: string, messages: UIMessage[]): 
           dedupKey: sessionId,
           // Re-read titleAuto before writing — the user may have renamed the
           // session while the model call was in flight.
-          isStillAuto: async () => {
-            const fresh = await getSession(sessionId).catch(() => undefined)
-            return !fresh || fresh.titleAuto !== false
+          isStillAuto: () => sessionTitleStillAuto(sessionId),
+          persist: async (title) => {
+            await writeAutoSessionTitle(sessionId, title)
           },
-          persist: (title) => updateSession(sessionId, { title, titleAuto: true }),
         })
         if (titleResult) {
           clearTitleRetry(sessionId)

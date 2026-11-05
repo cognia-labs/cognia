@@ -3,7 +3,6 @@ import {
   buildUsageCardMarkdown,
   buildUsageStatusSnapshot,
   formatCompactBucketUsd,
-  formatCompactTokens,
   formatCompactUsd,
   formatShortStatus,
   truncateWeighted,
@@ -79,16 +78,6 @@ describe("buildUsageStatusSnapshot", () => {
 })
 
 describe("formatters", () => {
-  it("formatCompactTokens", () => {
-    expect(formatCompactTokens(0)).toBe("0")
-    expect(formatCompactTokens(999)).toBe("999")
-    expect(formatCompactTokens(1234)).toBe("1.2k")
-    expect(formatCompactTokens(1_000_000)).toBe("1M")
-    expect(formatCompactTokens(1_234_567)).toBe("1.2M")
-    expect(formatCompactTokens(2_500_000_000)).toBe("2.5B")
-    expect(formatCompactTokens(-5)).toBe("0")
-  })
-
   it("formatCompactUsd", () => {
     expect(formatCompactUsd(0)).toBe("$0")
     expect(formatCompactUsd(0.416)).toBe("$0.42")

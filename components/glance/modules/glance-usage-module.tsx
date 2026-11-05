@@ -19,7 +19,8 @@ import { ScanSearchIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { GlanceUsageTotals } from "@/lib/glance/snapshot"
-import { formatCompactTokens, formatCompactUsd } from "@/lib/usage/status-snapshot"
+import { formatCompactUsd } from "@/lib/usage/status-snapshot"
+import { formatTokens } from "@/types/system/usage"
 import { cn } from "@/lib/utils"
 import type { GlanceModuleSize, GlanceUsageScope } from "@/types/glance/layout"
 
@@ -108,10 +109,10 @@ export function GlanceUsageModule({ size }: { size: GlanceModuleSize }) {
         }
       >
         <span className="text-muted-foreground">{t("today")}</span>
-        <b className="font-semibold tabular-nums">{formatCompactTokens(usage.today.tokens)}</b>
+        <b className="font-semibold tabular-nums">{formatTokens(usage.today.tokens)}</b>
         <span className="text-muted-foreground/60">·</span>
         <span className="text-muted-foreground">{t("week")}</span>
-        <b className="font-semibold tabular-nums">{formatCompactTokens(usage.week.tokens)}</b>
+        <b className="font-semibold tabular-nums">{formatTokens(usage.week.tokens)}</b>
         {usage.showSpend ? (
           <>
             <span className="text-muted-foreground/60">·</span>
@@ -210,7 +211,7 @@ export function GlanceUsageModule({ size }: { size: GlanceModuleSize }) {
           {
             key: "today",
             label: t("today"),
-            value: formatCompactTokens(usage.today.tokens),
+            value: formatTokens(usage.today.tokens),
             sub: second(usage.today),
             onClick: openUsage,
             actionLabel: t("open"),
@@ -218,7 +219,7 @@ export function GlanceUsageModule({ size }: { size: GlanceModuleSize }) {
           {
             key: "week",
             label: t("week"),
-            value: formatCompactTokens(usage.week.tokens),
+            value: formatTokens(usage.week.tokens),
             sub: second(usage.week),
             onClick: openUsage,
             actionLabel: t("open"),
@@ -226,7 +227,7 @@ export function GlanceUsageModule({ size }: { size: GlanceModuleSize }) {
           {
             key: "month",
             label: t("month"),
-            value: formatCompactTokens(usage.month.tokens),
+            value: formatTokens(usage.month.tokens),
             sub: second(usage.month),
             onClick: openUsage,
             actionLabel: t("open"),
@@ -235,7 +236,7 @@ export function GlanceUsageModule({ size }: { size: GlanceModuleSize }) {
       />
       <GlanceRow
         leading={<GlanceSparkline values={sparkValues} label={t("sparkline")} />}
-        sub={usage.topModel ? formatCompactTokens(usage.topModel.tokens) : undefined}
+        sub={usage.topModel ? formatTokens(usage.topModel.tokens) : undefined}
       >
         {usage.topModel ? (
           <span className="flex min-w-0 items-baseline gap-1.5">

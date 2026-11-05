@@ -41,6 +41,10 @@ describe("companionFusionAvailable", () => {
     ).toBe(false)
     // A device without the Control grant's agent.run is never offered a run.
     expect(companionFusionAvailable({ ...READY, grants: ["host.observe"] })).toBe(false)
+    // ADR-0253 D05: a Host that names no grants leaves them unknown, and a run
+    // needs the grant on record.
+    const { grants: _grants, ...unnamed } = READY
+    expect(companionFusionAvailable(unnamed)).toBe(false)
   })
 })
 

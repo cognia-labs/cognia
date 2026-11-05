@@ -2,11 +2,11 @@ import {
   HOST_PROTOCOL_MAX_VERSION,
   HOST_PROTOCOL_MIN_VERSION,
   SUPPORTED_HOST_FEATURE_VERSIONS,
+  manifestIsPersonPartition,
   parseHostFeatureManifest,
   supportsHostFeatureOperation,
   type HostFeatureManifest,
 } from "@/lib/platform/host-feature-manifest"
-import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
 import type { HostRuntimeSnapshot, RuntimeSnapshot } from "./operation-availability"
 
 const EMPTY_SNAPSHOT: RuntimeSnapshot = Object.freeze({
@@ -20,6 +20,15 @@ const listeners = new Set<() => void>()
 
 export function getRuntimeSnapshot(): RuntimeSnapshot {
   return currentSnapshot
+}
+
+/**
+ * Whether this device is an org member paired to their own person partition
+ * (ADR-0253 D04): every member-only path asks the snapshot this one way. Not
+ * `personChatCapability`, which asks whether this process is a person brain.
+ */
+export function isMemberOnPartition(snapshot: RuntimeSnapshot = currentSnapshot): boolean {
+  return snapshot.host?.personPartition === true
 }
 
 export function getServerRuntimeSnapshot(): RuntimeSnapshot {
@@ -46,22 +55,22 @@ export function updateRuntimeSnapshot(patch: Partial<RuntimeSnapshot>): void {
 /**
  * Convert the negotiated wire manifest into the minimal facts consumed by
  * operation availability. V2 trusts only explicitly healthy operations and
- * explicit device grants. V1 has no grant field, so compatibility derives
- * grants from the capabilities of operations that the old host advertised;
- * the host remains the final authorization boundary for every RPC.
+ * explicit device grants. A manifest that names no grants (V1 has no such
+ * field) leaves them unknown: an advertised operation is not a grant, and the
+ * host remains the final authorization boundary for every RPC (ADR-0253 D05).
  */
 export function runtimeHostSnapshotFromManifest(
   value: unknown,
   options: { hostStateWriteEnabled?: boolean } = {}
 ): HostRuntimeSnapshot {
   const manifest = parseHostFeatureManifest(value)
-  if (!manifest) return { compatible: false, operations: [], grants: [] }
+  if (!manifest) return { compatible: false, operations: [] }
   if (
     manifest.schemaVersion === 2 &&
     (manifest.protocol.max < HOST_PROTOCOL_MIN_VERSION ||
       manifest.protocol.min > HOST_PROTOCOL_MAX_VERSION)
   ) {
-    return { compatible: false, operations: [], grants: [] }
+    return { compatible: false, operations: [] }
   }
 
   const operations =
@@ -80,13 +89,7 @@ export function runtimeHostSnapshotFromManifest(
       ? operations.filter((operation) => operation !== "host_state_submit")
       : operations
 
-  const grants =
-    manifest.schemaVersion === 2
-      ? manifest.deviceGrants
-      : gatedOperations.flatMap((operation) => {
-          const descriptor = getCommandDescriptor(operation)
-          return descriptor ? [descriptor.capability] : []
-        })
+  const grants = manifest.schemaVersion === 2 ? manifest.deviceGrants : undefined
 
   return {
     compatible: true,
@@ -94,7 +97,7 @@ export function runtimeHostSnapshotFromManifest(
       ? { botAutomation: true as const }
       : {}),
     operations: [...new Set(gatedOperations)],
-    grants: [...new Set(grants)],
+    ...(grants ? { grants: [...new Set(grants)] } : {}),
     // Carried through rather than dropped: the ceilings are the only part of
     // the manifest a client needs to shape its UI to, and discarding them left
     // the companion shell with no way to learn them at all — the desktop's
@@ -103,10 +106,8 @@ export function runtimeHostSnapshotFromManifest(
     ...(manifest.schemaVersion === 2 && manifest.hostStateScope
       ? { hostStateScope: manifest.hostStateScope }
       : {}),
-    ...(manifest.schemaVersion === 2 && manifest.personPartition === true
-      ? { personPartition: true as const }
-      : {}),
-    ...(manifest.schemaVersion === 2 && manifest.personPartition === true && manifest.personAgents
+    ...(manifestIsPersonPartition(manifest) ? { personPartition: true as const } : {}),
+    ...(manifestIsPersonPartition(manifest) && manifest.personAgents
       ? { personAgents: manifest.personAgents }
       : {}),
   }
@@ -126,7 +127,7 @@ function freezeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshot {
     ? Object.freeze({
         ...snapshot.host,
         operations: Object.freeze([...snapshot.host.operations]),
-        grants: Object.freeze([...snapshot.host.grants]),
+        ...(snapshot.host.grants ? { grants: Object.freeze([...snapshot.host.grants]) } : {}),
         ...(snapshot.host.limits ? { limits: Object.freeze({ ...snapshot.host.limits }) } : {}),
       })
     : undefined

@@ -14,6 +14,9 @@ const policy: PersonAgentPolicy = {
 
 const session = { providerOverride: "anthropic", model: "claude-sonnet-4-5" }
 
+/** The policy as this Host version answers it: every field present. */
+const wire = { ...policy, modelNames: {}, modelPricing: {}, resumeAfterRestart: false }
+
 describe("person agent policy", () => {
   it("p6e runs the session's agent, else the org default", () => {
     expect(
@@ -59,6 +62,8 @@ describe("person agent policy", () => {
       { providerOverride: "openai", model: "gpt" },
       { providerOverride: "anthropic" },
       { model: "claude-sonnet-4-5" },
+      // D09: a model the org does not serve is refused here, as the lease would.
+      { providerOverride: "anthropic", model: "claude-opus-unserved" },
     ]) {
       expect(resolvePersonAgent(picks, policy, true)).toEqual({
         kind: "refused",
@@ -67,8 +72,19 @@ describe("person agent policy", () => {
     }
   })
 
+  it("d09 refuses tool-less chat on a model the org does not serve", () => {
+    const noDefault = { ...policy, defaultAgent: null }
+    expect(
+      resolvePersonAgent({ providerOverride: "anthropic", model: "unserved" }, noDefault, true)
+    ).toEqual({ kind: "refused", code: "model_access_unavailable" })
+    // Without tool-less chat on this Host nothing could run it anyway.
+    expect(
+      resolvePersonAgent({ providerOverride: "anthropic", model: "unserved" }, noDefault, false)
+    ).toEqual({ kind: "refused", code: "execution_isolation_unavailable" })
+  })
+
   it("p6e reads the Host policy and refuses a malformed answer", async () => {
-    const call = jest.fn().mockResolvedValueOnce(policy).mockResolvedValueOnce({ allowedAgents: 1 })
+    const call = jest.fn().mockResolvedValueOnce(wire).mockResolvedValueOnce({ allowedAgents: 1 })
     await expect(fetchPersonAgentPolicy({ call })).resolves.toEqual(policy)
     expect(call).toHaveBeenCalledWith("person_agent_policy_get", {})
     await expect(fetchPersonAgentPolicy({ call })).rejects.toMatchObject({
@@ -76,34 +92,39 @@ describe("person agent policy", () => {
     })
   })
 
-  it("p6g degrades a missing or malformed models map and usage to unknown", async () => {
-    const { models: _models, usage: _usage, ...older } = policy
+  it("adr0253 o02 refuses a policy without the fields this Host version answers with", async () => {
+    const { models: _models, ...noModels } = wire
+    const { usage: _usage, ...noUsage } = wire
+    const { resumeAfterRestart: _resume, ...noResume } = wire
+    for (const answer of [
+      noModels,
+      noUsage,
+      noResume,
+      { ...wire, models: { anthropic: ["ok"], openai: "gpt" } },
+      { ...wire, models: { broken: [1] } },
+      {
+        ...wire,
+        usage: { month: "2026-10", spentTokens: -1, reservedTokens: 0, monthlyTokens: null },
+      },
+    ]) {
+      const call = jest.fn().mockResolvedValueOnce(answer)
+      await expect(fetchPersonAgentPolicy({ call })).rejects.toMatchObject({
+        code: "execution_isolation_unavailable",
+      })
+    }
+    // No usage ledger on this Host is a real answer, and so is an uncapped month.
     const call = jest
       .fn()
-      .mockResolvedValueOnce(older)
-      .mockResolvedValueOnce({
-        ...older,
-        models: { anthropic: ["ok"], openai: "gpt", broken: [1] },
-        usage: { month: "2026-10", spentTokens: -1, reservedTokens: 0, monthlyTokens: null },
-      })
-      .mockResolvedValueOnce({ ...policy, usage: { ...policy.usage, monthlyTokens: null } })
-    await expect(fetchPersonAgentPolicy({ call })).resolves.toEqual({
-      ...older,
-      models: {},
-      usage: null,
-    })
-    await expect(fetchPersonAgentPolicy({ call })).resolves.toEqual({
-      ...older,
-      models: { anthropic: ["ok"] },
-      usage: null,
-    })
+      .mockResolvedValueOnce({ ...wire, usage: null })
+      .mockResolvedValueOnce({ ...wire, usage: { ...policy.usage, monthlyTokens: null } })
+    await expect(fetchPersonAgentPolicy({ call })).resolves.toMatchObject({ usage: null })
     await expect(fetchPersonAgentPolicy({ call })).resolves.toMatchObject({
       usage: { monthlyTokens: null },
     })
   })
 
   it("keeps the deployment's model names for served models only, and omits an empty map", async () => {
-    const { usage: _usage, ...rest } = policy
+    const { usage: _usage, ...rest } = wire
     const call = jest
       .fn()
       .mockResolvedValueOnce({
@@ -122,14 +143,14 @@ describe("person agent policy", () => {
       models: { anthropic: ["ok", "other"], openai: ["gpt"] },
       modelNames: { anthropic: { ok: "Okay Model" } },
     })
-    // A Host that sends none leaves the field out, as an older Host's manifest has it.
+    // A deployment that names none leaves the field out.
     const plain = await fetchPersonAgentPolicy({ call })
     expect("modelNames" in plain).toBe(false)
   })
 
   it("keeps the deployment's valid prices for served models and remembers them (ADR-0253 §10)", async () => {
     rememberPersonModelPricing({ stale: { m: { promptPer1M: 9, completionPer1M: 9 } } })
-    const { usage: _usage, ...rest } = policy
+    const { usage: _usage, ...rest } = wire
     const call = jest
       .fn()
       .mockResolvedValueOnce({
@@ -159,15 +180,18 @@ describe("person agent policy", () => {
   })
 
   it("adr0253 resumes after a restart only when the Host says exactly true", async () => {
-    const call = jest.fn().mockResolvedValueOnce({ ...policy, resumeAfterRestart: true })
+    const call = jest.fn().mockResolvedValueOnce({ ...wire, resumeAfterRestart: true })
     await expect(fetchPersonAgentPolicy({ call })).resolves.toEqual({
       ...policy,
       resumeAfterRestart: true,
     })
-    for (const value of [false, "true", 1, null, undefined]) {
-      call.mockResolvedValueOnce({ ...policy, resumeAfterRestart: value })
-      const read = await fetchPersonAgentPolicy({ call })
-      expect("resumeAfterRestart" in read).toBe(false)
+    call.mockResolvedValueOnce(wire)
+    expect("resumeAfterRestart" in (await fetchPersonAgentPolicy({ call }))).toBe(false)
+    for (const value of ["true", 1, null, undefined]) {
+      call.mockResolvedValueOnce({ ...wire, resumeAfterRestart: value })
+      await expect(fetchPersonAgentPolicy({ call })).rejects.toMatchObject({
+        code: "execution_isolation_unavailable",
+      })
     }
   })
 })

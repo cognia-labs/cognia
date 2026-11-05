@@ -328,13 +328,16 @@ describe("planDeviceSections", () => {
       "host-system"
     )
 
-    // Unknown grants (no manifest, or a Host that listed none) keep every section:
-    // the Host's own refusal stays the answer.
+    // Unknown grants (no manifest, or a Host that could not name them) keep
+    // every section: the Host's own refusal stays the answer.
     for (const unknown of [
       routed,
       {
         ...routed,
-        featureManifest: buildLocalHostFeatureManifest({ platform: "headless", deviceGrants: [] }),
+        featureManifest: buildLocalHostFeatureManifest({
+          platform: "headless",
+          deviceGrants: null,
+        }),
       },
     ]) {
       const sections = ids(planDeviceSections(unknown).sections)

@@ -377,13 +377,24 @@ export function normalizeTokenUsage(usage: {
   }
 }
 
-// cognia-next has no `@/lib/observability` module; ship a small inline
-// formatter so the cost tab can render token counts.
-export function formatTokens(tokens: number): string {
-  if (!Number.isFinite(tokens) || tokens <= 0) return "0"
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
-  return String(tokens)
+/**
+ * The one compact token figure every surface shows (ADR-0253 D07): 950 →
+ * "950", 1_234 → "1.2K", 1_000_000 → "1M", 2_500_000_000 → "2.5B". One decimal,
+ * a trailing ".0" dropped; nothing (no count, or not a number) reads "—", and
+ * zero or less reads "0". `lib/observability/format-utils.ts` re-exports it.
+ */
+export function formatTokens(tokens: number | null | undefined): string {
+  if (tokens === null || tokens === undefined || !Number.isFinite(tokens)) return "—"
+  if (tokens <= 0) return "0"
+  if (tokens < 1_000) return String(Math.round(tokens))
+  if (tokens < 999_950) return `${oneDecimal(tokens / 1_000)}K`
+  if (tokens < 999_950_000) return `${oneDecimal(tokens / 1_000_000)}M`
+  return `${oneDecimal(tokens / 1_000_000_000)}B`
+}
+
+function oneDecimal(value: number): string {
+  const fixed = value.toFixed(1)
+  return fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed
 }
 
 /**

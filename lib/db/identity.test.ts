@@ -11,7 +11,6 @@ import {
   linkExternalIdentity,
   listExternalIdentities,
   listOrgMembers,
-  listOrgsForUser,
   listUsers,
   listWorkspaceMembers,
   listWorkspacesForUser,
@@ -85,7 +84,7 @@ describe("org membership", () => {
     expect(await listOrgMembers("org_acme")).toHaveLength(1)
   })
 
-  it("reads in both directions", async () => {
+  it("lists one organization's members", async () => {
     await putOrgMembership({ orgId: "org_acme", userId: "usr_ada", role: "owner" })
     await putOrgMembership({ orgId: "org_acme", userId: "usr_bob", role: "member" })
     await putOrgMembership({ orgId: "org_other", userId: "usr_ada", role: "member" })
@@ -93,10 +92,6 @@ describe("org membership", () => {
     expect((await listOrgMembers("org_acme")).map((m) => m.userId).sort()).toEqual([
       "usr_ada",
       "usr_bob",
-    ])
-    expect((await listOrgsForUser("usr_ada")).map((m) => m.orgId).sort()).toEqual([
-      "org_acme",
-      "org_other",
     ])
   })
 

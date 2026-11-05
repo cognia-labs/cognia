@@ -53,7 +53,7 @@
 import { MOBILE_OUTBOUND_COMMANDS } from "@/lib/db/mobile-outbound-types"
 import { HostConsentRequiredError, issueHostAdminLease } from "@/lib/tauri/admin-lease"
 import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
-import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
+import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 
 export interface OutboundApprovalDeps {
@@ -286,8 +286,7 @@ const PERSON_PARTITION_UNLEASED = new Set(["host_state_submit"])
 function requiresApproval(command: string, deps: Required<OutboundApprovalDeps>): boolean {
   if (deps.getCommandDescriptor(command)?.approval !== "interactive") return false
   const snapshot = deps.getRuntimeSnapshot()
-  if (snapshot.host?.personPartition === true && PERSON_PARTITION_UNLEASED.has(command))
-    return false
+  if (isMemberOnPartition(snapshot) && PERSON_PARTITION_UNLEASED.has(command)) return false
   return snapshot.target?.kind === "companion"
 }
 

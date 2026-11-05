@@ -1,6 +1,7 @@
 import type { PersonAgentsManifest } from "@/lib/platform/host-feature-manifest"
 
 import {
+  resolvePersonTurn,
   personAgentSeed,
   personAllowance,
   personConversationAgent,
@@ -47,10 +48,13 @@ describe("personConversationAgent", () => {
     expect(problem({ providerOverride: "openai", model: "gpt" })).toBe("model-not-served")
     expect(problem({ providerOverride: "deepseek", model: "not-served" })).toBe("model-not-served")
     expect(problem({ providerOverride: "deepseek" })).toBe("model-not-served")
-    // An older Host sends no model list: only the provider is checked.
-    expect(problem({ providerOverride: "deepseek", model: "x" }, { ...agents, models: {} })).toBe(
-      undefined
-    )
+    // O01: no model list means nothing is served, never "unknown, so allowed".
+    expect(
+      problem(
+        { providerOverride: "deepseek", model: "ark-deepseek-pro" },
+        { ...agents, models: {} }
+      )
+    ).toBe("model-not-served")
   })
 
   it("p6g says when tool-less chat would be refused its model", () => {
@@ -63,8 +67,47 @@ describe("personConversationAgent", () => {
       problem: "chat-model-not-served",
     })
     expect(personConversationAgent({}, chat)).toMatchObject({ problem: "chat-model-not-served" })
-    // An older Host names no chat providers: nothing is known, nothing is said.
-    expect(personConversationAgent({}, { ...chat, models: {} })).toEqual({ kind: "chat" })
+    expect(
+      personConversationAgent({ providerOverride: "openai", model: "gpt" }, { ...chat, models: {} })
+    ).toEqual({ kind: "chat", problem: "chat-model-not-served" })
+  })
+})
+
+describe("resolvePersonTurn (ADR-0253 D09)", () => {
+  it("resolves the agent, provider and model a turn runs on", () => {
+    expect(resolvePersonTurn(served, agents)).toEqual({
+      kind: "agent",
+      runtimeId: "claude-agent-acp",
+      explicit: false,
+      provider: "deepseek",
+      model: "ark-deepseek-v4.1-flash",
+    })
+    expect(
+      resolvePersonTurn(
+        { providerOverride: "deepseek", model: "ark-deepseek-pro" },
+        {
+          ...agents,
+          defaultAgent: null,
+        }
+      )
+    ).toEqual({ kind: "chat", provider: "deepseek", model: "ark-deepseek-pro" })
+  })
+
+  it("refuses in the order the brain reports, naming the agent it would have run", () => {
+    expect(resolvePersonTurn({ ...served, agentRuntimeId: "pi" }, agents)).toEqual({
+      kind: "refused",
+      problem: "not-allowed",
+      runtimeId: "pi",
+      explicit: true,
+    })
+    // An unallowed agent is reported before the Host's missing execution.
+    expect(
+      resolvePersonTurn({ ...served, agentRuntimeId: "pi" }, { ...agents, execution: "none" })
+    ).toMatchObject({ problem: "not-allowed" })
+    expect(resolvePersonTurn({}, { ...agents, defaultAgent: null })).toEqual({
+      kind: "refused",
+      problem: "chat-model-not-served",
+    })
   })
 })
 
@@ -113,6 +156,16 @@ describe("personDefaultModel", () => {
     ).toEqual(served)
     expect(personDefaultModel(agents)).toEqual(served)
     expect(personDefaultModel({ ...agents, models: {} })).toBeNull()
+  })
+
+  it("adr0253 d08 falls back to the app default the org serves, the conversation's pick first", () => {
+    const appDefault = { provider: "deepseek", model: "ark-deepseek-pro" }
+    expect(personDefaultModel(agents, {}, appDefault)).toEqual({
+      providerOverride: "deepseek",
+      model: "ark-deepseek-pro",
+    })
+    expect(personDefaultModel(agents, served, appDefault)).toEqual(served)
+    expect(personDefaultModel(agents, {}, { provider: "openai", model: "gpt" })).toEqual(served)
   })
 })
 

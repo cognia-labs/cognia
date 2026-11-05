@@ -42,7 +42,7 @@ describe("SessionCostBadge — collapsed", () => {
         tokensLabel={tokens}
       />
     )
-    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5k/700")
+    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5K/700")
     expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("$0.1200")
   })
 
@@ -102,7 +102,7 @@ describe("SessionCostBadge — collapsed", () => {
         compact
       />
     )
-    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5k/700")
+    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5K/700")
   })
 })
 
@@ -133,7 +133,7 @@ describe("SessionCostBadge — popover with persisted rows", () => {
     )
     await user.click(screen.getByTestId("session-cost-trigger"))
     expect(await screen.findByTestId("cost-popover-turns")).toHaveTextContent("—")
-    expect(screen.getByText("267k")).toBeInTheDocument()
+    expect(screen.getByText("267K")).toBeInTheDocument()
     expect(screen.getByText("11")).toBeInTheDocument()
     expect(screen.getByText("$0.2500")).toBeInTheDocument()
     expect(screen.getByTestId("cost-popover-empty")).toBeInTheDocument()
@@ -170,7 +170,7 @@ describe("SessionCostBadge — popover with persisted rows", () => {
     )
     await user.click(screen.getByTestId("session-cost-trigger"))
     expect(await screen.findByTestId("cost-popover-turns")).toHaveTextContent("—")
-    expect(screen.getByText("267k")).toBeInTheDocument()
+    expect(screen.getByText("267K")).toBeInTheDocument()
     expect(screen.getByText("13")).toBeInTheDocument()
     expect(screen.getByText("$0.3500")).toBeInTheDocument()
     expect(screen.getByTestId("cost-popover-speed")).toHaveTextContent("—")
@@ -200,7 +200,7 @@ describe("SessionCostBadge — popover with persisted rows", () => {
         inMemoryUsage={{ inputTokens: 10, outputTokens: 2, totalCostUsd: 0.1 }}
       />
     )
-    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("2.0k")
+    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("2K")
     expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("0.5000")
     await user.click(screen.getByTestId("session-cost-trigger"))
     expect(await screen.findByTestId("cost-popover-turns")).toHaveTextContent("1")
@@ -229,7 +229,7 @@ describe("SessionCostBadge — popover with persisted rows", () => {
         inMemoryUsage={{ inputTokens: 10, outputTokens: 60 }}
       />
     )
-    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("2.0k")
+    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("2K")
     expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("0.5000")
     await user.click(screen.getByTestId("session-cost-trigger"))
     expect(screen.getByText("60")).toBeInTheDocument()
@@ -452,6 +452,6 @@ describe("SessionCostBadge — popover with persisted rows", () => {
     fireEvent.click(screen.getByTestId("session-cost-trigger"))
     void user
     const list = await screen.findByTestId("cost-popover-by-model")
-    expect(list).toHaveTextContent("2.50M")
+    expect(list).toHaveTextContent("2.5M")
   })
 })

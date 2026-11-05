@@ -203,7 +203,7 @@ describe("usageShortText / usageTooltipFragment across metrics", () => {
 
   it("reads the projection for a token metric", () => {
     const out = usageShortText(withGlance({ billableTokens: 2000, turns: 1 }), "tokens")
-    expect(out?.text).toBe("2k / wk")
+    expect(out?.text).toBe("2K / wk")
   })
 
   it("shows nothing rather than a fake zero when nothing could be priced", () => {

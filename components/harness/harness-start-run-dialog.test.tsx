@@ -79,7 +79,7 @@ describe("HarnessStartRunDialog", () => {
       expect(screen.getByTestId("harness-estimate")).toHaveTextContent("4 rollouts")
     )
     expect(screen.getByTestId("harness-estimate")).toHaveTextContent(
-      "About $2.50 · 120.0K tokens · 10.0m"
+      "About $2.50 · 120K tokens · 10.0m"
     )
     expect(screen.getByTestId("harness-estimate")).toHaveTextContent(
       "Based on only 3 comparable runs"

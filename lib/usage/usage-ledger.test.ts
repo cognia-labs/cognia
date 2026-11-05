@@ -11,6 +11,7 @@ import type { SessionUsageRow } from "@/lib/db/session-usage"
 import {
   applyRollupDelta,
   commitUsageRow,
+  commitUsageRows,
   contributesToBudget,
   freezeUsageCost,
   rebuildProviderCostDaily,
@@ -182,6 +183,73 @@ describe("commitUsageRow", () => {
   it("refuses a row with no identity", async () => {
     expect(await commitUsageRow(row({ messageId: "" }))).toBeNull()
     expect(await commitUsageRow(row({ sessionId: "" }))).toBeNull()
+  })
+})
+
+describe("commitUsageRows (ADR-0253 D07)", () => {
+  it("d07 commits a batch through the same projection, retracting what it replaces", async () => {
+    // This device booked the turn; the Host's row for it arrives bigger.
+    await commitUsageRow(row(), { resolve: flatPricing })
+    const seen: UsageCommitDaily[] = []
+    const dispose = setBudgetMirrorSink((c) => seen.push(c))
+    try {
+      await expect(
+        commitUsageRows(
+          [
+            row({ inputTokens: 2000, outputTokens: 1000 }),
+            row({ messageId: "m2" }),
+            row({ messageId: "", sessionId: "s1" }),
+          ],
+          { resolve: flatPricing }
+        )
+      ).resolves.toEqual({ written: 2, removed: 0 })
+    } finally {
+      dispose()
+    }
+    const bucket = await getDb().providerCostDaily.toArray()
+    expect(bucket).toHaveLength(1)
+    expect(bucket[0].requestCount).toBe(2)
+    expect(bucket[0].totalCostUsd).toBeCloseTo(6, 6)
+    expect(await ledgerTotal()).toBeCloseTo(await dailyTotal(), 9)
+    // One push per provider day, carrying the final total and the whole delta.
+    expect(seen).toHaveLength(1)
+    expect(seen[0].providerTotalUsd).toBeCloseTo(6, 6)
+    expect(seen[0].deltaUsd).toBeCloseTo(4, 6)
+  })
+
+  it("d07 keeps the last of two rows with one id", async () => {
+    await commitUsageRows([row(), row({ inputTokens: 2000, outputTokens: 1000 })], {
+      resolve: flatPricing,
+    })
+    expect(await getDb().sessionUsage.count()).toBe(1)
+    expect((await getDb().providerCostDaily.toArray())[0].totalCostUsd).toBeCloseTo(4, 6)
+  })
+
+  it("d07 retires a complete source's missing rows and nothing else", async () => {
+    const scanned = (messageId: string) =>
+      row({ messageId, sourceId: "codex", imported: true, costSource: "unknown" })
+    await commitUsageRows([scanned("a"), scanned("b")])
+    await commitUsageRow(row({ messageId: "local" }), { resolve: flatPricing })
+    await expect(commitUsageRows([scanned("a")], { retireSource: "codex" })).resolves.toEqual({
+      written: 1,
+      removed: 1,
+    })
+    expect((await getDb().sessionUsage.toArray()).map((r) => r.messageId).sort()).toEqual([
+      "a",
+      "local",
+    ])
+    expect(await ledgerTotal()).toBeCloseTo(await dailyTotal(), 9)
+  })
+
+  it("d07 writes nothing when the caller's scope moved on", async () => {
+    await expect(
+      commitUsageRows([row()], {
+        assertCurrent: () => {
+          throw new Error("Sync scope changed")
+        },
+      })
+    ).rejects.toThrow("Sync scope changed")
+    expect(await getDb().sessionUsage.count()).toBe(0)
   })
 })
 

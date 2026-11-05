@@ -196,86 +196,174 @@ export async function commitUsageRow(
   const frozen = freezeUsageCost(row, opts.resolve)
   const db = getDb()
 
-  let replaced = false
-  let daily: UsageCommitDaily | null = null
-
+  let committed: Omit<UsageCommitResult, "row"> = { replaced: false, daily: null }
   await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
-    const prior = await db.sessionUsage.get(frozen.messageId)
-    replaced = prior != null
-    await db.sessionUsage.put(frozen)
+    committed = await putWithProjection(db, frozen, now)
+  })
 
-    const before = rollupContribution(prior)
-    const after = rollupContribution(frozen)
-    if (!before.key && !after.key) return
+  if (committed.daily) pushToMirror(committed.daily)
+  return { row: frozen, ...committed }
+}
 
-    const sameBucket =
-      before.key != null &&
-      after.key != null &&
-      before.key.day === after.key.day &&
-      before.key.providerId === after.key.providerId &&
-      before.key.modelId === after.key.modelId
+/**
+ * Commit many usage rows and their projection in ONE transaction: the bulk
+ * door to the same ledger (ADR-0253 D07). Every row is frozen, put, and its
+ * projection delta applied exactly as {@link commitUsageRow} would, so a row
+ * that replaces one this device already booked retracts what it replaces
+ * instead of leaving the old spend in the rollup.
+ *
+ * `retireSource` is a complete scan's answer for one source: that source's
+ * rows absent from `rows` are deleted, their contribution (if any) retracted.
+ * `assertCurrent` runs inside the transaction before anything is written, so a
+ * caller whose scope moved on (a sync for a target no longer active) aborts it
+ * whole. Malformed rows (no message or session id) are skipped.
+ */
+export async function commitUsageRows(
+  rows: readonly SessionUsageRow[],
+  opts: {
+    now?: number
+    resolve?: PricingResolver
+    retireSource?: string
+    assertCurrent?: () => void
+  } = {}
+): Promise<{ written: number; removed: number }> {
+  const now = opts.now ?? Date.now()
+  // One row per id, the last given winning, as one put after another would.
+  const byId = new Map<string, SessionUsageRow>()
+  for (const row of rows) {
+    if (row.messageId && row.sessionId) byId.set(row.messageId, row)
+  }
+  const frozen = [...byId.values()].map((row) => freezeUsageCost(row, opts.resolve))
+  if (frozen.length === 0 && opts.retireSource === undefined) return { written: 0, removed: 0 }
+  const db = getDb()
 
-    if (before.key && !sameBucket) {
-      // The retry moved buckets (different day, provider or model). Retract the
-      // old contribution in full before adding the new one, otherwise a model
-      // switch on a retry double-counts under two model ids forever.
-      await applyRollupDelta(
-        db.providerCostDaily,
-        before.key,
-        {
-          costUsd: -before.costUsd,
-          inputTokens: -before.inputTokens,
-          outputTokens: -before.outputTokens,
-          requestCount: -before.requestCount,
-        },
-        now
-      )
+  const dailies = new Map<string, UsageCommitDaily>()
+  const keep = (daily: UsageCommitDaily | null) => {
+    if (!daily) return
+    const key = `${daily.providerId}\u0000${daily.day}`
+    const prior = dailies.get(key)
+    dailies.set(key, { ...daily, deltaUsd: (prior?.deltaUsd ?? 0) + daily.deltaUsd })
+  }
+  let removed = 0
+  await db.transaction("rw", db.sessionUsage, db.providerCostDaily, async () => {
+    opts.assertCurrent?.()
+    if (opts.retireSource !== undefined) {
+      const present = new Set(frozen.map((row) => row.messageId))
+      const existing = await db.sessionUsage.where("sourceId").equals(opts.retireSource).toArray()
+      const stale = existing.filter((row) => !present.has(row.messageId))
+      if (stale.length > 0) await db.sessionUsage.bulkDelete(stale.map((row) => row.messageId))
+      for (const row of stale) keep(await moveProjection(db, row, null, now))
+      removed = stale.length
     }
-
-    if (after.key) {
-      const base = sameBucket
-        ? before
-        : { costUsd: 0, inputTokens: 0, outputTokens: 0, requestCount: 0 }
-      await applyRollupDelta(
-        db.providerCostDaily,
-        after.key,
-        {
-          costUsd: after.costUsd - base.costUsd,
-          inputTokens: after.inputTokens - base.inputTokens,
-          outputTokens: after.outputTokens - base.outputTokens,
-          requestCount: after.requestCount - base.requestCount,
-        },
-        now
-      )
-    }
-
-    // Sum the provider's committed rows for the affected day INSIDE the
-    // transaction. This is what lets the synchronous budget mirror snap to
-    // durable state instead of drifting when a write is lost.
-    const target = after.key ?? before.key
-    if (!target) return
-    const dayRows = await db.providerCostDaily
-      .where("[providerId+day]")
-      .equals([target.providerId, target.day])
-      .toArray()
-    daily = {
-      day: target.day,
-      providerId: target.providerId,
-      providerTotalUsd: dayRows.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0),
-      deltaUsd: after.costUsd - before.costUsd,
+    // Bulk reads and writes: a scan commits thousands of rows, and only the
+    // ones that do or did count for the budget touch the projection.
+    const priors = await db.sessionUsage.bulkGet(frozen.map((row) => row.messageId))
+    if (frozen.length > 0) await db.sessionUsage.bulkPut(frozen)
+    for (const [index, row] of frozen.entries()) {
+      keep(await moveProjection(db, priors[index], row, now))
     }
   })
 
-  if (daily && mirrorSink) {
-    try {
-      mirrorSink(daily)
-    } catch {
-      // The mirror is an accelerator for the budget gate, never the record.
-      // A failing sink must not fail a committed write.
-    }
+  for (const daily of dailies.values()) pushToMirror(daily)
+  return { written: frozen.length, removed }
+}
+
+type LedgerDb = ReturnType<typeof getDb>
+
+/** Put one frozen row and move the projection by the difference it makes. */
+async function putWithProjection(
+  db: LedgerDb,
+  frozen: SessionUsageRow,
+  now: number
+): Promise<Omit<UsageCommitResult, "row">> {
+  const prior = await db.sessionUsage.get(frozen.messageId)
+  await db.sessionUsage.put(frozen)
+  return {
+    replaced: prior != null,
+    daily: await moveProjection(db, prior, frozen, now),
+  }
+}
+
+/**
+ * Move the rollup from `prior`'s contribution to `next`'s, inside the caller's
+ * transaction, and read back the provider's committed day total.
+ */
+async function moveProjection(
+  db: LedgerDb,
+  prior: SessionUsageRow | null | undefined,
+  next: SessionUsageRow | null,
+  now: number
+): Promise<UsageCommitDaily | null> {
+  const before = rollupContribution(prior)
+  const after = rollupContribution(next)
+  if (!before.key && !after.key) return null
+
+  const sameBucket =
+    before.key != null &&
+    after.key != null &&
+    before.key.day === after.key.day &&
+    before.key.providerId === after.key.providerId &&
+    before.key.modelId === after.key.modelId
+
+  if (before.key && !sameBucket) {
+    // The retry moved buckets (different day, provider or model). Retract the
+    // old contribution in full before adding the new one, otherwise a model
+    // switch on a retry double-counts under two model ids forever.
+    await applyRollupDelta(
+      db.providerCostDaily,
+      before.key,
+      {
+        costUsd: -before.costUsd,
+        inputTokens: -before.inputTokens,
+        outputTokens: -before.outputTokens,
+        requestCount: -before.requestCount,
+      },
+      now
+    )
   }
 
-  return { row: frozen, daily, replaced }
+  if (after.key) {
+    const base = sameBucket
+      ? before
+      : { costUsd: 0, inputTokens: 0, outputTokens: 0, requestCount: 0 }
+    await applyRollupDelta(
+      db.providerCostDaily,
+      after.key,
+      {
+        costUsd: after.costUsd - base.costUsd,
+        inputTokens: after.inputTokens - base.inputTokens,
+        outputTokens: after.outputTokens - base.outputTokens,
+        requestCount: after.requestCount - base.requestCount,
+      },
+      now
+    )
+  }
+
+  // Sum the provider's committed rows for the affected day INSIDE the
+  // transaction. This is what lets the synchronous budget mirror snap to
+  // durable state instead of drifting when a write is lost.
+  const target = after.key ?? before.key
+  if (!target) return null
+  const dayRows = await db.providerCostDaily
+    .where("[providerId+day]")
+    .equals([target.providerId, target.day])
+    .toArray()
+  return {
+    day: target.day,
+    providerId: target.providerId,
+    providerTotalUsd: dayRows.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0),
+    deltaUsd: after.costUsd - before.costUsd,
+  }
+}
+
+function pushToMirror(daily: UsageCommitDaily): void {
+  if (!mirrorSink) return
+  try {
+    mirrorSink(daily)
+  } catch {
+    // The mirror is an accelerator for the budget gate, never the record.
+    // A failing sink must not fail a committed write.
+  }
 }
 
 /**

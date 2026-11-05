@@ -20,6 +20,12 @@ jest.mock("@/lib/db/sessions", () => ({
   updateSession: jest.fn(),
 }))
 
+const mockIntentAvailable = jest.fn(async (_sessionId: string) => false)
+jest.mock("@/lib/db/mobile-outbound-queue", () => ({
+  enqueueHostStateIntentIfAvailable: jest.fn(),
+  hostStateSessionIntentAvailable: (sessionId: string) => mockIntentAvailable(sessionId),
+}))
+
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: {
     getState: jest.fn(() => ({
@@ -36,6 +42,7 @@ beforeEach(() => {
   _resetAllRetries()
   jest.clearAllMocks()
   mockIsTitleInFlight.mockReturnValue(false)
+  mockIntentAvailable.mockResolvedValue(false)
 })
 
 describe("markTitleFailed", () => {
@@ -147,6 +154,24 @@ describe("retryTitleIfNeeded", () => {
     await retryTitleIfNeeded("s1")
     expect(mockRunTitleTask).not.toHaveBeenCalled()
     expect(_getRetryState("s1")).toBeNull() // cleaned up
+  })
+
+  it("adr0253 d06 leaves a Host-owned conversation's title to the Host", async () => {
+    markTitleFailed("s1", { sourceText: "hello" })
+    _getRetryState("s1")!.lastAttemptAt = 0
+    mockIntentAvailable.mockResolvedValue(true)
+    mockGetSession.mockResolvedValue({
+      id: "s1",
+      title: "New conversation",
+      titleAuto: true,
+      createdAt: 1000,
+      updatedAt: 2000,
+    } as never)
+
+    await retryTitleIfNeeded("s1")
+    expect(mockRunTitleTask).not.toHaveBeenCalled()
+    expect(mockIntentAvailable).toHaveBeenCalledWith("s1")
+    expect(_getRetryState("s1")).toBeNull()
   })
 
   it("aborts when title no longer looks like placeholder/instant-preview", async () => {

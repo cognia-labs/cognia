@@ -94,12 +94,12 @@ describe("formatGlanceMetric", () => {
   it("leads with whatever the query asked for", () => {
     const s = snap({ knownCostUsd: 3, turns: 1, billableTokens: 2000 })
     expect(formatGlanceMetric(s, "spend")).toBe("$3")
-    expect(formatGlanceMetric(s, "tokens")).toBe("2k")
+    expect(formatGlanceMetric(s, "tokens")).toBe("2K")
   })
 
   it("defaults to the snapshot's own metric", () => {
     const s = snap({ billableTokens: 2000, query: { ...query, metric: "tokens" } })
-    expect(formatGlanceMetric(s)).toBe("2k")
+    expect(formatGlanceMetric(s)).toBe("2K")
   })
 })
 

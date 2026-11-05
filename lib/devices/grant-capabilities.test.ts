@@ -7,7 +7,6 @@ import {
   LOCKED_USE_AVAILABLE,
   ROUTER_FUSION_COMPANION_CAPABILITY,
   buildGrantRows,
-  deviceLacksCapability,
   grantForCapability,
   isGrantEnabled,
   ownerPermits,
@@ -289,9 +288,10 @@ describe("ownerPermits", () => {
     expect(predicate).toContain("d.user_id = h.user_id")
     expect(predicate.split(" OR ")).toHaveLength(3)
 
-    // And the Rust twin, whose own test drives it against the SQL.
+    // And the Rust statement of the rule, the test oracle its own test drives
+    // against the SQL (test-only since ADR-0253 X07).
     expect(rust).toContain(
-      "pub fn owner_permits(host_person: Option<&str>, device_person: Option<&str>) -> bool"
+      "#[cfg(test)]\npub(crate) fn owner_permits(host_person: Option<&str>, device_person: Option<&str>) -> bool"
     )
   })
 })
@@ -323,17 +323,5 @@ describe("buildGrantRows under a suspended owner", () => {
       evidence({ hostCapabilities: [...CONTROL], ownerSuspended: false })
     )
     expect(after).toEqual(before)
-  })
-})
-
-describe("deviceLacksCapability", () => {
-  it("answers yes only when the Host listed this device's grants without it", () => {
-    const member = ["agent.run", "client.read", "host.observe"]
-    expect(deviceLacksCapability(member, "host.admin")).toBe(true)
-    expect(deviceLacksCapability(member, "host.observe")).toBe(false)
-    // Unknown is not "lacks": no list, or a Host that could not read its store.
-    expect(deviceLacksCapability(undefined, "host.admin")).toBe(false)
-    expect(deviceLacksCapability(null, "host.admin")).toBe(false)
-    expect(deviceLacksCapability([], "host.admin")).toBe(false)
   })
 })

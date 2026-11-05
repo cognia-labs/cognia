@@ -3091,14 +3091,24 @@ describe("dispatchCommand: session attachment upload", () => {
 })
 
 describe("dispatchCommand: unknown command", () => {
-  it("returns the versioned host feature contract with least-privilege defaults", async () => {
+  it("adr-0253 d05 names the caller's grants only when the Host read them", async () => {
+    const unknown = (await dispatchCommand("host_feature_manifest", {})) as Record<string, unknown>
+    expect("deviceGrants" in unknown).toBe(false)
+    await expect(
+      dispatchCommand("host_feature_manifest", { callerDeviceGrants: [] })
+    ).resolves.toMatchObject({ deviceGrants: [] })
+    await expect(
+      dispatchCommand("host_feature_manifest", { callerDeviceGrants: ["host.observe"] })
+    ).resolves.toMatchObject({ deviceGrants: ["host.observe"] })
+  })
+
+  it("returns the versioned host feature contract", async () => {
     await expect(dispatchCommand("host_feature_manifest", {})).resolves.toMatchObject({
       schemaVersion: 2,
       hostBuildId: expect.any(String),
       platform: expect.any(String),
       generatedAt: expect.any(Number),
       protocol: { min: 1, max: 2 },
-      deviceGrants: ["host.observe"],
       features: {
         "claude.host-tools": {
           version: 1,

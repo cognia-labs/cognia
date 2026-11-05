@@ -409,10 +409,12 @@ pub fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 pub const OWNER_PREDICATE_SQL: &str =
     "(h.user_id IS NULL OR d.user_id IS NULL OR d.user_id = h.user_id)";
 
-/// The Rust twin of [`OWNER_PREDICATE_SQL`], for callers that already hold both
-/// ids. A test drives the two over the same table of cases, so neither can
-/// drift into answering differently from the other.
-pub fn owner_permits(host_person: Option<&str>, device_person: Option<&str>) -> bool {
+/// The Rust statement of [`OWNER_PREDICATE_SQL`], kept as the test oracle only:
+/// a test drives the SQL and this over the same table of cases, so the SQL —
+/// the one copy every decision runs — cannot drift from the rule written here.
+/// No runtime caller decides ownership in Rust (ADR-0253 X07).
+#[cfg(test)]
+pub(crate) fn owner_permits(host_person: Option<&str>, device_person: Option<&str>) -> bool {
     match (host_person, device_person) {
         (Some(host), Some(device)) => host == device,
         _ => true,

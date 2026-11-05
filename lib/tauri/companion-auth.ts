@@ -67,6 +67,23 @@ export interface CompanionAuthConfig {
   }
 }
 
+/** A config whose deployment signs people in: multi-tenant, with an issuer. */
+export type MultiTenantAuthConfig = CompanionAuthConfig & {
+  deploymentMode: "multi-tenant"
+  oidc: NonNullable<CompanionAuthConfig["oidc"]>
+}
+
+/**
+ * Whether a config's deployment signs people in through an OIDC issuer: the
+ * one multi-tenant predicate (ADR-0253 D10). A multi-tenant config without an
+ * issuer has nothing to sign in with, so it is not one.
+ */
+export function isMultiTenantAuthConfig(
+  config: CompanionAuthConfig
+): config is MultiTenantAuthConfig {
+  return config.deploymentMode === "multi-tenant" && Boolean(config.oidc)
+}
+
 /**
  * The issuer kind a config announces. Anything other than a known kind reads
  * as `logto`: the default keeps Logto's parameters flowing to the deployments
@@ -426,7 +443,7 @@ function validateRegistrationContext(
       throw new Error("pairing payload tenant does not match server")
     return
   }
-  if (config.deploymentMode !== "multi-tenant" || !config.oidc || !input.oidc) {
+  if (!isMultiTenantAuthConfig(config) || !input.oidc) {
     throw new Error("an active OIDC session is required for this pairing")
   }
   if (

@@ -36,7 +36,7 @@ describe("ContextGrowthChart", () => {
     )
     expect(screen.getByTestId("context-growth")).toBeInTheDocument()
     expect(screen.getByTestId("context-growth-summary")).toHaveTextContent(
-      "Peak 90.0K, latest 30.0K. Context dropped once"
+      "Peak 90K, latest 30K. Context dropped once"
     )
   })
 

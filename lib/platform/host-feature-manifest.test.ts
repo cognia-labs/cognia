@@ -1,4 +1,6 @@
 import {
+  deviceGrantAnswer,
+  deviceLacksCapability,
   hostSupportsExternalAgentModelPlans,
   EXTERNAL_AGENT_MODEL_PLAN_OPERATION,
 } from "./host-feature-manifest"
@@ -1156,4 +1158,28 @@ it("advertises automation control only on hosts with the Bot mutation executor",
         "bot_installation_mutate"
       )
     ).toBe(false)
+})
+
+describe("deviceLacksCapability", () => {
+  it("answers yes only when the Host listed this device's grants without it", () => {
+    const member = ["agent.run", "client.read", "host.observe"]
+    expect(deviceLacksCapability(member, "host.admin")).toBe(true)
+    expect(deviceLacksCapability(member, "host.observe")).toBe(false)
+    // Unknown is not "lacks": no list (no manifest, or a Host that could not
+    // read its store).
+    expect(deviceLacksCapability(undefined, "host.admin")).toBe(false)
+    expect(deviceLacksCapability(null, "host.admin")).toBe(false)
+    // ADR-0253 D05: an empty list is the Host saying the device holds nothing.
+    expect(deviceLacksCapability([], "host.admin")).toBe(true)
+  })
+})
+
+describe("deviceGrantAnswer (ADR-0253 D05)", () => {
+  it("absent is unknown, a list is the answer", () => {
+    expect(deviceGrantAnswer(undefined, "agent.run")).toBe("unknown")
+    expect(deviceGrantAnswer(null, "agent.run")).toBe("unknown")
+    expect(deviceGrantAnswer([], "agent.run")).toBe("lacks")
+    expect(deviceGrantAnswer(["agent.run"], "agent.run")).toBe("holds")
+    expect(deviceGrantAnswer(["host.observe"], "agent.run")).toBe("lacks")
+  })
 })

@@ -152,7 +152,7 @@ describe("ConversationManagerList", () => {
     expect(within(row).getByText("Researcher")).toBeInTheDocument()
     // The model only names a conversation that has no agent.
     expect(within(row).queryByText("Opus")).not.toBeInTheDocument()
-    expect(within(row).getByText("12 turns · 42.0K")).toBeInTheDocument()
+    expect(within(row).getByText("12 turns · 42K")).toBeInTheDocument()
     // The setup's formatter renders a relative time as its ISO instant.
     expect(
       within(row).getByText(new Date(NOW.getTime() - 2 * 3_600_000).toISOString())

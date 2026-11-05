@@ -14,7 +14,8 @@ import {
   StickyNote as NoteIcon,
 } from "lucide-react"
 import { getNodeIcon } from "@/lib/workflow/editor/node-icons"
-import { formatCostUsd, formatTokens } from "@/lib/workflow/runs/usage-aggregate"
+import { formatCostUsd } from "@/lib/workflow/runs/usage-aggregate"
+import { formatTokens } from "@/types/system/usage"
 import { agentNodeSummary, type AgentNodeSummary } from "@/lib/workflow/editor/agent-node-summary"
 import {
   missingRequiredFromDiagnostics,

@@ -3,6 +3,7 @@ import {
   formatDuration,
   formatModelPricing,
   formatPercent,
+  formatTokens,
   formatTokensPerSec,
   getModelPricingUSD,
   tokensPerSecond,
@@ -68,6 +69,25 @@ describe("tokensPerSecond", () => {
     expect(tokensPerSecond(0, 5000)).toBeNull() // no output
     expect(tokensPerSecond(500, -1)).toBeNull()
     expect(tokensPerSecond(Number.NaN, 5000)).toBeNull()
+  })
+})
+
+describe("formatTokens", () => {
+  it("adr0253 d07 renders one compact figure everywhere", () => {
+    expect(formatTokens(null)).toBe("—")
+    expect(formatTokens(undefined)).toBe("—")
+    expect(formatTokens(Number.NaN)).toBe("—")
+    expect(formatTokens(0)).toBe("0")
+    expect(formatTokens(-5)).toBe("0")
+    expect(formatTokens(99.6)).toBe("100")
+    expect(formatTokens(999)).toBe("999")
+    expect(formatTokens(1000)).toBe("1K")
+    expect(formatTokens(1234)).toBe("1.2K")
+    expect(formatTokens(12_340)).toBe("12.3K")
+    expect(formatTokens(999_949)).toBe("999.9K")
+    expect(formatTokens(999_950)).toBe("1M")
+    expect(formatTokens(1_234_567)).toBe("1.2M")
+    expect(formatTokens(2_500_000_000)).toBe("2.5B")
   })
 })
 

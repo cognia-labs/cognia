@@ -2,6 +2,7 @@ import {
   compactModelLabel,
   collectModelOptions,
   catalogModelIds,
+  memberOrgModelNames,
   resolveModelDisplayName,
   resolveModelContextLength,
   resolveModelMeta,
@@ -10,6 +11,10 @@ import {
   resolveModelLifecycle,
 } from "./model-options"
 import { PROVIDERS } from "@cognia/provider-types/provider"
+import {
+  __resetRuntimeSnapshotForTesting,
+  setRuntimeSnapshot,
+} from "@/lib/runtime/runtime-snapshot-store"
 import type { UserProviderSettings, CustomProviderSettings } from "@cognia/provider-types/provider"
 import {
   primeOpenRouterCatalogCache,
@@ -308,6 +313,53 @@ describe("resolveModelDisplayName", () => {
     // gpt-4o is in the alias table even for an unknown provider scope.
     expect(resolveModelDisplayName("mystery", "gpt-4o")).toBe("GPT-4o")
     expect(resolveModelDisplayName(undefined, "totally-unknown-xyz")).toBe("totally-unknown-xyz")
+  })
+
+  it("adr0253 d08 takes the org deployment's name first, for the provider that serves it", () => {
+    const m = PROVIDERS.anthropic.models[0]
+    const orgNames = { anthropic: { [m.id]: "Org Sonnet" } }
+    expect(
+      resolveModelDisplayName("anthropic", m.id, undefined, undefined, undefined, orgNames)
+    ).toBe("Org Sonnet")
+    expect(
+      resolveModelDisplayName("openrouter", m.id, undefined, undefined, undefined, orgNames)
+    ).not.toBe("Org Sonnet")
+    // Explicitly none: the catalog's own name.
+    expect(resolveModelDisplayName("anthropic", m.id, undefined, undefined, undefined, null)).toBe(
+      m.name
+    )
+  })
+
+  it("adr0253 d08 reads a member's partition's names by default, and nobody else's", () => {
+    const m = PROVIDERS.anthropic.models[0]
+    const personAgents = {
+      allowedAgents: [],
+      defaultAgent: null,
+      execution: "none",
+      models: { anthropic: [m.id] },
+      modelNames: { anthropic: { [m.id]: "Org Sonnet" } },
+      usage: null,
+    } as never
+    try {
+      setRuntimeSnapshot({
+        target: null,
+        vaultState: "unlocked",
+        connectionState: "online",
+        host: { compatible: true, operations: [], personPartition: true, personAgents },
+      })
+      expect(memberOrgModelNames()).toEqual({ anthropic: { [m.id]: "Org Sonnet" } })
+      expect(resolveModelDisplayName("anthropic", m.id)).toBe("Org Sonnet")
+      setRuntimeSnapshot({
+        target: null,
+        vaultState: "unlocked",
+        connectionState: "online",
+        host: { compatible: true, operations: [], personAgents },
+      })
+      expect(memberOrgModelNames()).toBeNull()
+      expect(resolveModelDisplayName("anthropic", m.id)).toBe(m.name)
+    } finally {
+      __resetRuntimeSnapshotForTesting()
+    }
   })
 
   it("finds a built-in catalog name when no provider scopes the lookup", () => {

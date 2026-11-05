@@ -66,7 +66,7 @@ describe("SessionCostBadgeLive", () => {
     }
     renderUI(<SessionCostBadgeLive sessionId="s1" tokensLabel={tokens} />)
     // 1500 in / 700 out, 0.12 cost.
-    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5k/700")
+    expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("Tokens 1.5K/700")
     expect(screen.getByTestId("session-cost-trigger")).toHaveTextContent("$0.1200")
   })
 })

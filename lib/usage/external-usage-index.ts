@@ -21,6 +21,7 @@ import {
 } from "@/lib/db/usage-source-states"
 import { getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
+import { commitUsageRows } from "@/lib/usage/usage-ledger"
 import { getSessionSources } from "@/lib/session-import/registry"
 import { scanSourceUsage } from "@/lib/session-import/usage-scan"
 import type {
@@ -99,28 +100,10 @@ export async function persistScanRows(
   rows: readonly SessionUsageRow[],
   opts: { complete: boolean }
 ): Promise<{ written: number; removed: number }> {
-  const db = getDb()
-  let written = 0
-  let removed = 0
-  await db.transaction("rw", db.sessionUsage, async () => {
-    if (opts.complete) {
-      const existing = await db.sessionUsage.where("sourceId").equals(sourceId).primaryKeys()
-      const keep = new Set(rows.map((r) => r.messageId))
-      const stale = (existing as string[]).filter((id) => !keep.has(id))
-      if (stale.length > 0) {
-        await db.sessionUsage.bulkDelete(stale)
-        removed = stale.length
-      }
-    }
-    if (rows.length > 0) {
-      // bulkPut, not the canonical `commitUsageRow`: these rows are imported by
-      // construction, so they contribute nothing to the budget projection and
-      // the per-row transaction the ledger opens would be pure overhead here.
-      await db.sessionUsage.bulkPut(rows as SessionUsageRow[])
-      written = rows.length
-    }
-  })
-  return { written, removed }
+  // The ledger's bulk door (ADR-0253 D07): these rows are imported by
+  // construction and so leave the budget projection alone, but a source's
+  // rows are still written, replaced and retired by the one usage writer.
+  return commitUsageRows(rows, opts.complete ? { retireSource: sourceId } : {})
 }
 
 /** Coverage window of the rows an index holds for one source. */

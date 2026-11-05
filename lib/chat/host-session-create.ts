@@ -15,8 +15,8 @@
  *
  * Outcomes, from the caller's side:
  * - `host` — the Host created (or already had) the row.
- * - `local` — no paired Host negotiated HostState, or the Host predates the
- *   intent. The conversation is local-only, exactly as before.
+ * - `local` — no paired Host negotiated HostState. The conversation is
+ *   local-only.
  * - `pending` — the action is durably queued but the Host did not answer in
  *   time (offline, slow link). It is delivered in order once reachable.
  * - a thrown {@link HostSessionRefusedError} — the Host refused; the caller
@@ -25,8 +25,6 @@
 
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { HostStateSessionSeed } from "@cognia/agent-config-types/host-state"
-
-import { HOST_STATE_UNSUPPORTED_SUBMIT_CODE } from "@/lib/sync/host-state-intent-settlement"
 
 /** Long enough for an online Host's round trip, short enough not to stall "new chat". */
 export const HOST_SESSION_CREATE_WAIT_MS = 5_000
@@ -99,7 +97,6 @@ export async function createSessionOnPairedHost(
     case "pending":
       return "pending"
     case "rejected":
-      if (settlement.code === HOST_STATE_UNSUPPORTED_SUBMIT_CODE) return "local"
       if (ALREADY_ON_HOST.has(settlement.code)) return "host"
       throw new HostSessionRefusedError(settlement.code)
   }

@@ -41,19 +41,13 @@ export interface OrgAgentPolicy {
   updatedBy?: string | null
   /**
    * ADR-0253 §7: whether a member turn a Host restart interrupted is run
-   * again, as it applies now. Absent from a Host older than §7, which never
-   * retries and must not be sent the setting.
+   * again, as it applies now.
    */
-  resumeAfterRestart?: boolean
+  resumeAfterRestart: boolean
   /** The organization's own choice; `null` follows the Host's default. */
-  resumeAfterRestartChoice?: boolean | null
+  resumeAfterRestartChoice: boolean | null
   /** The Host operator's default, what `null` means here. */
-  resumeAfterRestartDefault?: boolean
-}
-
-/** Whether the Host reads `resumeAfterRestart` (ADR-0253 §7). */
-export function supportsResumeAfterRestart(policy: OrgAgentPolicy): boolean {
-  return typeof policy.resumeAfterRestartDefault === "boolean"
+  resumeAfterRestartDefault: boolean
 }
 
 export interface OrgModelsDeps {
@@ -119,8 +113,7 @@ export interface OrgAgentPolicyWrite {
   defaultAgent: string | null
   /**
    * Absent keeps the organization's choice, `null` returns to the Host's
-   * default, a boolean is the organization's own. Send it only to a Host that
-   * reads it ({@link supportsResumeAfterRestart}): an older one refuses it.
+   * default, a boolean is the organization's own.
    */
   resumeAfterRestart?: boolean | null
 }

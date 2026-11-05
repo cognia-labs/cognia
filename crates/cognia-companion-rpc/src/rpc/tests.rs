@@ -10,7 +10,7 @@ use axum::{
     Router,
 };
 use cognia_companion::{
-    deny_list::DenyList, idempotency::IdempotencyCache, jwt::issue_device_jwt, CompanionState,
+    deny_list::DenyList, idempotency::IdempotencyCache, CompanionState,
 };
 use parking_lot::RwLock;
 use serde_json::json;
@@ -267,13 +267,15 @@ fn build_router(state: cognia_companion::SharedState) -> Router {
         .route("/internal/_rpc/{name}", post(rpc_handler))
         .layer(from_fn_with_state(
             state.clone(),
-            middleware::require_device_jwt,
+            middleware::test_support::require_test_device,
         ))
         .with_state(state)
 }
 
+/// A device principal for `device_id`, installed by the harness's test-only
+/// device middleware (ADR-0253 X01: no HS256 device token exists to mint).
 fn device_jwt(device_id: &str) -> String {
-    issue_device_jwt(SECRET, device_id, ACCOUNT_ID).expect("issue device jwt")
+    cognia_companion::middleware::test_support::device_bearer(ACCOUNT_ID, device_id)
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -4642,7 +4644,10 @@ fn host_feature_manifest_rejects_client_reported_grants_without_an_authority_sna
         None,
     );
 
-    assert_eq!(out["callerDeviceGrants"], json!([]));
+    // ADR-0253 D05: no snapshot to read is "unknown", so the field is left
+    // out rather than claiming the device holds nothing; the client's own
+    // claim never survives.
+    assert!(out.get("callerDeviceGrants").is_none());
 }
 
 #[test]
@@ -4673,9 +4678,9 @@ fn session_attach_receives_a_server_bound_grant_snapshot() {
         None,
     );
 
-    // Overwritten, not merged — and empty rather than absent, which is what
-    // fails every per-action check closed instead of open.
-    assert_eq!(out["callerDeviceGrants"], json!([]));
+    // Removed, not merged: without a snapshot the field is absent, which the
+    // attach arm reads as no grants (`readCallerGrants`), failing closed.
+    assert!(out.get("callerDeviceGrants").is_none());
     // The manifest's opaque host id is not the attach arm's business.
     assert!(out.get("authoritativeHostId").is_none());
 }

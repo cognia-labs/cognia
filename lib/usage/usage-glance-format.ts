@@ -8,7 +8,8 @@
 // window that also contains six unpriced turns is the specific lie this
 // module exists to make impossible.
 
-import { formatCompactTokens, formatCompactUsd } from "./status-snapshot"
+import { formatCompactUsd } from "./status-snapshot"
+import { formatTokens } from "@/types/system/usage"
 import { UNKNOWN_COST } from "./session-analytics"
 import type { UsageGlanceMetric, UsageGlancePeriod, UsageGlanceSnapshotV1 } from "./usage-glance"
 
@@ -59,7 +60,7 @@ export function formatGlanceCost(snapshot: UsageGlanceSnapshotV1): string {
 
 /** The token figure as text, compacted ("1.2M"). */
 export function formatGlanceTokens(snapshot: UsageGlanceSnapshotV1): string {
-  return formatCompactTokens(snapshot.billableTokens)
+  return formatTokens(snapshot.billableTokens)
 }
 
 /** The quota figure as text ("42%"), or the dash when nothing is configured. */

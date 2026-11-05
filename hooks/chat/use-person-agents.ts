@@ -14,10 +14,15 @@ import { useCallback, useSyncExternalStore } from "react"
 
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import {
+  manifestIsPersonPartition,
   parseHostFeatureManifest,
   type PersonAgentsManifest,
 } from "@/lib/platform/host-feature-manifest"
-import { getRuntimeSnapshot, updateRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
+import {
+  getRuntimeSnapshot,
+  isMemberOnPartition,
+  updateRuntimeSnapshot,
+} from "@/lib/runtime/runtime-snapshot-store"
 
 export interface PersonAgentsDeps {
   /** The paired Host's `host_feature_manifest` answer. */
@@ -62,7 +67,7 @@ export function __resetPersonAgentsRefreshForTesting(): void {
  * last answer but is recorded, so the composer can say it may be stale.
  */
 export async function refreshPersonAgents(deps: PersonAgentsDeps = {}): Promise<void> {
-  if (!getRuntimeSnapshot().host?.personPartition) return
+  if (!isMemberOnPartition()) return
   let manifest
   try {
     manifest = parseHostFeatureManifest(await (deps.readManifest ?? defaultReadManifest)())
@@ -77,10 +82,10 @@ export async function refreshPersonAgents(deps: PersonAgentsDeps = {}): Promise<
   }
   // A Host that is no longer this member's partition answers for someone
   // else; the next connect renegotiates the snapshot.
-  if (manifest.personPartition !== true) return
+  if (!manifestIsPersonPartition(manifest)) return
   // Re-read after the await: the device may have switched Hosts meanwhile.
   const host = getRuntimeSnapshot().host
-  if (!host?.personPartition) return
+  if (!host || !isMemberOnPartition()) return
   setRefreshFailed(false)
   const personAgents = manifest.personAgents
   if (personAgents) {

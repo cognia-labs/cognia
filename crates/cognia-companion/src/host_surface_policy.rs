@@ -53,15 +53,14 @@ pub struct HostSurfacePolicy {
     pub comment: String,
     pub schema_version: u32,
     /// Container execution uses Host-owned bindings. Raw workspace-action
-    /// roots still use fallbackOrgAction; Host-brain execution is dormant.
+    /// roots still use fallbackOrgAction. The Host's own brain never runs a
+    /// tenant's work; a member's agent runs sandboxed in their person brain.
     pub workspace_resolution: String,
     /// Only homogeneous execution capabilities; mixed capabilities are
     /// classified by descriptor arm so control-plane reads remain available.
     pub execution_capabilities: Vec<String>,
     pub execution_commands: Vec<String>,
     pub non_execution_commands: Vec<NonExecutionCommand>,
-    /// P6c keeps this empty: pet arms route to the headless person brain.
-    pub person_model_commands: Vec<NonExecutionCommand>,
     /// P6c closed loopback channel, separate from service authority.
     pub person_brain_commands: Vec<NonExecutionCommand>,
     /// P5d tenant-only data arms, enabled only with an installed person fleet.
@@ -165,8 +164,6 @@ mod tests {
     #[test]
     fn p6c_pet_routes_to_headless_person_without_changing_global_overrides() {
         let policy = POLICY.as_ref().unwrap();
-        assert!(policy.person_model_commands.is_empty());
-        assert!(policy.comment.contains("P6c emptied personModelCommands"));
         assert_eq!(policy.person_brain_commands.iter().map(|entry| entry.arm.as_str()).collect::<BTreeSet<_>>(),
             BTreeSet::from(["person_model_ticket_mint", "agent_send", "agent_interrupt", "agent_close_session",
                 "person_agent_lease_prepare", "person_agent_policy_get", "person_agent_usage_get", "spawn_external_agent", "send_to_external_agent", "get_external_agent_status", "kill_external_agent"]));

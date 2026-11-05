@@ -27,7 +27,6 @@ import {
   listSessionListRows,
   listSessions,
   setSessionRanks,
-  updateSession,
 } from "@/lib/db/sessions"
 import {
   createFolder as createFolderDb,
@@ -63,6 +62,7 @@ import {
   subscribeSessionHistoryMode,
 } from "@/lib/sync/session-history"
 import { enqueueHostStateIntentIfAvailable } from "@/lib/db/mobile-outbound-queue"
+import { renameSession } from "@/lib/chat/session-title-writes"
 
 /**
  * How far the active session id has been resolved to a row.
@@ -697,16 +697,7 @@ export function useSessions({
     async (id: string, title: string) => {
       if (!isCurrentScope()) return
       // A manual rename opts the session out of auto-title generation.
-      if (
-        await enqueueHostStateIntentIfAvailable({
-          sessionId: id,
-          action: { kind: "session.rename", title },
-        })
-      ) {
-        return
-      }
-      if (!isCurrentScope()) return
-      await updateSession(id, { title, titleAuto: false })
+      await renameSession(id, title, { isCurrentScope })
     },
     [isCurrentScope]
   )

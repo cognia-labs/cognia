@@ -212,12 +212,6 @@ impl EventBus {
         self.publish_targeted(event_type, payload, None, None)
     }
 
-    /// Person events retain server-derived routing in replay without adding
-    /// routing fields to their wire payload.
-    pub fn publish_person_to(&self, event_type: String, payload: Value, device_id: String, account_id: String) -> EventFrame {
-        self.publish_targeted(event_type, payload, Some(device_id), Some(account_id))
-    }
-
     /// Replayable partition-wide notification. Delivery still rechecks current
     /// person standing; no per-device frame is needed for an invalidation.
     pub fn publish_person(
@@ -758,10 +752,9 @@ mod tests {
         };
         let chunks = ["{\"usage\":1.", "25,\"text\":\"", "reply\"}"];
         for chunk in chunks {
-            bus.publish_person_to(
+            bus.publish_person(
                 "external-agent://stdout".into(),
                 json!({"data":chunk}),
-                "brain-person-a".into(),
                 "person-a".into(),
             );
             for _ in 0..(BUFFER_CAPACITY + 1) {
@@ -770,12 +763,8 @@ mod tests {
                     json!({}),
                     "person-b".into(),
                 );
-                bus.publish_person_to(
-                    "sync://invalidate".into(),
-                    json!({}),
-                    "device-a".into(),
-                    "person-a".into(),
-                );
+                // Host-wide frames fill the replay ring past its capacity.
+                bus.publish("sync://invalidate".into(), json!({}));
             }
         }
         let mut stdout = String::new();
@@ -801,10 +790,9 @@ mod tests {
         let publisher = bus.clone();
         let task = std::thread::spawn(move || {
             for i in 0..600 {
-                publisher.publish_person_to(
+                publisher.publish_person(
                     "external-agent://stdout".into(),
                     json!({"data":i}),
-                    "brain-person-a".into(),
                     "person-a".into(),
                 );
             }
@@ -833,17 +821,15 @@ mod tests {
     #[test]
     fn person_relay_filters_replay_and_ephemeral_frames_and_releases_closed_queues() {
         let bus = EventBus::new();
-        let own = bus.publish_person_to(
+        let own = bus.publish_person(
             "external-agent://stdout".into(),
             json!({}),
-            "brain-person-a".into(),
             "person-a".into(),
         );
-        bus.publish_person_to(
+        bus.publish_person(
             "external-agent://stdout".into(),
             json!({}),
-            "device-a".into(),
-            "person-a".into(),
+            "person-b".into(),
         );
         bus.publish("external-agent://stdout".into(), json!({}));
         let SubscribeResult::Ok {
@@ -899,13 +885,14 @@ mod tests {
     }
 
     #[test]
-    fn p5_targeted_person_events_preserve_legacy_payload_and_replay_visibility() {
+    fn p5_person_events_preserve_legacy_payload_and_keep_their_partition_in_replay() {
         let bus = EventBus::new();
         let boundary = bus.publish("sync://invalidate".into(), serde_json::json!({"table":"seed"}));
         let event = serde_json::json!({"sessionId":"a", "revision":1});
-        let frame = bus.publish_person_to("transcript://revision".into(), event.clone(), "person-a-device".into(), "pb_person_a".into());
-        assert!(frame.visible_to("person-a-device"));
-        assert!(!frame.visible_to("person-b-device"));
+        let frame = bus.publish_person("transcript://revision".into(), event.clone(), "pb_person_a".into());
+        // No device target: the transport delivers a stamped frame only to the
+        // person's currently bound devices.
+        assert_eq!(frame.target_device_id, None);
         let wire = serde_json::to_value(&frame).unwrap();
         assert_eq!(wire["payload"], event);
         assert!(wire.get("target_device_id").is_none());
@@ -913,10 +900,11 @@ mod tests {
         assert_eq!(frame.partition_account_id.as_deref(), Some("pb_person_a"));
         let legacy = bus.publish("sync://invalidate".into(), serde_json::json!({"table":"messages"}));
         assert!(legacy.visible_to("person-b-device"));
+        assert_eq!(legacy.partition_account_id, None);
         match bus.subscribe(Some(boundary.seq), now_ms()) {
             SubscribeResult::Ok { replay, .. } => {
                 assert!(replay.iter().any(|event| event.seq == frame.seq && event.partition_account_id.as_deref() == Some("pb_person_a")));
-                assert!(replay.iter().filter(|event| event.visible_to("person-b-device")).all(|event| event.event_type != "transcript://revision"));
+                assert!(replay.iter().any(|event| event.seq == legacy.seq && event.partition_account_id.is_none()));
             },
             _ => panic!("replay unavailable"),
         }

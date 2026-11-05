@@ -36,8 +36,9 @@ cognia-net = { path = "../cognia-net" }
 cognia-secrets = { path = "../cognia-secrets" }
 # Operation documents carry the same problem document a refusal would.
 cognia-problem = { path = "../cognia-problem" }
-# Tenant principals behind the resolved identity.
-cognia-tenant-auth = { path = "../cognia-tenant-auth" }
+# Tenant principals behind the resolved identity, and the workspace's one
+# JWT verifier and JWKS cache (`oidc`, ADR-0253 D01).
+cognia-tenant-auth = { path = "../cognia-tenant-auth", features = ["oidc"] }
 # The OIDC test issuer (`oidc::test_support`), only with `test-support`.
 wiremock = { workspace = true, optional = true }
 

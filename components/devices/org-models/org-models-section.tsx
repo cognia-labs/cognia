@@ -59,8 +59,6 @@ import {
   orgModelsRefusal,
   setOrgAgentPolicy,
   setOrgCredential,
-  supportsResumeAfterRestart,
-  type OrgAgentAvailability,
   type OrgAgentPolicy,
   type OrgAgentPolicyWrite,
   type OrgCredentialEntry,
@@ -112,11 +110,6 @@ function resumeValue(resume: boolean | null): ResumeValue {
 
 function resumeChoiceOf(value: string): boolean | null {
   return value === "retry" ? true : value === "end" ? false : null
-}
-
-/** Every agent the Host offers; an older Host lists only the allowed ones. */
-function offeredAgents(policy: OrgAgentPolicy): OrgAgentAvailability[] {
-  return policy.bundledAgents?.length ? policy.bundledAgents : policy.allowedAgents
 }
 
 export function OrgModelsSection({
@@ -176,16 +169,15 @@ export function OrgModelsSection({
   /** The admin's unsaved agent choice; null while it matches the Host. */
   const [draft, setDraft] = useState<AgentChoice | null>(null)
 
-  const agents = useMemo(() => (loaded ? offeredAgents(loaded.policy) : []), [loaded])
+  const agents = useMemo(() => loaded?.policy.bundledAgents ?? [], [loaded])
   const providers = useProviderOptions()
   const providerLabel = (id: string) => providers.find((option) => option.id === id)?.label ?? id
 
-  const resumeSupported = loaded ? supportsResumeAfterRestart(loaded.policy) : false
   const saved: AgentChoice = loaded
     ? {
         allowed: loaded.policy.allowedAgents.map((agent) => agent.runtimeId),
         defaultAgent: loaded.policy.defaultAgent,
-        resume: loaded.policy.resumeAfterRestartChoice ?? null,
+        resume: loaded.policy.resumeAfterRestartChoice,
       }
     : { allowed: [], defaultAgent: null, resume: null }
   const choice = draft ?? saved
@@ -229,10 +221,7 @@ export function OrgModelsSection({
     const next: OrgAgentPolicyWrite = {
       allowedAgents: draft.allowed,
       defaultAgent: draft.defaultAgent,
-      // An older Host refuses a field it does not know.
-      ...(resumeSupported && draft.resume !== saved.resume
-        ? { resumeAfterRestart: draft.resume }
-        : {}),
+      ...(draft.resume !== saved.resume ? { resumeAfterRestart: draft.resume } : {}),
     }
     return act("agents", async () => {
       await writePolicy(hostRef, next)
@@ -449,34 +438,32 @@ export function OrgModelsSection({
                   </SelectContent>
                 </Select>
               </div>
-              {resumeSupported ? (
-                <div className="space-y-1.5" data-testid="org-agents-resume">
-                  <Label htmlFor="org-agent-resume" className="text-xs">
-                    {t("agents.resume.label")}
-                  </Label>
-                  <Select
-                    value={resumeValue(choice.resume)}
-                    onValueChange={(next) => setDraft({ ...choice, resume: resumeChoiceOf(next) })}
-                    disabled={busy !== null}
-                  >
-                    <SelectTrigger id="org-agent-resume" data-testid="org-agent-resume">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">
-                        {t("agents.resume.followDefault", {
-                          state: loaded.policy.resumeAfterRestartDefault
-                            ? t("agents.resume.on")
-                            : t("agents.resume.off"),
-                        })}
-                      </SelectItem>
-                      <SelectItem value="retry">{t("agents.resume.retry")}</SelectItem>
-                      <SelectItem value="end">{t("agents.resume.end")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">{t("agents.resume.hint")}</p>
-                </div>
-              ) : null}
+              <div className="space-y-1.5" data-testid="org-agents-resume">
+                <Label htmlFor="org-agent-resume" className="text-xs">
+                  {t("agents.resume.label")}
+                </Label>
+                <Select
+                  value={resumeValue(choice.resume)}
+                  onValueChange={(next) => setDraft({ ...choice, resume: resumeChoiceOf(next) })}
+                  disabled={busy !== null}
+                >
+                  <SelectTrigger id="org-agent-resume" data-testid="org-agent-resume">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">
+                      {t("agents.resume.followDefault", {
+                        state: loaded.policy.resumeAfterRestartDefault
+                          ? t("agents.resume.on")
+                          : t("agents.resume.off"),
+                      })}
+                    </SelectItem>
+                    <SelectItem value="retry">{t("agents.resume.retry")}</SelectItem>
+                    <SelectItem value="end">{t("agents.resume.end")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{t("agents.resume.hint")}</p>
+              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button
                   size="sm"

@@ -45,7 +45,10 @@
 import { hasCapability } from "@/lib/platform/capabilities"
 import { isCliHost } from "@/lib/platform/detect"
 import type { HostFeatureManifest } from "@/lib/platform/host-feature-manifest"
-import { supportsHostFeatureOperation } from "@/lib/platform/host-feature-manifest"
+import {
+  deviceGrantAnswer,
+  supportsHostFeatureOperation,
+} from "@/lib/platform/host-feature-manifest"
 import { getRuntimeSnapshot, subscribeRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
@@ -147,14 +150,6 @@ export function __setProcessPlaneDepsForTests(next: Partial<ProcessPlaneDeps>): 
   }
 }
 
-function deviceGrants(manifest: HostFeatureManifest, grant: string): readonly string[] {
-  // A v1 manifest predates the field. It cannot say what this device holds, so
-  // it is not evidence of absence: the Host's own authorization still decides,
-  // and refusing here would make an older Host permanently unusable for a
-  // device that is in fact granted.
-  return manifest.schemaVersion === 2 ? manifest.deviceGrants : [grant]
-}
-
 /**
  * Where, if anywhere, an external agent process can start right now.
  *
@@ -173,7 +168,12 @@ export function externalAgentProcessPlane(
     if (!supportsHostFeatureOperation(manifest, PROCESS_PLANE_FEATURE, operation)) {
       return { ok: false, reason: "unsupported" }
     }
-    if (!deviceGrants(manifest, grant).includes(grant)) {
+    // A manifest that names no grants (v1, or a Host that could not read
+    // them) is not evidence of absence: the Host's own authorization decides.
+    if (
+      manifest.schemaVersion === 2 &&
+      deviceGrantAnswer(manifest.deviceGrants, grant) === "lacks"
+    ) {
       return { ok: false, reason: "not-granted" }
     }
     return { ok: true, via: "remote" }
@@ -198,7 +198,7 @@ export function externalAgentProcessPlane(
   }
   // The snapshot already resolved the grant question for both manifest
   // versions, so read it rather than re-deriving one here.
-  if (!host.grants.includes(grant)) {
+  if (deviceGrantAnswer(host.grants, grant) === "lacks") {
     return { ok: false, reason: "not-granted" }
   }
   return { ok: true, via: "remote" }

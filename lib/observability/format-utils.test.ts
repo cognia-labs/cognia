@@ -7,6 +7,7 @@ import {
   formatPercent,
   formatMs,
 } from "./format-utils"
+import { formatTokens as canonicalFormatTokens } from "@/types/system/usage"
 
 describe("formatTimestamp", () => {
   it("renders Date instances", () => {
@@ -81,21 +82,8 @@ describe("formatRate", () => {
 })
 
 describe("formatTokens", () => {
-  it("returns em-dash for null/undefined/NaN", () => {
-    expect(formatTokens(null)).toBe("—")
-    expect(formatTokens(undefined)).toBe("—")
-    expect(formatTokens(NaN)).toBe("—")
-  })
-
-  it("rounds and renders sub-1K", () => {
-    expect(formatTokens(0)).toBe("0")
-    expect(formatTokens(999)).toBe("999")
-    expect(formatTokens(99.6)).toBe("100")
-  })
-
-  it("renders K and M ranges", () => {
-    expect(formatTokens(1500)).toBe("1.5K")
-    expect(formatTokens(2_500_000)).toBe("2.50M")
+  it("adr0253 d07 is the one token formatter", () => {
+    expect(formatTokens).toBe(canonicalFormatTokens)
   })
 })
 

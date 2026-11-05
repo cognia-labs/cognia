@@ -32,6 +32,9 @@ const policy: OrgAgentPolicy = {
   defaultAgent: "claude-agent-acp",
   updatedAt: 3_000,
   updatedBy: "usr_ada",
+  resumeAfterRestart: false,
+  resumeAfterRestartChoice: null,
+  resumeAfterRestartDefault: false,
 }
 
 function deps(overrides: OrgModelsSectionDeps = {}): Required<OrgModelsSectionDeps> {
@@ -193,12 +196,6 @@ describe("OrgModelsSection", () => {
           defaultAgent: "claude-agent-acp",
         })
       )
-    })
-
-    it("a Host that predates the choice is neither offered nor sent it", async () => {
-      render(<OrgModelsSection row={row} deps={deps()} />)
-      await screen.findByTestId("org-models-agents")
-      expect(screen.queryByTestId("org-agents-resume")).not.toBeInTheDocument()
     })
   })
 

@@ -398,9 +398,6 @@ async fn decide_with_person_fleet(mode: DeploymentMode, execution: bool, sandbox
             if crate::jwt::is_service_scope(Some(principal.scope.as_ref())) { return Ok(()); }
             if !person_fleet { return Err(forbidden("host_data_unpartitioned")); }
             person_data_standing(provider, principal).await?;
-            if arm.is_some_and(|arm| policy.person_model_commands.iter().any(|entry| entry.arm == arm)) {
-                return Err(unavailable("model_access_unavailable"));
-            }
             return Ok(());
         },
         SurfaceClass::OperatorOnly => return if crate::jwt::is_service_scope(Some(principal.scope.as_ref())) { Ok(()) } else { Err(forbidden("host_surface_forbidden")) },

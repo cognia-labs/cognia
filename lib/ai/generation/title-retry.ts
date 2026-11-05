@@ -13,7 +13,11 @@
 
 import { computeBackoffDelay } from "@cognia/primitives"
 import { getSession } from "@/lib/db/sessions"
-import { updateSession } from "@/lib/db/sessions"
+import {
+  autoSessionTitlesWrittenHere,
+  sessionTitleStillAuto,
+  writeAutoSessionTitle,
+} from "@/lib/chat/session-title-writes"
 import { useSettingsStore } from "@/stores/settings"
 import {
   isPlaceholderTitle,
@@ -114,8 +118,9 @@ export async function retryTitleIfNeeded(sessionId: string): Promise<void> {
       return
     }
 
-    // Title was manually renamed — no more auto-generation.
-    if (session.titleAuto === false) {
+    // Title was manually renamed — no more auto-generation. Nor once a Host
+    // owns the conversation: the Host titles it (ADR-0253 D06).
+    if (session.titleAuto === false || !(await autoSessionTitlesWrittenHere(sessionId))) {
       retryMap.delete(sessionId)
       return
     }
@@ -143,11 +148,10 @@ export async function retryTitleIfNeeded(sessionId: string): Promise<void> {
       kind: entry.kind,
       currentTitle: session.title,
       dedupKey: sessionId,
-      isStillAuto: async () => {
-        const fresh = await getSession(sessionId).catch(() => undefined)
-        return !fresh || fresh.titleAuto !== false
+      isStillAuto: () => sessionTitleStillAuto(sessionId),
+      persist: async (title) => {
+        await writeAutoSessionTitle(sessionId, title)
       },
-      persist: (title) => updateSession(sessionId, { title, titleAuto: true }),
     })
 
     if (result) {

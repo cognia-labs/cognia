@@ -278,7 +278,7 @@ import {
 } from "@/lib/chat/session-aside-context"
 import { createAsideContextDispatch } from "@/lib/context-workbench/aside-context-dispatch"
 import { advanceResourceAsideContextCursor } from "@/lib/db/resource-workbench-sessions"
-import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
+import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
 import { runStandaloneTurn } from "@/lib/ai/chat/standalone-engine"
 import { runVscodeChatTurn } from "@/lib/plugin/vscode-shim/chat-turn"
@@ -2562,7 +2562,7 @@ export function useClaudeChat() {
         routerFusionGate(useSettingsStore.getState().settings, "chat") === "on" &&
         hostStateSendEligible({
           pairedHost: turnsRunOnPairedHost(),
-          personPartition: getRuntimeSnapshot().host?.personPartition === true,
+          personPartition: isMemberOnPartition(),
           fusionRun: false,
           routerFusionStamped: false,
           skipAppend: callOptions?.skipUserAppend === true || callOptions?.steerDrain === true,
@@ -2570,7 +2570,7 @@ export function useClaudeChat() {
           hasResourceContext: callOptions?.resourceContext !== undefined,
           attachmentCount: callOptions?.attachmentManifest?.length ?? 0,
           attachmentsAsRefs:
-            getRuntimeSnapshot().host?.personPartition === true &&
+            isMemberOnPartition() &&
             memberTurnAttachments(
               content,
               callOptions?.attachmentManifest,
@@ -3284,7 +3284,7 @@ export function useClaudeChat() {
       // the only write path. A turn it cannot carry is refused before any
       // row is written; it never falls through to a direct send the Host
       // would refuse after the user row was already kept here.
-      const memberOnPartition = getRuntimeSnapshot().host?.personPartition === true
+      const memberOnPartition = isMemberOnPartition()
       // ADR-0253 §9 G25: a member's files cross as uploads into their own
       // partition, and the intent names the refs. Decided here, on the final
       // content, so a turn whose files the Host cannot take is refused before

@@ -7,18 +7,18 @@
  * is read fresh for every turn: an admin who removes an agent or a credential
  * stops the next turn, not the next restart.
  *
- * Resolution, in order:
+ * Resolution is `resolvePersonTurn`, the one function the member's devices
+ * run on the same facts (ADR-0253 D09), with its refusals as Host codes:
  *
- * 1. The session's own `agentRuntimeId`, else the org default.
- * 2. Neither: the conversation is tool-less chat (P6c), when the Host offers it.
- * 3. An agent the org does not allow: `org_agent_not_allowed`. A conversation
- *    that named an agent never silently falls back to a different one.
- * 4. Execution unavailable on this Host: `execution_isolation_unavailable`.
- * 5. No org credential covers the agent, or not the conversation's provider:
- *    `model_access_unavailable`.
+ * - an agent the org does not allow: `org_agent_not_allowed`;
+ * - execution unavailable on this Host, or no agent and no tool-less chat:
+ *   `execution_isolation_unavailable`;
+ * - no org credential for the agent, or a provider or model the org does not
+ *   serve the conversation with: `model_access_unavailable`.
  */
 
 import type { ChatSession } from "@cognia/agent-config-types"
+import { resolvePersonTurn, type PersonAgentProblem } from "@/lib/chat/person-agent-choice"
 import { MAX_PERSON_MODEL_NAME_LENGTH } from "@/lib/platform/host-feature-manifest"
 import {
   readPersonModelPricing,
@@ -49,14 +49,12 @@ export interface PersonAgentPolicy {
   /**
    * P6g: per provider an allowed agent can use, the models the Host's
    * deployment serves; then every other provider the org holds a key for, so
-   * a member's tool-less chat can start on one. Empty from a Host older than
-   * P6g.
+   * a member's tool-less chat can start on one.
    */
   models: Record<string, string[]>
   /**
    * Per provider, the display name the deployment gives a served model, by
-   * model id; absent from a Host that sends none. See
-   * `PersonAgentsManifest.modelNames`.
+   * model id; absent when it names none. See `PersonAgentsManifest.modelNames`.
    */
   modelNames?: Record<string, Record<string, string>>
   /**
@@ -64,11 +62,11 @@ export interface PersonAgentPolicy {
    * (ADR-0253 §10); absent when it prices none. Member usage is booked at it.
    */
   modelPricing?: PersonModelPricing
-  /** P6g: null when the Host keeps no usage ledger, or is older than P6g. */
+  /** P6g: null when the Host keeps no usage ledger. */
   usage: PersonOwnUsage | null
   /**
    * ADR-0253 §7: retry a turn a Host restart interrupted, rather than end it
-   * `host_restarted`. Present only when on; a Host older than §7 never says.
+   * `host_restarted`. Present only when on.
    */
   resumeAfterRestart?: true
 }
@@ -86,14 +84,19 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
-function readModels(value: unknown): Record<string, string[]> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  const models: Record<string, string[]> = {}
-  for (const [provider, ids] of Object.entries(value)) {
-    if (Array.isArray(ids) && ids.every((id) => typeof id === "string" && id.length > 0))
-      models[provider] = [...ids]
-  }
-  return models
+function isModels(value: unknown): value is Record<string, string[]> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value).every(
+      (ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string" && id.length > 0)
+    )
+  )
+}
+
+function copyModels(models: Record<string, string[]>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(models).map(([provider, ids]) => [provider, [...ids]]))
 }
 
 /**
@@ -124,27 +127,21 @@ function readModelNames(
   return out
 }
 
-function readUsage(value: unknown): PersonOwnUsage | null {
-  if (!value || typeof value !== "object") return null
+function isUsage(value: unknown): value is PersonOwnUsage | null {
+  if (value === null) return true
+  if (!value || typeof value !== "object") return false
   const usage = value as Record<string, unknown>
-  if (
-    typeof usage.month !== "string" ||
-    !isCount(usage.spentTokens) ||
-    !isCount(usage.reservedTokens) ||
-    !(usage.monthlyTokens === null || isCount(usage.monthlyTokens))
+  return (
+    typeof usage.month === "string" &&
+    isCount(usage.spentTokens) &&
+    isCount(usage.reservedTokens) &&
+    (usage.monthlyTokens === null || isCount(usage.monthlyTokens))
   )
-    return null
-  return {
-    month: usage.month,
-    spentTokens: usage.spentTokens,
-    reservedTokens: usage.reservedTokens,
-    monthlyTokens: usage.monthlyTokens,
-  }
 }
 
 function isPolicy(
   value: unknown
-): value is Omit<PersonAgentPolicy, "models" | "usage"> & Record<string, unknown> {
+): value is Omit<PersonAgentPolicy, "resumeAfterRestart"> & Record<string, unknown> {
   if (!value || typeof value !== "object") return false
   const candidate = value as Record<string, unknown>
   return (
@@ -159,7 +156,12 @@ function isPolicy(
         (agent as PersonAllowedAgent).providers.every((id) => typeof id === "string")
     ) &&
     (candidate.defaultAgent === null || typeof candidate.defaultAgent === "string") &&
-    (candidate.execution === "sandboxed" || candidate.execution === "none")
+    (candidate.execution === "sandboxed" || candidate.execution === "none") &&
+    // Every field this Host version answers with; a policy without them is
+    // not one this brain was built against (same-version release).
+    isModels(candidate.models) &&
+    isUsage(candidate.usage) &&
+    typeof candidate.resumeAfterRestart === "boolean"
   )
 }
 
@@ -171,8 +173,7 @@ export async function fetchPersonAgentPolicy(
     throw Object.assign(new Error("person_agent_policy_invalid"), {
       code: "execution_isolation_unavailable",
     })
-  // The optional P6g facts degrade to "unknown", never to a refused turn.
-  const models = readModels(policy.models)
+  const models = copyModels(policy.models)
   const modelNames = readModelNames(policy.modelNames, models)
   const modelPricing = readPersonModelPricing(policy.modelPricing, models)
   // Every read refreshes the prices this brain books member usage at, so a
@@ -189,9 +190,17 @@ export async function fetchPersonAgentPolicy(
     models,
     ...(Object.keys(modelNames).length > 0 ? { modelNames } : {}),
     ...(Object.keys(modelPricing).length > 0 ? { modelPricing } : {}),
-    usage: readUsage(policy.usage),
+    usage: policy.usage === null ? null : { ...policy.usage },
     ...(policy.resumeAfterRestart === true ? { resumeAfterRestart: true as const } : {}),
   }
+}
+
+const PROBLEM_CODES: Record<PersonAgentProblem, string> = {
+  "not-allowed": "org_agent_not_allowed",
+  "execution-unavailable": "execution_isolation_unavailable",
+  "no-key": "model_access_unavailable",
+  "model-not-served": "model_access_unavailable",
+  "chat-model-not-served": "model_access_unavailable",
 }
 
 export function resolvePersonAgent(
@@ -199,22 +208,25 @@ export function resolvePersonAgent(
   policy: PersonAgentPolicy,
   toolLessAvailable: boolean
 ): PersonAgentResolution {
-  const explicit = session.agentRuntimeId
-  const runtimeId = explicit ?? policy.defaultAgent ?? undefined
-  if (!runtimeId) {
-    return toolLessAvailable
-      ? { kind: "tool-less" }
-      : { kind: "refused", code: "execution_isolation_unavailable" }
-  }
-  const agent = policy.allowedAgents.find((entry) => entry.runtimeId === runtimeId)
-  if (!agent) return { kind: "refused", code: "org_agent_not_allowed" }
-  if (policy.execution !== "sandboxed")
+  const resolved = resolvePersonTurn(session, policy)
+  const chat =
+    resolved.kind === "chat" ||
+    (resolved.kind === "refused" && resolved.problem === "chat-model-not-served")
+  // No agent and no tool-less chat on this Host: nothing can run the turn,
+  // whatever model it names.
+  if (chat && !toolLessAvailable)
     return { kind: "refused", code: "execution_isolation_unavailable" }
-  if (!agent.available || agent.providers.length === 0)
-    return { kind: "refused", code: "model_access_unavailable" }
-  const provider = session.providerOverride
-  const model = session.model
-  if (!provider || !model || !agent.providers.includes(provider))
-    return { kind: "refused", code: "model_access_unavailable" }
-  return { kind: "agent", runtimeId, provider, model }
+  switch (resolved.kind) {
+    case "agent":
+      return {
+        kind: "agent",
+        runtimeId: resolved.runtimeId,
+        provider: resolved.provider,
+        model: resolved.model,
+      }
+    case "chat":
+      return { kind: "tool-less" }
+    case "refused":
+      return { kind: "refused", code: PROBLEM_CODES[resolved.problem] }
+  }
 }

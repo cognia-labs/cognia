@@ -12,7 +12,6 @@ import {
   setOrgCredential,
   setOrgDefaultCap,
   setOrgMemberCap,
-  supportsResumeAfterRestart,
   type OrgModelsDeps,
 } from "./org-models"
 
@@ -93,12 +92,6 @@ describe("organization models over the management channel", () => {
         ...sent,
       })
     }
-  })
-
-  it("adr0253 a Host that reports the default reads the restart choice", () => {
-    const base = { allowedAgents: [], bundledAgents: [], defaultAgent: null }
-    expect(supportsResumeAfterRestart(base)).toBe(false)
-    expect(supportsResumeAfterRestart({ ...base, resumeAfterRestartDefault: false })).toBe(true)
   })
 
   it("reads the month's usage and tolerates a partial answer", async () => {

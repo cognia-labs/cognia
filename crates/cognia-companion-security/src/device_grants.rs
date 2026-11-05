@@ -3,14 +3,16 @@
 //!
 //! # What this module is now
 //!
-//! [`GrantKind`] is the shared vocabulary for the three elevated grants a
+//! [`GrantKind`] is the shared vocabulary for the four elevated grants a
 //! paired device can hold, and [`GrantKind::capabilities`] is the **single**
 //! mapping from a grant to the canonical SecurityStore capabilities that the
-//! request-path gates actually check. Three call sites consume it — the desktop
-//! toggles (`companion_api::commands::companion_set_remote_terminal` and its two
-//! siblings), the `cognia-server devices grant/revoke` CLI, and the one-time
-//! import in [`super::security_store::SecurityStore::migrate_legacy_device_grants`]
-//! — so a capability added to a grant lands on every host type at once.
+//! request-path gates actually check. Every writer of a grant goes through it —
+//! the desktop toggles (`companion_api::commands::companion_set_remote_terminal`
+//! and its siblings), the `cognia-server devices grant/revoke` CLI, and the
+//! one-time import in
+//! [`super::security_store::SecurityStore::migrate_legacy_device_grants`] — and
+//! the workspace access check reads the control grant's set from it, so a
+//! capability added to a grant lands on every host type at once.
 //!
 //! # Why the JSON file is read-only
 //!
@@ -106,16 +108,6 @@ impl GrantKind {
             GrantKind::SshFiles,
         ]
     }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "control" => Some(GrantKind::Control),
-            "agent-control" | "agent_control" => Some(GrantKind::AgentControl),
-            "terminal" => Some(GrantKind::Terminal),
-            "ssh-files" | "ssh_files" => Some(GrantKind::SshFiles),
-            _ => None,
-        }
-    }
 }
 
 /// On-disk shape. `BTreeSet` so the file is stable and diffable, and so a
@@ -167,20 +159,6 @@ impl DeviceGrantStore for FileDeviceGrantStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grant_kind_round_trips_through_its_wire_name() {
-        for kind in GrantKind::all() {
-            assert_eq!(GrantKind::parse(kind.as_str()), Some(kind));
-        }
-        // Underscore spelling accepted so a config written either way works.
-        assert_eq!(
-            GrantKind::parse("agent_control"),
-            Some(GrantKind::AgentControl)
-        );
-        assert_eq!(GrantKind::parse("ssh_files"), Some(GrantKind::SshFiles));
-        assert_eq!(GrantKind::parse("root"), None);
-    }
 
     #[test]
     fn each_grant_maps_onto_capabilities_the_request_path_actually_checks() {

@@ -54,6 +54,7 @@ import {
 } from "@/lib/claude/adapter"
 import { shouldGenerateTitle, isPlaceholderTitle } from "@/lib/ai/generation/run-title-task"
 import { markTitleFailed, clearTitleRetry } from "@/lib/ai/generation/title-retry"
+import { writeAutoSessionTitle } from "@/lib/chat/session-title-writes"
 import { smartContentPreview } from "@/lib/ai/generation/smart-preview"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import type { ApplyMemoryContextDeps } from "@/lib/memory/runtime/apply-memory-context"
@@ -568,9 +569,11 @@ export class RoomRunner {
         await deps.db.touchSession(sessionId)
         if (isPlaceholderTitle(session.title)) {
           const title = smartContentPreview(stripPromptPreambleFromContent(content), 40)
-          if (title) {
+          if (
+            title &&
+            (await writeAutoSessionTitle(sessionId, title, { update: deps.db.updateSession }))
+          ) {
             instantPreviewTitle = title
-            await deps.db.updateSession(sessionId, { title, titleAuto: true })
           }
         }
       } catch (err) {
@@ -737,8 +740,9 @@ export class RoomRunner {
               const fresh = await deps.db.getSession(sessionId).catch(() => undefined)
               return !fresh || fresh.titleAuto !== false
             },
-            persist: (title: string) =>
-              deps.db.updateSession(sessionId, { title, titleAuto: true }),
+            persist: async (title: string) => {
+              await writeAutoSessionTitle(sessionId, title, { update: deps.db.updateSession })
+            },
           })
           .then((titleResult) => {
             if (titleResult) clearTitleRetry(sessionId)

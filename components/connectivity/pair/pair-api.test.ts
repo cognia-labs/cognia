@@ -13,6 +13,7 @@ jest.mock("@/lib/tauri/companion-auth", () => ({
   registerCompanionDevice: jest.fn(),
   fetchCompanionAuthConfig: jest.fn(),
   authConfigIssuerKind: jest.requireActual("@/lib/tauri/companion-auth").authConfigIssuerKind,
+  isMultiTenantAuthConfig: jest.requireActual("@/lib/tauri/companion-auth").isMultiTenantAuthConfig,
 }))
 jest.mock("@/lib/logto/app-session", () => ({
   getActiveLogtoSession: jest.fn(),

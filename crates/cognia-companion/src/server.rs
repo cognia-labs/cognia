@@ -1686,8 +1686,8 @@ mod tests {
 
         let (_topology_guard, router) = build_desktop_router().await;
 
-        let jwt =
-            crate::jwt::issue_device_jwt(SECRET, "device-a", ACCOUNT_ID).expect("device token");
+        let jwt = crate::jwt::issue_scoped_jwt_for_test(SECRET, "device", "device-a", ACCOUNT_ID)
+            .expect("device-scoped token");
         let mut request = axum::http::Request::builder()
             .method("POST")
             .uri("/internal/_rpc/claude_sidecar_status")
@@ -2237,7 +2237,7 @@ mod tests {
         use tower::ServiceExt as _;
         let (_guard, router) = build_desktop_router().await;
         let (service, _) = crate::jwt::issue_service_jwt(SECRET, ACCOUNT_ID).unwrap();
-        let device = crate::jwt::issue_device_jwt(SECRET, "p6a-device", ACCOUNT_ID).unwrap();
+        let device = crate::jwt::issue_scoped_jwt_for_test(SECRET, "device", "p6a-device", ACCOUNT_ID).unwrap();
         for path in ["/internal/org-credentials/list", "/internal/org-credentials/set", "/internal/org-credentials/delete", "/internal/org-agents/get", "/internal/org-agents/set"] {
             for (token, expected) in [(&device, StatusCode::UNAUTHORIZED), (&service, StatusCode::CONFLICT)] {
                 let request = axum::http::Request::builder().method("POST").uri(path)

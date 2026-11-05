@@ -15,7 +15,7 @@ import type {
 import { createDiagnostic } from "@cognia/diagnostics"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
-import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
+import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { personDefaultModel } from "@/lib/chat/person-agent-choice"
 import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
 import {
@@ -122,16 +122,13 @@ function memberModelSeed(
 ): { model: string; providerOverride: string } | null {
   if (seed.model || seed.providerOverride || seed.agentRuntimeId) return null
   const host = getRuntimeSnapshot().host
-  if (!host?.personPartition || !host.personAgents) return null
+  if (!host || !isMemberOnPartition() || !host.personAgents) return null
   const settings = useSettingsStore.getState().settings
   const appDefault = resolveAppDefaultModel({
     defaultModel: settings?.defaultModel,
     defaultProvider: settings?.defaultProvider,
   })
-  const pick = personDefaultModel(host.personAgents, {
-    providerOverride: created.providerOverride ?? appDefault.provider,
-    model: created.model ?? appDefault.model,
-  })
+  const pick = personDefaultModel(host.personAgents, created, appDefault)
   return pick &&
     (pick.model !== created.model || pick.providerOverride !== created.providerOverride)
     ? pick

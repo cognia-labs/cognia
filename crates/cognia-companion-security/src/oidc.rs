@@ -17,10 +17,13 @@
 //!    indicator, and `exp` is in the future,
 //! 4. confirm the token's `scope` claim carries every scope the route requires.
 //!
-//! [`verify_access_token`] does exactly this against an already-fetched
-//! [`jsonwebtoken::jwk::JwkSet`] — it performs **no network I/O**, so it is
-//! fully unit-testable. The JWKS itself is fetched and cached by
-//! [`JwksCache`] (added in Phase 1b).
+//! Steps 1–3 are the workspace's one JWT verifier and JWKS cache, in
+//! `cognia_tenant_auth::oidc` (ADR-0253 D01); this module adds what a device
+//! registration needs on top: the route's required scopes (step 4), the
+//! Logto group mapping, and the Host's egress policy for the JWKS fetch.
+//! [`verify_access_token`] runs against an already-fetched
+//! [`jsonwebtoken::jwk::JwkSet`] — **no network I/O** — and [`JwksCache`]
+//! fetches and caches the key set.
 //!
 //! # Claim → cognia mapping
 //!
@@ -28,12 +31,12 @@
 //! - `organization_id` (Logto Organizations) → the cognia tenant.
 //! - `scope` → the granted permission set.
 
-use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm};
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use parking_lot::RwLock;
+use cognia_tenant_auth::oidc::{self as shared, JwtExpectations, JwtVerifyError};
+use jsonwebtoken::decode_header;
+use jsonwebtoken::jwk::JwkSet;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -136,50 +139,43 @@ struct RawClaims {
 // Verification
 // ---------------------------------------------------------------------------
 
+impl From<JwtVerifyError> for OidcError {
+    fn from(error: JwtVerifyError) -> Self {
+        match error {
+            JwtVerifyError::MissingKid => OidcError::MissingKid,
+            JwtVerifyError::UnknownKid(kid) => OidcError::UnknownKid(kid),
+            JwtVerifyError::UnsupportedKeyAlgorithm { kid } => {
+                OidcError::UnsupportedKeyAlgorithm { kid }
+            }
+            JwtVerifyError::Jwk { kid, source } => OidcError::Jwk { kid, source },
+            JwtVerifyError::Invalid(source) => OidcError::Invalid(source),
+        }
+    }
+}
+
 /// Verify a Logto access token against an already-fetched JWKS. **No network.**
 ///
-/// Signature is checked with the key whose `kid` matches the token header, and
-/// the algorithm is taken from the **JWKS entry** (not the attacker-controlled
-/// token header) to prevent algorithm-confusion attacks.
+/// Signature, `iss`, `aud` and `exp` go through the shared verifier, which
+/// takes the algorithm from the **JWKS entry** (not the attacker-controlled
+/// token header) to prevent algorithm-confusion attacks. The route's required
+/// scopes and the group mapping are this module's own.
 pub fn verify_access_token(
     jwks: &JwkSet,
     token: &str,
     cfg: &OidcVerifierConfig,
 ) -> Result<OidcClaims, OidcError> {
-    // ── 1. Read the `kid` from the token header ─────────────────────────────
-    let header = decode_header(token)?;
-    let kid = header.kid.ok_or(OidcError::MissingKid)?;
+    let raw: RawClaims = shared::verify_jwt(
+        jwks,
+        token,
+        &JwtExpectations {
+            issuer: &cfg.issuer,
+            audience: &cfg.audience,
+            leeway_secs: cfg.leeway_secs,
+            required_claims: &["exp", "iss", "aud"],
+        },
+    )?;
 
-    // ── 2. Locate the matching signing key in the JWKS ──────────────────────
-    let jwk = jwks
-        .find(&kid)
-        .ok_or_else(|| OidcError::UnknownKid(kid.clone()))?;
-
-    // ── 3. Pin the algorithm to the JWKS entry, NOT the token header ────────
-    // Trusting the header's `alg` would allow an algorithm-confusion attack;
-    // the key's declared algorithm is authoritative.
-    let alg = algorithm_for_jwk(jwk)
-        .ok_or_else(|| OidcError::UnsupportedKeyAlgorithm { kid: kid.clone() })?;
-
-    let key = DecodingKey::from_jwk(jwk).map_err(|source| OidcError::Jwk {
-        kid: kid.clone(),
-        source,
-    })?;
-
-    // ── 4. Verify signature + reserved claims (exp / iss / aud) ─────────────
-    // `Validation::new(alg)` pins `algorithms` to exactly `[alg]`, so a token
-    // whose header advertises a different algorithm is rejected before verify.
-    let mut validation = Validation::new(alg);
-    validation.leeway = cfg.leeway_secs;
-    validation.validate_exp = true;
-    validation.validate_nbf = false;
-    validation.set_issuer(&[cfg.issuer.as_str()]);
-    validation.set_audience(&[cfg.audience.as_str()]);
-    validation.set_required_spec_claims(&["exp", "iss", "aud"]);
-
-    let raw = decode::<RawClaims>(token, &key, &validation)?.claims;
-
-    // ── 5. Enforce the route's required scopes ──────────────────────────────
+    // Enforce the route's required scopes.
     let scopes: Vec<String> = raw
         .scope
         .as_deref()
@@ -210,56 +206,22 @@ pub fn verify_access_token(
     })
 }
 
-/// Map a JWKS entry's declared signing algorithm to a `jsonwebtoken::Algorithm`.
-fn algorithm_for_jwk(jwk: &Jwk) -> Option<Algorithm> {
-    match jwk.common.key_algorithm? {
-        KeyAlgorithm::ES256 => Some(Algorithm::ES256),
-        KeyAlgorithm::ES384 => Some(Algorithm::ES384),
-        KeyAlgorithm::RS256 => Some(Algorithm::RS256),
-        KeyAlgorithm::RS384 => Some(Algorithm::RS384),
-        KeyAlgorithm::RS512 => Some(Algorithm::RS512),
-        KeyAlgorithm::PS256 => Some(Algorithm::PS256),
-        KeyAlgorithm::PS384 => Some(Algorithm::PS384),
-        KeyAlgorithm::PS512 => Some(Algorithm::PS512),
-        KeyAlgorithm::EdDSA => Some(Algorithm::EdDSA),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // JWKS cache (OIDC discovery + fetch + TTL)
 // ---------------------------------------------------------------------------
 
-/// The single field we read from the OIDC discovery document.
-#[derive(Debug, Deserialize)]
-struct DiscoveryDoc {
-    jwks_uri: String,
-}
-
-struct CachedJwks {
-    jwks: Arc<JwkSet>,
-    fetched_at: Instant,
-}
-
-/// Fetches and caches a Logto tenant's JWKS.
+/// Fetches and caches a Logto tenant's JWKS through the shared cache
+/// (`cognia_tenant_auth::oidc::JwksCache`), every fetch going out under the
+/// Host's egress policy.
 ///
 /// The signing keys behind a Logto issuer rotate rarely, so the resource
 /// server caches them for [`ttl`](Self::new) and only re-fetches (via the
 /// OIDC discovery document → `jwks_uri`) once the cache goes stale. This keeps
 /// the hot request path free of network I/O.
-pub struct JwksCache {
-    /// Logto issuer base URL (e.g. `https://logto.example.com/oidc`). The
-    /// discovery document lives at `<issuer>/.well-known/openid-configuration`.
-    issuer: String,
-    ttl: Duration,
-    cached: RwLock<Option<CachedJwks>>,
-}
+pub struct JwksCache(shared::JwksCache);
 
-/// Bound the discovery + JWKS round-trip.
-///
-/// `jwks()` is reachable from the request hot path (OIDC is tried before the
-/// HS256 fall-through), so an issuer that connects but never responds must not
-/// stall every companion request for the OS TCP timeout.
+/// Bound the discovery + JWKS round-trip: an issuer that connects but never
+/// responds must not stall a registration for the OS TCP timeout.
 fn jwks_client_builder() -> reqwest::ClientBuilder {
     cognia_net::proxy_config::ensure_crypto_provider();
     reqwest::Client::builder()
@@ -269,75 +231,25 @@ fn jwks_client_builder() -> reqwest::ClientBuilder {
 
 impl JwksCache {
     /// Build a cache for `issuer`, keeping fetched keys for `ttl`.
+    ///
+    /// Each fetch builds a managed client for its own URL. A long-lived
+    /// `.no_proxy()` client once meant an operator behind a corporate proxy
+    /// could not reach their own Logto tenant at all, nor pick up a proxy
+    /// change; the discovery document and the JWKS may live on different
+    /// hosts, so each gets its own policy decision (the bypass list is
+    /// per-host).
     pub fn new(issuer: impl Into<String>, ttl: Duration) -> Self {
-        Self {
-            issuer: issuer.into(),
-            ttl,
-            cached: RwLock::new(None),
-        }
+        let factory: shared::JwksClientFactory = Arc::new(|url: &str| {
+            cognia_net::proxy_config::managed_client(jwks_client_builder(), url)
+                .map_err(|error| format!("proxy policy: {error}"))
+        });
+        Self(shared::JwksCache::new(issuer, ttl, factory))
     }
 
     /// Return the tenant's JWKS, fetching (and caching) it if the cache is
     /// empty or older than the TTL.
     pub async fn jwks(&self) -> Result<Arc<JwkSet>, OidcError> {
-        // Fast path: a fresh cached copy.
-        if let Some(cached) = self.cached.read().as_ref() {
-            if cached.fetched_at.elapsed() < self.ttl {
-                return Ok(Arc::clone(&cached.jwks));
-            }
-        }
-        // Slow path: fetch and replace. A concurrent fetch would at worst do
-        // redundant work and overwrite with an equally-fresh copy — acceptable
-        // for a rarely-rotated key set, and it avoids holding a lock across
-        // the network round-trip.
-        let jwks = Arc::new(self.fetch().await?);
-        *self.cached.write() = Some(CachedJwks {
-            jwks: Arc::clone(&jwks),
-            fetched_at: Instant::now(),
-        });
-        Ok(jwks)
-    }
-
-    /// Fetch the JWKS fresh: discovery document → `jwks_uri` → key set.
-    async fn fetch(&self) -> Result<JwkSet, OidcError> {
-        let discovery_url = format!(
-            "{}/.well-known/openid-configuration",
-            self.issuer.trim_end_matches('/')
-        );
-        // A managed client per target, rebuilt on every (cache-missing) fetch.
-        // This used to be one long-lived `.no_proxy()` client held in a struct
-        // field, which meant an operator behind a corporate proxy could not
-        // reach their own Logto tenant at all — and, being built once, would
-        // not have picked up a proxy change afterwards either. The discovery
-        // document and the JWKS may live on different hosts, so each gets its
-        // own policy decision; the bypass list is per-host.
-        let discovery_client =
-            cognia_net::proxy_config::managed_client(jwks_client_builder(), &discovery_url)
-                .map_err(|error| OidcError::Discovery(format!("proxy policy: {error}")))?;
-        let discovery: DiscoveryDoc = discovery_client
-            .get(&discovery_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| OidcError::Discovery(format!("GET {discovery_url}: {e}")))?
-            .json()
-            .await
-            .map_err(|e| OidcError::Discovery(format!("parse discovery document: {e}")))?;
-
-        let jwks_client =
-            cognia_net::proxy_config::managed_client(jwks_client_builder(), &discovery.jwks_uri)
-                .map_err(|error| OidcError::Discovery(format!("proxy policy: {error}")))?;
-        let jwks: JwkSet = jwks_client
-            .get(&discovery.jwks_uri)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| OidcError::Discovery(format!("GET {}: {e}", discovery.jwks_uri)))?
-            .json()
-            .await
-            .map_err(|e| OidcError::Discovery(format!("parse JWKS: {e}")))?;
-
-        Ok(jwks)
+        self.0.jwks().await.map_err(OidcError::Discovery)
     }
 }
 
@@ -441,7 +353,7 @@ pub mod test_support {
     //! `middleware`) can mint Logto tokens and stand up a fake issuer without
     //! duplicating key material.
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -550,7 +462,7 @@ NMXGupxmTMhli7JOJL8zEc93nWvBSpvoVwfTUwBHaYvIFdINrBF5wQg=\n\
 mod tests {
     use super::test_support::{jwks as test_jwks, mint, now, TEST_KID};
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use serde_json::json;
 
     const ISSUER: &str = "https://logto.test/oidc";
@@ -759,6 +671,32 @@ mod tests {
         let cache = JwksCache::new(server.uri(), Duration::ZERO);
         let _ = cache.jwks().await.expect("first");
         let _ = cache.jwks().await.expect("second");
+    }
+
+    #[tokio::test]
+    async fn d01_a_discovery_document_naming_another_issuer_is_refused() {
+        install_direct_proxy_policy();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": "https://elsewhere.test/oidc",
+                "jwks_uri": format!("{}/oidc/jwks", server.uri()),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/oidc/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(test_support::jwks_value()))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let cache = JwksCache::new(server.uri(), Duration::from_secs(300));
+        let err = cache.jwks().await.unwrap_err();
+        assert!(
+            matches!(&err, OidcError::Discovery(message) if message.contains("issuer mismatch")),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]

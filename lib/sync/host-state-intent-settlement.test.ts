@@ -5,7 +5,6 @@ import type { AllowedHostStateIntent, HostStateAction } from "@cognia/agent-conf
 
 const folders = {
   discardLocalFolder: jest.fn(async () => undefined),
-  writeFolderCreate: jest.fn(async () => undefined),
   writeFolderRename: jest.fn(async () => true),
   writeFolderReorder: jest.fn(async () => undefined),
   writeFolderDelete: jest.fn(async () => undefined),
@@ -37,15 +36,7 @@ jest.mock("@/lib/chat/session-workspace-move-writes", () => ({
   moveSessionWorkspaceLocally: (...args: unknown[]) => moveSessionWorkspaceLocally(...args),
 }))
 
-const folderRows = new Map<string, unknown>()
-jest.mock("@/lib/db/schema", () => ({
-  getDb: () => ({ sessionFolders: { get: async (id: string) => folderRows.get(id) } }),
-}))
-
-import {
-  HOST_STATE_UNSUPPORTED_SUBMIT_CODE,
-  settleRejectedHostStateIntent,
-} from "./host-state-intent-settlement"
+import { settleRejectedHostStateIntent } from "./host-state-intent-settlement"
 
 function action(intent: AllowedHostStateIntent, sessionId?: string): HostStateAction {
   return {
@@ -68,91 +59,27 @@ beforeEach(() => {
   deleteSessionsWithTeardown.mockClear()
   dispatchDiagnostic.mockClear()
   moveSessionWorkspaceLocally.mockReset().mockResolvedValue({ status: "moved" })
-  folderRows.clear()
 })
 
-describe("a Host too old to know the intent", () => {
-  it("applies every list intent locally, as the client did before routing", async () => {
-    await settleRejectedHostStateIntent(
-      action({ kind: "folder.rename", folderId: "f1", name: "Home" }),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "folder.reorder", projectId: "p1", orderedIds: ["f2", "f1"] }),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "folder.delete", folderId: "f1" }),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "session.pin", pinned: true }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "session.folder", folderId: null }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "session.order", manualOrder: 3, sectionKey: "pinned" }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
+describe("a submit the Host could not read (ADR-0253 O05)", () => {
+  it("applies nothing locally and says so", async () => {
     await settleRejectedHostStateIntent(
       action({ kind: "session.model", provider: "deepseek", model: "ds-flash" }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
+      "host_state_invalid_submit_request"
     )
-    await settleRejectedHostStateIntent(
-      action({ kind: "session.delete" }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-    )
-
-    expect(folders.writeFolderRename).toHaveBeenCalledWith("f1", "Home", expect.any(Number))
-    expect(folders.writeFolderReorder).toHaveBeenCalledWith("p1", ["f2", "f1"], expect.any(Number))
-    expect(folders.writeFolderDelete).toHaveBeenCalledWith("f1", expect.any(Number))
-    expect(sessions.bulkSetSessionsPinned).toHaveBeenCalledWith(["s1"], true)
-    expect(sessions.assignSessionToFolder).toHaveBeenCalledWith("s1", null)
-    expect(sessions.setSessionRanks).toHaveBeenCalledWith([{ id: "s1", manualOrder: 3 }], "pinned")
-    expect(sessions.updateSession).toHaveBeenCalledWith("s1", {
-      model: "ds-flash",
-      providerOverride: "deepseek",
-    })
-    expect(deleteSessionsWithTeardown).toHaveBeenCalledWith(["s1"])
-  })
-
-  it("replays a workspace move locally, re-planned on this device", async () => {
     await settleRejectedHostStateIntent(
       action({ kind: "session.workspace", projectId: "p2" }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
+      "host_state_invalid_submit_request"
     )
-    expect(moveSessionWorkspaceLocally).toHaveBeenCalledWith("s1", "p2")
-  })
-
-  it("drops a workspace move this device's plan now refuses", async () => {
-    moveSessionWorkspaceLocally.mockResolvedValueOnce({
-      status: "refused",
-      reason: "session-running",
+    for (const mock of [...Object.values(folders), ...Object.values(sessions)]) {
+      expect(mock).not.toHaveBeenCalled()
+    }
+    expect(moveSessionWorkspaceLocally).not.toHaveBeenCalled()
+    expect(dispatchDiagnostic).toHaveBeenCalledTimes(2)
+    expect(dispatchDiagnostic.mock.calls[0][0]).toMatchObject({
+      code: "hostStateIntentRefused",
+      message: "host_state_invalid_submit_request",
     })
-    await expect(
-      settleRejectedHostStateIntent(
-        action({ kind: "session.workspace", projectId: "p2" }, "s1"),
-        HOST_STATE_UNSUPPORTED_SUBMIT_CODE
-      )
-    ).resolves.toBeUndefined()
-    expect(moveSessionWorkspaceLocally).toHaveBeenCalledTimes(1)
-  })
-
-  it("keeps an optimistic folder, and restores it only if it went missing", async () => {
-    const create = action({ kind: "folder.create", folderId: "f1", projectId: "p1", name: "Work" })
-    folderRows.set("f1", { id: "f1" })
-    await settleRejectedHostStateIntent(create, HOST_STATE_UNSUPPORTED_SUBMIT_CODE)
-    expect(folders.writeFolderCreate).not.toHaveBeenCalled()
-    expect(folders.discardLocalFolder).not.toHaveBeenCalled()
-
-    folderRows.clear()
-    await settleRejectedHostStateIntent(create, HOST_STATE_UNSUPPORTED_SUBMIT_CODE)
-    expect(folders.writeFolderCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "f1", projectId: "p1", name: "Work" })
-    )
   })
 })
 
@@ -170,7 +97,7 @@ describe("a Host that understood and refused", () => {
     })
   })
 
-  it("stays quiet for a conflict, a send, a draft and an old Host's fallback", async () => {
+  it("stays quiet for a conflict, a send and a draft", async () => {
     await settleRejectedHostStateIntent(
       action({ kind: "session.pin", pinned: true }, "s1"),
       "host_state_conflict",
@@ -183,10 +110,6 @@ describe("a Host that understood and refused", () => {
     await settleRejectedHostStateIntent(
       action({ kind: "draft.replace", text: "t", attachments: [] }, "s1"),
       "host_state_forbidden"
-    )
-    await settleRejectedHostStateIntent(
-      action({ kind: "session.pin", pinned: true }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
     )
     expect(dispatchDiagnostic).not.toHaveBeenCalled()
   })
@@ -224,12 +147,12 @@ describe("a Host that understood and refused", () => {
   })
 })
 
-it("swallows a failing local fallback so a settled row stays settled", async () => {
-  sessions.bulkSetSessionsPinned.mockRejectedValueOnce(new Error("locked"))
+it("swallows a failing discard so a settled row stays settled", async () => {
+  folders.discardLocalFolder.mockRejectedValueOnce(new Error("locked"))
   await expect(
     settleRejectedHostStateIntent(
-      action({ kind: "session.pin", pinned: false }, "s1"),
-      HOST_STATE_UNSUPPORTED_SUBMIT_CODE
+      action({ kind: "folder.create", folderId: "f1", projectId: "p1", name: "Work" }),
+      "host_state_forbidden"
     )
   ).resolves.toBeUndefined()
 })

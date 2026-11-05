@@ -6,6 +6,7 @@ import "fake-indexeddb/auto"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
+import { commitUsageRow } from "@/lib/usage/usage-ledger"
 
 import {
   applySessionUsageRows,
@@ -71,6 +72,17 @@ describe("syncSessionUsage", () => {
     const rows = await getDb().sessionUsage.toArray()
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ messageId: "assistant-1", inputTokens: 12 })
+  })
+
+  it("adr0253 d07 moves the budget projection to the Host's row, not beside it", async () => {
+    await commitUsageRow(
+      sessionUsageFromWire(usage("assistant-1", { costUsd: 0.0005, costSource: "sdk" }))!
+    )
+    await applySessionUsageRows([usage("assistant-1", { costSource: "sdk" })])
+    const buckets = await getDb().providerCostDaily.toArray()
+    expect(buckets).toHaveLength(1)
+    expect(buckets[0]).toMatchObject({ requestCount: 1, inputTokens: 12 })
+    expect(buckets[0].totalCostUsd).toBeCloseTo(0.001, 9)
   })
 
   it("drops a deleted conversation's rows by their message ids", async () => {

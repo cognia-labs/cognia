@@ -8,8 +8,13 @@ import {
   retractOfferedHostStateActions,
   subscribeOfferedHostStateActions,
 } from "./host-state-offered-actions"
+import {
+  __resetRuntimeSnapshotForTesting,
+  setRuntimeSnapshot,
+} from "@/lib/runtime/runtime-snapshot-store"
 
 beforeEach(() => __resetOfferedHostStateActionsForTesting())
+afterEach(() => __resetRuntimeSnapshotForTesting())
 
 describe("offered HostState actions", () => {
   it("reads as offered when nothing is known", () => {
@@ -18,6 +23,21 @@ describe("offered HostState actions", () => {
     publishOfferedHostStateActions("target-a", undefined)
     // A Host that names no restriction restricts nothing.
     expect(hostStateActionOffered("turn.steer", "target-a")).toBe(true)
+  })
+
+  it("adr-0253 o04 reads a person partition's answer without a list as offering nothing", () => {
+    setRuntimeSnapshot({
+      target: { id: "member-host", kind: "companion", platform: "web", hostKind: "cloud" },
+      vaultState: "unlocked",
+      connectionState: "online",
+      host: { compatible: true, operations: [], grants: [], personPartition: true },
+    })
+    publishOfferedHostStateActions("target-a", undefined)
+    expect(hostStateActionOffered("message.enqueue", "target-a")).toBe(false)
+    refreshOfferedHostStateActions("target-a", ["message.enqueue"])
+    expect(hostStateActionOffered("message.enqueue", "target-a")).toBe(true)
+    refreshOfferedHostStateActions("target-a", undefined)
+    expect(hostStateActionOffered("message.enqueue", "target-a")).toBe(false)
   })
 
   it("follows the Host's list for its own target only", () => {

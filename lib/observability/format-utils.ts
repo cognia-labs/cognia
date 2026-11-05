@@ -44,14 +44,8 @@ export function formatRate(value: number, suffix = ""): string {
   return `${value.toFixed(2)}${suffix}`
 }
 
-export function formatTokens(tokens: number | null | undefined): string {
-  if (tokens === null || tokens === undefined || !Number.isFinite(tokens)) {
-    return "—"
-  }
-  if (tokens < 1000) return String(Math.round(tokens))
-  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}K`
-  return `${(tokens / 1_000_000).toFixed(2)}M`
-}
+/** The one token formatter (ADR-0253 D07), here beside the other compact formatters. */
+export { formatTokens } from "@/types/system/usage"
 
 /** USD with adaptive precision: sub-cent amounts keep 4 dp, the rest 2 dp. */
 export function formatUsd(value: number | null | undefined): string {

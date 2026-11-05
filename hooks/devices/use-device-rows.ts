@@ -29,6 +29,7 @@ import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { companionCredentialBook } from "@/lib/companion/credential-book"
 import { isCapabilityId } from "@/lib/platform/capabilities"
 import { parseHostFeatureManifest } from "@/lib/platform/host-feature-manifest"
+import { isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 
 import { APP_VERSION } from "@/lib/app-version"
 import { buildDeviceRows, summarizeDeviceRows } from "@/lib/devices/build-device-rows"
@@ -256,7 +257,7 @@ export function useDeviceRows(): UseDeviceRowsResult {
   const refreshGeneration = useRef(0)
   /** When the paired Host's snapshot was last read, and for which target and state. */
   const companionRead = useRef<{ key: string; at: number } | null>(null)
-  const personPartition = snapshot.host?.personPartition === true
+  const personPartition = isMemberOnPartition(snapshot)
 
   // ADR-0224 A3/A4: this desktop's own role in the console.
   const hostMode = useHostingState().hostMode.enabled
