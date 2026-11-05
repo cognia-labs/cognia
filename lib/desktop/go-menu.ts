@@ -71,18 +71,7 @@ const GO_MENU_EXTRAS: Readonly<Record<string, Omit<GoMenuItem, "id">>> = {
  * its anchor in its manifest.
  */
 export const GO_MENU_LAYOUT: readonly (readonly string[])[] = [
-  [
-    "inbox",
-    "workflows",
-    "sites",
-    "twin",
-    "agents",
-    "skills",
-    "plugins",
-    "squads",
-    "scheduler",
-    "discover",
-  ],
+  ["inbox", "workflows", "sites", "twin", "agents", "skills", "plugins", "scheduler", "discover"],
   ["issues", "templates", "goals", "pet", "browser"],
   ["a2ui", "dms", "conversations", "canvas", "files"],
   [
@@ -94,7 +83,6 @@ export const GO_MENU_LAYOUT: readonly (readonly string[])[] = [
     "integrations",
     "devices",
     "bots",
-    "eval",
     "performance",
     "me",
   ],

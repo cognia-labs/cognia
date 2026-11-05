@@ -20,7 +20,6 @@ import {
   SmartphoneIcon,
   ServerCogIcon,
   UserRoundIcon,
-  UsersIcon,
   WorkflowIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -45,7 +44,6 @@ export const MOBILE_QUICK_ACTION_ICONS: Record<string, LucideIcon> = {
   discover: CompassIcon,
   inbox: InboxIcon,
   twin: BotIcon,
-  squads: UsersIcon,
   // The same icon the Studio's own page header carries.
   templates: FileArchiveIcon,
   fleet: LayersIcon,
@@ -62,7 +60,6 @@ export const MOBILE_QUICK_ACTION_SPOT_ICONS: Record<string, MobileSpotIconName> 
   discover: "discover",
   inbox: "inbox",
   twin: "digital-twin",
-  squads: "agent-teams",
   templates: "templates",
   fleet: "fleet",
   servers: "servers",
@@ -110,9 +107,9 @@ export function getMobileQuickActionCatalog(
       kind: "route",
       route: entry.route,
       labelKey: entry.labelKey,
-      Icon: resolveLucideIcon(shortcut.icon) ?? PlusIcon,
+      Icon: (entry.iconName ? resolveLucideIcon(entry.iconName) : null) ?? PlusIcon,
       // The module gate checks the name against `MOBILE_SPOT_ICON_NAMES`.
-      spotIcon: shortcut.spotIcon as MobileSpotIconName,
+      spotIcon: (entry.spotIcon ?? "chat") as MobileSpotIconName,
     }
     if (shortcut.after === undefined) {
       catalog.push(item)

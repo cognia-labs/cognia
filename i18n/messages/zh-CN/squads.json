@@ -1,4 +1,7 @@
 {
+  "nav": {
+    "label": "小队"
+  },
   "fleet": {
     "clearFilters": "清除筛选",
     "configure": "配置这个小队",

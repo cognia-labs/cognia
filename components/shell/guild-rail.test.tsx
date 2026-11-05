@@ -37,11 +37,8 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import type { Team } from "@cognia/agent-config-types"
 import type { SelectedGuild } from "@/stores/ui"
 import { useSettingsStore } from "@/stores/settings/settings-store"
-import {
-  DEFAULT_SIDEBAR_LAYOUT,
-  DEFAULT_SIDEBAR_SIDE,
-  SIDEBAR_NAV_META,
-} from "@/types/shell/sidebar"
+import { DEFAULT_SIDEBAR_LAYOUT, DEFAULT_SIDEBAR_SIDE } from "@/types/shell/sidebar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
 import { CHROME_BUDGET, countControls } from "@/lib/ui/chrome-budget"
 import { SHELL_DOCK_TIMING_CLASS } from "@/lib/ui/shell-dock-motion"
 import { GUILD_RAIL_WIDTH_PX } from "@/types/shell/sidebar"
@@ -52,10 +49,12 @@ function withTooltipProvider(node: React.ReactNode) {
 
 const logInfo = jest.fn()
 
-// Destination labels are full keys (`desktop.guildRail.inbox`); reading a
-// built-in one back as its suffix keeps the assertions naming the destination.
+// Destination labels are full keys: a built-in's `desktop.guildRail.inbox`, a
+// module's `squads.nav.label`. Both read back as the destination's id, so the
+// assertions name the destination.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key.replace(/^desktop\.guildRail\./, ""),
+  useTranslations: () => (key: string) =>
+    key.replace(/^desktop\.guildRail\./, "").replace(/^([a-z-]+)\.nav\.label$/, "$1"),
 }))
 
 const routerPush = jest.fn()
@@ -447,7 +446,7 @@ test("the More button is hidden when every catalog item is pinned", () => {
     useSettingsStore.setState({
       settings: {
         sidebarLayout: {
-          pinned: SIDEBAR_NAV_META.map((m) => m.id),
+          pinned: navCatalog().map((m) => m.id),
           hidden: [],
         },
       } as never,
@@ -1239,7 +1238,7 @@ describe("accessibility", () => {
     act(() => {
       useSettingsStore.setState({
         settings: {
-          sidebarLayout: { pinned: [], hidden: SIDEBAR_NAV_META.map((m) => m.id) },
+          sidebarLayout: { pinned: [], hidden: navCatalog().map((m) => m.id) },
         } as never,
       })
     })

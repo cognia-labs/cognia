@@ -54,7 +54,8 @@ export const FULL_VIEWPORT_ROUTE_PATTERNS: readonly string[] = [
   "/servers",
   "/servers/",
   "/workspace",
-  "/squads",
+  // `/squads` is the same shape; its module declares it (`fullViewport` in
+  // `lib/squads/module.ts`), see `fullViewportRoutePatterns`.
   "/agents",
   "/projects",
   "/plugins",

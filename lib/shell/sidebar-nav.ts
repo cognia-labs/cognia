@@ -14,7 +14,6 @@ import {
   BrainIcon,
   CalendarClockIcon,
   CircleDot as CircleDotIcon,
-  ClipboardCheckIcon,
   CompassIcon,
   GitBranchIcon,
   GlobeIcon,
@@ -37,7 +36,6 @@ import {
   FolderOpenIcon,
   HistoryIcon,
   UsersRoundIcon,
-  UsersIcon,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { arrayMove } from "@dnd-kit/sortable"
@@ -74,7 +72,6 @@ export const SIDEBAR_NAV_ICONS: Record<string, LucideIcon> = {
   skills: SparklesIcon,
   plugins: PlugIcon,
   agents: UsersRoundIcon,
-  squads: UsersIcon,
   scheduler: CalendarClockIcon,
   goals: TargetIcon,
   pet: PawPrintIcon,
@@ -93,7 +90,6 @@ export const SIDEBAR_NAV_ICONS: Record<string, LucideIcon> = {
   // Not `BotIcon`: that one is Twin's, and two rail entries sharing a glyph
   // is indistinguishable once the rail is collapsed to icons.
   bots: BotMessageSquareIcon,
-  eval: ClipboardCheckIcon,
   performance: ActivityIcon,
   logs: ScrollTextIcon,
   me: UserRoundIcon,

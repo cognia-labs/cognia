@@ -79,6 +79,7 @@ export const NAV_ENTRY_FIELDS = [
   "label",
   "aliases",
   "icon",
+  "spotIcon",
   "group",
   "category",
   "after",
@@ -89,7 +90,7 @@ export const NAV_ENTRY_FIELDS = [
   "mobileShortcut",
 ]
 /** Fields of `ModuleNavEntry.mobileShortcut`. */
-export const MOBILE_SHORTCUT_FIELDS = ["icon", "spotIcon", "after"]
+export const MOBILE_SHORTCUT_FIELDS = ["after"]
 /** `SidebarNavMeta.group` and `SidebarNavCategory` (`types/shell/sidebar.ts`). */
 export const NAV_GROUPS = ["feature", "auxiliary"]
 export const NAV_CATEGORIES = ["explore", "agents", "spaces", "insights", "system", "you"]
@@ -329,6 +330,9 @@ function navErrors(entries, vocabulary) {
         errors.push(`${at}.${field} is a full i18n key ("<namespace>.<key>")`)
     }
     icon(entry.icon, `${at}.icon`)
+    if (!isText(entry.spotIcon)) errors.push(`${at}.spotIcon is required`)
+    else if (spotIconNames && !spotIconNames.has(entry.spotIcon))
+      errors.push(`${at}.spotIcon "${entry.spotIcon}" is not a MobileSpotIconName`)
     if (!NAV_GROUPS.includes(entry.group))
       errors.push(`${at}.group is one of ${NAV_GROUPS.join(", ")}`)
     if (!NAV_CATEGORIES.includes(entry.category))
@@ -344,12 +348,6 @@ function navErrors(entries, vocabulary) {
         errors.push(`${at}.mobileShortcut is an object`)
       } else {
         errors.push(...unknownFields(shortcut, MOBILE_SHORTCUT_FIELDS, `${at}.mobileShortcut`))
-        icon(shortcut.icon, `${at}.mobileShortcut.icon`)
-        if (!isText(shortcut.spotIcon)) errors.push(`${at}.mobileShortcut.spotIcon is required`)
-        else if (spotIconNames && !spotIconNames.has(shortcut.spotIcon))
-          errors.push(
-            `${at}.mobileShortcut.spotIcon "${shortcut.spotIcon}" is not a MobileSpotIconName`
-          )
         if (shortcut.after !== undefined && !isText(shortcut.after))
           errors.push(`${at}.mobileShortcut.after is text`)
       }

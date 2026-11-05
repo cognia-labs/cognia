@@ -36,7 +36,6 @@ export const MOBILE_QUICK_ACTION_CATALOG: readonly MobileQuickActionMeta[] = [
   { id: "discover", kind: "route", route: "/discover", i18nKey: "discover" },
   { id: "inbox", kind: "route", route: "/inbox", i18nKey: "inbox" },
   { id: "twin", kind: "route", route: "/twin", i18nKey: "twin" },
-  { id: "squads", kind: "route", route: "/squads", i18nKey: "squads" },
   // `/templates` shipped a full phone body (`TemplatesMobileBody`) that nothing
   // on a phone linked to: not a quick action, not a `/me` row, not a tab-bar
   // prefix. Reachable only by typing the URL is the same as unreachable.

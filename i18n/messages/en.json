@@ -14586,7 +14586,6 @@
       "directMessages": "Chats",
       "discover": "Discover",
       "editTeam": "Edit team",
-      "eval": "Evaluation",
       "featuresGroup": "Features",
       "files": "Files",
       "goals": "Goals",
@@ -14617,7 +14616,6 @@
       "sites": "Sites",
       "skills": "Skills",
       "sourceControl": "Source Control",
-      "squads": "Squads",
       "teamMuted": "{name} (muted)",
       "teamsGroup": "Teams",
       "templates": "Templates",
@@ -18132,6 +18130,9 @@
         "workflowVersion": "Workflow version id",
         "workflowVersionPlaceholder": "Optional immutable published version"
       }
+    },
+    "nav": {
+      "label": "Evaluation"
     },
     "runBar": {
       "label": "Running {label}"
@@ -29091,7 +29092,6 @@
         "newChat": "New chat",
         "search": "Search",
         "servers": "Servers",
-        "squads": "Squads",
         "templates": "Templates",
         "twin": "Digital twin",
         "workflows": "Workflows"
@@ -62114,6 +62114,9 @@
         "none": "No Squad is working. Pick one in the list to start it, or hand it a conversation from the composer.",
         "title": "Working now"
       }
+    },
+    "nav": {
+      "label": "Squads"
     },
     "overview": {
       "latestRun": {

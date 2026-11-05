@@ -14586,7 +14586,6 @@
       "directMessages": "对话",
       "discover": "发现",
       "editTeam": "编辑团队",
-      "eval": "评估",
       "featuresGroup": "功能",
       "files": "文件",
       "goals": "目标",
@@ -14617,7 +14616,6 @@
       "sites": "站点",
       "skills": "技能",
       "sourceControl": "源代码管理",
-      "squads": "小队",
       "teamMuted": "{name}（已静音）",
       "teamsGroup": "团队",
       "templates": "模板",
@@ -18132,6 +18130,9 @@
         "workflowVersion": "工作流版本 ID",
         "workflowVersionPlaceholder": "可选的不可变已发布版本"
       }
+    },
+    "nav": {
+      "label": "评估"
     },
     "runBar": {
       "label": "正在运行 {label}"
@@ -29091,7 +29092,6 @@
         "newChat": "新建会话",
         "search": "搜索",
         "servers": "服务器",
-        "squads": "小队",
         "templates": "模板",
         "twin": "数字分身",
         "workflows": "工作流"
@@ -62114,6 +62114,9 @@
         "none": "当前没有小队在运行。在列表里选一个小队启动，或在输入框把会话交给它。",
         "title": "运行中"
       }
+    },
+    "nav": {
+      "label": "小队"
     },
     "overview": {
       "latestRun": {

@@ -108,7 +108,6 @@ export const SIDEBAR_NAV_META: readonly SidebarNavMeta[] = [
   // Custom agents (ADR-0220): the list, each agent's detail, and the blank /
   // conversational create flows.
   { id: "agents", route: "/agents", i18nKey: "agents", group: "feature", category: "agents" },
-  { id: "squads", route: "/squads", i18nKey: "squads", group: "feature", category: "agents" },
   {
     id: "scheduler",
     route: "/scheduler",
@@ -219,7 +218,6 @@ export const SIDEBAR_NAV_META: readonly SidebarNavMeta[] = [
   // installed once and then runs unattended, so this is the page you open when
   // something needs deciding, not one you live in.
   { id: "bots", route: "/bots", i18nKey: "bots", group: "auxiliary", category: "agents" },
-  { id: "eval", route: "/eval", i18nKey: "eval", group: "auxiliary", category: "insights" },
   // Not `desktopOnly` (ADR-0035, 2026-08-13): every shell measures its own
   // Renderer and records captures, and the mobile safe-area capture chip's
   // "Open" lands here. Host sections appear only when a host is attached.

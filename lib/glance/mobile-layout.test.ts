@@ -6,6 +6,7 @@ import {
   type GlanceMobileEntry,
   type GlanceModuleId,
 } from "@/types/glance/layout"
+import { getMobileQuickActionCatalog } from "@/lib/shell/mobile-home-nav"
 import { DEFAULT_MOBILE_HOME_LAYOUT, MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
 
 import {
@@ -93,7 +94,8 @@ describe("defaults", () => {
     for (const repeated of ["newChat", "search", "workflows", "discover"]) {
       expect(DEFAULT_GLANCE_MOBILE_SHORTCUTS).not.toContain(repeated)
     }
-    const catalog = new Set(MOBILE_QUICK_ACTION_CATALOG.map((action) => action.id))
+    // The grid's catalog, with module destinations' shortcuts (`squads`).
+    const catalog = new Set(getMobileQuickActionCatalog().map((action) => action.id))
     for (const id of DEFAULT_GLANCE_MOBILE_SHORTCUTS) expect(catalog.has(id)).toBe(true)
   })
 })
@@ -205,6 +207,13 @@ describe("normalizeShortcuts", () => {
   it("accepts every catalogue id", () => {
     const all = MOBILE_QUICK_ACTION_CATALOG.map((a) => a.id)
     expect(normalizeShortcuts(all)).toEqual(all)
+  })
+
+  it("keeps a module destination's shortcut, which the built-in catalogue does not list", () => {
+    // Squads contributes its shortcut from `lib/squads/module.ts`.
+    expect(MOBILE_QUICK_ACTION_CATALOG.some((a) => a.id === "squads")).toBe(false)
+    expect(normalizeShortcuts(["squads", "inbox"])).toEqual(["squads", "inbox"])
+    expect(normalizeShortcuts(["agentTeams"])).toEqual(["squads"])
   })
 })
 

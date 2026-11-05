@@ -3,6 +3,7 @@ import {
   LEGACY_MOBILE_QUICK_ACTION_IDS,
   MOBILE_QUICK_ACTION_CATALOG,
 } from "./mobile-home"
+import { getMobileQuickActionCatalog } from "@/lib/shell/mobile-home-nav"
 import enMessages from "@/i18n/messages/en.json"
 import zhCnMessages from "@/i18n/messages/zh-CN.json"
 
@@ -31,7 +32,7 @@ describe("mobile home catalog", () => {
   })
 
   it("defaults to actions that exist in the catalog", () => {
-    const ids = new Set(MOBILE_QUICK_ACTION_CATALOG.map((m) => m.id))
+    const ids = new Set(getMobileQuickActionCatalog().map((m) => m.id))
     for (const id of DEFAULT_MOBILE_HOME_LAYOUT.quickActions) expect(ids.has(id)).toBe(true)
   })
 
@@ -39,7 +40,9 @@ describe("mobile home catalog", () => {
   // mapping has to still be in the catalog or the tile silently disappears from
   // saved grids instead of moving.
   it("maps every legacy id onto a live catalog id", () => {
-    const ids = new Set(MOBILE_QUICK_ACTION_CATALOG.map((m) => m.id))
+    // The grid's catalog: the built-ins and every module destination's
+    // shortcut (`agentTeams` now names Squads, which lives in its module).
+    const ids = new Set(getMobileQuickActionCatalog().map((m) => m.id))
     for (const [from, to] of Object.entries(LEGACY_MOBILE_QUICK_ACTION_IDS)) {
       expect(ids.has(to)).toBe(true)
       expect(ids.has(from)).toBe(false)

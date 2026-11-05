@@ -34,5 +34,17 @@ export default defineHostModule({
     "lib/ai/eval/service.ts",
     "lib/ai/eval/twin-benchmark.ts",
   ],
+  nav: [
+    {
+      id: "eval",
+      route: "/eval",
+      label: "eval.nav.label",
+      icon: "ClipboardCheck",
+      spotIcon: "eval",
+      group: "auxiliary",
+      category: "insights",
+      after: "bots",
+    },
+  ],
   messages: "eval",
 })

@@ -1,4 +1,7 @@
 {
+  "nav": {
+    "label": "Squads"
+  },
   "fleet": {
     "clearFilters": "Clear filters",
     "configure": "Configure this Squad",

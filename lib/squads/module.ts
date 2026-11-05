@@ -28,6 +28,24 @@ export default defineHostModule({
   // The Squad review count the chat composer and the context workbench show.
   api: ["hooks/squads/use-pending-squad-reviews.ts"],
   searchProviders: () => import("./search-provider"),
+  // Pinned on the rail by default (`DEFAULT_PINNED_IDS`) and on a fresh
+  // phone's grid (`DEFAULT_GLANCE_MOBILE_SHORTCUTS`): both are layouts over
+  // ids, which stay valid while the destination lives here.
+  nav: [
+    {
+      id: "squads",
+      route: "/squads",
+      label: "squads.nav.label",
+      icon: "Users",
+      spotIcon: "agent-teams",
+      group: "feature",
+      category: "agents",
+      after: "agents",
+      goMenuAfter: "plugins",
+      fullViewport: true,
+      mobileShortcut: { after: "twin" },
+    },
+  ],
   slashCommands: [
     {
       name: "squad",

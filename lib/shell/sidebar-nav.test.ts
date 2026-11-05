@@ -1,4 +1,3 @@
-import { UsersIcon } from "lucide-react"
 import {
   CANVAS_MODE_ID,
   SIDEBAR_NAV_META,
@@ -84,6 +83,7 @@ describe("getSidebarCatalog", () => {
             route: "/demo",
             label: "demo.nav.label",
             icon: "Users",
+            spotIcon: "agent-teams",
             group: "feature",
             category: "agents",
             after: "inbox",
@@ -111,7 +111,7 @@ describe("getSidebarCatalog", () => {
     expect(ids).toContain("workflows")
     // Derived, not hard-coded — the browser pane addition broke a literal "-2".
     expect(cat).toHaveLength(
-      SIDEBAR_NAV_META.filter(
+      navCatalog().filter(
         (meta) =>
           !meta.desktopOnly &&
           // Shown only while a paired host advertises it; no snapshot here.
@@ -279,7 +279,9 @@ describe("resolveSidebarLayout", () => {
     const { pinned, overflow, hidden } = resolveSidebarLayout(catalog, DEFAULT_SIDEBAR_LAYOUT)
     expect(ids(pinned)).toEqual([...DEFAULT_PINNED_IDS])
     expect(ids(overflow)).toEqual(
-      SIDEBAR_NAV_META.filter((m) => !DEFAULT_PINNED_IDS.includes(m.id as never)).map((m) => m.id)
+      navCatalog()
+        .filter((m) => !DEFAULT_PINNED_IDS.includes(m.id as never))
+        .map((m) => m.id)
     )
     expect(hidden).toEqual([])
   })
@@ -449,6 +451,8 @@ describe("navItemForPath", () => {
   })
 })
 
-it("provides an ordinary icon for Squads", () => {
-  expect(SIDEBAR_NAV_ICONS.squads).toBe(UsersIcon)
+it("provides an ordinary icon for Squads, which its module names", () => {
+  expect(getSidebarCatalog("tauri").find((item) => item.id === "squads")?.Icon).toBe(
+    resolveLucideIcon("Users")
+  )
 })

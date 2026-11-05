@@ -5,11 +5,19 @@ import { isValidElement, type ComponentType, type ReactElement } from "react"
 import { AvatarBadge } from "@/components/desktop/avatar-badge"
 import { MobileSpotIcon, type MobileSpotIconName } from "@/components/mobile/mobile-spot-icon"
 import type { AvatarSubject } from "@/lib/ui/avatar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import iconManifest from "@/public/icons/cognia-mobile-spots/icon-manifest.json"
 
 const NAVIGATION_ARTWORK: Partial<Record<string, MobileSpotIconName>> = {
   ...(iconManifest.coverage.desktopNavigation as Record<string, MobileSpotIconName>),
+  // A module destination names its illustration in its manifest; the gate
+  // checks it is a `MobileSpotIconName`.
+  ...Object.fromEntries(
+    navCatalog().flatMap((entry) =>
+      entry.module && entry.spotIcon ? [[entry.id, entry.spotIcon as MobileSpotIconName]] : []
+    )
+  ),
   chat: "chat",
   canvas: "canvas",
   settings: "preferences",

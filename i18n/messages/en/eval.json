@@ -1,4 +1,7 @@
 {
+  "nav": {
+    "label": "Evaluation"
+  },
   "annotate": {
     "count": "{count, plural, =1 {# annotation} other {# annotations}}",
     "empty": "No recent traces to analyze.",

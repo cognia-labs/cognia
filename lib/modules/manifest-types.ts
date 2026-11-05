@@ -213,6 +213,11 @@ export interface ModuleNavEntry {
   aliases?: string
   /** A Lucide icon name from the catalog (`lib/icons/lucide-catalog.tsx`), e.g. `"Users"`. */
   icon: string
+  /**
+   * A `MobileSpotIconName`: the illustration the rail and the phone grid draw
+   * in the illustrated icon style (`components/shell/navigation-icon.tsx`).
+   */
+  spotIcon: string
   /** As `SidebarNavMeta.group`. */
   group: SidebarNavMeta["group"]
   /** As `SidebarNavMeta.category`: the More-menu section. */
@@ -232,13 +237,9 @@ export interface ModuleNavEntry {
   fullViewport?: boolean
   /**
    * A shortcut in the phone's quick-action grid (`lib/shell/mobile-home-nav.ts`),
-   * under the same id, route and label.
+   * under the same id, route, label and icons.
    */
   mobileShortcut?: {
-    /** A Lucide icon name. */
-    icon: string
-    /** A `MobileSpotIconName`: the illustration Anime mode draws. */
-    spotIcon: string
     /** The shortcut id this one follows in the catalog; absent means the end. */
     after?: string
   }

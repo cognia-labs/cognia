@@ -6,12 +6,15 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { DEFAULT_GLANCE_MOBILE_SHORTCUTS } from "@/lib/glance/mobile-layout"
-import { MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
+import { getMobileQuickActionCatalog } from "@/lib/shell/mobile-home-nav"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import { MobileShortcutsEditor } from "./mobile-shortcuts-editor"
 
 const ROW_HEIGHT = 44
+
+/** The grid's catalog: the built-in shortcuts and every module destination's. */
+const MOBILE_QUICK_ACTION_CATALOG = getMobileQuickActionCatalog()
 
 beforeEach(() => useSettingsStore.setState({ settings: null }))
 

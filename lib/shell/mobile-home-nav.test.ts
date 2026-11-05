@@ -1,4 +1,3 @@
-import { UsersIcon } from "lucide-react"
 import {
   getMobileQuickActionCatalog,
   resolveMobileShortcuts,
@@ -20,6 +19,7 @@ function destination(id: string, over: Partial<ModuleNavEntry> = {}): ModuleNavE
     route: `/${id}`,
     label: `demo.nav.${id}`,
     icon: "Users",
+    spotIcon: "fleet",
     group: "feature",
     category: "agents",
     ...over,
@@ -38,9 +38,11 @@ describe("mobile-home-nav", () => {
     const moduleShortcuts = navCatalog().filter((entry) => entry.module && entry.mobileShortcut)
     expect(catalog).toHaveLength(MOBILE_QUICK_ACTION_CATALOG.length + moduleShortcuts.length)
     for (const item of catalog) {
-      const shortcut = moduleShortcuts.find((entry) => entry.id === item.id)?.mobileShortcut
+      const destination = moduleShortcuts.find((entry) => entry.id === item.id)
       expect(item.Icon).toBe(
-        shortcut ? resolveLucideIcon(shortcut.icon) : MOBILE_QUICK_ACTION_ICONS[item.id]
+        destination?.iconName
+          ? resolveLucideIcon(destination.iconName)
+          : MOBILE_QUICK_ACTION_ICONS[item.id]
       )
     }
   })
@@ -49,9 +51,9 @@ describe("mobile-home-nav", () => {
     const catalog = getMobileQuickActionCatalog(
       moduleCatalog([
         destination("alpha", {
-          mobileShortcut: { icon: "Users", spotIcon: "fleet", after: "twin" },
+          mobileShortcut: { after: "twin" },
         }),
-        destination("omega", { mobileShortcut: { icon: "Users", spotIcon: "fleet" } }),
+        destination("omega", { mobileShortcut: {} }),
         // A destination without a shortcut stays off the grid.
         destination("rail-only"),
       ])
@@ -73,7 +75,7 @@ describe("mobile-home-nav", () => {
       getMobileQuickActionCatalog(
         moduleCatalog([
           destination("alpha", {
-            mobileShortcut: { icon: "Users", spotIcon: "fleet", after: "x" },
+            mobileShortcut: { after: "x" },
           }),
         ])
       )
@@ -83,7 +85,7 @@ describe("mobile-home-nav", () => {
         moduleCatalog([
           destination("search", {
             route: "/search-page",
-            mobileShortcut: { icon: "Users", spotIcon: "fleet" },
+            mobileShortcut: {},
           }),
         ])
       )
@@ -159,8 +161,9 @@ describe("the retired agent-teams tile", () => {
 })
 
 it("keeps the Squads fallback ordinary and supplies its separate anime artwork", () => {
-  expect(MOBILE_QUICK_ACTION_ICONS.squads).toBe(UsersIcon)
-  expect(getMobileQuickActionCatalog().find((item) => item.id === "squads")?.spotIcon).toBe(
-    "agent-teams"
-  )
+  // Squads names both in its module manifest (`lib/squads/module.ts`).
+  const squads = getMobileQuickActionCatalog().find((item) => item.id === "squads")
+  expect(squads?.Icon).toBe(resolveLucideIcon("Users"))
+  expect(squads?.spotIcon).toBe("agent-teams")
+  expect(squads?.labelKey).toBe("squads.nav.label")
 })

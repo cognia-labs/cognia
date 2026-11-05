@@ -1,4 +1,7 @@
 {
+  "nav": {
+    "label": "评估"
+  },
   "annotate": {
     "count": "{count, plural, other {# 条标注}}",
     "empty": "没有可分析的近期轨迹。",

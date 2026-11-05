@@ -4,9 +4,13 @@
 
 import { fireEvent, render, screen } from "@testing-library/react"
 
+// Page labels are full keys (`desktop.guildRail.settings`); a built-in one
+// reads back as its suffix so the assertions name the page.
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string, values?: Record<string, unknown>) =>
-    values ? `${key}:${JSON.stringify(values)}` : key,
+  useTranslations: () => (key: string, values?: Record<string, unknown>) => {
+    const label = key.replace(/^desktop\.guildRail\./, "")
+    return values ? `${label}:${JSON.stringify(values)}` : label
+  },
 }))
 
 type Status = "idle" | "streaming" | "awaiting_approval" | "error"

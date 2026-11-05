@@ -5,6 +5,7 @@ import {
   DEFAULT_SIDEBAR_SIDE,
   groupSidebarNavByCategory,
 } from "./sidebar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
 import enMessages from "@/i18n/messages/en.json"
 import zhCnMessages from "@/i18n/messages/zh-CN.json"
 
@@ -102,7 +103,9 @@ describe("sidebar nav meta", () => {
   })
 
   it("every default-pinned id exists in the catalog", () => {
-    const ids = new Set(SIDEBAR_NAV_META.map((m) => m.id))
+    // The catalog the rail resolves pins against: the built-ins and every
+    // module's destinations (`squads` is pinned and lives in its module).
+    const ids = new Set(navCatalog().map((m) => m.id))
     for (const id of DEFAULT_SIDEBAR_LAYOUT.pinned) {
       expect(ids.has(id)).toBe(true)
     }

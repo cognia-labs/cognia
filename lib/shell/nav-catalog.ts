@@ -40,6 +40,11 @@ export interface NavCatalogEntry extends Omit<SidebarNavMeta, "i18nKey" | "alias
   module?: string
   /** A module entry's Lucide icon name. Built-ins draw from `SIDEBAR_NAV_ICONS`. */
   iconName?: string
+  /**
+   * A module entry's illustration (a `MobileSpotIconName`). Built-ins take
+   * theirs from the icon manifest's `coverage.desktopNavigation`.
+   */
+  spotIcon?: string
   /** Where the Go menu places a module entry (its `goMenuAfter`, else its `after`). */
   goMenuAfter?: string
   /** The route owns the viewport (`lib/shell/full-viewport-routes.ts`). */
@@ -72,6 +77,7 @@ export function moduleNavEntry(module: string, entry: ModuleNavEntry): NavCatalo
     ...(entry.hostOperationGated ? { hostOperationGated: true } : {}),
     module,
     iconName: entry.icon,
+    spotIcon: entry.spotIcon,
     ...(goMenuAfter ? { goMenuAfter } : {}),
     ...(entry.fullViewport ? { fullViewport: true } : {}),
     ...(entry.mobileShortcut ? { mobileShortcut: entry.mobileShortcut } : {}),

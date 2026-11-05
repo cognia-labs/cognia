@@ -8,7 +8,8 @@ import { SidebarCustomizer } from "./sidebar-customizer"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { SIDEBAR_WIDTH_DEFAULT, useUIStore } from "@/stores/ui"
-import { DEFAULT_SIDEBAR_LAYOUT, SIDEBAR_NAV_META } from "@/types/shell/sidebar"
+import { navCatalog } from "@/lib/shell/nav-catalog"
+import { DEFAULT_SIDEBAR_LAYOUT } from "@/types/shell/sidebar"
 
 jest.mock("next-intl", () => ({
   // Return the leaf key so assertions can target stable strings, and item
@@ -174,10 +175,10 @@ describe("SidebarCustomizer", () => {
   it("shows the More-empty placeholder when every item is pinned or hidden", () => {
     // Derive the full id universe from the real nav registry so this can't go
     // stale when a wave adds a new section. The suite pins the platform to
-    // "tauri", so the catalog is the whole of `SIDEBAR_NAV_META` with no
-    // `desktopOnly` filtering. Pinning every id leaves nothing for overflow →
-    // the "More" bucket is empty.
-    const allIds = SIDEBAR_NAV_META.map((m) => m.id)
+    // "tauri", so the catalog is the whole of `navCatalog()` (the built-ins
+    // and every module's destinations) with no `desktopOnly` filtering.
+    // Pinning every id leaves nothing for overflow → the "More" bucket is empty.
+    const allIds = navCatalog().map((m) => m.id)
     setLayout(allIds, [])
     renderCustomizer()
     expect(screen.getByText("customize.moreEmpty")).toBeInTheDocument()

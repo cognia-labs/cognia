@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
+import { navCatalog } from "@/lib/shell/nav-catalog"
 import { SIDEBAR_NAV_META } from "@/types/shell/sidebar"
 import type { RuntimeSnapshot } from "./operation-availability"
 import { resolveRuntimeRecovery } from "./recovery-resolver"
@@ -33,13 +34,17 @@ it("classifies the Feishu workbench as an entry that owns its authentication", (
 
 it("classifies every public sidebar destination exactly once", () => {
   expect(SURFACE_CONTRACTS.map((contract) => contract.id).sort()).toEqual(
-    expect.arrayContaining(SIDEBAR_NAV_META.map((item) => item.id))
+    expect.arrayContaining(navCatalog().map((item) => item.id))
   )
   expect(
     SURFACE_CONTRACTS.filter((contract) => "navigation" in contract && contract.navigation)
       .map((contract) => contract.id)
       .sort()
-  ).toEqual(SIDEBAR_NAV_META.map((item) => item.id).sort())
+  ).toEqual(
+    navCatalog()
+      .map((item) => item.id)
+      .sort()
+  )
   expect(new Set(SURFACE_CONTRACTS.map((contract) => contract.id)).size).toBe(
     SURFACE_CONTRACTS.length
   )

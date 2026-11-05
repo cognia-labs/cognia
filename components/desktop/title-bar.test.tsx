@@ -8,8 +8,9 @@ const logInfo = jest.fn()
 const logWarn = jest.fn()
 const logError = jest.fn()
 
+// A root-scoped translator (Go-menu labels are full keys) reads keys as given.
 jest.mock("next-intl", () => ({
-  useTranslations: (ns: string) => (key: string) => `${ns}.${key}`,
+  useTranslations: (ns?: string) => (key: string) => (ns ? `${ns}.${key}` : key),
 }))
 
 jest.mock("@cognia/logging", () => ({

@@ -445,6 +445,7 @@ const NAV_ENTRY = {
   route: "/crew",
   label: "crew.nav.label",
   icon: "Users",
+  spotIcon: "agent-teams",
   group: "feature",
   category: "agents",
 }
@@ -469,7 +470,7 @@ test("validateHostManifest checks nav entries against the catalog's vocabulary",
       goMenuAfter: "plugins",
       aliases: "crew.nav.aliases",
       fullViewport: true,
-      mobileShortcut: { icon: "Users", spotIcon: "agent-teams", after: "twin" },
+      mobileShortcut: { after: "twin" },
     }),
     []
   )
@@ -480,11 +481,12 @@ test("validateHostManifest checks nav entries against the catalog's vocabulary",
     label: "crewLabel",
     aliases: "crewAliases",
     icon: "users-x",
+    spotIcon: "crew-art",
     group: "main",
     category: "work",
     fullViewport: "yes",
     badge: 1,
-    mobileShortcut: { icon: "Users", spotIcon: "crew-art", after: 3, size: "s" },
+    mobileShortcut: { after: 3, size: "s" },
   })
   for (const expected of [
     'unknown field "badge"',
@@ -497,7 +499,7 @@ test("validateHostManifest checks nav entries against the catalog's vocabulary",
     "nav[0].category is one of explore, agents, spaces, insights, system, you",
     "nav[0].fullViewport is true or false",
     'nav[0].mobileShortcut: unknown field "size"',
-    'nav[0].mobileShortcut.spotIcon "crew-art" is not a MobileSpotIconName',
+    'nav[0].spotIcon "crew-art" is not a MobileSpotIconName',
     "nav[0].mobileShortcut.after is text",
   ])
     assert.ok(
@@ -535,7 +537,7 @@ test("the gate reads the spot icons and extension points from the tree, and nav 
   const navManifest = (id) =>
     HOST_MANIFEST.replace('id: "crew",', `id: "${id}",`).replace(
       "  searchProviders:",
-      `  nav: [{ id: "crew", route: "/${id}", label: "${id}.nav.label", icon: "Users", group: "feature", category: "agents", mobileShortcut: { icon: "Users", spotIcon: "nope" } }],\n  searchProviders:`
+      `  nav: [{ id: "crew", route: "/${id}", label: "${id}.nav.label", icon: "Users", spotIcon: "nope", group: "feature", category: "agents", mobileShortcut: {} }],\n  searchProviders:`
     )
   const result = run(
     moduleTree({
@@ -559,9 +561,7 @@ test("the gate reads the spot icons and extension points from the tree, and nav 
     })
   )
   assert.ok(
-    result.errors.some((e) =>
-      e.includes('mobileShortcut.spotIcon "nope" is not a MobileSpotIconName')
-    )
+    result.errors.some((e) => e.includes('nav[0].spotIcon "nope" is not a MobileSpotIconName'))
   )
   assert.ok(
     result.errors.some((e) =>

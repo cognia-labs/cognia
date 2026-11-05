@@ -33,6 +33,7 @@ function entry(over: Partial<ModuleNavEntry> & Pick<ModuleNavEntry, "id">): Modu
     route: `/${over.id}`,
     label: `${over.id}.nav.label`,
     icon: "Users",
+    spotIcon: "agent-teams",
     group: "feature",
     category: "agents",
     ...over,
@@ -82,7 +83,7 @@ describe("moduleNavEntry", () => {
           goMenuAfter: "plugins",
           fullViewport: true,
           hostOperationGated: true,
-          mobileShortcut: { icon: "Users", spotIcon: "agent-teams" },
+          mobileShortcut: { after: "twin" },
         })
       )
     ).toEqual({
@@ -95,9 +96,10 @@ describe("moduleNavEntry", () => {
       hostOperationGated: true,
       module: "squads",
       iconName: "Users",
+      spotIcon: "agent-teams",
       goMenuAfter: "plugins",
       fullViewport: true,
-      mobileShortcut: { icon: "Users", spotIcon: "agent-teams" },
+      mobileShortcut: { after: "twin" },
     })
   })
 

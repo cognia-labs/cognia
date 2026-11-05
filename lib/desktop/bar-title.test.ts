@@ -42,3 +42,11 @@ test("a route the rail does not list is named by the app alone", () => {
   // A prefix is not a match: `/settingsfoo` is not Settings.
   expect(resolveBarTitle("/settingsfoo", "Chat")).toEqual({ kind: "app" })
 })
+
+test("a module's destination is named by its own full label key", () => {
+  // Squads contributes its rail entry from `lib/squads/module.ts`.
+  expect(resolveBarTitle("/squads/abc", null)).toEqual({
+    kind: "page",
+    labelKey: "squads.nav.label",
+  })
+})

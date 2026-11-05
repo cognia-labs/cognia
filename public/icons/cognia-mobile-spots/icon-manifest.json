@@ -561,7 +561,6 @@
       "issues": "issues",
       "skills": "skills",
       "plugins": "plugins",
-      "squads": "agent-teams",
       "scheduler": "scheduler",
       "goals": "goals",
       "pet": "pet",
@@ -576,7 +575,6 @@
       "integrations": "integrations",
       "devices": "devices",
       "bots": "bots",
-      "eval": "eval",
       "performance": "performance",
       "logs": "logs",
       "me": "profile"
