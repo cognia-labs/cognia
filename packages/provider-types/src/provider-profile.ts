@@ -66,6 +66,23 @@ export type TransportProfile = z.infer<typeof transportProfileSchema>
 
 // ---- Deployment -------------------------------------------------------------
 
+const rateSchema = z.number().nonnegative()
+
+/**
+ * What a deployment charges for one model, USD per million tokens (ADR-0253
+ * §10). Absent: usage is priced from the built-in catalog by model id, or
+ * shown as unpriced; never as free. Field names match `ModelPricing`.
+ */
+export const deploymentModelPricingSchema = z
+  .object({
+    promptPer1M: rateSchema,
+    completionPer1M: rateSchema,
+    cachedInputPer1M: rateSchema.optional(),
+    cacheCreationPer1M: rateSchema.optional(),
+  })
+  .strict()
+export type DeploymentModelPricing = z.infer<typeof deploymentModelPricingSchema>
+
 export const deploymentModelSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().optional(),
@@ -104,6 +121,7 @@ export const deploymentModelSchema = z.object({
         .optional(),
     })
     .optional(),
+  pricing: deploymentModelPricingSchema.optional(),
 })
 export type DeploymentModel = z.infer<typeof deploymentModelSchema>
 

@@ -932,6 +932,45 @@ it("publishes the complete live model catalog and preserves independent limits a
   ).not.toHaveProperty("maxOutputTokens")
 })
 
+it("publishes the operator's own model price, never a catalog guess (ADR-0253 §10)", () => {
+  const result = buildGatewaySnapshot(
+    {
+      customProviders: [
+        {
+          id: "org-gateway",
+          customName: "Org",
+          baseURL: "https://org.example/v1",
+          apiKey: "k",
+          enabled: true,
+          apiProtocol: "openai",
+          customModels: ["set", "listed", "claude-sonnet-4-5"],
+          customModelMetadata: {
+            set: { pricing: { promptPer1M: 0.6, completionPer1M: 2.2, cachedInputPer1M: 0.1 } },
+          },
+          discoveredModels: [
+            { id: "listed", pricing: { promptPer1M: 7.2, completionPer1M: 14.4, currency: "CNY" } },
+            { id: "half", pricing: { promptPer1M: 1 } },
+          ],
+        },
+      ],
+    } as unknown as SnapshotSettingsSlice,
+    1
+  )
+  const metadata = (id: string) =>
+    result.providers[0].modelMetadata?.find((model) => model.id === id)
+  expect(metadata("set")?.pricing).toEqual({
+    promptPer1M: 0.6,
+    completionPer1M: 2.2,
+    cachedInputPer1M: 0.1,
+  })
+  // A listing in another currency is published in USD.
+  expect(metadata("listed")?.pricing?.promptPer1M).toBeGreaterThan(0)
+  expect(metadata("listed")?.pricing?.promptPer1M).toBeLessThan(7.2)
+  // Half a price is no price; a model the catalog knows is not priced here.
+  expect(metadata("half")).not.toHaveProperty("pricing")
+  expect(metadata("claude-sonnet-4-5")).not.toHaveProperty("pricing")
+})
+
 it("uses Anthropic authentication while preserving explicit subscription headers and API flavor", async () => {
   const snapshot: GatewayRoutingSnapshot = { providers: [], aliases: [], generatedAtMs: 1 }
   const result = await enrichSnapshotWithSubscriptionCreds(

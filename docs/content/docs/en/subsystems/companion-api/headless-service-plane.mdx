@@ -74,6 +74,18 @@ cognia-server gateway key-list
 
 The credential value is read from stdin and encrypted in the server's secret store. A deployment profile must reference the same `secretId`; storing a credential alone does not configure a model or endpoint. `profiles import` replaces the profile set, so review the exported document and its version before applying a prepared replacement. `gateway key-create` prints the gateway secret once; keep it in a local secret manager. The administrative `gateway status` command inspects persisted state in a separate process and does not prove that the running listener is healthy.
 
+A deployment model may carry the price the upstream charges for it, in USD per million tokens. An organization member's usage on that model is booked at this price. Without one, the built-in catalog's price for the model id is used, and without either the usage is shown as unpriced:
+
+```json
+{
+  "id": "deepseek-v4.1-flash",
+  "displayName": "DeepSeek V4.1 Flash",
+  "pricing": { "promptPer1M": 0.27, "completionPer1M": 1.1, "cachedInputPer1M": 0.07 }
+}
+```
+
+`promptPer1M` and `completionPer1M` are required; `cachedInputPer1M` and `cacheCreationPer1M` are optional. A negative or non-numeric rate is refused when the profile set is imported. The price stays on the Host: it is not published in `/v1/models` or in a task lease.
+
 The listener reads `.cognia/gateway-config.json` under that data directory. A minimal loopback configuration is:
 
 ```json

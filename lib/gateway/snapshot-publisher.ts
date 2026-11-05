@@ -24,6 +24,7 @@ import type {
   GatewayAliasSnapshot,
   GatewayProviderSnapshot,
   GatewayModelMetadata,
+  GatewaySnapshotModelMetadata,
   GatewayRotationStrategy,
   GatewayRouterFusionSwitches,
   GatewayRoutingSnapshot,
@@ -35,7 +36,11 @@ import type { AccountSummary, ProviderLimits } from "@/types/subscription"
 import type { ModelMapping } from "@cognia/provider-types/model-mapping"
 import type { RoutingStrategy } from "@cognia/provider-types/auto-router"
 import { getCatalogModelMetadata } from "@/lib/ai/providers/models-dev-sync"
-import { resolveModelPricingUsd } from "@/lib/usage/pricing"
+import { mergePricingLayers, resolveModelPricingUsd } from "@/lib/usage/pricing"
+import {
+  deploymentModelPricingSchema,
+  type DeploymentModelPricing,
+} from "@cognia/provider-types/provider-profile"
 import { getProviderRoutingRuntimeAdapters } from "@cognia/provider-routing/runtime-adapters"
 import { effectiveSurface } from "@cognia/router-fusion/settings/switches"
 
@@ -113,6 +118,48 @@ export function gatewayModelMetadata(
       fields.flatMap((field) => (meta[field] === undefined ? [] : [[field, meta[field]]]))
     ),
   }
+}
+
+/**
+ * The operator's own price for a model (ADR-0253 §10): the rate they set on a
+ * custom provider's model, else the one the deployment's model listing gave.
+ * Never the built-in catalog: a member's brain falls back to that itself, so
+ * the snapshot carries only what this deployment charges. USD per 1M tokens.
+ */
+export function gatewayModelPricing(
+  slice: SnapshotSettingsSlice,
+  providerId: string,
+  modelId: string
+): DeploymentModelPricing | undefined {
+  const settings = slice as Pick<AppSettings, "providerSettings" | "customProviders">
+  const custom = settings.customProviders?.find((entry) => entry.id === providerId)
+  const discovered =
+    custom?.discoveredModels ?? settings.providerSettings?.[providerId]?.discoveredModels
+  const merged = mergePricingLayers([
+    custom?.customModelMetadata?.[modelId]?.pricing,
+    discovered?.find((model) => model.id === modelId)?.pricing,
+  ])
+  const parsed = deploymentModelPricingSchema.safeParse({
+    promptPer1M: merged?.promptPer1M,
+    completionPer1M: merged?.completionPer1M,
+    ...(merged?.cachedInputPer1M !== undefined
+      ? { cachedInputPer1M: merged.cachedInputPer1M }
+      : {}),
+    ...(merged?.cacheCreationPer1M !== undefined
+      ? { cacheCreationPer1M: merged.cacheCreationPer1M }
+      : {}),
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
+/** {@link gatewayModelMetadata} plus the operator's price, as the snapshot carries a model. */
+function snapshotModelMetadata(
+  slice: SnapshotSettingsSlice,
+  providerId: string,
+  modelId: string
+): GatewaySnapshotModelMetadata {
+  const pricing = gatewayModelPricing(slice, providerId, modelId)
+  return { ...gatewayModelMetadata(slice, providerId, modelId), ...(pricing ? { pricing } : {}) }
 }
 
 /**
@@ -264,7 +311,7 @@ function buildProviders(slice: SnapshotSettingsSlice): GatewayProviderSnapshot[]
       ...(resolution.apiFlavor === "chat" || resolution.apiFlavor === "responses"
         ? { apiFlavor: resolution.apiFlavor }
         : {}),
-      modelMetadata: models.map((modelId) => gatewayModelMetadata(slice, id, modelId)),
+      modelMetadata: models.map((modelId) => snapshotModelMetadata(slice, id, modelId)),
       ...(resolution.headers
         ? {
             transport: {
@@ -878,7 +925,7 @@ export async function buildEnrichedGatewaySnapshot(
       return {
         ...provider,
         models,
-        modelMetadata: models.map((model) => gatewayModelMetadata(settings, provider.id, model)),
+        modelMetadata: models.map((model) => snapshotModelMetadata(settings, provider.id, model)),
       }
     }),
   }

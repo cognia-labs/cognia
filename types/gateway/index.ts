@@ -405,6 +405,15 @@ export interface GatewayModelMetadata {
   supportsStructuredOutput?: boolean
 }
 
+/**
+ * A model's facts as the routing snapshot carries them: the published facts
+ * plus the deployment's own price (ADR-0253 §10), which stays on the Host. The
+ * person policy hands it to a member's brain; it is never part of a task lease.
+ */
+export interface GatewaySnapshotModelMetadata extends GatewayModelMetadata {
+  pricing?: import("@cognia/provider-types/provider-profile").DeploymentModelPricing
+}
+
 export interface GatewaySubscriptionWindow {
   id: string
   usedPct: number
@@ -445,7 +454,7 @@ export interface GatewayProviderSnapshot {
   sourceProviderId?: string
   protocol: string
   apiFlavor?: "chat" | "responses"
-  modelMetadata?: GatewayModelMetadata[]
+  modelMetadata?: GatewaySnapshotModelMetadata[]
   baseUrl: string
   /** Primary / single credential; the fallback when no rotation pool is set. */
   apiKey?: string

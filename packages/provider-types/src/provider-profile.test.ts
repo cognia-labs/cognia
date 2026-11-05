@@ -64,6 +64,22 @@ describe("parse round-trips", () => {
     expect(result.ok).toBe(true)
   })
 
+  it("accepts a deployment's own model price and refuses a bad one (ADR-0253 §10)", () => {
+    const priced = (pricing: unknown) =>
+      parseDeploymentProfile({
+        ...deployment,
+        models: [{ ...deployment.models[0], pricing }],
+      }).ok
+    expect(priced({ promptPer1M: 0.6, completionPer1M: 2.2 })).toBe(true)
+    expect(
+      priced({ promptPer1M: 0, completionPer1M: 0, cachedInputPer1M: 0.1, cacheCreationPer1M: 1 })
+    ).toBe(true)
+    expect(priced({ promptPer1M: 0.6 })).toBe(false)
+    expect(priced({ promptPer1M: -1, completionPer1M: 1 })).toBe(false)
+    expect(priced({ promptPer1M: Number.POSITIVE_INFINITY, completionPer1M: 1 })).toBe(false)
+    expect(priced({ promptPer1M: 1, completionPer1M: 1, perSeat: 2 })).toBe(false)
+  })
+
   it("keeps v1 deployment models readable during migration", () => {
     expect(parseDeploymentProfile({ ...deployment, models: [{ id: "glm-4.6" }] }).ok).toBe(true)
   })

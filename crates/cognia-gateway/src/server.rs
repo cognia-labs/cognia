@@ -1620,7 +1620,8 @@ fn model_document(id: &str, provider: &crate::snapshot::ProviderSnapshot, concre
         .iter()
         .find(|entry| entry.id == concrete)
     {
-        for (name, value) in &metadata.fields {
+        // The deployment's price stays on the Host (ADR-0253 §10).
+        for (name, value) in metadata.fields.iter().filter(|(name, _)| *name != "pricing") {
             out[name] = value.clone();
         }
         for (from, to) in [
@@ -5530,6 +5531,15 @@ mod tests {
         account.write().generation = 2;
         assert!(!host.emit(REQUEST_OUTCOME_EVENT, json!({"ok":true})));
         assert_eq!(recording.events.lock().len(), 1);
+    }
+
+    #[test]
+    fn adr0253_model_document_keeps_the_deployment_price_on_the_host() {
+        let provider = serde_json::from_value(json!({"id":"fixture","protocol":"openai","enabled":true,"baseUrl":"http://127.0.0.1/v1",
+            "modelMetadata":[{"id":"model","name":"Model","pricing":{"promptPer1M":0.6,"completionPer1M":2.2}}]})).unwrap();
+        let document = model_document("model", &provider, "model");
+        assert_eq!(document["display_name"], "Model");
+        assert!(document.get("pricing").is_none());
     }
 
     #[test]

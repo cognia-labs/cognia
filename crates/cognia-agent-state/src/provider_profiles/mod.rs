@@ -55,6 +55,46 @@ pub struct DeploymentModelDoc {
     pub canonical_model_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_override: Option<Value>,
+    /// What this deployment charges for the model (ADR-0253 §10). Absent: the
+    /// usage is priced from the built-in catalog by model id, or shown as
+    /// unpriced; never as free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<DeploymentModelPricing>,
+}
+
+/// A deployment's own price for one model, USD per million tokens. The same
+/// field names as the app's `ModelPricing`, so the gateway snapshot and the
+/// person policy pass it on unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentModelPricing {
+    #[serde(rename = "promptPer1M")]
+    pub prompt_per_1m: f64,
+    #[serde(rename = "completionPer1M")]
+    pub completion_per_1m: f64,
+    #[serde(
+        rename = "cachedInputPer1M",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cached_input_per_1m: Option<f64>,
+    #[serde(
+        rename = "cacheCreationPer1M",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_creation_per_1m: Option<f64>,
+}
+
+impl DeploymentModelPricing {
+    /// Every rate is a finite, non-negative number.
+    pub fn is_valid(&self) -> bool {
+        [self.prompt_per_1m, self.completion_per_1m]
+            .into_iter()
+            .chain(self.cached_input_per_1m)
+            .chain(self.cache_creation_per_1m)
+            .all(|rate| rate.is_finite() && rate >= 0.0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -420,6 +460,16 @@ fn validate_docs(docs: &ProfileDocs) -> Result<(), ProfileStoreError> {
             return Err(ProfileStoreError::Validation(format!(
                 "deployment {} is missing required fields",
                 deployment.id
+            )));
+        }
+        if let Some(model) = deployment
+            .models
+            .iter()
+            .find(|model| model.pricing.as_ref().is_some_and(|p| !p.is_valid()))
+        {
+            return Err(ProfileStoreError::Validation(format!(
+                "deployment {} model {} has an invalid price",
+                deployment.id, model.id
             )));
         }
     }
@@ -929,15 +979,31 @@ pub fn gateway_snapshot_json(
                 .iter()
                 .map(|model| Value::from(model.id.clone()))
                 .collect();
-            // A model's display name, where the profile gives one, under the
-            // key the gateway's metadata uses (`/v1/models` `display_name`,
-            // the person policy's `modelNames`).
+            // A model's display name and price, where the profile gives them,
+            // under the keys the gateway's metadata uses (`/v1/models`
+            // `display_name`, the person policy's `modelNames` and
+            // `modelPricing`).
             let model_metadata: Vec<Value> = deployment
                 .models
                 .iter()
                 .filter_map(|model| {
-                    let name = model.display_name.as_deref()?.trim();
-                    (!name.is_empty()).then(|| serde_json::json!({"id": model.id, "name": name}))
+                    let mut entry = serde_json::Map::new();
+                    if let Some(name) = model
+                        .display_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                    {
+                        entry.insert("name".into(), Value::from(name));
+                    }
+                    if let Some(pricing) = model.pricing.as_ref().filter(|p| p.is_valid()) {
+                        entry.insert("pricing".into(), serde_json::to_value(pricing).ok()?);
+                    }
+                    if entry.is_empty() {
+                        return None;
+                    }
+                    entry.insert("id".into(), Value::from(model.id.clone()));
+                    Some(Value::Object(entry))
                 })
                 .collect();
             Some(serde_json::json!({
@@ -1053,6 +1119,7 @@ mod tests {
                     offering_ref: Some("glm-anthropic:glm-4.6".into()),
                     canonical_model_ref: Some("zhipu:glm-4.6".into()),
                     user_override: None,
+                    pricing: None,
                 }],
                 model_roles: Some(serde_json::json!({ "primary": "glm-4.6" })),
                 legacy_provider_id: Some("glm-anthropic".into()),
@@ -1393,6 +1460,7 @@ mod tests {
             offering_ref: None,
             canonical_model_ref: None,
             user_override: None,
+            pricing: None,
         });
         d.deployment_profiles[0].models.push(DeploymentModelDoc {
             id: "glm-blank".into(),
@@ -1401,6 +1469,7 @@ mod tests {
             offering_ref: None,
             canonical_model_ref: None,
             user_override: None,
+            pricing: None,
         });
         let none = |_: &Value| -> Option<String> { None };
         let snapshot = gateway_snapshot_json(&d, 1, 0, &none);
@@ -1414,6 +1483,60 @@ mod tests {
         let provider = parsed.provider("glm-anthropic").unwrap();
         assert_eq!(provider.models, ["glm-4.6", "glm-4.6-air", "glm-blank"]);
         assert_eq!(provider.model_metadata[0].fields["name"], "GLM 4.6 Air");
+    }
+
+    #[test]
+    fn adr0253_gateway_projection_carries_a_deployment_price_and_refuses_a_bad_one() {
+        let priced = DeploymentModelPricing {
+            prompt_per_1m: 0.6,
+            completion_per_1m: 2.2,
+            cached_input_per_1m: Some(0.11),
+            cache_creation_per_1m: None,
+        };
+        let mut d = docs();
+        d.deployment_profiles[0].models[0].pricing = Some(priced.clone());
+        let none = |_: &Value| -> Option<String> { None };
+        let snapshot = gateway_snapshot_json(&d, 1, 0, &none);
+        assert_eq!(
+            snapshot["providers"][0]["modelMetadata"],
+            serde_json::json!([{"id": "glm-4.6", "pricing":
+                {"promptPer1M": 0.6, "completionPer1M": 2.2, "cachedInputPer1M": 0.11}}])
+        );
+        let parsed: cognia_gateway::snapshot::RoutingSnapshot =
+            serde_json::from_value(snapshot).unwrap();
+        parsed.validate().unwrap();
+        assert_eq!(
+            parsed.provider("glm-anthropic").unwrap().model_metadata[0].fields["pricing"]
+                ["completionPer1M"],
+            2.2
+        );
+
+        let store = SqliteProfileStore::in_memory().unwrap();
+        store.replace_all(&d, Some(0)).unwrap();
+        assert_eq!(
+            store.load_all().unwrap().deployment_profiles[0].models[0].pricing,
+            Some(priced)
+        );
+        for bad in [-1.0, f64::NAN] {
+            let mut d = docs();
+            d.deployment_profiles[0].models[0].pricing = Some(DeploymentModelPricing {
+                prompt_per_1m: bad,
+                completion_per_1m: 1.0,
+                cached_input_per_1m: None,
+                cache_creation_per_1m: None,
+            });
+            assert!(matches!(
+                store.replace_all(&d, None),
+                Err(ProfileStoreError::Validation(_))
+            ));
+        }
+        // A price names only the rates the app knows.
+        assert!(
+            serde_json::from_value::<DeploymentModelDoc>(serde_json::json!({
+                "id": "m", "pricing": {"promptPer1M": 1, "completionPer1M": 1, "perSeat": 3}
+            }))
+            .is_err()
+        );
     }
 
     #[test]

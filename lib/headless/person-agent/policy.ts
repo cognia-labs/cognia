@@ -20,6 +20,11 @@
 
 import type { ChatSession } from "@cognia/agent-config-types"
 import { MAX_PERSON_MODEL_NAME_LENGTH } from "@/lib/platform/host-feature-manifest"
+import {
+  readPersonModelPricing,
+  rememberPersonModelPricing,
+  type PersonModelPricing,
+} from "./model-pricing"
 
 export interface PersonAllowedAgent {
   runtimeId: string
@@ -54,6 +59,11 @@ export interface PersonAgentPolicy {
    * `PersonAgentsManifest.modelNames`.
    */
   modelNames?: Record<string, Record<string, string>>
+  /**
+   * Per provider, the price the deployment gives a served model, by model id
+   * (ADR-0253 §10); absent when it prices none. Member usage is booked at it.
+   */
+  modelPricing?: PersonModelPricing
   /** P6g: null when the Host keeps no usage ledger, or is older than P6g. */
   usage: PersonOwnUsage | null
 }
@@ -159,6 +169,10 @@ export async function fetchPersonAgentPolicy(
   // The optional P6g facts degrade to "unknown", never to a refused turn.
   const models = readModels(policy.models)
   const modelNames = readModelNames(policy.modelNames, models)
+  const modelPricing = readPersonModelPricing(policy.modelPricing, models)
+  // Every read refreshes the prices this brain books member usage at, so a
+  // turn is priced at what the deployment charged when it ran.
+  rememberPersonModelPricing(modelPricing)
   return {
     allowedAgents: policy.allowedAgents.map((agent) => ({
       runtimeId: agent.runtimeId,
@@ -169,6 +183,7 @@ export async function fetchPersonAgentPolicy(
     execution: policy.execution,
     models,
     ...(Object.keys(modelNames).length > 0 ? { modelNames } : {}),
+    ...(Object.keys(modelPricing).length > 0 ? { modelPricing } : {}),
     usage: readUsage(policy.usage),
   }
 }

@@ -10,6 +10,7 @@ import { getSession } from "@/lib/db/sessions"
 import { listWorkSubmissions } from "@/lib/db/work-submissions"
 import { isTurnUsageClaimed } from "@/lib/usage/claimed-turn-usage"
 import { bookUsageRow, startUsageWriteOutbox } from "@/lib/usage/usage-write-outbox"
+import { priceMemberUsageRow } from "@/lib/headless/person-agent/model-pricing"
 import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 
@@ -281,11 +282,22 @@ export function startWorkSubmissionTerminalEvents(
   }
 }
 
-/** {@link recordResultUsage} through the usage outbox: a failed write is kept, not lost. */
+/**
+ * {@link recordResultUsage} through the usage outbox: a failed write is kept,
+ * not lost. In a member's partition the turn ran on the organization's model,
+ * so a cost the runtime did not report is priced at the deployment's rate,
+ * else the catalog's, else left unpriced (ADR-0253 §10).
+ */
 async function bookResultUsage(
   args: Parameters<typeof recordResultUsage>[0]
 ): ReturnType<typeof recordResultUsage> {
-  const row = resultUsageRow(args)
-  if (row) await bookUsageRow(row)
+  const built = resultUsageRow(args)
+  if (!built) return null
+  const capability = personChatCapability()
+  const row =
+    capability.chat !== "none" || capability.execution !== "none"
+      ? priceMemberUsageRow(built)
+      : built
+  await bookUsageRow(row)
   return row
 }

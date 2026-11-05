@@ -655,7 +655,8 @@ impl GatewayState {
                 || metadata.fields.get("supportsStreaming") == Some(&serde_json::Value::Bool(false)) {
                 return Err("the selected model lacks tools or streaming required by the task".into());
             }
-            let mut client_metadata = metadata.clone(); client_metadata.id = selector.clone();
+            // The deployment's price stays on the Host (ADR-0253 §10).
+            let mut client_metadata = metadata.clone(); client_metadata.id = selector.clone(); client_metadata.fields.remove("pricing");
             model_metadata_by_id.insert(selector.clone(), client_metadata);
             let private = providers.entry(selected_deployment.clone()).or_insert_with(|| {
                 let mut provider = provider;
@@ -1398,7 +1399,8 @@ mod tests {
                 "providers": [
                     {"id":"host-openai","deploymentId":"host-openai","protocol":"openai","baseUrl":base_url,
                      "apiKey":"host-only-key","enabled":true,"models":["model-a","model-b"],
-                     "modelMetadata":[{"id":"model-a","contextLength":64000,"supportsTools":true}]},
+                     "modelMetadata":[{"id":"model-a","contextLength":64000,"supportsTools":true,
+                       "pricing":{"promptPer1M":0.6,"completionPer1M":2.2}}]},
                     {"id":"keyless","protocol":"openai","baseUrl":base_url,"enabled":true,"models":["model-a"]},
                     {"id":"unsupported","protocol":"cohere","baseUrl":base_url,"apiKey":"k","enabled":true,"models":["model-a"]},
                     {"id":"disabled","protocol":"openai","baseUrl":base_url,"apiKey":"k","enabled":false,"models":["model-a"]}
@@ -1514,9 +1516,11 @@ mod tests {
             lease.model_metadata.as_ref().unwrap().fields["contextLength"],
             64000
         );
-        // The wire shape never names the credential.
+        // The wire shape never names the credential, nor the deployment's
+        // price (ADR-0253 §10).
         let wire = serde_json::to_string(&lease).unwrap();
         assert!(!wire.contains("host-only-key"));
+        assert!(!wire.contains("promptPer1M"));
 
         assert!(state
             .validate_host_task_secret(Some("phone-a"), "task-a", &lease.secret)

@@ -164,6 +164,25 @@ pub struct ProviderConstraintSnapshot {
     pub circuit_open: bool,
 }
 
+/// A deployment's price for a model (ADR-0253 §10): USD per million tokens,
+/// prompt and completion required, the two cache rates optional, nothing else.
+fn valid_model_pricing(value: &serde_json::Value) -> bool {
+    let Some(rates) = value.as_object() else {
+        return false;
+    };
+    let rate = |field: &str| rates.get(field).and_then(serde_json::Value::as_f64);
+    rate("promptPer1M").is_some()
+        && rate("completionPer1M").is_some()
+        && rates.iter().all(|(field, value)| {
+            matches!(
+                field.as_str(),
+                "promptPer1M" | "completionPer1M" | "cachedInputPer1M" | "cacheCreationPer1M"
+            ) && value
+                .as_f64()
+                .is_some_and(|rate| rate.is_finite() && rate >= 0.0)
+        })
+}
+
 /// Optional facts from the selected account's model catalog. Unknown is absent.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -615,6 +634,7 @@ impl RoutingSnapshot {
                         | "supportsVideo"
                         | "supportsStreaming"
                         | "supportsStructuredOutput" => value.is_boolean(),
+                        "pricing" => valid_model_pricing(value),
                         _ => false,
                     };
                     if !valid {
@@ -771,6 +791,32 @@ mod tests {
             .unwrap()
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn adr0253_model_pricing_metadata_accepts_only_known_non_negative_rates() {
+        let with = |pricing: serde_json::Value| {
+            serde_json::from_value::<RoutingSnapshot>(serde_json::json!({
+                "providers":[{"id":"provider","protocol":"openai","baseUrl":"https://x.invalid/v1",
+                    "enabled":true,"models":["m"],
+                    "modelMetadata":[{"id":"m","pricing":pricing}]}],
+                "generatedAtMs":1}))
+            .unwrap()
+            .validate()
+        };
+        assert!(with(serde_json::json!({"promptPer1M":0.5,"completionPer1M":1.5})).is_ok());
+        assert!(with(serde_json::json!({"promptPer1M":0,"completionPer1M":0,
+            "cachedInputPer1M":0.05,"cacheCreationPer1M":0.6}))
+        .is_ok());
+        for bad in [
+            serde_json::json!({"promptPer1M":0.5}),
+            serde_json::json!({"promptPer1M":-1,"completionPer1M":1}),
+            serde_json::json!({"promptPer1M":"0.5","completionPer1M":1}),
+            serde_json::json!({"promptPer1M":1,"completionPer1M":1,"perSeat":2}),
+            serde_json::json!([1, 2]),
+        ] {
+            assert!(with(bad.clone()).is_err(), "{bad}");
+        }
     }
 
     #[test]

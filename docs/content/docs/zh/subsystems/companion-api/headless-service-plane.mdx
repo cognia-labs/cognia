@@ -63,6 +63,18 @@ cognia-server gateway key-list
 
 凭据值从 stdin 读取，并加密保存在服务器 Secret Store。部署 Profile 必须引用同一个 `secretId`；仅保存凭据不会自动配置模型和端点。`profiles import` 会替换 Profile 集合，因此应用准备好的替换文档前，应检查导出内容及其版本。`gateway key-create` 仅显示一次网关密钥，请保存在本地密钥管理工具中。管理命令 `gateway status` 在独立进程中读取持久化状态，不能证明正在运行的监听器健康。
 
+部署中的模型可以带上上游对它的收费价格，单位为每百万 Token 美元。组织成员在该模型上的用量按此价格记账；没有此价格时使用内置目录中该模型 ID 的价格，两者都没有时用量显示为“未计价”：
+
+```json
+{
+  "id": "deepseek-v4.1-flash",
+  "displayName": "DeepSeek V4.1 Flash",
+  "pricing": { "promptPer1M": 0.27, "completionPer1M": 1.1, "cachedInputPer1M": 0.07 }
+}
+```
+
+`promptPer1M` 和 `completionPer1M` 必填，`cachedInputPer1M` 和 `cacheCreationPer1M` 可选。导入 Profile 集合时，负数或非数字的价格会被拒绝。价格只保留在主机上，不会出现在 `/v1/models` 或任务租约中。
+
 监听器从该数据目录下的 `.cognia/gateway-config.json` 读取配置。最小回环配置为：
 
 ```json

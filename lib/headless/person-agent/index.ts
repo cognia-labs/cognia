@@ -79,6 +79,7 @@ export async function installPersonAgents(
     { getSession },
     { externalAgentUsageRow },
     { bookUsageRow, startUsageWriteOutbox },
+    { priceMemberUsageRow },
     { settleChatTurn },
     { hostStateRunId },
     writeSource,
@@ -87,6 +88,7 @@ export async function installPersonAgents(
     import("@/lib/db/sessions"),
     import("@/lib/db/session-usage"),
     import("@/lib/usage/usage-write-outbox"),
+    import("./model-pricing"),
     import("@/lib/work-submission/chat-adapter"),
     import("@/lib/work-submission/host-adapter"),
     import("@/lib/companion/desktop-write-source"),
@@ -120,11 +122,16 @@ export async function installPersonAgents(
       await settleChatTurn({ runId: hostStateRunId(actionId), ...input })
     },
     project: (envelope) => writeSource.projectBrainRuntimeEnvelope(envelope),
-    // Through the usage outbox (ADR-0253 §10): a failed write is kept and
-    // retried, never only logged.
+    // Priced at the deployment's rate, else the catalog's, else unpriced, and
+    // through the usage outbox: a failed write is kept and retried, never
+    // only logged (ADR-0253 §10).
     recordUsage: async (input) => {
       const projectId = (await getSession(input.sessionId).catch(() => undefined))?.projectId
-      await bookUsageRow(externalAgentUsageRow({ ...input, ...(projectId ? { projectId } : {}) }))
+      await bookUsageRow(
+        priceMemberUsageRow(
+          externalAgentUsageRow({ ...input, ...(projectId ? { projectId } : {}) })
+        )
+      )
     },
     // The brain's registered publisher pipes it over the bridge; the Host
     // delivers it only to this person's devices.

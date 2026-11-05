@@ -4517,6 +4517,42 @@ describe("HostState Agent RPC dispatcher", () => {
     })
 
     it.each([
+      ["refreshes the deployment's prices", () => personAgentPolicyMock.mockResolvedValue(policy)],
+      [
+        "still runs when the prices cannot be read",
+        () => personAgentPolicyMock.mockRejectedValue(new Error("offline")),
+      ],
+    ])("ADR-0253 a tool-less turn without execution %s before it runs", async (_label, arrange) => {
+      const { initializePersonChat } = await import("@/lib/headless/person-chat")
+      const gateway = await import("@/lib/gateway/person-model-ticket")
+      const resolver = await import("@/lib/claude/build-options")
+      personAgentPolicyMock.mockReset()
+      arrange()
+      const mint = jest.mocked(gateway.mintPersonModelTicket).mockResolvedValue({
+        secret: "ticket",
+        endpoint: "http://127.0.0.1:9000/v1",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      } as never)
+      jest.mocked(resolver.resolveSendOptions).mockResolvedValue({ toolSurface: "none" } as never)
+      initializePersonChat("person-brain", { COGNIA_PERSON_CHAT: "tool-less" })
+      try {
+        await createAgentRpcHostStateDispatcher()(
+          action({ kind: "message.enqueue", messageId: "m-price", text: "hi", attachments: [] })
+        )
+        expect(personAgentPolicyMock).toHaveBeenCalledWith({ id: "brain-transport" })
+        expect(personAgentStartMock).not.toHaveBeenCalled()
+        expect(mint).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5", "session-1")
+        expect(sendPromptMock).toHaveBeenCalled()
+      } finally {
+        const { forgetPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+        forgetPersonChatTurn("session-1")
+        mint.mockReset()
+        personAgentPolicyMock.mockReset()
+        jest.mocked(resolver.resolveSendOptions).mockReset()
+      }
+    })
+
+    it.each([
       ["an agent the org does not allow", { agentRuntimeId: "codex-acp" }, "org_agent_not_allowed"],
       ["a provider no org key covers", { providerOverride: "openai" }, "model_access_unavailable"],
     ])("p6e abandons a turn for %s", async (_label, change, code) => {

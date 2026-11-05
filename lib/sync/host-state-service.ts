@@ -419,6 +419,20 @@ export function createAgentRpcHostStateDispatcher(
                   provider: resolution.provider,
                   model: resolution.model,
                 }
+            } else if (capability.chat === "tool-less") {
+              // No agent to resolve, but the turn is booked at its model's
+              // deployment price, which the policy read refreshes (ADR-0253
+              // §10). A failed read keeps the last prices; it never refuses
+              // the turn.
+              const [{ fetchPersonAgentPolicy }, { transport }] = await Promise.all([
+                import("@/lib/headless/person-agent"),
+                import("@/lib/tauri/transport-instance"),
+              ])
+              try {
+                await fetchPersonAgentPolicy(transport)
+              } catch {
+                // The last prices stand.
+              }
             }
             const partitionChat = !personAgent && capability.chat === "tool-less"
             const options =

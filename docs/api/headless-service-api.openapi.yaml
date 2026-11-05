@@ -137563,6 +137563,32 @@ paths:
                         type: string
                         minLength: 1
                         maxLength: 200
+                  modelPricing:
+                    description: "ADR-0253 §10: per provider, the price its deployment gives a served model, keyed by model id, in USD per
+                      million tokens. The person brain books member usage at it; a model absent here is priced from the
+                      built-in catalog, else shown as unpriced."
+                    type: object
+                    additionalProperties:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        additionalProperties: false
+                        required:
+                          - promptPer1M
+                          - completionPer1M
+                        properties:
+                          promptPer1M:
+                            type: number
+                            minimum: 0
+                          completionPer1M:
+                            type: number
+                            minimum: 0
+                          cachedInputPer1M:
+                            type: number
+                            minimum: 0
+                          cacheCreationPer1M:
+                            type: number
+                            minimum: 0
                   usage:
                     description: "P6g: the calling member's own spend and cap for the current UTC month; null when the Host keeps no usage
                       ledger. Never another person's row."

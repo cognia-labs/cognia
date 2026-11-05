@@ -76,9 +76,9 @@ fn person_policy_request(args: &Value) -> PersonResult<()> {
 /// The longest model name a member's device is handed.
 const MAX_MODEL_NAME_CHARS: usize = 200;
 
-/// One model a provider's deployment serves, with the name its deployment
-/// gives it, if any.
-type ServedModel = (String, Option<String>);
+/// One model a provider's deployment serves, with the name and the price its
+/// deployment gives it, if any.
+type ServedModel = (String, Option<String>, Option<Value>);
 
 fn person_policy_view(policy: cognia_companion::org_agent_policy::PolicyView, available: bool, usage: Option<Value>,
     keyed: &[String], models: &dyn Fn(&str) -> Vec<ServedModel>) -> Value {
@@ -93,16 +93,22 @@ fn person_policy_view(policy: cognia_companion::org_agent_policy::PolicyView, av
     // Beside them, the name each model's deployment gives it, so the device's
     // menu reads "DeepSeek V4.1 Flash" rather than the wire id. Only a name
     // that says more than the id (trimmed, bounded); the id stays the key.
+    // And the price the deployment gives it (ADR-0253 §10), which the brain
+    // books the member's usage at; the snapshot validated its shape.
     let mut served = serde_json::Map::new();
     let mut names = serde_json::Map::new();
+    let mut prices = serde_json::Map::new();
     let mut offer = |provider: &String, entries: Vec<ServedModel>, keep_empty: bool| {
         if served.contains_key(provider) || (!keep_empty && entries.is_empty()) { return; }
-        let named: serde_json::Map<String, Value> = entries.iter().filter_map(|(id, name)| {
+        let named: serde_json::Map<String, Value> = entries.iter().filter_map(|(id, name, _)| {
             let name = name.as_deref()?.trim();
             (!name.is_empty() && name != id).then(|| (id.clone(), Value::from(name.chars().take(MAX_MODEL_NAME_CHARS).collect::<String>())))
         }).collect();
         if !named.is_empty() { names.insert(provider.clone(), Value::Object(named)); }
-        served.insert(provider.clone(), json!(entries.into_iter().map(|(id, _)| id).collect::<Vec<_>>()));
+        let priced: serde_json::Map<String, Value> = entries.iter()
+            .filter_map(|(id, _, pricing)| pricing.clone().map(|pricing| (id.clone(), pricing))).collect();
+        if !priced.is_empty() { prices.insert(provider.clone(), Value::Object(priced)); }
+        served.insert(provider.clone(), json!(entries.into_iter().map(|(id, _, _)| id).collect::<Vec<_>>()));
     };
     for provider in policy.allowed_agents.iter().flat_map(|agent| agent.providers.iter()) {
         offer(provider, models(provider), true);
@@ -111,7 +117,7 @@ fn person_policy_view(policy: cognia_companion::org_agent_policy::PolicyView, av
         offer(provider, models(provider), false);
     }
     json!({"allowedAgents": policy.allowed_agents, "defaultAgent": policy.default_agent,
-        "execution": if available { "sandboxed" } else { "none" }, "models": served, "modelNames": names, "usage": usage})
+        "execution": if available { "sandboxed" } else { "none" }, "models": served, "modelNames": names, "modelPricing": prices, "usage": usage})
 }
 pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, tenant: Option<&str>,
     host: &dyn crate::rpc_host::RpcHost) -> PersonResult<Value> {
@@ -134,9 +140,9 @@ pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, te
     let shared = host.to_shared();
     let models = |provider: &str| shared.gateway().and_then(|gateway| gateway.with_snapshot(|snapshot|
         snapshot.and_then(|snapshot| snapshot.provider(provider)).map(|provider| provider.models.iter().map(|id| {
-            let name = provider.model_metadata.iter().find(|meta| &meta.id == id)
-                .and_then(|meta| meta.fields.get("name")).and_then(Value::as_str).map(str::to_string);
-            (id.clone(), name)
+            let meta = provider.model_metadata.iter().find(|meta| &meta.id == id);
+            let name = meta.and_then(|meta| meta.fields.get("name")).and_then(Value::as_str).map(str::to_string);
+            (id.clone(), name, meta.and_then(|meta| meta.fields.get("pricing")).cloned())
         }).collect::<Vec<ServedModel>>()))).unwrap_or_default();
     let mut view = person_policy_view(policy, available, usage, &keyed, &models);
     // The closed member channel exposes only the member's log audience and
@@ -404,9 +410,10 @@ mod tests {
             Some(json!({"month":"2026-10","spentTokens":5,"reservedTokens":1,"monthlyTokens":100})),
             &["provider".into(), "chat-only".into(), "unserved".into()],
             &|provider| match provider {
-                "provider" => vec![("model".into(), Some(format!("  Model {}  ", "x".repeat(300)))), ("plain".into(), None), ("same".into(), Some("same".into()))],
-                "chat-only" => vec![("chat-model".into(), Some("Chat Model".into()))],
-                "unserved" => vec![], _ => vec![("leak".into(), Some("Leak".into()))] });
+                "provider" => vec![("model".into(), Some(format!("  Model {}  ", "x".repeat(300))), None),
+                    ("plain".into(), None, Some(json!({"promptPer1M":0.6,"completionPer1M":2.2}))), ("same".into(), Some("same".into()), None)],
+                "chat-only" => vec![("chat-model".into(), Some("Chat Model".into()), None)],
+                "unserved" => vec![], _ => vec![("leak".into(), Some("Leak".into()), Some(json!({"promptPer1M":1,"completionPer1M":1})))] });
         // A keyed provider no agent uses is offered for chat; one this Host
         // does not serve is left out; one with no org key never appears.
         assert_eq!(view, json!({"allowedAgents":[{"runtimeId":"pi","available":true,"providers":["provider"]}],"defaultAgent":"pi","execution":"sandboxed",
@@ -414,6 +421,8 @@ mod tests {
             // Only names that say more than the id, trimmed and bounded.
             "modelNames":{"provider":{"model":format!("Model {}", "x".repeat(300)).chars().take(MAX_MODEL_NAME_CHARS).collect::<String>()},
                 "chat-only":{"chat-model":"Chat Model"}},
+            // ADR-0253 §10: only the prices served models' deployments give.
+            "modelPricing":{"provider":{"plain":{"promptPer1M":0.6,"completionPer1M":2.2}}},
             "usage":{"month":"2026-10","spentTokens":5,"reservedTokens":1,"monthlyTokens":100}}));
         assert!(person_policy_request(&json!({})).is_ok());
         for request in [json!({"orgId":"foreign"}), json!(null), json!([])] {

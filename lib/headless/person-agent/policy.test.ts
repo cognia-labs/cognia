@@ -1,3 +1,4 @@
+import { currentPersonModelPricing, rememberPersonModelPricing } from "./model-pricing"
 import { fetchPersonAgentPolicy, resolvePersonAgent, type PersonAgentPolicy } from "./policy"
 
 const policy: PersonAgentPolicy = {
@@ -124,5 +125,36 @@ describe("person agent policy", () => {
     // A Host that sends none leaves the field out, as an older Host's manifest has it.
     const plain = await fetchPersonAgentPolicy({ call })
     expect("modelNames" in plain).toBe(false)
+  })
+
+  it("keeps the deployment's valid prices for served models and remembers them (ADR-0253 §10)", async () => {
+    rememberPersonModelPricing({ stale: { m: { promptPer1M: 9, completionPer1M: 9 } } })
+    const { usage: _usage, ...rest } = policy
+    const call = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ...rest,
+        usage: null,
+        models: { anthropic: ["ok", "bad"], openai: ["gpt"] },
+        modelPricing: {
+          anthropic: {
+            ok: { promptPer1M: 3, completionPer1M: 15, cachedInputPer1M: 0.3 },
+            bad: { promptPer1M: -1, completionPer1M: 1 },
+            unserved: { promptPer1M: 1, completionPer1M: 1 },
+          },
+          openai: { gpt: { promptPer1M: 1 } },
+          broken: "nope",
+        },
+      })
+      .mockResolvedValueOnce({ ...rest, usage: null, models: { anthropic: ["ok"] } })
+    const priced = {
+      anthropic: { ok: { promptPer1M: 3, completionPer1M: 15, cachedInputPer1M: 0.3 } },
+    }
+    await expect(fetchPersonAgentPolicy({ call })).resolves.toMatchObject({ modelPricing: priced })
+    expect(currentPersonModelPricing()).toEqual(priced)
+    // A Host that prices nothing leaves the field out and clears what was remembered.
+    const plain = await fetchPersonAgentPolicy({ call })
+    expect("modelPricing" in plain).toBe(false)
+    expect(currentPersonModelPricing()).toEqual({})
   })
 })
