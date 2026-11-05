@@ -238,8 +238,8 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **只含数据。** 清单只 import 自己的 `define*` 辅助函数，顶层只能是字面量和懒加载入口 `() => import("…")`，不能有 schema、默认值或副作用。每个宿主都会静态 import 生成的注册表，而 S1 已经说明急加载模块图是一项预算（§2）。
 - **身份与生命周期：** `id`、`kind`、`stage`（`kernel`、`stable`、`beta`、`experimental`、`deprecated`）、`owner`（`.github/CODEOWNERS` 中的团队）、`acceptance.realSmoke`（`pending` 或 `passed:<日期>`）。
 - **边界：** `owns`（默认 `{lib,components,hooks,stores,types,app}/<id>/**` 之外的路径）、`dependsOn`、`api`、`provides` 和 `requires`（能力端口）。
-- **宿主层贡献：** `runtimes`、`settings.keys`、`tables`、`tools`、`capabilityContributions`、`taskExecutors`、`builtinSkills`、`pluginApi`、`workflowNodes`、`searchProviders`、`slashCommands`、`prompts`、`flags`、`messages`。
-- **UI 层贡献：** `slots`（插槽名取自 `CANONICAL_EXTENSION_POINTS`）、`settingsSections`、`nav`、`effects`。
+- **宿主层贡献：** `runtimes`、`settings.keys`、`tables`、`tools`、`capabilityContributions`、`taskExecutors`、`builtinSkills`、`pluginApi`、`workflowNodes`、`searchProviders`、`slashCommands`、`nav`、`prompts`、`flags`、`messages`。
+- **UI 层贡献：** `slots`（插槽名取自 `CANONICAL_EXTENSION_POINTS`）、`settingsSections`、`effects`。
 
 已有规则管着的字段，按已有规则来：
 - **`runtimes`** 声明运行时的身份和重要性，外加每个宿主一个适配器，也就是把 §2 的适配矩阵写成数据。brain 适配器沿用 `HeadlessRuntime.start` 的签名。`HeadlessHost`（`brain`、`person-brain`）不扩充，不让桌面冒充 brain。
@@ -266,6 +266,14 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - manifest 可以先放在 `lib/<id>/module.ts`，代码不必先搬过去。搬代码是另一次改动，要有它自己的理由。
   - 规模度量计的是模块带来的开销，不是模块存在本身。G7 的急加载文件数不计 manifest，所以只含数据的模块不增加它。
   - `stage` 记录实际发布的状态。分析 §11.2 把 `eval` 列为 experimental，但它现在正常发布，而 experimental 模块不贡献任何东西，所以在单独决定关闭它之前保持 `stable`。
+- **M2 为导航和插槽定下的规则。**
+  - `nav` 是宿主层字段。它只是数据，而读导航目录的代码都在 `lib/` 下：侧栏及其"更多"菜单和自定义面板、Go 菜单和原生菜单的路由、⌘K、标题栏和窗口标题、界面可用性边界、全视口路由、手机快捷方式。若从 UI 注册表读取，就会新增 `lib`→`components` 的边。
+  - 一个条目装着共享表原先为一个目的地记录的全部信息：布局里存的 id、路由、模块自己命名空间下的标签与别名 key、Lucide 图标和插画、分组与类别、`after` 锚点（Go 菜单位置不同时另给 `goMenuAfter`）、仅桌面和按宿主能力显示两个标志、`fullViewport`，以及可选的手机快捷方式。
+  - `lib/shell/nav-catalog.ts` 是唯一的合并目录：`SIDEBAR_NAV_META` 加上各个启用模块的条目，按锚点插入。锚点不存在、id 或路由重复时直接抛错。所有读取方都按完整 key 查标签，内置条目的 key 是 `desktop.guildRail.<key>`。
+  - 布局默认值和持久化的 id 是针对 id 的布局，不是贡献。`DEFAULT_PINNED_IDS`、手机默认网格和旧 id 映射继续写 `squads`。暂时关闭的模块，其已存储的 id 会保留，不会丢弃（`knownNavIds`）。
+  - 原生 Go 菜单（`src-tauri/src/menu.rs`）读不到注册表，所以仍是一份镜像，由 `menu-actions.test.ts` 对照合并目录检查。
+  - `slots` 的键必须是 `CANONICAL_EXTENSION_POINTS` 中的条目，值必须是懒加载入口。目前还没有模块填充插槽，所以没有外壳读取这个字段。渲染路径（模块组件与插件贡献一起进入 `PluginExtensionSlot`）随第一个贡献者落地，即 `pet` 试点的 `pet.console.tab` 和 `pet.panel.actions`。
+  - `squads` 和 `eval` 把自己的目的地从侧栏目录、图标表、Go 菜单布局、全视口列表、手机目录、插画覆盖表和侧栏标签中移了出来。侧栏目录位于 `packages/plugin-contract`，所以这次迁移使插件开发套件的固定版本失效，重新固定是单独的一步。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
@@ -300,7 +308,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（M0 时 1,124；M1 列出外壳工具包后为 1,088），只降不升 | M0 只报告；自 M1 起阻断 |
 | G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件，或 `types/**`；`api` 文件不能是 barrel（只有一条再导出的文件，即代码搬进 package 后留在原路径的转发文件，不算）。只判进出有 manifest 的模块的 import；仍在过渡表里的子系统等有了 manifest 再纳入，在此之前它的行（kernel 成员则为其 UI 模块）可以列 `api` | 违规 import，按 `文件 -> 目标` 记指纹（M1 时为 0），只降不升 | M1 |
 | G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用。M1 里：`dependsOn` 恰好等于 manifest 所在模块的文件实际 import 到的模块；声明的表或键必须存在、被本模块文件访问，且只有一个认领者。运行时相关的条款等 manifest 有了 `runtimes` 和 `effects`（M2）再生效 | 不一致为 0 | M1 |
-| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令 |
+| G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令；自 M2 起覆盖导航（图标、插画、取值范围、完整 key）和插槽名 |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
 | G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表在 manifest 之外急加载的文件数（M1 时为 1：`lib/modules/define.ts`） | 只降不升；例外要有记录 | M0 |
 | G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（M0 时 166，大多在 connectors 框架里；M1 做完飞书后 107），只降不升。目录 import 框架文件和实现入口文件以外的东西，也算一项 | M0 |
