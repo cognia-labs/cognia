@@ -305,7 +305,7 @@ CSRF check and is spent on use, before the exchange, so a replayed redirect cann
 `beginXOAuth` returns a URL rather than opening one — only the caller knows whether a browser is reachable
 from where it runs. The settings dialog opens it in-process on the desktop; a headless deployment drives
 the same function through the `oauth-begin` operator intent
-(`lib/connectors/principal/admin-intent.ts`), which dispatches on the adapter row's own `type`.
+(`lib/connectors/adapters/lark/principal/admin-intent.ts`), which dispatches on the adapter row's own `type`.
 
 ### The relay
 

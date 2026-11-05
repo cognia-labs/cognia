@@ -239,7 +239,7 @@ emit: async (event: NormalizedInboundEvent) => {
 
 pending 记录存在连接器 secret store 里，**而不是** `sessionStorage`。headless brain 的 Web Storage 是内存垫片，且打开设置对话框的浏览器是另一个进程 —— 写在那里的 state，需要花掉它的那个进程根本看不见。渲染端 `CONNECTOR_OAUTH_STATE_KEY` 那份副本只是桌面端的预检；持久记录才是权威的 CSRF 校验，并且在兑换之前就被花掉（clear-on-use），所以重放的回跳无法搭上它。
 
-`beginXOAuth` 返回 URL 而不是直接打开 —— 只有调用方知道它所处的位置有没有可用浏览器。桌面端由设置对话框在同进程打开；headless 部署通过 `oauth-begin` 运维意图（`lib/connectors/principal/admin-intent.ts`）驱动同一个函数，该意图按适配器行自身的 `type` 分派。
+`beginXOAuth` 返回 URL 而不是直接打开 —— 只有调用方知道它所处的位置有没有可用浏览器。桌面端由设置对话框在同进程打开；headless 部署通过 `oauth-begin` 运维意图（`lib/connectors/adapters/lark/principal/admin-intent.ts`）驱动同一个函数，该意图按适配器行自身的 `type` 分派。
 
 ### 中继
 
