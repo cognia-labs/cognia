@@ -6,7 +6,7 @@ import type { Issue, IssueActor, IssueRun } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
-import { createIssueRun, listActiveIssueRunIssueIds, settleIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, listActiveIssueRunIssueIds, settleIssueRun } from "@/lib/db/issue-runs"
 import { beginAgentTaskAttempt, createAgentTask } from "@/lib/db/agent-tasks"
 import { listActiveAgentRuns, type ActiveAgentRunDeps } from "./active-agent-runs"
 
@@ -151,7 +151,8 @@ describe("listActiveAgentRuns (Dexie)", () => {
       description: "",
     })
     await beginAgentTaskAttempt(task.id, { sessionId: "session-42" })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: first.id,
       projectId: "w1",
       adapterId: "agent-task",
@@ -160,7 +161,7 @@ describe("listActiveAgentRuns (Dexie)", () => {
       by: HUMAN,
       now: 2,
     })
-    await createIssueRun({
+    await claimIssueRun({
       issueId: second.id,
       projectId: "w1",
       adapterId: "agent-team",
@@ -170,7 +171,8 @@ describe("listActiveAgentRuns (Dexie)", () => {
       by: HUMAN,
       now: 1,
     })
-    const settled = await createIssueRun({
+    const settled = await claimIssueRun({
+      status: "running",
       issueId: finished.id,
       projectId: "w1",
       adapterId: "agent-task",

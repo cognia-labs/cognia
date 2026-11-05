@@ -7,7 +7,7 @@ import type { ScheduledTask } from "@/types/scheduler"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import { registerIssueRunAdapter, resetIssueRunRegistry } from "@/lib/issues/run/registry"
 import type { IssueRunAdapter } from "@/lib/issues/run/types"
 import { WAKEUP_BARRIER_KEY, WAKEUP_RELEASE_FLAG, createIssueWakeupFireGate } from "./gate"
@@ -89,7 +89,8 @@ function adapter(sessions: string[] | null): IssueRunAdapter {
 }
 
 const activeRun = (issueId: string) =>
-  createIssueRun({
+  claimIssueRun({
+    status: "running",
     issueId,
     projectId: "w1",
     adapterId: "fake",
@@ -376,6 +377,23 @@ it("releases held inputs when the issue is accepted out of triage, not when it e
   await expect(
     gate(task, event(activity(issue.id, { kind: "triage_changed", triageTo: "pending" })))
   ).resolves.toMatchObject({ fire: false })
+})
+
+it("releases held inputs when the blocking run is cancelled", async () => {
+  const issue = await makeIssue()
+  const deferred: IssueWakeupEvidence[] = [
+    { kind: "commented", subjectId: issue.id, ts: 0, summary: "held", chain: [] },
+  ]
+  const { gate } = setup()
+  const settle = activity(issue.id, {
+    kind: "run_cancelled",
+    originTaskId: "wk1",
+    actor: undefined,
+  })
+  await expect(gate(rule(issue.id, { deferred }), event(settle))).resolves.toEqual({
+    fire: true,
+    payload: { [WAKEUP_RELEASE_FLAG]: true },
+  })
 })
 
 it("releases held inputs when the blocking run settles, even its own", async () => {

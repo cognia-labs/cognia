@@ -8,7 +8,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createAgentTask } from "@/lib/db/agent-tasks"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import { createIssueSourceRegistry } from "./registry"
 import {
   AGENT_TASK_SOURCE_LABEL,
@@ -144,7 +144,8 @@ describe("list", () => {
       title: "n",
       description: "",
     })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "agent-task",

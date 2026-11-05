@@ -3736,7 +3736,8 @@
         "commented": "已评论",
         "run_started": "运行开始",
         "run_succeeded": "运行成功",
-        "run_failed": "运行失败"
+        "run_failed": "运行失败",
+        "run_cancelled": "运行已取消"
       }
     },
     "issueProjectId": {

@@ -142,8 +142,6 @@ export interface ApplyRemoteFieldOptions {
   provider?: string
   /** Local cycle id for a remote cycle external id, when the field is `cycle`. */
   cycleIdOf?: (externalId: string) => string | undefined
-  /** True while a run holds the issue, which refuses a status write. */
-  runActive?: boolean
 }
 
 /**
@@ -168,12 +166,8 @@ export async function applyRemoteField(
       break
     case "status": {
       if (typeof value !== "string") return false
-      const denial = await moveIssue({
-        id: issue.id,
-        to: value as IssueStatus,
-        by,
-        runActive: options.runActive ?? false,
-      })
+      // A run holding the issue refuses this inside `moveIssue`'s own write.
+      const denial = await moveIssue({ id: issue.id, to: value as IssueStatus, by })
       if (denial) return false
       break
     }

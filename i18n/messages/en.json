@@ -23907,6 +23907,7 @@
       "priority_changed": "changed priority from {from} to {to}",
       "project_changed": "moved this to another project",
       "reassigned": "reassigned this from {from} to {to}",
+      "run_cancelled": "cancelled an agent run",
       "run_checked_in": "a periodic run checked in",
       "run_failed": "an agent run failed",
       "run_started": "started an agent run",
@@ -24268,6 +24269,10 @@
         "body": "{title}",
         "title": "{identifier} reassigned to {to}"
       },
+      "run_cancelled": {
+        "body": "{title}",
+        "title": "{identifier} run cancelled"
+      },
       "run_failed": {
         "body": "{error}",
         "title": "{identifier} run failed"
@@ -24514,7 +24519,9 @@
       "baseBranchStacked": "Set by the stack: a pull request has one base.",
       "cancel": "Cancel run",
       "cancelled": "Run cancelled",
+      "cancelledDuringDispatch": "{identifier}: the run was cancelled before its engine accepted it.",
       "description": "Choose the execution engine. This is the confirmation — the engine starts as soon as you press Run.",
+      "dispatchFailed": "The engine did not accept the run: {error}",
       "engineLabel": "Execution engine",
       "loading": "Checking which engines can run this issue…",
       "noAdapters": "No execution engine is registered yet.",
@@ -24765,6 +24772,7 @@
         "priority_changed": "priority changes",
         "project_changed": "project changes",
         "reassigned": "reassigned",
+        "run_cancelled": "run cancelled",
         "run_checked_in": "run checked in",
         "run_failed": "run failed",
         "run_started": "run started",
@@ -68520,6 +68528,7 @@
             "assigned": "Assigned",
             "commented": "Commented",
             "created": "Created",
+            "run_cancelled": "Run cancelled",
             "run_failed": "Run failed",
             "run_started": "Run started",
             "run_succeeded": "Run succeeded",

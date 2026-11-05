@@ -20,7 +20,7 @@ import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun, listIssueRuns } from "@/lib/db/issue-runs"
+import { claimIssueRun, getIssueRun, listIssueRuns } from "@/lib/db/issue-runs"
 import { listIssueEvents } from "@/lib/db/issue-events"
 import {
   listIssueRunOptions,
@@ -77,17 +77,9 @@ function engine(over: Partial<IssueRunAdapter> = {}): IssueRunAdapter {
     id: "fake",
     kind: "agent-task",
     canRun: async () => ({ ok: true }),
-    start: async (target, context) => {
+    start: async (_target, context) => {
       starts.push(context)
-      return createIssueRun({
-        issueId: target.issue.id,
-        projectId: target.issue.projectId,
-        adapterId: "fake",
-        kind: "agent-task",
-        targetId: "task-1",
-        by: context.by,
-        ...(context.wakeup ? { wakeup: context.wakeup } : {}),
-      })
+      return { targetId: "task-1", status: "running" }
     },
     poll: async () => null,
     ...over,
@@ -309,7 +301,8 @@ describe("delivering", () => {
 
   it("steers the input into an active run and records the join", async () => {
     const issue = await makeIssue({ assignee: AGENT })
-    const active = await createIssueRun({
+    const active = await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",
@@ -338,7 +331,8 @@ describe("delivering", () => {
 
   it("holds the input when the active run cannot take it", async () => {
     const issue = await makeIssue({ assignee: AGENT })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",
@@ -529,7 +523,8 @@ describe("waking on timeout", () => {
   it("records the timeout on the trail when the run in flight cannot take it", async () => {
     registerIssueRunAdapter(engine())
     const issue = await makeIssue({ assignee: AGENT })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",

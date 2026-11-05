@@ -10,7 +10,7 @@ jest.mock("@/stores/agent/agent-team-store", () => ({
 
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createCharacter } from "@/lib/db/characters"
-import { createIssueRun, settleIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, settleIssueRun } from "@/lib/db/issue-runs"
 import type { IssueRun } from "@/types/issues"
 import {
   SELF_ACTOR_KEY,
@@ -51,7 +51,8 @@ describe("viewerAgentKeys", () => {
 
 describe("listRunningIssueIds", () => {
   it("mirrors the active-run index for the workspace", async () => {
-    const run = await createIssueRun({
+    const run = await claimIssueRun({
+      status: "running",
       issueId: "iss-a",
       projectId: "w1",
       adapterId: "x",
@@ -104,7 +105,8 @@ describe("listSquadRunsByIssue", () => {
   })
 
   it("reads the workspace's run rows and the team store by default", async () => {
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: "iss-z",
       projectId: "w1",
       adapterId: "agent-team",

@@ -17,7 +17,7 @@ import { getSharedBuiltInSkillRegistry } from "../registry"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { applyRuntimeIssueStatus, createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, getIssueRun } from "@/lib/db/issue-runs"
 import { registerIssueRunAdapter, resetIssueRunRegistry } from "@/lib/issues/run/registry"
 import "./wakeup-checkin"
 
@@ -58,7 +58,8 @@ async function setup(
     status: "todo",
     createdBy: { kind: "human" },
   })
-  const run = await createIssueRun({
+  const run = await claimIssueRun({
+    status: "running",
     issueId: issue.id,
     projectId: "w1",
     adapterId: "fake",

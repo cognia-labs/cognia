@@ -147,6 +147,7 @@
     "run_started": "启动了一次 Agent 运行",
     "run_succeeded": "完成了一次 Agent 运行",
     "run_failed": "Agent 运行失败",
+    "run_cancelled": "Agent 运行已取消",
     "artifact_linked": "关联了一个产物",
     "github_linked": "关联了一个 GitHub 议题",
     "github_write_back": "向 GitHub 推送了一次变更",
@@ -535,6 +536,8 @@
     "engineLabel": "执行引擎",
     "submit": "运行",
     "started": "{identifier} 已派发给 {adapter}",
+    "dispatchFailed": "执行引擎没有接受这次运行：{error}",
+    "cancelledDuringDispatch": "{identifier}：运行在执行引擎接受之前已被取消。",
     "baseBranch": "基线分支",
     "baseBranchHint": "Pull request 的目标分支；源分支由议题编号自动推导。",
     "reviewRule": "运行结束后议题进入「待审阅」—— 绝不会直接置为「完成」。",
@@ -603,6 +606,10 @@
     "run_failed": {
       "title": "{identifier} 运行失败",
       "body": "{error}"
+    },
+    "run_cancelled": {
+      "title": "{identifier} 运行已取消",
+      "body": "{title}"
     },
     "status_changed": {
       "title": "{identifier} 已移至 {to}",
@@ -957,6 +964,7 @@
       "run_started": "运行开始",
       "run_succeeded": "运行成功",
       "run_failed": "运行失败",
+      "run_cancelled": "运行已取消",
       "run_checked_in": "运行签到",
       "artifact_linked": "关联产物",
       "github_linked": "关联 GitHub issue",

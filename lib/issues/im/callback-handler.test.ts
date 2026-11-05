@@ -17,7 +17,7 @@ import { createIssue, getIssue } from "@/lib/db/issues"
 import { getDb } from "@/lib/db/schema"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getIssueRunRegistry, resetIssueRunRegistry } from "@/lib/issues/run/registry"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import {
   actorFromUser,
   deleteSiblingBindings,
@@ -190,7 +190,8 @@ describe("handleIssueActionCallback", () => {
       createdBy: { kind: "human" },
       status: "in_progress",
     })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: other.id,
       projectId: "w1",
       adapterId: "x",
@@ -217,16 +218,9 @@ describe("handleIssueActionCallback", () => {
       id: "fake",
       kind: "agent-task",
       canRun: async () => ({ ok: true }),
-      start: async (target, ctx) => {
+      start: async (_target, ctx) => {
         starts.push(ctx)
-        return createIssueRun({
-          issueId: target.issue.id,
-          projectId: "w1",
-          adapterId: "fake",
-          kind: "agent-task",
-          targetId: "t",
-          by: ctx.by,
-        })
+        return { targetId: "t", status: "running" }
       },
       poll: async () => null,
     })
@@ -469,16 +463,9 @@ describe("▶ Run with more than one capable engine", () => {
         id,
         kind: id === "agent-a" ? "agent-task" : "agent-team",
         canRun: async () => ({ ok: true }),
-        start: async (target, ctx) => {
+        start: async () => {
           started.push(id)
-          return createIssueRun({
-            issueId: target.issue.id,
-            projectId: "w1",
-            adapterId: id,
-            kind: "agent-task",
-            targetId: "t",
-            by: ctx.by,
-          })
+          return { targetId: "t", status: "running" }
         },
         poll: async () => ({ state: "running" }) as never,
       })
@@ -529,16 +516,9 @@ describe("▶ Run with more than one capable engine", () => {
       id: "only",
       kind: "agent-task",
       canRun: async () => ({ ok: true }),
-      start: async (target, ctx) => {
+      start: async () => {
         started.push("only")
-        return createIssueRun({
-          issueId: target.issue.id,
-          projectId: "w1",
-          adapterId: "only",
-          kind: "agent-task",
-          targetId: "t",
-          by: ctx.by,
-        })
+        return { targetId: "t", status: "running" }
       },
       poll: async () => ({ state: "running" }) as never,
     })

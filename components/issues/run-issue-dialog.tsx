@@ -173,16 +173,27 @@ export function RunIssueDialog({
             }
           : {}),
       })
-      toast.success(
-        t("run.started", { identifier, adapter: t(`run.adapter.${run.adapterId}.name`) })
-      )
+      if (run.status === "cancelled") {
+        // A cancel landed while the engine was accepting; the bridge already
+        // cancelled what the engine created.
+        toast.info(t("run.cancelledDuringDispatch", { identifier }))
+      } else {
+        toast.success(
+          t("run.started", { identifier, adapter: t(`run.adapter.${run.adapterId}.name`) })
+        )
+      }
       onStarted?.(run)
       onOpenChange(false)
     } catch (cause) {
       if (cause instanceof IssueRunRefusedError) {
         setError(t(`run.refusal.${cause.reason}`, { detail: cause.detail ?? "" }))
       } else {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        // The bridge settled the claim as failed; say the engine refused.
+        setError(
+          t("run.dispatchFailed", {
+            error: cause instanceof Error ? cause.message : String(cause),
+          })
+        )
       }
     } finally {
       setBusy(false)

@@ -3,12 +3,13 @@
  *
  * `installIssueRunBridge()` registers the three adapters and starts the
  * watchers that turn engine-side state changes into `poll` calls:
- *   - a Dexie `liveQuery` over the AgentTask rows and integration jobs the
- *     active runs point at (fires on any status/revision change),
+ *   - a Dexie `liveQuery` over the AgentTask rows, integration jobs and Squad
+ *     run records the active runs point at (fires on any status/revision
+ *     change),
  *   - a subscription on the AgentTeam store (tasks / team status),
  *   - a slow safety interval and one reconcile at boot (the reload-recovery
  *     path — the adapters' in-flight promises are gone after a reload, the
- *     engine rows are not).
+ *     engine rows are not), preceded once by `repairStrandedIssues`.
  *
  * Idempotent: a second call returns the same disposer. Called from
  * `bootIssueTracker` (`components/providers/initializers/issue-tracker-initializer.tsx`).
@@ -20,7 +21,12 @@ import { listIssueRuns } from "@/lib/db/issue-runs"
 import { createAgentTaskRunAdapter } from "./agent-task-adapter"
 import { createAgentTeamRunAdapter, ensureAgentTeamStoreLoaded } from "./agent-team-adapter"
 import { createGithubLoopRunAdapter } from "./github-loop-adapter"
-import { getIssueRunRegistry, reconcileIssueRuns, type IssueRunRegistry } from "./registry"
+import {
+  getIssueRunRegistry,
+  reconcileIssueRuns,
+  repairStrandedIssues,
+  type IssueRunRegistry,
+} from "./registry"
 
 export const ISSUE_RUN_RECONCILE_INTERVAL_MS = 60_000
 const RECONCILE_DEBOUNCE_MS = 200
@@ -43,18 +49,27 @@ let installed: { dispose: () => void } | null = null
 export async function engineChangeSignature(): Promise<string> {
   const runs = await listIssueRuns({ activeOnly: true })
   const db = getDb()
-  const taskIds = runs.filter((run) => run.kind === "agent-task").map((run) => run.targetId)
-  const jobIds = runs.filter((run) => run.kind === "github-loop").map((run) => run.targetId)
-  const [tasks, jobs] = await Promise.all([
+  // A claim still waiting for its engine points at nothing yet.
+  const bound = runs.filter((run) => run.targetId !== "")
+  const taskIds = bound.filter((run) => run.kind === "agent-task").map((run) => run.targetId)
+  const jobIds = bound.filter((run) => run.kind === "github-loop").map((run) => run.targetId)
+  const squadRunIds = bound.flatMap((run) =>
+    run.kind === "agent-team" && run.targetRef?.squadRunId ? [run.targetRef.squadRunId] : []
+  )
+  const [tasks, jobs, squadRuns] = await Promise.all([
     taskIds.length ? db.agentTasks.where("id").anyOf(taskIds).toArray() : Promise.resolve([]),
     jobIds.length
       ? db.integrationActionJobs.where("id").anyOf(jobIds).toArray()
       : Promise.resolve([]),
+    squadRunIds.length
+      ? db.agentTeamRuns.where("id").anyOf(squadRunIds).toArray()
+      : Promise.resolve([]),
   ])
   return [
-    `runs:${runs.length}`,
+    `runs:${runs.length}:${bound.length}`,
     ...tasks.map((task) => `task:${task.id}:${task.status}:${task.revision}`),
     ...jobs.map((job) => `job:${job.id}:${job.status}`),
+    ...squadRuns.map((record) => `squad:${record.id}:${record.status}`),
   ].join("|")
 }
 
@@ -131,8 +146,11 @@ export function installIssueRunBridge(options: InstallIssueRunBridgeOptions = {}
     () => void runReconcile(),
     options.intervalMs ?? ISSUE_RUN_RECONCILE_INTERVAL_MS
   )
-  // Reload recovery: settle whatever finished while we were away.
-  void runReconcile()
+  // Reload recovery: finish settles a crash interrupted, then settle whatever
+  // finished while we were away.
+  void repairStrandedIssues()
+    .catch(onError)
+    .then(() => runReconcile())
 
   const dispose = () => {
     if (disposed) return

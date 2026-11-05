@@ -114,36 +114,30 @@ function run(over: Partial<IssueRun> = {}): IssueRun {
 
 function makeDeps(over: Partial<AgentTaskRunAdapterDeps> = {}) {
   const created: Parameters<AgentTaskRunAdapterDeps["createTask"]>[0][] = []
-  const runs: Parameters<AgentTaskRunAdapterDeps["createRun"]>[0][] = []
   const started: string[] = []
   const cancelled: string[] = []
-  const marked: string[] = []
   const deps: AgentTaskRunAdapterDeps = {
     resolveCharacter: async (id) => (id === "char-1" ? { id, name: "Ada" } : undefined),
     createTask: async (input) => {
       created.push(input)
       return task({ id: "agent-task:new", agentId: input.agentId, title: input.title })
     },
-    runTaskNow: async (id) => {
+    startTaskNow: async (id) => {
       started.push(id)
+      return { status: "running" }
     },
     cancelTask: async (id) => {
       cancelled.push(id)
     },
     getTask: async () => undefined,
     listAttempts: async () => [],
-    createRun: async (input) => {
-      runs.push(input)
-      return run({ id: "run-new", targetId: input.targetId, status: input.status ?? "running" })
-    },
-    markRunning: async (id) => {
-      marked.push(id)
-    },
     now: () => 42,
     ...over,
   }
-  return { deps, created, runs, started, cancelled, marked }
+  return { deps, created, started, cancelled }
 }
+
+const CTX = { runId: "run-claim", by: HUMAN } as const
 
 describe("helpers", () => {
   it("builds the task prompt from identifier, project context and description", () => {
@@ -195,10 +189,10 @@ describe("canRun", () => {
 })
 
 describe("start", () => {
-  it("creates the AgentTask, records a queued run, dispatches, then marks running", async () => {
-    const { deps, created, runs, started, marked } = makeDeps()
+  it("creates the AgentTask, starts it, and hands back the accepted dispatch", async () => {
+    const { deps, created, started } = makeDeps()
     const adapter = createAgentTaskRunAdapter(deps)
-    const result = await adapter.start(target(), { by: HUMAN, origin: "interactive" })
+    const dispatch = await adapter.start(target(), { ...CTX, origin: "interactive" })
     expect(created[0]).toMatchObject({
       agentId: "char-1",
       projectId: "w1",
@@ -207,45 +201,74 @@ describe("start", () => {
       tags: ["issue", "issue:iss-1", "MERC-1"],
       now: 42,
     })
-    expect(runs[0]).toMatchObject({
-      issueId: "iss-1",
-      adapterId: AGENT_TASK_RUN_ADAPTER_ID,
-      kind: "agent-task",
-      targetId: "agent-task:new",
-      status: "queued",
-      by: HUMAN,
-    })
     expect(started).toEqual(["agent-task:new"])
-    expect(marked).toEqual(["run-new"])
-    expect(result.status).toBe("running")
+    expect(dispatch).toEqual({ targetId: "agent-task:new", status: "running" })
   })
 
-  it("appends a wakeup brief to the task and stores the lineage on the run", async () => {
-    const { deps, created, runs } = makeDeps()
+  it("reports queued when the Scheduler buffered the start", async () => {
+    const { deps } = makeDeps({ startTaskNow: async () => ({ status: "queued" }) })
+    expect(
+      await createAgentTaskRunAdapter(deps).start(target(), { ...CTX, origin: "interactive" })
+    ).toEqual({ targetId: "agent-task:new", status: "queued" })
+  })
+
+  it("does not wait for the task to finish", async () => {
+    let finish: () => void = () => {}
+    const { deps } = makeDeps({
+      // Accepted immediately; the work itself would take as long as it takes.
+      startTaskNow: async () => {
+        void new Promise<void>((resolve) => {
+          finish = resolve
+        })
+        return { status: "running" }
+      },
+    })
+    await expect(
+      createAgentTaskRunAdapter(deps).start(target(), { ...CTX, origin: "interactive" })
+    ).resolves.toMatchObject({ status: "running" })
+    finish()
+  })
+
+  it("appends a wakeup brief to the task", async () => {
+    const { deps, created } = makeDeps()
     const wakeup = { taskId: "wk", chain: ["wk"], statusBefore: "todo" as const, periodic: true }
     await createAgentTaskRunAdapter(deps).start(target(), {
-      by: HUMAN,
+      ...CTX,
       origin: "wakeup",
       brief: "[WAKEUP wk] MERC-1",
       wakeup,
     })
     expect(created[0]!.description.endsWith("\n\n[WAKEUP wk] MERC-1")).toBe(true)
-    expect(runs[0]).toMatchObject({ wakeup })
   })
 
-  it("throws when the target is not runnable and when the scheduler refuses", async () => {
-    const { deps } = makeDeps({
-      runTaskNow: async () => {
+  it("throws when the target is not runnable, and cancels the task the Scheduler refused", async () => {
+    const { deps, cancelled } = makeDeps({
+      startTaskNow: async () => {
         throw new Error("scheduler down")
       },
     })
     const adapter = createAgentTaskRunAdapter(deps)
     await expect(
-      adapter.start(target({ issue: issue({ assignee: undefined }) }), { by: HUMAN, origin: "im" })
+      adapter.start(target({ issue: issue({ assignee: undefined }) }), { ...CTX, origin: "im" })
     ).rejects.toThrow(/refused: assignee-kind-mismatch/)
-    await expect(adapter.start(target(), { by: HUMAN, origin: "im" })).rejects.toThrow(
+    await expect(adapter.start(target(), { ...CTX, origin: "im" })).rejects.toThrow(
       "scheduler down"
     )
+    expect(cancelled).toEqual(["agent-task:new"])
+  })
+
+  it("still throws the Scheduler's refusal when cancelling the task also fails", async () => {
+    const { deps } = makeDeps({
+      startTaskNow: async () => {
+        throw new Error("scheduler down")
+      },
+      cancelTask: async () => {
+        throw new Error("cancel failed")
+      },
+    })
+    await expect(
+      createAgentTaskRunAdapter(deps).start(target(), { ...CTX, origin: "im" })
+    ).rejects.toThrow("scheduler down")
   })
 })
 
@@ -255,6 +278,15 @@ describe("poll", () => {
       const { deps } = makeDeps({ getTask: async () => task({ status }) })
       expect(await createAgentTaskRunAdapter(deps).poll(run())).toBeNull()
     }
+  })
+
+  it("reports running once a queued run's task is in progress", async () => {
+    const { deps } = makeDeps({ getTask: async () => task({ status: "in_progress" }) })
+    expect(await createAgentTaskRunAdapter(deps).poll(run({ status: "queued" }))).toEqual({
+      status: "running",
+    })
+    const pending = makeDeps({ getTask: async () => task({ status: "pending" }) })
+    expect(await createAgentTaskRunAdapter(pending.deps).poll(run({ status: "queued" }))).toBeNull()
   })
 
   it("settles from the task's terminal status with attempts as evidence", async () => {

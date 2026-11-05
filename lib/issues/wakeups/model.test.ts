@@ -486,6 +486,18 @@ describe("summarizeIssueEventPayload", () => {
       })
     ).toBe("comment: a b")
     expect(summarizeIssueEventPayload({ kind: "created", by: { kind: "human" } })).toBe("created")
+    expect(summarizeIssueEventPayload({ kind: "run_cancelled", runId: "r", adapterId: "a" })).toBe(
+      "run cancelled"
+    )
+    expect(
+      summarizeIssueEventPayload({
+        kind: "run_cancelled",
+        runId: "r",
+        adapterId: "a",
+        reason: "squad run terminated",
+      })
+    ).toBe("run cancelled: squad run terminated")
+    expect(ISSUE_WAKEUP_EVENT_KINDS).toContain("run_cancelled")
   })
 })
 

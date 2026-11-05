@@ -100,6 +100,7 @@ const EVENT_KINDS = exhaustive<IssueEventKind>({
   run_started: true,
   run_succeeded: true,
   run_failed: true,
+  run_cancelled: true,
   artifact_linked: true,
   deliverable_accepted: true,
   github_linked: true,
@@ -279,7 +280,7 @@ describe("issue tracker dynamic message keys", () => {
     })
 
     it("covers every event kind the activity trail can be handed", () => {
-      expect(EVENT_KINDS).toHaveLength(40)
+      expect(EVENT_KINDS).toHaveLength(41)
     })
   })
 })

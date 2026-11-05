@@ -31,6 +31,7 @@ const ISSUE_TRIGGER_KINDS = [
   "run_started",
   "run_succeeded",
   "run_failed",
+  "run_cancelled",
 ] as const
 
 /** `"a, b"` in the box, `["a", "b"]` in the params. */

@@ -18,7 +18,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
 import "./update"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import { getIssue } from "@/lib/db/issues"
 
 const dbFixture = createDbTestFixture()
@@ -128,7 +128,8 @@ describe("issue.update", () => {
     // The partial outcome is the whole reason results are per-field: an agent
     // told "applied" for the batch would believe the move happened.
     const issue = await makeIssue({ status: "in_progress" })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "agent-task",

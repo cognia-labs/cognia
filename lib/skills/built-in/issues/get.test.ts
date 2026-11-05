@@ -18,7 +18,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
 import "./get"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import { addIssueComment } from "@/lib/db/issues"
 
 const dbFixture = createDbTestFixture()
@@ -73,7 +73,8 @@ describe("issue.get", () => {
 
   it("lists runs with their artifacts", async () => {
     const issue = await makeIssue()
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "agent-task",

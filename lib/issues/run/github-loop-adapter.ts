@@ -18,7 +18,6 @@
 
 import type { IssueProject, IssueRun, IssueRunArtifact } from "@/types/issues"
 import type { IntegrationActionJob } from "@/types/plugin/plugin-integration"
-import { createIssueRun } from "@/lib/db/issue-runs"
 import { getIntegrationActionJob } from "@/lib/db/integrations"
 import {
   approveIntegrationActionJob,
@@ -33,6 +32,7 @@ import {
 } from "@/lib/issues/github-writeback"
 import type {
   IssueRunAdapter,
+  IssueRunDispatch,
   IssueRunPollResult,
   IssueRunStartContext,
   IssueRunTarget,
@@ -134,8 +134,6 @@ export interface GithubLoopRunAdapterDeps {
   approve: typeof approveIntegrationActionJob
   cancelJob: (jobId: string) => Promise<unknown>
   getJob: (jobId: string) => Promise<IntegrationActionJob | undefined>
-  createRun: typeof createIssueRun
-  now: () => number
   /**
    * Record the parent pointer in the user's own checkout, when the container
    * references one. Best effort by design — see `recordLocalParent`.
@@ -160,8 +158,6 @@ function defaultDeps(): GithubLoopRunAdapterDeps {
     approve: approveIntegrationActionJob,
     cancelJob: cancelIntegrationActionJob,
     getJob: getIntegrationActionJob,
-    createRun: createIssueRun,
-    now: Date.now,
     recordParent: async (repoPath, branch, parent) => {
       const { gitStackSetParent } = await import("@/lib/git/commands")
       await gitStackSetParent(repoPath, branch, parent)
@@ -223,7 +219,7 @@ export function createGithubLoopRunAdapter(
     id: GITHUB_LOOP_RUN_ADAPTER_ID,
     kind: "github-loop",
     canRun,
-    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRun> {
+    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRunDispatch> {
       const verdict = await canRun(target)
       if (!verdict.ok) throw new Error(`github-loop adapter refused: ${verdict.reason}`)
       const { issue } = target
@@ -250,7 +246,6 @@ export function createGithubLoopRunAdapter(
         (typeof baseOption === "string" && baseOption.trim()
           ? baseOption.trim()
           : DEFAULT_GITHUB_LOOP_BASE)
-      const now = deps.now()
 
       let job = await deps.execute(
         GITHUB_DELIVERY_PLUGIN_ID,
@@ -269,7 +264,9 @@ export function createGithubLoopRunAdapter(
               : {}),
           },
           source: "manual",
-          idempotencyKey: `issue-run:${issue.id}:${now}`,
+          // The claimed run names the job: one dispatch, one job, even if the
+          // same issue is run again within the same millisecond.
+          idempotencyKey: `issue-run:${context.runId}`,
         },
         // A person who picked this run in the Run dialog or on an IM card
         // confirmed the write (ADR-0239 phase 2): its human receipt is the
@@ -286,11 +283,7 @@ export function createGithubLoopRunAdapter(
 
       if (stackOn) await recordLocalParent(deps, target, head, stackOn)
 
-      return deps.createRun({
-        issueId: issue.id,
-        projectId: issue.projectId,
-        adapterId: GITHUB_LOOP_RUN_ADAPTER_ID,
-        kind: "github-loop",
+      return {
         targetId: job.id,
         targetRef: {
           repoFullName: ref.repoFullName,
@@ -298,11 +291,11 @@ export function createGithubLoopRunAdapter(
           base,
           ...(stackOn ? { stackedOn: stackOn } : {}),
         },
-        by: context.by,
+        // Still `awaiting_approval` after the release above means the write
+        // tier is holding it for a person elsewhere (ADR-0239): the run is
+        // claimed and waiting, i.e. `queued`, until the job starts.
         status: job.status === "running" ? "running" : "queued",
-        ...(context.wakeup ? { wakeup: context.wakeup } : {}),
-        now,
-      })
+      }
     },
     async poll(run: IssueRun): Promise<IssueRunPollResult> {
       const job = await deps.getJob(run.targetId)
@@ -315,6 +308,8 @@ export function createGithubLoopRunAdapter(
           return { status: "failed", error: job.error ?? `job ${job.status}` }
         case "cancelled":
           return { status: "cancelled" }
+        case "running":
+          return run.status === "queued" ? { status: "running" } : null
         default:
           return null
       }

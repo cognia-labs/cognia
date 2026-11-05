@@ -16,11 +16,25 @@ export interface AgentTaskRuntimeDeps {
   moveTask: (taskId: string, status: AgentTask["status"], now: number) => Promise<unknown>
   createTask: (input: CreateScheduledTaskInput) => Promise<{ id: string }>
   runTaskNow: (taskId: string) => Promise<unknown>
+  /**
+   * Start the scheduled task and resolve once the Scheduler accepted it —
+   * running, or buffered behind a running execution — with no wait for the
+   * work. Rejects when the start ended without running (skipped) or the
+   * Scheduler refused.
+   */
+  startTaskNow: (taskId: string) => Promise<AgentTaskStart>
   pauseTask: (taskId: string) => Promise<boolean>
   resumeTask: (taskId: string) => Promise<boolean>
   deleteTask: (taskId: string) => Promise<boolean>
   getExecution: (executionId: string) => Promise<TaskExecution | null>
   reconcile: typeof reconcileAgentTaskAttempts
+}
+
+/** What the Scheduler said when it accepted an agent task's start. */
+export interface AgentTaskStart {
+  executionId: string
+  /** `running` when it started now, `queued` when buffered behind another run. */
+  status: "running" | "queued"
 }
 
 export async function ensureAgentTaskSchedule(
@@ -64,6 +78,67 @@ export async function runAgentTaskNow(
   const execution = await deps.runTaskNow(scheduledTaskId)
   if (!execution) throw new Error("Agent task Scheduler execution did not start")
   return execution
+}
+
+/**
+ * Start an agent task and return as soon as the Scheduler accepted it.
+ *
+ * `runAgentTaskNow` resolves with the SETTLED execution, which can take as
+ * long as the task's timeout. A caller that only needs to know the task is
+ * on its way (the issue run bridge, which owns the issue's column from the
+ * moment the engine accepts) uses this instead and watches the task row for
+ * the outcome.
+ */
+export async function startAgentTaskNow(
+  taskId: string,
+  providedDeps?: AgentTaskRuntimeDeps
+): Promise<AgentTaskStart> {
+  const deps = providedDeps ?? defaultDeps()
+  const scheduledTaskId = await ensureAgentTaskSchedule(taskId, deps)
+  return deps.startTaskNow(scheduledTaskId)
+}
+
+/**
+ * Bridge the Scheduler's settle-time `runTaskNow` to an accept-time answer
+ * through its `onAccepted` hook. Exported for its own test.
+ */
+export function acceptedStart(
+  runTaskNow: (
+    taskId: string,
+    opts: { onAccepted: (execution: TaskExecution) => void }
+  ) => Promise<TaskExecution | null>,
+  taskId: string
+): Promise<AgentTaskStart> {
+  return new Promise<AgentTaskStart>((resolve, reject) => {
+    let answered = false
+    const answer = (start: AgentTaskStart) => {
+      if (answered) return
+      answered = true
+      resolve(start)
+    }
+    runTaskNow(taskId, {
+      onAccepted: (execution) => answer({ executionId: execution.id, status: "running" }),
+    })
+      .then((execution) => {
+        if (answered) return
+        // No `onAccepted`: the start ended without running, or it was buffered.
+        if (execution && execution.status === "pending") {
+          answer({ executionId: execution.id, status: "queued" })
+          return
+        }
+        if (execution && execution.status !== "skipped") {
+          answer({ executionId: execution.id, status: "running" })
+          return
+        }
+        answered = true
+        reject(new Error("Agent task Scheduler execution did not start"))
+      })
+      .catch((error: unknown) => {
+        if (answered) return
+        answered = true
+        reject(error)
+      })
+  })
 }
 
 export async function pauseAgentTask(
@@ -123,6 +198,7 @@ function defaultDeps(): AgentTaskRuntimeDeps {
     moveTask: moveAgentTask,
     createTask: (input) => scheduler.createTask(input),
     runTaskNow: (taskId) => scheduler.runTaskNow(taskId),
+    startTaskNow: (taskId) => acceptedStart((id, opts) => scheduler.runTaskNow(id, opts), taskId),
     pauseTask: (taskId) => scheduler.pauseTask(taskId),
     resumeTask: (taskId) => scheduler.resumeTask(taskId),
     deleteTask: (taskId) => scheduler.deleteTask(taskId),

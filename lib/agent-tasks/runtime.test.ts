@@ -1,9 +1,12 @@
 import type { AgentTask } from "@/types/agent/agent-task"
+import type { TaskExecution } from "@/types/scheduler"
 import {
+  acceptedStart,
   cancelAgentTask,
   ensureAgentTaskSchedule,
   reconcileAgentTaskRuntime,
   runAgentTaskNow,
+  startAgentTaskNow,
   type AgentTaskRuntimeDeps,
 } from "./runtime"
 
@@ -31,6 +34,10 @@ function task(overrides: Partial<AgentTask> = {}): AgentTask {
 function fixture(row = task()) {
   const createTask = jest.fn(async () => ({ id: "scheduled-1" }))
   const runTaskNowMock = jest.fn(async () => ({ id: "execution-1", status: "completed" }))
+  const startTaskNowMock = jest.fn(async () => ({
+    executionId: "execution-1",
+    status: "running" as const,
+  }))
   const deleteTask = jest.fn(async () => true)
   const bindSchedule = jest.fn(async () => undefined)
   const moveTask = jest.fn(async () => row)
@@ -50,6 +57,7 @@ function fixture(row = task()) {
       moveTask,
       createTask,
       runTaskNow: runTaskNowMock,
+      startTaskNow: startTaskNowMock,
       pauseTask: jest.fn(async () => true),
       resumeTask: jest.fn(async () => true),
       deleteTask,
@@ -58,6 +66,7 @@ function fixture(row = task()) {
     },
     createTask,
     runTaskNowMock,
+    startTaskNowMock,
     deleteTask,
     bindSchedule,
     moveTask,
@@ -137,5 +146,65 @@ describe("single-Agent task Scheduler runtime", () => {
     const resolveExecution = fx.reconcile.mock.calls[0][0]
 
     await expect(resolveExecution("missing")).resolves.toBeNull()
+  })
+})
+
+describe("startAgentTaskNow", () => {
+  it("binds the schedule and asks for an accept-time start", async () => {
+    const fx = fixture()
+    expect(await startAgentTaskNow("task-1", fx.deps)).toEqual({
+      executionId: "execution-1",
+      status: "running",
+    })
+    expect(fx.startTaskNowMock).toHaveBeenCalledWith("scheduled-1")
+    expect(fx.runTaskNowMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("acceptedStart", () => {
+  function execution(status: TaskExecution["status"]): TaskExecution {
+    return { id: "ex-1", status } as TaskExecution
+  }
+
+  it("answers at onAccepted, long before the execution settles", async () => {
+    let settle: (value: TaskExecution) => void = () => {}
+    const run = jest.fn(
+      (_id: string, opts: { onAccepted: (execution: TaskExecution) => void }) =>
+        new Promise<TaskExecution | null>((resolve) => {
+          opts.onAccepted(execution("running"))
+          settle = resolve
+        })
+    )
+    await expect(acceptedStart(run, "sched-1")).resolves.toEqual({
+      executionId: "ex-1",
+      status: "running",
+    })
+    expect(run).toHaveBeenCalledWith("sched-1", expect.any(Object))
+    settle(execution("completed"))
+  })
+
+  it("reads a buffered start as queued and a skipped or missing one as refused", async () => {
+    await expect(acceptedStart(async () => execution("pending"), "s")).resolves.toEqual({
+      executionId: "ex-1",
+      status: "queued",
+    })
+    await expect(acceptedStart(async () => execution("skipped"), "s")).rejects.toThrow(
+      "did not start"
+    )
+    await expect(acceptedStart(async () => null, "s")).rejects.toThrow("did not start")
+  })
+
+  it("passes a Scheduler refusal through, and ignores a failure after acceptance", async () => {
+    await expect(
+      acceptedStart(async () => {
+        throw new Error("owner elsewhere")
+      }, "s")
+    ).rejects.toThrow("owner elsewhere")
+    await expect(
+      acceptedStart(async (_id, opts) => {
+        opts.onAccepted(execution("running"))
+        throw new Error("timed out later")
+      }, "s")
+    ).resolves.toMatchObject({ status: "running" })
   })
 })

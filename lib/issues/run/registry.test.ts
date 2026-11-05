@@ -7,7 +7,13 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun, listIssueRuns } from "@/lib/db/issue-runs"
+import {
+  claimIssueRun,
+  getIssueRun,
+  ISSUE_RUN_DISPATCH_STALE_MS,
+  listIssueRuns,
+  settleIssueRun,
+} from "@/lib/db/issue-runs"
 import { listIssueEvents } from "@/lib/db/issue-events"
 import {
   IssueRunRefusedError,
@@ -21,7 +27,9 @@ import {
   loadIssueRunTarget,
   reconcileIssueRuns,
   registerIssueRunAdapter,
+  repairStrandedIssues,
   resetIssueRunRegistry,
+  runStatusBefore,
   runtimeActorFor,
   settleIssueRunAndIssue,
   startIssueRun,
@@ -66,16 +74,9 @@ function fakeAdapter(
     starts,
     cancels,
     canRun: async () => ({ ok: true }),
-    start: async (target, ctx) => {
+    start: async (target) => {
       starts.push(target)
-      return createIssueRun({
-        issueId: target.issue.id,
-        projectId: target.issue.projectId,
-        adapterId: over.id ?? "fake",
-        kind: "agent-task",
-        targetId: "t-1",
-        by: ctx.by,
-      })
+      return { targetId: "t-1", status: "running" }
     },
     poll: async () => over.pollResult ?? null,
     cancel: async (run) => {
@@ -147,7 +148,8 @@ describe("loadIssueRunTarget / listIssueRunOptions", () => {
       reason: "issue-finished",
     })
     const busy = await makeIssue()
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: busy.id,
       projectId: "w1",
       adapterId: "fake",
@@ -215,7 +217,14 @@ describe("triage", () => {
 describe("startIssueRun", () => {
   it("dispatches through the adapter and takes in_progress for the runtime", async () => {
     const registry = new IssueRunRegistry()
-    const adapter = fakeAdapter()
+    const contexts: unknown[] = []
+    const adapter = fakeAdapter({
+      start: async (target, ctx) => {
+        adapter.starts.push(target)
+        contexts.push(ctx)
+        return { targetId: "engine-1", targetRef: { taskId: "tk" }, status: "queued" }
+      },
+    })
     registry.register(adapter)
     const issue = await makeIssue()
     const run = await startIssueRun(
@@ -223,10 +232,101 @@ describe("startIssueRun", () => {
       registry
     )
     expect(adapter.starts).toHaveLength(1)
-    expect(run.status).toBe("running")
+    expect(contexts[0]).toMatchObject({ runId: run.id, options: { a: 1 } })
+    expect(run).toMatchObject({
+      status: "queued",
+      targetId: "engine-1",
+      targetRef: { taskId: "tk" },
+      statusBefore: "todo",
+    })
+    expect(await getIssueRun(run.id)).toEqual(run)
     expect((await getIssue(issue.id))!.status).toBe("in_progress")
     const kinds = (await listIssueEvents({ issueId: issue.id })).map((e) => e.kind)
     expect(kinds).toEqual(["created", "run_started", "status_changed"])
+  })
+
+  it("lets exactly one of two concurrent dispatches through and refuses the other run-active", async () => {
+    const registry = new IssueRunRegistry()
+    const adapter = fakeAdapter()
+    registry.register(adapter)
+    const issue = await makeIssue()
+    const start = () =>
+      startIssueRun(
+        { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+        registry
+      )
+    const outcomes = await Promise.allSettled([start(), start()])
+    expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1)
+    const refused = outcomes.find((o) => o.status === "rejected") as PromiseRejectedResult
+    expect(refused.reason).toBeInstanceOf(IssueRunRefusedError)
+    expect(refused.reason).toMatchObject({ reason: "run-active" })
+    expect(adapter.starts).toHaveLength(1)
+    expect(await listIssueRuns({ issueId: issue.id })).toHaveLength(1)
+  })
+
+  it("holds the issue from the claim: a person cannot drag it into in_progress mid-dispatch", async () => {
+    const registry = new IssueRunRegistry()
+    const { moveIssue } = await import("@/lib/db/issues")
+    let denial: unknown
+    registry.register(
+      fakeAdapter({
+        start: async (target) => {
+          denial = await moveIssue({ id: target.issue.id, to: "in_progress", by: HUMAN })
+          return { targetId: "t-1", status: "running" }
+        },
+      })
+    )
+    const issue = await makeIssue()
+    await startIssueRun(
+      { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+    expect(denial).toBe("runtime-owned")
+  })
+
+  it("records statusBefore as the column the issue was in when the engine accepted", async () => {
+    const registry = new IssueRunRegistry()
+    const { moveIssue } = await import("@/lib/db/issues")
+    registry.register(
+      fakeAdapter({
+        start: async (target) => {
+          // Any column but the runtime's own is still the person's to change.
+          expect(await moveIssue({ id: target.issue.id, to: "backlog", by: HUMAN })).toBeNull()
+          return { targetId: "t-1", status: "running" }
+        },
+      })
+    )
+    const issue = await makeIssue()
+    const run = await startIssueRun(
+      { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+    expect(run.statusBefore).toBe("backlog")
+    expect(runStatusBefore(run)).toBe("backlog")
+  })
+
+  it("returns the cancelled row and cancels the engine item when a cancel lands mid-dispatch", async () => {
+    const registry = new IssueRunRegistry()
+    const adapter: ReturnType<typeof fakeAdapter> = fakeAdapter({
+      start: async (_target, ctx) => {
+        await cancelIssueRun(ctx.runId, registry)
+        return { targetId: "engine-9", targetRef: { taskId: "tk" }, status: "running" }
+      },
+    })
+    registry.register(adapter)
+    const issue = await makeIssue()
+    const run = await startIssueRun(
+      { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+    expect(run.status).toBe("cancelled")
+    // The cancel saw an unbound claim and asked no engine; the dispatch path
+    // cancelled the item the engine handed back.
+    expect(adapter.cancels).toHaveLength(1)
+    expect(adapter.cancels[0]).toMatchObject({ targetId: "engine-9", targetRef: { taskId: "tk" } })
+    expect((await getIssue(issue.id))!.status).toBe("todo")
+    const kinds = (await listIssueEvents({ issueId: issue.id })).map((e) => e.kind)
+    expect(kinds).toEqual(["created", "run_started", "run_cancelled"])
   })
 
   it("refuses with a machine-readable reason and never touches the issue", async () => {
@@ -264,7 +364,7 @@ describe("startIssueRun", () => {
     ).rejects.toThrow(/Issue not found/)
   })
 
-  it("rethrows engine failures untouched", async () => {
+  it("rethrows engine failures untouched, settles the claim failed and leaves the issue alone", async () => {
     const registry = new IssueRunRegistry()
     registry.register(
       fakeAdapter({
@@ -281,6 +381,18 @@ describe("startIssueRun", () => {
       )
     ).rejects.toThrow("scheduler exploded")
     expect((await getIssue(issue.id))!.status).toBe("todo")
+    const [run] = await listIssueRuns({ issueId: issue.id })
+    expect(run).toMatchObject({ status: "failed", error: "scheduler exploded", targetId: "" })
+    const kinds = (await listIssueEvents({ issueId: issue.id })).map((e) => e.kind)
+    expect(kinds).toEqual(["created", "run_started", "run_failed"])
+    // The failed claim released the issue: the next Run is not refused run-active.
+    registry.register(fakeAdapter())
+    await expect(
+      startIssueRun(
+        { issueId: issue.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+        registry
+      )
+    ).resolves.toMatchObject({ status: "running" })
   })
 })
 
@@ -294,7 +406,7 @@ describe("settleIssueRunAndIssue / reconcileIssueRuns / cancelIssueRun", () => {
     return { issue, run }
   }
 
-  it("success and failure both advance to in_review; cancel hands back to todo", async () => {
+  it("success and failure both advance to in_review; cancel hands back to statusBefore", async () => {
     const registry = new IssueRunRegistry()
     registry.register(fakeAdapter())
     const a = await running(registry)
@@ -313,6 +425,32 @@ describe("settleIssueRunAndIssue / reconcileIssueRuns / cancelIssueRun", () => {
     const c = await running(registry)
     await settleIssueRunAndIssue(c.run.id, { status: "cancelled" })
     expect((await getIssue(c.issue.id))!.status).toBe("todo")
+
+    const fromBacklog = await makeIssue({ status: "backlog" })
+    const d = await startIssueRun(
+      { issueId: fromBacklog.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+    await settleIssueRunAndIssue(d.id, { status: "cancelled" })
+    expect((await getIssue(fromBacklog.id))!.status).toBe("backlog")
+
+    const fromReview = await makeIssue({ status: "in_review" })
+    const e = await startIssueRun(
+      { issueId: fromReview.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+    await settleIssueRunAndIssue(e.id, { status: "cancelled" })
+    expect((await getIssue(fromReview.id))!.status).toBe("in_review")
+  })
+
+  it("a cancel never pulls back an issue that left in_progress", async () => {
+    const registry = new IssueRunRegistry()
+    registry.register(fakeAdapter())
+    const { issue, run } = await running(registry)
+    const { getDb } = await import("@/lib/db/schema")
+    await getDb().issues.update(issue.id, { status: "done", statusCategory: "completed" })
+    await settleIssueRunAndIssue(run.id, { status: "cancelled" })
+    expect((await getIssue(issue.id))!.status).toBe("done")
   })
 
   it("links the pull requests a settled run opened onto its issue", async () => {
@@ -383,6 +521,47 @@ describe("settleIssueRunAndIssue / reconcileIssueRuns / cancelIssueRun", () => {
     expect((await getIssueRun(c.run.id))!.status).toBe("running")
   })
 
+  it("reconcile skips a claim in flight and fails one left unbound past the stale window", async () => {
+    const registry = new IssueRunRegistry()
+    const adapter = fakeAdapter({ pollResult: { status: "failed", error: "never asked" } })
+    registry.register(adapter)
+    const issue = await makeIssue()
+    const claim = await claimIssueRun({
+      issueId: issue.id,
+      projectId: "w1",
+      adapterId: "fake",
+      kind: "agent-task",
+      by: HUMAN,
+      now: 1_000,
+    })
+    const fresh = await reconcileIssueRuns(registry, 1_000 + ISSUE_RUN_DISPATCH_STALE_MS)
+    expect(fresh).toMatchObject({ polled: 0, settled: [] })
+    expect((await getIssueRun(claim.id))!.status).toBe("queued")
+
+    const stale = await reconcileIssueRuns(registry, 1_001 + ISSUE_RUN_DISPATCH_STALE_MS)
+    expect(stale).toMatchObject({ polled: 0, settled: [claim.id] })
+    expect(await getIssueRun(claim.id)).toMatchObject({
+      status: "failed",
+      error: "dispatch interrupted before the engine accepted it",
+    })
+    expect((await getIssue(issue.id))!.status).toBe("todo")
+  })
+
+  it("reconcile marks a queued run running when its engine picked it up", async () => {
+    const registry = new IssueRunRegistry()
+    registry.register(
+      fakeAdapter({
+        start: async () => ({ targetId: "t-1", status: "queued" }),
+        pollResult: { status: "running" },
+      })
+    )
+    const { run } = await running(registry)
+    expect(run.status).toBe("queued")
+    const result = await reconcileIssueRuns(registry)
+    expect(result).toMatchObject({ polled: 1, settled: [] })
+    expect((await getIssueRun(run.id))!.status).toBe("running")
+  })
+
   it("reconcile fails a run whose adapter vanished", async () => {
     const registry = new IssueRunRegistry()
     registry.register(fakeAdapter())
@@ -407,6 +586,40 @@ describe("settleIssueRunAndIssue / reconcileIssueRuns / cancelIssueRun", () => {
     expect((await getIssue(issue.id))!.status).toBe("todo")
     expect(await cancelIssueRun(run.id, registry)).toBeUndefined()
     expect(await cancelIssueRun("missing", registry)).toBeUndefined()
+    const kinds = (await listIssueEvents({ issueId: issue.id })).map((e) => e.kind)
+    expect(kinds).toContain("run_cancelled")
+    expect(kinds).not.toContain("run_failed")
+  })
+
+  it("cancelIssueRun leaves an engine-side cancel to a claim the engine has not accepted", async () => {
+    const registry = new IssueRunRegistry()
+    const adapter = fakeAdapter()
+    registry.register(adapter)
+    const issue = await makeIssue()
+    const claim = await claimIssueRun({
+      issueId: issue.id,
+      projectId: "w1",
+      adapterId: "fake",
+      kind: "agent-task",
+      by: HUMAN,
+    })
+    expect((await cancelIssueRun(claim.id, registry))?.status).toBe("cancelled")
+    expect(adapter.cancels).toEqual([])
+  })
+
+  it("cancelIssueRun keeps the run active when the engine refuses to cancel", async () => {
+    const registry = new IssueRunRegistry()
+    registry.register(
+      fakeAdapter({
+        cancel: async () => {
+          throw new Error("engine unreachable")
+        },
+      })
+    )
+    const { run, issue } = await running(registry)
+    await expect(cancelIssueRun(run.id, registry)).rejects.toThrow("engine unreachable")
+    expect((await getIssueRun(run.id))!.status).toBe("running")
+    expect((await getIssue(issue.id))!.status).toBe("in_progress")
   })
 
   it("cancelIssueRun tolerates adapters without cancel", async () => {
@@ -425,17 +638,9 @@ describe("wakeup support", () => {
     const contexts: unknown[] = []
     registry.register(
       fakeAdapter({
-        start: async (target, ctx) => {
+        start: async (_target, ctx) => {
           contexts.push(ctx)
-          return createIssueRun({
-            issueId: target.issue.id,
-            projectId: target.issue.projectId,
-            adapterId: "fake",
-            kind: "agent-task",
-            targetId: "t-1",
-            by: ctx.by,
-            ...(ctx.wakeup ? { wakeup: ctx.wakeup } : {}),
-          })
+          return { targetId: "t-1", status: "running" }
         },
       })
     )
@@ -446,6 +651,10 @@ describe("wakeup support", () => {
       registry
     )
     expect(contexts[0]).toMatchObject({ origin: "wakeup", brief: "B", wakeup })
+    // The claim, not the adapter, stores the lineage now.
+    const [row] = await listIssueRuns({ issueId: issue.id })
+    expect(row.wakeup).toEqual(wakeup)
+    expect(contexts[0]).toMatchObject({ runId: row.id })
   })
 
   it("names sessions only for an active run whose adapter can", async () => {
@@ -484,7 +693,8 @@ describe("wakeup support", () => {
 
   it("checks in a periodic wakeup run: settles with the note and hands the issue back", async () => {
     const issue = await makeIssue({ status: "backlog" })
-    const run = await createIssueRun({
+    const run = await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",
@@ -511,9 +721,29 @@ describe("wakeup support", () => {
     })
   })
 
+  it("hands back to the run's own statusBefore, preferring it over the wakeup's", async () => {
+    const registry = new IssueRunRegistry()
+    registry.register(fakeAdapter())
+    const issue = await makeIssue({ status: "in_review" })
+    const run = await startIssueRun(
+      {
+        issueId: issue.id,
+        adapterId: "fake",
+        by: HUMAN,
+        origin: "wakeup",
+        wakeup: { taskId: "wk", chain: ["wk"], statusBefore: "todo", periodic: true },
+      },
+      registry
+    )
+    expect(run.statusBefore).toBe("in_review")
+    await checkInIssueRun(run.id, "quiet")
+    expect((await getIssue(issue.id))!.status).toBe("in_review")
+  })
+
   it("refuses to check in a run no periodic wakeup started", async () => {
     const issue = await makeIssue()
-    const plain = await createIssueRun({
+    const plain = await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",
@@ -533,7 +763,8 @@ describe("wakeup support", () => {
 
   it("leaves an issue a person moved meanwhile where they put it", async () => {
     const issue = await makeIssue()
-    const run = await createIssueRun({
+    const run = await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",
@@ -546,6 +777,85 @@ describe("wakeup support", () => {
     await getDb().issues.update(issue.id, { status: "in_review", statusCategory: "started" })
     await checkInIssueRun(run.id, "ok")
     expect((await getIssue(issue.id))!.status).toBe("in_review")
+  })
+})
+
+describe("repairStrandedIssues", () => {
+  async function strand(
+    issueStatus: "todo" | "backlog",
+    settle: Parameters<typeof settleIssueRun>[1]
+  ) {
+    const { applyRuntimeIssueStatus } = await import("@/lib/db/issues")
+    const issue = await makeIssue({ status: issueStatus })
+    const run = await claimIssueRun({
+      issueId: issue.id,
+      projectId: "w1",
+      adapterId: "fake",
+      kind: "agent-task",
+      targetId: "t",
+      status: "running",
+      by: HUMAN,
+      now: Date.now() - 1_000,
+    })
+    const { bindIssueRunDispatch } = await import("@/lib/db/issue-runs")
+    await bindIssueRunDispatch(run.id, { targetId: "t", status: "running" }, issueStatus)
+    await applyRuntimeIssueStatus(issue.id, "in_progress", HUMAN)
+    // The pre-atomic settle: the row settles, the window closes before the issue moves.
+    await settleIssueRun(run.id, settle)
+    return issue
+  }
+
+  it("finishes what an interrupted settle left: review for an outcome, hand-back for a cancel", async () => {
+    const succeeded = await strand("todo", { status: "succeeded" })
+    const failed = await strand("todo", { status: "failed", error: "boom" })
+    const cancelled = await strand("backlog", { status: "cancelled" })
+    const checkedIn = await strand("backlog", { status: "succeeded", mode: "checkin", note: "q" })
+    const result = await repairStrandedIssues()
+    expect(new Set(result.repaired)).toEqual(
+      new Set([succeeded.id, failed.id, cancelled.id, checkedIn.id])
+    )
+    expect((await getIssue(succeeded.id))!.status).toBe("in_review")
+    expect((await getIssue(failed.id))!.status).toBe("in_review")
+    expect((await getIssue(cancelled.id))!.status).toBe("backlog")
+    expect((await getIssue(checkedIn.id))!.status).toBe("backlog")
+    expect((await repairStrandedIssues()).repaired).toEqual([])
+  })
+
+  it("leaves alone an issue a person put in in_progress, an active run, and a claim that never bound", async () => {
+    const { moveIssue } = await import("@/lib/db/issues")
+    const byHand = await makeIssue()
+    await moveIssue({ id: byHand.id, to: "in_progress", by: HUMAN })
+
+    const afterRun = await strand("todo", { status: "succeeded" })
+    const registry = new IssueRunRegistry()
+    registry.register(fakeAdapter())
+    // Settled properly, then a person moved it back into in_progress.
+    const { getDb } = await import("@/lib/db/schema")
+    await getDb().issues.update(afterRun.id, { status: "in_review", statusCategory: "started" })
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    await moveIssue({ id: afterRun.id, to: "in_progress", by: HUMAN })
+
+    const active = await makeIssue()
+    await startIssueRun(
+      { issueId: active.id, adapterId: "fake", by: HUMAN, origin: "interactive" },
+      registry
+    )
+
+    const unbound = await makeIssue()
+    await moveIssue({ id: unbound.id, to: "in_progress", by: HUMAN })
+    const claim = await claimIssueRun({
+      issueId: unbound.id,
+      projectId: "w1",
+      adapterId: "fake",
+      kind: "agent-task",
+      by: HUMAN,
+    })
+    await settleIssueRun(claim.id, { status: "failed", error: "refused" })
+
+    expect((await repairStrandedIssues()).repaired).toEqual([])
+    for (const issue of [byHand, afterRun, active, unbound]) {
+      expect((await getIssue(issue.id))!.status).toBe("in_progress")
+    }
   })
 })
 

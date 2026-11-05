@@ -27,7 +27,7 @@ import type { BuiltInSkillContext } from "../types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import {
   applyIssueAction,
   describeOutcome,
@@ -157,7 +157,8 @@ describe("applyIssueAction", () => {
     // The whole reason writes route through this layer: an agent must not be
     // able to drag an issue out from under the runtime that is executing it.
     const issue = await makeIssue({ status: "in_progress" })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "agent-task",

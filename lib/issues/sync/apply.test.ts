@@ -6,7 +6,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssueCycle } from "@/lib/db/issue-cycles"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import { listIssueEvents } from "@/lib/db/issue-events"
 import { createLabel, listLabels } from "@/lib/db/labels"
 import type { Issue, IssueActor } from "@/types/issues"
@@ -135,7 +135,8 @@ describe("applyRemoteField", () => {
 
   it("refuses a status write while a run owns the issue, and an empty title", async () => {
     const issue = await make({ status: "in_progress" })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "a",
@@ -143,7 +144,8 @@ describe("applyRemoteField", () => {
       targetId: "t",
       by: HUMAN,
     })
-    expect(await applyRemoteField(issue, "status", "done", SYNC, { runActive: true })).toBe(false)
+    // No caller-supplied flag: the write itself sees the run.
+    expect(await applyRemoteField(issue, "status", "done", SYNC)).toBe(false)
     expect((await getIssue(issue.id))!.status).toBe("in_progress")
     expect(await applyRemoteField(issue, "title", "  ", SYNC)).toBe(false)
   })

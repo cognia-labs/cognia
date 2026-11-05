@@ -2,12 +2,15 @@
  * Guarded issue-move semantics for the issue board.
  *
  * `canMoveIssue` is the SINGLE source of truth for which status transitions a
- * human (or an actor on the human's behalf) may perform. It is shared by:
- *   - the desktop board's drag-and-drop (illegal targets grey out at drag
- *     start via `allowedIssueMoveTargets`),
- *   - the mobile board's action sheet,
- *   - the IM card's move buttons (slice ③),
- *   - the run adapter's write-back.
+ * human (or an actor on the human's behalf) may perform. It is enforced in
+ * one place, `moveIssue` (`lib/db/issues.ts`), which reads whether a run
+ * holds the issue in the same transaction as the write — so every door that
+ * moves an issue (board, bulk actions, IM card, phone, sync) is held to it.
+ * Surfaces also call it ahead of time to offer only legal moves: the desktop
+ * board greys out illegal drop targets at drag start
+ * (`allowedIssueMoveTargets`), and the IM card builds its buttons from it.
+ * The run bridge does not move issues through it: runtime transitions have
+ * their own door (`applyRuntimeIssueStatus` / `handBackRuntimeIssueStatus`).
  *
  * Ownership model — deliberately identical to
  * `lib/ai/agent/team/gates/task-move-guard.ts`, so the two boards never disagree:

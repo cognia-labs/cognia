@@ -3,6 +3,7 @@
  */
 
 import type { AgentTeam, AgentTeamTask } from "@/types/agent/agent-team"
+import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { Issue, IssueProject, IssueRun } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import {
@@ -63,10 +64,15 @@ jest.mock("@/lib/ai/agent/team/agent-team", () => ({
 jest.mock("@/lib/ai/agent/team/agent-team-runtime", () => ({
   abortTeam: (...args: unknown[]) => mockAbort(...args),
 }))
+const mockControlDurableRun = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/ai/agent/team/durable/durable-control", () => ({
+  controlDurableRun: (...args: unknown[]) => mockControlDurableRun(...args),
+}))
 const fakeStoreState = {
   teams: { "team-1": { id: "team-1", name: "Squad", status: "idle" } },
   tasks: { "tt-1": { id: "tt-1", teamId: "team-1", status: "pending" } },
   createTask: jest.fn((input: { title: string }) => ({ id: "tt-created", ...input })),
+  deleteTask: jest.fn((_taskId: string) => {}),
 }
 jest.mock("@/stores/agent/agent-team-store", () => ({
   useAgentTeamStore: { getState: () => fakeStoreState, subscribe: () => () => {} },
@@ -162,15 +168,24 @@ function run(over: Partial<IssueRun> = {}): IssueRun {
   }
 }
 
+function squadRun(status: AgentTeamRunRecord["status"]): AgentTeamRunRecord {
+  return {
+    id: "run_team_1",
+    teamId: "team-1",
+    objective: "o",
+    status,
+    priority: 0,
+    decisionVersion: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+}
+
 function makeDeps(over: Partial<AgentTeamRunAdapterDeps> = {}) {
   const created: Parameters<AgentTeamRunAdapterDeps["createTask"]>[0][] = []
-  const runs: Parameters<AgentTeamRunAdapterDeps["createRun"]>[0][] = []
+  const deleted: string[] = []
   const starts: Array<[string, string, unknown]> = []
-  const aborts: Array<[string, string]> = []
-  let startResolve: () => void = () => {}
-  const startPromise = new Promise<void>((resolve) => {
-    startResolve = resolve
-  })
+  const aborts: Array<[string, string, string | undefined]> = []
   const deps: AgentTeamRunAdapterDeps = {
     getTeam: (id) => (id === "team-1" ? team() : undefined),
     getTask: () => undefined,
@@ -178,23 +193,25 @@ function makeDeps(over: Partial<AgentTeamRunAdapterDeps> = {}) {
       created.push(input)
       return teamTask({ id: "tt-new", title: input.title })
     },
+    deleteTask: (taskId) => {
+      deleted.push(taskId)
+    },
     startTeam: async (id, origin, _goal, conversation) => {
       starts.push([id, origin, conversation])
-      await startPromise
+      return { squadRunId: "run_team_1" }
     },
-    abortTeam: (id, reason) => {
-      aborts.push([id, reason])
+    abortTeam: async (id, reason, squadRunId) => {
+      aborts.push([id, reason, squadRunId])
     },
+    getSquadRun: async () => undefined,
     collectArtifacts: async () => [{ label: "art", href: "/a" }],
-    createRun: async (input) => {
-      runs.push(input)
-      return run({ id: "run-new", targetRef: input.targetRef })
-    },
     now: () => 42,
     ...over,
   }
-  return { deps, created, runs, starts, aborts, resolveStart: () => startResolve() }
+  return { deps, created, deleted, starts, aborts }
 }
+
+const CTX = { runId: "run-claim", by: HUMAN } as const
 
 describe("helpers", () => {
   it("builds hrefs, maps priorities, knows the busy statuses", () => {
@@ -235,10 +252,10 @@ describe("canRun", () => {
 })
 
 describe("start", () => {
-  it("adds a task with issue metadata, records the run, and fires the team without awaiting", async () => {
+  it("adds a task with issue metadata, waits for the Squad to accept, and keeps the Squad run id", async () => {
     const harness = makeDeps()
     const adapter = createAgentTeamRunAdapter(harness.deps)
-    const result = await adapter.start(target(), { by: HUMAN, origin: "im" })
+    const dispatch = await adapter.start(target(), { ...CTX, origin: "im" })
     expect(harness.created[0]).toMatchObject({
       teamId: "team-1",
       title: "MERC-1: Ship it",
@@ -247,25 +264,29 @@ describe("start", () => {
       tags: ["issue", "MERC-1"],
       metadata: { issueId: "iss-1", issueIdentifier: "MERC-1" },
     })
-    expect(harness.runs[0]).toMatchObject({
-      adapterId: AGENT_TEAM_RUN_ADAPTER_ID,
-      kind: "agent-team",
+    expect(dispatch).toEqual({
       targetId: "team-1",
-      targetRef: { taskId: "tt-new" },
+      targetRef: { taskId: "tt-new", squadRunId: "run_team_1" },
       status: "running",
-      now: 42,
     })
-    // start returned before the team run finished
-    expect(result.id).toBe("run-new")
     expect(harness.starts).toEqual([["team-1", "im", undefined]])
-    harness.resolveStart()
   })
 
-  it("appends a wakeup brief to the task and stores the lineage on the run", async () => {
+  it("omits the Squad run id when the Squad named none", async () => {
+    const harness = makeDeps({ startTeam: async () => ({}) })
+    expect(
+      await createAgentTeamRunAdapter(harness.deps).start(target(), {
+        ...CTX,
+        origin: "interactive",
+      })
+    ).toEqual({ targetId: "team-1", targetRef: { taskId: "tt-new" }, status: "running" })
+  })
+
+  it("appends a wakeup brief to the task", async () => {
     const harness = makeDeps()
     const wakeup = { taskId: "wk", chain: ["wk"], statusBefore: "todo" as const, periodic: false }
     await createAgentTeamRunAdapter(harness.deps).start(target(), {
-      by: HUMAN,
+      ...CTX,
       origin: "wakeup",
       brief: "[WAKEUP wk] MERC-1",
       wakeup,
@@ -273,24 +294,21 @@ describe("start", () => {
     expect(harness.created[0]!.description).toBe(
       "All of it\n\nProject context: ctx\n\n[WAKEUP wk] MERC-1"
     )
-    expect(harness.runs[0]).toMatchObject({ wakeup })
-    harness.resolveStart()
   })
 
-  it("routes a start rejection to onStartError and refuses unrunnable targets", async () => {
-    const errors: unknown[] = []
+  it("throws a Squad refusal through, removes the task it added, and refuses unrunnable targets", async () => {
     const harness = makeDeps({
       startTeam: async () => {
-        throw new Error("no teammates")
+        throw new Error("squad run refused: not_ready")
       },
-      onStartError: (error) => errors.push(error),
     })
     const adapter = createAgentTeamRunAdapter(harness.deps)
-    await adapter.start(target(), { by: HUMAN, origin: "interactive" })
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(errors.map((e) => (e as Error).message)).toEqual(["no teammates"])
+    await expect(adapter.start(target(), { ...CTX, origin: "interactive" })).rejects.toThrow(
+      "squad run refused: not_ready"
+    )
+    expect(harness.deleted).toEqual(["tt-new"])
     await expect(
-      adapter.start(target({ issue: issue({ assignee: undefined }) }), { by: HUMAN, origin: "im" })
+      adapter.start(target({ issue: issue({ assignee: undefined }) }), { ...CTX, origin: "im" })
     ).rejects.toThrow(/refused/)
   })
 })
@@ -323,7 +341,7 @@ describe("poll", () => {
     expect(await cancelled.poll(run())).toEqual({ status: "cancelled" })
   })
 
-  it("stays active while the team is busy or idle, fails when the team stopped or vanished", async () => {
+  it("without a Squad run id: stays active while the team is busy or idle, fails when it stopped or vanished", async () => {
     for (const status of ["planning", "executing", "paused", "idle"] as const) {
       const adapter = createAgentTeamRunAdapter(
         makeDeps({
@@ -357,13 +375,115 @@ describe("poll", () => {
       error: "team task no longer exists",
     })
   })
+
+  it("settles a task left in review as succeeded once the team stopped", async () => {
+    const adapter = createAgentTeamRunAdapter(
+      makeDeps({
+        getTask: () => teamTask({ status: "review", result: "ready for a look" }),
+        getTeam: () => team({ status: "completed" }),
+      }).deps
+    )
+    expect(await adapter.poll(run())).toEqual({
+      status: "succeeded",
+      summary: "ready for a look",
+      artifacts: [{ label: "art", href: "/a" }],
+    })
+    const stillGoing = createAgentTeamRunAdapter(
+      makeDeps({
+        getTask: () => teamTask({ status: "review" }),
+        getTeam: () => team({ status: "executing" }),
+      }).deps
+    )
+    expect(await stillGoing.poll(run())).toBeNull()
+  })
+
+  describe("with a Squad run id", () => {
+    const withSquad = run({ targetRef: { taskId: "tt-1", squadRunId: "run_team_1" } })
+
+    it("keeps the run active while the Squad run is going or waiting for a person", async () => {
+      for (const status of [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "sleeping",
+        "recovering",
+        "needs_input",
+      ] as const) {
+        const adapter = createAgentTeamRunAdapter(
+          makeDeps({
+            getTask: () => teamTask({ status: "pending" }),
+            // The team itself may read idle: the record is the truth now.
+            getTeam: () => team({ status: "idle" }),
+            getSquadRun: async () => squadRun(status),
+          }).deps
+        )
+        expect(await adapter.poll(withSquad)).toBeNull()
+      }
+    })
+
+    it("settles from the ended Squad run: review succeeds, a stop cancels, the rest fail", async () => {
+      const poll = (task: Partial<AgentTeamTask>, status: AgentTeamRunRecord["status"]) =>
+        createAgentTeamRunAdapter(
+          makeDeps({
+            getTask: () => teamTask(task),
+            getSquadRun: async () => squadRun(status),
+          }).deps
+        ).poll(withSquad)
+      expect(await poll({ status: "review" }, "completed")).toMatchObject({
+        status: "succeeded",
+      })
+      expect(await poll({ status: "pending" }, "cancelled")).toEqual({
+        status: "cancelled",
+        reason: "squad run cancelled",
+      })
+      expect(await poll({ status: "in_progress" }, "terminated")).toEqual({
+        status: "cancelled",
+        reason: "squad run terminated",
+      })
+      expect(await poll({ status: "pending" }, "completed")).toMatchObject({
+        status: "failed",
+        error: "team run ended (completed) before the task ran",
+      })
+      expect(await poll({ status: "in_progress" }, "failed")).toMatchObject({
+        status: "failed",
+        error: "team run ended (failed) before the task ran",
+      })
+    })
+
+    it("fails a run whose Squad record vanished", async () => {
+      const adapter = createAgentTeamRunAdapter(
+        makeDeps({ getTask: () => teamTask({ status: "pending" }) }).deps
+      )
+      expect(await adapter.poll(withSquad)).toEqual({
+        status: "failed",
+        error: "squad run no longer exists",
+      })
+    })
+  })
 })
 
 describe("cancel", () => {
-  it("aborts the team", async () => {
+  it("stops the Squad run that serves the issue run, and waits for it", async () => {
     const harness = makeDeps()
-    await createAgentTeamRunAdapter(harness.deps).cancel!(run())
-    expect(harness.aborts).toEqual([["team-1", "issue run run-1 cancelled"]])
+    const adapter = createAgentTeamRunAdapter(harness.deps)
+    await adapter.cancel!(run({ targetRef: { taskId: "tt-1", squadRunId: "run_team_1" } }))
+    await adapter.cancel!(run())
+    expect(harness.aborts).toEqual([
+      ["team-1", "issue run run-1 cancelled", "run_team_1"],
+      ["team-1", "issue run run-1 cancelled", undefined],
+    ])
+  })
+
+  it("passes an engine-side cancel failure to the bridge", async () => {
+    const adapter = createAgentTeamRunAdapter(
+      makeDeps({
+        abortTeam: async () => {
+          throw new Error("stop refused")
+        },
+      }).deps
+    )
+    await expect(adapter.cancel!(run())).rejects.toThrow("stop refused")
   })
 })
 
@@ -487,6 +607,11 @@ describe("collectDurableArtifacts", () => {
       { label: "Branch feat/x", href: AGENT_BRANCHES_HREF },
       { label: "Session (mate)", href: "/?session=sess-1" },
     ])
+    // The issue run's own Squad run, by id, wins over the newest-record guess.
+    const byId = await collectDurableArtifacts(
+      run({ targetRef: { taskId: "tt-1", squadRunId: "trun-old" } })
+    )
+    expect(byId).toEqual([{ label: "Team workspace", href: "/squads?id=team-1" }])
     // Without a task ref every child run counts.
     const all = await collectDurableArtifacts(run({ targetRef: undefined }))
     expect(all.filter((a) => a.label.startsWith("Branch")).map((a) => a.label)).toEqual([
@@ -515,7 +640,9 @@ describe("default deps", () => {
     expect(deps.createTask({ teamId: "team-1", title: "x", description: "" })).toMatchObject({
       id: "tt-created",
     })
-    await deps.startTeam("team-1", "im", "KEY-1: Fix the thing")
+    expect(await deps.startTeam("team-1", "im", "KEY-1: Fix the thing")).toEqual({
+      squadRunId: "run_team_1",
+    })
     expect(mockStartSquadRun).toHaveBeenCalledWith({
       squadId: "team-1",
       goal: "KEY-1: Fix the thing",
@@ -523,9 +650,22 @@ describe("default deps", () => {
       triggeredFrom: { source: "im" },
     })
     expect(mockStart).not.toHaveBeenCalled()
-    deps.abortTeam("team-1", "why")
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(mockAbort).toHaveBeenCalledWith("team-1", expect.any(Error))
+    mockStartSquadRun.mockResolvedValueOnce({ started: false, reason: "not_ready" })
+    await expect(deps.startTeam("team-1", "im", "x")).rejects.toThrow(
+      "squad run refused: not_ready"
+    )
+    deps.deleteTask("tt-1")
+    expect(fakeStoreState.deleteTask).toHaveBeenCalledWith("tt-1")
+
+    await deps.abortTeam("team-1", "why", "run_team_1")
+    expect(mockAbort).toHaveBeenCalledWith("team-1", expect.any(Error), "run_team_1")
+    expect(mockControlDurableRun).toHaveBeenCalledWith("run_team_1", "stop")
+    mockControlDurableRun.mockClear()
+    await deps.abortTeam("team-1", "why")
+    expect(mockControlDurableRun).not.toHaveBeenCalled()
+
+    await createAgentTeamRun(squadRun("running"))
+    expect(await deps.getSquadRun("run_team_1")).toMatchObject({ status: "running" })
     expect(deps.now()).toBeGreaterThan(0)
   })
 

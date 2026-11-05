@@ -22,7 +22,8 @@ import type {
   IssueRunKind,
   IssueRunWakeup,
 } from "@/types/issues"
-import type { SettleIssueRunInput } from "@/lib/db/issue-runs"
+import type { IssueRunDispatch, SettleIssueRunInput } from "@/lib/db/issue-runs"
+export type { IssueRunDispatch } from "@/lib/db/issue-runs"
 
 /**
  * Where the Run gesture came from; picks the team gate policy. `wakeup` is an
@@ -105,6 +106,11 @@ export interface IssueRunConversation {
 }
 
 export interface IssueRunStartContext {
+  /**
+   * The claimed `IssueRun.id`. The bridge claims the issue before it asks the
+   * engine, so an engine-side idempotency key can name the run it serves.
+   */
+  runId: string
   by: IssueActor
   origin: IssueRunOrigin
   /** Present when the gesture came from an IM card. See {@link IssueRunConversation}. */
@@ -132,11 +138,13 @@ export function withRunBrief(text: string, brief: string | undefined): string {
 }
 
 /**
- * `null` while the engine is still working; a settlement once it is terminal.
- * Adapters must be idempotent here — the reconciler calls `poll` on every
- * active run at boot and whenever an engine table changes.
+ * `null` while the engine has nothing new to say; `{ status: "running" }`
+ * once a `queued` run's engine has picked it up (the reconciler marks the row
+ * running); a settlement once it is terminal. Adapters must be idempotent
+ * here — the reconciler calls `poll` on every bound active run at boot and
+ * whenever an engine table changes.
  */
-export type IssueRunPollResult = SettleIssueRunInput | null
+export type IssueRunPollResult = SettleIssueRunInput | { status: "running" } | null
 
 export interface IssueRunAdapter {
   /** Stable id persisted on `IssueRun.adapterId`. */
@@ -145,14 +153,21 @@ export interface IssueRunAdapter {
   /** Whether this adapter could run the target right now. Pure w.r.t. the tracker. */
   canRun(target: IssueRunTarget): Promise<IssueRunVerdict>
   /**
-   * Dispatch to the engine and record the run (`createIssueRun`). Must throw
-   * on engine failure — the bridge surfaces it; nothing swallows a failed
-   * dispatch into a silent "queued" row.
+   * Dispatch to the engine and resolve once the engine ACCEPTED the work (not
+   * when it finishes), with the engine item it created. The bridge has
+   * already claimed the issue (`context.runId`) and binds the result onto
+   * that row. Must throw when the engine refuses or the dispatch fails — the
+   * bridge settles the claim as failed, leaves the issue where it was, and
+   * rethrows; nothing turns a failed dispatch into a silent "queued" row.
    */
-  start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRun>
+  start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRunDispatch>
   /** Inspect engine state for an active run. See `IssueRunPollResult`. */
   poll(run: IssueRun): Promise<IssueRunPollResult>
-  /** Best-effort engine-side cancel. The bridge settles the run as `cancelled` afterwards. */
+  /**
+   * Engine-side cancel for a bound run. The bridge settles the run as
+   * `cancelled` once this resolves; a throw leaves the run active and reaches
+   * the caller.
+   */
   cancel?(run: IssueRun): Promise<void>
   /**
    * Chat sessions the active run is executing in, newest first. Two callers:

@@ -147,6 +147,7 @@
     "run_started": "started an agent run",
     "run_succeeded": "finished an agent run",
     "run_failed": "an agent run failed",
+    "run_cancelled": "cancelled an agent run",
     "artifact_linked": "linked an artifact",
     "github_linked": "linked a GitHub issue",
     "github_write_back": "pushed a change to GitHub",
@@ -535,6 +536,8 @@
     "engineLabel": "Execution engine",
     "submit": "Run",
     "started": "{identifier} dispatched to {adapter}",
+    "dispatchFailed": "The engine did not accept the run: {error}",
+    "cancelledDuringDispatch": "{identifier}: the run was cancelled before its engine accepted it.",
     "baseBranch": "Base branch",
     "baseBranchHint": "The branch the pull request targets; the head branch is derived from the issue identifier.",
     "reviewRule": "When the run ends the issue moves to In review — never straight to Done.",
@@ -603,6 +606,10 @@
     "run_failed": {
       "title": "{identifier} run failed",
       "body": "{error}"
+    },
+    "run_cancelled": {
+      "title": "{identifier} run cancelled",
+      "body": "{title}"
     },
     "status_changed": {
       "title": "{identifier} moved to {to}",
@@ -957,6 +964,7 @@
       "run_started": "run started",
       "run_succeeded": "run succeeded",
       "run_failed": "run failed",
+      "run_cancelled": "run cancelled",
       "run_checked_in": "run checked in",
       "artifact_linked": "artifact linked",
       "github_linked": "GitHub issue linked",

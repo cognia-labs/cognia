@@ -7,30 +7,56 @@
  * follow `lib/issues/sources/registry.ts`'s swallow-and-report `listAll`: a
  * dispatch that fails must fail loudly, never turn into a silent queued row.
  *
- * Three orchestrations live here because every entry point (detail panel Run
- * button, IM card, reconciler) must apply the same ownership rules:
- *   - `startIssueRun`   — refuse-or-dispatch, then the runtime takes
- *                          `in_progress` (`applyRuntimeIssueStatus`).
- *   - `settleIssueRunAndIssue` — settle the row, then advance the issue to
- *                          `in_review` (or hand it back to `todo` on cancel).
+ * The orchestrations live here because every entry point (detail panel Run
+ * button, IM card, wakeups, reconciler) must apply the same ownership rules:
+ *   - `startIssueRun`   — refuse, claim the issue (`claimIssueRun`, the start
+ *                          lock), dispatch, then bind what the engine accepted
+ *                          and take `in_progress` in one transaction. A
+ *                          dispatch that throws settles the claim as failed,
+ *                          leaves the issue where it was, and rethrows.
+ *   - `settleIssueRunAndIssue` — settle the row, link the PRs it produced and
+ *                          advance the issue to `in_review` (or hand it back to
+ *                          `statusBefore` on cancel) in one transaction.
  *                          NEVER to `done`.
- *   - `reconcileIssueRuns` — poll every active run through its adapter; the
- *                          recovery path after a reload, and the fan-in for
+ *   - `reconcileIssueRuns` — poll every bound active run through its adapter;
+ *                          the recovery path after a reload, and the fan-in for
  *                          the engine-table watchers in `install.ts`.
+ *   - `repairStrandedIssues` — once at boot, finish the issue half of a settle
+ *                          that a crash interrupted before settles were atomic.
  */
 
-import type { IssueActor, IssueRun, IssueRunKind, IssueRunWakeup } from "@/types/issues"
+import type {
+  IssueActor,
+  IssueRun,
+  IssueRunKind,
+  IssueRunWakeup,
+  IssueStatus,
+} from "@/types/issues"
 import { isActiveIssueRunStatus } from "@/types/issues"
-import { getIssue, listIssues } from "@/lib/db/issues"
-import { applyRuntimeIssueStatus } from "@/lib/db/issues"
+import {
+  applyRuntimeIssueStatus,
+  getIssue,
+  handBackRuntimeIssueStatus,
+  linkIssueExternal,
+  listIssues,
+} from "@/lib/db/issues"
+import { listIssueEvents } from "@/lib/db/issue-events"
+import { getDb } from "@/lib/db/schema"
 import { openBlockers } from "@/lib/issues/relations"
-import { linkRunPullRequests } from "@/lib/issues/pull-requests"
+import { linkRunPullRequests, type LinkRunPullRequestsDeps } from "@/lib/issues/pull-requests"
 import { getIssueProject } from "@/lib/db/issue-projects"
 import {
+  bindIssueRunDispatch,
+  claimIssueRun,
   getIssueRun,
   hasActiveIssueRun,
+  isUnboundIssueRun,
+  IssueRunActiveError,
+  ISSUE_RUN_DISPATCH_STALE_MS,
   listIssueRuns,
+  markIssueRunRunning,
   settleIssueRun,
+  type IssueRunDispatch,
   type SettleIssueRunInput,
 } from "@/lib/db/issue-runs"
 import type {
@@ -219,9 +245,15 @@ export interface StartIssueRunInput {
 }
 
 /**
- * Refuse-or-dispatch. Throws `IssueRunRefusedError` for a policy refusal and
- * rethrows engine failures untouched. On success the issue is `in_progress`
- * and the returned run row is active.
+ * Refuse-or-dispatch. Throws `IssueRunRefusedError` for a policy refusal
+ * (including `run-active` when another dispatch won the claim) and rethrows
+ * engine failures untouched after settling the claim as failed. On success
+ * the engine accepted the work, the issue is `in_progress`, and the returned
+ * run row is active and bound to the engine item.
+ *
+ * When a cancel lands while the engine is accepting, the bind finds the claim
+ * already settled: the engine item that was just created is cancelled too,
+ * and the settled (cancelled) row is returned.
  */
 export async function startIssueRun(
   input: StartIssueRunInput,
@@ -238,16 +270,81 @@ export async function startIssueRun(
   const verdict = await adapter.canRun(target)
   if (!verdict.ok) throw new IssueRunRefusedError(verdict.reason, verdict.detail)
 
-  const run = await adapter.start(target, {
-    by: input.by,
-    origin: input.origin,
-    ...(input.conversation ? { conversation: input.conversation } : {}),
-    ...(input.options ? { options: input.options } : {}),
-    ...(input.brief ? { brief: input.brief } : {}),
-    ...(input.wakeup ? { wakeup: input.wakeup } : {}),
+  let claim: IssueRun
+  try {
+    claim = await claimIssueRun({
+      issueId: target.issue.id,
+      projectId: target.issue.projectId,
+      adapterId: adapter.id,
+      kind: adapter.kind,
+      by: input.by,
+      ...(input.wakeup ? { wakeup: input.wakeup } : {}),
+    })
+  } catch (error) {
+    if (error instanceof IssueRunActiveError) throw new IssueRunRefusedError("run-active")
+    throw error
+  }
+
+  let dispatch: IssueRunDispatch
+  try {
+    dispatch = await adapter.start(target, {
+      runId: claim.id,
+      by: input.by,
+      origin: input.origin,
+      ...(input.conversation ? { conversation: input.conversation } : {}),
+      ...(input.options ? { options: input.options } : {}),
+      ...(input.brief ? { brief: input.brief } : {}),
+      ...(input.wakeup ? { wakeup: input.wakeup } : {}),
+    })
+  } catch (error) {
+    // The issue never left its column (it moves only once the engine
+    // accepted), so settling the claim is the whole cleanup.
+    await settleIssueRun(claim.id, { status: "failed", error: dispatchErrorText(error) })
+    throw error
+  }
+
+  const bound = await acceptIssueRunDispatch(claim.id, dispatch, input.by)
+  if (bound) return bound
+  const settled = await getIssueRun(claim.id)
+  if (adapter.cancel && settled) {
+    await adapter.cancel({ ...settled, targetId: dispatch.targetId, ...targetRefOf(dispatch) })
+  }
+  if (!settled) throw new Error(`Issue run ${claim.id} vanished during dispatch`)
+  return settled
+}
+
+function targetRefOf(dispatch: IssueRunDispatch): Pick<IssueRun, "targetRef"> {
+  return dispatch.targetRef ? { targetRef: dispatch.targetRef } : {}
+}
+
+/** The text a failed dispatch leaves on its run row. */
+function dispatchErrorText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error)
+  return text.trim() || "dispatch failed"
+}
+
+/**
+ * Bind what the engine accepted onto the claim and give the runtime the
+ * column, in one transaction. `statusBefore` is read from the issue here,
+ * just before it moves: a person may have moved it between the claim and
+ * the engine's answer (any column but `in_progress`, which the claim holds).
+ * Returns `undefined` when the claim was settled meanwhile (a cancel).
+ */
+async function acceptIssueRunDispatch(
+  runId: string,
+  dispatch: IssueRunDispatch,
+  by: IssueActor
+): Promise<IssueRun | undefined> {
+  const db = getDb()
+  return db.transaction("rw", db.issueRuns, db.issues, db.issueEvents, async () => {
+    const claim = await db.issueRuns.get(runId)
+    if (!claim || !isActiveIssueRunStatus(claim.status)) return undefined
+    const issue = await db.issues.get(claim.issueId)
+    const bound = await bindIssueRunDispatch(runId, dispatch, issue?.status)
+    if (!bound) return undefined
+    await applyRuntimeIssueStatus(claim.issueId, "in_progress", by)
+    return bound
   })
-  await applyRuntimeIssueStatus(target.issue.id, "in_progress", input.by)
-  return run
 }
 
 /** The runtime actor stamped on status changes the bridge makes on an engine's behalf. */
@@ -259,30 +356,45 @@ export function runtimeActorFor(run: IssueRun): IssueActor {
   }
 }
 
+/** The column a run took its issue from, for a hand-back. */
+export function runStatusBefore(run: IssueRun): IssueStatus | undefined {
+  return run.statusBefore ?? run.wakeup?.statusBefore
+}
+
+const LINK_PULL_REQUEST_DEPS: LinkRunPullRequestsDeps = {
+  getIssue,
+  link: linkIssueExternal,
+}
+
 /**
- * Settle a run and move its issue on. Terminal success/failure both advance
- * to `in_review` — either way a human has to look; a cancel hands the issue
- * back to `todo`. Pull requests among the run's artifacts are linked onto the
- * issue (`linkRunPullRequests`). Idempotent: an already-settled run returns `undefined` and
- * touches nothing.
+ * Settle a run and move its issue on, in ONE transaction: the row, the PRs
+ * among its artifacts (`linkRunPullRequests`, so an until-pr wakeup sees a PR
+ * the run opened even when its text never names the issue), and the issue's
+ * column. Success and failure both advance to `in_review` — either way a
+ * human has to look; a cancel hands the issue back to the column the run
+ * took it from (`handBackRuntimeIssueStatus`). A crash can no longer leave a
+ * terminal run beside an issue stuck in `in_progress`.
+ *
+ * Idempotent: an already-settled run returns `undefined` and touches nothing.
  */
 export async function settleIssueRunAndIssue(
   runId: string,
   settlement: SettleIssueRunInput,
   now = Date.now()
 ): Promise<IssueRun | undefined> {
-  const settled = await settleIssueRun(runId, settlement, now)
-  if (!settled) return undefined
-  const actor = runtimeActorFor(settled)
-  // A PR the run opened belongs on the issue even when its text never names
-  // the issue; that is what lets an until-pr wakeup see it merge.
-  await linkRunPullRequests(settled.issueId, settled.artifacts, actor)
-  if (settled.status === "cancelled") {
-    await applyRuntimeIssueStatus(settled.issueId, "todo", actor)
-  } else {
-    await applyRuntimeIssueStatus(settled.issueId, "in_review", actor)
-  }
-  return settled
+  const db = getDb()
+  return db.transaction("rw", db.issueRuns, db.issues, db.issueEvents, async () => {
+    const settled = await settleIssueRun(runId, settlement, now)
+    if (!settled) return undefined
+    const actor = runtimeActorFor(settled)
+    await linkRunPullRequests(settled.issueId, settled.artifacts, actor, LINK_PULL_REQUEST_DEPS)
+    if ("mode" in settlement || settled.status === "cancelled") {
+      await handBackRuntimeIssueStatus(settled.issueId, runStatusBefore(settled), actor)
+    } else {
+      await applyRuntimeIssueStatus(settled.issueId, "in_review", actor)
+    }
+    return settled
+  })
 }
 
 export interface ReconcileIssueRunsResult {
@@ -293,17 +405,35 @@ export interface ReconcileIssueRunsResult {
 }
 
 /**
- * Poll every active run through its adapter and settle the terminal ones. A
- * run whose adapter is no longer registered is settled as failed — an engine
- * we cannot ask cannot keep owning an `in_progress` column forever.
+ * Poll every bound active run through its adapter and settle the terminal
+ * ones. A run whose adapter is no longer registered is settled as failed — an
+ * engine we cannot ask cannot keep owning an `in_progress` column forever.
+ *
+ * A claim not yet bound to an engine item is a dispatch in flight and is not
+ * polled (its adapter would look up an empty id). Once it is older than
+ * `ISSUE_RUN_DISPATCH_STALE_MS` the dispatch was interrupted — the window
+ * closed between claim and acceptance — and the claim is settled as failed;
+ * its issue never left its column, so nothing else moves.
  */
 export async function reconcileIssueRuns(
   registry: IssueRunRegistry = getIssueRunRegistry(),
   now = Date.now()
 ): Promise<ReconcileIssueRunsResult> {
   const active = await listIssueRuns({ activeOnly: true })
-  const result: ReconcileIssueRunsResult = { polled: active.length, settled: [], errored: [] }
+  const result: ReconcileIssueRunsResult = { polled: 0, settled: [], errored: [] }
   for (const run of active) {
+    if (isUnboundIssueRun(run)) {
+      if (now - run.startedAt > ISSUE_RUN_DISPATCH_STALE_MS) {
+        await settleIssueRun(
+          run.id,
+          { status: "failed", error: "dispatch interrupted before the engine accepted it" },
+          now
+        )
+        result.settled.push(run.id)
+      }
+      continue
+    }
+    result.polled += 1
     const adapter = registry.get(run.adapterId)
     if (!adapter) {
       await settleIssueRunAndIssue(
@@ -316,10 +446,12 @@ export async function reconcileIssueRuns(
     }
     try {
       const outcome = await adapter.poll(run)
-      if (outcome) {
-        await settleIssueRunAndIssue(run.id, outcome, now)
-        result.settled.push(run.id)
+      if (!outcome) continue
+      if (outcome.status === "running") {
+        if (run.status === "queued") await markIssueRunRunning(run.id, now)
+        continue
       }
+      if (await settleIssueRunAndIssue(run.id, outcome, now)) result.settled.push(run.id)
     } catch (error) {
       result.errored.push({ runId: run.id, error })
     }
@@ -328,7 +460,10 @@ export async function reconcileIssueRuns(
 }
 
 /**
- * User-initiated cancel: best-effort engine cancel, then settle as cancelled.
+ * User-initiated cancel: engine cancel, then settle as cancelled (which hands
+ * the issue back to the column the run took it from). A claim whose engine
+ * has not accepted yet has nothing to cancel engine-side; `startIssueRun`
+ * finds it settled when the engine answers and cancels the item it got.
  * Returns the settled run, or `undefined` if it was already terminal/missing.
  */
 export async function cancelIssueRun(
@@ -337,9 +472,9 @@ export async function cancelIssueRun(
   now = Date.now()
 ): Promise<IssueRun | undefined> {
   const run = await getIssueRun(runId)
-  if (!run) return undefined
+  if (!run || !isActiveIssueRunStatus(run.status)) return undefined
   const adapter = registry.get(run.adapterId)
-  if (adapter?.cancel) await adapter.cancel(run)
+  if (adapter?.cancel && !isUnboundIssueRun(run)) await adapter.cancel(run)
   return settleIssueRunAndIssue(runId, { status: "cancelled" }, now)
 }
 
@@ -400,12 +535,17 @@ export type CheckInIssueRunResult =
  * Settle a periodic wakeup's run with a note and leave the issue where it was.
  *
  * Starting the run moved the issue to `in_progress`; a check-in delivered
- * nothing to review, so instead of `settleIssueRunAndIssue`'s advance to
- * `in_review` the issue goes back to the open column it was in
- * (`IssueRunWakeup.statusBefore`). `applyRuntimeIssueStatus` only hands back
- * from `in_progress`, so an issue a person moved meanwhile stays where they
- * put it. The engine keeps running until its turn ends; its later terminal
- * poll finds the run already settled and changes nothing.
+ * nothing to review, so instead of advancing to `in_review` the issue goes
+ * back to the column the run took it from (`runStatusBefore`). This goes
+ * through the same one-transaction settle as every other outcome, so a PR
+ * the run opened before checking in is still linked onto the issue. The
+ * hand-back only leaves `in_progress`, so an issue a person moved meanwhile
+ * stays where they put it.
+ *
+ * The engine keeps running until its turn ends; its later terminal poll is
+ * never made (the run is no longer active). A new dispatch may claim the
+ * issue in the meantime — that is the next run, with its own engine item,
+ * and the old one can no longer write to the issue.
  *
  * Who may call this is the caller's question (`issue.wakeup_checkin` checks
  * the calling session is the run's own).
@@ -419,11 +559,83 @@ export async function checkInIssueRun(
   if (!run) return { status: "refused", reason: "not-found" }
   if (!isActiveIssueRunStatus(run.status)) return { status: "refused", reason: "not-active" }
   if (!run.wakeup?.periodic) return { status: "refused", reason: "not-periodic-wakeup" }
-  const settled = await settleIssueRun(runId, { status: "succeeded", mode: "checkin", note }, now)
+  const settled = await settleIssueRunAndIssue(
+    runId,
+    { status: "succeeded", mode: "checkin", note },
+    now
+  )
   if (!settled) return { status: "refused", reason: "not-active" }
-  const before = run.wakeup.statusBefore
-  if (before === "backlog" || before === "todo" || before === "in_review") {
-    await applyRuntimeIssueStatus(settled.issueId, before, runtimeActorFor(settled))
-  }
   return { status: "checked-in", run: settled }
+}
+
+/** Trail kinds that end a run. */
+const RUN_END_KINDS: ReadonlySet<string> = new Set([
+  "run_succeeded",
+  "run_failed",
+  "run_cancelled",
+  "run_checked_in",
+])
+
+function runIdOfEvent(event: { payload: object }): string | undefined {
+  return "runId" in event.payload && typeof event.payload.runId === "string"
+    ? event.payload.runId
+    : undefined
+}
+
+export interface RepairStrandedIssuesResult {
+  repaired: string[]
+}
+
+/**
+ * Finish the issue half of settles a crash interrupted.
+ *
+ * Before `settleIssueRunAndIssue` was one transaction, a run could be settled
+ * and the window close before its issue moved: the issue then sat in
+ * `in_progress` with no active run, and nothing ever looked at it again
+ * (the reconciler polls active runs only). Run once at boot, before the first
+ * reconcile.
+ *
+ * An issue is stranded only when all of this holds: it is in `in_progress`,
+ * it has no active run, its newest run was bound to an engine and is
+ * terminal, and the trail's last status change put it in `in_progress`
+ * while that run held it (between the run's `run_started` and its ending
+ * entry — a window in which the run lock kept everyone but the bridge out of
+ * that column). An
+ * issue a person moved into `in_progress` before pressing Run, or after a run
+ * settled, fails that test and is left alone; so does an issue whose claim
+ * failed before its engine accepted (the issue never moved for it). The repair is what the settle would have done: a
+ * check-in or a cancel hands back to `statusBefore`, anything else advances
+ * to `in_review`.
+ */
+export async function repairStrandedIssues(): Promise<RepairStrandedIssuesResult> {
+  const repaired: string[] = []
+  const issues = await listIssues({ statuses: ["in_progress"] })
+  for (const issue of issues) {
+    const runs = await listIssueRuns({ issueId: issue.id })
+    if (runs.some((run) => isActiveIssueRunStatus(run.status))) continue
+    const latest = runs[0]
+    if (!latest || latest.endedAt === undefined || isUnboundIssueRun(latest)) continue
+    // Order by the trail's own clock: its `ts` is monotonic and may run a
+    // millisecond ahead of the wall clock the run row's times come from.
+    const events = [...(await listIssueEvents({ issueId: issue.id }))].sort((a, b) => a.ts - b.ts)
+    const started = events.find(
+      (event) => event.payload.kind === "run_started" && event.payload.runId === latest.id
+    )
+    const ended = events.find(
+      (event) => RUN_END_KINDS.has(event.payload.kind) && runIdOfEvent(event) === latest.id
+    )
+    const lastMove = events.findLast((event) => event.payload.kind === "status_changed")
+    if (!started || !ended || !lastMove || lastMove.payload.kind !== "status_changed") continue
+    if (lastMove.payload.to !== "in_progress") continue
+    if (lastMove.ts < started.ts || lastMove.ts > ended.ts) continue
+    const actor = runtimeActorFor(latest)
+    const checkedIn = ended.payload.kind === "run_checked_in"
+    if (checkedIn || latest.status === "cancelled") {
+      await handBackRuntimeIssueStatus(issue.id, runStatusBefore(latest), actor)
+    } else {
+      await applyRuntimeIssueStatus(issue.id, "in_review", actor)
+    }
+    repaired.push(issue.id)
+  }
+  return { repaired }
 }

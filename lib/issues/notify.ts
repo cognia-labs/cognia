@@ -51,6 +51,8 @@ export const DEFAULT_ISSUE_NOTIFY_TEXT: Readonly<Record<string, string>> = Objec
   "notify.run_succeeded.body": "{title}",
   "notify.run_failed.title": "{identifier} run failed",
   "notify.run_failed.body": "{error}",
+  "notify.run_cancelled.title": "{identifier} run cancelled",
+  "notify.run_cancelled.body": "{title}",
   "notify.status_changed.title": "{identifier} moved to {to}",
   "notify.status_changed.body": "{title}",
   "notify.commented.title": "New comment on {identifier} from {by}",
@@ -128,6 +130,9 @@ export function issueEventToNotification(
       return build("run_succeeded", "success", {}, true)
     case "run_failed":
       return build("run_failed", "error", { error: payload.error }, true)
+    // A cancel is somebody's decision, so it informs rather than alarms.
+    case "run_cancelled":
+      return build("run_cancelled", "info", {}, true)
     // A wakeup fired on an issue a person owns: they are the delivery.
     case "wakeup_fired":
       if (payload.delivery !== "notified") return null

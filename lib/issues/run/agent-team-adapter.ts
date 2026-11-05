@@ -8,10 +8,13 @@
  * executing / planning / paused cannot take a new task mid-run — the adapter
  * refuses with `team-busy` rather than adding a task nobody will pick up.
  *
- * `start()` resolves only when the team run is terminal, so the adapter fires
- * it without awaiting and lets `poll` (driven by the store subscription in
- * `install.ts`) settle the run from the task's own status. That also covers a
- * reload mid-run: the awaiting promise is gone but the task row is not.
+ * `startSquadRun` resolves once the run is journalled and its lifecycle is
+ * under way (the lifecycle itself is fire-and-forget there), so the adapter
+ * awaits it: a refusal throws through to the bridge, which settles the claim
+ * as failed. The Squad run id it returns is kept on the issue run
+ * (`targetRef.squadRunId`), and `poll` (driven by the store subscription and
+ * the `agentTeamRuns` watch in `install.ts`) settles from the task's status
+ * and that Squad run's own record. That also covers a reload mid-run.
  *
  * Artifacts come from the durable-v2 tables when the team wrote them (delivery
  * nodes → PR urls; child runs → branch / worktree) — legacy runs simply have
@@ -23,11 +26,12 @@ import type { AgentTeam, AgentTeamTask, CreateTaskInput } from "@/types/agent/ag
 import type { ConversationReference } from "@/types/connectors/event"
 import { parseConversationKey } from "@/types/connectors/event"
 import type { IssueRun, IssueRunArtifact } from "@/types/issues"
+import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import type { SquadPlanApprovalDelegate } from "@/lib/ai/agent/team/squad/start-squad-run"
-import { createIssueRun } from "@/lib/db/issue-runs"
 import {
   getAgentTeamDeliveryGraph,
+  getAgentTeamRun,
   listAgentTeamChildRuns,
   listAgentTeamDeliveryNodes,
   listAgentTeamRuns,
@@ -35,6 +39,7 @@ import {
 import type {
   IssueRunAdapter,
   IssueRunConversation,
+  IssueRunDispatch,
   IssueRunOrigin,
   IssueRunPollResult,
   IssueRunStartContext,
@@ -71,8 +76,11 @@ export interface AgentTeamRunAdapterDeps {
   getTeam: (teamId: string) => AgentTeam | undefined
   getTask: (taskId: string) => AgentTeamTask | undefined
   createTask: (input: CreateTaskInput) => AgentTeamTask
+  /** Remove a task this adapter added, when the run it was added for never started. */
+  deleteTask: (taskId: string) => void
   /**
-   * Kick off the run.
+   * Kick off the run. Resolves once the Squad run is accepted (journalled,
+   * lifecycle under way) with its id; throws when the Squad refused.
    *
    * `goal` is the issue, stated as the Squad's objective. The previous
    * `agentTeamManager.start` took none, so the lead planned against whatever
@@ -84,13 +92,19 @@ export interface AgentTeamRunAdapterDeps {
     origin: IssueRunOrigin,
     goal?: string,
     conversation?: IssueRunConversation
-  ) => Promise<void>
-  abortTeam: (teamId: string, reason: string) => void
+  ) => Promise<{ squadRunId?: string }>
+  /**
+   * Stop the Squad run serving this issue run: abort it in this window and
+   * stop its durable record, so a run parked or recovering elsewhere stops
+   * too. Without a `squadRunId` (rows from before it was recorded) only the
+   * in-window abort is possible.
+   */
+  abortTeam: (teamId: string, reason: string, squadRunId?: string) => Promise<void>
+  /** The Squad run record an issue run was served by (`targetRef.squadRunId`). */
+  getSquadRun: (runId: string) => Promise<AgentTeamRunRecord | undefined>
   /** Durable-v2 artifact readers (best-effort; may return nothing for legacy runs). */
   collectArtifacts: (run: IssueRun) => Promise<IssueRunArtifact[]>
-  createRun: typeof createIssueRun
   now: () => number
-  onStartError?: (error: unknown) => void
 }
 
 /** What an IM-dispatched run gets that a desktop-dispatched one does not. */
@@ -229,14 +243,23 @@ export function createDefaultAgentTeamRunAdapterDeps(): AgentTeamRunAdapterDeps 
       if (!result.started) {
         throw new Error(`squad run refused: ${result.reason ?? "unknown"}`)
       }
+      return result.runId ? { squadRunId: result.runId } : {}
     },
-    abortTeam: (teamId, reason) => {
-      void import("@/lib/ai/agent/team/agent-team-runtime").then(({ abortTeam }) =>
-        abortTeam(teamId, new Error(reason))
-      )
+    deleteTask: (taskId) => {
+      loadedStore?.getState().deleteTask(taskId)
     },
+    abortTeam: async (teamId, reason, squadRunId) => {
+      const { abortTeam } = await import("@/lib/ai/agent/team/agent-team-runtime")
+      abortTeam(teamId, new Error(reason), squadRunId)
+      if (!squadRunId) return
+      // The same stop the Squad console sends (`startSquadRun`'s replaced-run
+      // path): it reaches a run that is parked or recovering, which the
+      // in-window abort above cannot.
+      const { controlDurableRun } = await import("@/lib/ai/agent/team/durable/durable-control")
+      await controlDurableRun(squadRunId, "stop")
+    },
+    getSquadRun: getAgentTeamRun,
     collectArtifacts: collectDurableArtifacts,
-    createRun: createIssueRun,
     now: Date.now,
   }
 }
@@ -265,10 +288,14 @@ export async function collectDurableArtifacts(run: IssueRun): Promise<IssueRunAr
     { label: "Team workspace", href: agentTeamWorkspaceHref(run.targetId) },
   ]
   const taskId = run.targetRef?.taskId
-  const runs = await listAgentTeamRuns(run.targetId)
-  const record = runs
-    .filter((candidate) => candidate.createdAt >= run.startedAt - 1_000)
-    .sort((a, b) => b.createdAt - a.createdAt)[0]
+  const squadRunId = run.targetRef?.squadRunId
+  // The run this issue run started, by id. Rows from before the id was kept
+  // fall back to the newest record started at/after the issue run.
+  const record = squadRunId
+    ? await getAgentTeamRun(squadRunId)
+    : (await listAgentTeamRuns(run.targetId))
+        .filter((candidate) => candidate.createdAt >= run.startedAt - 1_000)
+        .sort((a, b) => b.createdAt - a.createdAt)[0]
   if (!record) return artifacts
 
   const graph = await getAgentTeamDeliveryGraph(record.id)
@@ -332,7 +359,7 @@ export function createAgentTeamRunAdapter(
     id: AGENT_TEAM_RUN_ADAPTER_ID,
     kind: "agent-team",
     canRun,
-    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRun> {
+    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRunDispatch> {
       const verdict = await canRun(target)
       if (!verdict.ok) throw new Error(`agent-team adapter refused: ${verdict.reason}`)
       const { issue, project } = target
@@ -351,31 +378,28 @@ export function createAgentTeamRunAdapter(
         tags: ["issue", issue.identifier],
         metadata: { issueId: issue.id, issueIdentifier: issue.identifier },
       })
-      const run = await deps.createRun({
-        issueId: issue.id,
-        projectId: issue.projectId,
-        adapterId: AGENT_TEAM_RUN_ADAPTER_ID,
-        kind: "agent-team",
-        targetId: teamId,
-        targetRef: { taskId: task.id },
-        by: context.by,
-        status: "running",
-        ...(context.wakeup ? { wakeup: context.wakeup } : {}),
-        now: deps.now(),
-      })
-      // Resolves at terminal state — never awaited here. A start that throws
-      // synchronously (team vanished between canRun and start) still surfaces.
-      deps
-        .startTeam(
+      let accepted: { squadRunId?: string }
+      try {
+        accepted = await deps.startTeam(
           teamId,
           context.origin,
           `${issue.identifier}: ${issue.title}`,
           context.conversation
         )
-        .catch((error) => {
-          deps.onStartError?.(error)
-        })
-      return run
+      } catch (error) {
+        // The task was added for this run alone; a Squad that refused must
+        // not find it in its list on the next unrelated run.
+        deps.deleteTask(task.id)
+        throw error
+      }
+      return {
+        targetId: teamId,
+        targetRef: {
+          taskId: task.id,
+          ...(accepted.squadRunId ? { squadRunId: accepted.squadRunId } : {}),
+        },
+        status: "running",
+      }
     },
     async poll(run: IssueRun): Promise<IssueRunPollResult> {
       const taskId = run.targetRef?.taskId
@@ -396,26 +420,68 @@ export function createAgentTeamRunAdapter(
           }
         case "cancelled":
           return { status: "cancelled" }
-        default: {
-          // Not terminal. If the team itself has stopped, the task was never
-          // picked up (or the run was aborted) — do not leave the issue
-          // runtime-owned forever.
-          const team = deps.getTeam(run.targetId)
-          if (!team) return { status: "failed", error: "team no longer exists" }
-          if (!BUSY_TEAM_STATUSES.has(team.status) && team.status !== "idle") {
-            return {
-              status: "failed",
-              error: `team run ended (${team.status}) before the task ran`,
-              artifacts: await deps.collectArtifacts(run),
-            }
-          }
-          return null
-        }
+        default:
+          return pollUnfinishedTask(run, task)
       }
     },
     async cancel(run: IssueRun): Promise<void> {
-      deps.abortTeam(run.targetId, `issue run ${run.id} cancelled`)
+      await deps.abortTeam(run.targetId, `issue run ${run.id} cancelled`, run.targetRef?.squadRunId)
     },
+  }
+
+  /**
+   * The task is not terminal. Whether the run still is depends on the Squad:
+   *
+   *   - The Squad run is still going (or waiting for a person: `needs_input`,
+   *     paused, recovering) → keep the run active. A parked launch is waiting
+   *     for someone to resume it from the Squad console, not failed.
+   *   - The Squad run ended with the task in `review` → `succeeded`. Review is
+   *     the team's "a person has to look" state, exactly what the issue's
+   *     `in_review` means; the run did its work. A later `completed` finds the
+   *     run already settled and changes nothing.
+   *   - The Squad run was cancelled / terminated → `cancelled`.
+   *   - It ended any other way with the task never finished → `failed`.
+   *
+   * Rows from before the Squad run id was kept (`targetRef.squadRunId`) can
+   * only read the team's status, as they always did.
+   */
+  async function pollUnfinishedTask(
+    run: IssueRun,
+    task: AgentTeamTask
+  ): Promise<IssueRunPollResult> {
+    const squadRunId = run.targetRef?.squadRunId
+    let ended: { status: AgentTeamRunRecord["status"] } | { teamStatus: AgentTeam["status"] }
+    if (squadRunId) {
+      const record = await deps.getSquadRun(squadRunId)
+      if (!record) return { status: "failed", error: "squad run no longer exists" }
+      // Lazy for the same reason as the store: the records module drags the
+      // Squad runtime graph in.
+      const { isTerminalSquadRunStatus } =
+        await import("@/lib/ai/agent/team/squad/squad-run-records")
+      if (!isTerminalSquadRunStatus(record.status)) return null
+      ended = { status: record.status }
+    } else {
+      const team = deps.getTeam(run.targetId)
+      if (!team) return { status: "failed", error: "team no longer exists" }
+      if (BUSY_TEAM_STATUSES.has(team.status) || team.status === "idle") return null
+      ended = { teamStatus: team.status }
+    }
+    if (task.status === "review") {
+      return {
+        status: "succeeded",
+        ...(task.result ? { summary: task.result.slice(0, 500) } : {}),
+        artifacts: await deps.collectArtifacts(run),
+      }
+    }
+    if ("status" in ended && (ended.status === "cancelled" || ended.status === "terminated")) {
+      return { status: "cancelled", reason: `squad run ${ended.status}` }
+    }
+    const how = "status" in ended ? ended.status : ended.teamStatus
+    return {
+      status: "failed",
+      error: `team run ended (${how}) before the task ran`,
+      artifacts: await deps.collectArtifacts(run),
+    }
   }
 }
 

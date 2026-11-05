@@ -44,7 +44,6 @@ import {
 } from "@/lib/db/issues"
 import { createIssueCycle, listIssueCycles, updateIssueCycle } from "@/lib/db/issue-cycles"
 import { listIssueEvents } from "@/lib/db/issue-events"
-import { hasActiveIssueRun } from "@/lib/db/issue-runs"
 import { listLabels } from "@/lib/db/labels"
 import { getDb } from "@/lib/db/schema"
 import { getIntegrationAccount } from "@/lib/db/integrations"
@@ -292,7 +291,6 @@ async function reconcileItem(
   // than `now`. The ref must be stamped no earlier than the newest event it
   // examined, or that edit looks new again next time and is pushed twice.
   const watermark = events.reduce((max, event) => Math.max(max, event.ts), now)
-  const runActive = await hasActiveIssueRun(local.id)
   signal?.throwIfAborted()
 
   const patch: RemotePatch = {}
@@ -352,7 +350,6 @@ async function reconcileItem(
       const applied = await applyRemoteField(current, field, remoteValue, by, {
         provider: binding.providerId,
         cycleIdOf: context.cycleIdOf,
-        runActive,
         signal,
       })
       if (applied) touched = true

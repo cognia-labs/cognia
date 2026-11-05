@@ -24,7 +24,13 @@ jest.mock("@/lib/issues/run/registry", () => {
   }
 })
 const mockToastSuccess = jest.fn()
-jest.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => mockToastSuccess(...a) } }))
+const mockToastInfo = jest.fn()
+jest.mock("sonner", () => ({
+  toast: {
+    success: (...a: unknown[]) => mockToastSuccess(...a),
+    info: (...a: unknown[]) => mockToastInfo(...a),
+  },
+}))
 
 // The stack picker asks the database what sibling issues already pushed. Stub
 // the three reads at their own seam so the dialog's own logic is what is tested.
@@ -127,7 +133,18 @@ describe("RunIssueDialog", () => {
     )
   })
 
-  it("localizes a refusal and shows other errors verbatim", async () => {
+  it("says a run was cancelled when a cancel landed while the engine accepted", async () => {
+    const user = userEvent.setup()
+    mockStart.mockResolvedValueOnce({ id: "run-1", adapterId: "agent-team", status: "cancelled" })
+    renderDialog()
+    await screen.findByTestId("run-issue-adapter-agent-team")
+    await user.click(screen.getByTestId("run-issue-submit"))
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalled())
+    expect(String(mockToastInfo.mock.calls[0][0])).toContain("run.cancelledDuringDispatch")
+    expect(mockToastSuccess).not.toHaveBeenCalled()
+  })
+
+  it("localizes a refusal and says the engine refused for any other error", async () => {
     const user = userEvent.setup()
     mockStart.mockRejectedValueOnce(new IssueRunRefusedError("run-active"))
     renderDialog()
@@ -136,7 +153,9 @@ describe("RunIssueDialog", () => {
     expect(await screen.findByTestId("run-issue-error")).toHaveTextContent("run.refusal.run-active")
     mockStart.mockRejectedValueOnce(new Error("engine down"))
     await user.click(screen.getByTestId("run-issue-submit"))
-    expect(await screen.findByTestId("run-issue-error")).toHaveTextContent("engine down")
+    const error = await screen.findByTestId("run-issue-error")
+    await waitFor(() => expect(error).toHaveTextContent("run.dispatchFailed"))
+    expect(error).toHaveTextContent("engine down")
   })
 
   it("explains when nothing can run", async () => {

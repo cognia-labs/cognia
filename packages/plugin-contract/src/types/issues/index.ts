@@ -514,6 +514,8 @@ export type IssueEventKind =
   | "run_started"
   | "run_succeeded"
   | "run_failed"
+  /** A person (or a cancel path acting for one) stopped an active run. Not a failure. */
+  | "run_cancelled"
   | "artifact_linked"
   | "deliverable_accepted"
   | "github_linked"
@@ -566,6 +568,7 @@ export type IssueEventPayload =
   | { kind: "run_started"; runId: string; adapterId: string; by: IssueActor }
   | { kind: "run_succeeded"; runId: string; adapterId: string; summary?: string }
   | { kind: "run_failed"; runId: string; adapterId: string; error: string }
+  | { kind: "run_cancelled"; runId: string; adapterId: string; reason?: string }
   | { kind: "artifact_linked"; label: string; href: string; runId?: string }
   | {
       kind: "deliverable_accepted"
@@ -790,7 +793,12 @@ export interface IssueRun {
   /** `IssueRunAdapter.id` that owns this run. */
   adapterId: string
   kind: IssueRunKind
-  /** Engine-native id of the dispatched work item. */
+  /**
+   * Engine-native id of the dispatched work item. Empty while the run is
+   * claimed but its engine has not accepted the dispatch yet
+   * (`claimIssueRun` → `bindIssueRunDispatch`); a claim left unbound past
+   * `ISSUE_RUN_DISPATCH_STALE_MS` was interrupted and is settled as failed.
+   */
   targetId: string
   /** Secondary engine ids (e.g. the team task id for an `agent-team` run). */
   targetRef?: Record<string, string>
@@ -805,6 +813,14 @@ export interface IssueRun {
   /** Short outcome text from the engine (result preview, PR title, …). */
   summary?: string
   error?: string
+  /**
+   * The issue's status when the engine accepted the dispatch, read in the
+   * same transaction that moved it to `in_progress`. A cancel or a check-in
+   * hands the issue back here (when it is still in `in_progress`). Absent on
+   * rows written before the field existed; readers fall back to
+   * `wakeup.statusBefore`, then `todo`.
+   */
+  statusBefore?: IssueStatus
   /**
    * Present when an issue wakeup started this run. Not indexed, so adding it
    * needed no schema bump; see `types/issues/wakeup.ts` for why lineage lives

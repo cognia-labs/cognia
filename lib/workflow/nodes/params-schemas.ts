@@ -602,6 +602,7 @@ const ISSUE_TRIGGER_KINDS = [
   "run_started",
   "run_succeeded",
   "run_failed",
+  "run_cancelled",
 ] as const
 const IssueEventTriggerParams = z.object({
   // Unscoped = every trail kind.

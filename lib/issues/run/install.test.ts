@@ -4,10 +4,11 @@
 
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createAgentTask } from "@/lib/db/agent-tasks"
+import { createAgentTeamRun } from "@/lib/db/agent-team-runtime"
 import { getDb } from "@/lib/db/schema"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, getIssueRun } from "@/lib/db/issue-runs"
 import {
   ISSUE_RUN_RECONCILE_INTERVAL_MS,
   __resetIssueRunBridgeForTesting,
@@ -28,11 +29,16 @@ afterEach(() => {
 
 const HUMAN = { kind: "human" } as const
 
+let containerId: string | undefined
+beforeEach(() => {
+  containerId = undefined
+})
+
 async function seedIssue() {
-  const project = await createIssueProject({ projectId: "w1", name: "M", key: "MERC" })
+  containerId ??= (await createIssueProject({ projectId: "w1", name: "M", key: "MERC" })).id
   return createIssue({
     projectId: "w1",
-    issueProjectId: project.id,
+    issueProjectId: containerId,
     title: "x",
     createdBy: HUMAN,
     status: "in_progress",
@@ -43,15 +49,19 @@ const flush = (ms = 350) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe("engineChangeSignature", () => {
   it("encodes active runs plus the engine rows they point at", async () => {
-    expect(await engineChangeSignature()).toBe("runs:0")
+    expect(await engineChangeSignature()).toBe("runs:0:0")
     const issue = await seedIssue()
+    const second = await seedIssue()
+    const third = await seedIssue()
+    const fourth = await seedIssue()
     const task = await createAgentTask({
       id: "agent-task:1",
       agentId: "c",
       title: "t",
       description: "",
     })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: AGENT_TASK_RUN_ADAPTER_ID,
@@ -59,15 +69,46 @@ describe("engineChangeSignature", () => {
       targetId: task.id,
       by: HUMAN,
     })
-    await createIssueRun({
-      issueId: issue.id,
+    await claimIssueRun({
+      status: "running",
+      issueId: second.id,
       projectId: "w1",
       adapterId: "github-loop",
       kind: "github-loop",
       targetId: "job-missing",
       by: HUMAN,
     })
-    expect(await engineChangeSignature()).toBe("runs:2|task:agent-task:1:pending:1")
+    // A claim still waiting for its engine points at nothing.
+    await claimIssueRun({
+      issueId: third.id,
+      projectId: "w1",
+      adapterId: AGENT_TASK_RUN_ADAPTER_ID,
+      kind: "agent-task",
+      by: HUMAN,
+    })
+    await createAgentTeamRun({
+      id: "run_team_1",
+      teamId: "team-1",
+      objective: "o",
+      status: "needs_input",
+      priority: 0,
+      decisionVersion: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await claimIssueRun({
+      status: "running",
+      issueId: fourth.id,
+      projectId: "w1",
+      adapterId: "agent-team",
+      kind: "agent-team",
+      targetId: "team-1",
+      targetRef: { taskId: "tt-1", squadRunId: "run_team_1" },
+      by: HUMAN,
+    })
+    expect(await engineChangeSignature()).toBe(
+      "runs:4:3|task:agent-task:1:pending:1|squad:run_team_1:needs_input"
+    )
   })
 })
 
@@ -104,7 +145,8 @@ describe("installIssueRunBridge", () => {
     // The task already finished while the app was away (written the way the
     // scheduler executor settles it — a direct row update, not a human move).
     await getDb().agentTasks.update(task.id, { status: "completed", revision: 2 })
-    const finished = await createIssueRun({
+    const finished = await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: AGENT_TASK_RUN_ADAPTER_ID,
@@ -138,7 +180,8 @@ describe("installIssueRunBridge", () => {
       description: "",
       approvalPolicy: "auto",
     })
-    const live = await createIssueRun({
+    const live = await claimIssueRun({
+      status: "running",
       issueId: issue2.id,
       projectId: "w1",
       adapterId: AGENT_TASK_RUN_ADAPTER_ID,
@@ -153,6 +196,32 @@ describe("installIssueRunBridge", () => {
     expect((await getIssueRun(live.id))!.status).toBe("failed")
     expect((await getIssue(issue2.id))!.status).toBe("in_review")
     expect(errors).toEqual([])
+    dispose()
+  })
+
+  it("repairs an issue an interrupted settle stranded in in_progress, at boot", async () => {
+    const registry = new IssueRunRegistry()
+    const issue = await seedIssue()
+    const stranded = await claimIssueRun({
+      status: "running",
+      issueId: issue.id,
+      projectId: "w1",
+      adapterId: AGENT_TASK_RUN_ADAPTER_ID,
+      kind: "agent-task",
+      targetId: "agent-task:gone",
+      by: HUMAN,
+      now: Date.now() - 1_000,
+    })
+    const { applyRuntimeIssueStatus } = await import("@/lib/db/issues")
+    const { settleIssueRun } = await import("@/lib/db/issue-runs")
+    // The seed starts the issue in in_progress; move it the way a run would.
+    await getDb().issues.update(issue.id, { status: "todo", statusCategory: "unstarted" })
+    await applyRuntimeIssueStatus(issue.id, "in_progress", HUMAN)
+    await settleIssueRun(stranded.id, { status: "succeeded" })
+
+    const dispose = installIssueRunBridge({ registry, subscribeTeamStore: false })
+    await flush()
+    expect((await getIssue(issue.id))!.status).toBe("in_review")
     dispose()
   })
 
@@ -174,7 +243,8 @@ describe("installIssueRunBridge", () => {
       },
     })
     const issue = await seedIssue()
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: AGENT_TASK_RUN_ADAPTER_ID,

@@ -116,6 +116,14 @@ describe("issueEventToNotification", () => {
         error: "boom",
       })
     ).toMatchObject({ level: "error", body: "boom" })
+    // A cancel is somebody's decision: it informs, it does not alarm.
+    expect(
+      issueEventToNotification(ISSUE, {
+        kind: "run_cancelled",
+        runId: "r",
+        adapterId: "a",
+      })
+    ).toMatchObject({ level: "info", title: "MERC-1 run cancelled", directed: true })
     expect(
       issueEventToNotification(ISSUE, {
         kind: "status_changed",

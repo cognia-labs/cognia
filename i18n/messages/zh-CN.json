@@ -23907,6 +23907,7 @@
       "priority_changed": "将优先级从「{from}」改为「{to}」",
       "project_changed": "将其移动到了另一个项目",
       "reassigned": "将负责人从 {from} 改为 {to}",
+      "run_cancelled": "Agent 运行已取消",
       "run_checked_in": "周期运行已签到",
       "run_failed": "Agent 运行失败",
       "run_started": "启动了一次 Agent 运行",
@@ -24268,6 +24269,10 @@
         "body": "{title}",
         "title": "{identifier} 已改派给 {to}"
       },
+      "run_cancelled": {
+        "body": "{title}",
+        "title": "{identifier} 运行已取消"
+      },
       "run_failed": {
         "body": "{error}",
         "title": "{identifier} 运行失败"
@@ -24514,7 +24519,9 @@
       "baseBranchStacked": "由所叠加的分支决定：一个 PR 只有一个基分支。",
       "cancel": "取消运行",
       "cancelled": "运行已取消",
+      "cancelledDuringDispatch": "{identifier}：运行在执行引擎接受之前已被取消。",
       "description": "选择执行引擎。这一步就是确认 —— 按下「运行」后引擎立即启动。",
+      "dispatchFailed": "执行引擎没有接受这次运行：{error}",
       "engineLabel": "执行引擎",
       "loading": "正在检查哪些引擎可以运行这个议题…",
       "noAdapters": "尚未注册任何执行引擎。",
@@ -24765,6 +24772,7 @@
         "priority_changed": "优先级变化",
         "project_changed": "项目变化",
         "reassigned": "改派",
+        "run_cancelled": "运行已取消",
         "run_checked_in": "运行签到",
         "run_failed": "运行失败",
         "run_started": "运行开始",
@@ -68520,6 +68528,7 @@
             "assigned": "已指派",
             "commented": "已评论",
             "created": "已创建",
+            "run_cancelled": "运行已取消",
             "run_failed": "运行失败",
             "run_started": "运行开始",
             "run_succeeded": "运行成功",

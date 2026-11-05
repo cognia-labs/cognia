@@ -6,7 +6,7 @@ import type { Issue } from "@/types/issues"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 import {
   IssueRunRegistry,
   resetIssueRunRegistry,
@@ -124,7 +124,8 @@ describe("pushIssueCard", () => {
 
   it("hides Run and every move while a run is active", async () => {
     const issue = await seedIssue("in_progress")
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",

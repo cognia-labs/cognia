@@ -17,9 +17,9 @@ import type { AgentTask, AgentTaskAttempt } from "@/types/agent/agent-task"
 import type { IssueRun, IssueRunArtifact } from "@/types/issues"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { createAgentTask, getAgentTask, listAgentTaskAttempts } from "@/lib/db/agent-tasks"
-import { createIssueRun, markIssueRunRunning } from "@/lib/db/issue-runs"
 import type {
   IssueRunAdapter,
+  IssueRunDispatch,
   IssueRunPollResult,
   IssueRunStartContext,
   IssueRunTarget,
@@ -37,12 +37,11 @@ export function sessionHref(sessionId: string): string {
 export interface AgentTaskRunAdapterDeps {
   resolveCharacter: (id: string) => Promise<{ id: string; name: string } | undefined>
   createTask: typeof createAgentTask
-  runTaskNow: (taskId: string) => Promise<unknown>
+  /** Resolves once the Scheduler accepted the start (`startAgentTaskNow`), not when it settles. */
+  startTaskNow: (taskId: string) => Promise<{ status: "running" | "queued" }>
   cancelTask: (taskId: string) => Promise<void>
   getTask: (taskId: string) => Promise<AgentTask | undefined>
   listAttempts: (taskId: string) => Promise<AgentTaskAttempt[]>
-  createRun: typeof createIssueRun
-  markRunning: typeof markIssueRunRunning
   now: () => number
 }
 
@@ -59,12 +58,10 @@ function defaultDeps(): AgentTaskRunAdapterDeps {
   return {
     resolveCharacter: resolveCharacterById,
     createTask: createAgentTask,
-    runTaskNow: async (taskId) => (await loadRuntime()).runAgentTaskNow(taskId),
+    startTaskNow: async (taskId) => (await loadRuntime()).startAgentTaskNow(taskId),
     cancelTask: async (taskId) => (await loadRuntime()).cancelAgentTask(taskId),
     getTask: getAgentTask,
     listAttempts: listAgentTaskAttempts,
-    createRun: createIssueRun,
-    markRunning: markIssueRunRunning,
     now: Date.now,
   }
 }
@@ -110,7 +107,7 @@ export function createAgentTaskRunAdapter(
     id: AGENT_TASK_RUN_ADAPTER_ID,
     kind: "agent-task",
     canRun,
-    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRun> {
+    async start(target: IssueRunTarget, context: IssueRunStartContext): Promise<IssueRunDispatch> {
       const verdict = await canRun(target)
       if (!verdict.ok) throw new Error(`agent-task adapter refused: ${verdict.reason}`)
       const { issue } = target
@@ -124,22 +121,18 @@ export function createAgentTaskRunAdapter(
         tags: ["issue", `issue:${issue.id}`, issue.identifier],
         now: deps.now(),
       })
-      const run = await deps.createRun({
-        issueId: issue.id,
-        projectId: issue.projectId,
-        adapterId: AGENT_TASK_RUN_ADAPTER_ID,
-        kind: "agent-task",
-        targetId: task.id,
-        by: context.by,
-        status: "queued",
-        ...(context.wakeup ? { wakeup: context.wakeup } : {}),
-        now: deps.now(),
-      })
-      // If the scheduler refuses, let it throw: the run row stays `queued`
-      // and the reconciler will settle it from the task's own status.
-      await deps.runTaskNow(task.id)
-      await deps.markRunning(run.id, deps.now())
-      return { ...run, status: "running" }
+      // The scheduler accepting the task is the engine accepting the run. A
+      // refusal throws through to the bridge, which settles the claim as
+      // failed; the task it created is cancelled so it cannot start later on
+      // its own and run with no issue run watching it.
+      let accepted: { status: "running" | "queued" }
+      try {
+        accepted = await deps.startTaskNow(task.id)
+      } catch (error) {
+        await deps.cancelTask(task.id).catch(() => undefined)
+        throw error
+      }
+      return { targetId: task.id, status: accepted.status }
     },
     async poll(run: IssueRun): Promise<IssueRunPollResult> {
       const task = await deps.getTask(run.targetId)
@@ -166,6 +159,8 @@ export function createAgentTaskRunAdapter(
         }
         case "cancelled":
           return { status: "cancelled" }
+        case "in_progress":
+          return run.status === "queued" ? { status: "running" } : null
         default:
           return null
       }

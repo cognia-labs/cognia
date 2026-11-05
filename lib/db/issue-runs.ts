@@ -7,11 +7,13 @@
  * new engine is one adapter in `lib/issues/run/` and zero schema bumps on the
  * engine's tables.
  *
- * Written by `lib/issues/run/` adapters (`createIssueRun`) and settled by the
- * same adapters when the engine reports a terminal state (`settleIssueRun`).
+ * Claimed by `startIssueRun` (`claimIssueRun`, the start lock), bound to the
+ * engine item once the adapter's engine accepted (`bindIssueRunDispatch`),
+ * and settled when the engine reports a terminal state (`settleIssueRun`).
  * The row is what feeds:
  *   - the "N agents working" pills (`listActiveIssueRunIssueIds`),
- *   - the runtime-owned guard in `lib/issues/state-machine.ts` (`hasActiveIssueRun`),
+ *   - the runtime-owned guard `moveIssue` applies in its own transaction
+ *     (`lib/db/issues.ts`, rule in `lib/issues/state-machine.ts`),
  *   - the agent-task / agent-team federated sources' "from KEY-1" badge
  *     (`getIssueRunByTarget`),
  *   - the issue detail panel's run history (`listIssueRuns`).
@@ -25,6 +27,7 @@
 
 import type {
   IssueActor,
+  IssueStatus,
   IssueRun,
   IssueRunArtifact,
   IssueRunKind,
@@ -40,30 +43,69 @@ function newIssueRunId(): string {
   return `irun_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export interface CreateIssueRunInput {
+/**
+ * How long a claim may wait for its engine to accept the dispatch. A claim
+ * still unbound after this was interrupted (the window closed mid-dispatch);
+ * the reconciler settles it as failed instead of polling an engine item that
+ * was never created.
+ */
+export const ISSUE_RUN_DISPATCH_STALE_MS = 5 * 60_000
+
+/** Raised by `claimIssueRun` when the issue already has a `queued` / `running` run. */
+export class IssueRunActiveError extends Error {
+  readonly issueId: string
+  readonly activeRunId: string
+
+  constructor(issueId: string, activeRunId: string) {
+    super(`Issue ${issueId} already has an active run (${activeRunId})`)
+    this.name = "IssueRunActiveError"
+    this.issueId = issueId
+    this.activeRunId = activeRunId
+    Object.setPrototypeOf(this, IssueRunActiveError.prototype)
+  }
+}
+
+/** What an engine hands back once it accepted a dispatch. */
+export interface IssueRunDispatch {
+  /** Engine-native id of the work item the engine created. */
+  targetId: string
+  targetRef?: Record<string, string>
+  /** `running` when the engine already picked it up, `queued` while it waits. */
+  status: Extract<IssueRunStatus, "queued" | "running">
+}
+
+export interface ClaimIssueRunInput {
   issueId: string
   /** Owning workspace id, mirrored from the issue. */
   projectId: string
   adapterId: string
   kind: IssueRunKind
-  targetId: string
-  targetRef?: Record<string, string>
   by: IssueActor
-  /** Defaults to `running`; pass `queued` when the engine has not picked it up yet. */
-  status?: Extract<IssueRunStatus, "queued" | "running">
   /** Lineage, when an issue wakeup started this run. */
   wakeup?: IssueRunWakeup
+  /**
+   * The engine item, when it already exists at claim time. Omitted on the
+   * dispatch path: `startIssueRun` claims first and binds what the engine
+   * returns (`bindIssueRunDispatch`), so the claim itself is the lock.
+   */
+  targetId?: string
+  targetRef?: Record<string, string>
+  status?: Extract<IssueRunStatus, "queued" | "running">
   /** Test injection. */
   now?: number
 }
 
 /**
- * Record a dispatch and append `run_started` to the issue's trail in one
- * transaction. The engine-side work item must already exist — `targetId` is
- * required — so a crash between "engine accepted" and "row written" leaves an
- * orphan engine item rather than a run row pointing at nothing.
+ * Claim the issue for one run: refuse when it already has an active run,
+ * otherwise insert the row and append `run_started`, in one transaction.
+ *
+ * This is the start lock. The active-run check and the insert share the
+ * transaction, so two dispatches racing for the same issue cannot both pass
+ * (Dexie serialises read-write transactions over the same table). The row is
+ * `queued` with an empty `targetId` until the engine accepts; `moveIssue`
+ * already treats the issue as runtime-owned from here.
  */
-export async function createIssueRun(input: CreateIssueRunInput): Promise<IssueRun> {
+export async function claimIssueRun(input: ClaimIssueRunInput): Promise<IssueRun> {
   const db = getDb()
   const now = input.now ?? Date.now()
   const row: IssueRun = {
@@ -72,9 +114,9 @@ export async function createIssueRun(input: CreateIssueRunInput): Promise<IssueR
     projectId: input.projectId,
     adapterId: input.adapterId,
     kind: input.kind,
-    targetId: input.targetId,
+    targetId: input.targetId ?? "",
     ...(input.targetRef ? { targetRef: input.targetRef } : {}),
-    status: input.status ?? "running",
+    status: input.status ?? "queued",
     by: input.by,
     startedAt: now,
     updatedAt: now,
@@ -82,6 +124,8 @@ export async function createIssueRun(input: CreateIssueRunInput): Promise<IssueR
     ...(input.wakeup ? { wakeup: input.wakeup } : {}),
   }
   await db.transaction("rw", db.issueRuns, db.issueEvents, async () => {
+    const active = await activeRunOf(input.issueId)
+    if (active) throw new IssueRunActiveError(input.issueId, active.id)
     await db.issueRuns.add(row)
     await appendIssueEvent({
       issueId: input.issueId,
@@ -89,6 +133,49 @@ export async function createIssueRun(input: CreateIssueRunInput): Promise<IssueR
     })
   })
   return row
+}
+
+/**
+ * Record what the engine accepted onto a claimed run. Returns the bound row,
+ * or `undefined` when the claim is gone or no longer active (a cancel landed
+ * while the engine was accepting). `statusBefore` is the issue status the
+ * caller read in the same transaction, before it moved the issue on.
+ */
+export async function bindIssueRunDispatch(
+  id: string,
+  dispatch: IssueRunDispatch,
+  statusBefore: IssueStatus | undefined,
+  now = Date.now()
+): Promise<IssueRun | undefined> {
+  const db = getDb()
+  return db.transaction("rw", db.issueRuns, async () => {
+    const existing = await db.issueRuns.get(id)
+    if (!existing || !isActiveIssueRunStatus(existing.status)) return undefined
+    const next: IssueRun = {
+      ...existing,
+      targetId: dispatch.targetId,
+      status: dispatch.status,
+      updatedAt: now,
+      ...(statusBefore ? { statusBefore } : {}),
+    }
+    if (dispatch.targetRef) next.targetRef = dispatch.targetRef
+    else delete next.targetRef
+    await db.issueRuns.put(next)
+    return next
+  })
+}
+
+/** True while the run is claimed but its engine has not accepted yet. */
+export function isUnboundIssueRun(run: Pick<IssueRun, "targetId">): boolean {
+  return run.targetId === ""
+}
+
+async function activeRunOf(issueId: string): Promise<IssueRun | undefined> {
+  const table = getDb().issueRuns
+  return (
+    (await table.where("[issueId+status]").equals([issueId, "queued"]).first()) ??
+    (await table.where("[issueId+status]").equals([issueId, "running"]).first())
+  )
 }
 
 export async function getIssueRun(id: string): Promise<IssueRun | undefined> {
@@ -134,11 +221,7 @@ export async function listIssueRuns(query: ListIssueRunsQuery = {}): Promise<Iss
 
 /** True while any `queued` / `running` run exists for the issue. */
 export async function hasActiveIssueRun(issueId: string): Promise<boolean> {
-  const db = getDb()
-  const queued = await db.issueRuns.where("[issueId+status]").equals([issueId, "queued"]).count()
-  if (queued > 0) return true
-  const running = await db.issueRuns.where("[issueId+status]").equals([issueId, "running"]).count()
-  return running > 0
+  return (await activeRunOf(issueId)) !== undefined
 }
 
 /**
@@ -287,7 +370,8 @@ export type SettleIssueRunInput =
    */
   | { status: "succeeded"; mode: "checkin"; note: string }
   | { status: "failed"; error: string; artifacts?: IssueRunArtifact[] }
-  | { status: "cancelled"; error?: string }
+  /** `reason` is kept on the row's `error` field for the run history; it is not a failure. */
+  | { status: "cancelled"; reason?: string }
 
 /**
  * Move a run to a terminal state and append the matching trail event. Returns
@@ -347,12 +431,29 @@ export async function settleIssueRun(
           ...(input.summary ? { summary: input.summary } : {}),
         },
       })
-    } else {
-      const error = input.error ?? "cancelled"
-      next.error = error
+    } else if (input.status === "cancelled") {
+      // A cancel is somebody's decision, not an engine failure: its own trail
+      // kind, so a subscriber to `run_failed` never hears about it.
+      if (input.reason) next.error = input.reason
       await appendIssueEvent({
         issueId: existing.issueId,
-        payload: { kind: "run_failed", runId: id, adapterId: existing.adapterId, error },
+        payload: {
+          kind: "run_cancelled",
+          runId: id,
+          adapterId: existing.adapterId,
+          ...(input.reason ? { reason: input.reason } : {}),
+        },
+      })
+    } else {
+      next.error = input.error
+      await appendIssueEvent({
+        issueId: existing.issueId,
+        payload: {
+          kind: "run_failed",
+          runId: id,
+          adapterId: existing.adapterId,
+          error: input.error,
+        },
       })
     }
     await db.issueRuns.put(next)

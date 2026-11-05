@@ -32,7 +32,6 @@ import { ISSUE_STATUSES } from "@/types/issues"
 import { getDb } from "@/lib/db/schema"
 import { patchConversationOverride } from "@/lib/db/conversation-overrides"
 import { createIssue, getIssue, moveIssue } from "@/lib/db/issues"
-import { hasActiveIssueRun } from "@/lib/db/issue-runs"
 import { IssueRunRefusedError, listIssueRunOptions, startIssueRun } from "@/lib/issues/run/registry"
 import { issueRunOptionLabel, type IssueActionPayload, type IssueDraft } from "./card"
 import { pushIssueCard, pushIssueRunChoice, pushIssueText, type IssueImPushDeps } from "./push"
@@ -232,8 +231,8 @@ export async function handleIssueActionCallback(
 
   switch (payload.action) {
     case "move": {
-      const runActive = await hasActiveIssueRun(payload.issueId)
-      const denial = await moveIssue({ id: payload.issueId, to: payload.to, by, runActive })
+      // `moveIssue` reads whether a run holds the issue itself, in its write.
+      const denial = await moveIssue({ id: payload.issueId, to: payload.to, by })
       if (denial) {
         await audit(
           "issue.card_action_denied",

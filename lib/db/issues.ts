@@ -46,7 +46,7 @@ import { FULL_ISSUE_CAPABILITIES } from "@/types/issues/unified"
 import { getDb } from "./schema"
 import { allocateIssueNumber } from "./issue-counters"
 import { appendIssueEvent, deleteIssueEvents } from "./issue-events"
-import { deleteIssueRuns } from "./issue-runs"
+import { deleteIssueRuns, hasActiveIssueRun } from "./issue-runs"
 import { recordTombstones } from "./tombstones"
 import type { ListIssuesQuery } from "@cognia/plugin-contract/lib/db/issues"
 export type { ListIssuesQuery } from "@cognia/plugin-contract/lib/db/issues"
@@ -277,24 +277,28 @@ export interface MoveIssueInput {
   id: string
   to: IssueStatus
   by: IssueActor
-  /** True while an `IssueRunAdapter` run is in flight for this issue. */
-  runActive?: boolean
 }
 
 /**
  * Guarded status change. Returns `null` on success or a structured reason on
  * refusal — never throws for a policy denial, so the caller (drag handler, IM
- * callback, mobile action sheet) can localize the message without string
- * matching.
+ * callback, mobile action sheet, sync) can localize the message without
+ * string matching.
+ *
+ * Whether a run holds the issue is read here, in the same transaction as the
+ * write, from `issueRuns` — never taken from the caller. A board that drew a
+ * stale "no run" snapshot, or a door that forgot to ask, still cannot move an
+ * issue into or out of the column a run owns. A claim (`claimIssueRun`) holds
+ * the issue from the moment it is written, before its engine accepted.
  */
 export async function moveIssue(input: MoveIssueInput): Promise<IssueMoveError | null> {
   const db = getDb()
-  return db.transaction("rw", db.issues, db.issueEvents, async () => {
+  return db.transaction("rw", db.issues, db.issueEvents, db.issueRuns, async () => {
     const existing = await db.issues.get(input.id)
     if (!existing) return "issue-not-found" as const
 
     const verdict = canMoveIssue(FULL_ISSUE_CAPABILITIES, existing.status, input.to, {
-      runActive: input.runActive ?? false,
+      runActive: await hasActiveIssueRun(existing.id),
     })
     if (!verdict.allowed) return verdict.reason
 
@@ -1155,25 +1159,74 @@ export async function mapIssuesByExternalProvider(
 }
 
 /**
- * Runtime-owned status write, used ONLY by `lib/issues/run/` adapters.
+ * Runtime-owned status write, used ONLY by the run bridge
+ * (`lib/issues/run/registry.ts` and the boot repair beside it).
  *
  * `moveIssue` applies the human guard, which (correctly) refuses to move an
  * issue into or out of `in_progress` while a run is active — that is the
  * runtime's column. This is the runtime's own door: it may enter
- * `in_progress` when a run starts, leave to `in_review` when the run
- * finishes, or hand the issue back to `todo` when the run is cancelled before
- * producing anything — and NOTHING else. `done` is never reachable from here;
+ * `in_progress` when the engine accepts a run, or leave to `in_review` when
+ * the run finishes — and NOTHING else. `done` is never reachable from here;
  * promoting a reviewed issue is the human's call (`lib/issues/state-machine.ts`).
- *
- * `backlog` is the one other hand-back: a wakeup check-in returns the issue to
- * the open column it was in before its run took it (`checkInIssueRun`), and
- * an issue woken from the backlog belongs back there, not promoted to `todo`.
- * It carries the same guard as `todo`.
+ * Giving the column back after a run that delivered nothing goes through
+ * `handBackRuntimeIssueStatus`, which returns the issue to the column the run
+ * took it from. `todo` / `backlog` here carry the same only-from-`in_progress`
+ * guard.
  */
 export async function applyRuntimeIssueStatus(
   id: string,
   to: Extract<IssueStatus, "in_progress" | "in_review" | "todo" | "backlog">,
   by: IssueActor
+): Promise<void> {
+  await writeRuntimeIssueStatus(id, to, by, to === "todo" || to === "backlog")
+}
+
+/**
+ * Give the column back after a run that delivered nothing to review (a
+ * cancel, a dispatch the engine refused, a wakeup check-in): the issue
+ * returns to `statusBefore` — the column it was in when the run took it —
+ * but only while it is still in `in_progress`. An issue a person moved
+ * elsewhere meanwhile stays where they put it.
+ *
+ * `statusBefore` is whatever the run recorded. `in_progress` (a person had
+ * put it there before pressing Run) means the issue simply stays; a finished
+ * status cannot have been recorded (runs never start on finished issues),
+ * so it reads as `todo`. Absent means a row from before the field existed,
+ * and the old hand-back target `todo` applies.
+ */
+export async function handBackRuntimeIssueStatus(
+  id: string,
+  statusBefore: IssueStatus | undefined,
+  by: IssueActor
+): Promise<void> {
+  const to = handBackTarget(statusBefore)
+  if (!to) return
+  await writeRuntimeIssueStatus(id, to, by, true)
+}
+
+/** Where a hand-back lands for a recorded `statusBefore`, or `null` to stay. */
+export function handBackTarget(
+  statusBefore: IssueStatus | undefined
+): Extract<IssueStatus, "backlog" | "todo" | "in_review"> | null {
+  switch (statusBefore) {
+    case "backlog":
+    case "todo":
+    case "in_review":
+      return statusBefore
+    case "in_progress":
+      return null
+    case "done":
+    case "canceled":
+    case undefined:
+      return "todo"
+  }
+}
+
+async function writeRuntimeIssueStatus(
+  id: string,
+  to: Extract<IssueStatus, "in_progress" | "in_review" | "todo" | "backlog">,
+  by: IssueActor,
+  handBack: boolean
 ): Promise<void> {
   const db = getDb()
   await db.transaction("rw", db.issues, db.issueEvents, async () => {
@@ -1182,9 +1235,9 @@ export async function applyRuntimeIssueStatus(
     // A finished/cancelled issue is not dragged back into the pipeline by a
     // late engine callback.
     if (existing.statusCategory === "completed" || existing.statusCategory === "canceled") return
-    // The cancel hand-back only relinquishes the runtime's own column; it never
+    // A hand-back only relinquishes the runtime's own column; it never
     // demotes an issue a human has already moved elsewhere.
-    if ((to === "todo" || to === "backlog") && existing.status !== "in_progress") return
+    if (handBack && existing.status !== "in_progress") return
     const now = Date.now()
     const timestamps = statusTimestampPatch(to, now, existing)
     const next: Issue = {

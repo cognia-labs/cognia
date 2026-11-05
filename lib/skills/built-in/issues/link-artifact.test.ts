@@ -21,7 +21,7 @@ import type { BuiltInSkillContext } from "../types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, getIssueRun } from "@/lib/db/issue-runs"
 import { getDb } from "@/lib/db/schema"
 import { registerIssueRunAdapter, resetIssueRunRegistry } from "@/lib/issues/run/registry"
 import "./link-artifact"
@@ -61,7 +61,8 @@ beforeEach(async () => {
     createdBy: HUMAN,
   })
   runId = (
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "fake",

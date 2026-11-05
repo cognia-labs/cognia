@@ -17,7 +17,7 @@ import type { BuiltInSkillContext } from "../types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, getIssueRun, settleIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun, getIssueRun, settleIssueRun } from "@/lib/db/issue-runs"
 import { resetIssueRunRegistry } from "@/lib/issues/run/registry"
 import "./cancel-run"
 
@@ -49,7 +49,8 @@ async function startedRun(workspaceId = "w1", container = () => containerId) {
     status: "in_progress",
     createdBy: HUMAN,
   })
-  const created = await createIssueRun({
+  const created = await claimIssueRun({
+    status: "running",
     issueId: issue.id,
     projectId: workspaceId,
     adapterId: "engine-a",

@@ -20,7 +20,7 @@ import { createIssue } from "@/lib/db/issues"
 import "./delete"
 import { getIssue } from "@/lib/db/issues"
 import { listIssueEvents } from "@/lib/db/issue-events"
-import { createIssueRun } from "@/lib/db/issue-runs"
+import { claimIssueRun } from "@/lib/db/issue-runs"
 
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
@@ -76,7 +76,8 @@ describe("issue.delete", () => {
     // `canDelete` is a separate bit from `canMove`: the run guard owns the
     // status column, not the row's existence.
     const issue = await makeIssue({ status: "in_progress" })
-    await createIssueRun({
+    await claimIssueRun({
+      status: "running",
       issueId: issue.id,
       projectId: "w1",
       adapterId: "agent-task",

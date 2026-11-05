@@ -106,7 +106,6 @@ function makeDeps(over: Partial<GithubLoopRunAdapterDeps> = {}) {
   const executed: Array<[string, unknown, unknown?, unknown?]> = []
   const approved: string[] = []
   const cancelled: string[] = []
-  const runs: Parameters<GithubLoopRunAdapterDeps["createRun"]>[0][] = []
   const parents: Array<[string, string, string]> = []
   const workspace = { roots: [{ id: "root-1", path: "/checkout" }] }
   const deps: GithubLoopRunAdapterDeps = {
@@ -124,18 +123,13 @@ function makeDeps(over: Partial<GithubLoopRunAdapterDeps> = {}) {
       cancelled.push(id)
     },
     getJob: async () => undefined,
-    createRun: async (input) => {
-      runs.push(input)
-      return run({ id: "run-new", status: input.status ?? "running" })
-    },
-    now: () => 99,
     recordParent: async (repoPath, branch, parent) => {
       parents.push([repoPath, branch, parent])
     },
     loadWorkspace: async () => workspace,
     ...over,
   }
-  return { deps, executed, approved, cancelled, runs, parents }
+  return { deps, executed, approved, cancelled, parents }
 }
 
 describe("helpers", () => {
@@ -189,9 +183,9 @@ describe("start", () => {
     const resolveAccount = jest.fn().mockResolvedValueOnce(account).mockResolvedValueOnce(null)
     const harness = makeDeps({ resolveAccount })
     const adapter = createGithubLoopRunAdapter(harness.deps)
-    await expect(adapter.start(target(), { by: HUMAN, origin: "interactive" })).rejects.toThrow(
-      "no-github-account"
-    )
+    await expect(
+      adapter.start(target(), { runId: "run-claim", by: HUMAN, origin: "interactive" })
+    ).rejects.toThrow("no-github-account")
     expect(resolveAccount).toHaveBeenCalledWith("octo/repo", undefined, undefined)
     expect(harness.executed).toHaveLength(0)
   })
@@ -199,6 +193,7 @@ describe("start", () => {
     const harness = makeDeps()
     const adapter = createGithubLoopRunAdapter(harness.deps)
     const result = await adapter.start(target(), {
+      runId: "run-claim",
       by: HUMAN,
       origin: "interactive",
       options: { [GITHUB_LOOP_BASE_OPTION]: " develop " },
@@ -210,7 +205,7 @@ describe("start", () => {
       accountId: "acc-1",
       actionId: "runIssueLoop",
       source: "manual",
-      idempotencyKey: "issue-run:iss-1:99",
+      idempotencyKey: "issue-run:run-claim",
       input: {
         repoFullName: "octo/repo",
         issueNumber: 12,
@@ -221,22 +216,22 @@ describe("start", () => {
       },
     })
     expect(harness.approved).toEqual(["job-1"])
-    expect(harness.runs[0]).toMatchObject({
-      adapterId: GITHUB_LOOP_RUN_ADAPTER_ID,
-      kind: "github-loop",
+    expect(result).toEqual({
       targetId: "job-1",
       targetRef: { repoFullName: "octo/repo", head: "issue/merc-3", base: "develop" },
       status: "running",
-      now: 99,
     })
-    expect(result.id).toBe("run-new")
   })
 
   it("names the person who started the run as the write's caller, and nobody for a wakeup (ADR-0239)", async () => {
     const callers: unknown[] = []
     for (const origin of ["interactive", "im", "wakeup"] as const) {
       const harness = makeDeps()
-      await createGithubLoopRunAdapter(harness.deps).start(target(), { by: HUMAN, origin })
+      await createGithubLoopRunAdapter(harness.deps).start(target(), {
+        runId: "run-claim",
+        by: HUMAN,
+        origin,
+      })
       callers.push(harness.executed[0][2])
     }
     expect(callers).toEqual([
@@ -250,6 +245,7 @@ describe("start", () => {
     for (const origin of ["interactive", "im"] as const) {
       const harness = makeDeps()
       await createGithubLoopRunAdapter(harness.deps).start(target(), {
+        runId: "run-claim",
         by: { kind: "agent", id: "char-1" },
         origin,
       })
@@ -266,13 +262,14 @@ describe("start", () => {
       },
     })
     const adapter = createGithubLoopRunAdapter(harness.deps)
-    await adapter.start(target({ issue: issue({ description: undefined }) }), {
+    const dispatch = await adapter.start(target({ issue: issue({ description: undefined }) }), {
+      runId: "run-claim",
       by: HUMAN,
       origin: "im",
       options: { [GITHUB_LOOP_BASE_OPTION]: 7 },
     })
     expect(harness.approved).toEqual([])
-    expect(harness.runs[0]).toMatchObject({
+    expect(dispatch).toMatchObject({
       status: "queued",
       targetRef: expect.objectContaining({ base: DEFAULT_GITHUB_LOOP_BASE }),
     })
@@ -280,7 +277,7 @@ describe("start", () => {
     expect(input.input).not.toHaveProperty("body")
   })
 
-  it("appends a wakeup brief to the body, even with no description, and stores the lineage", async () => {
+  it("appends a wakeup brief to the body, even with no description", async () => {
     const executed: Array<[string, unknown]> = []
     const harness = makeDeps({
       execute: async (pluginId, input) => {
@@ -291,17 +288,20 @@ describe("start", () => {
     const wakeup = { taskId: "wk", chain: ["wk"], statusBefore: "todo" as const, periodic: false }
     await createGithubLoopRunAdapter(harness.deps).start(
       target({ issue: issue({ description: undefined }) }),
-      { by: HUMAN, origin: "wakeup", brief: "[WAKEUP wk]", wakeup }
+      { runId: "run-claim", by: HUMAN, origin: "wakeup", brief: "[WAKEUP wk]", wakeup }
     )
     const [, input] = executed[0] as [string, { input: Record<string, unknown> }]
     expect(input.input.body).toBe("[WAKEUP wk]")
-    expect(harness.runs[0]).toMatchObject({ wakeup })
   })
 
   it("throws for an unrunnable target", async () => {
     const adapter = createGithubLoopRunAdapter(makeDeps().deps)
     await expect(
-      adapter.start(target({ issue: issue({ githubRef: undefined }) }), { by: HUMAN, origin: "im" })
+      adapter.start(target({ issue: issue({ githubRef: undefined }) }), {
+        runId: "run-claim",
+        by: HUMAN,
+        origin: "im",
+      })
     ).rejects.toThrow(/refused: no-github-ref/)
   })
 })
@@ -339,6 +339,16 @@ describe("poll / cancel", () => {
       status: "failed",
       error: "integration job no longer exists",
     })
+  })
+
+  it("reports running once a queued run's job started, and only then", async () => {
+    const poll = (status: IntegrationActionJob["status"], runStatus: IssueRun["status"]) =>
+      createGithubLoopRunAdapter(makeDeps({ getJob: async () => job({ status }) }).deps).poll(
+        run({ status: runStatus })
+      )
+    expect(await poll("running", "queued")).toEqual({ status: "running" })
+    expect(await poll("running", "running")).toBeNull()
+    expect(await poll("awaiting_approval", "queued")).toBeNull()
   })
 
   it("cancels the job", async () => {
@@ -481,15 +491,16 @@ describe("issueProjectLocalRoot", () => {
 
 describe("start — stacked mode", () => {
   it("uses the stack branch as the pull request's base", async () => {
-    const { deps, executed, runs } = makeDeps()
+    const { deps, executed } = makeDeps()
     const adapter = createGithubLoopRunAdapter(deps)
-    await adapter.start(target(), {
+    const dispatch = await adapter.start(target(), {
+      runId: "run-claim",
       by: HUMAN,
       origin: "interactive",
       options: { [GITHUB_LOOP_STACK_ON_OPTION]: " issue/merc-1 " },
     })
     expect((executed[0][1] as { input: { base: string } }).input.base).toBe("issue/merc-1")
-    expect(runs[0].targetRef).toMatchObject({ base: "issue/merc-1", stackedOn: "issue/merc-1" })
+    expect(dispatch.targetRef).toMatchObject({ base: "issue/merc-1", stackedOn: "issue/merc-1" })
   })
 
   it("the stack wins over an explicit base rather than being ignored", async () => {
@@ -498,6 +509,7 @@ describe("start — stacked mode", () => {
     const { deps, executed } = makeDeps()
     const adapter = createGithubLoopRunAdapter(deps)
     await adapter.start(target(), {
+      runId: "run-claim",
       by: HUMAN,
       origin: "interactive",
       options: {
@@ -513,6 +525,7 @@ describe("start — stacked mode", () => {
     const adapter = createGithubLoopRunAdapter(deps)
     await expect(
       adapter.start(target(), {
+        runId: "run-claim",
         by: HUMAN,
         origin: "interactive",
         options: { [GITHUB_LOOP_STACK_ON_OPTION]: "issue/merc-3" },
@@ -535,6 +548,7 @@ describe("start — stacked mode", () => {
         }),
       }),
       {
+        runId: "run-claim",
         by: HUMAN,
         origin: "interactive",
         options: { [GITHUB_LOOP_STACK_ON_OPTION]: "issue/merc-1" },
@@ -546,20 +560,20 @@ describe("start — stacked mode", () => {
   it("does not touch a checkout for an unstacked run", async () => {
     const { deps, parents } = makeDeps()
     const adapter = createGithubLoopRunAdapter(deps)
-    await adapter.start(target(), { by: HUMAN, origin: "interactive" })
+    await adapter.start(target(), { runId: "run-claim", by: HUMAN, origin: "interactive" })
     expect(parents).toEqual([])
   })
 
   it("a failed local write does not fail a dispatched run", async () => {
     // The pull request is already open by then; the stack is real whether or
     // not a checkout on this machine learns about it.
-    const { deps, runs } = makeDeps({
+    const { deps } = makeDeps({
       recordParent: async () => {
         throw new Error("no git bridge")
       },
     })
     const adapter = createGithubLoopRunAdapter(deps)
-    await adapter.start(
+    const dispatch = await adapter.start(
       target({
         project: project({
           resources: [
@@ -569,12 +583,13 @@ describe("start — stacked mode", () => {
         }),
       }),
       {
+        runId: "run-claim",
         by: HUMAN,
         origin: "interactive",
         options: { [GITHUB_LOOP_STACK_ON_OPTION]: "issue/merc-1" },
       }
     )
-    expect(runs).toHaveLength(1)
+    expect(dispatch.targetId).toBe("job-1")
   })
 })
 
@@ -588,7 +603,7 @@ it("carries explicit Host admission from availability through the queued Issue L
   expect(await adapter.canRun(target())).toMatchObject({ ok: false })
   const admitted = { ...target(), credentialContext }
   expect(await adapter.canRun(admitted)).toEqual({ ok: true })
-  await adapter.start(admitted, { by: HUMAN, origin: "interactive" })
+  await adapter.start(admitted, { runId: "run-claim", by: HUMAN, origin: "interactive" })
   expect(resolveAccount).toHaveBeenLastCalledWith("octo/repo", undefined, credentialContext)
   expect(harness.executed[0][3]).toBe(credentialContext)
 })

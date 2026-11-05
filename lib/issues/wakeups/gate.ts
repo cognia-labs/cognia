@@ -60,6 +60,7 @@ export const WAKEUP_BARRIER_KEY = "wakeupBarrier"
 const RUN_SETTLE_KINDS: ReadonlySet<string> = new Set([
   "run_succeeded",
   "run_failed",
+  "run_cancelled",
   "run_checked_in",
 ])
 

@@ -1,10 +1,10 @@
 /**
  * `issue.cancel_run`: stop an in-flight run and give the issue back.
  *
- * The counterpart to `issue.run`. Cancelling returns the issue to `todo`
- * rather than parking it at `in_review`, which is what `settleIssueRunAndIssue`
- * already does for the Run dialog's cancel button. This tool adds no second
- * cancel path, it just reaches the existing one.
+ * The counterpart to `issue.run`. Cancelling returns the issue to the column
+ * the run took it from rather than parking it at `in_review`, which is what
+ * `settleIssueRunAndIssue` already does for the Run dialog's cancel button.
+ * This tool adds no second cancel path, it just reaches the existing one.
  */
 
 import { z } from "zod"
@@ -54,7 +54,7 @@ const skill: BuiltInSkill<typeof schema> = {
     buildConfirmSurface({
       surfaceId: `sfc_issue_cancel_run_${Date.now().toString(36)}`,
       title: "Cancel issue run",
-      summary: "Stop the in-flight run and return the issue to todo.",
+      summary: "Stop the in-flight run and return the issue to the column it came from.",
       details: [{ label: "Run", value: args.runId }],
     }),
 }

@@ -35,6 +35,8 @@ import {
   adoptIssueExternalRefBinding,
   unlinkIssueExternal,
   applyRuntimeIssueStatus,
+  handBackRuntimeIssueStatus,
+  handBackTarget,
   cascadeIssueWakeups,
   createIssue,
   createIssueWithResult,
@@ -282,12 +284,36 @@ describe("moveIssue", () => {
     expect(reopened).not.toHaveProperty("startedAt")
   })
 
-  it("returns a structured reason instead of throwing when the runtime owns the column", async () => {
+  it("reads an active run itself and refuses the runtime's column with a structured reason", async () => {
+    const { claimIssueRun, settleIssueRun } = await import("./issue-runs")
     const issue = await make({ status: "todo" })
-    expect(await moveIssue({ id: issue.id, to: "in_progress", by: HUMAN, runActive: true })).toBe(
-      "runtime-owned"
-    )
+    const claim = await claimIssueRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      adapterId: "agent-task",
+      kind: "agent-task",
+      by: HUMAN,
+    })
+    // Even a claim whose engine has not accepted yet holds the column.
+    expect(await moveIssue({ id: issue.id, to: "in_progress", by: HUMAN })).toBe("runtime-owned")
     expect((await getIssue(issue.id))!.status).toBe("todo")
+    // Every other column stays the person's.
+    expect(await moveIssue({ id: issue.id, to: "backlog", by: HUMAN })).toBeNull()
+
+    const running = await make({ status: "in_progress" })
+    await claimIssueRun({
+      issueId: running.id,
+      projectId: running.projectId,
+      adapterId: "agent-task",
+      kind: "agent-task",
+      targetId: "t",
+      status: "running",
+      by: HUMAN,
+    })
+    expect(await moveIssue({ id: running.id, to: "done", by: HUMAN })).toBe("runtime-owned")
+
+    await settleIssueRun(claim.id, { status: "cancelled" })
+    expect(await moveIssue({ id: issue.id, to: "in_progress", by: HUMAN })).toBeNull()
   })
 
   it("reports a missing issue rather than throwing", async () => {
@@ -607,6 +633,36 @@ describe("applyRuntimeIssueStatus", () => {
     const reviewing = await make({ status: "in_review" })
     await applyRuntimeIssueStatus(reviewing.id, "backlog", AGENT)
     expect((await getIssue(reviewing.id))!.status).toBe("in_review")
+  })
+})
+
+describe("handBackRuntimeIssueStatus", () => {
+  it("returns the issue to the column the run took it from, only from in_progress", async () => {
+    for (const before of ["backlog", "todo", "in_review"] as const) {
+      const running = await make({ status: "in_progress" })
+      await handBackRuntimeIssueStatus(running.id, before, AGENT)
+      expect((await getIssue(running.id))!.status).toBe(before)
+    }
+    const moved = await make({ status: "done" })
+    await handBackRuntimeIssueStatus(moved.id, "todo", AGENT)
+    expect((await getIssue(moved.id))!.status).toBe("done")
+    const elsewhere = await make({ status: "todo" })
+    await handBackRuntimeIssueStatus(elsewhere.id, "backlog", AGENT)
+    expect((await getIssue(elsewhere.id))!.status).toBe("todo")
+  })
+
+  it("stays put for a run started from in_progress and falls back to todo otherwise", async () => {
+    expect(handBackTarget("in_progress")).toBeNull()
+    expect(handBackTarget(undefined)).toBe("todo")
+    expect(handBackTarget("done")).toBe("todo")
+    expect(handBackTarget("canceled")).toBe("todo")
+    const stays = await make({ status: "in_progress" })
+    await handBackRuntimeIssueStatus(stays.id, "in_progress", AGENT)
+    expect((await getIssue(stays.id))!.status).toBe("in_progress")
+    expect(await kindsOf(stays.id)).toEqual(["created"])
+    const legacy = await make({ status: "in_progress" })
+    await handBackRuntimeIssueStatus(legacy.id, undefined, AGENT)
+    expect((await getIssue(legacy.id))!.status).toBe("todo")
   })
 })
 

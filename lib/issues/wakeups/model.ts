@@ -526,6 +526,10 @@ export function summarizeIssueEventPayload(payload: IssueEventPayload): string {
         : "run succeeded"
     case "run_failed":
       return `run failed: ${truncate(payload.error, ISSUE_WAKEUP_SUMMARY_MAX)}`
+    case "run_cancelled":
+      return payload.reason
+        ? `run cancelled: ${truncate(payload.reason, ISSUE_WAKEUP_SUMMARY_MAX)}`
+        : "run cancelled"
     case "run_checked_in":
       return `run checked in: ${truncate(payload.note, ISSUE_WAKEUP_SUMMARY_MAX)}`
     case "artifact_linked":
@@ -747,6 +751,7 @@ export const ISSUE_WAKEUP_EVENT_KINDS = [
   "run_started",
   "run_succeeded",
   "run_failed",
+  "run_cancelled",
   "run_checked_in",
   "artifact_linked",
   "deliverable_accepted",

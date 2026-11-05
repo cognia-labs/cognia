@@ -18,7 +18,7 @@ import type { BuiltInSkillContext } from "../types"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createIssueProject } from "@/lib/db/issue-projects"
 import { createIssue, getIssue } from "@/lib/db/issues"
-import { createIssueRun, listIssueRuns } from "@/lib/db/issue-runs"
+import { listIssueRuns } from "@/lib/db/issue-runs"
 import { registerIssueRunAdapter, resetIssueRunRegistry } from "@/lib/issues/run/registry"
 import "./run"
 
@@ -41,15 +41,7 @@ function fakeAdapter(id: string, verdict: IssueRunVerdict): IssueRunAdapter {
     id,
     kind: "agent-task",
     canRun: async () => verdict,
-    start: async (target, context) =>
-      createIssueRun({
-        issueId: target.issue.id,
-        projectId: target.issue.projectId,
-        adapterId: id,
-        kind: "agent-task",
-        targetId: `t_${id}`,
-        by: context.by,
-      }),
+    start: async () => ({ targetId: `t_${id}`, status: "running" }),
     poll: async () => null,
   }
 }
