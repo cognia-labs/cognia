@@ -862,8 +862,19 @@ export async function offerHostStateRow(id: string): Promise<HostStateOffer | nu
   })
 }
 
-export async function markSent(id: string): Promise<void> {
-  await getDb().mobileOutboundQueue.update(id, { status: "sent" })
+export async function markSent(
+  id: string,
+  delivered: { createdEntityId?: string } = {}
+): Promise<void> {
+  await getDb().mobileOutboundQueue.update(id, {
+    status: "sent",
+    ...(delivered.createdEntityId ? { createdEntityId: delivered.createdEntityId } : {}),
+  })
+}
+
+/** One queued row, for a surface following what it queued. */
+export async function getOutboundJob(id: string): Promise<MobileOutboundJobRow | undefined> {
+  return getDb().mobileOutboundQueue.get(id)
 }
 
 /** Return an undispatched claim to the durable queue without consuming a retry. */
@@ -1042,6 +1053,15 @@ export async function markCollabConflict(
     currentRevision,
     claimedAt: undefined,
   })
+}
+
+/** Collaboration writes the server refused as conflicting, waiting for a person's choice. */
+export async function listCollabConflicts(): Promise<MobileOutboundJobRow[]> {
+  return getDb()
+    .mobileOutboundQueue.where("status")
+    .equals("conflicted")
+    .filter((row) => row.protocol === "collab-v1")
+    .toArray()
 }
 
 export async function discardCollabConflict(id: string): Promise<void> {

@@ -80,7 +80,7 @@ const skill: BuiltInSkill<typeof schema> = {
       return { status: result.status }
     }
 
-    const { createIssue } = await import("@/lib/db/issues")
+    const { createIssueRecord } = await import("@/lib/issues/service")
     const { listIssueProjects } = await import("@/lib/db/issue-projects")
     let issueProjectId = args.issueProjectId
     if (issueProjectId) {
@@ -96,14 +96,15 @@ const skill: BuiltInSkill<typeof schema> = {
       if (!newest) return { status: "no-projects" }
       issueProjectId = newest.id
     }
-    const issue = await createIssue({
+    const issue = await createIssueRecord({
       projectId: workspaceId,
       issueProjectId,
       title: args.title,
       ...(args.description ? { description: args.description } : {}),
-      // The assistant is filing this, not the user. `createdBy` is the only
-      // record of that, and it used to say a human did it whatever called in.
-      createdBy: await resolveIssueActor(ctx),
+      // The assistant is filing this, not the user. `by` (stored as
+      // `createdBy`) is the only record of that, and it used to say a human
+      // did it whatever called in.
+      by: await resolveIssueActor(ctx),
       ...(ctx.imBinding
         ? {
             origin: {

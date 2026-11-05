@@ -8,14 +8,11 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
+// The service owns the binding write and the refresh-schedule follow-up
+// (`lib/issues/service.test.ts`); this file tests what the dialog hands it.
 const mockAddResource = jest.fn()
-jest.mock("@/lib/db/issue-projects", () => ({
-  addIssueProjectResource: (...a: unknown[]) => mockAddResource(...a),
-}))
-
-const mockSyncSchedule = jest.fn()
-jest.mock("@/lib/issues/github-sync-schedule", () => ({
-  syncGithubIssueSchedule: (...a: unknown[]) => mockSyncSchedule(...a),
+jest.mock("@/lib/issues/service", () => ({
+  attachProjectResource: (...a: unknown[]) => mockAddResource(...a),
 }))
 
 const mockListAdapters = jest.fn(async (): Promise<unknown[]> => [])
@@ -120,7 +117,6 @@ beforeEach(() => {
   registerIssueSyncProvider(createLarkBitableSyncProvider())
   jest.clearAllMocks()
   mockAddResource.mockResolvedValue(undefined)
-  mockSyncSchedule.mockResolvedValue({ action: "created", bindingCount: 1 })
 })
 
 describe("REPO_FULL_NAME_PATTERN", () => {
@@ -175,8 +171,6 @@ describe("binding a GitHub repo", () => {
       repoFullName: "acme/one",
       addedAt: expect.any(Number),
     })
-    // Without this the executor exists but nothing ever fires it.
-    expect(mockSyncSchedule).toHaveBeenCalledTimes(1)
     expect(props.onOpenChange).toHaveBeenCalledWith(false)
   })
 
@@ -267,16 +261,6 @@ describe("referencing a mounted directory", () => {
       rootId: "root-1",
       addedAt: expect.any(Number),
     })
-  })
-
-  it("does not touch the sync schedule — only repos are syncable", async () => {
-    const user = userEvent.setup()
-    renderDialog()
-    await switchToDirectory(user)
-    await user.click(screen.getByTestId("resource-submit"))
-
-    await waitFor(() => expect(mockAddResource).toHaveBeenCalled())
-    expect(mockSyncSchedule).not.toHaveBeenCalled()
   })
 })
 
@@ -392,7 +376,6 @@ describe("binding a Lark tasklist", () => {
       name: "Team tasks",
       addedAt: expect.any(Number),
     })
-    expect(mockSyncSchedule).toHaveBeenCalledTimes(1)
   })
 
   it("names the account when Lark refuses", async () => {

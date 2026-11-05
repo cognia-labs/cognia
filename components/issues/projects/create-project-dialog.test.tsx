@@ -5,8 +5,10 @@ jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 const mockCreate = jest.fn()
 const mockListTakenKeys = jest.fn()
 jest.mock("@/lib/db/issue-projects", () => ({
-  createIssueProject: (...a: unknown[]) => mockCreate(...a),
   listTakenProjectKeys: (...a: unknown[]) => mockListTakenKeys(...a),
+}))
+jest.mock("@/lib/issues/service", () => ({
+  createIssueProjectRecord: (...a: unknown[]) => mockCreate(...a),
 }))
 
 const toastError = jest.fn()

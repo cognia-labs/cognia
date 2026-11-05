@@ -215,6 +215,16 @@ const DEFAULT_OPTS: Pick<
  * the boot provider). The runner subscribes to `network` change events
  * itself; consumers don't have to plumb online/offline.
  */
+/**
+ * The server's id for a delivered collaboration create, kept on the row so the
+ * surface that queued it can open the new record (`createdEntityId`).
+ */
+function deliveredCreate(row: MobileOutboundJobRow, result: unknown): { createdEntityId?: string } {
+  if (row.protocol !== "collab-v1" || !row.command.endsWith("_create")) return {}
+  const id = (result as { id?: unknown } | null | undefined)?.id
+  return typeof id === "string" && id ? { createdEntityId: id } : {}
+}
+
 export function createOutboundRunner(opts: RunnerOptions): OutboundRunner {
   const {
     dispatcher,
@@ -445,7 +455,7 @@ export function createOutboundRunner(opts: RunnerOptions): OutboundRunner {
         // never retain these for the 24-hour queue history after Host ACK.
         await deleteRow(row.id)
       } else {
-        await markSent(row.id)
+        await markSent(row.id, deliveredCreate(row, result))
       }
     } catch (err) {
       if (row.protocol === "collab-v1" && isCollabConflict(err)) {

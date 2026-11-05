@@ -17,7 +17,7 @@ import { ArtifactPreview } from "@/components/artifacts/artifact-preview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { groupIssueDeliverables, type IssueDeliverable } from "@/lib/issues/deliverables"
-import { acceptIssueDeliverable } from "@/lib/db/issue-runs"
+import { acceptIssueDeliverableRecord } from "@/lib/issues/service"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import type { IssueRun } from "@/types/issues"
 import { IssueRunArtifactLink } from "./issue-run-artifact-link"
@@ -58,7 +58,7 @@ function DeliverableRow({ deliverable }: { deliverable: IssueDeliverable }) {
     setBusy(true)
     setError(undefined)
     try {
-      const at = await acceptIssueDeliverable(version.runId, receipt.id, receipt.digest)
+      const at = await acceptIssueDeliverableRecord(version.runId, receipt.id, receipt.digest)
       setAccepted((value) => ({ ...value, [selectedIdentity]: at }))
     } catch {
       setError(t("deliverables.acceptFailed"))

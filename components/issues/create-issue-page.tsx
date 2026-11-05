@@ -72,8 +72,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
-import { createIssue } from "@/lib/db/issues"
-import { createIssueProject, listTakenProjectKeys } from "@/lib/db/issue-projects"
+import { listTakenProjectKeys } from "@/lib/db/issue-projects"
+import {
+  createIssueProjectWithFirstIssue,
+  createIssueRecord,
+  type CreateIssueRequest,
+} from "@/lib/issues/service"
 import { getCollabWorkspace } from "@/lib/db/collab-workspace-mirror"
 import { enqueueCollabMutation } from "@/lib/db/mobile-outbound-queue"
 import { buildHeadlessTurnLlmClient } from "@/lib/ai/headless-turn-llm-client"
@@ -132,6 +136,12 @@ export interface CreateIssuePageProps {
   /** Plan the new issue into this cycle. */
   cycleId?: string
   onCreated?: (issueId: string) => void
+  /**
+   * A shared-workspace create was queued as outbound row `operationId`. The
+   * server names the issue only once the row is delivered, so the caller
+   * follows the row (`followQueuedCreate`) to open it.
+   */
+  onSharedQueued?: (operationId: string) => void
   /** Writable local labels, for the labels menu. */
   labels?: readonly LabelRow[]
   /** Workspace cycles, for the cycle picker. */
@@ -265,7 +275,7 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
     try {
       if (destination === "shared") {
         if (!sharedOrgId || !selectedProjectId) throw new Error(t("create.sharedUnavailable"))
-        await enqueueCollabMutation({
+        const queued = await enqueueCollabMutation({
           command: "collab_issue_create",
           orgId: sharedOrgId,
           entityType: "issue",
@@ -280,34 +290,41 @@ function useCreateIssueForm(props: CreateIssuePageProps) {
           },
           label: form.title,
         })
+        props.onSharedQueued?.(queued.id)
       } else {
-        const containerId = needsProject
-          ? (
-              await createIssueProject({
-                projectId: props.projectId,
-                name: identity.name.trim(),
-                key: identityVerdict.key || undefined,
-              })
-            ).id
-          : selectedProjectId
-
-        const issue = await createIssue({
-          projectId: props.projectId,
-          issueProjectId: containerId,
+        const request: Omit<CreateIssueRequest, "projectId" | "issueProjectId"> = {
           title: form.title,
           ...(form.description.trim() ? { description: form.description.trim() } : {}),
           ...(form.assignee ? { assignee: form.assignee } : {}),
           status: form.status,
           priority: form.priority,
           labelIds: form.labelIds,
-          createdBy: { kind: "human" },
+          by: { kind: "human" },
           ...(form.parentId ? { parentId: form.parentId } : {}),
           ...(form.parentId && form.stage !== undefined ? { stage: form.stage } : {}),
           ...(form.blockedByIds.length > 0 ? { blockedBy: form.blockedByIds } : {}),
           ...(form.cycleId ? { cycleId: form.cycleId } : {}),
           ...(form.dueDate !== undefined ? { dueDate: form.dueDate } : {}),
           ...(form.estimate !== undefined ? { estimate: form.estimate } : {}),
-        })
+        }
+        // A new container and its first issue land together or not at all, so
+        // a refused issue leaves no empty project behind.
+        const issue = needsProject
+          ? (
+              await createIssueProjectWithFirstIssue(
+                {
+                  projectId: props.projectId,
+                  name: identity.name.trim(),
+                  key: identityVerdict.key || undefined,
+                },
+                request
+              )
+            ).issue
+          : await createIssueRecord({
+              ...request,
+              projectId: props.projectId,
+              issueProjectId: selectedProjectId,
+            })
         props.onCreated?.(issue.id)
       }
 

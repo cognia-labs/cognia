@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { CollabFieldClash } from "@/lib/collab/client"
 import { listUsers } from "@/lib/db/identity"
-import { discardCollabConflict, rebaseCollabConflict } from "@/lib/db/mobile-outbound-queue"
-import { getDb } from "@/lib/db/schema"
+import { listCollabConflicts } from "@/lib/db/mobile-outbound-queue"
+import { resolveCollabConflict } from "@/lib/issues/service"
 
 const FIELD_LABEL_KEYS = new Set(["title", "body", "description", "status", "priority", "assignee"])
 
@@ -25,15 +25,7 @@ export function CollabConflictsPanel() {
   const t = useTranslations("issues.conflicts")
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const conflicts = useLiveQuery(
-    () =>
-      getDb()
-        .mobileOutboundQueue.where("status")
-        .equals("conflicted")
-        .filter((row) => row.protocol === "collab-v1")
-        .toArray(),
-    []
-  )
+  const conflicts = useLiveQuery(() => listCollabConflicts(), [])
   const authorIds = [
     ...new Set(
       (conflicts ?? []).flatMap((row) =>
@@ -134,14 +126,14 @@ export function CollabConflictsPanel() {
                 size="sm"
                 variant="outline"
                 disabled={busyId === row.id}
-                onClick={() => void act(row.id, () => discardCollabConflict(row.id))}
+                onClick={() => void act(row.id, () => resolveCollabConflict(row.id, "discard"))}
               >
                 {t("discard")}
               </Button>
               <Button
                 size="sm"
                 disabled={busyId === row.id}
-                onClick={() => void act(row.id, () => rebaseCollabConflict(row.id))}
+                onClick={() => void act(row.id, () => resolveCollabConflict(row.id, "rebase"))}
               >
                 {t("resubmit")}
               </Button>

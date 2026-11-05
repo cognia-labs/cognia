@@ -159,6 +159,26 @@ describe("createIssue", () => {
     expect(await listIssues({ projectId: "w2" })).toEqual([])
   })
 
+  it("refuses a parent or blocker that is missing or lives in another workspace", async () => {
+    // The same rule a later `setIssueParent` / `addIssueBlocker` enforces.
+    const foreignContainer = (
+      await createIssueProject({ projectId: "w2", name: "Other", key: "OTH" })
+    ).id
+    const foreign = await createIssue({
+      projectId: "w2",
+      issueProjectId: foreignContainer,
+      title: "Far",
+      createdBy: HUMAN,
+    })
+    await expect(make({ parentId: "ghost" })).rejects.toThrow(/Unknown issue: ghost/)
+    await expect(make({ blockedBy: ["ghost"] })).rejects.toThrow(/Unknown issue: ghost/)
+    await expect(make({ parentId: foreign.id })).rejects.toThrow(/Parent must be in the same/)
+    await expect(make({ blockedBy: [foreign.id] })).rejects.toThrow(/Blocker must be in the same/)
+    expect(await listIssues({ projectId: "w1" })).toEqual([])
+    const parent = await make({ title: "Parent" })
+    expect((await make({ parentId: parent.id, blockedBy: [parent.id] })).parentId).toBe(parent.id)
+  })
+
   it("records an IM origin when given one", async () => {
     const issue = await make({
       origin: { kind: "im", conversationKey: "lark:oc_1", messageId: "m1" },

@@ -5,13 +5,15 @@
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 
 const mockCreateIssue = jest.fn()
-const mockCreateIssueProject = jest.fn()
+const mockCreateWithProject = jest.fn()
 const mockListTakenProjectKeys = jest.fn()
 const mockGetCollabWorkspace = jest.fn()
 const mockEnqueueCollabMutation = jest.fn()
-jest.mock("@/lib/db/issues", () => ({ createIssue: (...a: unknown[]) => mockCreateIssue(...a) }))
+jest.mock("@/lib/issues/service", () => ({
+  createIssueRecord: (...a: unknown[]) => mockCreateIssue(...a),
+  createIssueProjectWithFirstIssue: (...a: unknown[]) => mockCreateWithProject(...a),
+}))
 jest.mock("@/lib/db/issue-projects", () => ({
-  createIssueProject: (...a: unknown[]) => mockCreateIssueProject(...a),
   listTakenProjectKeys: (...a: unknown[]) => mockListTakenProjectKeys(...a),
 }))
 jest.mock("@/lib/db/collab-workspace-mirror", () => ({
@@ -152,7 +154,7 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockListTakenProjectKeys.mockResolvedValue(new Set<string>())
   mockCreateIssue.mockResolvedValue({ id: "iss_1" })
-  mockCreateIssueProject.mockResolvedValue({ id: "p-new" })
+  mockCreateWithProject.mockResolvedValue({ project: { id: "p-new" }, issue: { id: "iss_2" } })
   mockGetCollabWorkspace.mockResolvedValue(undefined)
   mockEnqueueCollabMutation.mockResolvedValue({ id: "op_1" })
   mockBuildUtility.mockReturnValue({ complete: (...a: unknown[]) => mockComplete(...a) })
@@ -205,6 +207,56 @@ describe("CreateIssuePage", () => {
     await user.type(screen.getByTestId("create-issue-description"), "**bold** body")
     await user.click(screen.getByTestId("create-tab-preview"))
     expect(screen.getByTestId("markdown-stub")).toHaveTextContent("**bold** body")
+  })
+
+  it("files into the chosen container with the service's request shape", async () => {
+    const user = userEvent.setup()
+    const props = renderPage({ onCreated: jest.fn() })
+    await user.type(await screen.findByTestId("create-issue-title"), "Plain work")
+    await user.click(screen.getByTestId("create-issue-submit"))
+    await waitFor(() =>
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "w1",
+          issueProjectId: PROJECT.id,
+          title: "Plain work",
+          by: { kind: "human" },
+        })
+      )
+    )
+    expect(mockCreateWithProject).not.toHaveBeenCalled()
+    expect(props.onCreated).toHaveBeenCalledWith("iss_1")
+  })
+
+  it("creates a workspace's first container and its first issue in one write", async () => {
+    const user = userEvent.setup()
+    const props = renderPage({ projects: [], onCreated: jest.fn() })
+    await user.type(await screen.findByTestId("create-issue-project-name"), "Venus")
+    await user.type(screen.getByTestId("create-issue-title"), "First work")
+    await user.click(screen.getByTestId("create-issue-submit"))
+    await waitFor(() => expect(mockCreateWithProject).toHaveBeenCalledTimes(1))
+    const [projectInput, request] = mockCreateWithProject.mock.calls[0]
+    expect(projectInput).toMatchObject({ projectId: "w1", name: "Venus" })
+    expect(request).toMatchObject({ title: "First work", by: { kind: "human" } })
+    expect(request).not.toHaveProperty("issueProjectId")
+    expect(mockCreateIssue).not.toHaveBeenCalled()
+    expect(props.onCreated).toHaveBeenCalledWith("iss_2")
+  })
+
+  it("hands a shared-workspace create to the caller to follow, by its queue row", async () => {
+    mockGetCollabWorkspace.mockResolvedValue({ orgId: "org-1" })
+    const user = userEvent.setup()
+    const props = renderPage({ onSharedQueued: jest.fn(), onCreated: jest.fn() })
+    await user.click(await screen.findByTestId("create-issue-destination"))
+    await user.click(await screen.findByRole("option", { name: "create.destinationShared" }))
+    await user.type(screen.getByTestId("create-issue-title"), "Shared work")
+    await user.click(screen.getByTestId("create-issue-submit"))
+    await waitFor(() => expect(props.onSharedQueued).toHaveBeenCalledWith("op_1"))
+    expect(mockEnqueueCollabMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "collab_issue_create", orgId: "org-1" })
+    )
+    expect(props.onCreated).not.toHaveBeenCalled()
+    expect(mockCreateIssue).not.toHaveBeenCalled()
   })
 
   it("picks a parent through the relationships row", async () => {

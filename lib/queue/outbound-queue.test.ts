@@ -763,6 +763,34 @@ describe("createOutboundRunner", () => {
     await runner.stop()
   })
 
+  it("keeps the server's id on a delivered collaboration create, and only there", async () => {
+    const runner = createOutboundRunner({
+      dispatcher: { call: async () => ({ id: "srv-issue-1", title: "T" }) },
+      enforceMobile: false,
+      scope,
+    })
+    const create = await enqueue({
+      command: "collab_issue_create",
+      payload: {},
+      protocol: "collab-v1",
+    })
+    const patch = await enqueue({
+      command: "collab_issue_patch",
+      payload: {},
+      protocol: "collab-v1",
+    })
+    await runner.kick()
+    await runner.kick()
+    expect(await getDb().mobileOutboundQueue.get(create.id)).toMatchObject({
+      status: "sent",
+      createdEntityId: "srv-issue-1",
+    })
+    const patched = await getDb().mobileOutboundQueue.get(patch.id)
+    expect(patched?.status).toBe("sent")
+    expect(patched).not.toHaveProperty("createdEntityId")
+    await runner.stop()
+  })
+
   it("files the clashing fields of a field-level conflict with the row", async () => {
     const fields = { title: { yours: "a", theirs: "b", changedAt: 4, changedBy: null } }
     const conflict = Object.assign(new Error("field conflict"), {

@@ -220,6 +220,14 @@ describe("createIssuesAPI", () => {
     expect(mockApply).not.toHaveBeenCalled()
   })
 
+  it("refuses a malformed action from plugin code before anything applies", async () => {
+    const api = createIssuesAPI("p")
+    await expect(api.assign("MERC-1", { kind: "robot", id: "r" } as never)).rejects.toThrow(
+      /invalid to/
+    )
+    expect(mockApply).not.toHaveBeenCalled()
+  })
+
   it("returns null for an unknown ref on get, and throws on writes", async () => {
     const api = createIssuesAPI("p")
     mockResolve.mockResolvedValue(undefined)

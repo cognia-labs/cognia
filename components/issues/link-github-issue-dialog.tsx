@@ -35,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { linkIssueToGithub } from "@/lib/db/issues"
+import { linkIssueGithubRecord } from "@/lib/issues/service"
 
 export interface LinkGithubIssueDialogProps {
   open: boolean
@@ -67,15 +67,11 @@ export function LinkGithubIssueDialog({
     if (!canSubmit) return
     setBusy(true)
     try {
-      await linkIssueToGithub(
+      // The URL is derived by the service: it is a pure function of the
+      // repository and the number, and asking would invite a mismatch.
+      await linkIssueGithubRecord(
         issueId,
-        {
-          repoFullName: selectedRepo,
-          number: parsed,
-          // Derived, not asked for: GitHub's issue URL is a pure function of
-          // the repo and the number, and asking would invite a mismatch.
-          htmlUrl: `https://github.com/${selectedRepo}/issues/${parsed}`,
-        },
+        { repoFullName: selectedRepo, number: parsed },
         { kind: "human" }
       )
       setNumber("")

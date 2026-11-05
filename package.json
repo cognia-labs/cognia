@@ -312,6 +312,7 @@
     "audit:convergence:test": "node --test scripts/gates/check-convergence.test.mjs scripts/gates/convergence/counter.test.mjs",
     "audit:modules": "node scripts/gates/check-modules.mjs",
     "audit:identity-vocabulary": "node scripts/gates/check-identity-vocabulary.mjs",
+    "audit:issue-write-boundary": "node scripts/gates/check-issue-write-boundary.mjs",
     "audit:identity-vocabulary:baseline": "node scripts/gates/check-identity-vocabulary.mjs --write-baseline",
     "audit:identity-vocabulary:test": "node --test scripts/gates/check-identity-vocabulary.test.mjs",
     "audit:invoke-arg-parity": "node scripts/gates/check-invoke-arg-parity.mjs",

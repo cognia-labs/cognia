@@ -51,9 +51,7 @@ import {
 } from "@/components/ui/select"
 import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import { addIssueProjectResource } from "@/lib/db/issue-projects"
-import { syncGithubIssueSchedule } from "@/lib/issues/github-sync-schedule"
-import { isSyncedResource } from "@/lib/issues/sync/bindings"
+import { attachProjectResource } from "@/lib/issues/service"
 import {
   getIssueSyncRegistry,
   getIssueSyncProvidersRevision,
@@ -386,12 +384,10 @@ export function ProjectResourceDialog({
     setError(null)
     try {
       const resource = resourceInput ?? buildResource()
-      if (initialResource) await addIssueProjectResource(issueProjectId, resource, initialResource)
-      else await addIssueProjectResource(issueProjectId, resource)
-      // Adding the first synced resource is what brings the background refresh
-      // into existence. Doing it here rather than at boot means a user who
-      // binds one sees the board stay fresh without restarting.
-      if (isSyncedResource(resource)) await syncGithubIssueSchedule()
+      // Binding the first synced resource also starts the background refresh,
+      // so a user who binds one sees the board stay fresh without restarting.
+      if (initialResource) await attachProjectResource(issueProjectId, resource, initialResource)
+      else await attachProjectResource(issueProjectId, resource)
 
       onAdded?.(resource)
       close()

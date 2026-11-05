@@ -190,6 +190,7 @@
     "destinationLocal": "This device (default)",
     "destinationShared": "Shared workspace",
     "sharedUnavailable": "This shared workspace is not ready for new issues.",
+    "sharedQueued": "Sent to the shared workspace. It opens here once the server has it.",
     "subIssueOf": "Sub-issue of {identifier}",
     "createAnother": "Create another",
     "moreOptions": "More options",
@@ -504,6 +505,7 @@
     "account": "Writing as {account}",
     "accountChecking": "Checking the connected account…",
     "success": "GitHub accepted the change.",
+    "refreshFailed": "GitHub took the change, but refreshing the board failed: {error}",
     "pending": "Sent. GitHub has not confirmed it yet; it shows in the activity once it lands.",
     "error": {
       "no-account": "No enabled GitHub account is connected. Connect one in Settings → Connections.",

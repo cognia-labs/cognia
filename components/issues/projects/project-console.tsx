@@ -44,14 +44,12 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { useClientLiveQuery } from "@/hooks/data"
 import { useIssueSyncAvailability } from "../kept-copy-source-state"
 import { listIssues } from "@/lib/db/issues"
+import { listIssueProjects, type IssueProjectUpdatePatch } from "@/lib/db/issue-projects"
 import {
-  deleteIssueProject,
-  listIssueProjects,
-  removeIssueProjectResource,
-  updateIssueProject,
-  type IssueProjectUpdatePatch,
-} from "@/lib/db/issue-projects"
-import { syncGithubIssueSchedule } from "@/lib/issues/github-sync-schedule"
+  deleteIssueProjectRecord,
+  detachProjectResource,
+  updateIssueProjectRecord,
+} from "@/lib/issues/service"
 import { computeProgressFromIssues } from "@/lib/issues/project-progress"
 import { isSyncedResource } from "@/lib/issues/sync/bindings"
 import { summarizeSync, syncSummaryMessage } from "@/lib/issues/sync/describe"
@@ -170,7 +168,7 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
 
   async function patchProject(id: string, patch: IssueProjectUpdatePatch) {
     try {
-      await updateIssueProject(id, patch)
+      await updateIssueProjectRecord(id, patch)
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))
     }
@@ -180,18 +178,20 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
     const project = (projects ?? []).find((candidate) => candidate.id === projectId)
     const resource = project?.resources[index]
     if (!resource) return
-    await removeIssueProjectResource(projectId, resource)
-    // Unbinding the last synced resource is what retires the background refresh.
-    if (isSyncedResource(resource)) await syncGithubIssueSchedule()
+    try {
+      // Unbinding the last synced resource also retires the background refresh.
+      await detachProjectResource(projectId, resource)
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   async function confirmDelete() {
     if (!deleteTarget) return
     try {
-      await deleteIssueProject(deleteTarget.id)
+      // Also retires the refresh when the container held the last repo binding.
+      await deleteIssueProjectRecord(deleteTarget.id)
       if (selectedId === deleteTarget.id) setSelectedId(undefined)
-      // The container may have been the last one holding a repo binding.
-      await syncGithubIssueSchedule()
       toast.success(t("projects.deleted", { name: deleteTarget.name }))
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))

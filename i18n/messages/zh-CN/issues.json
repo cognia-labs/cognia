@@ -190,6 +190,7 @@
     "destinationLocal": "此设备（默认）",
     "destinationShared": "共享工作区",
     "sharedUnavailable": "该共享工作区暂时无法新建议题。",
+    "sharedQueued": "已发往共享工作区，服务器收到后会在这里打开。",
     "subIssueOf": "{identifier} 的子议题",
     "createAnother": "继续创建下一个",
     "moreOptions": "更多选项",
@@ -504,6 +505,7 @@
     "account": "以 {account} 的身份写入",
     "accountChecking": "正在检查已连接的账号…",
     "success": "GitHub 已接受该变更。",
+    "refreshFailed": "GitHub 已接受变更，但刷新看板失败：{error}",
     "pending": "已发出，GitHub 尚未确认；落地后会出现在活动记录中。",
     "error": {
       "no-account": "没有已启用的 GitHub 账号。请在「设置 → 连接」中连接一个。",

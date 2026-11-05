@@ -24052,6 +24052,7 @@
       "preview": "预览",
       "projectLabel": "项目",
       "relationships": "关联",
+      "sharedQueued": "已发往共享工作区，服务器收到后会在这里打开。",
       "sharedUnavailable": "该共享工作区暂时无法新建议题。",
       "subIssueOf": "{identifier} 的子议题",
       "submit": "创建议题",
@@ -24931,6 +24932,7 @@
         "not_planned": "不再计划"
       },
       "reasonLabel": "原因",
+      "refreshFailed": "GitHub 已接受变更，但刷新看板失败：{error}",
       "section": "GitHub 操作",
       "sectionHint": "这些操作会写入 GitHub。看板会在下次同步后反映变更。",
       "success": "GitHub 已接受该变更。",

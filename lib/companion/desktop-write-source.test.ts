@@ -343,7 +343,15 @@ jest.mock("@/lib/issues/sources/local-source", () => ({
     sourceId: issue.id,
   }),
 }))
-jest.mock("@/lib/db/issue-runs", () => ({ hasActiveIssueRun: async () => true }))
+jest.mock("@/lib/db/issue-runs", () => ({
+  listActiveIssueRunIssueIds: async () => new Set(["i1"]),
+}))
+// The real service runs, so the phone meets the same validation every surface
+// does; only the container lookup behind `createIssueRecord` is stubbed.
+jest.mock("@/lib/db/issue-projects", () => ({
+  ...jest.requireActual("@/lib/db/issue-projects"),
+  getIssueProject: async (id: string) => (id === "p" ? { id: "p", projectId: "w" } : undefined),
+}))
 
 const mockMemoryUpdate = jest.fn()
 const mockMemoryForget = jest.fn()
@@ -2801,7 +2809,21 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
         action: { kind: "status", to: "done" },
       })
     ).rejects.toThrow(/unknown issue/)
-    mockGetIssue.mockResolvedValueOnce({ id: "i1" })
+    // A well-known kind with a made-up value is refused before the gate.
+    await expect(
+      dispatchCommand("issue_apply_action", {
+        issueId: "i1",
+        action: { kind: "status", to: "shipped" },
+      })
+    ).rejects.toThrow(/invalid to/)
+    await expect(
+      dispatchCommand("issue_apply_action", {
+        issueId: "i1",
+        action: { kind: "assignee", to: { kind: "robot", id: "r" } },
+      })
+    ).rejects.toThrow(/invalid to/)
+    expect(mockApplyBulk).not.toHaveBeenCalled()
+    mockGetIssue.mockResolvedValueOnce({ id: "i1", projectId: "w" })
     const outcome = await dispatchCommand("issue_apply_action", {
       issueId: "i1",
       action: { kind: "status", to: "done" },
@@ -2814,7 +2836,7 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
       new Set(["local:i1"])
     )
     // Stage and triage ride the same allowlist the phone builds from.
-    mockGetIssue.mockResolvedValueOnce({ id: "i1" })
+    mockGetIssue.mockResolvedValueOnce({ id: "i1", projectId: "w" })
     await dispatchCommand("issue_apply_action", {
       issueId: "i1",
       action: { kind: "triage", to: null },
@@ -2837,7 +2859,7 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
       title: "T",
       status: "todo",
       dueDate: 5,
-      labelIds: ["l1", 7],
+      labelIds: ["l1"],
       junk: "ignored",
     })
     expect(out).toEqual({ id: "iss_new", identifier: "MERC-9" })
@@ -2850,6 +2872,24 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
       labelIds: ["l1"],
       createdBy: { kind: "human" },
     })
+    // Fields that are not what they claim are refused, never written.
+    for (const [field, value, error] of [
+      ["status", "shipped", /Unknown issue status/],
+      ["priority", "extreme", /Unknown issue priority/],
+      ["assignee", { kind: "robot", id: "r" }, /person, an agent or a team/],
+      ["labelIds", ["l1", 7], /labelIds must be a list of strings/],
+      ["dueDate", "tomorrow", /due date/],
+    ] as const) {
+      await expect(
+        dispatchCommand("issue_create", {
+          projectId: "w",
+          issueProjectId: "p",
+          title: "T",
+          [field]: value,
+        })
+      ).rejects.toThrow(error)
+    }
+    expect(mockCreateIssue).toHaveBeenCalledTimes(1)
     await dispatchCommand("issue_create", {
       projectId: "w",
       issueProjectId: "p",

@@ -41,7 +41,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { createIssueCycle, deleteIssueCycle, updateIssueCycle } from "@/lib/db/issue-cycles"
+import {
+  createIssueCycleRecord,
+  deleteIssueCycleRecord,
+  updateIssueCycleRecord,
+} from "@/lib/issues/service"
 import type { CycleProgress } from "@/lib/issues/relations"
 import { cn } from "@/lib/utils"
 import {
@@ -159,7 +163,7 @@ export function CycleEditorList({
     if (!trimmed) return
     setBusy(true)
     try {
-      await createIssueCycle({
+      await createIssueCycleRecord({
         projectId,
         kind,
         name: trimmed,
@@ -300,7 +304,7 @@ export function CycleEditorList({
                     onBlur={(event) => {
                       const next = event.target.value.trim()
                       if (next && next !== cycle.name) {
-                        void patch(cycle.id, () => updateIssueCycle(cycle.id, { name: next }))
+                        void patch(cycle.id, () => updateIssueCycleRecord(cycle.id, { name: next }))
                       }
                     }}
                     data-testid={`manage-cycles-name-${cycle.id}`}
@@ -309,7 +313,7 @@ export function CycleEditorList({
                     value={cycle.status}
                     onValueChange={(value) =>
                       void patch(cycle.id, () =>
-                        updateIssueCycle(cycle.id, { status: value as IssueCycleStatus })
+                        updateIssueCycleRecord(cycle.id, { status: value as IssueCycleStatus })
                       )
                     }
                   >
@@ -339,7 +343,7 @@ export function CycleEditorList({
                         variant="destructive"
                         onClick={() => {
                           setPendingDeleteId(null)
-                          void patch(cycle.id, () => deleteIssueCycle(cycle.id))
+                          void patch(cycle.id, () => deleteIssueCycleRecord(cycle.id))
                         }}
                         data-testid={`manage-cycles-delete-confirm-${cycle.id}`}
                       >
@@ -372,7 +376,9 @@ export function CycleEditorList({
                     label={t("startsAt")}
                     value={cycle.startsAt}
                     onPick={(value) =>
-                      void patch(cycle.id, () => updateIssueCycle(cycle.id, { startsAt: value }))
+                      void patch(cycle.id, () =>
+                        updateIssueCycleRecord(cycle.id, { startsAt: value })
+                      )
                     }
                     testId={`manage-cycles-starts-${cycle.id}`}
                     clearLabel={t("clear")}
@@ -382,7 +388,9 @@ export function CycleEditorList({
                     label={t("endsAt")}
                     value={cycle.endsAt}
                     onPick={(value) =>
-                      void patch(cycle.id, () => updateIssueCycle(cycle.id, { endsAt: value }))
+                      void patch(cycle.id, () =>
+                        updateIssueCycleRecord(cycle.id, { endsAt: value })
+                      )
                     }
                     testId={`manage-cycles-ends-${cycle.id}`}
                     clearLabel={t("clear")}
@@ -391,7 +399,7 @@ export function CycleEditorList({
                     value={cycle.issueProjectId ?? "workspace"}
                     onValueChange={(value) =>
                       void patch(cycle.id, () =>
-                        updateIssueCycle(cycle.id, {
+                        updateIssueCycleRecord(cycle.id, {
                           issueProjectId: value === "workspace" ? null : value,
                         })
                       )

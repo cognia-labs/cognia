@@ -19,8 +19,8 @@ jest.mock("@/stores/artifact/artifact-store", () => ({
 }))
 
 const mockAcceptDelivery = jest.fn()
-jest.mock("@/lib/db/issue-runs", () => ({
-  acceptIssueDeliverable: (...args: unknown[]) => mockAcceptDelivery(...args),
+jest.mock("@/lib/issues/service", () => ({
+  acceptIssueDeliverableRecord: (...args: unknown[]) => mockAcceptDelivery(...args),
 }))
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"

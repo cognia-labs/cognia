@@ -3,8 +3,8 @@
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 
 const mockLink = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/db/issues", () => ({
-  linkIssueToGithub: (...a: unknown[]) => mockLink(...a),
+jest.mock("@/lib/issues/service", () => ({
+  linkIssueGithubRecord: (...a: unknown[]) => mockLink(...a),
 }))
 
 const toastError = jest.fn()
@@ -49,11 +49,8 @@ describe("LinkGithubIssueDialog", () => {
     await waitFor(() =>
       expect(mockLink).toHaveBeenCalledWith(
         "i1",
-        {
-          repoFullName: "acme/mercury",
-          number: 42,
-          htmlUrl: "https://github.com/acme/mercury/issues/42",
-        },
+        // The service derives the URL from these two.
+        { repoFullName: "acme/mercury", number: 42 },
         { kind: "human" }
       )
     )

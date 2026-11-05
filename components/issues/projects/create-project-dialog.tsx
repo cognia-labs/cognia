@@ -25,7 +25,8 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { createIssueProject, listTakenProjectKeys } from "@/lib/db/issue-projects"
+import { listTakenProjectKeys } from "@/lib/db/issue-projects"
+import { createIssueProjectRecord } from "@/lib/issues/service"
 import type { IssueProject } from "@/types/issues"
 import {
   EMPTY_PROJECT_IDENTITY,
@@ -71,7 +72,7 @@ export function CreateProjectDialog({
   async function submit() {
     setBusy(true)
     try {
-      const project = await createIssueProject({
+      const project = await createIssueProjectRecord({
         projectId,
         name: identity.name.trim(),
         key: verdict.key,

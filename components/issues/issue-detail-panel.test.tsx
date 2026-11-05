@@ -102,12 +102,8 @@ jest.mock("@/lib/codeserver/client", () => ({
   },
 }))
 
-const mockSetIssueAssignee = jest.fn()
-const mockAddIssueComment = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/db/issues", () => ({
   getIssue: jest.fn(),
-  setIssueAssignee: (...a: unknown[]) => mockSetIssueAssignee(...a),
-  addIssueComment: (...a: unknown[]) => mockAddIssueComment(...a),
 }))
 const mockCancelIssueRun = jest.fn()
 const mockRunSessionIds = jest.fn(async (_run: unknown): Promise<string[]> => ["s1"])
@@ -187,7 +183,6 @@ beforeEach(() => {
   mockMentionCandidates.mockReturnValue([])
   mockPublishRun.mockClear()
   pickerProps = null
-  mockSetIssueAssignee.mockResolvedValue(undefined)
   mockCancelIssueRun.mockResolvedValue(undefined)
 })
 
@@ -228,21 +223,29 @@ describe("IssueDetailPanel", () => {
     expect(screen.getByTestId("issue-detail-assignee-team:t1")).toHaveTextContent("Falcon")
   })
 
-  it("lets a local issue be (re)assigned through the picker", async () => {
-    render(<IssueDetailPanel item={item({ assignee: { kind: "agent", id: "c1" } })} />)
+  it("lets a local issue be (re)assigned through the picker, via the caller's gate", () => {
+    const onAction = jest.fn()
+    render(
+      <IssueDetailPanel
+        item={item({ assignee: { kind: "agent", id: "c1" } })}
+        onAction={onAction}
+      />
+    )
     expect(screen.getByTestId("assignee-picker-stub")).toBeInTheDocument()
     expect(pickerProps!.value).toEqual({ kind: "agent", id: "c1" })
     pickerProps!.onChange({ kind: "team", id: "t1", label: "Squad" })
-    await waitFor(() =>
-      expect(mockSetIssueAssignee).toHaveBeenCalledWith(
-        "i1",
-        { kind: "team", id: "t1", label: "Squad" },
-        { kind: "human" }
-      )
-    )
-    mockSetIssueAssignee.mockRejectedValueOnce(new Error("nope"))
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "assignee",
+      to: { kind: "team", id: "t1", label: "Squad" },
+    })
     pickerProps!.onChange(null)
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("nope"))
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "assignee", to: null })
+  })
+
+  it("offers no assignee picker or composer without a caller to route the write", () => {
+    render(<IssueDetailPanel item={item()} />)
+    expect(screen.queryByTestId("assignee-picker-stub")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("issue-comment-composer")).not.toBeInTheDocument()
   })
 
   it("offers Run on a local issue and opens the run dialog", async () => {
@@ -599,14 +602,14 @@ describe("open in Pro IDE", () => {
   it("stays hidden when the issue names no file", async () => {
     // An affordance that is usually disabled teaches people to ignore it.
     render(<IssueDetailPanel item={item({ title: "The login button is the wrong colour" })} />)
-    await waitFor(() => expect(screen.getByTestId("assignee-picker-stub")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId("issue-detail-panel")).toBeInTheDocument())
     expect(screen.queryByTestId("issue-detail-file-references")).toBeNull()
   })
 
   it("stays hidden when no Pro IDE is bound", async () => {
     mockProIdeRoot = null
     render(<IssueDetailPanel item={item({ title: "crash in lib/a.ts" })} />)
-    await waitFor(() => expect(screen.getByTestId("assignee-picker-stub")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId("issue-detail-panel")).toBeInTheDocument())
     expect(screen.queryByTestId("issue-detail-file-references")).toBeNull()
   })
 
@@ -623,7 +626,6 @@ describe("open in Pro IDE", () => {
     render(<IssueDetailPanel item={item({ title: "crash in lib/a.ts" })} />)
     fireEvent.click(await screen.findByTestId(testId("lib/a.ts")))
     await waitFor(() => expect(mockDriveOpen).toHaveBeenCalled())
-    expect(mockSetIssueAssignee).not.toHaveBeenCalled()
   })
 })
 
@@ -719,14 +721,12 @@ describe("editing", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "addLabel", labelId: "l1" })
   })
 
-  it("writes a comment", async () => {
+  it("writes a comment through the caller's gate", async () => {
     const user = userEvent.setup()
-    editable()
+    const onAction = editable()
     await user.type(screen.getByTestId("issue-comment-input"), "looks good")
     await user.click(screen.getByTestId("issue-comment-submit"))
-    await waitFor(() =>
-      expect(mockAddIssueComment).toHaveBeenCalledWith("i1", "looks good", { kind: "human" })
-    )
+    expect(onAction).toHaveBeenCalledWith({ kind: "comment", body: "looks good" })
   })
 
   it("offers no mention picker on a local issue, which has no roster to notify", () => {
@@ -790,7 +790,6 @@ describe("editing", () => {
       await user.type(screen.getByTestId("issue-comment-input"), "shared update")
       await user.click(screen.getByTestId("issue-comment-submit"))
       expect(onAction).toHaveBeenCalledWith({ kind: "comment", body: "shared update" })
-      expect(mockAddIssueComment).not.toHaveBeenCalled()
     })
 
     it("offers the issue's workspace members as mentions and sends the declared ids", async () => {

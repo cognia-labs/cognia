@@ -57,7 +57,9 @@ import { useIssueSyncAvailability } from "./kept-copy-source-state"
 import { useAssigneeOptions } from "@/hooks/issues/use-assignee-options"
 import { useIssueSelection } from "@/hooks/issues/use-issue-selection"
 import { useIssueShortcuts } from "@/hooks/issues/use-issue-shortcuts"
-import { listIssues, moveIssue, reorderIssues } from "@/lib/db/issues"
+import { listIssues } from "@/lib/db/issues"
+import { moveIssueRecord, reorderIssueRecords } from "@/lib/issues/service"
+import { followQueuedCreate } from "@/lib/issues/shared-create"
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import { listIssueCycles } from "@/lib/db/issue-cycles"
 import { buildPlanningHints } from "@/lib/issues/planning-hints"
@@ -222,6 +224,40 @@ export function IssueConsole({
     initialSelectedId
       ? makeUnifiedIssueId(initialSelectedSource ?? "local", initialSelectedId)
       : undefined
+  )
+
+  /**
+   * A shared-workspace create is queued before the server names the issue, so
+   * it is followed to delivery and opened then — unless the person has moved
+   * on to another issue meanwhile, which a late jump would yank them out of.
+   * The ref mirrors the selection for the subscription; written in an effect,
+   * not during render.
+   */
+  const selectedIdRef = useRef(selectedId)
+  useEffect(() => {
+    selectedIdRef.current = selectedId
+  }, [selectedId])
+  const sharedCreateFollows = useRef(new Set<() => void>())
+  useEffect(() => {
+    const follows = sharedCreateFollows.current
+    return () => {
+      for (const stop of follows) stop()
+      follows.clear()
+    }
+  }, [])
+  const followSharedCreate = useCallback(
+    (operationId: string) => {
+      toast.info(t("create.sharedQueued"))
+      const selectedAtQueue = selectedIdRef.current
+      const stop = followQueuedCreate(operationId, (outcome) => {
+        sharedCreateFollows.current.delete(stop)
+        if (outcome.kind !== "delivered") return
+        if (selectedIdRef.current !== selectedAtQueue) return
+        setSelectedId(makeUnifiedIssueId("collab", outcome.entityId))
+      })
+      sharedCreateFollows.current.add(stop)
+    },
+    [t]
   )
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -673,11 +709,19 @@ export function IssueConsole({
    */
   async function handleWritebackCompleted() {
     if (projectId) {
+      // The write itself already landed; a refresh that fails only leaves the
+      // mirror stale until the next sync, which the person should know.
       await runWorkspaceGithubSync({
         projectId,
         full: true,
         credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-      }).catch(() => undefined)
+      }).catch((cause: unknown) =>
+        toast.warning(
+          t("writeback.refreshFailed", {
+            error: cause instanceof Error ? cause.message : String(cause),
+          })
+        )
+      )
     }
     setFederatedTick((tick) => tick + 1)
   }
@@ -703,13 +747,17 @@ export function IssueConsole({
     if (parsed?.kind !== "local") return
 
     if (action.type === "move") {
-      const denial = await moveIssue({
-        id: parsed.sourceId,
-        to: action.to,
-        by: { kind: "human" },
-      })
-      if (denial && denial !== "issue-not-found") {
-        toast.error(t(`board.denied.${denial}`, { source: t("source.local") }))
+      try {
+        const denial = await moveIssueRecord({
+          id: parsed.sourceId,
+          to: action.to,
+          by: { kind: "human" },
+        })
+        if (denial && denial !== "issue-not-found") {
+          toast.error(t(`board.denied.${denial}`, { source: t("source.local") }))
+        }
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : String(cause))
       }
       return
     }
@@ -718,7 +766,13 @@ export function IssueConsole({
     if (!item) return
     const column = buildIssueColumns(sorted).find((candidate) => candidate.status === item.status)
     if (!column) return
-    await reorderIssues(reorderIssueColumn(column.items, action.unifiedId, action.targetIndex))
+    try {
+      await reorderIssueRecords(
+        reorderIssueColumn(column.items, action.unifiedId, action.targetIndex)
+      )
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   /** Shared props for the `CreateIssuePage` surface. */
@@ -732,7 +786,8 @@ export function IssueConsole({
     projects: projects ?? [],
     status: createStatus,
     parent: createParent,
-    onCreated: (issueId: string) => setSelectedId(`local:${issueId}`),
+    onCreated: (issueId: string) => setSelectedId(makeUnifiedIssueId("local", issueId)),
+    onSharedQueued: followSharedCreate,
   }
 
   return (
@@ -967,7 +1022,7 @@ export function IssueConsole({
       <SyncConflictsPanel
         projectId={projectId}
         identifiersById={identifiersById}
-        onOpenIssue={(id) => setSelectedId(`local:${id}`)}
+        onOpenIssue={(id) => setSelectedId(makeUnifiedIssueId("local", id))}
       />
 
       <DeleteIssueDialog

@@ -24,6 +24,7 @@ import { onIssueEvent } from "@/lib/issues/event-bus"
 import {
   applyIssueAction,
   createIssueRecord,
+  parseIssueAction,
   isIssuePriority,
   isIssueStage,
   isIssueStatus,
@@ -113,12 +114,15 @@ export function createIssuesAPI(
     ref: string,
     actions: readonly IssueBulkAction[]
   ): Promise<IssueBulkOutcome> {
+    // Plugin code is not type-checked against this host: every action is
+    // checked before any of them applies, so a malformed one writes nothing.
+    const checked = actions.map((action) => parseIssueAction(action))
     const issue = await requireIssue(ref)
     let applied = 0
     let skipped = 0
     let failed = 0
     let reason: IssueBulkOutcome["reason"]
-    for (const action of actions) {
+    for (const action of checked) {
       const outcome = await applyIssueAction(issue, action, by)
       applied += outcome.applied
       skipped += outcome.skipped

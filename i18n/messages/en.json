@@ -24052,6 +24052,7 @@
       "preview": "Preview",
       "projectLabel": "Project",
       "relationships": "Relationships",
+      "sharedQueued": "Sent to the shared workspace. It opens here once the server has it.",
       "sharedUnavailable": "This shared workspace is not ready for new issues.",
       "subIssueOf": "Sub-issue of {identifier}",
       "submit": "Create issue",
@@ -24931,6 +24932,7 @@
         "not_planned": "Not planned"
       },
       "reasonLabel": "Reason",
+      "refreshFailed": "GitHub took the change, but refreshing the board failed: {error}",
       "section": "GitHub actions",
       "sectionHint": "These write to GitHub. The board reflects the change after the next sync.",
       "success": "GitHub accepted the change.",

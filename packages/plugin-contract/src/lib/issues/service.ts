@@ -26,6 +26,8 @@ export interface CreateIssueRequest {
   labels?: readonly string[]
   labelIds?: readonly string[]
   parentId?: string
+  /** Issues this one is blocked by, by id. */
+  blockedBy?: readonly string[]
   cycleId?: string
   dueDate?: number
   estimate?: number

@@ -79,16 +79,15 @@ const mockDelete = jest.fn().mockResolvedValue(undefined)
 const mockRemoveResource = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/db/issue-projects", () => ({
   listIssueProjects: jest.fn(),
-  updateIssueProject: (...a: unknown[]) => mockUpdate(...a),
-  deleteIssueProject: (...a: unknown[]) => mockDelete(...a),
-  removeIssueProjectResource: (...a: unknown[]) => mockRemoveResource(...a),
+}))
+// The service owns the writes and their refresh-schedule follow-up
+// (`lib/issues/service.test.ts`); this file tests what the console hands it.
+jest.mock("@/lib/issues/service", () => ({
+  updateIssueProjectRecord: (...a: unknown[]) => mockUpdate(...a),
+  deleteIssueProjectRecord: (...a: unknown[]) => mockDelete(...a),
+  detachProjectResource: (...a: unknown[]) => mockRemoveResource(...a),
 }))
 jest.mock("@/lib/db/issues", () => ({ listIssues: jest.fn() }))
-
-const mockSyncSchedule = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/issues/github-sync-schedule", () => ({
-  syncGithubIssueSchedule: (...a: unknown[]) => mockSyncSchedule(...a),
-}))
 const mockRunSync = jest.fn()
 jest.mock("@/lib/issues/sync-runner", () => ({
   isMissingGithubCredential: () => false,
@@ -322,7 +321,6 @@ describe("ProjectConsole", () => {
         await (deleteProps.onConfirm as () => Promise<void>)()
       })
       expect(mockDelete).toHaveBeenCalledWith("p1")
-      expect(mockSyncSchedule).toHaveBeenCalled()
       await waitFor(() => expect(screen.queryByTestId("inspector-stub")).not.toBeInTheDocument())
     })
 

@@ -739,15 +739,15 @@ async function fileHostIssue(input: {
   sourceHost: string
   url: string
 }): Promise<{ id: string }> {
-  const { createIssue } = await import("@/lib/db/issues")
-  const issue = await createIssue({
+  const { createIssueRecord } = await import("@/lib/issues/service")
+  const issue = await createIssueRecord({
     projectId: input.workspaceId,
     issueProjectId: input.issueProjectId,
     title: input.title,
     // The address goes in the body rather than only in `origin`, because the
     // board renders a description and not a provenance record.
     description: `${input.description}\n\n${input.url}`.trim(),
-    createdBy: { kind: "human" },
+    by: { kind: "human" },
     origin: { kind: "browser", sourceHost: input.sourceHost },
   })
   return { id: issue.id }

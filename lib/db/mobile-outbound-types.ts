@@ -222,4 +222,10 @@ export interface MobileOutboundJobRow {
    * conflict, where the panel falls back to showing both records.
    */
   conflictFields?: Record<string, CollabFieldClash>
+  /**
+   * A delivered `collab_*_create` only: the id the server gave the new record.
+   * The create is queued before the server has answered, so this is how the
+   * surface that queued it can open the record once it exists.
+   */
+  createdEntityId?: string
 }

@@ -2071,49 +2071,38 @@ async function adapterUpdatePolicy(payload: Record<string, unknown>): Promise<nu
 }
 
 /**
- * One board action from a paired phone (spec 2026-09-06 D8). Routed through
- * `applyIssueBulkAction`, never a bare Dexie write, so the capability bits
- * and the run-active guard the desktop enforces apply to the phone too. The
- * outcome is returned as counted, so the phone can say "refused" honestly.
+ * One board action from a paired phone (spec 2026-09-06 D8). The payload is
+ * checked field by field (`parseIssueAction`) and then goes through the
+ * service's `applyIssueAction`, never a bare Dexie write, so the capability
+ * bits and the run lock the desktop enforces apply to the phone too. The
+ * outcome is returned as counted, with the gate's own refusal reason, so the
+ * phone can say "refused" honestly and in its own words.
  */
 async function issueApplyActionRpc(payload: Record<string, unknown>): Promise<unknown> {
   const issueId = payload.issueId
   if (typeof issueId !== "string" || !issueId.trim()) {
     throw new Error("issue_apply_action.issueId is required")
   }
-  const action = payload.action
-  if (
-    !action ||
-    typeof action !== "object" ||
-    typeof (action as { kind?: unknown }).kind !== "string"
-  ) {
-    throw new Error("issue_apply_action.action is required")
-  }
-  const kind = (action as { kind: string }).kind
+  const kind = (payload.action as { kind?: unknown } | null | undefined)?.kind
+  if (typeof kind !== "string") throw new Error("issue_apply_action.action is required")
   // One allowlist for both ends: the phone builds from it, the host enforces it.
   const { REMOTE_ISSUE_ACTION_KINDS } = await import("@/lib/issues/remote-write")
   if (!(REMOTE_ISSUE_ACTION_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`issue_apply_action.action.kind "${kind}" is not allowed from a paired client`)
   }
+  const { applyIssueAction, parseIssueAction } = await import("@/lib/issues/service")
+  const action = parseIssueAction(payload.action)
   const { getIssue } = await import("@/lib/db/issues")
   const issue = await getIssue(issueId)
   if (!issue) throw new Error(`issue_apply_action: unknown issue ${issueId}`)
-  const { toUnifiedIssue } = await import("@/lib/issues/sources/local-source")
-  const { hasActiveIssueRun } = await import("@/lib/db/issue-runs")
-  const { applyIssueBulkAction } = await import("@/lib/issues/bulk-actions")
-  const item = toUnifiedIssue(issue)
-  const running = (await hasActiveIssueRun(issue.id))
-    ? new Set([item.unifiedId])
-    : new Set<string>()
-  const outcome = await applyIssueBulkAction(
-    [item],
-    action as Parameters<typeof applyIssueBulkAction>[1],
-    { kind: "human" },
-    running
-  )
-  return outcome
+  return applyIssueAction(issue, action, { kind: "human" })
 }
 
+/**
+ * A new issue from a paired phone, through the same `createIssueRecord` every
+ * other surface uses: an unknown status, priority, stage or assignee kind is
+ * refused there rather than written.
+ */
 async function issueCreateRpc(payload: Record<string, unknown>): Promise<unknown> {
   const projectId = payload.projectId
   const issueProjectId = payload.issueProjectId
@@ -2127,32 +2116,34 @@ async function issueCreateRpc(payload: Record<string, unknown>): Promise<unknown
   if (typeof title !== "string" || !title.trim()) {
     throw new Error("issue_create.title is required")
   }
-  const { createIssue } = await import("@/lib/db/issues")
-  const issue = await createIssue({
+  const { createIssueRecord } = await import("@/lib/issues/service")
+  type Request = Parameters<typeof createIssueRecord>[0]
+  // Present fields are handed over as sent; `createIssueRecord` refuses any
+  // that are not what they claim to be. Triage has one state to accept.
+  const issue = await createIssueRecord({
     projectId,
     issueProjectId,
     title,
-    ...(typeof payload.description === "string" ? { description: payload.description } : {}),
-    ...(typeof payload.status === "string"
-      ? { status: payload.status as Parameters<typeof createIssue>[0]["status"] }
+    ...(payload.description !== undefined
+      ? { description: payload.description as Request["description"] }
       : {}),
-    ...(typeof payload.priority === "string"
-      ? { priority: payload.priority as Parameters<typeof createIssue>[0]["priority"] }
+    ...(payload.status !== undefined ? { status: payload.status as Request["status"] } : {}),
+    ...(payload.priority !== undefined
+      ? { priority: payload.priority as Request["priority"] }
       : {}),
-    ...(payload.assignee && typeof payload.assignee === "object"
-      ? { assignee: payload.assignee as Parameters<typeof createIssue>[0]["assignee"] }
+    ...(payload.assignee !== undefined
+      ? { assignee: payload.assignee as Request["assignee"] }
       : {}),
     ...(typeof payload.parentId === "string" ? { parentId: payload.parentId } : {}),
     ...(typeof payload.cycleId === "string" ? { cycleId: payload.cycleId } : {}),
-    ...(typeof payload.dueDate === "number" ? { dueDate: payload.dueDate } : {}),
-    ...(typeof payload.estimate === "number" ? { estimate: payload.estimate } : {}),
-    // `createIssue` refuses an illegal stage; triage has one state to accept.
-    ...(typeof payload.stage === "number" ? { stage: payload.stage } : {}),
+    ...(payload.dueDate !== undefined ? { dueDate: payload.dueDate as number } : {}),
+    ...(payload.estimate !== undefined ? { estimate: payload.estimate as number } : {}),
+    ...(payload.stage !== undefined ? { stage: payload.stage as number } : {}),
     ...(payload.triage === "pending" ? { triage: "pending" as const } : {}),
-    ...(Array.isArray(payload.labelIds)
-      ? { labelIds: payload.labelIds.filter((id): id is string => typeof id === "string") }
+    ...(payload.labelIds !== undefined
+      ? { labelIds: payload.labelIds as Request["labelIds"] }
       : {}),
-    createdBy: { kind: "human" },
+    by: { kind: "human" },
   })
   return { id: issue.id, identifier: issue.identifier }
 }

@@ -130,9 +130,19 @@ jest.mock("./issue-detail-panel", () => ({
     return <div data-testid="detail-stub" />
   },
 }))
+let createProps: Record<string, unknown> = {}
 jest.mock("./create-issue-page", () => ({
-  CreateIssuePage: (props: Record<string, unknown>) =>
-    props.open ? <div data-testid="create-dialog-stub" /> : null,
+  CreateIssuePage: (props: Record<string, unknown>) => {
+    createProps = props
+    return props.open ? <div data-testid="create-dialog-stub" /> : null
+  },
+}))
+const mockFollowQueuedCreate = jest.fn(
+  (_id: string, _onSettled: (outcome: unknown) => void) => () => {}
+)
+jest.mock("@/lib/issues/shared-create", () => ({
+  followQueuedCreate: (id: string, onSettled: (outcome: unknown) => void) =>
+    mockFollowQueuedCreate(id, onSettled),
 }))
 let collabStaleForTest = false
 jest.mock("./collab-refresh-stale-badge", () => ({
@@ -151,8 +161,11 @@ const mockMoveIssue = jest.fn().mockResolvedValue(null)
 const mockReorderIssues = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/db/issues", () => ({
   listIssues: jest.fn(),
-  moveIssue: (...a: unknown[]) => mockMoveIssue(...a),
-  reorderIssues: (...a: unknown[]) => mockReorderIssues(...a),
+}))
+jest.mock("@/lib/issues/service", () => ({
+  moveIssueRecord: (...a: unknown[]) => mockMoveIssue(...a),
+  reorderIssueRecords: (...a: unknown[]) => mockReorderIssues(...a),
+  resolveCollabConflict: jest.fn(),
 }))
 jest.mock("@/lib/db/issue-projects", () => ({ listIssueProjects: jest.fn() }))
 jest.mock("@/lib/db/labels", () => ({ listLabels: jest.fn() }))
@@ -216,6 +229,7 @@ jest.mock("sonner", () => ({
     error: (m: unknown) => toastCalls.push(["error", m]),
     success: (m: unknown) => toastCalls.push(["success", m]),
     warning: (m: unknown) => toastCalls.push(["warning", m]),
+    info: (m: unknown) => toastCalls.push(["info", m]),
   },
 }))
 
@@ -991,6 +1005,52 @@ describe("IssueConsole", () => {
         await (detailProps.onWritebackCompleted as () => Promise<void>)()
       })
       await waitFor(() => expect(mockListAll.mock.calls.length).toBeGreaterThan(before))
+      // The write landed; the stale mirror is said, not swallowed.
+      expect(toastCalls).toContainEqual(["warning", "writeback.refreshFailed:offline"])
+    })
+
+    it("opens a shared create once delivered", async () => {
+      mockListAll.mockResolvedValue({
+        items: [item(), item({ kind: "collab", sourceId: "srv-1" })],
+        errors: [],
+      })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      act(() => (createProps.onSharedQueued as (id: string) => void)("op-1"))
+      expect(toastCalls).toContainEqual(["info", "create.sharedQueued"])
+      expect(mockFollowQueuedCreate).toHaveBeenCalledWith("op-1", expect.any(Function))
+      act(() => mockFollowQueuedCreate.mock.calls[0]![1]({ kind: "delivered", entityId: "srv-1" }))
+      expect(await screen.findByTestId("detail-stub")).toBeInTheDocument()
+      expect((detailProps.item as UnifiedIssueItem | undefined)?.unifiedId).toBe("collab:srv-1")
+    })
+
+    it("does not jump to a delivered shared create once the person opened another issue", async () => {
+      mockListAll.mockResolvedValue({
+        items: [item(), item({ kind: "collab", sourceId: "srv-1" })],
+        errors: [],
+      })
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      act(() => (createProps.onSharedQueued as (id: string) => void)("op-1"))
+      act(() => callProp(boardProps, "onSelect", "local:i1"))
+      await screen.findByTestId("detail-stub")
+      act(() => mockFollowQueuedCreate.mock.calls[0]![1]({ kind: "delivered", entityId: "srv-1" }))
+      expect((detailProps.item as UnifiedIssueItem | undefined)?.unifiedId).toBe("local:i1")
+    })
+
+    it("reports a drop the write boundary refused to take", async () => {
+      mockListAll.mockResolvedValue({ items: [item()], errors: [] })
+      mockMoveIssue.mockRejectedValueOnce(new Error("Unknown issue status 'x'"))
+      render(<IssueConsole />)
+      await screen.findByTestId("board-stub")
+      await act(async () => {
+        await (boardProps.onDrop as (action: unknown) => Promise<void>)({
+          type: "move",
+          unifiedId: "local:i1",
+          to: "done",
+        })
+      })
+      expect(toastCalls).toContainEqual(["error", "Unknown issue status 'x'"])
     })
 
     it("round-trips a GitHub write-back through a full sync", async () => {

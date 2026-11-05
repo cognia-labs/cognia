@@ -18,10 +18,10 @@ jest.mock("next/link", () => ({
 const mockCreate = jest.fn(async (..._a: unknown[]) => ({}))
 const mockUpdate = jest.fn(async (..._a: unknown[]) => undefined)
 const mockDelete = jest.fn(async (..._a: unknown[]) => undefined)
-jest.mock("@/lib/db/issue-cycles", () => ({
-  createIssueCycle: (...a: unknown[]) => mockCreate(...a),
-  updateIssueCycle: (...a: unknown[]) => mockUpdate(...a),
-  deleteIssueCycle: (...a: unknown[]) => mockDelete(...a),
+jest.mock("@/lib/issues/service", () => ({
+  createIssueCycleRecord: (...a: unknown[]) => mockCreate(...a),
+  updateIssueCycleRecord: (...a: unknown[]) => mockUpdate(...a),
+  deleteIssueCycleRecord: (...a: unknown[]) => mockDelete(...a),
 }))
 const mockToastError = jest.fn()
 jest.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => mockToastError(...a) } }))

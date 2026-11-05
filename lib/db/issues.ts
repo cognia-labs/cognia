@@ -167,6 +167,21 @@ export async function createIssueWithResult(
         )
       }
 
+      // The same checks `setIssueParent` and `addIssueBlocker` make later: a
+      // relation to a row that does not exist, or lives in another workspace,
+      // is a dangling link no board can draw.
+      const related = [
+        ...(input.parentId ? [{ id: input.parentId, role: "Parent" }] : []),
+        ...[...new Set(input.blockedBy ?? [])].map((id) => ({ id, role: "Blocker" })),
+      ]
+      for (const relation of related) {
+        const other = await db.issues.get(relation.id)
+        if (!other) throw new Error(`Unknown issue: ${relation.id}`)
+        if (other.projectId !== input.projectId) {
+          throw new Error(`${relation.role} must be in the same workspace`)
+        }
+      }
+
       const status = input.status ?? "backlog"
       // IndexedDB serializes these read/write transactions across tabs too.
       // Check before allocating a number or recording a second creation event.

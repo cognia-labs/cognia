@@ -49,7 +49,7 @@ import { listIssueRuns } from "@/lib/db/issue-runs"
 import { getCollabWorkspace } from "@/lib/db/collab-workspace-mirror"
 import { getCollabIssue } from "@/lib/db/collab-issue-mirror"
 import { useCollabMentionCandidates } from "@/hooks/collab/use-collab-mention-candidates"
-import { addIssueComment, getIssue, setIssueAssignee } from "@/lib/db/issues"
+import { getIssue } from "@/lib/db/issues"
 import { listPublishTargets } from "@/lib/issues/publish"
 import { actorKey } from "@/lib/issues/board-model"
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
@@ -195,13 +195,13 @@ export function IssueDetailPanel({
     undefined
   )
 
-  async function handleAssign(actor: IssueActor | null) {
+  /**
+   * Through the caller's `onAction` like every other edit here, so the board's
+   * gate decides and the outcome is reported once (`runBulk`).
+   */
+  function handleAssign(actor: IssueActor | null) {
     if (!localId) return
-    try {
-      await setIssueAssignee(localId, actor, { kind: "human" })
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : String(cause))
-    }
+    onAction?.({ kind: "assignee", to: actor })
   }
 
   async function handleCancelRun(runId: string) {
@@ -255,18 +255,14 @@ export function IssueDetailPanel({
     [item.title, item.description]
   )
 
-  async function handleComment(body: string, mentions: string[] = []) {
-    try {
-      if (localId) {
-        // A local issue has no membership to resolve a mention against.
-        await addIssueComment(localId, body, { kind: "human" })
-      } else if (writesCollabComments) {
-        await onAction?.(
-          mentions.length > 0 ? { kind: "comment", body, mentions } : { kind: "comment", body }
-        )
-      }
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : String(cause))
+  function handleComment(body: string, mentions: string[] = []) {
+    if (localId) {
+      // A local issue has no membership to resolve a mention against.
+      onAction?.({ kind: "comment", body })
+    } else if (writesCollabComments) {
+      onAction?.(
+        mentions.length > 0 ? { kind: "comment", body, mentions } : { kind: "comment", body }
+      )
     }
   }
 
@@ -370,7 +366,7 @@ export function IssueDetailPanel({
             )}
           </PropertyRow>
           <PropertyRow label={t("detail.assignee")}>
-            {localId && item.capabilities.canAssign ? (
+            {localId && onAction && item.capabilities.canAssign ? (
               <AssigneePicker
                 value={item.assignee ?? null}
                 onChange={handleAssign}
@@ -802,7 +798,7 @@ export function IssueDetailPanel({
                 The trail has always rendered comments; until now there was no
                 way to write one, because `addIssueComment` had no caller.
               */}
-              {item.capabilities.canComment ? (
+              {onAction && item.capabilities.canComment ? (
                 <IssueCommentComposer
                   onSubmit={handleComment}
                   {...(writesCollabComments ? { mentionCandidates } : {})}
