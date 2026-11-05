@@ -205,7 +205,7 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
 | M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 已完成（2026-11-05）：基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
-| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads` 试点已落地，G2 已改为阻断；`eval`、飞书三层、G3 和 G4 还没做 |
+| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads`、`eval` 两个试点已落地，G2 已改为阻断；飞书三层、G3 和 G4 还没做 |
 | 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
 | M3. 内核汇点（与阶段 3 同期） | 设置键归属；能力端口，先做 `ocr`、`speech`（试点）和 `docs-provider`；能力授予贡献（先过 ADR-0198）；提示词贡献 | 设置 store 的引用文件数、`build-options` 触达的子系统数都在下降 |
 | 3. 工作主干 | 运行表引用台账；统一状态词表；ADR-0247 的承诺 | 所有运行都在台账里 |
@@ -261,6 +261,11 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
   - 搜索 provider 懒加载，和内置 provider 注册在一起。它到达后，对话框会重跑查询；无头搜索会等它加载完。provider 的 `kind` 仍属于搜索词表（`lib/global-search/types.ts`），模块要加新的 kind 就加在那里，就像加一个类型。
   - 设置分区的元数据（分组、Lucide 图标名、`after`、`requires`、`profiles`、布局、关键词）是数据，文案是模块自己命名空间下的完整 key。分区 id 的类型由 manifest 推出；插件契约里的 `SettingsSectionId` 只列插件可以打开的分区。
   - 休眠：`experimental` 模块不向这三处贡献任何东西；深链接到它的分区时，页面会说明该分区已关闭。
+- **`eval` 试点为过渡归属表定下的规则。**
+  - 模块的代码放在别的子系统目录下时，由它的 manifest 用 `owns` 认领；它在表里的行和路径覆盖在同一次改动里删掉（G1 不允许两处同时存在）。`eval` 的行和 `lib/ai/eval/`、`lib/plugin/eval/` 两条覆盖都改成了认领，每个文件的所有者不变，G2 没有新增边。
+  - manifest 可以先放在 `lib/<id>/module.ts`，代码不必先搬过去。搬代码是另一次改动，要有它自己的理由。
+  - 规模度量计的是模块带来的开销，不是模块存在本身。G7 的急加载文件数不计 manifest，所以只含数据的模块不增加它。
+  - `stage` 记录实际发布的状态。分析 §11.2 把 `eval` 列为 experimental，但它现在正常发布，而 experimental 模块不贡献任何东西，所以在单独决定关闭它之前保持 `stable`。
 
 **模块之间怎么通信。**
 - **公开接口文件。** 一个模块只能通过另一个模块 `api` 里列出的具体文件，以及 `types/<id>/**`，来 import 它。不建 barrel，这是 `check-root-loading-boundaries` 已有的要求。对方必须写在 `dependsOn` 里，且 `dependsOn` 图无环。
@@ -296,7 +301,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用 | 不一致为 0 | M1 |
 | G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令 |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
-| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表急加载的文件数（M1 时为 3：两份 manifest 和 `lib/modules/define.ts`） | 只降不升；例外要有记录 | M0 |
+| G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表在 manifest 之外急加载的文件数（M1 时为 1：`lib/modules/define.ts`） | 只降不升；例外要有记录 | M0 |
 | G8 框架与厂商无关 | 框架目录里没有按厂商名分支、没有以厂商命名的文件，也不 import 厂商实现。沿用 `check-provider-name-branches.mjs`（ADR-0090）的做法，加上基线 | 违规项（166，大多在 connectors 框架里），只降不升 | M0 |
 
 子系统的键来自 `scripts/gates/lib/subsystems.mjs`，依赖分析脚本也用它，所以两者对任何路径的归属都一致。

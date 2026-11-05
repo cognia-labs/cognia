@@ -253,10 +253,6 @@ const GoalsSection = dynamic(() => import("./goals/goals-section").then((m) => m
   ssr: false,
   loading: () => <SectionLoading />,
 })
-const EvalSettingsSection = dynamic(
-  () => import("./eval/eval-settings-section").then((m) => m.EvalSettingsSection),
-  { ssr: false, loading: () => <SectionLoading /> }
-)
 const HarnessEvolutionSection = dynamic(
   () =>
     import("./harness-evolution/harness-evolution-section").then((m) => m.HarnessEvolutionSection),
@@ -664,8 +660,6 @@ function SectionContent({
       return <CustomModeSettings />
     case "agent-runtime":
       return <AgentRuntimeSection />
-    case "eval":
-      return <EvalSettingsSection />
     case "harness-evolution":
       return <HarnessEvolutionSection />
     case "hooks":

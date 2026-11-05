@@ -50,6 +50,16 @@ describe("settings-nav-config", () => {
       expect(settingsSectionDescriptionKey(item!)).toBe("squads.settingsSection.description")
     })
 
+    it("eval comes from its module manifest, right after Fleet in the Agents group", () => {
+      // `components/eval/module.ui.ts`, the second M1 pilot (ADR-0250 §14).
+      const index = SETTINGS_NAV.findIndex((n) => n.id === "eval")
+      const item = SETTINGS_NAV[index]
+      expect(item?.group).toBe("agents")
+      expect(SETTINGS_NAV[index - 1]?.id).toBe("fleet")
+      expect(settingsSectionLabelKey(item!)).toBe("eval.settingsSection.label")
+      expect(SETTINGS_SEARCH_KEYWORDS.eval).toEqual(expect.arrayContaining(["judge", "评估"]))
+    })
+
     it("keys a built-in section's strings under settings.tabs and settings.descriptions", () => {
       const item = SETTINGS_NAV.find((n) => n.id === "plugins")!
       expect(settingsSectionLabelKey(item)).toBe(`settings.tabs.${item.labelKey}`)

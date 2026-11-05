@@ -244,14 +244,16 @@ export function registryErrors(ctx, manifests) {
 }
 
 /**
- * G7: files a host loads when it imports the generated registries: every
- * manifest and what it imports eagerly. Lazy entries and type imports do not
- * count; a manifest is data, so this should stay at the manifests plus
- * `lib/modules/define.ts`.
+ * G7: files a host loads when it imports the generated registries, besides
+ * the manifests themselves: what the manifests import eagerly. Lazy entries and
+ * type imports do not count; a manifest is data, so this should stay at
+ * `lib/modules/define.ts` however many modules there are. (Counting the
+ * manifests too would make every new module look like growth.)
  */
 export function registryEagerFiles(ctx, manifests) {
   const seen = new Set()
-  const queue = [...manifests.host.values(), ...manifests.ui.values()].map(({ file }) => file)
+  const roots = [...manifests.host.values(), ...manifests.ui.values()].map(({ file }) => file)
+  const queue = [...roots]
   while (queue.length) {
     const file = queue.pop()
     if (seen.has(file) || !ctx.exists(file)) continue
@@ -262,7 +264,8 @@ export function registryEagerFiles(ctx, manifests) {
       if (target && !seen.has(target)) queue.push(target)
     }
   }
-  return seen.size
+  const manifestFiles = new Set(roots)
+  return [...seen].filter((file) => !manifestFiles.has(file)).length
 }
 
 // ------------------------------------------------------------- ownership

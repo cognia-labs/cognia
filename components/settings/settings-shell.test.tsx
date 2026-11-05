@@ -381,6 +381,14 @@ describe("SettingsShell — module sections (ADR-0250 §14)", () => {
     expect(container.querySelector("[data-settings-panel]")!.className).toMatch(/\bflex-1\b/)
   })
 
+  it("renders a module section that declares no layout in the capped panel", () => {
+    mockSection = "eval"
+    const { container } = render(<SettingsShell />)
+    expect(screen.getByTestId("section-body")).toBeInTheDocument()
+    expect(screen.getByText("eval.settingsSection.label")).toBeInTheDocument()
+    expect(container.querySelector("[data-settings-panel]")!.className).not.toMatch(/\bflex-1\b/)
+  })
+
   it("says a dormant module's section is off instead of rendering another one", () => {
     mockSection = "lab"
     render(<SettingsShell />)

@@ -18312,6 +18312,10 @@
       "storedOutputLabel": "Stored answer length",
       "title": "Eval settings"
     },
+    "settingsSection": {
+      "description": "Default judge model, scorers, quality gates, and cost guards for agent evaluations.",
+      "label": "Evaluation"
+    },
     "subtitle": "Datasets, scorers, and pass^k reliability for your built-in agents.",
     "tabs": {
       "annotate": "Trace analysis",
@@ -51812,7 +51816,6 @@
       "desktop": "Tauri-only window, autostart and tray behavior.",
       "diagnostics": "Crash logs, recent errors, and native logging diagnostics with export bundles.",
       "discover": "Pin, reorder, or hide the Discover categories.",
-      "eval": "Default judge model, scorers, quality gates, and cost guards for agent evaluations.",
       "externalBridge": "MCP server that exposes Cognia's wiki, RAG, and runtime entities to external coding agents (Claude Code, Cursor, Cline). Opt-in per scope.",
       "externalServices": "Connect SaaS, websites, APIs, MCP servers, and local apps through one governed service catalog.",
       "fleet": "Monitor and control coding agents launched anywhere on this machine (Claude Code, Codex, OpenCode), the Dynamic-Island overlay, and recent-session history.",
@@ -58333,7 +58336,6 @@
       "desktop": "Desktop",
       "diagnostics": "Diagnostics",
       "discover": "Discover",
-      "eval": "Evaluation",
       "externalBridge": "External Bridge (MCP)",
       "externalServices": "External services",
       "fleet": "Agent Fleet",

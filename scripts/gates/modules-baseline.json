@@ -10,7 +10,7 @@
     "tables": 400,
     "settingsStateMembers": 151,
     "settingsStoreImporters": 573,
-    "registryEagerFiles": 3
+    "registryEagerFiles": 1
   },
   "direction": [
     "app/agents/evolution/route-body.mobile.tsx -> mobile",

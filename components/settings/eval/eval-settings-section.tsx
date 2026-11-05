@@ -472,3 +472,5 @@ export function EvalSettingsSection() {
     </div>
   )
 }
+
+export default EvalSettingsSection

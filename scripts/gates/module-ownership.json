@@ -240,9 +240,6 @@
     "error": {
       "class": "foundation"
     },
-    "eval": {
-      "class": "module"
-    },
     "execution": {
       "class": "kernel"
     },
@@ -875,11 +872,6 @@
       "why": "VS Code extension host UI (analysis §11.1 plugin)."
     },
     {
-      "prefix": "lib/ai/eval/",
-      "owner": "eval",
-      "why": "Split out of `ai` (analysis §11.1 ai)."
-    },
-    {
       "prefix": "lib/ai/agent/team/",
       "owner": "agent-team",
       "why": "Split out of `ai` into agent orchestration (analysis §11.1 ai)."
@@ -993,11 +985,6 @@
       "prefix": "components/plugins/devtools/",
       "owner": "plugin-devtools",
       "why": "Plugin ecosystem module, experimental (analysis §11.1 plugin)."
-    },
-    {
-      "prefix": "lib/plugin/eval/",
-      "owner": "eval",
-      "why": "Plugin eval helpers join the eval module (analysis §11.1 plugin)."
     },
     {
       "prefix": "lib/plugin/pi-packages/",

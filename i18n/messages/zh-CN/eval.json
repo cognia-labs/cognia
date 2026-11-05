@@ -793,6 +793,10 @@
     "storedOutputLabel": "保留回答长度",
     "title": "评估设置"
   },
+  "settingsSection": {
+    "description": "为 Agent 评估设置默认评委模型、评分器、质量门限与费用保护。",
+    "label": "评估"
+  },
   "subtitle": "为内置 Agent 提供评测集、评分器与 pass^k 可靠性。",
   "tabs": {
     "annotate": "轨迹分析",

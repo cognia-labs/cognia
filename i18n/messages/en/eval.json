@@ -793,6 +793,10 @@
     "storedOutputLabel": "Stored answer length",
     "title": "Eval settings"
   },
+  "settingsSection": {
+    "description": "Default judge model, scorers, quality gates, and cost guards for agent evaluations.",
+    "label": "Evaluation"
+  },
   "subtitle": "Datasets, scorers, and pass^k reliability for your built-in agents.",
   "tabs": {
     "annotate": "Trace analysis",

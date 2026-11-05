@@ -322,11 +322,23 @@ test("G5: contributions are checked for shape, icon and clashes between modules"
   )
 })
 
-test("G7: the registries load the manifests and what they import eagerly, nothing lazy", () => {
+test("G7: the registries load what the manifests import eagerly, nothing lazy", () => {
   const result = run(moduleTree())
-  // lib/crew/module.ts, components/crew/module.ui.ts, lib/modules/define.ts;
-  // not the lazy targets and not the type-only manifest-types.ts.
-  assert.equal(result.measures.size.registryEagerFiles, 3)
+  // lib/modules/define.ts only: not the manifests themselves, not the lazy
+  // targets and not the type-only manifest-types.ts.
+  assert.equal(result.measures.size.registryEagerFiles, 1)
+})
+
+test("G7: another data-only module does not count as eager growth", () => {
+  const tree = moduleTree()
+  tree["lib/second/module.ts"] = [
+    'import { defineHostModule } from "@/lib/modules/define"',
+    'export default defineHostModule({ id: "second", kind: "module", stage: "stable" })',
+    "",
+  ].join("\n")
+  tree["lib/second/index.ts"] = "export const second = 1\n"
+  const result = run(tree)
+  assert.equal(result.measures.size.registryEagerFiles, 1)
 })
 
 // ------------------------------------------------------------ cycles
