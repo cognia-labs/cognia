@@ -143,7 +143,7 @@ flowchart LR
 面向正在开发中的插件的开发者模式界面。它刻意做得很小：构建、安装、重载的权威在 `cognia plugin dev` CLI，应用的职责是验证与呈现。
 
 - **开发者模式**（`developer-mode.ts`）是唯一的门。构建模式与遗留的 `localStorage` 标记在启动时被折叠成一个持久化值，所以 devtools 区块和 Creator 不可能对「开发者界面是否存在」给出不同答案。
-- **文件监听**（`file-watch.ts`）监听本地来源插件的安装目录，300 ms 防抖后走与 CLI 相同的已验证重载路径。
+- **文件监听**（`file-watch.ts`）监听作者实际编辑的目录（“加载本地目录”选的源目录、Dev Mode 文件夹，都没有时才是安装副本），300 ms 防抖后走与 CLI 相同的已验证重载路径。源目录在每次重载前先重新安装一次。
 - **日志环**（`debugger.ts`）保留插件经 `ctx.logger` 写出的每一行，并打上它来自哪个生命周期 generation。
 - **运行时日志流**（`runtime-log-stream.ts`）把这个环与 Python 宿主的缓冲合成一条按时间排序的视图，并点名那些根本没有输出通道的运行时。
 
@@ -153,7 +153,8 @@ flowchart LR
 | --- | --- | --- |
 | `developer-mode.ts` | 唯一持久化的开发者模式标记，以及从遗留信号单向迁移的启动逻辑 | `isDeveloperModeEnabled`、`useDeveloperMode`、`setDeveloperModeEnabled`、`migrateDeveloperMode` |
 | `debugger.ts` | 每插件、每 generation 的日志环，上限 1000 条。`createDebugContext` 包住 `ctx.logger`，让插件的每条日志都镜像进来 | `getPluginDebugger`、`startSession`、`log` / `getLogs` / `onLog`、`createDebugContext` |
-| `file-watch.ts` | 应用内监听器：按运行时判定资格、精确路径归属、防抖、走已验证路径重载 | `startPluginFileWatch`、`watchEligibility`、`resolveWatchedPluginId` |
+| `file-watch.ts` | 应用内监听器：按运行时判定资格、决定监听哪个目录、精确路径归属、防抖、同一插件同时只重载一次、走已验证路径重载 | `startPluginFileWatch`、`watchEligibility`、`resolveWatchedPluginId`、`isInstallSwap` |
+| `lib/plugin/local/unpacked-sources.ts` | 记住每个“加载本地目录”插件的源目录；只有插件 id 和权限面都没变时才从它重新安装 | `recordUnpackedSource`、`listWatchableUnpackedSources`、`resyncUnpackedSource` |
 | `runtime-log-stream.ts` | 合并前端日志环与 Python 缓冲的读取面，按运行时打标 | `getPluginRuntimeLogs`、`subscribePluginRuntimeLogs`、`logSourcesFor` |
 
 ### 重载的权威在哪里
@@ -211,6 +212,10 @@ flowchart TD
 
 - **结构体参数放在 `args` 下** —— `plugin_watch_start(app, args: WatchStartArgs)` 只收一个结构体，Tauri 会从 `args` 键读取。`file-watch.ts` 取代的那个模块传的是扁平的 `{ paths }`，`args` 永远缺失，命令在创建任何监听器之前就被拒。`lib/plugin/core/context.ts` 里已经为 `plugin_show_notification` 记过同一个坑。
 - **只有新的 active generation 才算成功** —— 安装事件说明产物落盘了，文件变化说明字节动了，两者都不说明插件激活了。任何在没有 `activationProof` 的情况下报成功的东西，报的是别的事。
+- **监听作者编辑的目录** —— “加载本地目录”会把选中的目录复制到插件根目录，监听安装副本根本看不到作者的修改。现在 `installPluginFromDirectory` 会记下源目录（`unpacked-sources.ts`），只要插件的安装来源仍是本地目录，监听器就监听它。这种重新安装跳过了安装前的确认流程，所以插件 id 或权限面一变就拒绝，需要重新“加载本地目录”。
+- **安装器替换目录不算编辑** —— 所有安装器都是先暂存一棵目录树，再整体重命名到插件目录上，原生监听器报出来的是目录本身的事件。对安装副本，监听器忽略这类事件（`isInstallSwap`）：安装器自己会重载插件，再响应一次只会让每次 `cognia plugin dev` 的重载重复一遍。
+- **同一插件同时只重载一次** —— `PluginManager.reloadPlugin` 的每一步都串行，但两次重载以前会交错：后一次读到插件已停用，就跳过重新启用，还把前一次刚启用的卸载掉。现在同一插件的重载排队执行，重载期间的保存会在结束后补一次。
+- **`cognia plugin dev` 忽略自己写出的文件** —— 前端构建即使什么都没变也会重写 `dist/index.js`，而 `dist/` 因为其他类型插件的产物在那里而被监听。没有 `BuildOutputs`（`crates/cognia-cli/src/commands/dev.rs`）时，每次构建都会排队触发下一次。
 - **监听资格按运行时判定，并且理由要显示出来** —— `dev` 与 `local` 来源的 `frontend`、`python`、`hybrid` 会被监听。`wasm` 与 `vscode-extension` 在界面上被报为 `needs-build`，而不是悄悄跳过：否则一个永远不重载的插件，和一个坏掉的监听器长得一模一样。
 - **命名空间冲突规避** —— 每个表操作都经过 `namespace.ts` 辅助函数作为唯一事实来源（`namespace.ts:6`）。`dexie-api` 在 `table()` 与 `rawDb()` 的 Proxy 中均拒绝对核心表或其他插件表的裸访问（`dexie-api.ts:48`、`dexie-api.ts:67`）。`applyPluginTables` 对未变化的集合幂等，但超过 `MAX_TABLES_PER_PLUGIN = 20` 会抛错（`bridge.ts:37`）；改变后的集合需先调用 `removePluginTables`（`bridge.ts:28`）。
 

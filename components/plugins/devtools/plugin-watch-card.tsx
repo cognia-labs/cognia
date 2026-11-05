@@ -26,6 +26,8 @@ import {
   startPluginFileWatch,
   watchEligibility,
   type PluginFileWatchHandle,
+  type WatchedRoot,
+  type WatchedVia,
   type WatchIneligibility,
 } from "@/lib/plugin/devtools/file-watch"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
@@ -37,7 +39,7 @@ export function PluginWatchCard({ className }: { className?: string }) {
   const plugins = useMemo(() => Object.values(pluginMap), [pluginMap])
   const desktop = isTauri()
   const [enabled, setEnabled] = useState(false)
-  const [watchedIds, setWatchedIds] = useState<string[]>([])
+  const [watchedRoots, setWatchedRoots] = useState<WatchedRoot[]>([])
   const handleRef = useRef<PluginFileWatchHandle | null>(null)
   const enabledRef = useRef(false)
   // Read through a ref so the restart below depends on the folder set alone.
@@ -78,18 +80,18 @@ export function PluginWatchCard({ className }: { className?: string }) {
       setEnabled(next)
       enabledRef.current = next
       if (!next) {
-        setWatchedIds([])
+        setWatchedRoots([])
         await stop()
         return
       }
       try {
         const handle = await startPluginFileWatch(Object.values(usePluginStore.getState().plugins))
         handleRef.current = handle
-        setWatchedIds(handle.watchedPluginIds)
+        setWatchedRoots(handle.roots)
       } catch (error) {
         setEnabled(false)
         enabledRef.current = false
-        setWatchedIds([])
+        setWatchedRoots([])
         toast.error(
           t("startFailed", { message: error instanceof Error ? error.message : String(error) })
         )
@@ -114,7 +116,7 @@ export function PluginWatchCard({ className }: { className?: string }) {
           return
         }
         handleRef.current = handle
-        setWatchedIds(handle.watchedPluginIds)
+        setWatchedRoots(handle.roots)
       } catch (error) {
         toast.error(
           tRef.current("startFailed", {
@@ -178,8 +180,40 @@ export function PluginWatchCard({ className }: { className?: string }) {
           />
         ) : (
           <p className="text-xs text-muted-foreground" data-testid="plugin-watch-status">
-            {enabled ? t("watching", { count: watchedIds.length }) : t("idle")}
+            {enabled
+              ? t("watching", { count: new Set(watchedRoots.map((root) => root.pluginId)).size })
+              : t("idle")}
           </p>
+        )}
+
+        {enabled && watchedRoots.length > 0 && (
+          <div className="space-y-1.5">
+            <h4 className="text-xs font-semibold text-muted-foreground">{t("watchedHeading")}</h4>
+            <ul className="space-y-1.5">
+              {watchedRoots.map((root) => (
+                <Surface asChild key={`${root.pluginId}\0${root.root}`} layer="raised">
+                  <li
+                    className="rounded-md border px-2.5 py-1.5 text-xs"
+                    data-testid={`plugin-watch-root-${root.pluginId}`}
+                    data-via={root.via}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {pluginMap[root.pluginId]?.manifest.name ?? root.pluginId}
+                      </span>
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        {root.pluginId}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 truncate font-mono text-muted-foreground" title={root.root}>
+                      {root.root}
+                    </p>
+                    <p className="text-muted-foreground">{t(`via.${root.via}` as never)}</p>
+                  </li>
+                </Surface>
+              ))}
+            </ul>
+          </div>
         )}
 
         {skipped.length > 0 && (
@@ -212,6 +246,9 @@ export function PluginWatchCard({ className }: { className?: string }) {
     </Card>
   )
 }
+
+/** Every `via.*` label the watched-folder list can render. */
+export const WATCHED_VIAS: WatchedVia[] = ["install", "dev-folder", "unpacked-source"]
 
 /** Re-exported so the catalogue test can enumerate every reason it renders. */
 export const WATCH_INELIGIBILITY_REASONS: WatchIneligibility[] = [

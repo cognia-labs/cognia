@@ -1,8 +1,5 @@
-//! Plugin devtools Tauri commands.
-//!
-//! These handlers back the in-app plugin developer experience: a filesystem
-//! watcher for locally-sourced plugins, and a listing of what the runtime has
-//! loaded.
+//! Plugin devtools Tauri commands: the filesystem watcher behind the in-app
+//! plugin file watch (`lib/plugin/devtools/file-watch.ts`).
 //!
 //! They are registered unconditionally. An earlier version of this comment
 //! claimed they were `debug_assertions`-gated, which was never true of the
@@ -14,12 +11,14 @@
 //! / `connectedClients` API on top of them. `plugin_reload` also went, since
 //! the `plugin-hot-reload:<id>` event it emitted had exactly one listener and
 //! that module is gone. Reloading is now the verified cli-bridge round-trip in
-//! `lib/cli-bridge/handlers/plugin-dev-reload.ts`.
+//! `lib/cli-bridge/handlers/plugin-dev-reload.ts`. `plugin_dev_server_watch` /
+//! `plugin_dev_server_unwatch` and `plugin_list_dev_plugins` went later for
+//! the same reason: their only caller was the deleted `dev-server.ts`.
 //!
-//! ADR 0016 P1-7 (2026-05-17) — `plugin_watch_start` / `plugin_dev_server_watch`
-//! now hold a real `notify::RecommendedWatcher` instead of a stub
-//! `Vec<PathBuf>`. Filesystem events emit `plugin:file-change` with the same
-//! payload shape `lib/plugin/devtools/file-watch.ts` expects.
+//! ADR 0016 P1-7 (2026-05-17) — `plugin_watch_start` holds a real
+//! `notify::RecommendedWatcher` instead of a stub `Vec<PathBuf>`. Filesystem
+//! events emit `plugin:file-change` with the payload shape `file-watch.ts`
+//! expects.
 
 // Without `tauri-host` the commands compile out (ADR-0196), leaving imports
 // and helpers only they use; the feature build still lints all of them.
@@ -31,41 +30,25 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "tauri-host")]
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter};
 
-use super::{PluginError, PluginRuntimeState, Result};
+use super::{PluginError, Result};
 
-/// Active filesystem watchers. We keep a small handful — one for the
-/// top-level `plugin_watch_start` (driven by `file-watch.ts`) and a per-id
-/// map for `plugin_dev_server_watch` (driven by `dev-server.ts`).
+/// The watcher `plugin_watch_start` created, and the paths it watches.
 struct WatcherState {
-    /// Holds the single watcher created by `plugin_watch_start`. Dropping it
-    /// stops the underlying file-system event stream.
-    global: Option<RecommendedWatcher>,
-    /// Holds watchers created by `plugin_dev_server_watch`, keyed by
-    /// `pluginId` so each plugin can be unwatched independently.
-    per_plugin: std::collections::HashMap<String, RecommendedWatcher>,
-    /// Mirror of the watched paths so the existing tests + introspection
-    /// callers can still see what's being watched.
+    /// Dropping it stops the underlying file-system event stream.
+    watcher: Option<RecommendedWatcher>,
     paths: Vec<PathBuf>,
 }
 
-impl WatcherState {
-    fn empty() -> Self {
-        Self {
-            global: None,
-            per_plugin: std::collections::HashMap::new(),
-            paths: Vec::new(),
-        }
-    }
-}
+static WATCHERS: once_cell::sync::Lazy<Mutex<WatcherState>> = once_cell::sync::Lazy::new(|| {
+    Mutex::new(WatcherState {
+        watcher: None,
+        paths: Vec::new(),
+    })
+});
 
-static WATCHERS: once_cell::sync::Lazy<Mutex<WatcherState>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(WatcherState::empty()));
-
-/// Test-only accessor: number of currently-watched paths. The previous
-/// stub-based tests inspected `WATCH_PATHS.read().len()`; mirror that surface
-/// here without exposing the watcher state directly.
+/// Test-only accessor: number of currently-watched paths.
 #[cfg(test)]
 fn watched_path_count() -> usize {
     WATCHERS.lock().paths.len()
@@ -79,8 +62,8 @@ pub struct FileChangePayload {
     #[serde(rename = "type")]
     pub kind: String,
     pub path: String,
-    /// Milliseconds since UNIX epoch — the TS handler reads this to skip
-    /// stale events queued during reload.
+    /// Milliseconds since UNIX epoch when the watcher saw the change.
+    /// Diagnostic only: the renderer orders and debounces changes itself.
     pub timestamp: u64,
 }
 
@@ -111,69 +94,11 @@ impl FileChangePayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DevServerWatchArgs {
-    #[serde(default)]
-    pub plugin_id: Option<String>,
-    /// Either a single `path` (typical TS call shape) or an array.
-    #[serde(default)]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub paths: Option<Vec<String>>,
-}
-
-#[cfg(feature = "tauri-host")]
-#[tauri::command]
-pub async fn plugin_dev_server_watch(app: AppHandle, args: DevServerWatchArgs) -> Result<()> {
-    let plugin_id = args.plugin_id.clone().unwrap_or_default();
-    let mut paths: Vec<String> = Vec::new();
-    if let Some(p) = args.path {
-        paths.push(p);
-    }
-    if let Some(ps) = args.paths {
-        paths.extend(ps);
-    }
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let watcher = start_watcher(&app, paths.clone())?;
-    let mut state = WATCHERS.lock();
-    if !plugin_id.is_empty() {
-        // Replace any previous watcher for this plugin id — re-watching the
-        // same plugin replaces its old watcher cleanly.
-        state.per_plugin.insert(plugin_id.clone(), watcher);
-    } else {
-        // No plugin id supplied — fall back to global slot. Caller is
-        // responsible for not double-binding.
-        state.global = Some(watcher);
-    }
-    for p in paths {
-        let pb = PathBuf::from(p);
-        if !state.paths.contains(&pb) {
-            state.paths.push(pb);
-        }
-    }
-    log::debug!(
-        "plugin_dev_server_watch: plugin={} watches={}",
-        plugin_id,
-        state.paths.len()
-    );
-    Ok(())
-}
-
-#[cfg_attr(feature = "tauri-host", tauri::command)]
-pub async fn plugin_dev_server_unwatch(plugin_id: String) -> Result<()> {
-    let mut state = WATCHERS.lock();
-    state.per_plugin.remove(&plugin_id);
-    log::debug!("plugin_dev_server_unwatch: plugin={}", plugin_id);
-    Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WatchStartArgs {
     pub paths: Vec<String>,
 }
 
+/// Watch `args.paths`, replacing whatever an earlier call watched.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
 pub async fn plugin_watch_start(app: AppHandle, args: WatchStartArgs) -> Result<()> {
@@ -182,30 +107,18 @@ pub async fn plugin_watch_start(app: AppHandle, args: WatchStartArgs) -> Result<
     }
     let watcher = start_watcher(&app, args.paths.clone())?;
     let mut state = WATCHERS.lock();
-    state.global = Some(watcher);
-    for p in args.paths {
-        let pb = PathBuf::from(p);
-        if !state.paths.contains(&pb) {
-            state.paths.push(pb);
-        }
-    }
+    state.watcher = Some(watcher);
+    state.paths = args.paths.into_iter().map(PathBuf::from).collect();
     Ok(())
 }
 
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub async fn plugin_watch_stop() -> Result<()> {
     let mut state = WATCHERS.lock();
-    // Dropping the watchers stops the underlying file-system event stream.
-    state.global = None;
-    state.per_plugin.clear();
+    // Dropping the watcher stops the underlying file-system event stream.
+    state.watcher = None;
     state.paths.clear();
     Ok(())
-}
-
-#[cfg(feature = "tauri-host")]
-#[tauri::command]
-pub async fn plugin_list_dev_plugins(state: State<'_, PluginRuntimeState>) -> Result<Vec<String>> {
-    Ok(state.plugins.read().keys().cloned().collect())
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -288,7 +201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_stop_clears_global_and_per_plugin_watchers() {
+    async fn watch_stop_clears_the_watcher() {
         // Build state directly — we can't construct a real AppHandle in unit
         // tests, but the stop path only touches the WATCHERS mutex.
         {
@@ -296,8 +209,8 @@ mod tests {
             state.paths.push(PathBuf::from("/tmp/a"));
             state.paths.push(PathBuf::from("/tmp/b"));
             // We can't construct a RecommendedWatcher without notify init,
-            // but the state.global / per_plugin only matter for the side
-            // effects of dropping — leaving them None is fine for this test.
+            // but the watcher only matters for the side effect of dropping —
+            // leaving it None is fine for this test.
         }
         assert_eq!(watched_path_count(), 2);
         plugin_watch_stop().await.unwrap();

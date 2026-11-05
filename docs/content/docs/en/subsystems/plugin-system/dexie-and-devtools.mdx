@@ -149,9 +149,10 @@ purpose: the authority for building, installing and reloading is the
   legacy `localStorage` flag are folded into one persisted value at boot, so the
   devtools section and Creator can never disagree about whether developer
   surfaces exist.
-- **file watch** (`file-watch.ts`) watches a locally-sourced plugin's install
-  directory and, after a 300 ms debounce, puts it through the same verified
-  reload the CLI uses.
+- **file watch** (`file-watch.ts`) watches the folder a plugin's author edits
+  (a "Load unpacked" source folder, a Dev Mode folder, or else the installed
+  copy) and, after a 300 ms debounce, puts it through the same verified reload
+  the CLI uses. A source folder is reinstalled from before each reload.
 - **the log ring** (`debugger.ts`) keeps every line a plugin writes through
   `ctx.logger`, tagged with the lifecycle generation it came from.
 - **the runtime log stream** (`runtime-log-stream.ts`) merges that ring with the
@@ -164,7 +165,8 @@ purpose: the authority for building, installing and reloading is the
 | --- | --- | --- |
 | `developer-mode.ts` | The one persisted developer-mode flag, plus the one-way boot migration off the legacy signals | `isDeveloperModeEnabled`, `useDeveloperMode`, `setDeveloperModeEnabled`, `migrateDeveloperMode` |
 | `debugger.ts` | Per-plugin, per-generation log ring capped at 1000 entries. `createDebugContext` wraps `ctx.logger` so every plugin log mirrors into it | `getPluginDebugger`, `startSession`, `log` / `getLogs` / `onLog`, `createDebugContext` |
-| `file-watch.ts` | In-app watcher: eligibility per runtime, exact path attribution, debounce, reload through the verified path | `startPluginFileWatch`, `watchEligibility`, `resolveWatchedPluginId` |
+| `file-watch.ts` | In-app watcher: eligibility per runtime, which folder to watch, exact path attribution, debounce, one reload per plugin at a time, reload through the verified path | `startPluginFileWatch`, `watchEligibility`, `resolveWatchedPluginId`, `isInstallSwap` |
+| `lib/plugin/local/unpacked-sources.ts` | Remembers each "Load unpacked" plugin's source folder, and reinstalls from it only when the id and permission surface are unchanged | `recordUnpackedSource`, `listWatchableUnpackedSources`, `resyncUnpackedSource` |
 | `runtime-log-stream.ts` | Merged reader over the frontend ring and the Python buffer, tagged by runtime | `getPluginRuntimeLogs`, `subscribePluginRuntimeLogs`, `logSourcesFor` |
 
 ### Where the reload authority lives
@@ -250,6 +252,10 @@ activation). See the managed IDE operations page, "Dev Mode".
 
 - **Struct arguments live under `args`** — `plugin_watch_start(app, args: WatchStartArgs)` takes one struct, so Tauri reads it from the `args` key. The module `file-watch.ts` replaced sent a flat `{ paths }`, which leaves `args` absent and the command rejects before any watcher exists. `lib/plugin/core/context.ts` documents the same trap for `plugin_show_notification`.
 - **Only a new active generation is success** — an install event says a bundle landed on disk, a file change says bytes moved, and neither says the plugin activated. Anything that reports success without an `activationProof` is reporting something else.
+- **Watch the folder the author edits** — "Load unpacked" copies the picked folder into the plugin root, so watching the installed copy saw no edit at all. `installPluginFromDirectory` now records the folder (`unpacked-sources.ts`), and the watcher watches it while the plugin's install origin is still a local directory. Its reinstall skips the pre-install chain, so it refuses a changed plugin id or permission surface; those need "Load unpacked" again.
+- **An installer's directory swap is not an edit** — every installer stages a tree and renames it over the plugin directory, which the native watcher reports as events on the directory itself. The watcher ignores those for an installed copy (`isInstallSwap`): the installer reloads the plugin itself, and answering the swap repeated each `cognia plugin dev` reload while the watch was on.
+- **One reload per plugin at a time** — each step of `PluginManager.reloadPlugin` is serialized, but two overlapping reloads used to interleave: the later one read the plugin as disabled, skipped re-enabling, and unloaded what the first had enabled. Reloads of one plugin now queue, and the watcher replays a save made mid-reload once afterwards.
+- **`cognia plugin dev` ignores its own writes** — a frontend build rewrites `dist/index.js` even when nothing changed, and `dist/` is watched for entries other plugin types build there. Without `BuildOutputs` (`crates/cognia-cli/src/commands/dev.rs`) every build queued the next one.
 - **Watch eligibility is per runtime, and the reason is shown** — `dev` and `local` sources are watched for `frontend`, `python` and `hybrid`. `wasm` and `vscode-extension` are reported `needs-build` in the UI rather than silently skipped, because a plugin that never reloads is otherwise indistinguishable from a broken watcher.
 - **Namespace collision avoidance** — every table operation goes through the `namespace.ts` helpers as a single source of truth (`namespace.ts:6`). `dexie-api` rejects bare access to core tables or other plugins' tables in both `table()` and the `rawDb()` Proxy (`dexie-api.ts:48`, `dexie-api.ts:67`). `applyPluginTables` is idempotent on unchanged sets but throws above `MAX_TABLES_PER_PLUGIN = 20` (`bridge.ts:37`); a changed set requires `removePluginTables` first (`bridge.ts:28`).
 

@@ -35,6 +35,7 @@ jest.mock("@/lib/db/plugin-install-origins", () => ({
 }))
 
 import { invoke } from "@tauri-apps/api/core"
+import { readUnpackedSources } from "./unpacked-sources"
 import { isTauri } from "@/lib/tauri"
 import { dispatchPluginError } from "@/lib/plugin/error-bus"
 
@@ -95,6 +96,31 @@ describe("installPluginFromDirectory", () => {
       expect.objectContaining({ pluginId: "converted", version: "4.0.0" })
     )
     expect(mockInvoke).not.toHaveBeenCalledWith("preview_local_manifest", expect.anything())
+  })
+
+  it("remembers a folder install's source for the watcher, and forgets it on any other origin", async () => {
+    localStorage.clear()
+    mockInvoke.mockResolvedValueOnce({ pluginId: "demo", warnings: [] })
+    await installPluginFromDirectory("/src/demo", { version: "1.0.0" })
+    expect(readUnpackedSources()).toEqual({
+      demo: expect.objectContaining({ pluginId: "demo", sourceDir: "/src/demo" }),
+    })
+
+    mockInvoke.mockResolvedValueOnce({ pluginId: "demo", warnings: [] })
+    await installPluginFromDirectory("/tmp/cogpack/plugins/demo", {
+      origin: { kind: "local", via: "cogpack-embedded" },
+      version: "1.0.0",
+    })
+    expect(readUnpackedSources()).toEqual({})
+  })
+
+  it("leaves the remembered source alone when the install fails", async () => {
+    localStorage.clear()
+    mockInvoke.mockResolvedValueOnce({ pluginId: "demo", warnings: [] })
+    await installPluginFromDirectory("/src/demo", { version: "1.0.0" })
+    mockInvoke.mockRejectedValueOnce(new Error("plugin.json is invalid"))
+    await expect(installPluginFromDirectory("/src/other", { version: "1.0.0" })).rejects.toThrow()
+    expect(readUnpackedSources().demo?.sourceDir).toBe("/src/demo")
   })
 
   it("calls plugin_install_from_directory and returns the receipt", async () => {

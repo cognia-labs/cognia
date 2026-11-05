@@ -35943,6 +35943,12 @@
         "startFailed": "无法开始监听：{message}",
         "title": "监听插件目录",
         "toggleLabel": "监听文件变化",
+        "via": {
+          "dev-folder": "Dev Mode 文件夹，每次重载前先从这里重新安装",
+          "install": "已安装的副本",
+          "unpacked-source": "通过“加载本地目录”选的源目录，每次重载前先从这里重新安装"
+        },
+        "watchedHeading": "正在监听的目录",
         "watching": "正在监听 {count, plural, =0 {0 个插件} other {# 个插件}}"
       }
     },

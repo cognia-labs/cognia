@@ -2521,12 +2521,6 @@
     "plugin_deactivate_vscode": {
       "to": "plugin.vscode.deactivate"
     },
-    "plugin_dev_server_unwatch": {
-      "to": "plugin.dev_server.unwatch"
-    },
-    "plugin_dev_server_watch": {
-      "to": "plugin.dev_server.watch"
-    },
     "plugin_disable": {
       "to": "plugin.disable"
     },
@@ -2592,9 +2586,6 @@
     },
     "plugin_list": {
       "to": "plugin.list"
-    },
-    "plugin_list_dev_plugins": {
-      "to": "plugin.dev_plugin.list"
     },
     "plugin_load": {
       "to": "plugin.load"

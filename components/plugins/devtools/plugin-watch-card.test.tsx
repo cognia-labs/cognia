@@ -30,7 +30,7 @@ import { toast } from "sonner"
 import { isTauri } from "@/lib/tauri"
 import { startPluginFileWatch } from "@/lib/plugin/devtools/file-watch"
 
-import { PluginWatchCard, WATCH_INELIGIBILITY_REASONS } from "./plugin-watch-card"
+import { PluginWatchCard, WATCHED_VIAS, WATCH_INELIGIBILITY_REASONS } from "./plugin-watch-card"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 
 const mockIsTauri = isTauri as jest.MockedFunction<typeof isTauri>
@@ -76,7 +76,11 @@ beforeEach(() => {
   mockIsTauri.mockReturnValue(true)
   mockToastError.mockReset()
   stopHandle.mockClear()
-  mockStart.mockReset().mockResolvedValue({ watchedPluginIds: ["ok"], stop: stopHandle })
+  mockStart.mockReset().mockResolvedValue({
+    watchedPluginIds: ["ok"],
+    roots: [{ pluginId: "ok", root: "/plugins/ok", via: "install" }],
+    stop: stopHandle,
+  })
   mockDevMode.folders = []
   seed()
 })
@@ -126,6 +130,32 @@ describe("PluginWatchCard", () => {
     for (const reason of WATCH_INELIGIBILITY_REASONS) {
       expect(enMessages.plugins.devtools.watch.reason[reason]).toBeTruthy()
     }
+  })
+
+  it("every kind of watched folder has a translation", () => {
+    for (const via of WATCHED_VIAS) {
+      expect(enMessages.plugins.devtools.watch.via[via]).toBeTruthy()
+    }
+  })
+
+  it("lists each watched folder and what it is once watching", async () => {
+    seed(plugin({ id: "ok" }), plugin({ id: "unpacked", source: "local" }))
+    mockStart.mockResolvedValue({
+      watchedPluginIds: ["ok", "unpacked"],
+      roots: [
+        { pluginId: "ok", root: "/plugins/ok", via: "install" },
+        { pluginId: "unpacked", root: "/src/unpacked", via: "unpacked-source" },
+      ],
+      stop: stopHandle,
+    })
+    renderCard()
+    expect(screen.queryByTestId("plugin-watch-root-unpacked")).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("switch"))
+    const row = await screen.findByTestId("plugin-watch-root-unpacked")
+    expect(row).toHaveAttribute("data-via", "unpacked-source")
+    expect(row).toHaveTextContent("/src/unpacked")
+    expect(row).toHaveTextContent(enMessages.plugins.devtools.watch.via["unpacked-source"])
+    expect(screen.getByTestId("plugin-watch-status")).toHaveTextContent("2 plugins")
   })
 
   it("says the feature is desktop-only off Tauri", () => {

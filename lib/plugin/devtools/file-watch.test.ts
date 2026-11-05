@@ -6,6 +6,7 @@ import type { Plugin } from "@/types/plugin"
 import {
   APP_WATCH_SOURCE,
   FILE_CHANGE_EVENT,
+  isInstallSwap,
   resolveWatchedPluginId,
   startPluginFileWatch,
   watchEligibility,
@@ -72,6 +73,8 @@ function harness(reload?: PluginFileWatchDependencies["reload"]): Harness {
       }),
     devFolders: () => [],
     syncDevFolder: async () => undefined,
+    unpackedSources: async () => [],
+    syncUnpackedSource: async () => undefined,
     record: (entry) => {
       recorded.push(entry)
     },
@@ -408,6 +411,104 @@ describe("startPluginFileWatch reload overlap", () => {
     expect(calls).toEqual(["a", "b"])
     gate.resolve()
     await flush()
+    await handle.stop()
+  })
+})
+
+describe("isInstallSwap", () => {
+  it("is an event on the install directory itself", () => {
+    const root = { root: "/plugins/demo", via: "install" as const }
+    expect(isInstallSwap(root, "/plugins/demo")).toBe(true)
+    expect(isInstallSwap(root, "/plugins/demo/")).toBe(true)
+    expect(isInstallSwap(root, "/plugins/demo/dist/index.js")).toBe(false)
+  })
+
+  it("never applies to a folder the author edits", () => {
+    expect(isInstallSwap({ root: "/src/demo", via: "unpacked-source" }, "/src/demo")).toBe(false)
+    expect(isInstallSwap({ root: "/dev/demo", via: "dev-folder" }, "/dev/demo")).toBe(false)
+  })
+})
+
+describe("startPluginFileWatch with unpacked and installed plugins", () => {
+  it("watches an unpacked plugin in its source folder and reinstalls from it before reloading", async () => {
+    const h = harness()
+    const order: string[] = []
+    let asked: string[] = []
+    h.deps.unpackedSources = async (pluginIds) => {
+      asked = pluginIds
+      return [{ pluginId: "unpacked", sourceDir: "/src/unpacked" }]
+    }
+    h.deps.syncUnpackedSource = async (pluginId, sourceDir) => {
+      order.push(`sync ${pluginId} ${sourceDir}`)
+    }
+    const reload = h.deps.reload
+    h.deps.reload = async (pluginId, attempt, sessionId) => {
+      order.push(`reload ${pluginId}`)
+      return reload(pluginId, attempt, sessionId)
+    }
+    const handle = await startPluginFileWatch(
+      [
+        plugin({ id: "unpacked", source: "local", path: "/plugins/unpacked" }),
+        plugin({ id: "installed", source: "local", path: "/plugins/installed" }),
+        plugin({ id: "built", type: "wasm" }),
+      ],
+      h.deps
+    )
+    // Ineligible plugins are not looked up at all.
+    expect(asked).toEqual(["unpacked", "installed"])
+    expect(h.started).toEqual([["/src/unpacked", "/plugins/installed"]])
+    expect(handle.roots).toEqual([
+      { pluginId: "unpacked", root: "/src/unpacked", via: "unpacked-source" },
+      { pluginId: "installed", root: "/plugins/installed", via: "install" },
+    ])
+
+    h.emit({ type: "modify", path: "/src/unpacked/src/index.ts", timestamp: 1 })
+    await flush()
+    expect(order).toEqual(["sync unpacked /src/unpacked", "reload unpacked"])
+
+    h.emit({ type: "modify", path: "/plugins/installed/index.js", timestamp: 2 })
+    await flush()
+    expect(order).toEqual(["sync unpacked /src/unpacked", "reload unpacked", "reload installed"])
+    await handle.stop()
+  })
+
+  it("records a refused resync as a failed reload and does not reload", async () => {
+    const h = harness()
+    h.deps.unpackedSources = async () => [{ pluginId: "unpacked", sourceDir: "/src/unpacked" }]
+    h.deps.syncUnpackedSource = async () => {
+      throw new Error("unpacked changed its permissions or network access")
+    }
+    const handle = await startPluginFileWatch(
+      [plugin({ id: "unpacked", source: "local", path: "/plugins/unpacked" })],
+      h.deps
+    )
+    h.emit({ type: "modify", path: "/src/unpacked/plugin.json", timestamp: 1 })
+    await flush()
+    expect(h.reloads).toEqual([])
+    expect(h.recorded.at(-1)).toMatchObject({
+      pluginId: "unpacked",
+      status: "failed",
+      note: "unpacked changed its permissions or network access",
+    })
+    await handle.stop()
+  })
+
+  it("lets an installer swap the install copy without a second reload", async () => {
+    const h = harness()
+    const handle = await startPluginFileWatch(
+      [plugin({ id: "cli-built", source: "local", path: "/plugins/cli-built" })],
+      h.deps
+    )
+    // What `cognia plugin dev` installing a new build looks like: the staged
+    // tree renamed over the plugin directory.
+    h.emit({ type: "create", path: "/plugins/cli-built", timestamp: 1 })
+    h.emit({ type: "rename", path: "/plugins/cli-built", timestamp: 1 })
+    await flush()
+    expect(h.reloads).toEqual([])
+    // An edit inside the installed copy still reloads.
+    h.emit({ type: "modify", path: "/plugins/cli-built/dist/index.js", timestamp: 2 })
+    await flush()
+    expect(h.reloads).toEqual([{ pluginId: "cli-built", attempt: 1 }])
     await handle.stop()
   })
 })

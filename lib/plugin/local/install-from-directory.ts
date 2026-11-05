@@ -22,6 +22,7 @@ import { isTauri } from "@/lib/tauri"
 import { loggers } from "@cognia/logging"
 import type { PluginManifest } from "@/types/plugin"
 import { recordInstallOrigin } from "@/lib/plugin/origin/install-origin"
+import { forgetUnpackedSource, recordUnpackedSource } from "./unpacked-sources"
 import type { CogpackProvenance, PluginInstallOrigin } from "@/types/plugin/plugin-cogset"
 
 export interface InstallFromDirectoryReceipt {
@@ -111,12 +112,21 @@ export async function installPluginFromDirectory(
       { sourceDir, generatedFiles: options.generatedFiles }
     )
     loggers.plugin.info(`[local-install] installed ${result.pluginId} from ${sourceDir}`)
+    const origin = options.origin ?? { kind: "local", via: "directory" }
     await recordInstallOrigin({
       pluginId: result.pluginId,
       version: await resolveInstalledVersion(sourceDir, options),
-      origin: options.origin ?? { kind: "local", via: "directory" },
+      origin,
       viaCogpack: options.viaCogpack,
     })
+    // Remember the folder so the DevTools watcher can watch it instead of the
+    // installed copy. Any other origin (a cogpack's temp tree) has no folder
+    // worth watching, and must not leave an older one behind.
+    if (origin.kind === "local" && origin.via === "directory") {
+      recordUnpackedSource(result.pluginId, sourceDir)
+    } else {
+      forgetUnpackedSource(result.pluginId)
+    }
     return {
       pluginId: result.pluginId,
       warnings: result.warnings ?? [],

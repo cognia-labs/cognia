@@ -153,6 +153,12 @@
     "desktopOnly": "监听插件目录需要 Cognia 桌面端。",
     "empty": "没有可监听的插件。从本地目录安装一个，或运行 `cognia plugin dev`。",
     "skippedHeading": "未监听",
+    "watchedHeading": "正在监听的目录",
+    "via": {
+      "install": "已安装的副本",
+      "dev-folder": "Dev Mode 文件夹，每次重载前先从这里重新安装",
+      "unpacked-source": "通过“加载本地目录”选的源目录，每次重载前先从这里重新安装"
+    },
     "reason": {
       "needs-build": "需要先构建。应用内没有编译器，改源码不会产生新产物。请用 `cognia plugin dev`，它会先构建安装再请求重载。",
       "not-local-source": "从安装包装的，磁盘上没有可监听的源码目录。",

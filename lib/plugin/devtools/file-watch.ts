@@ -25,6 +25,14 @@
  * first reinstalls the plugin from it (`syncDevFolder`, which also renews its
  * `local-dev` receipt), then reloads it, and the reload activates a temporary
  * Pro IDE proxy rather than committing one.
+ *
+ * A plugin installed with "Load unpacked" is watched the same way in the
+ * folder it was loaded from (`syncUnpackedSource`), since the installed copy
+ * is not what its author edits.
+ *
+ * Reloads of one plugin never overlap: a save that lands mid-reload is replayed
+ * once afterwards. An installer swapping a watched install copy is not a save
+ * (`isInstallSwap`), since the installer reloads the plugin itself.
  */
 
 import type { Plugin } from "@/types/plugin"
@@ -35,6 +43,7 @@ import {
 } from "@/lib/cli-bridge/handlers/plugin-dev-reload"
 import { devFolders } from "@/lib/plugin/ide/dev-mode"
 import { recordHotReloadEvent } from "@/stores/plugin-runtime/hot-reload-history-store"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import { loggers } from "../core/logger"
 
 /** The event the Rust watcher emits. It carries no plugin id, only a path. */
@@ -88,11 +97,20 @@ export function watchEligibility(
   return { watchable: true }
 }
 
-interface WatchedRoot {
+/**
+ * What a watched folder is, which decides what happens before a reload.
+ *
+ * - `install`: the installed copy. Reloaded as it is.
+ * - `dev-folder`: a Managed IDE Dev Mode folder, reinstalled before each reload.
+ * - `unpacked-source`: the folder a plugin was "Load unpacked" from, reinstalled
+ *   before each reload (see `lib/plugin/local/unpacked-sources`).
+ */
+export type WatchedVia = "install" | "dev-folder" | "unpacked-source"
+
+export interface WatchedRoot {
   pluginId: string
   root: string
-  /** A Dev Mode plugin folder, synced into the install before each reload. */
-  devFolder?: boolean
+  via: WatchedVia
 }
 
 /**
@@ -104,15 +122,43 @@ interface WatchedRoot {
  * The roots are known exactly here, so nothing needs guessing.
  */
 export function resolveWatchedPluginId(
-  roots: readonly WatchedRoot[],
+  roots: readonly Pick<WatchedRoot, "pluginId" | "root">[],
   changedPath: string
 ): string | null {
-  let best: WatchedRoot | null = null
+  return resolveWatchedRoot(roots, changedPath)?.pluginId ?? null
+}
+
+function resolveWatchedRoot<T extends Pick<WatchedRoot, "pluginId" | "root">>(
+  roots: readonly T[],
+  changedPath: string
+): T | null {
+  let best: T | null = null
   for (const candidate of roots) {
     if (!isUnder(changedPath, candidate.root)) continue
     if (!best || candidate.root.length > best.root.length) best = candidate
   }
-  return best?.pluginId ?? null
+  return best
+}
+
+/**
+ * Whether a change is an installer replacing a watched install copy.
+ *
+ * Every installer (`cognia plugin dev`, Load unpacked, updates) stages a tree
+ * and renames it over the plugin directory, which the native watcher reports
+ * as events on the directory itself, while an edit inside it reports the file.
+ * The installer reloads the plugin itself, so answering the swap with a second
+ * reload only repeated the work, once per `cognia plugin dev` build while this
+ * watch was on.
+ */
+export function isInstallSwap(
+  root: Pick<WatchedRoot, "root" | "via">,
+  changedPath: string
+): boolean {
+  return root.via === "install" && trimSeparator(changedPath) === trimSeparator(root.root)
+}
+
+function trimSeparator(path: string): string {
+  return path.endsWith("/") || path.endsWith("\\") ? path.slice(0, -1) : path
 }
 
 function isUnder(changedPath: string, root: string): boolean {
@@ -136,6 +182,10 @@ export interface PluginFileWatchDependencies {
   devFolders: () => Array<{ path: string; pluginId: string }>
   /** Reinstall a plugin from its Dev Mode folder, ahead of its reload. */
   syncDevFolder: (path: string) => Promise<void>
+  /** "Load unpacked" folders still trusted for these plugins. */
+  unpackedSources: (pluginIds: string[]) => Promise<Array<{ pluginId: string; sourceDir: string }>>
+  /** Reinstall a plugin from its "Load unpacked" folder, ahead of its reload. */
+  syncUnpackedSource: (pluginId: string, sourceDir: string) => Promise<void>
   record: typeof recordHotReloadEvent
   now: () => number
   debounceMs: number
@@ -146,6 +196,8 @@ export interface PluginFileWatchDependencies {
 export interface PluginFileWatchHandle {
   /** Plugin ids this run is actually watching. */
   watchedPluginIds: string[]
+  /** Each watched folder and what it is, so the UI can say where it looks. */
+  roots: WatchedRoot[]
   stop: () => Promise<void>
 }
 
@@ -165,17 +217,31 @@ export async function startPluginFileWatch(
   const roots: WatchedRoot[] = folders.map((folder) => ({
     pluginId: folder.pluginId,
     root: folder.path,
-    devFolder: true,
+    via: "dev-folder",
   }))
-  for (const plugin of plugins) {
-    if (fromFolder.has(plugin.manifest.id)) continue
-    if (!watchEligibility(plugin, deps.isDesktop()).watchable) continue
-    if (!plugin.path) continue
-    roots.push({ pluginId: plugin.manifest.id, root: plugin.path })
+  const eligible = plugins.filter(
+    (plugin) =>
+      !fromFolder.has(plugin.manifest.id) && watchEligibility(plugin, deps.isDesktop()).watchable
+  )
+  // An unpacked plugin is watched in the folder it was loaded from, which is
+  // what its author edits; the installed copy is the installer's.
+  const unpacked = new Map(
+    (await deps.unpackedSources(eligible.map((plugin) => plugin.manifest.id))).map((entry) => [
+      entry.pluginId,
+      entry.sourceDir,
+    ])
+  )
+  for (const plugin of eligible) {
+    const sourceDir = unpacked.get(plugin.manifest.id)
+    if (sourceDir) {
+      roots.push({ pluginId: plugin.manifest.id, root: sourceDir, via: "unpacked-source" })
+    } else if (plugin.path) {
+      roots.push({ pluginId: plugin.manifest.id, root: plugin.path, via: "install" })
+    }
   }
 
   if (roots.length === 0) {
-    return { watchedPluginIds: [], stop: async () => {} }
+    return { watchedPluginIds: [], roots: [], stop: async () => {} }
   }
 
   await deps.startWatch(roots.map((entry) => entry.root))
@@ -192,8 +258,9 @@ export async function startPluginFileWatch(
 
   const unlisten = await deps.listen(FILE_CHANGE_EVENT, (payload) => {
     if (stopped) return
-    const pluginId = resolveWatchedPluginId(roots, payload.path)
-    if (!pluginId) return
+    const root = resolveWatchedRoot(roots, payload.path)
+    if (!root || isInstallSwap(root, payload.path)) return
+    const pluginId = root.pluginId
 
     const existing = pending.get(pluginId)
     if (existing) clearTimeout(existing)
@@ -232,8 +299,9 @@ export async function startPluginFileWatch(
       timestamp: deps.now(),
     })
     try {
-      const folder = roots.find((entry) => entry.pluginId === pluginId && entry.devFolder)
-      if (folder) await deps.syncDevFolder(folder.root)
+      const root = roots.find((entry) => entry.pluginId === pluginId)
+      if (root?.via === "dev-folder") await deps.syncDevFolder(root.root)
+      if (root?.via === "unpacked-source") await deps.syncUnpackedSource(pluginId, root.root)
       const result = await deps.reload(pluginId, attempt, deps.sessionId)
       deps.record({
         pluginId,
@@ -262,6 +330,7 @@ export async function startPluginFileWatch(
 
   return {
     watchedPluginIds: roots.map((entry) => entry.pluginId),
+    roots: roots.map((entry) => ({ ...entry })),
     stop: async () => {
       stopped = true
       for (const timer of pending.values()) clearTimeout(timer)
@@ -311,6 +380,16 @@ function defaultDependencies(): PluginFileWatchDependencies {
       const { installPluginFromDirectory } =
         await import("@/lib/plugin/local/install-from-directory")
       await installPluginFromDirectory(path)
+    },
+    unpackedSources: async (pluginIds) => {
+      const { listWatchableUnpackedSources } = await import("@/lib/plugin/local/unpacked-sources")
+      return listWatchableUnpackedSources(pluginIds)
+    },
+    syncUnpackedSource: async (pluginId, sourceDir) => {
+      const installed = usePluginStore.getState().plugins[pluginId]?.manifest
+      if (!installed) throw new Error(`Plugin not found: ${pluginId}`)
+      const { resyncUnpackedSource } = await import("@/lib/plugin/local/unpacked-sources")
+      await resyncUnpackedSource(pluginId, sourceDir, installed)
     },
     record: recordHotReloadEvent,
     now: () => Date.now(),
