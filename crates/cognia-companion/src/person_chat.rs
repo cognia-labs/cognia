@@ -86,7 +86,7 @@ impl PersonSessions {
                 owner
             }
         };
-        if owner != wanted { return Err("host_surface_forbidden"); }
+        if owner != wanted { return Err("session_partition_mismatch"); }
         Ok(())
     }
     /// The caller may drive `session`: it is theirs, or it is unclaimed and
@@ -98,14 +98,14 @@ impl PersonSessions {
         match claims.owners.get(session) {
             Some(owner) if owner.as_ref() == wanted => Ok(()),
             None if person.is_none() => Ok(()),
-            _ => Err("host_surface_forbidden"),
+            _ => Err("session_partition_mismatch"),
         }
     }
     fn check_existing(&self, session: &str, person: Option<&PersonPartition>) -> Result<(), &'static str> {
         self.sync(crate::security_store::security_store().as_ref())?;
         let claims = self.0.read();
         if let Some(owner) = claims.owners.get(session) {
-            if owner.as_ref() != person.map(|p| &p.account_id) { return Err("host_surface_forbidden"); }
+            if owner.as_ref() != person.map(|p| &p.account_id) { return Err("session_partition_mismatch"); }
         }
         Ok(())
     }
@@ -234,10 +234,10 @@ mod tests {
         before.bind("adr0253-operator", None).unwrap();
         // A restart: a new fence over the same store keeps every claim.
         let after = PersonSessions::default();
-        assert_eq!(after.bind("adr0253-bob", None), Err("host_surface_forbidden"));
-        assert_eq!(after.check("adr0253-bob", None), Err("host_surface_forbidden"));
+        assert_eq!(after.bind("adr0253-bob", None), Err("session_partition_mismatch"));
+        assert_eq!(after.check("adr0253-bob", None), Err("session_partition_mismatch"));
         after.check("adr0253-bob", Some(&bob)).unwrap();
-        assert_eq!(after.bind("adr0253-operator", Some(&bob)), Err("host_surface_forbidden"));
+        assert_eq!(after.bind("adr0253-operator", Some(&bob)), Err("session_partition_mismatch"));
         assert_eq!(after.owner_account("adr0253-bob"), Some(bob.account_id.clone()));
         // Seeing a session id while publishing records no owner, so a member
         // may still claim it afterwards.
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(after.forget_person(&bob.account_id), Ok(2));
         let rejoined = PersonSessions::default();
         rejoined.bind("adr0253-bob", None).unwrap();
-        assert_eq!(rejoined.bind("adr0253-operator", Some(&bob)), Err("host_surface_forbidden"));
+        assert_eq!(rejoined.bind("adr0253-operator", Some(&bob)), Err("session_partition_mismatch"));
     }
 
     #[test]

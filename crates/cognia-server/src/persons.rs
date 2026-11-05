@@ -216,11 +216,11 @@ impl Fleet {
     fn record_purge(&self, person: &PersonPartition) -> Result<(), &'static str> {
         let root = self.template.data_dir.join("persons").join(&person.account_id);
         // The boot scan finds a recorded purge through the partition directory.
-        std::fs::create_dir_all(&root).map_err(|_| "person_brain_unavailable")?;
+        std::fs::create_dir_all(&root).map_err(|_| "person_storage_failed")?;
         let data_generation = self.data_scopes.read().get(&person.account_id).map(|scope| scope.data_generation.clone());
         let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation, purging: true })
-            .map_err(|_| "person_brain_unavailable")?;
-        cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")
+            .map_err(|_| "person_storage_failed")?;
+        cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_storage_failed")
     }
     fn refresh(&self, entries: &BTreeMap<String, Entry>) {
         *self.snapshots.write() = entries.values().map(|entry| PersonBrainStatus {
@@ -318,13 +318,13 @@ impl Fleet {
                 return stopped.map(Admission::Wait).ok_or("person_brain_capacity");
             }
             let root = self.template.data_dir.join("persons").join(&person.account_id);
-            std::fs::create_dir_all(&root).map_err(|_| "person_brain_unavailable")?;
-            let key_existed = cognia_secrets::secret_store::get(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?.is_some();
-            let key = cognia_companion_rpc::headless::get_or_create_account_content_key(&person.account_id).map_err(|_| "person_brain_unavailable")?;
+            std::fs::create_dir_all(&root).map_err(|_| "person_storage_failed")?;
+            let key_existed = cognia_secrets::secret_store::get(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_storage_failed")?.is_some();
+            let key = cognia_companion_rpc::headless::get_or_create_account_content_key(&person.account_id).map_err(|_| "person_storage_failed")?;
             let receipt_scope = if key_existed { self.data_scopes.read().get(&person.account_id).cloned() } else { None }
                 .unwrap_or_else(|| PersonReceiptScope { account_id: person.account_id.clone(), data_generation: uuid::Uuid::new_v4().to_string() });
-            let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()), purging: false }).map_err(|_| "person_brain_unavailable")?;
-            cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")?;
+            let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()), purging: false }).map_err(|_| "person_storage_failed")?;
+            cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_storage_failed")?;
             self.data_scopes.write().insert(person.account_id.clone(), receipt_scope);
             let mut config = self.template.clone();
             config.account_id = person.account_id.clone(); config.account_content_key = key; config.data_dir = root;
@@ -348,11 +348,11 @@ impl Fleet {
 #[cognia_companion::person_partition::async_trait]
 impl PersonBrainFleet for Fleet {
     async fn acquire(&self, person: &PersonPartition) -> Result<Box<dyn PersonRequest>, &'static str> {
-        if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+        if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
         let guard = loop {
             let stopped = {
                 let mut entries = self.entries.lock().await;
-                if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+                if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
                 match self.admit_locked(&mut entries, person)? {
                     Admission::Ready(guard) => break guard,
                     Admission::Wait(stopped) => stopped,
@@ -363,7 +363,8 @@ impl PersonBrainFleet for Fleet {
         let deadline = tokio::time::Instant::now() + self.template.ready_timeout;
         loop {
             if ws_bridge::account_connected(&person.account_id) { return Ok(Box::new(guard)); }
-            if tokio::time::Instant::now() >= deadline || self.stopping.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+            if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
+            if tokio::time::Instant::now() >= deadline { return Err("person_brain_starting"); }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }
@@ -452,32 +453,32 @@ impl Fleet {
                 code
             })?;
         let policy = cognia_external_agent::presets::SpawnPolicy::from_env(&self.template.data_dir);
-        cognia_external_agent::person_workspace::person_workspace_remove(&policy, &person.account_id).map_err(|_| "person_brain_unavailable")?;
+        cognia_external_agent::person_workspace::person_workspace_remove(&policy, &person.account_id).map_err(|_| "person_storage_failed")?;
         if let Some(records) = &records {
             cognia_companion::host_surface_gate::person_remove_execution_records(records, person)?;
         }
         cognia_companion::audit::record_async("person_execution_purge", "local-operator", "service", "allow",
             serde_json::json!({"accountId":person.account_id,"stoppedRuns":stopped})).await;
-        self.ledger.purge_person_receipts(&person.account_id).map_err(|_| "person_brain_unavailable")?;
+        self.ledger.purge_person_receipts(&person.account_id).map_err(|_| "person_storage_failed")?;
         // ADR-0253 §6: what the Host keeps about the person outside the data
         // root goes too. Each step is idempotent, so a resumed purge repeats it.
         cognia_companion::person_chat::PERSON_SESSIONS.forget_person(&person.account_id)?;
         cognia_companion::org_policy::person_forget_usage(&person.org_id, &person.user_id).map_err(|error| {
             log::error!("person usage could not be removed: {error}");
-            "person_brain_unavailable"
+            "person_storage_failed"
         })?;
         let redacted = self.state.event_bus.forget_partition(&person.account_id);
         cognia_companion::audit::record_async("person_partition_forget", "local-operator", "service", "allow",
             serde_json::json!({"accountId":person.account_id,"redactedFrames":redacted})).await;
         // Destroy the DEK before removing any data; a partially failed purge
         // remains inaccessible and may be retried idempotently.
-        cognia_secrets::secret_store::delete(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?;
+        cognia_secrets::secret_store::delete(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_storage_failed")?;
         self.state.push_tokens.forget_account(&person.account_id);
         let root = self.template.data_dir.join("persons").join(&person.account_id);
         match std::fs::remove_dir_all(&root) {
-            Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}, Err(_) => return Err("person_brain_unavailable"),
+            Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}, Err(_) => return Err("person_storage_failed"),
         }
-        cognia_secrets::secret_store::delete(METADATA_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?;
+        cognia_secrets::secret_store::delete(METADATA_SERVICE, &person.account_id).map_err(|_| "person_storage_failed")?;
         Ok(())
     }
 }
@@ -736,7 +737,7 @@ mod tests {
         let _slot = lock_slot().await; clear_socket_for_testing();
         let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 1);
         let a = person("timeout-a");
-        assert!(matches!(fleet.acquire(&a).await, Err("person_brain_unavailable")));
+        assert!(matches!(fleet.acquire(&a).await, Err("person_brain_starting")));
         assert_eq!(fleet.entries.lock().await.get(&a.account_id).unwrap().usage.in_flight.load(Ordering::SeqCst), 0);
         let attempt = { let fleet = fleet.clone(); let a = a.clone(); tokio::spawn(async move { fleet.acquire(&a).await }) };
         tokio::time::sleep(Duration::from_millis(20)).await;

@@ -1281,7 +1281,9 @@ Both values must be positive integers; invalid configuration leaves the fleet
 uninstalled and Host data refused. In-flight requests prevent eviction and
 purge. If every slot is busy, another person receives retryable
 `503 person_brain_capacity`; if hello does not arrive within the brain ready
-timeout, the request receives retryable `503 person_brain_unavailable`.
+timeout, the request receives retryable `503 person_brain_starting`. The full
+set of person-partition refusals, each with one status and retry flag, is
+`protocol/person-partition-problems.json` (ADR-0253).
 Reserve memory for the operator brain, sidecar and Rust Host in addition to
 person brains. Size the cap from measured idle/peak RSS of the built person
 profile and the container memory limit; `8` is the rollout default, not an RSS

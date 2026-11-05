@@ -65,7 +65,7 @@ pub(super) async fn dispatch(
         )
     {
         cognia_companion::person_chat::person_claim_operator_control_args(&args)
-            .map_err(|_| crate::person_model::person_forbidden())?;
+            .map_err(crate::person_model::person_partition_refusal)?;
     }
     let result = match name {
         "person_agent_policy_get" => {
@@ -156,7 +156,7 @@ pub(super) async fn dispatch(
             };
             cognia_companion::person_chat::PERSON_SESSIONS
                 .check(&session_id, person.as_ref())
-                .map_err(|_| crate::person_model::person_forbidden())?;
+                .map_err(crate::person_model::person_partition_refusal)?;
             let command_id: Option<String> = optional_aliased(&args, "command_id", "commandId")?;
             claude_commands::claude_interrupt_impl_with_id(
                 &host.sidecar_state(),
@@ -379,7 +379,7 @@ pub(super) async fn dispatch(
                     .filter(|person| Some(person.account_id.as_str()) == tenant_id)
                     .ok_or_else(crate::person_model::person_forbidden)?;
                 cognia_companion::person_chat::person_check_session_args(&args, Some(&person))
-                    .map_err(|_| crate::person_model::person_forbidden())?;
+                    .map_err(crate::person_model::person_partition_refusal)?;
             }
             let command_id: Option<String> = optional_aliased(&args, "command_id", "commandId")?;
             claude_commands::claude_close_session_impl_with_id(
@@ -875,7 +875,7 @@ async fn send_arm(
     }
     cognia_companion::person_chat::PERSON_SESSIONS
         .bind(&session_id, None)
-        .map_err(|_| crate::person_model::person_forbidden())?;
+        .map_err(crate::person_model::person_partition_refusal)?;
     let device_id = caller.device_id;
     let mut options = options;
     let context = cognia_companion::remote_execution::global().register(

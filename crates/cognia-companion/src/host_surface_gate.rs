@@ -125,7 +125,10 @@ fn bound_device_person(
 fn map_authority_error(error: crate::workspace_access::WorkspaceAccessError) -> Refusal {
     use crate::workspace_access::WorkspaceAccessError::*;
     match error {
-        Unauthorized | Upstream { status: 400..=499 } => forbidden("host_surface_forbidden"),
+        // ADR-0253 §8: the collaboration plane says the person has no
+        // standing; the Host's own credential being refused is its outage.
+        Upstream { status: 403 | 404 } => forbidden("person_not_member"),
+        Unauthorized | Upstream { status: 400..=499 } => unavailable("host_authority_unavailable"),
         InvalidTarget(_) => forbidden("workspace_unresolved"),
         _ => unavailable("host_authority_unavailable"),
     }
@@ -801,7 +804,7 @@ pub async fn person_stop_execution(directory: Option<&std::path::Path>, person: 
     backend: &dyn cognia_external_agent::exec_backend::ExecBackend, timeout: Duration) -> Result<usize, &'static str> {
     tokio::time::timeout(timeout, async {
         let records = match directory {
-            Some(directory) => ExecutionBindings(directory.join("companion/execution-bindings.json")).read().map_err(|_| "person_brain_unavailable")?,
+            Some(directory) => ExecutionBindings(directory.join("companion/execution-bindings.json")).read().map_err(|_| "person_storage_failed")?,
             None => HashMap::new(),
         };
         let mut ids: std::collections::HashSet<String> = records.iter().filter(|(_, binding)| person_execution_owner(binding).as_ref() == Some(person))
@@ -839,18 +842,18 @@ pub async fn person_stop_execution(directory: Option<&std::path::Path>, person: 
 pub fn person_remove_execution_records(directory: &std::path::Path, person: &crate::person_partition::PersonPartition) -> Result<(), &'static str> {
     let _guard = BINDING_WRITER.lock();
     let store = ExecutionBindings(directory.join("companion/execution-bindings.json"));
-    let mut records = store.read().map_err(|_| "person_brain_unavailable")?;
+    let mut records = store.read().map_err(|_| "person_storage_failed")?;
     records.retain(|_, binding| person_execution_owner(binding).as_ref() != Some(person));
-    store.write(&records).map_err(|_| "person_brain_unavailable")?;
+    store.write(&records).map_err(|_| "person_storage_failed")?;
     let mounts = WorkspaceMounts::new(directory.join("companion/workspace-mounts.json"), None);
-    let mut roots = mounts.read().map_err(|_| "person_brain_unavailable")?;
-    roots.remove(&serde_json::to_string(&(&person.org_id, format!("person:{}", person.account_id))).map_err(|_| "person_brain_unavailable")?);
-    let parent = mounts.path.parent().ok_or("person_brain_unavailable")?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|_| "person_brain_unavailable")?;
+    let mut roots = mounts.read().map_err(|_| "person_storage_failed")?;
+    roots.remove(&serde_json::to_string(&(&person.org_id, format!("person:{}", person.account_id))).map_err(|_| "person_storage_failed")?);
+    let parent = mounts.path.parent().ok_or("person_storage_failed")?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|_| "person_storage_failed")?;
     use std::io::Write;
-    file.write_all(&serde_json::to_vec(&roots).map_err(|_| "person_brain_unavailable")?)
-        .and_then(|_| file.as_file().sync_all()).map_err(|_| "person_brain_unavailable")?;
-    file.persist(&mounts.path).map_err(|_| "person_brain_unavailable")?;
+    file.write_all(&serde_json::to_vec(&roots).map_err(|_| "person_storage_failed")?)
+        .and_then(|_| file.as_file().sync_all()).map_err(|_| "person_storage_failed")?;
+    file.persist(&mounts.path).map_err(|_| "person_storage_failed")?;
     Ok(())
 }
 
@@ -1129,8 +1132,8 @@ mod tests {
                     "client.write", Some("app_settings_update"), &device("device"), None, true).await.unwrap_err().code, "host_surface_forbidden");
             }
         }
-        assert_eq!(map_authority_error(crate::workspace_access::WorkspaceAccessError::Upstream { status: 404 }).code, "host_surface_forbidden");
-        for (result, expected) in [(2, "host_authority_unavailable"), (3, "host_principal_unbound"), (4, "host_surface_forbidden")] {
+        assert_eq!(map_authority_error(crate::workspace_access::WorkspaceAccessError::Upstream { status: 404 }).code, "person_not_member");
+        for (result, expected) in [(2, "host_authority_unavailable"), (3, "host_principal_unbound"), (4, "person_not_member")] {
             let provider = Fake { result, calls: AtomicUsize::new(0), workspaces: Mutex::new(vec![]) };
             assert_eq!(decide_with_person_fleet(DeploymentMode::MultiTenant, true, false, &provider,
                 "client.read", Some("session_list"), &device("device"), None, true).await.unwrap_err().code, expected);
@@ -1325,7 +1328,7 @@ mod tests {
                 capability, Some(arm), &device("device"), None, true).await.unwrap_err().code, "host_principal_unbound");
             let revoked = Fake { result: 4, calls: AtomicUsize::new(0), workspaces: Mutex::new(vec![]) };
             assert_eq!(decide_with_person_fleet(DeploymentMode::MultiTenant, true, false, &revoked,
-                capability, Some(arm), &device("device"), None, true).await.unwrap_err().code, "host_surface_forbidden");
+                capability, Some(arm), &device("device"), None, true).await.unwrap_err().code, "person_not_member");
             assert_eq!(decide_with_person_fleet(DeploymentMode::MultiTenant, true, false, &member,
                 capability, Some(arm), &device("service"), None, true).await.unwrap_err().code, "host_surface_forbidden");
         }
@@ -1342,7 +1345,7 @@ mod tests {
             assert!(member.workspaces.lock().iter().all(Option::is_none));
             assert_eq!(decide_with_person_fleet(DeploymentMode::MultiTenant, true, false, &member,
                 "host.observe", Some(arm), &device("device"), None, false).await.unwrap_err().code, "host_surface_forbidden");
-            for (result, code) in [(3, "host_principal_unbound"), (4, "host_surface_forbidden")] {
+            for (result, code) in [(3, "host_principal_unbound"), (4, "person_not_member")] {
                 let provider = Fake { result, calls: AtomicUsize::new(0), workspaces: Mutex::new(vec![]) };
                 assert_eq!(decide_with_person_fleet(DeploymentMode::MultiTenant, true, false, &provider,
                     "host.observe", Some(arm), &device("device"), None, true).await.unwrap_err().code, code);
@@ -1387,7 +1390,7 @@ mod tests {
         assert_eq!(audience(1, DeploymentMode::MultiTenant, false, "device").await.unwrap_err().code, "host_surface_forbidden");
         // A person no longer bound, or no longer in the org, gets no stream.
         assert_eq!(audience(3, DeploymentMode::MultiTenant, true, "device").await.unwrap_err().code, "host_principal_unbound");
-        assert_eq!(audience(4, DeploymentMode::MultiTenant, true, "device").await.unwrap_err().code, "host_surface_forbidden");
+        assert_eq!(audience(4, DeploymentMode::MultiTenant, true, "device").await.unwrap_err().code, "person_not_member");
         // A single-user Host is unchanged.
         assert_eq!(audience(1, DeploymentMode::SingleUser, false, "device").await.unwrap(), EventsAudience::Host);
 
@@ -1760,13 +1763,18 @@ mod tests {
     #[test]
     fn authority_transport_malformed_and_explicit_denials_have_distinct_statuses() {
         use crate::workspace_access::WorkspaceAccessError::*;
-        for error in [NotConfigured, Unreachable("offline".into()), Malformed("invalid JSON".into()), Upstream { status: 503 }] {
+        // ADR-0253 §8: the Host's own credential being refused, or any other
+        // failure to resolve standing, is the authority's outage, not a denial.
+        for error in [NotConfigured, Unreachable("offline".into()), Malformed("invalid JSON".into()),
+            Upstream { status: 503 }, Unauthorized, Upstream { status: 400 }] {
             let refusal = map_authority_error(error);
             assert_eq!(refusal.status, StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(refusal.code, "host_authority_unavailable");
         }
-        for error in [Unauthorized, Upstream { status: 403 }, Upstream { status: 404 }] {
-            assert_eq!(map_authority_error(error).status, StatusCode::FORBIDDEN);
+        for error in [Upstream { status: 403 }, Upstream { status: 404 }] {
+            let refusal = map_authority_error(error);
+            assert_eq!(refusal.status, StatusCode::FORBIDDEN);
+            assert_eq!(refusal.code, "person_not_member");
         }
     }
 }

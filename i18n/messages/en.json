@@ -16539,6 +16539,10 @@
         "hint": "The paired host refused this new chat — usually this device doesn't have Agent Control on that host. Ask the host's owner to grant it, then start the chat again.",
         "label": "Conversation not created on the host"
       },
+      "hostStateChannelUnavailable": {
+        "hint": "The connection to the Host wasn't ready in time, so the message wasn't sent. Your text is back in the composer; send it again once the Host is connected.",
+        "label": "Couldn't reach your organization's Host"
+      },
       "hostStateIntentRefused": {
         "hint": "The paired host refused this change, so nothing changed there. The reason is below; trying again gets the same answer until it changes.",
         "label": "Change not applied on the host"
@@ -16562,6 +16566,10 @@
       "managedPolicyRefused": {
         "hint": "The managed policy disallows this sandbox or approval mode. Choose an allowed mode or contact your administrator.",
         "label": "Managed policy refused"
+      },
+      "memberSendUnsupported": {
+        "hint": "Members send plain messages to the Host. This one carries something it can't take yet, such as a context resource, an @-addressed runtime or a re-run of an earlier turn. Your text is back in the composer.",
+        "label": "Your organization's Host can't take this message"
       },
       "memberUsageCapReached": {
         "hint": "You've used this month's model allowance from your organization. It resets at the start of next month; an org owner or admin can raise it.",
@@ -16603,6 +16611,10 @@
         "hint": "Organization settings such as shared model keys and allowed agents only exist on a Host that serves an organization. This Host serves one person, so there is nothing to configure here.",
         "label": "Needs an organization Host"
       },
+      "orgSuspended": {
+        "hint": "The Host's operator has suspended this organization. Your data is kept, but nothing runs until the organization is resumed.",
+        "label": "This organization is suspended"
+      },
       "partitionWorkspaceUnavailable": {
         "hint": "On a shared Host, your conversations live in your own personal space, which isn't linked to the Host's workspaces, so this one can't be moved into a workspace here.",
         "label": "No workspaces in your personal space"
@@ -16622,6 +16634,30 @@
       "personAgentExited": {
         "hint": "The agent's sandbox ended before it finished the turn. Send the message again to start a fresh agent. If this keeps happening, ask your organization's admin to check the Host.",
         "label": "Your agent stopped unexpectedly"
+      },
+      "personBrainBusy": {
+        "hint": "This can't happen while one of your replies is running on the Host. Wait for it to finish, or stop it, then try again.",
+        "label": "A reply is still running"
+      },
+      "personBrainStarting": {
+        "hint": "The Host didn't get your workspace ready in time. Try again in a moment.",
+        "label": "Your workspace on the Host is still starting"
+      },
+      "personBrainStopping": {
+        "hint": "The Host is stopping your workspace or shutting down. Try again in a moment.",
+        "label": "Your workspace on the Host is stopping"
+      },
+      "personNotMember": {
+        "hint": "Your organization's Host no longer lists you as a member, so it won't run anything for you. If this is a mistake, ask an org owner or admin to add you back.",
+        "label": "You're not a member of this organization"
+      },
+      "personPurging": {
+        "hint": "Your organization's Host is deleting your data there. Nothing can run for you until that finishes.",
+        "label": "Your data on this Host is being removed"
+      },
+      "personStorageFailed": {
+        "hint": "Your organization's Host failed to read or write your data. Ask the Host's operator to check its disk and logs.",
+        "label": "The Host couldn't access your data"
       },
       "personWorkspaceQuotaExceeded": {
         "hint": "Runs on a shared Host keep their files in your personal workspace, which has a size limit. Delete files you no longer need, then start the run again.",
@@ -16722,6 +16758,10 @@
       "serviceUnavailable": {
         "hint": "The service is temporarily unavailable — retry shortly.",
         "label": "Service unavailable"
+      },
+      "sessionPartitionMismatch": {
+        "hint": "The conversation belongs to another member or to the Host's operator, so your device can't read or change it.",
+        "label": "This conversation isn't yours on this Host"
       },
       "sessionResolutionFailed": {
         "hint": "The agent couldn't resume this conversation — start a new session.",

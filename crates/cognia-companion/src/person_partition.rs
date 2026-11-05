@@ -210,21 +210,36 @@ fn push_devices_in_store(frame: &crate::event_bus::EventFrame, registry: &crate:
 }
 
 pub async fn list_handler() -> Result<axum::Json<serde_json::Value>, cognia_problem::Problem> {
-    let fleet = fleet().ok_or_else(|| unavailable("host_data_unpartitioned"))?;
-    fleet.list().await.map(axum::Json).map_err(|_| unavailable("person_brain_unavailable"))
+    let fleet = fleet().ok_or_else(|| person_problem("host_data_unpartitioned"))?;
+    fleet.list().await.map(axum::Json).map_err(|_| person_problem("person_storage_failed"))
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PurgePerson { org: String, user: String }
 pub async fn purge_handler(axum::Json(body): axum::Json<PurgePerson>) -> Result<axum::Json<serde_json::Value>, cognia_problem::Problem> {
-    let fleet = fleet().ok_or_else(|| unavailable("host_data_unpartitioned"))?;
+    let fleet = fleet().ok_or_else(|| person_problem("host_data_unpartitioned"))?;
     let person = PersonPartition::new(body.org, body.user);
-    fleet.purge(&person).await.map_err(unavailable)?;
+    fleet.purge(&person).await.map_err(person_problem)?;
     Ok(axum::Json(serde_json::json!({ "accountId": person.account_id, "purged": true })))
 }
-pub fn unavailable(code: &'static str) -> cognia_problem::Problem {
-    cognia_problem::Problem::with_status(axum::http::StatusCode::SERVICE_UNAVAILABLE, code, code)
-        .retryable(true)
+/// ADR-0253 §8: the one status and retry flag of each code a member can see
+/// from the person-partition path (`protocol/person-partition-problems.json`).
+/// A code outside that list (an execution or workspace refusal passed through
+/// by a purge) keeps the transient answer it always had.
+pub fn person_problem_status(code: &str) -> (axum::http::StatusCode, bool) {
+    use axum::http::StatusCode;
+    match code {
+        "person_not_member" | "org_suspended" | "session_partition_mismatch" | "host_surface_forbidden"
+            | "host_data_unpartitioned" => (StatusCode::FORBIDDEN, false),
+        "person_purging" => (StatusCode::CONFLICT, false),
+        "person_brain_busy" => (StatusCode::CONFLICT, true),
+        "person_storage_failed" => (StatusCode::INTERNAL_SERVER_ERROR, false),
+        _ => (StatusCode::SERVICE_UNAVAILABLE, true),
+    }
+}
+pub fn person_problem(code: &'static str) -> cognia_problem::Problem {
+    let (status, retryable) = person_problem_status(code);
+    cognia_problem::Problem::with_status(status, code, code).retryable(retryable)
 }
 
 /// P6c shared fake fleet: tests exercise the actual middleware/dispatcher
@@ -242,7 +257,7 @@ pub mod person_test_support {
     #[async_trait::async_trait]
     impl PersonBrainFleet for PersonFleet {
         async fn acquire(&self, person: &PersonPartition) -> Result<Box<dyn PersonRequest>, &'static str> {
-            if self.person(&person.account_id).is_none() { return Err("person_brain_unavailable"); }
+            if self.person(&person.account_id).is_none() { return Err("person_brain_starting"); }
             Ok(Box::new(Request(PersonReceiptScope { account_id:person.account_id.clone(), data_generation:"p6c-data".into() })))
         }
         fn accepts_bridge(&self, account: &str, generation: &str) -> bool {
@@ -272,6 +287,20 @@ pub mod person_test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adr0253_every_problem_code_answers_with_its_catalog_status_and_retry_flag() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../protocol/person-partition-problems.json")).unwrap();
+        let codes = catalog["codes"].as_array().unwrap();
+        assert!(!codes.is_empty());
+        for entry in codes {
+            let code = entry["code"].as_str().unwrap();
+            let (status, retryable) = person_problem_status(code);
+            assert_eq!(u64::from(status.as_u16()), entry["status"].as_u64().unwrap(), "{code}");
+            assert_eq!(retryable, entry["retryable"].as_bool().unwrap(), "{code}");
+        }
+    }
     #[test]
     fn admission_latch_is_per_child_and_survives_revocation() {
         let authority = PersonBrainAuthority::new("admission-test".into());
@@ -309,7 +338,7 @@ mod tests {
         assert!(!event_visible_in_store(&frame, "p5-device", Some("tenant-p5"), &store));
         let legacy = bus.publish("sync://invalidate".into(), serde_json::json!({"table":"messages"}));
         assert!(event_visible(&legacy, "any-device", None));
-        assert!(unavailable("person_brain_capacity").retryable);
+        assert!(person_problem("person_brain_capacity").retryable);
     }
 
     #[test]

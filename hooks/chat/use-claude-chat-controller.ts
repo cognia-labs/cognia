@@ -144,6 +144,8 @@ import {
 } from "@/lib/db/messages"
 import {
   enqueueHostStateIntentIfAvailable,
+  enqueueHostStateIntentWhenAvailable,
+  HostStateChannelUnavailableError,
   hostStateSessionIntentAvailable,
   withdrawUnsentHostStateMessages,
   type WithdrawnHostStateMessage,
@@ -3243,13 +3245,18 @@ export function useClaudeChat() {
       // A sealed Router + Fusion turn (one the check before the build did not
       // foresee as host-state) is dispatched here, where its run is created:
       // host-state sends never stamp (ADR-0188 B1).
+      // ADR-0253 §9: on a member's person partition the HostState intent is
+      // the only write path. A turn it cannot carry is refused before any
+      // row is written; it never falls through to a direct send the Host
+      // would refuse after the user row was already kept here.
+      const memberOnPartition = getRuntimeSnapshot().host?.personPartition === true
       const hostStateEligible =
         localAuthorization !== undefined &&
         sendOptions.execution?.runtimeAdapter !== "vscode-chat" &&
         !isSessionAside &&
         hostStateSendEligible({
           pairedHost: turnsRunOnPairedHost(),
-          personPartition: getRuntimeSnapshot().host?.personPartition === true,
+          personPartition: memberOnPartition,
           fusionRun: Boolean(sendOptions.routerFusionRun),
           routerFusionStamped: Boolean(sendOptions.routerFusion),
           skipAppend,
@@ -3262,9 +3269,29 @@ export function useClaudeChat() {
           collaboration: Boolean(session?.collaboration),
           standalone: isStandaloneChatMode(),
         })
+      if (memberOnPartition && !hostStateEligible) {
+        store
+          .getState()
+          .setSessionDiagnostic(
+            sessionId,
+            createDiagnostic("memberSendUnsupported", { source: "chat", meta: { sessionId } })
+          )
+        // A person's own send is thrown, so the composer gives the text (and
+        // its attachments) back; an automated turn has no composer to return
+        // to and is refused like any other.
+        if (localAuthorization !== undefined) {
+          disarmBranch()
+          throw new Error("member_send_unsupported")
+        }
+        rejectSend("member_send_unsupported")
+        return
+      }
       if (hostStateEligible) {
         try {
-          const queued = await enqueueHostStateIntentIfAvailable({
+          const enqueueIntent = memberOnPartition
+            ? enqueueHostStateIntentWhenAvailable
+            : enqueueHostStateIntentIfAvailable
+          const queued = await enqueueIntent({
             sessionId,
             ...(callOptions?.backgroundDelivery
               ? { actionId: callOptions.backgroundDelivery.id }
@@ -3306,12 +3333,20 @@ export function useClaudeChat() {
             return
           }
         } catch (error) {
-          store
-            .getState()
-            .setSessionDiagnostic(
-              sessionId,
-              toDiagnostic(error, { source: "chat", meta: { sessionId } })
-            )
+          store.getState().setSessionDiagnostic(
+            sessionId,
+            error instanceof HostStateChannelUnavailableError
+              ? createDiagnostic("hostStateChannelUnavailable", {
+                  source: "chat",
+                  meta: { sessionId },
+                })
+              : toDiagnostic(error, { source: "chat", meta: { sessionId } })
+          )
+          // A member's send has no other path: the composer must get it back.
+          if (memberOnPartition) {
+            disarmBranch()
+            throw error
+          }
           rejectSend(error)
           return
         }

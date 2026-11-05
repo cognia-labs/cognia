@@ -408,12 +408,12 @@ async fn execute_inner(
     .await?;
     let _person_request = if let Some(person) = partition.as_ref() {
         let fleet = super::person_partition::fleet()
-            .ok_or_else(|| super::person_partition::unavailable("person_brain_unavailable"))?;
+            .ok_or_else(|| super::person_partition::person_problem("host_data_unpartitioned"))?;
         Some(
             fleet
                 .acquire(person)
                 .await
-                .map_err(super::person_partition::unavailable)?,
+                .map_err(super::person_partition::person_problem)?,
         )
     } else {
         None

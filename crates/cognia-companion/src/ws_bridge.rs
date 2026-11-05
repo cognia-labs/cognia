@@ -851,7 +851,7 @@ pub fn resolve_bridge_transport(state: &SharedState) -> Result<Arc<dyn BridgeTra
     if let Some(socket) = socket_bridge_transport_for_state(state) {
         return Ok(socket);
     }
-    if super::person_partition::current().is_some() { return Err("person_brain_unavailable".into()); }
+    if super::person_partition::current().is_some() { return Err("person_brain_starting".into()); }
     if let Some(renderer) = state.renderer.as_ref() {
         return Ok(renderer.bridge_transport());
     }
@@ -894,8 +894,9 @@ pub async fn ws_bridge_handler(
     let person_token = request.extensions().get::<crate::jwt::PersonBrainClaims>().cloned();
     if ctx.scope == "person-brain" && !person_token.as_ref().is_some_and(|token|
         super::person_partition::fleet().is_some_and(|fleet| fleet.accepts_bridge(&ctx.tenant_id, &token.generation))) {
-        return super::api::public_error_response(axum::http::StatusCode::FORBIDDEN,
-            "person_brain_unavailable", "person brain is not active", true, serde_json::json!({}));
+        let (status, retryable) = super::person_partition::person_problem_status("person_brain_stopping");
+        return super::api::public_error_response(status,
+            "person_brain_stopping", "person brain is not active", retryable, serde_json::json!({}));
     }
     ws.max_message_size(MAX_BRIDGE_FRAME_BYTES)
         .max_frame_size(MAX_BRIDGE_FRAME_BYTES)

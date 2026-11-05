@@ -20,7 +20,14 @@ import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
 import { act, renderHook } from "@testing-library/react"
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
-import type { WithdrawnHostStateMessage } from "@/lib/db/mobile-outbound-queue"
+import {
+  HostStateChannelUnavailableError,
+  type WithdrawnHostStateMessage,
+} from "@/lib/db/mobile-outbound-queue"
+import {
+  __resetRuntimeSnapshotForTesting,
+  setRuntimeSnapshot,
+} from "@/lib/runtime/runtime-snapshot-store"
 
 import { useAgentRuntimeStore, useExternalAgentStore } from "@/stores/agent"
 import type {
@@ -237,8 +244,14 @@ jest.mock("@/lib/sync/host-state-offered-actions", () => ({
   hostStateActionOfferedHere: (kind: string) => hostStateActionOfferedMock(kind),
 }))
 
+const enqueueHostStateIntentWhenAvailableMock = jest.fn()
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
+  ...jest.requireActual<typeof import("@/lib/db/mobile-outbound-queue")>(
+    "@/lib/db/mobile-outbound-queue"
+  ),
   enqueueHostStateIntentIfAvailable: (...args: unknown[]) => enqueueHostStateIntentMock(...args),
+  enqueueHostStateIntentWhenAvailable: (...args: unknown[]) =>
+    enqueueHostStateIntentWhenAvailableMock(...args),
   hostStateSessionIntentAvailable: (...args: unknown[]) =>
     hostStateSessionIntentAvailableMock(...args),
   withdrawUnsentHostStateMessages: (sessionId: string) =>
@@ -1890,6 +1903,98 @@ describe("useClaudeChat — actions", () => {
     expect(chatState.sessions["sess-1"]?.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "u1" })])
     )
+  })
+
+  describe("a member on a person partition (ADR-0253 §9)", () => {
+    beforeEach(() => {
+      turnsRunOnPairedHostMock.mockReturnValue(true)
+      enqueueHostStateIntentWhenAvailableMock.mockReset()
+      setRuntimeSnapshot({
+        target: { id: "member-host", kind: "companion", platform: "web", hostKind: "cloud" },
+        vaultState: "unlocked",
+        connectionState: "online",
+        host: {
+          compatible: true,
+          operations: ["host_state_submit"],
+          grants: [],
+          personPartition: true,
+        },
+      })
+    })
+    afterEach(() => __resetRuntimeSnapshotForTesting())
+
+    it("waits for the HostState channel and never dispatches the turn itself", async () => {
+      enqueueHostStateIntentWhenAvailableMock.mockResolvedValueOnce({
+        id: "action-1",
+        status: "pending",
+      })
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+
+      await act(async () => {
+        await result.current.send("from a member")
+      })
+
+      expect(enqueueHostStateIntentWhenAvailableMock).toHaveBeenCalledWith({
+        sessionId: "sess-1",
+        action: expect.objectContaining({ kind: "message.enqueue", text: "from a member" }),
+      })
+      expect(enqueueHostStateIntentMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: expect.objectContaining({ kind: "message.enqueue" }) })
+      )
+      expect(sendPromptMock).not.toHaveBeenCalled()
+    })
+
+    it("throws a channel that never came back to the composer, keeping no row", async () => {
+      enqueueHostStateIntentWhenAvailableMock.mockRejectedValueOnce(
+        new HostStateChannelUnavailableError()
+      )
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+
+      let thrown: unknown
+      await act(async () => {
+        await result.current.send("lost connection").catch((error: unknown) => {
+          thrown = error
+        })
+      })
+
+      expect(thrown).toBeInstanceOf(HostStateChannelUnavailableError)
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(persistMessagesMock).not.toHaveBeenCalled()
+      expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({ code: "hostStateChannelUnavailable" })
+      )
+      expect(
+        (chatState.sessions["sess-1"]?.messages as Array<{ role: string }> | undefined)?.some(
+          (message) => message.role === "user"
+        ) ?? false
+      ).toBe(false)
+    })
+
+    it("refuses a send the intent cannot carry instead of sending it directly", async () => {
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+
+      let thrown: unknown
+      await act(async () => {
+        await result.current
+          .send("with context", undefined, { sessionId: "sess-1", resourceContext: "notes" })
+          .catch((error: unknown) => {
+            thrown = error
+          })
+      })
+
+      expect(thrown).toEqual(new Error("member_send_unsupported"))
+      expect(enqueueHostStateIntentWhenAvailableMock).not.toHaveBeenCalled()
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(persistMessagesMock).not.toHaveBeenCalled()
+      expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({ code: "memberSendUnsupported" })
+      )
+    })
   })
 
   describe("final execution port lease admission", () => {

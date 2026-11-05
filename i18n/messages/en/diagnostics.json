@@ -500,6 +500,46 @@
     "personAgentAttachmentUnsupported": {
       "label": "The agent can't read this attachment",
       "hint": "Agents on a shared Host can read text and images, but not documents such as PDFs. Remove the document, or paste the parts you need as text."
+    },
+    "personNotMember": {
+      "label": "You're not a member of this organization",
+      "hint": "Your organization's Host no longer lists you as a member, so it won't run anything for you. If this is a mistake, ask an org owner or admin to add you back."
+    },
+    "orgSuspended": {
+      "label": "This organization is suspended",
+      "hint": "The Host's operator has suspended this organization. Your data is kept, but nothing runs until the organization is resumed."
+    },
+    "sessionPartitionMismatch": {
+      "label": "This conversation isn't yours on this Host",
+      "hint": "The conversation belongs to another member or to the Host's operator, so your device can't read or change it."
+    },
+    "personPurging": {
+      "label": "Your data on this Host is being removed",
+      "hint": "Your organization's Host is deleting your data there. Nothing can run for you until that finishes."
+    },
+    "personBrainStarting": {
+      "label": "Your workspace on the Host is still starting",
+      "hint": "The Host didn't get your workspace ready in time. Try again in a moment."
+    },
+    "personBrainStopping": {
+      "label": "Your workspace on the Host is stopping",
+      "hint": "The Host is stopping your workspace or shutting down. Try again in a moment."
+    },
+    "personBrainBusy": {
+      "label": "A reply is still running",
+      "hint": "This can't happen while one of your replies is running on the Host. Wait for it to finish, or stop it, then try again."
+    },
+    "personStorageFailed": {
+      "label": "The Host couldn't access your data",
+      "hint": "Your organization's Host failed to read or write your data. Ask the Host's operator to check its disk and logs."
+    },
+    "memberSendUnsupported": {
+      "label": "Your organization's Host can't take this message",
+      "hint": "Members send plain messages to the Host. This one carries something it can't take yet, such as a context resource, an @-addressed runtime or a re-run of an earlier turn. Your text is back in the composer."
+    },
+    "hostStateChannelUnavailable": {
+      "label": "Couldn't reach your organization's Host",
+      "hint": "The connection to the Host wasn't ready in time, so the message wasn't sent. Your text is back in the composer; send it again once the Host is connected."
     }
   },
   "detail": {

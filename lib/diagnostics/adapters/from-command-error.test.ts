@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+
 import { DIAGNOSTIC_CODES } from "@cognia/diagnostics"
 import { parseInvokeError } from "@/lib/tauri/command-error"
 
@@ -128,11 +131,26 @@ describe("multi-tenant Host refusals", () => {
     expect(DIAGNOSTIC_CODES.modelAccessUnavailable.actions).toEqual([{ kind: "dismiss" }])
     // Capacity is a concurrency ceiling, not a fault; both clear on retry.
     expect(diagnose("person_brain_capacity")).toBe("resourceLimit")
-    expect(diagnose("person_brain_unavailable")).toBe("serviceUnavailable")
+    // ADR-0253 §8: retired; an old Host's code is no longer recognized.
+    expect(isHostRefusalCode("person_brain_unavailable")).toBe(false)
     expect(isHostRefusalCode("person_brain_capacity")).toBe(true)
     // P5d: a partition has no workspaces to move a conversation into.
     expect(diagnose("workspace_unavailable")).toBe("partitionWorkspaceUnavailable")
     expect(DIAGNOSTIC_CODES.partitionWorkspaceUnavailable.retryable).toBe(false)
+  })
+
+  it("maps every person-partition refusal in the protocol catalog with its retry flag", () => {
+    const catalog = JSON.parse(
+      readFileSync(join(process.cwd(), "protocol/person-partition-problems.json"), "utf8")
+    ) as { codes: Array<{ code: string; status: number; retryable: boolean }> }
+    expect(catalog.codes.length).toBeGreaterThan(0)
+    for (const { code, retryable } of catalog.codes) {
+      expect(isHostRefusalCode(code)).toBe(true)
+      const mapped = diagnose(code)
+      expect(mapped).not.toBe("unknown")
+      // The diagnostic offers a retry exactly when the Host marks the code retryable.
+      expect({ code, retryable: DIAGNOSTIC_CODES[mapped].retryable }).toEqual({ code, retryable })
+    }
   })
 
   it("maps P6d execution refusals to actionable stable diagnostics", () => {

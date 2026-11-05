@@ -3856,7 +3856,7 @@ pub(super) async fn dispatch(
             cognia_companion::person_partition::current()
         };
         cognia_companion::person_chat::person_check_session_args(&args, person_partition.as_ref())
-            .map_err(|_| crate::person_model::person_forbidden())?;
+            .map_err(crate::person_model::person_partition_refusal)?;
     }
     validate_completion_command_fields(name, &args)?;
     // Remote Session Control gate. Runs for both the HTTP `rpc_handler` and

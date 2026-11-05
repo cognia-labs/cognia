@@ -13,7 +13,9 @@ import {
   enqueueCollabMutation,
   enqueueHostStateAction,
   enqueueHostStateIntentIfAvailable,
+  enqueueHostStateIntentWhenAvailable,
   enqueueUnlessQueued,
+  HostStateChannelUnavailableError,
   awaitHostStateIntentSettlement,
   hostOwnsSessionState,
   hostStateSessionIntentAvailable,
@@ -56,6 +58,9 @@ import {
 } from "@cognia/agent-config-types/host-state"
 
 const scope = { accountId: "acct_queue", targetId: "desktop-studio", routingGeneration: 1 }
+// Every current Host declares the namespace it writes HostState under; an
+// intent is never addressed without it (ADR-0253 §9).
+const hostStateScope = { accountId: scope.accountId, runtimeTargetId: scope.targetId }
 
 describe("mobile outbound queue target isolation", () => {
   beforeEach(async () => {
@@ -97,7 +102,7 @@ describe("mobile outbound queue target isolation", () => {
         target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
         vaultState: "unlocked",
         connectionState: "online",
-        host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+        host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
       })
       publishOfferedHostStateActions(scope.targetId, offered ? ["approval.respond"] : [])
       const sessionId = bound === "other-session" ? "s2" : "s1"
@@ -166,7 +171,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
     const pending = enqueueHostStateIntentIfAvailable({
       sessionId: "s1",
@@ -600,6 +605,7 @@ describe("mobile outbound queue target isolation", () => {
         compatible: true,
         operations: ["host_state_submit"],
         grants: [],
+        hostStateScope,
       },
     })
 
@@ -705,7 +711,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "mobile", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
     const draft = (actionId: string, text: string) =>
       enqueueHostStateIntentIfAvailable({
@@ -752,7 +758,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
 
     const row = await enqueueHostStateIntentIfAvailable({
@@ -773,7 +779,7 @@ describe("mobile outbound queue target isolation", () => {
         target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
         vaultState: "unlocked",
         connectionState: "online",
-        host: { compatible: true, operations, grants: [] },
+        host: { compatible: true, operations, grants: [], hostStateScope },
       })
     snapshot([])
     // Not negotiated.
@@ -794,6 +800,84 @@ describe("mobile outbound queue target isolation", () => {
     await expect(hostStateSessionIntentAvailable("s-avail")).resolves.toBe(true)
     await expect(hostStateSessionIntentAvailable("")).resolves.toBe(false)
     await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(0)
+  })
+
+  it("never addresses an intent to a Host that declared no HostState scope", async () => {
+    setRuntimeSnapshot({
+      target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
+      vaultState: "unlocked",
+      connectionState: "online",
+      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+    })
+    await getDb().hostStateChannels.put({
+      channel: sessionStateChannel(scope.targetId, "s-noscope"),
+      hostId: "host-authority",
+      hostGeneration: 1,
+      hostSeq: 1,
+      revision: 1,
+      digest: "digest",
+      state: createEmptyHostStateSession(scope.targetId, "s-noscope"),
+      updatedAt: 100,
+    })
+    // The local target id is what this client calls the pairing, not where the
+    // Host writes: without its declaration nothing is sent under a guess.
+    await expect(hostStateSessionIntentAvailable("s-noscope")).resolves.toBe(false)
+    await expect(
+      enqueueHostStateIntentIfAvailable({ sessionId: "s-noscope", action: { kind: "turn.abort" } })
+    ).resolves.toBeNull()
+    await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(0)
+  })
+
+  describe("a member's send waits for its Host's channel (ADR-0253 §9)", () => {
+    const message = (messageId: string) => ({
+      sessionId: "s-wait",
+      action: { kind: "message.enqueue" as const, messageId, text: "hello", attachments: [] },
+    })
+    const negotiate = () =>
+      setRuntimeSnapshot({
+        target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
+        vaultState: "unlocked",
+        connectionState: "online",
+        host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
+      })
+    const confirm = () =>
+      getDb().hostStateChannels.put({
+        channel: sessionStateChannel(scope.targetId, "s-wait"),
+        hostId: "host-authority",
+        hostGeneration: 1,
+        hostSeq: 1,
+        revision: 1,
+        digest: "digest",
+        state: createEmptyHostStateSession(scope.targetId, "s-wait"),
+        updatedAt: 100,
+      })
+
+    it("queues the intent once the channel is negotiated and confirmed", async () => {
+      const pending = enqueueHostStateIntentWhenAvailable(message("m-wait"), {
+        timeoutMs: 5_000,
+        pollMs: 5,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(0)
+      negotiate()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // Negotiated, but no confirmed snapshot to stamp the intent against yet.
+      await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(0)
+      await confirm()
+      await expect(pending).resolves.toMatchObject({ protocol: "host-state", status: "pending" })
+      await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(1)
+    })
+
+    it("gives up with a typed error and writes nothing when the channel never comes", async () => {
+      negotiate()
+      const refusal = enqueueHostStateIntentWhenAvailable(message("m-never"), {
+        timeoutMs: 30,
+        pollMs: 5,
+      })
+      await expect(refusal).rejects.toBeInstanceOf(HostStateChannelUnavailableError)
+      await expect(refusal).rejects.toMatchObject({ code: "host_state_channel_unavailable" })
+      await expect(getDb().mobileOutboundQueue.count()).resolves.toBe(0)
+    })
   })
 
   it("says the Host owns the session rows exactly when a target negotiated HostState submit", () => {
@@ -845,7 +929,7 @@ describe("mobile outbound queue target isolation", () => {
       },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: [], grants: [] },
+      host: { compatible: true, operations: [], grants: [], hostStateScope },
     })
 
     await expect(
@@ -873,7 +957,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
 
     const row = await enqueueHostStateIntentIfAvailable({
@@ -907,7 +991,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
 
     const row = await enqueueHostStateIntentIfAvailable({
@@ -973,7 +1057,7 @@ describe("mobile outbound queue target isolation", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      host: { compatible: true, operations: ["host_state_submit"], grants: [], hostStateScope },
     })
     await expect(
       enqueueHostStateIntentIfAvailable({
@@ -1526,7 +1610,7 @@ describe("Stop: turn fence, priority and withdrawal", () => {
       target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
       vaultState: "unlocked",
       connectionState: "online",
-      host: { compatible: true, operations, grants: [] },
+      host: { compatible: true, operations, grants: [], hostStateScope },
     })
   }
 

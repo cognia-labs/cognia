@@ -45,8 +45,20 @@ const HOST_REFUSAL_TO_DIAGNOSTIC: Readonly<Record<string, DiagnosticCode>> = {
   person_workspace_quota_exceeded: "personWorkspaceQuotaExceeded",
   person_workspace_unavailable: "personWorkspaceUnavailable",
   credential_delivery_refused: "credentialDeliveryRefused",
+  // ADR-0253 §8: every person-partition refusal in
+  // `protocol/person-partition-problems.json` has its own entry.
   person_brain_capacity: "resourceLimit",
-  person_brain_unavailable: "serviceUnavailable",
+  person_not_member: "personNotMember",
+  org_suspended: "orgSuspended",
+  session_partition_mismatch: "sessionPartitionMismatch",
+  person_purging: "personPurging",
+  person_brain_starting: "personBrainStarting",
+  person_brain_stopping: "personBrainStopping",
+  person_brain_busy: "personBrainBusy",
+  person_storage_failed: "personStorageFailed",
+  // ADR-0253 §9: the member device's own refusals of a send.
+  member_send_unsupported: "memberSendUnsupported",
+  host_state_channel_unavailable: "hostStateChannelUnavailable",
 }
 
 /**

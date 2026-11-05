@@ -987,6 +987,80 @@ export const DIAGNOSTIC_CODES: Readonly<Record<DiagnosticCode, DiagnosticCodeSpe
     actions: [{ kind: "dismiss" }],
     icon: "settings",
   },
+  // ADR-0253 §8: one entry per person-partition refusal. Status and retry
+  // flag follow `protocol/person-partition-problems.json`; the Host's own
+  // envelope flag still wins at the producer.
+  personNotMember: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "key",
+  },
+  orgSuspended: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "key",
+  },
+  sessionPartitionMismatch: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "key",
+  },
+  personPurging: {
+    severity: "info",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "database",
+  },
+  personBrainStarting: {
+    severity: "warning",
+    retryable: true,
+    persistent: false,
+    actions: [{ kind: "retry" }, { kind: "dismiss" }],
+    icon: "clock",
+  },
+  personBrainStopping: {
+    severity: "warning",
+    retryable: true,
+    persistent: false,
+    actions: [{ kind: "retry" }, { kind: "dismiss" }],
+    icon: "clock",
+  },
+  personBrainBusy: {
+    severity: "info",
+    retryable: true,
+    persistent: false,
+    actions: [{ kind: "retry" }, { kind: "dismiss" }],
+    icon: "clock",
+  },
+  personStorageFailed: {
+    severity: "error",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "database",
+  },
+  // ADR-0253 §9: the composer already has the text back; nothing to retry.
+  memberSendUnsupported: {
+    severity: "info",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "plug",
+  },
+  hostStateChannelUnavailable: {
+    severity: "warning",
+    retryable: false,
+    persistent: false,
+    actions: [{ kind: "dismiss" }],
+    icon: "network",
+  },
 
   // -------------------------------------------------------------- fallback
   unknown: {

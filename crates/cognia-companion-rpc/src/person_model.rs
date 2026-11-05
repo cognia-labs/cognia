@@ -10,6 +10,13 @@ type PersonResult<T> = Result<T, (StatusCode, Json<RpcError>)>;
 pub fn person_forbidden() -> (StatusCode, Json<RpcError>) {
     (StatusCode::FORBIDDEN, Json(RpcError::new("host_surface_forbidden", "host_surface_forbidden")))
 }
+/// ADR-0253 §8: a person-partition refusal with its catalog status and retry
+/// flag (`protocol/person-partition-problems.json`).
+pub fn person_partition_refusal(code: &'static str) -> (StatusCode, Json<RpcError>) {
+    let (status, retryable) = cognia_companion::person_partition::person_problem_status(code);
+    let error = RpcError::new(code, code);
+    (status, Json(if retryable { error.retryable() } else { error }))
+}
 /// A refused tool-less send, with the reason logged; the caller only sees the code.
 fn person_send_refused(reason: &'static str) -> (StatusCode, Json<RpcError>) {
     log::warn!("person chat send refused: {reason}");
@@ -165,8 +172,10 @@ pub(crate) async fn person_send_turn(host: &dyn crate::rpc_host::RpcHost,
         .join("persons").join(&person.account_id).join("person-chat-scratch");
     let mut options = person_send_options(options.unwrap_or_default(), &session_id, person,
         gateway, port, scratch.to_string_lossy().into_owned())?;
-    cognia_companion::person_chat::PERSON_SESSIONS.bind(&session_id, Some(person))
-        .map_err(|_| person_send_refused("session belongs to another partition"))?;
+    cognia_companion::person_chat::PERSON_SESSIONS.bind(&session_id, Some(person)).map_err(|code| {
+        log::warn!("person chat send refused: session fence ({code})");
+        person_partition_refusal(code)
+    })?;
     std::fs::create_dir_all(&scratch).map_err(|_| RpcError::internal("person chat scratch unavailable".into()))?;
     // The sidecar starts in its script directory, so a relative Host data dir
     // must be resolved here rather than interpreted in the child's cwd.
@@ -388,10 +397,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
         cognia_companion::person_chat::PERSON_SESSIONS.bind("p6c-operator-used", None).unwrap();
         let occupied = person_mint(MultiTenant, &a, request("p6c-operator-used"), &host.gateway, 19384).unwrap();
         assert_error(person_send_turn(&host, &a, 19384, "p6c-operator-used".into(), json!("claim-operator"), Some(options(&occupied)), None).await,
-            StatusCode::FORBIDDEN, "host_surface_forbidden");
+            StatusCode::FORBIDDEN, "session_partition_mismatch");
         let b_ticket = person_mint(MultiTenant, &b, request("p6c-frame-session"), &host.gateway, 19384).unwrap();
         assert_error(person_send_turn(&host, &b, 19384, "p6c-frame-session".into(), json!("steal"), Some(options(&b_ticket)), None).await,
-            StatusCode::FORBIDDEN, "host_surface_forbidden");
+            StatusCode::FORBIDDEN, "session_partition_mismatch");
         let state = std::sync::Arc::new(cognia_companion::CompanionState {
             secret:parking_lot::RwLock::new(vec![0;32]), deny_list:std::sync::Arc::new(cognia_companion::deny_list::DenyList::new()),
             renderer:None, runtime:cognia_companion::runtime::unwired(),
@@ -403,12 +412,12 @@ readline.createInterface({input:process.stdin}).on('line', line => {
         for scope in ["service", "owner"] {
             assert_error(crate::rpc::dispatch("agent_send", json!({"sessionId":"p6c-frame-session","prompt":"steal"}),
                 &state, &host, "operator", Some("operator"), Some(scope), cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext).await,
-                StatusCode::FORBIDDEN, "host_surface_forbidden");
+                StatusCode::FORBIDDEN, "session_partition_mismatch");
         }
         let foreign_interrupt = cognia_companion::person_partition::scope(Some(b.clone()),
             crate::rpc::dispatch("agent_interrupt", json!({"sessionId":"p6c-frame-session"}), &state, &host,
                 &format!("brain-{}", b.account_id), Some(&b.account_id), Some("person-brain"), cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext)).await;
-        assert_error(foreign_interrupt, StatusCode::FORBIDDEN, "host_surface_forbidden");
+        assert_error(foreign_interrupt, StatusCode::FORBIDDEN, "session_partition_mismatch");
         assert!(received.try_recv().is_err(), "refused turns must write no sidecar frame");
         let result = cognia_companion::person_partition::scope(Some(a.clone()),
             crate::rpc::dispatch("agent_interrupt", json!({"sessionId":"p6c-frame-session"}), &state, &host,
@@ -426,8 +435,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
                         cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext)).await
             }
         };
-        assert_error(brain_dispatch(b.clone(), "agent_close_session", "p6c-frame-session").await, StatusCode::FORBIDDEN, "host_surface_forbidden");
-        assert_error(brain_dispatch(a.clone(), "agent_close_session", "p6c-operator-used").await, StatusCode::FORBIDDEN, "host_surface_forbidden");
+        assert_error(brain_dispatch(b.clone(), "agent_close_session", "p6c-frame-session").await, StatusCode::FORBIDDEN, "session_partition_mismatch");
+        assert_error(brain_dispatch(a.clone(), "agent_close_session", "p6c-operator-used").await, StatusCode::FORBIDDEN, "session_partition_mismatch");
         assert_error(brain_dispatch(a.clone(), "claude_close_session", "p6c-frame-session").await, StatusCode::FORBIDDEN, "host_surface_forbidden");
         assert!(received.try_recv().is_err(), "refused closes must write no sidecar frame");
         for session in ["p6c-frame-session", "p6c-never-bound"] {

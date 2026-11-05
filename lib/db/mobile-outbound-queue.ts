@@ -93,56 +93,11 @@ export interface EnqueueHostStateIntentInput {
 }
 
 /**
- * Whether a session intent for `sessionId` would be queued right now: the
- * active target negotiated HostState and the session's channel has a
- * confirmed Host snapshot. The same checks `enqueueHostStateIntentIfAvailable`
- * makes before it writes, without writing — for a caller that must decide
- * BEFORE building a send whether the send will be handed to the Host (a
- * Router + Fusion seal is never made for a host-state send, ADR-0188). A
- * full outbox still throws at enqueue time; that is an error, not a fallback.
+ * The HostState target an intent is addressed to right now, or null when the
+ * active target did not negotiate HostState. Shared by the check and the
+ * enqueue below so they can never disagree (ADR-0253 §9).
  */
-export async function hostStateSessionIntentAvailable(sessionId: string): Promise<boolean> {
-  if (!sessionId) return false
-  const local = getActiveRuntimeTargetContext()
-  if (!local) return false
-  const key = getRuntimeTargetScopeKey()
-  const db = getDb()
-  const assertActive = () => {
-    if (key !== getRuntimeTargetScopeKey() || db.name !== getDb().name) {
-      throw new Error("Host-state database scope changed")
-    }
-  }
-  const negotiated = await hostStateSubmitNegotiated()
-  assertActive()
-  if (!negotiated) return false
-  const scope = (await negotiatedHostStateScope()) ?? {
-    accountId: local.accountId,
-    targetId: local.targetId,
-  }
-  assertActive()
-  const confirmed = await db.hostStateChannels.get(sessionStateChannel(scope.targetId, sessionId))
-  assertActive()
-  return Boolean(confirmed?.hostId) && (confirmed?.hostGeneration ?? 0) >= 1
-}
-
-/**
- * Persist a client intent against the latest confirmed Host snapshot.
- *
- * Returns null when the active target did not negotiate HostState or its
- * snapshot has not arrived yet, allowing the compatibility caller to keep its
- * legacy path. A device-bound approval also uses its original authenticated
- * RPC: a HostState worker has a different caller identity. Once eligible,
- * queue capacity, client sequence allocation and
- * row insertion happen in one transaction so two tabs cannot allocate the
- * same sequence or show optimism before durable storage succeeds.
- *
- * Throws {@link HostStateActionNotOfferedError} for an intent the Host's
- * `supportedActions` leaves out: it would only be refused after the fact, and
- * falling back to the legacy path would do it locally behind the Host's back.
- */
-export async function enqueueHostStateIntentIfAvailable(
-  input: EnqueueHostStateIntentInput
-): Promise<MobileOutboundJobRow | null> {
+async function hostStateIntentTarget() {
   const local = getActiveRuntimeTargetContext()
   if (!local) return null
   const key = getRuntimeTargetScopeKey()
@@ -155,6 +110,92 @@ export async function enqueueHostStateIntentIfAvailable(
   const negotiated = await hostStateSubmitNegotiated()
   assertActive()
   if (!negotiated) return null
+  // Host-state is addressed in the HOST's namespace. `local` is what this
+  // client calls the pairing; the Host writes its channels under the scope it
+  // declared in the manifest, and refuses a submit under any other target.
+  const scope = await negotiatedHostStateScope()
+  assertActive()
+  if (!scope) return null
+  return { local, db, assertActive, scope }
+}
+
+/**
+ * Whether a session intent for `sessionId` would be queued right now: the
+ * active target negotiated HostState and the session's channel has a
+ * confirmed Host snapshot. The same checks `enqueueHostStateIntentIfAvailable`
+ * makes before it writes, without writing — for a caller that must decide
+ * BEFORE building a send whether the send will be handed to the Host (a
+ * Router + Fusion seal is never made for a host-state send, ADR-0188). A
+ * full outbox still throws at enqueue time; that is an error, not a fallback.
+ */
+export async function hostStateSessionIntentAvailable(sessionId: string): Promise<boolean> {
+  if (!sessionId) return false
+  const target = await hostStateIntentTarget()
+  if (!target) return false
+  const confirmed = await target.db.hostStateChannels.get(
+    sessionStateChannel(target.scope.targetId, sessionId)
+  )
+  target.assertActive()
+  return Boolean(confirmed?.hostId) && (confirmed?.hostGeneration ?? 0) >= 1
+}
+
+/** The Host's HostState channel did not become ready while the intent waited. */
+export class HostStateChannelUnavailableError extends Error {
+  readonly code = "host_state_channel_unavailable"
+  constructor() {
+    super("host_state_channel_unavailable")
+    this.name = "HostStateChannelUnavailableError"
+  }
+}
+
+/** How long a member's send waits for its Host's channel (ADR-0253 §9). */
+export const HOST_STATE_CHANNEL_WAIT_MS = 30_000
+const HOST_STATE_CHANNEL_POLL_MS = 250
+
+/**
+ * {@link enqueueHostStateIntentIfAvailable} for a caller with no other path
+ * (a member on a person partition, ADR-0253 §9): while the channel is not
+ * negotiated or its snapshot is not confirmed yet, wait for it instead of
+ * returning null. Throws {@link HostStateChannelUnavailableError} once the
+ * wait ends, so the caller can give the text back; never writes anything
+ * before the intent is durable in the outbox.
+ */
+export async function enqueueHostStateIntentWhenAvailable(
+  input: EnqueueHostStateIntentInput,
+  options: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<MobileOutboundJobRow> {
+  const deadline = Date.now() + (options.timeoutMs ?? HOST_STATE_CHANNEL_WAIT_MS)
+  const pollMs = options.pollMs ?? HOST_STATE_CHANNEL_POLL_MS
+  for (;;) {
+    const row = await enqueueHostStateIntentIfAvailable(input)
+    if (row) return row
+    if (Date.now() >= deadline) throw new HostStateChannelUnavailableError()
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+}
+
+/**
+ * Persist a client intent against the latest confirmed Host snapshot.
+ *
+ * Returns null when the active target did not negotiate HostState or its
+ * snapshot has not arrived yet: a desktop or single-user pairing then keeps
+ * its direct path, and a member waits through
+ * {@link enqueueHostStateIntentWhenAvailable}. A device-bound approval also uses its original authenticated
+ * RPC: a HostState worker has a different caller identity. Once eligible,
+ * queue capacity, client sequence allocation and
+ * row insertion happen in one transaction so two tabs cannot allocate the
+ * same sequence or show optimism before durable storage succeeds.
+ *
+ * Throws {@link HostStateActionNotOfferedError} for an intent the Host's
+ * `supportedActions` leaves out: it would only be refused after the fact, and
+ * falling back to the legacy path would do it locally behind the Host's back.
+ */
+export async function enqueueHostStateIntentIfAvailable(
+  input: EnqueueHostStateIntentInput
+): Promise<MobileOutboundJobRow | null> {
+  const target = await hostStateIntentTarget()
+  if (!target) return null
+  const { local, db, assertActive, scope } = target
   if (input.action.kind === "approval.respond" && input.sessionId) {
     const { peekRemoteApprovalContext } = await import("@/lib/claude/ipc")
     assertActive()
@@ -164,16 +205,6 @@ export async function enqueueHostStateIntentIfAvailable(
     if (peekRemoteApprovalContext(input.sessionId, input.action.requestId)) return null
   }
   const turnFence = isLiveControlIntent(input.action) && (await hostStateTurnFenceNegotiated())
-  assertActive()
-  // Host-state is addressed in the HOST's namespace. `local` is what this
-  // client calls the pairing; the Host writes its channels under the scope it
-  // declared in the manifest, and refuses a submit under any other target. A
-  // Host too old to declare one still gets the local id, which is what it
-  // matched before.
-  const scope = (await negotiatedHostStateScope()) ?? {
-    accountId: local.accountId,
-    targetId: local.targetId,
-  }
   assertActive()
   if (!hostStateActionOffered(input.action.kind, scope.targetId)) {
     throw new HostStateActionNotOfferedError(input.action.kind)
@@ -1258,13 +1289,10 @@ export interface WithdrawnHostStateMessage {
 export async function withdrawUnsentHostStateMessages(
   sessionId: string
 ): Promise<WithdrawnHostStateMessage[]> {
-  const local = getActiveRuntimeTargetContext()
-  if (!local || !sessionId) return []
-  if (!(await hostStateSubmitNegotiated())) return []
-  const scope = (await negotiatedHostStateScope()) ?? {
-    accountId: local.accountId,
-    targetId: local.targetId,
-  }
+  if (!sessionId) return []
+  const target = await hostStateIntentTarget()
+  if (!target) return []
+  const { local, scope } = target
   const channel = sessionStateChannel(scope.targetId, sessionId)
   const db = getDb()
   return db.transaction("rw", db.mobileOutboundQueue, db.messages, async () => {

@@ -1,0 +1,17 @@
+{
+  "$comment": "ADR-0253 §8: every problem code a member can see from a multi-tenant Host's person-partition path, each with one HTTP status and one retry flag. Rust: crates/cognia-companion/src/person_partition.rs person_problem. Client: lib/diagnostics/adapters/from-command-error.ts. Both are pinned against this file.",
+  "codes": [
+    { "code": "person_not_member", "status": 403, "retryable": false },
+    { "code": "org_suspended", "status": 403, "retryable": false },
+    { "code": "session_partition_mismatch", "status": 403, "retryable": false },
+    { "code": "host_surface_forbidden", "status": 403, "retryable": false },
+    { "code": "host_data_unpartitioned", "status": 403, "retryable": false },
+    { "code": "person_purging", "status": 409, "retryable": false },
+    { "code": "person_brain_busy", "status": 409, "retryable": true },
+    { "code": "person_storage_failed", "status": 500, "retryable": false },
+    { "code": "person_brain_starting", "status": 503, "retryable": true },
+    { "code": "person_brain_stopping", "status": 503, "retryable": true },
+    { "code": "person_brain_capacity", "status": 503, "retryable": true },
+    { "code": "host_authority_unavailable", "status": 503, "retryable": true }
+  ]
+}

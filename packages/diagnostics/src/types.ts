@@ -436,6 +436,33 @@ export type DiagnosticCode =
   | "personAgentExited"
   /** A member's agent was sent an attachment it has no prompt slot for (P6e). */
   | "personAgentAttachmentUnsupported"
+  /** ADR-0253 §8: the person has no standing in the organization. */
+  | "personNotMember"
+  /** ADR-0253 §4: the organization is suspended; data is kept, nothing runs. */
+  | "orgSuspended"
+  /** ADR-0253 §8: the session belongs to another partition or to the operator. */
+  | "sessionPartitionMismatch"
+  /** ADR-0253 §6: the person's partition is being purged. */
+  | "personPurging"
+  /** ADR-0253 §8: the person's brain did not become ready in time. */
+  | "personBrainStarting"
+  /** ADR-0253 §8: the fleet or this person's brain is stopping. */
+  | "personBrainStopping"
+  /** ADR-0253 §8: a purge was refused while one of the person's turns runs. */
+  | "personBrainBusy"
+  /** ADR-0253 §8: the Host could not read or write the partition's storage. */
+  | "personStorageFailed"
+  /**
+   * ADR-0253 §9: a member's send the HostState intent cannot carry. A person
+   * partition has no other write path, so it is refused before any row is
+   * written and the text goes back to the composer.
+   */
+  | "memberSendUnsupported"
+  /**
+   * ADR-0253 §9: a member's send waited for the HostState channel to be
+   * negotiated and confirmed, and it never was.
+   */
+  | "hostStateChannelUnavailable"
   | "routingNoCandidates"
   // --- Cognia internals ---
   | "settingsLoadFailed"
