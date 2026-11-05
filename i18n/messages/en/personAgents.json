@@ -25,6 +25,11 @@
   "starting": "Starting {agent}…",
   "noExecution": "Agents aren't available to members on this Host yet.",
   "noneAllowed": "Your organization hasn't allowed any agents yet.",
+  "refreshFailed": "Couldn't reach your organization's Host just now, so this may be out of date.",
+  "startError": {
+    "unavailable": "This agent can't start a conversation right now: your organization no longer serves a model it can use.",
+    "failed": "The new conversation couldn't be started. Try again."
+  },
   "badge": {
     "default": "Default",
     "noKey": "No key",

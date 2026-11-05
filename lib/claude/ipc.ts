@@ -7,7 +7,6 @@ import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { UIMessage } from "@/types"
 import { transport } from "@/lib/tauri"
 import { detectHostProfile } from "@/lib/platform/capabilities"
-import { personChatCapability } from "@/lib/headless/person-chat"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
 import type {
@@ -1248,14 +1247,13 @@ export async function closeSession(
   sessionId: string,
   options?: { commandId?: string }
 ): Promise<void> {
-  // A tool-less person brain's channel admits only agent_close_session (P6c).
-  const command =
-    options?.commandId || personChatCapability().chat === "tool-less"
-      ? "agent_close_session"
-      : "claude_close_session"
-  await transport.call(command, {
+  // Always the canonical command (ADR-0090): it is the one a person brain's
+  // channel and a member device's grant admit (P6c, ADR-0253 G12), and it
+  // closes exactly as the legacy `claude_close_session` alias does. Its
+  // idempotency key is minted here when the caller has none.
+  await transport.call("agent_close_session", {
     sessionId,
-    ...(options?.commandId ? { commandId: options.commandId } : {}),
+    commandId: options?.commandId ?? crypto.randomUUID(),
   })
   sentMcpConfigurations.delete(sessionId)
 }

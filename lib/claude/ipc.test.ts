@@ -1017,22 +1017,21 @@ describe("Claude session commands", () => {
     })
   })
 
-  it("closeSession invokes the close command", async () => {
+  it("adr0253 closeSession always sends the canonical command with an idempotency key", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     await closeSession("sess-4")
-    expect(callSpy).toHaveBeenCalledWith("claude_close_session", { sessionId: "sess-4" })
-  })
-
-  it("closeSession uses the admitted agent_close_session in a tool-less person brain", async () => {
-    const { initializePersonChat } = await import("@/lib/headless/person-chat")
-    initializePersonChat("person-brain", { COGNIA_PERSON_CHAT: "tool-less" })
-    try {
-      callSpy.mockResolvedValueOnce(undefined)
-      await closeSession("sess-5")
-      expect(callSpy).toHaveBeenCalledWith("agent_close_session", { sessionId: "sess-5" })
-    } finally {
-      initializePersonChat("operator", {})
-    }
+    // The legacy alias is outside a member device's and a person brain's grant.
+    expect(callSpy).toHaveBeenCalledWith("agent_close_session", {
+      sessionId: "sess-4",
+      commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
+    callSpy.mockResolvedValueOnce(undefined)
+    await closeSession("sess-5", { commandId: "close-5" })
+    expect(callSpy).toHaveBeenCalledWith("agent_close_session", {
+      sessionId: "sess-5",
+      commandId: "close-5",
+    })
+    expect(callSpy).not.toHaveBeenCalledWith("claude_close_session", expect.anything())
   })
 
   it("getSidecarStatus returns the parsed boolean", async () => {

@@ -33113,6 +33113,11 @@
       "no-key": "Your organization has no model key that can run this agent. Ask an admin to add one.",
       "not-allowed": "Your organization no longer allows this agent. Start a new conversation with one it allows."
     },
+    "refreshFailed": "Couldn't reach your organization's Host just now, so this may be out of date.",
+    "startError": {
+      "failed": "The new conversation couldn't be started. Try again.",
+      "unavailable": "This agent can't start a conversation right now: your organization no longer serves a model it can use."
+    },
     "startHeading": "Start a new conversation with",
     "starting": "Starting {agent}…",
     "title": "Your organization's agents"

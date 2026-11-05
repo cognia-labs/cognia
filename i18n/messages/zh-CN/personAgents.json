@@ -25,6 +25,11 @@
   "starting": "正在启动 {agent}…",
   "noExecution": "这台 Host 暂未向成员开放智能体。",
   "noneAllowed": "组织还没有允许任何智能体。",
+  "refreshFailed": "暂时无法连接组织的主机，以下信息可能已过时。",
+  "startError": {
+    "unavailable": "该智能体现在无法开始对话：组织已不再提供它可用的模型。",
+    "failed": "无法开始新对话，请重试。"
+  },
   "badge": {
     "default": "默认",
     "noKey": "无密钥",

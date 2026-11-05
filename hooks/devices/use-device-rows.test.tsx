@@ -14,7 +14,11 @@ import { resetWanWakeOverridesForTests, wakeDeviceForWan } from "@/lib/signaling
 import { buildLocalHostFeatureManifest } from "@/lib/platform/host-feature-manifest"
 
 import { COMPANION_HOST_LABEL_EVENT } from "@/lib/companion/host-orchestration"
-import { useDeviceRows } from "./use-device-rows"
+import {
+  COMPANION_HOST_REFRESH_MS,
+  DEVICE_POLL_INTERVAL_MS,
+  useDeviceRows,
+} from "./use-device-rows"
 
 const pairedRows: unknown[] = []
 let companionHost: unknown = null
@@ -556,6 +560,64 @@ describe("browser Companion Host inventory", () => {
       "absent"
     )
     expect(result.current.rows[0].runtime.isRoutingTarget).toBe(false)
+  })
+
+  it("adr0253 asks a member's Host only for the member's own manifest", async () => {
+    runtimeSnapshot = {
+      ...runtimeSnapshot,
+      host: { compatible: true, operations: [], grants: [], personPartition: true },
+    } as typeof runtimeSnapshot
+    const asked: string[] = []
+    const answer = transportCallImpl
+    transportCallImpl = async (name) => {
+      asked.push(name)
+      return answer(name)
+    }
+    const { result } = renderHook(() => useDeviceRows())
+    await waitFor(() =>
+      expect(result.current.rows.find((row) => row.kind === "remote-host")?.connectionState).toBe(
+        "ready"
+      )
+    )
+    // `host_capabilities` describes the operator's machine; a member is refused it.
+    expect(asked).toContain("host_feature_manifest")
+    expect(asked).not.toContain("host_capabilities")
+    expect(result.current.rows.find((row) => row.kind === "remote-host")?.connectionError).toBe(
+      undefined
+    )
+  })
+
+  it("adr0253 re-reads the paired Host on its own cadence, not every presence poll", async () => {
+    jest.useFakeTimers()
+    try {
+      const asked: string[] = []
+      const answer = transportCallImpl
+      transportCallImpl = async (name) => {
+        asked.push(name)
+        return answer(name)
+      }
+      const manifests = () => asked.filter((name) => name === "host_feature_manifest").length
+      const { result } = renderHook(() => useDeviceRows())
+      await waitFor(() => expect(manifests()).toBe(1))
+      for (let elapsed = 0; elapsed < COMPANION_HOST_REFRESH_MS - DEVICE_POLL_INTERVAL_MS;) {
+        elapsed += DEVICE_POLL_INTERVAL_MS
+        await act(async () => {
+          jest.advanceTimersByTime(DEVICE_POLL_INTERVAL_MS)
+        })
+      }
+      expect(manifests()).toBe(1)
+      await act(async () => {
+        jest.advanceTimersByTime(DEVICE_POLL_INTERVAL_MS)
+      })
+      await waitFor(() => expect(manifests()).toBe(2))
+      // Asked for by the person: read at once.
+      await act(async () => {
+        await result.current.refresh()
+      })
+      expect(manifests()).toBe(3)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it("shows a paired Host's new name as soon as it is renamed", async () => {

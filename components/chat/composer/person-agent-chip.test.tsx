@@ -126,6 +126,32 @@ describe("PersonAgentChip", () => {
     })
   })
 
+  it("adr0253 says so when starting the conversation fails, and keeps the panel open", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    const onStartConversation = jest.fn(async () => {
+      throw new Error("session create refused")
+    })
+    renderChip({ onStartConversation })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("person-agent-start-claude-agent-acp"))
+    })
+    expect(onStartConversation).toHaveBeenCalled()
+    expect(screen.getByTestId("person-agent-start-error")).toHaveTextContent("startError.failed")
+    // The item is usable again for another try.
+    expect(screen.getByTestId("person-agent-start-claude-agent-acp")).toHaveAttribute(
+      "aria-disabled",
+      "false"
+    )
+    warn.mockRestore()
+  })
+
+  it("adr0253 marks agents read before a failed refresh as possibly out of date", () => {
+    renderChip({ refreshFailed: true })
+    expect(screen.getByTestId("person-agent-stale")).toHaveTextContent("refreshFailed")
+    renderChip({ refreshFailed: false })
+    expect(screen.getAllByTestId("person-agent-stale")).toHaveLength(1)
+  })
+
   it("p6g labels an agent without a key and never starts it", async () => {
     const { onStartConversation } = renderChip()
     const codex = screen.getByTestId("person-agent-start-codex-acp")

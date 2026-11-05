@@ -35,6 +35,8 @@ export interface PersonAgentChipProps {
   /** The member's agents, as `usePersonAgents` reads them. */
   agents: PersonAgentsManifest
   refresh: () => Promise<void>
+  /** The last re-read failed; `agents` is the answer before it. */
+  refreshFailed?: boolean
   disabled?: boolean
   className?: string
   /** Icon only, for a crowded toolbar; the tooltip carries the words. */
@@ -51,6 +53,7 @@ export function PersonAgentChip({
   session = {},
   agents,
   refresh,
+  refreshFailed = false,
   disabled,
   className,
   dense,
@@ -60,6 +63,8 @@ export function PersonAgentChip({
   const format = useFormatter()
   const [open, setOpen] = useState(false)
   const [starting, setStarting] = useState<string | null>(null)
+  /** Why the last pick did not start a conversation, shown in the panel. */
+  const [startError, setStartError] = useState<"unavailable" | "failed" | null>(null)
 
   // Spend moves with every turn: re-read when the chip appears and on open.
   useEffect(() => {
@@ -87,13 +92,23 @@ export function PersonAgentChip({
           ? t("allowance.unlimited", { spent: tokens(allowance.spentTokens) })
           : null
 
+  // The agent can stop being startable between showing the list and the pick
+  // (a refresh landed meanwhile), and starting can fail; both are said in the
+  // panel rather than ignored (ADR-0253 G11).
   const start = async (runtimeId: string) => {
+    setStartError(null)
     const seed = personAgentSeed(agents, runtimeId, session)
-    if (!seed) return
+    if (!seed) {
+      setStartError("unavailable")
+      return
+    }
     setStarting(runtimeId)
     try {
       await onStartConversation(seed)
       setOpen(false)
+    } catch (error) {
+      console.warn("[person-agents] starting a conversation failed", error)
+      setStartError("failed")
     } finally {
       setStarting(null)
     }
@@ -108,6 +123,7 @@ export function PersonAgentChip({
         open={open}
         onOpenChange={(next) => {
           setOpen(next)
+          setStartError(null)
           if (next) void refresh()
         }}
         title={t("title")}
@@ -166,6 +182,20 @@ export function PersonAgentChip({
               data-testid="person-agent-allowance"
             >
               {allowanceLine}
+            </p>
+          ) : null}
+          {refreshFailed ? (
+            <p className="text-muted-foreground" data-testid="person-agent-stale">
+              {t("refreshFailed")}
+            </p>
+          ) : null}
+          {startError ? (
+            <p
+              className="text-amber-600 dark:text-amber-400"
+              role="alert"
+              data-testid="person-agent-start-error"
+            >
+              {t(`startError.${startError}`)}
             </p>
           ) : null}
         </div>

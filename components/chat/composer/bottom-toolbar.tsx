@@ -257,6 +257,7 @@ function GenericBottomToolbar({
       <PersonAgentChip
         agents={personAgents.agents}
         refresh={personAgents.refresh}
+        refreshFailed={personAgents.refreshFailed}
         disabled={isStreaming}
         className={TOOLBAR_CHIP}
         dense={dense}

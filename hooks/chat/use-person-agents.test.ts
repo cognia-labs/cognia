@@ -11,7 +11,11 @@ import {
   setRuntimeSnapshot,
 } from "@/lib/runtime/runtime-snapshot-store"
 
-import { refreshPersonAgents, usePersonAgents } from "./use-person-agents"
+import {
+  __resetPersonAgentsRefreshForTesting,
+  refreshPersonAgents,
+  usePersonAgents,
+} from "./use-person-agents"
 
 const agents = (spentTokens: number): PersonAgentsManifest => ({
   allowedAgents: [{ runtimeId: "claude-agent-acp", available: true, providers: ["deepseek"] }],
@@ -42,7 +46,10 @@ const manifest = (personAgents?: PersonAgentsManifest) =>
     )
   )
 
-beforeEach(() => __resetRuntimeSnapshotForTesting())
+beforeEach(() => {
+  __resetRuntimeSnapshotForTesting()
+  __resetPersonAgentsRefreshForTesting()
+})
 
 describe("usePersonAgents", () => {
   it("p6g shows the member's agents only on their own partition", () => {
@@ -61,18 +68,37 @@ describe("usePersonAgents", () => {
     expect(getRuntimeSnapshot().host?.operations).toEqual(["host_state_submit"])
   })
 
-  it("p6g keeps the last answer when the read fails, is malformed or omits them", async () => {
+  it("adr0253 keeps the last answer on a failed or unreadable read, and says so", async () => {
     connect({ personPartition: true, personAgents: agents(1) })
     for (const readManifest of [
       async () => {
         throw new Error("offline")
       },
       async () => ({ schemaVersion: 2 }),
-      async () => manifest(undefined),
     ]) {
-      await refreshPersonAgents({ readManifest })
+      const { result } = renderHook(() => usePersonAgents({ readManifest }))
+      await act(() => result.current.refresh())
       expect(getRuntimeSnapshot().host?.personAgents?.usage?.spentTokens).toBe(1)
+      expect(result.current.refreshFailed).toBe(true)
     }
+    // The next good read clears the mark.
+    const { result } = renderHook(() =>
+      usePersonAgents({ readManifest: async () => manifest(agents(5)) })
+    )
+    await act(() => result.current.refresh())
+    expect(result.current.refreshFailed).toBe(false)
+    expect(result.current.agents?.usage?.spentTokens).toBe(5)
+  })
+
+  it("adr0253 clears the agents a Host no longer declares", async () => {
+    connect({ personPartition: true, personAgents: agents(1) })
+    const { result } = renderHook(() =>
+      usePersonAgents({ readManifest: async () => manifest(undefined) })
+    )
+    await act(() => result.current.refresh())
+    expect(getRuntimeSnapshot().host?.personAgents).toBeUndefined()
+    expect(result.current.agents).toBeNull()
+    expect(result.current.refreshFailed).toBe(false)
   })
 
   it("p6g never asks a Host that is not the member's partition", async () => {

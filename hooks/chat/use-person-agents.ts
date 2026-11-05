@@ -10,7 +10,7 @@
  * operations and grants alone.
  */
 
-import { useCallback } from "react"
+import { useCallback, useSyncExternalStore } from "react"
 
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import {
@@ -29,34 +29,84 @@ async function defaultReadManifest(): Promise<unknown> {
   return transport.call("host_feature_manifest", {})
 }
 
-/** Re-read the member's agents into the snapshot. A failed read keeps the last. */
+/**
+ * Whether the last re-read failed. The snapshot then still holds the answer
+ * before it, which the composer shows as possibly out of date rather than as
+ * current (ADR-0253 G10).
+ */
+let refreshFailed = false
+const failureListeners = new Set<() => void>()
+function setRefreshFailed(next: boolean) {
+  if (refreshFailed === next) return
+  refreshFailed = next
+  for (const listener of failureListeners) listener()
+}
+function subscribeRefreshFailed(listener: () => void) {
+  failureListeners.add(listener)
+  return () => {
+    failureListeners.delete(listener)
+  }
+}
+
+/** Test seam: forget a failure a previous test left behind. */
+export function __resetPersonAgentsRefreshForTesting(): void {
+  setRefreshFailed(false)
+}
+
+/**
+ * Re-read the member's agents into the snapshot.
+ *
+ * A Host that no longer declares them (execution turned off, the member's
+ * agents withdrawn) clears them: the last answer is not kept as if it were
+ * still true. A read that fails or answers something unreadable keeps the
+ * last answer but is recorded, so the composer can say it may be stale.
+ */
 export async function refreshPersonAgents(deps: PersonAgentsDeps = {}): Promise<void> {
   if (!getRuntimeSnapshot().host?.personPartition) return
   let manifest
   try {
     manifest = parseHostFeatureManifest(await (deps.readManifest ?? defaultReadManifest)())
-  } catch {
+  } catch (error) {
+    console.warn("[person-agents] host_feature_manifest read failed", error)
+    setRefreshFailed(true)
     return
   }
-  if (manifest?.schemaVersion !== 2 || manifest.personPartition !== true) return
-  const personAgents = manifest.personAgents
-  if (!personAgents) return
+  if (manifest?.schemaVersion !== 2) {
+    setRefreshFailed(true)
+    return
+  }
+  // A Host that is no longer this member's partition answers for someone
+  // else; the next connect renegotiates the snapshot.
+  if (manifest.personPartition !== true) return
   // Re-read after the await: the device may have switched Hosts meanwhile.
   const host = getRuntimeSnapshot().host
   if (!host?.personPartition) return
-  updateRuntimeSnapshot({ host: { ...host, personAgents } })
+  setRefreshFailed(false)
+  const personAgents = manifest.personAgents
+  if (personAgents) {
+    updateRuntimeSnapshot({ host: { ...host, personAgents } })
+    return
+  }
+  if (host.personAgents === undefined) return
+  const { personAgents: _withdrawn, ...rest } = host
+  updateRuntimeSnapshot({ host: rest })
 }
 
 export function usePersonAgents(deps: PersonAgentsDeps = {}): {
   /** `null` unless the paired Host is this member's partition and declared them. */
   agents: PersonAgentsManifest | null
+  /** The last re-read failed: `agents` is the answer before it. */
+  refreshFailed: boolean
   refresh: () => Promise<void>
 } {
   const host = useRuntimeSnapshot().host
+  const failed = useSyncExternalStore(
+    subscribeRefreshFailed,
+    () => refreshFailed,
+    () => false
+  )
   const { readManifest } = deps
   const refresh = useCallback(() => refreshPersonAgents({ readManifest }), [readManifest])
-  return {
-    agents: host?.personPartition ? (host.personAgents ?? null) : null,
-    refresh,
-  }
+  const agents = host?.personPartition ? (host.personAgents ?? null) : null
+  return { agents, refreshFailed: agents !== null && failed, refresh }
 }

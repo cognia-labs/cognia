@@ -81,6 +81,14 @@ import { projectSandboxConnectionCapabilities } from "@/lib/sandbox/runtime-avai
  */
 export const DEVICE_POLL_INTERVAL_MS = 5_000
 
+/**
+ * How often the paired Host's own snapshot (capabilities and feature
+ * manifest) is re-read. It changes when the Host is upgraded or reconfigured,
+ * not with presence, so the 5 s presence poll does not ask the Host each time
+ * (ADR-0253 G13). A change of connection state reads it at once.
+ */
+export const COMPANION_HOST_REFRESH_MS = 30_000
+
 export interface UseDeviceRowsResult {
   rows: DeviceRow[]
   summary: { total: number; online: number; needsAttention: number }
@@ -180,9 +188,10 @@ function readPresence(deviceIds: readonly string[]): Map<string, DevicePresenceS
 }
 
 /** Read the active /pair Host without copying its credentials into the device directory. */
-async function readCompanionHost(
+export async function readCompanionHost(
   targetId: string,
-  connectionState: "online" | "connecting" | "offline"
+  connectionState: "online" | "connecting" | "offline",
+  options: { personPartition?: boolean } = {}
 ): Promise<RemoteHostInput | null> {
   const record = await companionCredentialBook().get({
     accountNamespace: getActiveAccountId(),
@@ -202,8 +211,15 @@ async function readCompanionHost(
   }
   if (connectionState !== "online") return host
 
+  // A member on an organization Host's person partition holds no
+  // `host.observe` grant on its execution surface: `host_capabilities` would
+  // describe the operator's machine and is refused. Only the manifest, which
+  // is the member's own, is read (ADR-0253 G13).
+  const askCapabilities = options.personPartition !== true
   const [capabilities, manifest] = await Promise.allSettled([
-    transport.call<{ capabilities?: unknown }>("host_capabilities", {}),
+    askCapabilities
+      ? transport.call<{ capabilities?: unknown }>("host_capabilities", {})
+      : Promise.resolve(null),
     transport.call<unknown>("host_feature_manifest", {}),
   ])
   const reportedAt = Date.now()
@@ -222,7 +238,8 @@ async function readCompanionHost(
     }
   }
   const failure = [capabilities, manifest].find((result) => result.status === "rejected")
-  host.connectionState = host.capabilitiesAt && host.featureManifestAt ? "ready" : "degraded"
+  host.connectionState =
+    (host.capabilitiesAt || !askCapabilities) && host.featureManifestAt ? "ready" : "degraded"
   if (host.connectionState === "ready") host.lastConnectedAt = reportedAt
   if (failure?.status === "rejected") host.connectionError = String(failure.reason)
   return host
@@ -237,6 +254,9 @@ export function useDeviceRows(): UseDeviceRowsResult {
   const workersReachable = executionWorkersAccess(snapshot) === "ask"
   const [companionHost, setCompanionHost] = useState<RemoteHostInput | null>(null)
   const refreshGeneration = useRef(0)
+  /** When the paired Host's snapshot was last read, and for which target and state. */
+  const companionRead = useRef<{ key: string; at: number } | null>(null)
+  const personPartition = snapshot.host?.personPartition === true
 
   // ADR-0224 A3/A4: this desktop's own role in the console.
   const hostMode = useHostingState().hostMode.enabled
@@ -307,44 +327,60 @@ export function useDeviceRows(): UseDeviceRowsResult {
     }
   }, [])
 
-  const refresh = useCallback(async () => {
-    const generation = ++refreshGeneration.current
-    const [devices, workerRows, hostPerson, companion] = await Promise.all([
-      readHostDevices(),
-      readWorkers(workersReachable),
-      readHostPersonId(),
-      companionTargetId && !activeHostId
-        ? readCompanionHost(companionTargetId, snapshot.connectionState).catch(() => null)
-        : Promise.resolve(null),
-    ])
-    if (generation !== refreshGeneration.current) return
-    setCompanionHost((previous) =>
-      companion && previous?.id === companion.id
-        ? {
-            ...companion,
-            capabilities: companion.capabilities ?? previous.capabilities,
-            capabilitiesAt: companion.capabilitiesAt ?? previous.capabilitiesAt,
-            featureManifest: companion.featureManifest ?? previous.featureManifest,
-            featureManifestAt: companion.featureManifestAt ?? previous.featureManifestAt,
-            lastConnectedAt: companion.lastConnectedAt ?? previous.lastConnectedAt,
-          }
-        : companion
-    )
-    setHostDevices(devices)
-    setWorkers(workerRows)
-    setHostPersonUserId(hostPerson)
-    setOwnerNames(await readOwnerNames(devices))
-    setLoading(false)
-    setNow(Date.now())
-  }, [activeHostId, companionTargetId, snapshot.connectionState, workersReachable])
+  const refresh = useCallback(
+    async (force = false) => {
+      const generation = ++refreshGeneration.current
+      const companionKey = `${companionTargetId}|${snapshot.connectionState}|${personPartition}`
+      const companionDue =
+        force ||
+        companionRead.current?.key !== companionKey ||
+        Date.now() - companionRead.current.at >= COMPANION_HOST_REFRESH_MS
+      const readsCompanion = Boolean(companionTargetId && !activeHostId && companionDue)
+      const [devices, workerRows, hostPerson, companion] = await Promise.all([
+        readHostDevices(),
+        readWorkers(workersReachable),
+        readHostPersonId(),
+        readsCompanion
+          ? readCompanionHost(companionTargetId!, snapshot.connectionState, {
+              personPartition,
+            }).catch(() => null)
+          : Promise.resolve(undefined),
+      ])
+      if (generation !== refreshGeneration.current) return
+      if (readsCompanion) companionRead.current = { key: companionKey, at: Date.now() }
+      // `undefined`: not due this round, so the last read stands.
+      if (companion !== undefined)
+        setCompanionHost((previous) =>
+          companion && previous?.id === companion.id
+            ? {
+                ...companion,
+                capabilities: companion.capabilities ?? previous.capabilities,
+                capabilitiesAt: companion.capabilitiesAt ?? previous.capabilitiesAt,
+                featureManifest: companion.featureManifest ?? previous.featureManifest,
+                featureManifestAt: companion.featureManifestAt ?? previous.featureManifestAt,
+                lastConnectedAt: companion.lastConnectedAt ?? previous.lastConnectedAt,
+              }
+            : companion
+        )
+      setHostDevices(devices)
+      setWorkers(workerRows)
+      setHostPersonUserId(hostPerson)
+      setOwnerNames(await readOwnerNames(devices))
+      setLoading(false)
+      setNow(Date.now())
+    },
+    [activeHostId, companionTargetId, personPartition, snapshot.connectionState, workersReachable]
+  )
+
+  const forceRefresh = useCallback(() => refresh(true), [refresh])
 
   useEffect(() => {
     let cancelled = false
     let pending = false
-    const run = () => {
+    const run = (force = false) => {
       if (pending) return
       pending = true
-      void refresh()
+      void refresh(force)
         .catch(() => {
           if (!cancelled) setLoading(false)
         })
@@ -355,7 +391,7 @@ export function useDeviceRows(): UseDeviceRowsResult {
     run()
     const timer = setInterval(run, DEVICE_POLL_INTERVAL_MS)
     // A rename shows at once, not on the next poll.
-    const stopLabels = subscribeCompanionHostLabels(run)
+    const stopLabels = subscribeCompanionHostLabels(() => run(true))
     return () => {
       cancelled = true
       refreshGeneration.current += 1
@@ -508,6 +544,7 @@ export function useDeviceRows(): UseDeviceRowsResult {
     summary: useMemo(() => summarizeDeviceRows(rows), [rows]),
     loading,
     hostUnreachable: isTauri() && hostDevices === null && !loading,
-    refresh,
+    // Asked for by the person: the Host is read now, not on its own cadence.
+    refresh: forceRefresh,
   }
 }
