@@ -1,6 +1,5 @@
-import { buildLarkRunFallbackSegment } from "./lark-driver"
-import { buildLarkResultCardSegment } from "@/lib/connectors/adapters/lark/result-card"
-import { resolveWebEntryBase } from "@/lib/connectors/entry/deep-links"
+import { connectorVendor } from "@/lib/connectors/vendor-contribution"
+import type { MessageSegment } from "@/types/connectors/segment"
 import { liveQuery, type Subscription } from "dexie"
 import { getDb } from "@/lib/db/schema"
 import { waitForOutboundTerminal } from "@/lib/db/outbound-jobs"
@@ -414,36 +413,16 @@ async function deliverMilestone(
   binding: ExecutionRunBinding,
   snapshot: RunProjectionSnapshot
 ): Promise<void> {
-  const row =
-    deliveryConversationRef(binding).platform === "lark"
-      ? await getDb().adapterInstances.get(binding.adapterId)
-      : undefined
-  const segments =
-    deliveryConversationRef(binding).platform === "lark"
-      ? [
-          // On Lark the milestone is a proper result card — state header,
-          // elapsed/details footer — rather than a bare markdown bubble. The
-          // projected snapshot is already PII-safe, so its timeline markdown
-          // and run link can go straight into the card body.
-          buildLarkResultCardSegment({
-            locale: snapshot.locale,
-            presentation: row?.settings?.cardPresentation,
-            answer: markdown(snapshot),
-            status:
-              snapshot.status === "completed"
-                ? "done"
-                : snapshot.status === "cancelled"
-                  ? "interrupted"
-                  : "error",
-            elapsedMs: snapshot.elapsedMs,
-            ...(resolveWebEntryBase() && snapshot.detailsUrl
-              ? {
-                  detailsUrl: `${resolveWebEntryBase()}${snapshot.detailsUrl}`,
-                }
-              : {}),
-          }),
-        ]
-      : [{ type: "markdown" as const, md: markdown(snapshot) }]
+  // A vendor may draw the milestone as a result card; elsewhere it is markdown.
+  const vendorCards = connectorVendor(deliveryConversationRef(binding).platform)?.runPresentation
+  const segments: MessageSegment[] = vendorCards
+    ? [
+        await vendorCards.milestone(snapshot, {
+          adapter: await getDb().adapterInstances.get(binding.adapterId),
+          timeline: markdown(snapshot),
+        }),
+      ]
+    : [{ type: "markdown", md: markdown(snapshot) }]
   const job = await enqueueOutbound({
     adapterId: binding.adapterId,
     conversationKey: binding.conversationKey,
@@ -455,7 +434,7 @@ async function deliverMilestone(
         idempotencyKey: `execution-run:${binding.id}:${snapshot.revision}:final`,
         ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
         // Terminal-card marker for the `onConnectorOutbound` result-card seam.
-        ...(deliveryConversationRef(binding).platform === "lark"
+        ...(vendorCards
           ? {
               resultCard: {
                 runId: snapshot.runId,
@@ -525,10 +504,10 @@ async function deliverFallback(
   const followUpEligible =
     binding.deliveryTarget?.address.scopeKind === "private" && snapshot.allowedActions.length > 0
   const followUpItems = followUpEligible ? buildFollowUpItems(snapshot) : []
-  const row =
-    deliveryConversationRef(binding).platform === "lark"
-      ? await getDb().adapterInstances.get(binding.adapterId)
-      : undefined
+  const vendorCards = connectorVendor(deliveryConversationRef(binding).platform)?.runPresentation
+  const vendorFallback = vendorCards
+    ? await vendorCards.fallback(snapshot, await getDb().adapterInstances.get(binding.adapterId))
+    : undefined
   const job = await enqueueOutbound({
     adapterId: binding.adapterId,
     conversationKey: binding.conversationKey,
@@ -536,12 +515,8 @@ async function deliverFallback(
       conversationRef: deliveryConversationRef(binding),
       deliveryTarget: binding.deliveryTarget,
       segments: [
-        deliveryConversationRef(binding).platform === "lark"
-          ? buildLarkRunFallbackSegment(
-              snapshot,
-              resolveWebEntryBase(row),
-              row?.settings?.cardPresentation
-            )
+        vendorFallback
+          ? vendorFallback
           : readableGroupProgress
             ? { type: "markdown", md: markdown(snapshot) }
             : buildA2UISegment(`execution-run:${snapshot.runId}`, surface),

@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:lib/connectors/entry/tokens.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "lib/connectors",
+  "repaymentPhase": "1",
+  "reason": "The Feishu web-entry tokens module moved to lib/connectors/adapters/lark/entry/tokens.ts (ADR-0250 §14 vendor-neutral frameworks). The same five findings are counted under the new path; nothing new is admitted."
+}

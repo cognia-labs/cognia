@@ -20,7 +20,10 @@ jest.mock("@/hooks/use-tunnel-status", () => ({
   },
 }))
 
-jest.mock("@/lib/connectors/lark-web/entry-client", () => ({ resolveLarkApiBase: () => "" }))
+jest.mock("@/lib/connectors/server-transport", () => ({
+  ...jest.requireActual("@/lib/connectors/server-transport"),
+  resolveConnectorApiBase: () => "",
+}))
 
 const mockGetTunnelInfo = jest.fn().mockResolvedValue(null)
 jest.mock("@/lib/connectivity/tunnel-resolver", () => ({

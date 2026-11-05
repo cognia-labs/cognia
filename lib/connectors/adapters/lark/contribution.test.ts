@@ -10,6 +10,40 @@ jest.mock("@/lib/auth-providers/feishu/oauth-handler", () => ({
 }))
 jest.mock("./health", () => ({ pingLark: jest.fn(async () => true) }))
 jest.mock("./avatar", () => ({ resolveLarkAvatar: jest.fn(async () => ({ url: "https://a" })) }))
+jest.mock("./command-cards", () => ({
+  buildLarkCommandReply: jest.fn(() => ({
+    type: "card",
+    card: { kind: "lark", payload: "reply" },
+  })),
+  buildLarkStatusCard: jest.fn(() => ({ type: "card", card: { kind: "lark", payload: "status" } })),
+}))
+jest.mock("./approval-card", () => ({
+  buildLarkClosedApprovalSegment: jest.fn(() => ({ type: "text", text: "closed" })),
+}))
+jest.mock("./card-kit", () => ({ larkReplyLocale: jest.fn(() => "en") }))
+jest.mock("./result-card", () => ({
+  withLarkResultCard: jest.fn((segments: unknown[]) => [
+    ...segments,
+    { type: "card", card: { kind: "lark", payload: "result" } },
+  ]),
+  splitLarkCardSegments: jest.fn((segments: Array<{ type: string }>) =>
+    segments.length ? segments.map((segment) => [segment]) : []
+  ),
+  buildLarkResultCardSegment: jest.fn(() => ({
+    type: "card",
+    card: { kind: "lark", payload: "m" },
+  })),
+}))
+jest.mock("./entry/deep-links", () => ({
+  resolveWebEntryBase: jest.fn(() => "https://web.example"),
+  buildRunDetailsUrl: jest.fn((runId: string) => `https://web.example/runs/${runId}`),
+}))
+jest.mock("./run-presentation/driver", () => ({
+  buildLarkRunFallbackSegment: jest.fn(() => ({
+    type: "card",
+    card: { kind: "lark", payload: "f" },
+  })),
+}))
 jest.mock("./surface-schedule", () => ({
   startLarkSurfaceSweep: jest.fn(),
   startBindRequestExpirySweep: jest.fn(),
@@ -23,6 +57,33 @@ import { handleLarkOAuth } from "@/lib/auth-providers/feishu/oauth-handler"
 import { pingLark } from "./health"
 import { resolveLarkAvatar } from "./avatar"
 import { startBindRequestExpirySweep, startLarkSurfaceSweep } from "./surface-schedule"
+import { buildLarkCommandReply, buildLarkStatusCard } from "./command-cards"
+import { buildLarkClosedApprovalSegment } from "./approval-card"
+import { larkReplyLocale } from "./card-kit"
+import { buildLarkResultCardSegment, withLarkResultCard } from "./result-card"
+import { buildLarkRunFallbackSegment } from "./run-presentation/driver"
+import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import type { RunProjectionSnapshot } from "@/types/execution/run"
+import type { StatusView } from "@/lib/connectors/commands/render"
+
+function event(overrides: {
+  channel?: "private" | "group"
+  scopeKind?: "private" | "group"
+  replyInThread?: boolean
+  menu?: boolean
+}): NormalizedInboundEvent {
+  return {
+    platform: "lark",
+    channel: { kind: overrides.channel ?? "group" },
+    conversationRef: {
+      platform: "lark",
+      adapterId: "lark-1",
+      ...(overrides.scopeKind ? { scopeKind: overrides.scopeKind } : {}),
+      ...(overrides.replyInThread ? { replyInThread: true } : {}),
+    },
+    ...(overrides.menu ? { channelData: { larkMenuConversation: true } } : {}),
+  } as unknown as NormalizedInboundEvent
+}
 
 const row = (settings: Record<string, unknown> = {}) =>
   ({ id: "lark-1", type: "lark", settings }) as unknown as AdapterInstanceRow
@@ -93,5 +154,99 @@ describe("larkContribution", () => {
     await flush()
     expect(startLarkSurfaceSweep).not.toHaveBeenCalled()
     expect(startBindRequestExpirySweep).not.toHaveBeenCalled()
+  })
+
+  it("reads private topics as private and lists their sessions per chat", () => {
+    const conversations = larkContribution.conversations!
+    expect(conversations.isPrivate!(event({ channel: "private" }))).toBe(true)
+    expect(conversations.isPrivate!(event({ scopeKind: "private" }))).toBe(true)
+    expect(conversations.isPrivate!(event({}))).toBe(false)
+    expect(
+      conversations.chatScopedSessions!(event({ scopeKind: "private", replyInThread: true }))
+    ).toBe(true)
+    expect(conversations.chatScopedSessions!(event({ channel: "private", menu: true }))).toBe(true)
+    expect(conversations.chatScopedSessions!(event({ channel: "private" }))).toBe(false)
+    expect(conversations.chatScopedSessions!(event({ replyInThread: true }))).toBe(false)
+    expect(conversations.deliveryProbe!(event({}))).toBe(true)
+    expect(conversations.deliveryProbe!(event({ channel: "private" }))).toBe(false)
+  })
+
+  it("draws command replies, the status view and closed approval cards as Lark cards", async () => {
+    await expect(larkContribution.commands!.renderReply!("mode", "ok", "applied")).resolves.toEqual(
+      {
+        type: "card",
+        card: { kind: "lark", payload: "reply" },
+      }
+    )
+    expect(buildLarkCommandReply).toHaveBeenCalledWith("mode", "ok", "applied")
+    const view = {} as StatusView
+    await larkContribution.commands!.renderStatus!(view)
+    expect(buildLarkStatusCard).toHaveBeenCalledWith(view)
+    await larkContribution.closedApprovalSegment!("answered", "**Q**")
+    expect(buildLarkClosedApprovalSegment).toHaveBeenCalledWith("answered", "**Q**")
+  })
+
+  it("picks the turn locale from the message and titles the run from it", async () => {
+    await expect(larkContribution.reply!.turnLocale!("hello there", "zh-CN")).resolves.toBe("en")
+    expect(larkReplyLocale).toHaveBeenCalledWith("hello there", "zh-CN")
+    expect(larkContribution.reply!.titleFromMessage).toBe(true)
+  })
+
+  it("groups the final answer around its result card and names only a group asker", async () => {
+    const answer = [{ type: "markdown" as const, md: "answer" }]
+    const context = {
+      receivingAdapter: row(),
+      presentationAdapter: row({ cardPresentation: { title: "T" } }),
+      runId: "run-1",
+      status: "done" as const,
+      elapsedMs: 1200,
+      privateChat: false,
+      initiator: "ou_abc123",
+      locale: "en",
+    }
+    const groups = await larkContribution.reply!.finalGroups!(answer, context)
+    expect(groups).toHaveLength(2)
+    expect(withLarkResultCard).toHaveBeenLastCalledWith(
+      answer,
+      expect.objectContaining({
+        presentation: { title: "T" },
+        status: "done",
+        initiatorOpenId: "ou_abc123",
+        detailsUrl: "https://web.example/runs/run-1",
+      })
+    )
+    await larkContribution.reply!.finalGroups!(answer, { ...context, privateChat: true })
+    expect(withLarkResultCard).toHaveBeenLastCalledWith(
+      answer,
+      expect.objectContaining({ initiatorOpenId: undefined })
+    )
+    await larkContribution.reply!.finalGroups!(answer, { ...context, initiator: "u-123" })
+    expect(withLarkResultCard).toHaveBeenLastCalledWith(
+      answer,
+      expect.objectContaining({ initiatorOpenId: undefined })
+    )
+  })
+
+  it("draws run milestones and fallback progress as Lark cards", async () => {
+    const snapshot = {
+      locale: "en",
+      status: "cancelled",
+      elapsedMs: 5,
+      detailsUrl: "/runs/run-1",
+    } as unknown as RunProjectionSnapshot
+    const adapter = row({ cardPresentation: { title: "T" } })
+    await larkContribution.runPresentation!.milestone(snapshot, { adapter, timeline: "timeline" })
+    expect(buildLarkResultCardSegment).toHaveBeenCalledWith({
+      locale: "en",
+      presentation: { title: "T" },
+      answer: "timeline",
+      status: "interrupted",
+      elapsedMs: 5,
+      detailsUrl: "https://web.example/runs/run-1",
+    })
+    await larkContribution.runPresentation!.fallback(snapshot, adapter)
+    expect(buildLarkRunFallbackSegment).toHaveBeenCalledWith(snapshot, "https://web.example", {
+      title: "T",
+    })
   })
 })

@@ -20,7 +20,10 @@
 import { isLarkFeatureEnabled } from "@/lib/connectors/feature-flags"
 import { appendAudit } from "@/lib/connectors/audit"
 import { recordConnectorMetric } from "@/lib/connectors/metrics"
-import { buildSurfaceUrl, CHAT_TAB_URL_VERSION } from "@/lib/connectors/entry/deep-links"
+import {
+  buildSurfaceUrl,
+  CHAT_TAB_URL_VERSION,
+} from "@/lib/connectors/adapters/lark/entry/deep-links"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import type { AdapterInstanceRow, LarkChatSurfaceType } from "@/lib/db/connector-types"
 import {

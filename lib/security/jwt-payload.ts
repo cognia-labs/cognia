@@ -9,7 +9,7 @@
  * tokens. Nothing here proves anything.
  *
  * This module exists because the same fifteen lines had already been written
- * twice — `lib/connectors/lark-web/session.ts` and a private copy inside
+ * twice — `lib/connectors/adapters/lark/web/session.ts` and a private copy inside
  * `lib/tauri/companion-auth.ts` — with two different error behaviours. Both
  * shapes are kept, because both call sites are right about what they need:
  * a router wants `null` and a token exchange wants a throw.

@@ -6,8 +6,24 @@
  * only light constants eagerly; each hook loads the code it needs.
  */
 
+import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { ConnectorVendorContribution } from "@/lib/connectors/vendor-contribution"
 import { LARK_CAPS } from "./capability"
+
+/** A Lark direct chat, including a topic opened inside one. */
+function isPrivateConversation(event: NormalizedInboundEvent): boolean {
+  return (
+    event.channel.kind === "private" ||
+    event.conversationAddress?.scopeKind === "private" ||
+    event.conversationRef.channelKind === "private" ||
+    event.conversationRef.scopeKind === "private"
+  )
+}
+
+/** The run state a result card shows for a projected run's terminal status. */
+function cardStatus(status: string): "done" | "interrupted" | "error" {
+  return status === "completed" ? "done" : status === "cancelled" ? "interrupted" : "error"
+}
 
 export const larkContribution: ConnectorVendorContribution = {
   platform: "lark",
@@ -59,5 +75,90 @@ export const larkContribution: ConnectorVendorContribution = {
         },
       },
     ]
+  },
+  conversations: {
+    isPrivate: isPrivateConversation,
+    // A private topic, or the conversation the bot's menu opened, lists the
+    // chat's sessions rather than one conversation key's.
+    chatScopedSessions: (event) =>
+      isPrivateConversation(event) &&
+      (event.conversationRef.replyInThread === true ||
+        event.channelData?.larkMenuConversation === true),
+    deliveryProbe: (event) => event.channel.kind === "group",
+  },
+  commands: {
+    renderReply: async (command, text, outcome) =>
+      (await import("./command-cards")).buildLarkCommandReply(command, text, outcome),
+    // Feishu draws the status view as tiles.
+    renderStatus: async (view) => (await import("./command-cards")).buildLarkStatusCard(view),
+  },
+  closedApprovalSegment: async (state, detail) =>
+    (await import("./approval-card")).buildLarkClosedApprovalSegment(state, detail),
+  reply: {
+    turnLocale: async (text, language) =>
+      (await import("./card-kit")).larkReplyLocale(text, language),
+    titleFromMessage: true,
+    // A completed answer ships as a Card 2.0 result card (header state, the
+    // `> 回复：…` quote when native reply-quoting is off, elapsed / initiator /
+    // run-link footer). A card survives the serializer only as its request's
+    // sole segment, so the list is grouped: contiguous non-card runs keep
+    // the combined body, each card goes out as its own interactive message.
+    finalGroups: async (segments, context) => {
+      const [
+        { splitLarkCardSegments, withLarkResultCard },
+        { buildRunDetailsUrl, resolveWebEntryBase },
+      ] = await Promise.all([import("./result-card"), import("./entry/deep-links")])
+      const carded = withLarkResultCard(segments, {
+        presentation: context.presentationAdapter?.settings?.cardPresentation,
+        status: context.status,
+        quote: context.quote,
+        elapsedMs: context.elapsedMs,
+        // Naming the asker tells a group who the answer is for; in a private
+        // chat it only mentions the reader to themselves.
+        initiatorOpenId:
+          !context.privateChat && /^ou_[A-Za-z0-9]+$/.test(context.initiator)
+            ? context.initiator
+            : undefined,
+        locale: context.locale,
+        detailsUrl:
+          buildRunDetailsUrl(context.runId, resolveWebEntryBase(context.receivingAdapter)) ??
+          undefined,
+        fallbackAnswer: context.fallbackAnswer,
+      })
+      const groups = splitLarkCardSegments(carded)
+      // An empty list keeps the default single enqueue.
+      return groups.length > 0 ? groups : undefined
+    },
+  },
+  runPresentation: {
+    // The milestone is a result card (state header, elapsed / details footer)
+    // rather than a bare markdown bubble. The projected snapshot is already
+    // PII-safe, so its timeline and run link go straight into the card body.
+    milestone: async (snapshot, { adapter, timeline }) => {
+      const [{ buildLarkResultCardSegment }, { resolveWebEntryBase }] = await Promise.all([
+        import("./result-card"),
+        import("./entry/deep-links"),
+      ])
+      const base = resolveWebEntryBase()
+      return buildLarkResultCardSegment({
+        locale: snapshot.locale,
+        presentation: adapter?.settings?.cardPresentation,
+        answer: timeline,
+        status: cardStatus(snapshot.status),
+        elapsedMs: snapshot.elapsedMs,
+        ...(base && snapshot.detailsUrl ? { detailsUrl: `${base}${snapshot.detailsUrl}` } : {}),
+      })
+    },
+    fallback: async (snapshot, adapter) => {
+      const [{ buildLarkRunFallbackSegment }, { resolveWebEntryBase }] = await Promise.all([
+        import("./run-presentation/driver"),
+        import("./entry/deep-links"),
+      ])
+      return buildLarkRunFallbackSegment(
+        snapshot,
+        resolveWebEntryBase(adapter),
+        adapter?.settings?.cardPresentation
+      )
+    },
   },
 }

@@ -1,7 +1,7 @@
 import { resolveActivityI18n } from "@/lib/connectors/activity/i18n"
 import { reduceRunEvents } from "@/lib/execution/run-reducer"
 import type { RunActivitySnapshot, RunProjectionSnapshot, RunEvent } from "@/types/execution/run"
-import { formatLarkRunTimeline, larkActivityCount } from "./lark-timeline"
+import { formatLarkRunTimeline, larkActivityCount } from "./timeline"
 
 const snapshot: RunProjectionSnapshot = {
   runId: "run",

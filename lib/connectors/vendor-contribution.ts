@@ -20,8 +20,13 @@
 
 import type { PlatformAdapter } from "@/types/connectors"
 import type { Capability } from "@/types/connectors/capability"
+import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import type { MessageSegment } from "@/types/connectors/segment"
+import type { RunProjectionSnapshot } from "@/types/execution/run"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { AvatarSource, PlatformAvatarTarget } from "./platform-avatar"
+import type { StatusView } from "./commands/render"
+import type { ApprovalCardState } from "./hitl/approval-card-state"
 import { CONNECTOR_VENDORS } from "./adapters/_vendors"
 
 /** Something a contribution started that the runtime stops on teardown. */
@@ -37,6 +42,25 @@ export interface ConnectorVendorAvatarContext {
   active(): boolean
   /** The framework's URL screen: only a public HTTPS URL on the vendor's hosts passes. */
   publicUrl(value: unknown, providerResponse?: boolean): string | undefined
+}
+
+/** What the agent-run reply hands a vendor that draws the final answer itself. */
+export interface ConnectorVendorFinalReplyContext {
+  /** The row of the adapter that sends the answer (a respond-via sibling, or the receiver). */
+  presentationAdapter?: AdapterInstanceRow
+  /** The row of the adapter that received the message. */
+  receivingAdapter: AdapterInstanceRow
+  runId: string
+  status: "done" | "interrupted"
+  /** The asker's message, when the answer must quote it (native reply-quoting is off). */
+  quote?: string
+  elapsedMs: number
+  privateChat: boolean
+  /** The asker's platform user id. */
+  initiator: string
+  locale?: string
+  /** Recovered text to show when the run produced no answer segment. */
+  fallbackAnswer?: string
 }
 
 export interface ConnectorVendorContribution {
@@ -64,6 +88,55 @@ export interface ConnectorVendorContribution {
   }
   /** Long-lived services the connector runtime starts once and disposes on teardown. */
   startRuntimeServices?(): ConnectorVendorService[]
+  /** How this platform's conversations read to the control commands (`commands/dispatch.ts`). */
+  readonly conversations?: {
+    /** Private beyond `channel.kind`, for example a topic inside a direct chat. */
+    isPrivate?(event: NormalizedInboundEvent): boolean
+    /** Whether the conversation's sessions are listed per chat rather than per conversation key. */
+    chatScopedSessions?(event: NormalizedInboundEvent): boolean
+    /** Whether `/agent verify` may run its unmentioned-delivery probe here. */
+    deliveryProbe?(event: NormalizedInboundEvent): boolean
+  }
+  /** Native drawings of control-command replies; plain text when absent. */
+  readonly commands?: {
+    renderReply?(
+      command: string,
+      text: string,
+      outcome: "applied" | "denied" | "unknown"
+    ): Promise<MessageSegment>
+    renderStatus?(view: StatusView): Promise<MessageSegment>
+  }
+  /**
+   * The closed form of an approval or question card. Platforms without it
+   * keep the card as sent (`hitl/approval-card-state.ts`).
+   */
+  closedApprovalSegment?(state: ApprovalCardState, detail?: string): Promise<MessageSegment>
+  /** The agent-run reply (`runtime.ts`). */
+  readonly reply?: {
+    /** The turn's locale from the asker's message and the app language. */
+    turnLocale?(text: string, language: string | undefined): Promise<string>
+    /** Whether the run's presentation title is the message's first line. */
+    readonly titleFromMessage?: boolean
+    /**
+     * The final answer as outbound groups, one message each. A group holding
+     * a card is marked `resultCard` for the `onConnectorOutbound` hook.
+     * Undefined keeps the default single message.
+     */
+    finalGroups?(
+      segments: MessageSegment[],
+      context: ConnectorVendorFinalReplyContext
+    ): Promise<MessageSegment[][] | undefined>
+  }
+  /** Run cards for the generic presentation runner (`run-presentation/runner.ts`). */
+  readonly runPresentation?: {
+    /** The terminal milestone; marked `resultCard` for `onConnectorOutbound`. */
+    milestone(
+      snapshot: RunProjectionSnapshot,
+      context: { adapter?: AdapterInstanceRow; timeline: string }
+    ): Promise<MessageSegment>
+    /** The progress card the fallback path sends or edits. */
+    fallback(snapshot: RunProjectionSnapshot, adapter?: AdapterInstanceRow): Promise<MessageSegment>
+  }
 }
 
 /** Every contributed vendor, in catalog order. */

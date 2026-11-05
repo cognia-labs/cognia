@@ -35,8 +35,10 @@ import { useHostProfile } from "@/hooks/use-host-profile"
 import { useTunnelStatus } from "@/hooks/use-tunnel-status"
 import { refreshCompanionEndpoints } from "@/lib/connectivity/endpoint-refresh"
 import { getTunnelInfo } from "@/lib/connectivity/tunnel-resolver"
-import { resolveLarkApiBase } from "@/lib/connectors/lark-web/entry-client"
-import { resolveConnectorsIngressBase } from "@/lib/connectors/server-transport"
+import {
+  resolveConnectorApiBase,
+  resolveConnectorsIngressBase,
+} from "@/lib/connectors/server-transport"
 
 /**
  * Why there is no usable ingress base.
@@ -81,7 +83,7 @@ export interface UseConnectorIngressOptions {
 }
 
 function defaultPublicOrigin(): string | null {
-  const configured = resolveLarkApiBase()
+  const configured = resolveConnectorApiBase()
   if (configured) return configured
   return typeof window === "undefined" ? null : window.location.origin
 }

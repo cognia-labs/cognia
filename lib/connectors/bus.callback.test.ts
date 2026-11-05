@@ -20,7 +20,7 @@ import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-ma
 import { createExecutionRun } from "@/lib/db/execution-runs"
 import { registerRunControlHandler } from "@/lib/execution/run-control"
 import { parseLarkInteractiveCallback } from "./adapters/lark/parse"
-import { buildLarkRunFallbackSegment } from "./run-presentation/lark-driver"
+import { buildLarkRunFallbackSegment } from "@/lib/connectors/adapters/lark/run-presentation/driver"
 import { sanitizeOutboundSegments } from "./a2ui-bridge/a2ui-to-segments"
 import { connectorsLarkUserAuth } from "./tauri/commands"
 jest.mock("./tauri/commands", () => ({

@@ -3,7 +3,7 @@
 /**
  * /lark/shortcut — landing page for Feishu message shortcuts and the
  * `+`-menu import entry (plan 2026-07-24 P5). All flow logic lives in the
- * unit-tested `lib/connectors/lark-web/intent-client` (launch parsing,
+ * unit-tested `lib/connectors/adapters/lark/web/intent-client` (launch parsing,
  * JSSDK exchange, submit, poll); this page only sequences the JSSDK
  * bootstrap and renders the terminal outcomes.
  */
@@ -14,12 +14,15 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { parseShortcutLaunch, runLarkEntryFlow } from "@/lib/connectors/lark-web/intent-client"
+import {
+  parseShortcutLaunch,
+  runLarkEntryFlow,
+} from "@/lib/connectors/adapters/lark/web/intent-client"
 import {
   configureLarkJsSdk,
   getLarkTriggerDetail,
   loadLarkJsSdkScript,
-} from "@/lib/connectors/lark-web/jssdk"
+} from "@/lib/connectors/adapters/lark/web/jssdk"
 
 const KNOWN_ERROR_CODES = new Set([
   "adapter_missing",

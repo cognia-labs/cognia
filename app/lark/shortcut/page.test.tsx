@@ -14,19 +14,22 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
-jest.mock("@/lib/connectors/lark-web/intent-client", () => ({
+jest.mock("@/lib/connectors/adapters/lark/web/intent-client", () => ({
   parseShortcutLaunch: jest.fn(() => ({ triggerId: "t1", adapterId: "lk-1" })),
   runLarkEntryFlow: jest.fn(),
 }))
 
-jest.mock("@/lib/connectors/lark-web/jssdk", () => ({
+jest.mock("@/lib/connectors/adapters/lark/web/jssdk", () => ({
   loadLarkJsSdkScript: jest.fn(async () => undefined),
   configureLarkJsSdk: jest.fn(async () => undefined),
   getLarkTriggerDetail: jest.fn(async () => ({})),
 }))
 
-import { parseShortcutLaunch, runLarkEntryFlow } from "@/lib/connectors/lark-web/intent-client"
-import { configureLarkJsSdk } from "@/lib/connectors/lark-web/jssdk"
+import {
+  parseShortcutLaunch,
+  runLarkEntryFlow,
+} from "@/lib/connectors/adapters/lark/web/intent-client"
+import { configureLarkJsSdk } from "@/lib/connectors/adapters/lark/web/jssdk"
 import LarkShortcutPage from "./page"
 
 const flowMock = runLarkEntryFlow as jest.MockedFunction<typeof runLarkEntryFlow>

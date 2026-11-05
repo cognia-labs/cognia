@@ -34,7 +34,7 @@ import type {
   MessageRouteEvidence,
   PlatformHistoryCursor,
 } from "@/types/connectors/adapter"
-import { createLarkRunPresentationDriver } from "@/lib/connectors/run-presentation/lark-driver"
+import { createLarkRunPresentationDriver } from "@/lib/connectors/adapters/lark/run-presentation/driver"
 import type {
   ConnectorCallbackDecision,
   ConnectorCallbackEvent,

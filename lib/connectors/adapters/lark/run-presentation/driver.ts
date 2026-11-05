@@ -11,7 +11,7 @@ import {
 } from "@/lib/connectors/adapters/lark/card-presentation"
 import type { MessageSegment } from "@/types/connectors/segment"
 import { privateThreadReplyAnchor } from "@/lib/connectors/adapters/lark/private-threads"
-import { buildRunDetailsUrl } from "@/lib/connectors/entry/deep-links"
+import { buildRunDetailsUrl } from "../entry/deep-links"
 import type {
   RunControlAction,
   RunPresentationDriver,
@@ -27,8 +27,12 @@ import {
 } from "@/lib/connectors/activity/activity-to-a2ui"
 import { resolveActivityI18n } from "@/lib/connectors/activity/i18n"
 import { sanitizeActivityLabel, safeStableActivityId } from "@/lib/execution/run-activity"
-import { buildFollowUpItems, RUN_ACTION_LABEL_EN, RUN_ACTION_LABEL_ZH } from "./follow-up-items"
-import { formatLarkRunTimeline, larkActivityCount, larkMilestoneLine } from "./lark-timeline"
+import {
+  buildFollowUpItems,
+  RUN_ACTION_LABEL_EN,
+  RUN_ACTION_LABEL_ZH,
+} from "@/lib/connectors/run-presentation/follow-up-items"
+import { formatLarkRunTimeline, larkActivityCount, larkMilestoneLine } from "./timeline"
 import {
   createLarkCotClient,
   createLarkCotProjectionState,
@@ -37,8 +41,8 @@ import {
   isLarkCotUnsupportedError,
   projectLarkCotEvents,
   rememberLarkCotUnsupported,
-} from "./lark-cot"
-import type { LarkCotProjectionState } from "./lark-cot"
+} from "./cot"
+import type { LarkCotProjectionState } from "./cot"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import {
   LARK_ICON,

@@ -3,7 +3,7 @@
 /**
  * /lark/entry?entry=…|surface=… — landing page for authorized Feishu deep
  * links (plan 2026-07-24 P3.3). All token/SSO/poll logic lives in the
- * unit-tested `lib/connectors/lark-web/entry-client`; this page only renders
+ * unit-tested `lib/connectors/adapters/lark/web/entry-client`; this page only renders
  * the three terminal outcomes: navigate into the conversation, bounce to the
  * companion's Feishu SSO login, or an i18n'd error with a workbench fallback.
  */
@@ -14,7 +14,10 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { resolveLarkEntry, type LarkEntryOutcome } from "@/lib/connectors/lark-web/entry-client"
+import {
+  resolveLarkEntry,
+  type LarkEntryOutcome,
+} from "@/lib/connectors/adapters/lark/web/entry-client"
 
 type EntryErrorCode = Extract<LarkEntryOutcome, { kind: "error" }>["code"]
 

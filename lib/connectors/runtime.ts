@@ -90,12 +90,7 @@ import {
 import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
-import { buildRunDetailsUrl, resolveWebEntryBase } from "./entry/deep-links"
-import {
-  splitLarkCardSegments,
-  withLarkResultCard,
-} from "@/lib/connectors/adapters/lark/result-card"
-import { larkReplyLocale } from "@/lib/connectors/adapters/lark/card-kit"
+import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
 import {
@@ -2204,14 +2199,13 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           )
         // Persist one locale for the complete turn, including replay without
         // an IM binding and the terminal result card.
-        const runLocale =
-          event.platform === "lark"
-            ? larkReplyLocale(event.plainText, appSettings?.language)
-            : appSettings?.language
-        const presentationTitle =
-          event.platform === "lark"
-            ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
-            : runTitle
+        const vendorReply = connectorVendor(event.platform)?.reply
+        const runLocale = vendorReply?.turnLocale
+          ? await vendorReply.turnLocale(event.plainText, appSettings?.language)
+          : appSettings?.language
+        const presentationTitle = vendorReply?.titleFromMessage
+          ? sanitizeActivityLabel(event.plainText.split(/\r?\n/, 1)[0], "Agent run")
+          : runTitle
         const recoveryParent = recoveryParentRunId
           ? await getDb().executionRuns.get(recoveryParentRunId)
           : undefined
@@ -2292,7 +2286,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         await runProducer.start(turnStartedAt, {
           recoveryAnchor,
           locale: runLocale,
-          ...(event.platform === "lark" ? { title: presentationTitle, safeTitle: true } : {}),
+          ...(vendorReply?.titleFromMessage ? { title: presentationTitle, safeTitle: true } : {}),
         })
         // Abort propagation: thread the per-adapter teardown signal (aborted
         // by the install teardown and by a lifecycle requeue/stop) into the
@@ -2847,54 +2841,38 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           break
         }
 
-        // ── Lark result card ──
-        // A completed Lark ai-run answer ships as a Card 2.0 "result card"
-        // (header state, `> 回复：…` quote when native reply-quoting is off,
-        // elapsed/initiator/run-link footer) instead of a bare lark_md div.
-        // The transform runs AFTER the draft branch, so an acceptance draft
-        // always keeps the raw generated segments.
-        //
-        // A `card` segment survives the serializer verbatim ONLY as its
-        // request's sole segment — the multi-segment combiner would degrade
-        // it to a "[card]" label — so the list is grouped for enqueueing:
-        // contiguous non-card runs keep today's combined body, each card
-        // goes out as its own interactive message.
-        let larkGroups: MessageSegment[][] | undefined
-        if (outboundTarget.deliveryTarget.address.platform === "lark") {
-          const presentationRow =
+        // ── Vendor-drawn final answer ──
+        // A vendor may ship the completed answer as its own cards (Lark's
+        // result card). The transform runs AFTER the draft branch, so an
+        // acceptance draft always keeps the raw generated segments.
+        const finalGroups = connectorVendor(outboundTarget.deliveryTarget.address.platform)?.reply
+          ?.finalGroups
+        let vendorGroups: MessageSegment[][] | undefined
+        if (finalGroups) {
+          const presentationAdapter =
             outboundTarget.adapterId === adapterRow.id
               ? adapterRow
               : await getAdapterInstance(outboundTarget.adapterId)
-          const carded = withLarkResultCard(outboundSegments, {
-            presentation: presentationRow?.settings?.cardPresentation,
+          vendorGroups = await finalGroups(outboundSegments, {
+            presentationAdapter,
+            receivingAdapter: adapterRow,
+            runId: executionRunId,
             status: limitStop ? "interrupted" : "done",
-            // The card's blockquote stands in for the platform reply-quote
-            // only when quoting is off; a private chat never needs it.
+            // The quote stands in for the platform reply-quote only when
+            // quoting is off; a private chat never needs it.
             quote: !quoteReply && event.channel.kind !== "private" ? event.plainText : undefined,
             elapsedMs: Date.now() - turnStartedAt,
-            // Naming the asker tells a group who the answer is for; in a
-            // private chat it only mentions the reader to themselves.
-            initiatorOpenId:
-              event.channel.kind !== "private" &&
-              /^ou_[A-Za-z0-9]+$/.test(event.sender.remoteUserId)
-                ? event.sender.remoteUserId
-                : undefined,
+            privateChat: event.channel.kind === "private",
+            initiator: event.sender.remoteUserId,
             locale: runLocale,
-            detailsUrl:
-              buildRunDetailsUrl(executionRunId, resolveWebEntryBase(adapterRow)) ?? undefined,
             fallbackAnswer: recoveredText,
           })
-          const groups = splitLarkCardSegments(carded)
-          // An empty list keeps the legacy single enqueue (empty segments
-          // serialize to the "[empty]" placeholder) rather than sending
-          // nothing at all.
-          larkGroups = groups.length > 0 ? groups : undefined
         }
 
         // Deliver through the respond-via target resolved above (falls back to
         // the receiving bot on any invalid target).
-        if (larkGroups) {
-          for (const [index, group] of larkGroups.entries()) {
+        if (vendorGroups) {
+          for (const [index, group] of vendorGroups.entries()) {
             await enqueueOutbound(
               {
                 adapterId: outboundTarget.adapterId,
@@ -2911,7 +2889,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                     // delivered idempotency keys, so sharing `airun:…` across
                     // parts would drop every part after the first.
                     idempotencyKey:
-                      larkGroups.length > 1 ? `${idempotencyKey}:part:${index}` : idempotencyKey,
+                      vendorGroups.length > 1 ? `${idempotencyKey}:part:${index}` : idempotencyKey,
                     // Card-bearing groups carry the terminal-card marker the
                     // `onConnectorOutbound` hook exposes as `resultCard`.
                     ...(group.some((segment) => segment.type === "card")

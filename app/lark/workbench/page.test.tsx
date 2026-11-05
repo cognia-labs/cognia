@@ -6,7 +6,7 @@ import {
   checkLarkPersonalHost,
   loadLarkTeamWorkspaces,
   resolveLarkWorkbench,
-} from "@/lib/connectors/lark-web/intent-client"
+} from "@/lib/connectors/adapters/lark/web/intent-client"
 import { refreshCollabPlane } from "@/lib/collab/refresh"
 
 const mockPush = jest.fn()
@@ -16,7 +16,7 @@ jest.mock("next-intl", () => ({
   useTranslations: () =>
     Object.assign((key: string) => key, { has: (key: string) => !key.includes("unknown") }),
 }))
-jest.mock("@/lib/connectors/lark-web/intent-client", () => ({
+jest.mock("@/lib/connectors/adapters/lark/web/intent-client", () => ({
   resolveLarkWorkbench: jest.fn(),
   checkLarkPersonalHost: jest.fn(),
   loadLarkTeamWorkspaces: jest.fn(),

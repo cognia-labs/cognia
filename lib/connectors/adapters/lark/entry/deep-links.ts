@@ -17,7 +17,7 @@
  * fallback.
  */
 
-import { isLarkFeatureEnabled, type LarkFlagAdapterSettings } from "../feature-flags"
+import { isLarkFeatureEnabled, type LarkFlagAdapterSettings } from "@/lib/connectors/feature-flags"
 import {
   issueEntryToken,
   issueSurfaceToken,

@@ -9,6 +9,7 @@ import {
   connectorWebhookPath,
   LARK_OAUTH_RELAY_PATH,
   connectorOAuthRelayPath,
+  resolveConnectorApiBase,
   resolveConnectorsIngressBase,
 } from "./server-transport"
 import type { TransportMode } from "@/types/connectors/adapter"
@@ -25,6 +26,24 @@ function row(transportMode: TransportMode | undefined) {
 describe("CONNECTORS_SERVER_PORT", () => {
   it("is the shared loopback port", () => {
     expect(CONNECTORS_SERVER_PORT).toBe(7842)
+  })
+})
+
+describe("resolveConnectorApiBase", () => {
+  const original = process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE
+  afterEach(() => {
+    if (original === undefined) delete process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE
+    else process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE = original
+  })
+
+  it("is same-origin when no companion API origin is configured", () => {
+    delete process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE
+    expect(resolveConnectorApiBase()).toBe("")
+  })
+
+  it("trims the configured origin and drops trailing slashes", () => {
+    process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE = "  https://api.example.com//  "
+    expect(resolveConnectorApiBase()).toBe("https://api.example.com")
   })
 })
 

@@ -15,7 +15,7 @@
  */
 
 import { isLarkFeatureEnabled } from "@/lib/connectors/feature-flags"
-import { CHAT_TAB_URL_VERSION } from "@/lib/connectors/entry/deep-links"
+import { CHAT_TAB_URL_VERSION } from "@/lib/connectors/adapters/lark/entry/deep-links"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { ensureChatSurface } from "@/lib/db/lark-chat-surfaces"
 import { larkTenantRequest, type LarkCredentials, type LarkTenantRequest } from "./http"

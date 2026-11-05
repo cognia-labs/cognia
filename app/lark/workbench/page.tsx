@@ -18,7 +18,7 @@ import {
   resolveLarkWorkbench,
   type LarkWorkbenchContext,
   type LarkWorkbenchOutcome,
-} from "@/lib/connectors/lark-web/intent-client"
+} from "@/lib/connectors/adapters/lark/web/intent-client"
 
 // This route is an entry gate. Chat, settings, devices and workspace panels
 // remain on their existing routes and use the existing authenticated shell.

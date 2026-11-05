@@ -39,7 +39,7 @@ import {
   readWorkbenchMode,
   resolveWebEntryBase,
   type LarkWorkbenchMode,
-} from "@/lib/connectors/entry/deep-links"
+} from "@/lib/connectors/adapters/lark/entry/deep-links"
 
 const ENTRY_FLAGS: LarkBooleanFeatureFlag[] = [
   "larkPrincipalRegistry",

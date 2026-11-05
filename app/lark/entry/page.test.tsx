@@ -14,12 +14,12 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
-jest.mock("@/lib/connectors/lark-web/entry-client", () => ({
+jest.mock("@/lib/connectors/adapters/lark/web/entry-client", () => ({
   resolveLarkEntry: jest.fn(),
 }))
 
-import { resolveLarkEntry } from "@/lib/connectors/lark-web/entry-client"
-import type { LarkEntryOutcome } from "@/lib/connectors/lark-web/entry-client"
+import { resolveLarkEntry } from "@/lib/connectors/adapters/lark/web/entry-client"
+import type { LarkEntryOutcome } from "@/lib/connectors/adapters/lark/web/entry-client"
 import LarkEntryPage from "./page"
 
 const resolveMock = resolveLarkEntry as jest.MockedFunction<typeof resolveLarkEntry>

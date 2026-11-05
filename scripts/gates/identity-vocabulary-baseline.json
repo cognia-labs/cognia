@@ -309,7 +309,7 @@
     "lib/connectors/bus.ts": {
       "bareAccountId": 6
     },
-    "lib/connectors/entry/tokens.ts": {
+    "lib/connectors/adapters/lark/entry/tokens.ts": {
       "bareAccountId": 5
     },
     "lib/connectors/principal/admin.ts": {

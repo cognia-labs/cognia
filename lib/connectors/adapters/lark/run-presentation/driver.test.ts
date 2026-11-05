@@ -1,6 +1,6 @@
-import { createLarkRunPresentationDriver, buildLarkRunFallbackSegment } from "./lark-driver"
-import { __resetLarkCotSupportCacheForTesting } from "./lark-cot"
-import type { LarkCotEvent } from "./lark-cot"
+import { createLarkRunPresentationDriver, buildLarkRunFallbackSegment } from "./driver"
+import { __resetLarkCotSupportCacheForTesting } from "./cot"
+import type { LarkCotEvent } from "./cot"
 import type {
   RunPresentationRef,
   RunPresentationTarget,

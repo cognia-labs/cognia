@@ -15,6 +15,7 @@ import {
   decodeJwtPayload,
   getLarkWebSession,
 } from "./session"
+import { resolveConnectorApiBase } from "@/lib/connectors/server-transport"
 
 export type LarkEntryOutcome =
   | { kind: "navigate"; conversationKey: string; sessionId?: string }
@@ -45,11 +46,6 @@ export interface ResolveLarkEntryOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
-/** Companion origin the static export talks to; "" = same origin. */
-export function resolveLarkApiBase(): string {
-  return (process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE ?? "").trim().replace(/\/+$/, "")
-}
-
 function deniedCode(status: number, body: { error?: string }): LarkEntryOutcome {
   if (status === 410) return { kind: "error", code: "entry_expired" }
   if (status === 409) return { kind: "error", code: "entry_consumed" }
@@ -67,7 +63,7 @@ export async function resolveLarkEntry(
   // `globalThis` access keeps this evaluable in environments without fetch
   // (older jsdom) — the paths that never fetch still work there.
   const fetchFn = options.fetchFn ?? (globalThis.fetch as typeof fetch | undefined)
-  const apiBase = options.apiBase ?? resolveLarkApiBase()
+  const apiBase = options.apiBase ?? resolveConnectorApiBase()
   const params = new URLSearchParams(options.search)
   const entryToken = params.get("entry")
   const surfaceToken = params.get("surface")

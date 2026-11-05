@@ -1,4 +1,5 @@
-import { approvalStateSegment, settleApprovalCard } from "./approval-card-state"
+import { settleApprovalCard } from "./approval-card-state"
+import { buildLarkClosedApprovalSegment } from "@/lib/connectors/adapters/lark/approval-card"
 import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
 import { waitForOutboundTerminal } from "@/lib/db/outbound-jobs"
 import { appendAudit } from "@/lib/connectors/audit"
@@ -13,47 +14,6 @@ const input = {
   state: "approved" as const,
 }
 beforeEach(() => jest.clearAllMocks())
-it.each([
-  "approved",
-  "denied",
-  "expired",
-  "processed",
-  "failed",
-  "answered",
-  "skipped",
-  "cancelled",
-] as const)("removes every action in a %s card", (state) => {
-  const segment = approvalStateSegment(state)
-  expect(JSON.stringify(segment)).not.toContain('"button"')
-  expect(JSON.stringify(segment)).toContain('"schema":"2.0"')
-})
-it("titles each closed state with its own icon and colour", () => {
-  const header = (state: Parameters<typeof approvalStateSegment>[0]) =>
-    (approvalStateSegment(state) as { card: { payload: { header: Record<string, unknown> } } }).card
-      .payload.header
-  expect(header("answered")).toMatchObject({
-    title: { content: "已回答" },
-    template: "green",
-    icon: { token: "succeed_filled" },
-  })
-  expect(header("skipped")).toMatchObject({ title: { content: "已跳过" } })
-  expect(header("cancelled")).toMatchObject({
-    title: { content: "已停止" },
-    template: "orange",
-    icon: { token: "stop_outlined" },
-  })
-})
-it("keeps the detail's markdown but disarms a mention in it", () => {
-  const text = JSON.stringify(approvalStateSegment("answered", "**Q** <at id=all></at>"))
-  expect(text).toContain("**Q**")
-  expect(text).not.toMatch(/<at\b/)
-})
-it("includes the optional detail above the closed notice", () => {
-  const withDetail = JSON.stringify(approvalStateSegment("answered", "**Q**\n> Selected: A"))
-  expect(withDetail).toContain("Selected: A")
-  const blank = JSON.stringify(approvalStateSegment("answered", "   "))
-  expect(blank).not.toContain("> ")
-})
 it("edits the original delivered message through the durable queue", async () => {
   jest.mocked(waitForOutboundTerminal).mockResolvedValue({
     adapterId: "lark-1",
@@ -66,7 +26,7 @@ it("edits the original delivered message through the durable queue", async () =>
     expect.objectContaining({
       request: expect.objectContaining({
         editTargetMessageId: "om-1",
-        segments: [approvalStateSegment("approved")],
+        segments: [buildLarkClosedApprovalSegment("approved")],
       }),
       // ADR-0239: an edit of the card in its own conversation.
       authorization: { kind: "system-notice", inboundConversationKey: "chat" },

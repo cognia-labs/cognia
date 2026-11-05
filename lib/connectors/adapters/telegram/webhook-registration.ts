@@ -22,10 +22,10 @@
 
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { isTauri } from "@/lib/platform/detect"
-import { resolveLarkApiBase } from "@/lib/connectors/lark-web/entry-client"
 import type { TauriHttpRequest, TauriHttpResponse } from "@/types/connectors/adapter"
 import {
   connectorWebhookPath,
+  resolveConnectorApiBase,
   resolveConnectorsIngressBase,
 } from "@/lib/connectors/server-transport"
 import { TELEGRAM_ALLOWED_UPDATES } from "./allowed-updates"
@@ -233,11 +233,10 @@ export const defaultTelegramWebhookEnvironment: TelegramWebhookEnvironment = {
       return null
     }
   },
-  // `resolveLarkApiBase()` reads the companion's configured API origin; it is
-  // Lark-named for historical reasons but is the shared "where does this
+  // The companion's configured API origin: the shared "where does this
   // deployment live" answer every connector form already uses.
   publicBase: () =>
-    resolveLarkApiBase() || (typeof window === "undefined" ? null : window.location.origin),
+    resolveConnectorApiBase() || (typeof window === "undefined" ? null : window.location.origin),
 }
 
 /** {@link resolveTelegramWebhookUrl} against the live host. */

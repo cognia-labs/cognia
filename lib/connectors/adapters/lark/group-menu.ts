@@ -19,7 +19,7 @@
 
 import { isLarkFeatureEnabled } from "@/lib/connectors/feature-flags"
 import { recordConnectorMetric } from "@/lib/connectors/metrics"
-import { CHAT_TAB_URL_VERSION } from "@/lib/connectors/entry/deep-links"
+import { CHAT_TAB_URL_VERSION } from "@/lib/connectors/adapters/lark/entry/deep-links"
 import { getChatSurface } from "@/lib/db/lark-chat-surfaces"
 import { classifyScopeError, type LarkCredentials } from "./http"
 import {

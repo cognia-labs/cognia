@@ -17,7 +17,7 @@ import {
   buildWorkbenchUrl,
   readWorkbenchMode,
   resolveWebEntryBase,
-} from "@/lib/connectors/entry/deep-links"
+} from "@/lib/connectors/adapters/lark/entry/deep-links"
 import { hashOpenId, resolveConnectorPrincipal } from "@/lib/connectors/principal/resolve"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"

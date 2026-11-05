@@ -7,8 +7,8 @@ import {
   isLarkCotUnsupportedError,
   projectLarkCotEvents,
   rememberLarkCotUnsupported,
-} from "./lark-cot"
-import type { LarkCotEvent, LarkCotProjectionState } from "./lark-cot"
+} from "./cot"
+import type { LarkCotEvent, LarkCotProjectionState } from "./cot"
 import { resolveActivityI18n } from "@/lib/connectors/activity/i18n"
 import { safeStableActivityId } from "@/lib/execution/run-activity"
 import type { RunProjectionSnapshot } from "@/types/execution/run"

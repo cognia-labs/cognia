@@ -32,7 +32,7 @@ import {
   sanitizeActivityLabel,
 } from "@/lib/execution/run-activity"
 import type { RunActivityCategory, RunProjectionSnapshot } from "@/types/execution/run"
-import type { LarkRunRequest } from "./lark-driver"
+import type { LarkRunRequest } from "./driver"
 
 export interface LarkCotEvent {
   event_type: string

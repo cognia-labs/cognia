@@ -25,6 +25,15 @@ import type { PlatformAdapter, TransportMode } from "@/types/connectors/adapter"
 export const CONNECTORS_SERVER_PORT = 7842
 
 /**
+ * The companion API origin the static export talks to; "" = same origin.
+ * Every connector page and form reads it. The variable keeps its first
+ * (Feishu-era) name because deployments already set it.
+ */
+export function resolveConnectorApiBase(): string {
+  return (process.env.NEXT_PUBLIC_COGNIA_LARK_API_BASE ?? "").trim().replace(/\/+$/, "")
+}
+
+/**
  * The transport a built adapter actually runs.
  *
  * The adapter's declared `transportModes` is the authority whenever it names
@@ -110,7 +119,7 @@ export interface ConnectorsIngressInput {
   /**
    * Public origin of the companion deployment. Same-origin in the reference
    * compose (Caddy serves the static export and proxies `/connectors/*`), so
-   * callers normally pass `resolveLarkApiBase() || window.location.origin`.
+   * callers normally pass `resolveConnectorApiBase() || window.location.origin`.
    */
   publicBase?: string | null
 }

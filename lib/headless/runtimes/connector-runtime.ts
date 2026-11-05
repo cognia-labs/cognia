@@ -26,7 +26,7 @@ import {
 } from "@/lib/connectors/tauri/commands"
 import { setConnectorListen, type ConnectorListenFn } from "@/lib/connectors/events"
 import { installConnectorRuntime } from "@/lib/connectors/bootstrap/install-connector-runtime"
-import { installLarkIntentHandler } from "@/lib/connectors/entry/consumed-handler"
+import { installLarkIntentHandler } from "@/lib/connectors/adapters/lark/entry/consumed-handler"
 
 import {
   createConnectorRuntimeLease,

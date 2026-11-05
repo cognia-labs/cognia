@@ -69,8 +69,7 @@ import { handleDelegateCommand } from "./delegate"
 import { handleHandoffCommand } from "./handoff"
 import { handleScheduleCommand, type ScheduleCommandScheduler } from "./schedule"
 import * as R from "./render"
-import { buildLarkCommandReply } from "../adapters/lark/card"
-import { buildLarkStatusCard } from "../adapters/lark/command-cards"
+import { connectorVendor } from "../vendor-contribution"
 
 /**
  * Legacy spellings, kept as aliases onto the named presets.
@@ -169,14 +168,9 @@ function idPrefix(id: string): string {
   return id.slice(0, 8)
 }
 
-function isLarkPrivateConversation(event: NormalizedInboundEvent): boolean {
-  return (
-    event.platform === "lark" &&
-    (event.channel.kind === "private" ||
-      event.conversationAddress?.scopeKind === "private" ||
-      event.conversationRef.channelKind === "private" ||
-      event.conversationRef.scopeKind === "private")
-  )
+/** Private beyond `channel.kind`, where the platform's vendor says so (a topic in a DM). */
+function isVendorPrivateConversation(event: NormalizedInboundEvent): boolean {
+  return connectorVendor(event.platform)?.conversations?.isPrivate?.(event) === true
 }
 
 /**
@@ -194,7 +188,7 @@ export function isCommandAllowed(
   const inAllowlist = allow.includes(event.sender.id) || allow.includes(event.sender.remoteUserId)
   if (mode === "allowlist") return inAllowlist
   // private-only: allow in 1:1 DMs, else require the allowlist.
-  return event.channel.kind === "private" || isLarkPrivateConversation(event) || inAllowlist
+  return event.channel.kind === "private" || isVendorPrivateConversation(event) || inAllowlist
 }
 
 /** Strict allowlist membership used by high-impact control-plane writes. */
@@ -231,11 +225,10 @@ export async function maybeHandleControlCommand(
   const audit = deps.audit ?? appendAudit
   const at = (deps.now ?? Date.now)()
   const patchOverride = deps.patchOverride ?? patchConversationOverride
+  const vendor = connectorVendor(event.platform)
   const privateThread =
-    isLarkPrivateConversation(event) && event.conversationRef.replyInThread === true
-  const chatSessions =
-    privateThread ||
-    (isLarkPrivateConversation(event) && event.channelData?.larkMenuConversation === true)
+    isVendorPrivateConversation(event) && event.conversationRef.replyInThread === true
+  const chatSessions = vendor?.conversations?.chatScopedSessions?.(event) === true
   const listSessions = chatSessions
     ? (deps.listChatSessions ?? listSessionsByConversationChat)
     : (deps.listSessions ?? listSessionsByConversationKey)
@@ -262,8 +255,8 @@ export async function maybeHandleControlCommand(
         conversationRef: event.conversationRef,
         segments:
           typeof content === "string"
-            ? event.platform === "lark"
-              ? [buildLarkCommandReply(parsed.name, content, kind)]
+            ? vendor?.commands?.renderReply
+              ? [await vendor.commands.renderReply(parsed.name, content, kind)]
               : [{ type: "text", text: content }]
             : content,
         metadata: { idempotencyKey: newIdempotencyKey() },
@@ -478,9 +471,11 @@ export async function maybeHandleControlCommand(
         sessionIdPrefix: active ? idPrefix(active.id) : "—",
         assignee: R.renderAssignee(override?.assignee),
       }
-      // Feishu draws the view as tiles; elsewhere it is the bilingual text.
+      // A vendor may draw the view natively; elsewhere it is the bilingual text.
       await reply(
-        event.platform === "lark" ? [buildLarkStatusCard(statusView)] : R.renderStatus(statusView),
+        vendor?.commands?.renderStatus
+          ? [await vendor.commands.renderStatus(statusView)]
+          : R.renderStatus(statusView),
         "applied"
       )
       return true
@@ -895,7 +890,7 @@ export async function maybeHandleControlCommand(
           await reply(R.renderDenied(), "denied", { reason: "agent_verify_not_authorized" })
           return true
         }
-        if (event.platform !== "lark" || event.channel.kind !== "group") {
+        if (vendor?.conversations?.deliveryProbe?.(event) !== true) {
           await reply(R.renderUsage("agent"), "denied", { reason: "probe_requires_lark_group" })
           return true
         }
