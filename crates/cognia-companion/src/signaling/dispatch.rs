@@ -372,13 +372,37 @@ async fn run(
     let mut rpc_work = RpcWorkQueue::default();
     // P6e: what this device may hear, as `/ws/events` decides it. `None`
     // forwards no event frames; inbound RPCs are still answered.
+    // Subscribed before standing is first decided, so a revocation during
+    // that lookup still reaches this channel.
+    let mut closures = crate::standing::authority().closures();
     let mut audience = rtc_events_audience(&device_id).await.ok();
     let mut audience_ticker = tokio::time::interval(std::time::Duration::from_secs(25));
     audience_ticker.tick().await;
+    // ADR-0253 §3: a departure, a suspension or a lost device ends this
+    // channel at once. While open, its person counts as present.
+    let channel_person = rtc_device_principal(&device_id).ok().flatten()
+        .as_ref().and_then(crate::host_surface_gate::bound_person);
+    let _standing_presence = channel_person.clone().map(|person| crate::standing::authority().presence(person));
+    // Set when standing ends the channel: the peer is closed below, so the
+    // device learns it at once instead of timing out on a channel no one reads.
+    let mut standing_closed = false;
 
     loop {
         tokio::select! {
             biased;
+
+            closure = closures.recv() => {
+                match closure {
+                    Ok(closure) if closure.closes(&device_id, channel_person.as_ref()) => { standing_closed = true; break; }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                    // Missed closures: decide this channel's standing now.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => match rtc_events_audience(&device_id).await {
+                        Ok(next) => audience = Some(next),
+                        Err(status) if status < 500 => { standing_closed = true; break; }
+                        Err(_) => {}
+                    },
+                }
+            }
 
             _ = audience_ticker.tick() => {
                 // A promotion widens the stream, a demotion narrows it, a
@@ -620,6 +644,12 @@ async fn run(
                     Err(RecvError::Closed) => break,
                 }
             }
+        }
+    }
+    if standing_closed {
+        peer.set_relay_open(false);
+        if let Some(connection) = peer.detach_peer().await {
+            connection.close().await;
         }
     }
 }
@@ -944,6 +974,17 @@ pub(super) fn empty_rpc_for_test(id: &str, method: &str) -> Vec<u8> {
 /// device's tenant resolved the way inbound RPCs resolve it. `Err` carries the
 /// refusal's HTTP status.
 async fn rtc_events_audience(device_id: &str) -> Result<crate::host_surface_gate::EventsAudience, u16> {
+    match rtc_device_principal(device_id)? {
+        Some(principal) => crate::host_surface_gate::events_audience(&principal).await.map_err(|problem| problem.status),
+        // A single-user Host's device stream is as it always was.
+        None => Ok(crate::host_surface_gate::EventsAudience::Host),
+    }
+}
+
+/// The device principal a data channel acts as, with its tenant resolved the
+/// way inbound RPCs resolve it. `Ok(None)`: a single-user Host's device with
+/// no tenant; `Err(403)`: a multi-tenant Host cannot place it.
+fn rtc_device_principal(device_id: &str) -> Result<Option<DeviceContext>, u16> {
     let multi_tenant = crate::deployment::deployment_mode() == crate::deployment::DeploymentMode::MultiTenant;
     let tenant = security_store().and_then(|security| if multi_tenant {
         security.unambiguous_device_tenant(device_id)
@@ -951,17 +992,15 @@ async fn rtc_events_audience(device_id: &str) -> Result<crate::host_surface_gate
         security.active_device_tenant(device_id)
     }.ok().flatten());
     let Some(tenant_id) = tenant else {
-        // A single-user Host's device stream is as it always was.
-        return if multi_tenant { Err(403) } else { Ok(crate::host_surface_gate::EventsAudience::Host) };
+        return if multi_tenant { Err(403) } else { Ok(None) };
     };
-    let principal = DeviceContext {
+    Ok(Some(DeviceContext {
         device_id: device_id.to_string(),
         tenant_id,
         scope: "device".to_string(),
         granted_scopes: Vec::new(),
         authorization_capabilities: None,
-    };
-    crate::host_surface_gate::events_audience(&principal).await.map_err(|problem| problem.status)
+    }))
 }
 
 #[cfg(test)]

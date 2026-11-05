@@ -109,6 +109,12 @@ pub struct Fleet {
     records_root: parking_lot::Mutex<Option<std::path::PathBuf>>,
 }
 fn now_ms() -> i64 { chrono::Utc::now().timestamp_millis() }
+fn standing_person(person: &PersonPartition) -> cognia_companion::host_surface_gate::Person {
+    cognia_companion::host_surface_gate::Person { org: person.org_id.clone(), user: person.user_id.clone() }
+}
+/// How long a departure waits for interrupted work to report its end before
+/// it stops what is left.
+const DEPARTURE_SETTLE: Duration = Duration::from_secs(10);
 /// Whether the account's brain says it is running something: its member agent
 /// turns hold execution-broker leases, and the count rides each heartbeat pong.
 /// A report gone stale reads as not running, so a hung brain is still reaped.
@@ -292,6 +298,9 @@ impl Fleet {
     /// that must stop first is signalled here and awaited by the caller with
     /// the lock released, after which the pass runs again on fresh state.
     fn admit_locked(&self, entries: &mut BTreeMap<String, Entry>, person: &PersonPartition) -> Result<Admission, &'static str> {
+        // ADR-0253 §3: under the fleet lock, so a revocation's brain stop
+        // cannot be overtaken by an admission that looked before it.
+        if let Some(code) = cognia_companion::standing::authority().revocation(&standing_person(person)) { return Err(code); }
         if let Some(entry) = entries.get(&person.account_id) {
             if entry.purging.load(Ordering::SeqCst) { return Err("person_purging"); }
             // The person's previous brain is still going; its data is in use.
@@ -349,6 +358,9 @@ impl Fleet {
 impl PersonBrainFleet for Fleet {
     async fn acquire(&self, person: &PersonPartition) -> Result<Box<dyn PersonRequest>, &'static str> {
         if self.stopping.load(Ordering::SeqCst) { return Err("person_brain_stopping"); }
+        // A brain runs only for a member (ADR-0253 §3); its own requests are
+        // then exempt, because a negative change stops it.
+        cognia_companion::standing::authority().admit(&standing_person(person)).await?;
         let guard = loop {
             let stopped = {
                 let mut entries = self.entries.lock().await;
@@ -389,8 +401,11 @@ impl PersonBrainFleet for Fleet {
         drop(entries);
         let mut list = Vec::new();
         for person in people {
-            let standing = match cognia_companion::workspace_access::standing_actions(&person.org_id, None, &person.user_id).await {
-                Ok(_) => "member", Err(cognia_companion::workspace_access::WorkspaceAccessError::Upstream { status: 404 }) => "not-member",
+            let standing = match cognia_companion::standing::authority()
+                .actions(&standing_person(&person), None, cognia_companion::standing::Freshness::Cached).await {
+                Ok(_) => "member",
+                Err(refusal) if refusal.code == "person_not_member" => "not-member",
+                Err(refusal) if refusal.code == "org_suspended" => "org-suspended",
                 Err(_) => "unresolved",
             };
             if let Some(status) = self.statuses().into_iter().find(|status| status.account_id == person.account_id) {
@@ -441,7 +456,99 @@ impl PersonBrainFleet for Fleet {
     }
 }
 
+/// ADR-0253 §3: what this Host does when a member's standing ends.
+#[cognia_companion::person_partition::async_trait]
+impl cognia_companion::standing::DepartureEnforcer for Fleet {
+    fn active_people(&self) -> Vec<cognia_companion::host_surface_gate::Person> {
+        let running: Vec<String> = self.snapshots.read().iter().filter(|status| status.running).map(|status| status.account_id.clone()).collect();
+        let people = self.people.read();
+        let mut active: Vec<_> = running.iter().filter_map(|account| people.get(account)).map(standing_person).collect();
+        active.extend(cognia_companion::host_surface_gate::person_execution_lease_people().iter().map(standing_person));
+        active
+    }
+    async fn depart(&self, person: &cognia_companion::host_surface_gate::Person, code: &'static str) {
+        self.depart_person(&person.partition(), code).await;
+    }
+    async fn workspace_removed(&self, person: &cognia_companion::host_surface_gate::Person, workspace: &str) {
+        let Some(records) = self.execution_records_root() else { return };
+        match cognia_companion::host_surface_gate::stop_workspace_executions(&records, self.person_exec.as_ref(),
+            &person.org, &person.user, workspace, DEPARTURE_SETTLE).await {
+            Ok(stopped) => for id in stopped {
+                cognia_companion::audit::record_async("person_run_revoked", "standing-authority", "service", "deny",
+                    serde_json::json!({"orgId":person.org,"userId":person.user,"workspaceId":workspace,"agentId":id,
+                        "kind":"sandboxed","code":cognia_companion::standing::REVOKED_DURING_RUN})).await;
+            },
+            Err(code) => log::warn!("workspace departure left runs for {}: {code}", person.user),
+        }
+    }
+}
+
 impl Fleet {
+    /// Stop everything this Host runs for `person` and keep their data: their
+    /// tool-less turns end as `revoked_during_run`, their sandboxed runs are
+    /// stopped by their watchdogs (woken by the revocation) or here after
+    /// [`DEPARTURE_SETTLE`], then their brain stops. Nothing restarts it: brain
+    /// start asks standing.
+    pub(crate) async fn depart_person(&self, person: &PersonPartition, code: &'static str) {
+        use cognia_companion::standing::REVOKED_DURING_RUN;
+        let services = cognia_companion_rpc::headless::headless_services();
+        let mut chats = Vec::new();
+        if let Some(services) = &services {
+            let live: std::collections::HashSet<String> = services.sidecar.live_session_ids().into_iter().collect();
+            for session in cognia_companion::person_chat::PERSON_SESSIONS.sessions_of(&person.account_id) {
+                if !live.contains(&session) { continue; }
+                cognia_companion::person_chat::mark_turn_revoked(&session, REVOKED_DURING_RUN);
+                if let Err(error) = cognia_sidecar::commands::claude_interrupt_impl(&services.sidecar, session.clone()).await {
+                    log::warn!("departure could not interrupt a member turn: {error}");
+                }
+                cognia_companion::audit::record_async("person_run_revoked", &format!("brain-{}", person.account_id), "person-brain", "deny",
+                    serde_json::json!({"accountId":person.account_id,"sessionId":session,"kind":"tool-less","code":REVOKED_DURING_RUN,"standing":code})).await;
+                chats.push(session);
+            }
+        }
+        let deadline = tokio::time::Instant::now() + DEPARTURE_SETTLE;
+        let leased = || cognia_companion::host_surface_gate::person_execution_lease_people().contains(person);
+        while leased() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let runs = cognia_companion::host_surface_gate::person_stop_execution(self.execution_records_root().as_deref(), person,
+            self.person_exec.as_ref(), DEPARTURE_SETTLE).await;
+        if let Err(code) = runs { log::warn!("departure could not stop every run of {}: {code}", person.account_id); }
+        // Let the brain write what the interrupted work ended with.
+        let still_live = |chats: &[String]| services.as_ref().is_some_and(|services| {
+            let live = services.sidecar.live_session_ids();
+            chats.iter().any(|session| live.contains(session))
+        });
+        while (still_live(&chats) || reports_runs(&person.account_id, now_ms())) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let live = services.as_ref().map(|services| services.sidecar.live_session_ids()).unwrap_or_default();
+        for session in chats.iter().filter(|session| !live.contains(session)) {
+            cognia_companion::person_chat::forget_turn_revoked(session);
+        }
+        self.stop_person(person).await;
+        cognia_companion::audit::record_async("person_standing_departure", "standing-authority", "service", "deny",
+            serde_json::json!({"accountId":person.account_id,"code":code,"turns":chats.len(),"runs":runs.unwrap_or(0)})).await;
+    }
+
+    /// Stop `person`'s brain, keeping their partition. Only while they are
+    /// still revoked: a lookup since the departure began may have found them a
+    /// member again, and their new brain is then theirs to keep. Checked under
+    /// the fleet lock, as admission is.
+    async fn stop_person(&self, person: &PersonPartition) {
+        let stopped = {
+            let mut entries = self.entries.lock().await;
+            if cognia_companion::standing::authority().partition_revocation(person).is_none() { return; }
+            let stopped = entries.get_mut(&person.account_id).and_then(|entry| {
+                self.persist_usage(entry);
+                self.stop_entry(entry)
+            });
+            self.refresh(&entries);
+            stopped
+        };
+        wait_stopped(stopped).await;
+    }
+
     /// The purge's data removal, with the person's brain already stopped and
     /// their purge marker set.
     async fn purge_stopped(&self, person: &PersonPartition) -> Result<(), &'static str> {
@@ -487,7 +594,11 @@ impl Fleet {
 mod tests {
     use super::*;
     use cognia_companion::ws_bridge::test_support::{lock_slot, clear_socket_for_testing, install_person_socket_for_testing};
+    /// The fixtures' organization is a member everywhere: brain start asks.
+    static P5_STANDING: std::sync::LazyLock<cognia_companion::host_surface_gate::person_standing_test_support::Installed> =
+        std::sync::LazyLock::new(|| cognia_companion::host_surface_gate::person_standing_test_support::Installed::new("p5-test-org"));
     fn fixture(root: &std::path::Path, maximum: usize) -> Arc<Fleet> {
+        std::sync::LazyLock::force(&P5_STANDING);
         let mut config = crate::brain::tests::test_config(root.join("missing-brain.mjs"), Duration::from_millis(100));
         config.data_dir = root.into();
         Fleet::with_limits(config, crate::brain::tests::test_state(), Duration::from_secs(1), maximum,
@@ -495,6 +606,101 @@ mod tests {
             cognia_companion_rpc::headless::HeadlessServices::stub_for_tests().exec.clone()).unwrap()
     }
     fn person(user: &str) -> PersonPartition { PersonPartition::new("p5-test-org".into(), user.into()) }
+
+    #[tokio::test]
+    async fn adr0253_a_departure_stops_the_brain_keeps_the_data_and_refuses_a_restart() {
+        use cognia_companion::standing::{authority, Freshness};
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let org = "org_adr0253_departure";
+        let standing = cognia_companion::host_surface_gate::person_standing_test_support::Installed::new(org);
+        let ada = PersonPartition::new(org.into(), "usr_departure_ada".into());
+        let bob = PersonPartition::new(org.into(), "usr_departure_bob".into());
+        let _ada_socket = install_person_socket_for_testing(&fleet.state, &ada.account_id);
+        drop(fleet.acquire(&ada).await.unwrap());
+        let scope = fleet.receipt_scope(&ada.account_id).unwrap();
+        let _bob_socket = install_person_socket_for_testing(&fleet.state, &bob.account_id);
+        drop(fleet.acquire(&bob).await.unwrap());
+        // Ada leaves: the plane refuses her, the authority revokes her.
+        standing.refuse("person_not_member");
+        assert_eq!(authority().actions(&standing_person(&ada), None, Freshness::Fresh).await.unwrap_err().code, "person_not_member");
+        fleet.depart_person(&ada, "person_not_member").await;
+        assert!(!ws_bridge::account_connected(&ada.account_id), "the departed brain still runs");
+        assert!(ws_bridge::account_connected(&bob.account_id), "a departure stopped someone else's brain");
+        // Her partition is kept for the operator to purge or for her return.
+        assert_eq!(fleet.receipt_scope(&ada.account_id), Some(scope.clone()));
+        assert!(matches!(fleet.acquire(&ada).await, Err("person_not_member")));
+        // Re-added: once the cached refusal expires, a lookup after the
+        // revocation finds her a member again.
+        standing.admit();
+        authority().invalidate_person(&standing_person(&ada));
+        let _ada_again = install_person_socket_for_testing(&fleet.state, &ada.account_id);
+        drop(fleet.acquire(&ada).await.unwrap());
+        assert_eq!(fleet.receipt_scope(&ada.account_id), Some(scope));
+        fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adr0253_the_fleet_reports_people_with_runs_and_departs_through_the_enforcer() {
+        use cognia_companion::standing::{authority, DepartureEnforcer, Freshness};
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let org = "org_adr0253_enforcer";
+        let standing = cognia_companion::host_surface_gate::person_standing_test_support::Installed::new(org);
+        let ada = PersonPartition::new(org.into(), "usr_enforcer_ada".into());
+        // A live sandboxed run makes its person active, brain or not.
+        let binding = cognia_external_agent::spawn_authority::PlacementBinding { org_id: ada.org_id.clone(),
+            workspace_id: format!("person:{}", ada.account_id), actor_user_id: ada.user_id.clone(), run_id: "adr0253-enforcer".into() };
+        cognia_companion::host_surface_gate::person_execution_lease_bind("adr0253-enforcer", &binding, Arc::new(|| true), Arc::new(|| {})).unwrap();
+        assert!(fleet.active_people().contains(&standing_person(&ada)));
+        cognia_companion::host_surface_gate::person_execution_lease_revoke("adr0253-enforcer", &binding);
+        assert!(!fleet.active_people().contains(&standing_person(&ada)));
+        let _socket = install_person_socket_for_testing(&fleet.state, &ada.account_id);
+        drop(fleet.acquire(&ada).await.unwrap());
+        standing.refuse("person_not_member");
+        let _ = authority().actions(&standing_person(&ada), None, Freshness::Fresh).await;
+        DepartureEnforcer::depart(fleet.as_ref(), &standing_person(&ada), "person_not_member").await;
+        assert!(!ws_bridge::account_connected(&ada.account_id));
+        fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_departure_spares_a_brain_admitted_after_a_rejoin() {
+        use cognia_companion::standing::{authority, Freshness};
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let org = "org_adr0253_rejoin";
+        let standing = cognia_companion::host_surface_gate::person_standing_test_support::Installed::new(org);
+        let ada = PersonPartition::new(org.into(), "usr_rejoin_ada".into());
+        standing.refuse("person_not_member");
+        let _ = authority().actions(&standing_person(&ada), None, Freshness::Fresh).await;
+        // Re-added while the departure is still settling.
+        standing.admit();
+        authority().actions(&standing_person(&ada), None, Freshness::Fresh).await.unwrap();
+        let _socket = install_person_socket_for_testing(&fleet.state, &ada.account_id);
+        drop(fleet.acquire(&ada).await.unwrap());
+        fleet.stop_person(&ada).await;
+        assert!(ws_bridge::account_connected(&ada.account_id), "a stale departure stopped a member's brain");
+        fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adr0253_brain_start_asks_standing_and_a_suspension_refuses_it() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let org = "org_adr0253_brain_start";
+        let standing = cognia_companion::host_surface_gate::person_standing_test_support::Installed::new(org);
+        let ada = PersonPartition::new(org.into(), "usr_brain_start".into());
+        standing.refuse("org_suspended");
+        assert!(matches!(fleet.acquire(&ada).await, Err("org_suspended")));
+        standing.refuse("host_authority_unavailable");
+        cognia_companion::standing::authority().invalidate_org(org);
+        assert!(matches!(fleet.acquire(&ada).await, Err("host_authority_unavailable")));
+        assert!(fleet.receipt_scope(&ada.account_id).is_none(), "a refused person got a partition");
+        let listed = fleet.list().await.unwrap();
+        assert!(listed["persons"].as_array().unwrap().is_empty());
+        fleet.shutdown().await;
+    }
 
     #[tokio::test]
     async fn p6d_fleet_purge_removes_workspace_records_and_preserves_other_partition() {

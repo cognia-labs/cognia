@@ -265,6 +265,8 @@ pub fn apply(
     // own teardown is safe.
     if matches!(action, LifecycleAction::Suspend | LifecycleAction::Revoke) {
         super::event_leases::close_device(device_id);
+        // Every transport's socket, the data channel included (ADR-0253 §3).
+        super::standing::authority().close_device(device_id);
     }
 
     // ── 7. Bus frame — closes `/ws/events` for this device ──────────────────

@@ -182,6 +182,10 @@ pub(crate) struct PersonAgentLeaseRequest {
 }
 pub(crate) fn person_lease_mint(person: &PersonPartition, request: PersonAgentLeaseRequest, gateway: &GatewayState) -> PersonResult<Value> {
     let _p6d_fence = cognia_companion::org_policy::PERSON_CREDENTIAL_FENCE.lock();
+    // ADR-0253 §3: under the fence the revocation takes.
+    if let Some(code) = cognia_companion::standing::authority().partition_revocation(person) {
+        return Err(crate::person_model::person_partition_refusal(code));
+    }
     person_runtime_admit(person, &request.runtime_id, Some(&request.provider))?;
     let family = cognia_companion::org_agent_policy::person_runtime_family(&request.runtime_id)
         .ok_or_else(|| person_refusal(StatusCode::SERVICE_UNAVAILABLE, "model_access_unavailable"))?;

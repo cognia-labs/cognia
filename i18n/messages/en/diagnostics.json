@@ -501,6 +501,10 @@
       "label": "The agent can't read this attachment",
       "hint": "Agents on a shared Host can read text and images, but not documents such as PDFs. Remove the document, or paste the parts you need as text."
     },
+    "revokedDuringRun": {
+      "label": "Stopped because your access changed",
+      "hint": "Your membership or role in this organization changed while this was running, so the Host stopped it. What was already written is kept. Anything it had already done outside the Host was not undone."
+    },
     "personNotMember": {
       "label": "You're not a member of this organization",
       "hint": "Your organization's Host no longer lists you as a member, so it won't run anything for you. If this is a mistake, ask an org owner or admin to add you back."

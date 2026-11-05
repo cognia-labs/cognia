@@ -614,6 +614,15 @@ which sees only the organizations its `COLLAB_INTERNAL_SERVICE_CREDENTIAL_SCOPES
 entry names. Rows are kept for seven days; a Host offline for longer receives a
 `resync` and re-checks every person it serves.
 
+A multi-tenant Host with `COGNIA_COLLAB_URL` and
+`COGNIA_COLLAB_SERVICE_CREDENTIAL` set follows the stream from boot and keeps
+its cursor in `<data>/companion/standing-cursor.json`. When a member leaves or
+their organization is suspended, the Host revokes their model tickets, stops
+their turns and sandboxed runs (each ends as `revoked_during_run` and is
+audited), stops their brain and closes their devices' sockets; their partition
+data is kept. Whether or not the stream is up, the Host re-checks everyone it
+is running something for every 30 seconds.
+
 ## Multi-tenant Host
 
 Set `COGNIA_DEPLOYMENT_MODE=multi-tenant`. Before serving, the Host requires a

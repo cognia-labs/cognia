@@ -134,17 +134,14 @@ pub(super) const COMMANDS: &[&str] = &[
     "app_settings_update",
 ];
 
+/// A desktop Host has no organization scope, whatever its mode says; the
+/// refusal is organization administration's one `org_scope_unavailable`.
 fn require_org_server(kind: &str) -> Result<(), (StatusCode, Json<RpcError>)> {
     if kind == "headless" {
         Ok(())
     } else {
-        Err((
-            StatusCode::CONFLICT,
-            Json(RpcError::new(
-                "org_scope_unavailable",
-                "organization administration requires a multi-tenant cognia-server",
-            )),
-        ))
+        let problem = cognia_companion::org_policy::org_scope_unavailable();
+        Err((problem.status_code(), Json(RpcError::new(problem.code, problem.detail))))
     }
 }
 
@@ -251,12 +248,19 @@ impl cognia_external_agent::exec_backend::AgentEventEmitter for BindingEmitter {
         ) {
             if let Some(reason) = self.person_reason.read().as_ref() {
                 payload["reason"] = serde_json::json!(reason);
+            } else if let Some(reason) =
+                cognia_companion::host_surface_gate::run_stop_reason(&self.agent_id)
+            {
+                // A run the Host stopped because its placer lost the
+                // workspace (ADR-0253 §3).
+                payload["reason"] = serde_json::json!(reason);
             }
         }
         if channel == cognia_external_agent::exec_backend::EXIT_CHANNEL
             && payload.get("agentId").and_then(Value::as_str) == Some(self.agent_id.as_str())
         {
             self.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+            cognia_companion::host_surface_gate::forget_run_stop_reason(&self.agent_id);
             cognia_companion::host_surface_gate::person_execution_lease_revoke(
                 &self.agent_id,
                 &self.binding,
@@ -289,6 +293,10 @@ impl cognia_external_agent::exec_backend::AgentEventEmitter for BindingEmitter {
 
 /// P6d bounded watchdog. A completed run never retains a timer beyond one
 /// interval. The partition and generation fences protect replacement runs.
+/// Standing is not asked here: the Host's standing authority re-checks
+/// everyone with a run every 30 seconds and wakes this watchdog the moment
+/// it revokes someone (ADR-0253 §3), and the run then ends as
+/// `revoked_during_run`.
 fn person_start_watchdog(
     root: std::path::PathBuf,
     id: String,
@@ -320,9 +328,13 @@ fn person_watchdog_with_interval(
     reason: std::sync::Arc<parking_lot::RwLock<Option<String>>>,
     interval: std::time::Duration,
 ) {
+    let mut revocations = cognia_companion::standing::authority().revocations();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                () = tokio::time::sleep(interval) => {}
+                _ = revocations.changed() => {}
+            }
             if exited.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
@@ -359,12 +371,16 @@ fn person_watchdog_with_interval(
             })
             .await
             .unwrap_or(Err("person_workspace_unavailable"));
-            let standing =
-                cognia_companion::host_surface_gate::person_execution_standing(&person).await;
+            let revoked = cognia_companion::standing::authority()
+                .revocation(&cognia_companion::host_surface_gate::Person {
+                    org: person.org_id.clone(),
+                    user: person.user_id.clone(),
+                })
+                .map(|_| cognia_companion::standing::REVOKED_DURING_RUN.to_owned());
             let violation = reason
                 .read()
                 .clone()
-                .or_else(|| standing.err().map(|problem| problem.code))
+                .or(revoked)
                 .or_else(|| match measured {
                     Ok((used, max)) if used > max => {
                         Some("person_workspace_quota_exceeded".to_owned())
@@ -380,6 +396,11 @@ fn person_watchdog_with_interval(
                 });
             if let Some(code) = violation {
                 cognia_companion::host_surface_gate::person_execution_lease_revoke(&id, &binding);
+                if code == cognia_companion::standing::REVOKED_DURING_RUN && reason.read().is_none() {
+                    cognia_companion::audit::record_async("person_run_revoked", &format!("brain-{}", person.account_id),
+                        "person-brain", "deny", serde_json::json!({"accountId":person.account_id,"agentId":id,
+                            "kind":"sandboxed","code":code})).await;
+                }
                 *reason.write() = Some(code.clone());
                 emitter.emit(
                     cognia_external_agent::exec_backend::STATE_CHANGE_CHANNEL,
@@ -3783,7 +3804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6e_watchdog_standing_loss_stops_run_revokes_ticket_and_preserves_reason() {
+    async fn adr0253_a_revocation_wakes_the_watchdog_which_stops_the_run_as_revoked_during_run() {
         use cognia_companion::{host_surface_gate as gate, person_partition::PersonPartition};
         use cognia_external_agent::{
             exec_backend::AgentEventEmitter,
@@ -3833,7 +3854,7 @@ mod tests {
             person_bus: Some(bus.clone()),
             person_reason: reason.clone(),
         });
-        standing.refuse("host_surface_forbidden");
+        // A long interval: only the revocation can wake the watchdog in time.
         person_watchdog_with_interval(
             temp.path().into(),
             id.into(),
@@ -3842,7 +3863,18 @@ mod tests {
             emitter.clone(),
             exited,
             reason.clone(),
-            std::time::Duration::from_millis(1),
+            std::time::Duration::from_secs(3600),
+        );
+        tokio::task::yield_now().await;
+        standing.refuse("person_not_member");
+        let departed = gate::Person { org: person.org_id.clone(), user: person.user_id.clone() };
+        assert_eq!(
+            cognia_companion::standing::authority()
+                .actions(&departed, None, cognia_companion::standing::Freshness::Fresh)
+                .await
+                .unwrap_err()
+                .code,
+            "person_not_member"
         );
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while backend.killed.lock().is_empty() {
@@ -3851,7 +3883,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(reason.read().as_deref(), Some("host_surface_forbidden"));
+        assert_eq!(reason.read().as_deref(), Some("revoked_during_run"));
         assert!(gateway
             .tickets
             .validate(&minted.secret, chrono::Utc::now().timestamp_millis())
@@ -3867,7 +3899,7 @@ mod tests {
         };
         assert_eq!(replay.len(), 2);
         for event in replay {
-            assert_eq!(event.payload["reason"], "host_surface_forbidden");
+            assert_eq!(event.payload["reason"], "revoked_during_run");
             assert_eq!(
                 event.partition_account_id.as_deref(),
                 Some(person.account_id.as_str())

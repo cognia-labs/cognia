@@ -16723,6 +16723,10 @@
         "hint": "This host is already running the maximum number of agent processes — finish or close one, then try again.",
         "label": "Too many agent sessions"
       },
+      "revokedDuringRun": {
+        "hint": "Your membership or role in this organization changed while this was running, so the Host stopped it. What was already written is kept. Anything it had already done outside the Host was not undone.",
+        "label": "Stopped because your access changed"
+      },
       "routerFusionBypassed": {
         "hint": "Router + Fusion could not reserve a background model call, so it ran on the original path and its cost is not in the ledger. Repeated failures pause the surface; check Settings → AI connections → Routing.",
         "label": "Model call not ledgered"

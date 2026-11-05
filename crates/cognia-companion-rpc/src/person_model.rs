@@ -38,6 +38,11 @@ pub fn person_mint(mode: DeploymentMode, person: &PersonPartition, request: Pers
         return Err(RpcError::malformed("invalid person model request".into()));
     }
     let _p6c_fence = cognia_companion::org_policy::PERSON_CREDENTIAL_FENCE.lock();
+    // ADR-0253 §3: a revoked person's brain is being stopped; it mints
+    // nothing meanwhile. Checked under the fence the revocation takes.
+    if let Some(code) = cognia_companion::standing::authority().partition_revocation(person) {
+        return Err(person_partition_refusal(code));
+    }
     let key = cognia_companion::org_credentials::OrgCredentials::org_provider_key(&person.org_id, &request.provider)
         .map_err(|_| person_unavailable())?.ok_or_else(person_unavailable)?;
     let fingerprint = cognia_companion::org_credentials::OrgCredentials::list(&person.org_id)
@@ -176,6 +181,9 @@ pub(crate) async fn person_send_turn(host: &dyn crate::rpc_host::RpcHost,
         log::warn!("person chat send refused: session fence ({code})");
         person_partition_refusal(code)
     })?;
+    // A new turn: a revocation mark left by an earlier one that never
+    // reported its end must not stamp this one.
+    cognia_companion::person_chat::forget_turn_revoked(&session_id);
     std::fs::create_dir_all(&scratch).map_err(|_| RpcError::internal("person chat scratch unavailable".into()))?;
     // The sidecar starts in its script directory, so a relative Host data dir
     // must be resolved here rather than interpreted in the child's cwd.
@@ -266,6 +274,28 @@ mod tests {
         assert_eq!(overrides[0].protocol, "anthropic");
         assert_eq!(overrides[0].deployment_id.as_deref(), Some("p6c-deployment"));
         assert_eq!(gateway.with_snapshot(|snapshot| snapshot.unwrap().providers[0].api_key.clone()).as_deref(), Some("operator-key-never-used"));
+    }
+    #[tokio::test]
+    async fn adr0253_a_revoked_person_mints_nothing_and_loses_what_they_hold() {
+        let _p6c_lock = PERSON_TEST_LOCK.lock().await;
+        let gateway = std::sync::Arc::new(gateway());
+        cognia_companion::org_policy::org_usage_install(gateway.tickets.clone());
+        let a = PersonPartition::new("org_adr0253_mint".into(), "usr_adr0253_mint".into());
+        let standing = cognia_companion::host_surface_gate::person_standing_test_support::Installed::new(&a.org_id);
+        OrgCredentials::set(&a.org_id, "p6c-provider", "org-key", "operator", 1).unwrap();
+        let held = person_mint(MultiTenant, &a, request("adr0253-held"), &gateway, 19384).unwrap();
+        standing.refuse("person_not_member");
+        let departed = cognia_companion::host_surface_gate::Person { org: a.org_id.clone(), user: a.user_id.clone() };
+        let _ = cognia_companion::standing::authority()
+            .actions(&departed, None, cognia_companion::standing::Freshness::Fresh).await;
+        assert!(gateway.tickets.validate(held["secret"].as_str().unwrap(), 1).is_err());
+        assert_error(person_mint(MultiTenant, &a, request("adr0253-after"), &gateway, 19384), StatusCode::FORBIDDEN, "person_not_member");
+        // Rejoined: a lookup after the revocation finds a member again.
+        standing.admit();
+        cognia_companion::standing::authority()
+            .actions(&departed, None, cognia_companion::standing::Freshness::Fresh).await.unwrap();
+        assert!(person_mint(MultiTenant, &a, request("adr0253-rejoined"), &gateway, 19384).is_ok());
+        OrgCredentials::delete(&a.org_id, "p6c-provider").unwrap();
     }
     #[tokio::test]
     async fn p6c_mint_refusals_are_closed_and_non_person_callers_are_forbidden() {

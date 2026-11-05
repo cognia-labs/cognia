@@ -20,6 +20,16 @@ pub fn person_revoke_provider(org: &str, provider: &str) {
     if let Some(registry) = ORG_USAGE_REGISTRY.read().clone() { registry.person_revoke_provider(org, provider); }
 }
 
+/// ADR-0253 §3: revoke every ticket minted for a member whose standing ended
+/// (`user: None`: everyone in the organization). Under the credential fence,
+/// so a mint in flight either lands before and is revoked, or after and is
+/// refused by the standing authority's revocation.
+pub fn person_revoke_member(org: &str, user: Option<&str>) -> usize {
+    let Some(registry) = ORG_USAGE_REGISTRY.read().clone() else { return 0 };
+    let _fence = PERSON_CREDENTIAL_FENCE.lock();
+    registry.person_revoke_member(org, user)
+}
+
 /// ADR-0253 §6: a purge removes the member's usage. No ledger installed
 /// (a desktop Host, or a server without member accounting) has nothing to
 /// remove.
@@ -54,11 +64,16 @@ pub fn is_write(command: &str) -> bool {
     matches!(command, "org_model_credential_set" | "org_model_credential_delete" | "org_agent_policy_set" | "org_usage_cap_set" | "org_member_usage_cap_set")
 }
 
+/// The one refusal for organization administration on a Host with no
+/// organization scope (ADR-0253 D03): a configuration boundary, not a
+/// transient outage, so retry cannot help.
+pub const ORG_SCOPE_UNAVAILABLE: &str = "org_scope_unavailable";
+pub fn org_scope_unavailable() -> Problem {
+    Problem::with_status(StatusCode::CONFLICT, ORG_SCOPE_UNAVAILABLE, "organization administration requires a multi-tenant Host")
+}
+
 pub fn require_mode(mode: DeploymentMode) -> Result<(), Problem> {
-    if mode == DeploymentMode::MultiTenant { Ok(()) } else {
-        // A configuration boundary, not a transient outage: retry cannot help.
-        Err(Problem::with_status(StatusCode::CONFLICT, "org_scope_unavailable", "organization administration requires a multi-tenant Host"))
-    }
+    if mode == DeploymentMode::MultiTenant { Ok(()) } else { Err(org_scope_unavailable()) }
 }
 
 /// Service authority must name an org; tenant devices may never select one.

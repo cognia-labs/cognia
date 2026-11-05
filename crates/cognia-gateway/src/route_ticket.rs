@@ -1496,6 +1496,27 @@ impl RouteTicketRegistry {
         count
     }
 
+    /// ADR-0253 §3: a member whose standing ended loses every ticket minted
+    /// for them, chat and agent alike. `user: None` is the whole organization
+    /// (a suspension). Credentials and secrets go even if metadata
+    /// persistence fails.
+    pub fn person_revoke_member(&self, org: &str, user: Option<&str>) -> usize {
+        let mut inner = self.inner.lock();
+        let mut count = 0;
+        for record in &mut inner.records {
+            if !record.ticket.revoked
+                && record.ticket.member.as_ref().is_some_and(|member| {
+                    member.org_id == org && user.is_none_or(|user| member.user_id == user)
+                })
+            {
+                revoke_record(record);
+                count += 1;
+            }
+        }
+        inner.dirty |= count > 0;
+        count
+    }
+
     pub fn revoke_session(&self, session_id: &str) -> usize {
         let mut inner = self.inner.lock();
         let mut count = 0;
@@ -1615,6 +1636,27 @@ mod tests {
         reg.person_revoke_run("pb_p6e", "run:agent");
         assert!(reg.validate(&minted.secret, 172_800_002).is_err());
         assert!(!reg.person_extend_run(&minted.ticket.ticket_id, "run:agent", 172_800_002, 120_000));
+    }
+
+    #[test]
+    fn adr0253_a_departed_member_loses_every_ticket_and_only_theirs() {
+        let reg = registry();
+        let mint = |org: &str, user: &str| {
+            let mut request = mint_request();
+            request.execution_fingerprint = format!("adr0253-{}", uuid::Uuid::new_v4());
+            reg.person_mint_owned(request, Some(&snapshot()), 1,
+                Some(format!("pb_{user}")), Some(MemberBinding { org_id: org.into(), user_id: user.into() })).unwrap()
+        };
+        let (ada, ada_agent, bob, other) = (mint("org_a", "usr_ada"), mint("org_a", "usr_ada"), mint("org_a", "usr_bob"), mint("org_b", "usr_cy"));
+        assert_eq!(reg.person_revoke_member("org_a", Some("usr_ada")), 2);
+        assert!(reg.validate(&ada.secret, 2).is_err());
+        assert!(reg.validate(&ada_agent.secret, 2).is_err());
+        assert!(reg.validate(&bob.secret, 2).is_ok());
+        assert_eq!(reg.person_revoke_member("org_a", Some("usr_ada")), 0);
+        // A suspension takes the whole organization's, no one else's.
+        assert_eq!(reg.person_revoke_member("org_a", None), 1);
+        assert!(reg.validate(&bob.secret, 2).is_err());
+        assert!(reg.validate(&other.secret, 2).is_ok());
     }
 
     #[test]

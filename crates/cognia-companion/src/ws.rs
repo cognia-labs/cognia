@@ -373,6 +373,9 @@ async fn handle_socket(
         }),
         _ => None,
     };
+    // Subscribed before standing is first decided, so a revocation during
+    // that lookup still reaches this socket.
+    let mut closures = super::standing::authority().closures();
     let mut audience = match &audience_principal {
         Some(principal) => match super::host_surface_gate::events_audience(principal).await {
             Ok(audience) => audience,
@@ -380,6 +383,11 @@ async fn handle_socket(
         },
         None => super::host_surface_gate::EventsAudience::Host,
     };
+    // ADR-0253 §3: a departure, a suspension or a lost device closes this
+    // socket at once, not at the next audience re-check. While open, it
+    // counts its person as present, so the sweep re-checks them.
+    let socket_person = audience_principal.as_ref().and_then(super::host_surface_gate::bound_person);
+    let _standing_presence = socket_person.clone().map(|person| super::standing::authority().presence(person));
     // Channels this connection receives. Starts at the catalog's `default_on`
     // set — i.e. exactly what reached clients before subscriptions existed, so
     // a client that never sends a `subscribe` frame sees no change — and is
@@ -457,6 +465,30 @@ async fn handle_socket(
     loop {
         if !person_live() { return; }
         tokio::select! {
+            closure = closures.recv() => {
+                let close = match closure {
+                    Ok(closure) => closure.closes(&device_id, socket_person.as_ref()),
+                    // Missed closures: decide this socket's standing now.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => match &audience_principal {
+                        Some(principal) => match super::host_surface_gate::events_audience(principal).await {
+                            Ok(next) => { audience = next; false }
+                            Err(problem) => problem.status < 500,
+                        },
+                        None => false,
+                    },
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => false,
+                };
+                if close {
+                    let _ = socket
+                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: 1008,
+                            reason: "standing changed".into(),
+                        })))
+                        .await;
+                    return;
+                }
+            }
+
             // Batch window expired — flush what accumulated.
             _ = batch_window(batcher.deadline()) => {
                 if let Some(batch) = batcher.take_due(Instant::now()) {

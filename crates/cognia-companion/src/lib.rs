@@ -142,6 +142,8 @@ pub mod workflow_app_challenge;
 pub mod workspace_access;
 pub mod host_surface_policy;
 pub mod host_surface_gate;
+pub mod standing;
+pub mod standing_stream;
 pub mod host_routes;
 pub mod ws;
 pub mod ws_bridge;

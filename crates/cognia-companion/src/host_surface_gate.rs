@@ -1,6 +1,7 @@
-//! Admission only: cached standing expires no later than five seconds after
-//! the lookup started, including negative results. Revocation lands at the
-//! next admission past that bound; run fencing stays in the collab server.
+//! Admission over the Host's one standing authority (`crate::standing`):
+//! cached standing expires no later than five seconds after the lookup
+//! started, including negative results, and the standing-change stream drops
+//! it sooner. Run fencing stays in the collab server.
 #![allow(clippy::result_large_err)]
 
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
@@ -17,6 +18,14 @@ use cognia_external_agent::spawn_authority::{ExecutionAdmission, PlacementBindin
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Person { pub org: String, pub user: String }
+
+impl Person {
+    /// The person's partition on this Host: the one place a partition is
+    /// derived from a standing answer (ADR-0253 D02).
+    pub fn partition(&self) -> crate::person_partition::PersonPartition {
+        crate::person_partition::PersonPartition::new(self.org.clone(), self.user.clone())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Refusal { pub status: StatusCode, pub code: &'static str }
@@ -39,9 +48,11 @@ impl From<Refusal> for Problem {
 #[async_trait::async_trait]
 pub trait StandingProvider: Send + Sync {
     fn person(&self, principal: &DeviceContext) -> Result<Person, Refusal>;
+    /// Admission standing, at most five seconds old ([`crate::standing::Freshness::Cached`]).
     async fn actions(&self, person: &Person, workspace: Option<&str>) -> Result<Vec<String>, Refusal>;
-    /// P6d execution must see departures immediately, without the admission cache.
-    async fn person_execution_actions(&self, person: &Person) -> Result<Vec<String>, Refusal> { self.actions(person, None).await }
+    /// Organization standing asked now ([`crate::standing::Freshness::Fresh`]):
+    /// execution and organization-policy writes must see a departure at once.
+    async fn fresh_actions(&self, person: &Person) -> Result<Vec<String>, Refusal> { self.actions(person, None).await }
 }
 
 type CacheKey = (Person, Option<String>);
@@ -50,15 +61,19 @@ const CACHE_LIMIT: usize = 1024;
 const CACHE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
-struct AdmissionCache { entries: HashMap<CacheKey, CacheValue> }
+pub(crate) struct AdmissionCache { entries: HashMap<CacheKey, CacheValue> }
 
 impl AdmissionCache {
-    fn get(&self, key: &CacheKey, now: Instant) -> Option<Result<Vec<String>, Refusal>> {
+    pub(crate) fn forget_person(&mut self, person: &Person) { self.entries.retain(|(cached, _), _| cached != person); }
+    pub(crate) fn forget_org(&mut self, org: &str) { self.entries.retain(|(cached, _), _| cached.org != org); }
+    pub(crate) fn clear(&mut self) { self.entries.clear(); }
+
+    pub(crate) fn get(&self, key: &CacheKey, now: Instant) -> Option<Result<Vec<String>, Refusal>> {
         self.entries.get(key).filter(|(at, _)| now.saturating_duration_since(*at) < CACHE_TTL)
             .map(|(_, result)| result.clone())
     }
 
-    fn insert(&mut self, key: CacheKey, started: Instant, now: Instant, result: Result<Vec<String>, Refusal>) {
+    pub(crate) fn insert(&mut self, key: CacheKey, started: Instant, now: Instant, result: Result<Vec<String>, Refusal>) {
         self.entries.retain(|_, (at, _)| now.saturating_duration_since(*at) < CACHE_TTL);
         // A slow lookup must neither extend the TTL nor overwrite fresher
         // standing from a concurrent admission for the same principal.
@@ -73,13 +88,15 @@ impl AdmissionCache {
     }
 }
 
-struct LiveStanding { cache: Mutex<AdmissionCache> }
-static LIVE: Lazy<Arc<LiveStanding>> = Lazy::new(|| Arc::new(LiveStanding { cache: Mutex::new(AdmissionCache::default()) }));
+/// The live provider: the verified device binding, then the standing
+/// authority. In-flight requests are not single-flighted.
+struct LiveStanding;
+static LIVE: LiveStanding = LiveStanding;
 
 #[async_trait::async_trait]
 impl StandingProvider for LiveStanding {
-    async fn person_execution_actions(&self, person: &Person) -> Result<Vec<String>, Refusal> {
-        crate::workspace_access::standing_actions(&person.org, None, &person.user).await.map_err(map_authority_error)
+    async fn fresh_actions(&self, person: &Person) -> Result<Vec<String>, Refusal> {
+        crate::standing::authority().actions(person, None, crate::standing::Freshness::Fresh).await
     }
     fn person(&self, principal: &DeviceContext) -> Result<Person, Refusal> {
         let store = crate::security_store::security_store()
@@ -88,18 +105,13 @@ impl StandingProvider for LiveStanding {
     }
 
     async fn actions(&self, person: &Person, workspace: Option<&str>) -> Result<Vec<String>, Refusal> {
-        let key = (person.clone(), workspace.map(str::to_string));
-        let started = Instant::now();
-        if let Some(result) = self.cache.lock().get(&key, started) {
-            return result;
-        }
-        let result = crate::workspace_access::standing_actions(&person.org, workspace, &person.user)
-            .await.map_err(map_authority_error);
-        // Measure from request START, so a slow upstream never extends stale
-        // authority by its latency. In-flight requests are not single-flighted.
-        self.cache.lock().insert(key, started, Instant::now(), result.clone());
-        result
+        crate::standing::authority().actions(person, workspace, crate::standing::Freshness::Cached).await
     }
+}
+
+/// The person a device principal is bound to on this Host, if any.
+pub fn bound_person(principal: &DeviceContext) -> Option<Person> {
+    LIVE.person(principal).ok()
 }
 
 fn bound_device_person(
@@ -122,12 +134,14 @@ fn bound_device_person(
     })
 }
 
-fn map_authority_error(error: crate::workspace_access::WorkspaceAccessError) -> Refusal {
+pub(crate) fn map_authority_error(error: crate::workspace_access::WorkspaceAccessError) -> Refusal {
     use crate::workspace_access::WorkspaceAccessError::*;
     match error {
-        // ADR-0253 §8: the collaboration plane says the person has no
-        // standing; the Host's own credential being refused is its outage.
-        Upstream { status: 403 | 404 } => forbidden("person_not_member"),
+        OrgSuspended => forbidden("org_suspended"),
+        // ADR-0253 §8: the collaboration plane answers a non-member 404. A
+        // bare 403 is the Host's own credential refused (a scope that does
+        // not cover the org): its outage, never a reason to depart anyone.
+        Upstream { status: 404 } => forbidden("person_not_member"),
         Unauthorized | Upstream { status: 400..=499 } => unavailable("host_authority_unavailable"),
         InvalidTarget(_) => forbidden("workspace_unresolved"),
         _ => unavailable("host_authority_unavailable"),
@@ -172,28 +186,12 @@ pub fn person_execution_tiers(enabled: bool, tiers: Option<&[cognia_environment:
     enabled && tiers.is_some_and(|tiers| tiers.iter().any(|tier| *tier >= cognia_environment::spec::IsolationTier::Gvisor))
 }
 pub async fn person_execution_standing(person: &crate::person_partition::PersonPartition) -> Result<(), Problem> {
-    #[cfg(any(test, feature = "test-support"))]
-    if let Some(result) = person_standing_test_support::get(&person.org_id) { return result; }
-    LIVE.person_execution_actions(&Person { org: person.org_id.clone(), user: person.user_id.clone() }).await
+    LIVE.fresh_actions(&Person { org: person.org_id.clone(), user: person.user_id.clone() }).await
         .map(|_| ()).map_err(Problem::from)
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub mod person_standing_test_support {
-    use super::*;
-    static RESULTS: Lazy<Mutex<HashMap<String, Option<&'static str>>>> = Lazy::new(Default::default);
-    pub struct Installed(String);
-    impl Installed {
-        pub fn new(org: &str) -> Self { RESULTS.lock().insert(org.into(), None); Self(org.into()) }
-        pub fn refuse(&self, code: &'static str) { RESULTS.lock().insert(self.0.clone(), Some(code)); }
-    }
-    impl Drop for Installed { fn drop(&mut self) { RESULTS.lock().remove(&self.0); } }
-    pub(super) fn get(org: &str) -> Option<Result<(), Problem>> {
-        RESULTS.lock().get(org).map(|code| match code {
-            Some(code) => Err(Problem::with_status(StatusCode::FORBIDDEN, *code, *code)), None => Ok(()),
-        })
-    }
-}
+pub use crate::standing::test_support as person_standing_test_support;
 
 /// P6e lifecycle hooks captured at spawn. The exact generation is compared
 /// before renewal/revocation, so delayed exits cannot retire replacements.
@@ -220,6 +218,64 @@ pub fn person_execution_lease_revoke(id: &str, binding: &PlacementBinding) {
         if leases.get(id).is_some_and(|lease| lease.binding == *binding) { leases.remove(id) } else { None }
     };
     if let Some(lease) = lease { (lease.revoke)(); }
+}
+
+/// The people with a live sandboxed run on this Host (ADR-0253 §3 sweep).
+pub fn person_execution_lease_people() -> Vec<crate::person_partition::PersonPartition> {
+    let mut people: Vec<_> = PERSON_EXECUTION_LEASES.lock().values()
+        .filter_map(|lease| person_execution_owner(&lease.binding)).collect();
+    people.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+    people.dedup();
+    people
+}
+
+/// Why the Host stopped a run it placed, by agent id, for the run's exit
+/// event (ADR-0253 §3). A person run carries its own reason; this covers
+/// runs placed in an organization workspace.
+static RUN_STOP_REASONS: Lazy<Mutex<HashMap<String, &'static str>>> = Lazy::new(Default::default);
+pub fn run_stop_reason(id: &str) -> Option<&'static str> {
+    RUN_STOP_REASONS.lock().get(id).copied()
+}
+pub fn forget_run_stop_reason(id: &str) {
+    RUN_STOP_REASONS.lock().remove(id);
+}
+
+/// ADR-0253 §3 `workspace_removed`: stop the runs `user` placed in
+/// `workspace`, each recorded as `revoked_during_run`. Their other runs and
+/// every other person's run in that workspace go on. Returns the stopped ids.
+pub async fn stop_workspace_executions(directory: &std::path::Path, backend: &dyn cognia_external_agent::exec_backend::ExecBackend,
+    org: &str, user: &str, workspace: &str, timeout: Duration) -> Result<Vec<String>, &'static str> {
+    let placed = |binding: &PlacementBinding| binding.org_id == org && binding.actor_user_id == user && binding.workspace_id == workspace;
+    let path = directory.join("companion/execution-bindings.json");
+    let records = tokio::task::spawn_blocking(move || ExecutionBindings(path).read())
+        .await.map_err(|_| "execution_binding_store_unavailable")?.map_err(|refusal| refusal.code)?;
+    let ids: Vec<String> = records.iter().filter(|(_, binding)| placed(binding))
+        .filter_map(|(key, _)| key.strip_prefix("external-agent:").map(str::to_owned)).collect();
+    tokio::time::timeout(timeout, async {
+        use cognia_external_agent::process::ExternalAgentProcessState::{Stopped, Failed};
+        let mut stopped = Vec::new();
+        for id in ids {
+            let _run = person_execution_run_lock(&id).lock_owned().await;
+            if matches!(backend.status(&id).await, None | Some(Stopped | Failed)) { continue; }
+            // The live generation must still be the recorded placement: a
+            // replacement under the same id is someone else's run.
+            let info = backend.get_info(&id).await.map_err(|_| "execution_binding_store_unavailable")?;
+            let binding = info.pointer("/placement/binding").cloned()
+                .and_then(|value| serde_json::from_value::<PlacementBinding>(value).ok());
+            if !binding.as_ref().is_some_and(placed) { continue; }
+            // Read by the run's exit event, which also removes it.
+            RUN_STOP_REASONS.lock().insert(id.clone(), crate::standing::REVOKED_DURING_RUN);
+            if backend.kill(&id).await.is_err() {
+                forget_run_stop_reason(&id);
+                return Err("execution_binding_store_unavailable");
+            }
+            while !matches!(backend.status(&id).await, None | Some(Stopped | Failed)) {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            stopped.push(id);
+        }
+        Ok(stopped)
+    }).await.map_err(|_| "execution_stop_timeout")?
 }
 
 /// P6d ownership is derived from a Host binding, never from event/request ids.
@@ -272,7 +328,7 @@ async fn authorize_entry(capability: &str, arm: Option<&str>, execution_channel:
         Err(unavailable("execution_isolation_unavailable"))
     } else {
         decide(deployment_mode(), enabled, crate::environment_pool::installed().is_some(),
-            LIVE.as_ref(), capability, arm, principal, workspace).await
+            &LIVE, capability, arm, principal, workspace).await
     };
     if let Err(refusal) = &result {
         crate::audit::record_async("host_surface_authorize", &principal.device_id, &principal.scope, "deny",
@@ -297,16 +353,17 @@ pub async fn decide(mode: DeploymentMode, execution: bool, sandboxes: bool, prov
 }
 
 async fn org_policy_standing(mode: DeploymentMode, provider: &dyn StandingProvider, principal: &DeviceContext) -> Result<Option<Person>, Refusal> {
-    if mode != DeploymentMode::MultiTenant { return Err(Refusal { status: StatusCode::CONFLICT, code: "org_scope_unavailable" }); }
+    crate::org_policy::require_mode(mode)
+        .map_err(|problem| Refusal { status: problem.status_code(), code: crate::org_policy::ORG_SCOPE_UNAVAILABLE })?;
     if crate::jwt::is_service_scope(Some(&principal.scope)) { return Ok(None); }
     let person = provider.person(principal)?;
-    let actions = provider.actions(&person, None).await?;
+    let actions = provider.fresh_actions(&person).await?;
     if !actions.iter().any(|action| action == "org.policy.manage") { return Err(forbidden("host_surface_forbidden")); }
     Ok(Some(person))
 }
 
 pub async fn org_policy_person(principal: &DeviceContext) -> Result<Person, Problem> {
-    org_policy_standing(deployment_mode(), LIVE.as_ref(), principal).await
+    org_policy_standing(deployment_mode(), &LIVE, principal).await
         .and_then(|person| person.ok_or_else(|| forbidden("host_principal_unbound")))
         .map_err(Problem::from)
 }
@@ -373,13 +430,20 @@ async fn person_data_standing(provider: &dyn StandingProvider, principal: &Devic
     Ok(person)
 }
 
+/// Whether `principal` acts inside a person partition on this Host: a tenant
+/// caller on a multi-tenant Host. The operator's service scope and every
+/// single-user Host act for the Host itself (ADR-0253 D03).
+fn partitioned_caller(principal: &DeviceContext) -> bool {
+    deployment_mode() == DeploymentMode::MultiTenant && !crate::jwt::is_service_scope(Some(principal.scope.as_ref()))
+}
+
 /// Operation reads have no command args. Re-resolve the current verified
 /// person and standing rather than trusting the receipt's historical device.
 pub(crate) async fn operation_person(principal: &DeviceContext) -> Result<Option<crate::person_partition::PersonPartition>, Problem> {
-    if deployment_mode() == DeploymentMode::SingleUser || crate::jwt::is_service_scope(Some(principal.scope.as_ref())) { return Ok(None); }
-    let person = person_data_standing(LIVE.as_ref(), principal).await
+    if !partitioned_caller(principal) { return Ok(None); }
+    let person = person_data_standing(&LIVE, principal).await
         .map_err(Problem::from)?;
-    Ok(Some(crate::person_partition::PersonPartition::new(person.org, person.user)))
+    Ok(Some(person.partition()))
 }
 
 /// What one device's event stream may carry (P6e live replies).
@@ -414,7 +478,7 @@ impl EventsAudience {
 /// effect without a reconnect.
 pub async fn events_audience(principal: &DeviceContext) -> Result<EventsAudience, Problem> {
     let result = events_audience_with(deployment_mode(), execution_enabled(),
-        crate::environment_pool::installed().is_some(), LIVE.as_ref(), principal,
+        crate::environment_pool::installed().is_some(), &LIVE, principal,
         crate::person_partition::fleet().is_some()).await;
     if let Err(refusal) = &result {
         crate::audit::record_async("host_surface_authorize", &principal.device_id, &principal.scope, "deny",
@@ -432,7 +496,7 @@ async fn events_audience_with(mode: DeploymentMode, execution: bool, sandboxes: 
         Err(refusal) if refusal.code == "host_surface_forbidden" && mode == DeploymentMode::MultiTenant
             && person_fleet && !crate::jwt::is_service_scope(Some(principal.scope.as_ref())) => {
             let person = person_data_standing(provider, principal).await?;
-            Ok(EventsAudience::Partition(crate::person_partition::PersonPartition::new(person.org, person.user).account_id))
+            Ok(EventsAudience::Partition(person.partition().account_id))
         }
         Err(refusal) => Err(refusal),
     }
@@ -443,7 +507,7 @@ pub async fn person_partition(capability: &str, command: &str, principal: &Devic
     if principal.scope == "person-brain" {
         return crate::person_chat::person_caller(principal, command).map(Some);
     }
-    if deployment_mode() == DeploymentMode::SingleUser || crate::jwt::is_service_scope(Some(principal.scope.as_ref())) { return Ok(None); }
+    if !partitioned_caller(principal) { return Ok(None); }
     let policy = POLICY.as_ref().map_err(|_| Problem::with_status(StatusCode::FORBIDDEN, "host_surface_forbidden", "invalid Host policy"))?;
     let partition_host_state = crate::person_partition::fleet().is_some()
         && policy.person_host_state_capability(command).is_some();
@@ -451,9 +515,9 @@ pub async fn person_partition(capability: &str, command: &str, principal: &Devic
         || (!partition_host_state && !policy.get(capability).is_some_and(|entry| entry.class == SurfaceClass::HostData)) { return Ok(None); }
     // The normal gate already checked standing. Reuse its bounded cache and
     // derive authority only from the verified binding, never from args.
-    let person = person_data_standing(LIVE.as_ref(), principal).await
+    let person = person_data_standing(&LIVE, principal).await
         .map_err(Problem::from)?;
-    Ok(Some(crate::person_partition::PersonPartition::new(person.org, person.user)))
+    Ok(Some(person.partition()))
 }
 
 /// Legacy explicit browser scopes, retained for single-user compatibility.
@@ -731,7 +795,7 @@ async fn resolve_execution_admission(provider: &dyn StandingProvider, lookup: &d
 
 async fn person_resolve_execution(provider: &dyn StandingProvider, lookup: &dyn ExecutionBindingLookup,
     command: &str, args: &Value, person: &crate::person_partition::PersonPartition) -> Result<ExecutionAdmission, Refusal> {
-    provider.person_execution_actions(&Person { org: person.org_id.clone(), user: person.user_id.clone() }).await?;
+    provider.fresh_actions(&Person { org: person.org_id.clone(), user: person.user_id.clone() }).await?;
     let id = record_id(command, args).filter(|id| !id.is_empty()).ok_or_else(|| forbidden("workspace_unresolved"))?;
     let existing = lookup.binding(&record_key(command, id))?;
     if existing.as_ref().is_some_and(|binding| person_execution_owner(binding).as_ref() != Some(person)) {
@@ -892,7 +956,7 @@ pub async fn authorize_execution(state: &crate::SharedState, capability: &str, c
             let store = tokio::task::spawn_blocking(move || ExecutionBindings(directory.join("companion/execution-bindings.json")).read())
                 .await.map_err(|_| unavailable("execution_binding_store_unavailable"))??;
             if command == "spawn_external_agent" && store.len() >= EXECUTION_BINDING_LIMIT { return Err(unavailable("execution_binding_store_full")); }
-            resolve_execution_admission(LIVE.as_ref(), &store, command, args, principal).await.map(Some)
+            resolve_execution_admission(&LIVE, &store, command, args, principal).await.map(Some)
         }.await;
         return result.map_err(Problem::from);
     }
@@ -932,7 +996,7 @@ pub async fn authorize_execution(state: &crate::SharedState, capability: &str, c
             && !record_id(command, args).is_some_and(|id| store.contains_key(&record_key(command, id))) {
             return Err(unavailable("execution_binding_store_full"));
         }
-        resolve_execution_admission(LIVE.as_ref(), &store, command, args, principal).await.map(Some)
+        resolve_execution_admission(&LIVE, &store, command, args, principal).await.map(Some)
     }.await;
     if let Err(refusal) = &result {
         crate::audit::record_async("host_surface_authorize", &principal.device_id, &principal.scope, "deny",
@@ -945,6 +1009,70 @@ pub async fn authorize_execution(state: &crate::SharedState, capability: &str, c
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn adr0253_a_workspace_removal_stops_only_the_placers_runs_there() {
+        use cognia_external_agent::exec_backend::ExecBackend;
+        use cognia_external_agent::process::{ExternalAgentEventSink, ExternalAgentProcessState, ExternalAgentSpawnConfig};
+        struct Runs(Mutex<HashMap<String, (ExternalAgentProcessState, PlacementBinding)>>);
+        #[async_trait::async_trait]
+        impl ExecBackend for Runs {
+            async fn spawn(&self, _: ExternalAgentSpawnConfig, _: Arc<dyn ExternalAgentEventSink>) -> Result<String, String> { unreachable!() }
+            async fn send(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+            async fn kill(&self, id: &str) -> Result<(), String> {
+                self.0.lock().get_mut(id).ok_or("unknown")?.0 = ExternalAgentProcessState::Stopped;
+                Ok(())
+            }
+            async fn kill_all(&self) -> Result<(), String> { unreachable!() }
+            async fn status(&self, id: &str) -> Option<ExternalAgentProcessState> { self.0.lock().get(id).map(|run| run.0.clone()) }
+            async fn list(&self) -> Vec<String> { self.0.lock().keys().cloned().collect() }
+            async fn is_running(&self, _: &str) -> Result<bool, String> { unreachable!() }
+            async fn get_info(&self, id: &str) -> Result<Value, String> {
+                Ok(json!({ "placement": { "binding": self.0.lock().get(id).ok_or("unknown")?.1 } }))
+            }
+            async fn set_running(&self, _: &str) -> Result<(), String> { unreachable!() }
+            async fn set_failed(&self, _: &str) -> Result<(), String> { unreachable!() }
+            fn kind(&self) -> &'static str { "adr0253-runs" }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let placed = |user: &str, workspace: &str, run: &str| PlacementBinding {
+            org_id: "org_adr0253_ws".into(), workspace_id: workspace.into(), actor_user_id: user.into(), run_id: run.into() };
+        let runs = [
+            ("adr0253-ada-a", placed("usr_ada", "ws_a", "1"), ExternalAgentProcessState::Running),
+            ("adr0253-ada-b", placed("usr_ada", "ws_b", "2"), ExternalAgentProcessState::Running),
+            ("adr0253-bob-a", placed("usr_bob", "ws_a", "3"), ExternalAgentProcessState::Running),
+            ("adr0253-ada-done", placed("usr_ada", "ws_a", "4"), ExternalAgentProcessState::Stopped),
+            // The id was reused by someone else's run since it was recorded.
+            ("adr0253-ada-reused", placed("usr_ada", "ws_a", "5"), ExternalAgentProcessState::Running),
+        ];
+        let store = ExecutionBindings(temp.path().join("companion/execution-bindings.json"));
+        let backend = Runs(Mutex::new(HashMap::new()));
+        for (id, binding, state) in &runs {
+            store.insert(&format!("external-agent:{id}"), binding).unwrap();
+            let live = if *id == "adr0253-ada-reused" { placed("usr_cy", "ws_a", "6") } else { binding.clone() };
+            backend.0.lock().insert(id.to_string(), (state.clone(), live));
+        }
+        let stopped = stop_workspace_executions(temp.path(), &backend, "org_adr0253_ws", "usr_ada", "ws_a", Duration::from_secs(5)).await.unwrap();
+        assert_eq!(stopped, vec!["adr0253-ada-a".to_string()]);
+        assert_eq!(run_stop_reason("adr0253-ada-a"), Some(crate::standing::REVOKED_DURING_RUN));
+        for id in ["adr0253-ada-b", "adr0253-bob-a", "adr0253-ada-reused"] {
+            assert_eq!(backend.0.lock()[id].0, ExternalAgentProcessState::Running, "{id}");
+            assert_eq!(run_stop_reason(id), None);
+        }
+        forget_run_stop_reason("adr0253-ada-a");
+        assert_eq!(run_stop_reason("adr0253-ada-a"), None);
+    }
+
+    #[test]
+    fn adr0253_lease_people_are_the_owners_of_live_person_runs() {
+        let person = crate::person_partition::PersonPartition::new("org_adr0253_lease".into(), "usr_adr0253_lease".into());
+        let binding = PlacementBinding { org_id: person.org_id.clone(), workspace_id: format!("person:{}", person.account_id),
+            actor_user_id: person.user_id.clone(), run_id: "adr0253-lease".into() };
+        person_execution_lease_bind("adr0253-lease", &binding, Arc::new(|| true), Arc::new(|| {})).unwrap();
+        assert!(person_execution_lease_people().contains(&person));
+        person_execution_lease_revoke("adr0253-lease", &binding);
+        assert!(!person_execution_lease_people().contains(&person));
+    }
 
     #[test]
     fn p6e_run_lease_hooks_compare_generation_and_revoke_once() {
@@ -1516,7 +1644,7 @@ mod tests {
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
         // LiveStanding refuses service identities: they cannot borrow tenant
         // standing. The new class must not exempt overrides or other classes.
-        assert_eq!(LiveStanding { cache: Mutex::new(AdmissionCache::default()) }.person(&service).unwrap_err().code, "host_principal_unbound");
+        assert_eq!(LiveStanding.person(&service).unwrap_err().code, "host_principal_unbound");
         for arm in policy.command_overrides.keys() {
             assert_eq!(decide(DeploymentMode::MultiTenant, true, true, &provider,
                 "client.write", Some(arm), &service, None).await.unwrap_err().code, "host_principal_unbound", "{arm}");
@@ -1786,15 +1914,15 @@ mod tests {
         // ADR-0253 §8: the Host's own credential being refused, or any other
         // failure to resolve standing, is the authority's outage, not a denial.
         for error in [NotConfigured, Unreachable("offline".into()), Malformed("invalid JSON".into()),
-            Upstream { status: 503 }, Unauthorized, Upstream { status: 400 }] {
+            Upstream { status: 503 }, Unauthorized, Upstream { status: 400 }, Upstream { status: 403 }] {
             let refusal = map_authority_error(error);
             assert_eq!(refusal.status, StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(refusal.code, "host_authority_unavailable");
         }
-        for error in [Upstream { status: 403 }, Upstream { status: 404 }] {
-            let refusal = map_authority_error(error);
-            assert_eq!(refusal.status, StatusCode::FORBIDDEN);
-            assert_eq!(refusal.code, "person_not_member");
-        }
+        let refusal = map_authority_error(Upstream { status: 404 });
+        assert_eq!(refusal.status, StatusCode::FORBIDDEN);
+        assert_eq!(refusal.code, "person_not_member");
+        let refusal = map_authority_error(OrgSuspended);
+        assert_eq!((refusal.status, refusal.code), (StatusCode::FORBIDDEN, "org_suspended"));
     }
 }

@@ -3258,11 +3258,21 @@ async fn run_serve(
                 match cognia_server::persons::Fleet::new(config.clone(), Arc::clone(&shared)) {
                     Ok(fleet) => {
                         cognia_companion::person_partition::install(Some(fleet.clone()));
+                        // ADR-0253 §3: a member's departure stops their work here.
+                        cognia_companion::standing::install_enforcer(Some(fleet.clone()));
                         fleet.start_idle_reaper();
                         fleet.resume_interrupted_purges();
                         person_fleet = Some(fleet);
                     }
                     Err(error) => log::error!("person-brain fleet unavailable; Host data remains refused: {error}"),
+                }
+                // ADR-0253 §2–§3: re-check everyone this Host acts for every
+                // 30 seconds, and follow the plane's standing changes.
+                cognia_companion::standing::authority().spawn_sweep();
+                if cognia_companion::workspace_access::CollabServiceConfig::from_env().is_some() {
+                    cognia_companion::standing_stream::spawn(data_dir.clone());
+                } else {
+                    log::warn!("no collaboration plane configured; member standing is re-checked every 30 seconds only");
                 }
             }
             let supervisor = brain::BrainSupervisor::new(config, Arc::clone(&shared));
@@ -3320,6 +3330,7 @@ async fn run_serve(
     // ADR-0233 A7: stop the managed desktop worker between transactions.
     cognia_companion_rpc::managed_desktops::shutdown();
     if let Some(fleet) = person_fleet {
+        cognia_companion::standing::install_enforcer(None);
         fleet.shutdown().await;
         cognia_companion::person_partition::install(None);
     }

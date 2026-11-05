@@ -172,6 +172,8 @@ describe("multi-tenant Host refusals", () => {
     expect(DIAGNOSTIC_CODES.personAgentExited.retryable).toBe(true)
     expect(diagnose("person_agent_attachment_unsupported")).toBe("personAgentAttachmentUnsupported")
     expect(DIAGNOSTIC_CODES.personAgentAttachmentUnsupported.retryable).toBe(false)
+    expect(diagnose("revoked_during_run")).toBe("revokedDuringRun")
+    expect(DIAGNOSTIC_CODES.revokedDuringRun.retryable).toBe(false)
     // Turn outcomes, not Host refusals.
     expect(isHostRefusalCode("person_agent_exited")).toBe(false)
   })

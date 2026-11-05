@@ -24,6 +24,10 @@ impl PersonPartition {
         let account_id = format!("pb_{}", &hex::encode(hash.finalize())[..24]);
         Self { org_id, user_id, account_id }
     }
+    /// The partition a verified device binding belongs to (ADR-0253 D02).
+    pub fn of(person: &crate::security_store::VerifiedDevicePerson) -> Self {
+        Self::new(person.org_id.to_string(), person.user_id.to_string())
+    }
 }
 
 tokio::task_local! { static PARTITION: Option<PersonPartition>; }
@@ -184,7 +188,7 @@ fn event_visible_in_store(frame: &crate::event_bus::EventFrame, device: &str, te
         Some(tenant) => store.active_oidc_device_person(tenant, device),
         None => store.person_for_account_device(device),
     };
-    person.ok().flatten().is_some_and(|person| PersonPartition::new(person.org_id.to_string(), person.user_id.to_string()).account_id == account)
+    person.ok().flatten().is_some_and(|person| PersonPartition::of(&person).account_id == account)
 }
 
 /// The devices a person-partition event may wake by push. One frame stands

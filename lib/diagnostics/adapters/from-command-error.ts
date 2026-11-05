@@ -73,6 +73,9 @@ const COMMAND_CODE_TO_DIAGNOSTIC: Readonly<Record<string, DiagnosticCode>> = {
   // A member's sandboxed agent turn (P6e, `lib/headless/person-agent/`).
   person_agent_exited: "personAgentExited",
   person_agent_attachment_unsupported: "personAgentAttachmentUnsupported",
+  // ADR-0253 §3: the Host stopped the turn or run because the member's
+  // standing ended while it ran.
+  revoked_during_run: "revokedDuringRun",
   // The organization gateway could not account a member's usage; it says so
   // rather than spend unmetered, and it passes.
   member_usage_unavailable: "serviceUnavailable",

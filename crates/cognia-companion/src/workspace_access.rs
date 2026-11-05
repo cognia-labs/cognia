@@ -65,6 +65,10 @@ pub enum WorkspaceAccessError {
     Malformed(String),
     #[error("the authenticated identity is not linked to this organization")]
     IdentityUnlinked,
+    /// ADR-0253 §4: the operator suspended the organization. Not an outage:
+    /// every member of it is refused until the operator resumes it.
+    #[error("the organization is suspended")]
+    OrgSuspended,
 }
 
 impl WorkspaceAccessError {
@@ -72,6 +76,7 @@ impl WorkspaceAccessError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::IdentityUnlinked => "oidc_identity_unlinked",
+            Self::OrgSuspended => "org_suspended",
             Self::NotConfigured => "approval_authority_unconfigured",
             Self::InvalidTarget(_) => "approval_authority_invalid_target",
             Self::Unauthorized => "approval_authority_unauthorized",
@@ -322,13 +327,25 @@ fn is_path_segment(value: &str) -> bool {
 
 /// Actions are collaboration-owned standing, not a renderer projection.
 /// This deliberately shares the approval client's proxy, timeout, credential
-/// and no-redirect policy. The admission cache lives in host_surface_gate.
+/// and no-redirect policy. Every Host caller goes through the standing
+/// authority (`crate::standing`), which owns the cache and its invalidation.
 pub async fn standing_actions(
     org_id: &str,
     workspace_id: Option<&str>,
     user_id: &str,
 ) -> Result<Vec<String>, WorkspaceAccessError> {
     let config = CollabServiceConfig::from_env().ok_or(WorkspaceAccessError::NotConfigured)?;
+    standing_actions_with(&config, org_id, workspace_id, user_id).await
+}
+
+/// [`standing_actions`] against an explicit config (tests point it at a local
+/// server).
+pub async fn standing_actions_with(
+    config: &CollabServiceConfig,
+    org_id: &str,
+    workspace_id: Option<&str>,
+    user_id: &str,
+) -> Result<Vec<String>, WorkspaceAccessError> {
     let endpoint = match workspace_id {
         Some(workspace) => access_endpoint(&config.base_url, org_id, workspace, user_id)?,
         None => {
@@ -346,12 +363,71 @@ pub async fn standing_actions(
         .header(reqwest::header::ACCEPT, "application/json")
         .send().await
         .map_err(|error| WorkspaceAccessError::Unreachable(error.to_string()))?;
+    let status = response.status().as_u16();
     if !response.status().is_success() {
-        return Err(WorkspaceAccessError::Upstream { status: response.status().as_u16() });
+        // A suspended organization is the one 403 that names its cause; any
+        // other refusal keeps its bare status.
+        if status == 403 && refusal_code(response).await.as_deref() == Some("org_suspended") {
+            return Err(WorkspaceAccessError::OrgSuspended);
+        }
+        return Err(WorkspaceAccessError::Upstream { status });
     }
     let body = response.bytes().await
         .map_err(|error| WorkspaceAccessError::Unreachable(error.to_string()))?;
     parse_standing_actions(&body)
+}
+
+/// The `code` of a refusal body, read within a small bound.
+async fn refusal_code(mut response: reqwest::Response) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Refusal { code: Option<String> }
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if body.len() + chunk.len() > 4096 { return None; }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice::<Refusal>(&body).ok()?.code
+}
+
+/// ADR-0253 §2: open the collaboration plane's standing-change stream after
+/// `after` (`None`: from wherever the plane says to start, with a `resync`).
+/// The stream is long-lived, so only connecting is bounded here; the reader
+/// bounds silence itself.
+pub async fn open_standing_changes(after: Option<i64>) -> Result<reqwest::Response, WorkspaceAccessError> {
+    let config = CollabServiceConfig::from_env().ok_or(WorkspaceAccessError::NotConfigured)?;
+    open_standing_changes_with(&config, after).await
+}
+
+pub async fn open_standing_changes_with(
+    config: &CollabServiceConfig,
+    after: Option<i64>,
+) -> Result<reqwest::Response, WorkspaceAccessError> {
+    let endpoint = match after {
+        Some(after) => format!("{}/internal/v1/standing-changes?after={after}", config.base_url),
+        None => format!("{}/internal/v1/standing-changes", config.base_url),
+    };
+    let client = cognia_net::proxy_config::managed_client(
+        reqwest::Client::builder()
+            .connect_timeout(REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none()),
+        &endpoint,
+    )
+    .map_err(|error| WorkspaceAccessError::Unreachable(error.to_string()))?;
+    // Until the headers arrive; the body is bounded by the reader's silence
+    // limit.
+    let response = tokio::time::timeout(REQUEST_TIMEOUT, client
+        .get(&endpoint)
+        .bearer_auth(&config.credential)
+        .header(reqwest::header::ACCEPT, "application/x-ndjson")
+        .send())
+        .await
+        .map_err(|_| WorkspaceAccessError::Unreachable("no answer from the standing stream".into()))?
+        .map_err(|error| WorkspaceAccessError::Unreachable(error.to_string()))?;
+    match response.status().as_u16() {
+        200..=299 => Ok(response),
+        401 | 403 => Err(WorkspaceAccessError::Unauthorized),
+        status => Err(WorkspaceAccessError::Upstream { status }),
+    }
 }
 
 /// The org's members as the collaboration plane lists them: user id → name.
@@ -458,12 +534,22 @@ pub fn device_can_control(device_id: &str) -> bool {
     let Some(store) = super::security_store::security_store() else {
         return false;
     };
+    device_can_control_in(&store, device_id)
+}
+
+/// The control grant is every capability [`GrantKind::Control`] maps to, not
+/// only `workspace.write` (ADR-0253 G23): a device whose grant was partly
+/// revoked no longer steers sessions.
+///
+/// [`GrantKind::Control`]: cognia_companion_security::device_grants::GrantKind::Control
+fn device_can_control_in(store: &super::security_store::SecurityStore, device_id: &str) -> bool {
     let Ok(Some(tenant_id)) = store.active_device_tenant(device_id) else {
         return false;
     };
-    store
-        .has_capability(&tenant_id, device_id, "workspace.write")
-        .unwrap_or(false)
+    cognia_companion_security::device_grants::GrantKind::Control
+        .capabilities()
+        .iter()
+        .all(|capability| store.has_capability(&tenant_id, device_id, capability).unwrap_or(false))
 }
 
 /// The Host's own owner principal.
@@ -797,6 +883,102 @@ mod tests {
         for body in [b"{}".as_slice(), b"null", br#"{"actions":[true]}"#, b"not json"] {
             assert!(parse_standing_actions(body).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_suspended_organization_is_its_own_refusal() {
+        cognia_net::proxy_config::apply_current(cognia_net::proxy_config::ProxyConfig::default())
+            .unwrap();
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let cases = [
+            (403, serde_json::json!({"error":"org_suspended","code":"org_suspended"}), "suspended"),
+            (403, serde_json::json!({"error":"forbidden"}), "403"),
+            // The Host's credential does not cover the organization.
+            (403, serde_json::json!({"error":"credential_scope"}), "403"),
+            (404, serde_json::json!({"code":"org_suspended"}), "404"),
+        ];
+        for (status, body, expected) in cases {
+            let server = MockServer::start().await;
+            Mock::given(path("/internal/v1/orgs/org_acme/access/usr_alice"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .mount(&server)
+                .await;
+            let config =
+                CollabServiceConfig::from_parts(Some(server.uri()), Some("host-credential".into()))
+                    .unwrap();
+            let error = standing_actions_with(&config, ORG, None, USER).await.unwrap_err();
+            match expected {
+                "suspended" => {
+                    assert!(matches!(error, WorkspaceAccessError::OrgSuspended));
+                    assert_eq!(error.code(), "org_suspended");
+                }
+                "403" => assert!(matches!(error, WorkspaceAccessError::Upstream { status: 403 })),
+                _ => assert!(matches!(error, WorkspaceAccessError::Upstream { status: 404 })),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn adr0253_the_standing_stream_presents_the_host_credential_and_its_cursor() {
+        cognia_net::proxy_config::apply_current(cognia_net::proxy_config::ProxyConfig::default())
+            .unwrap();
+        use wiremock::{
+            matchers::{header, method, path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/v1/standing-changes"))
+            .and(query_param("after", "41"))
+            .and(header("authorization", "Bearer host-credential"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{\"type\":\"heartbeat\",\"seq\":41}\n"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config =
+            CollabServiceConfig::from_parts(Some(server.uri()), Some("host-credential".into()))
+                .unwrap();
+        let body = open_standing_changes_with(&config, Some(41)).await.unwrap().text().await.unwrap();
+        assert_eq!(body, "{\"type\":\"heartbeat\",\"seq\":41}\n");
+        for (status, unauthorized) in [(401, true), (403, true), (503, false)] {
+            let server = MockServer::start().await;
+            Mock::given(path("/internal/v1/standing-changes"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let config =
+                CollabServiceConfig::from_parts(Some(server.uri()), Some("host-credential".into()))
+                    .unwrap();
+            let error = open_standing_changes_with(&config, None).await.unwrap_err();
+            assert_eq!(matches!(error, WorkspaceAccessError::Unauthorized), unauthorized, "{status}");
+        }
+    }
+
+    #[test]
+    fn adr0253_control_means_every_capability_of_the_control_grant() {
+        use cognia_companion_security::device_grants::GrantKind;
+        let store = crate::security_store::SecurityStore::in_memory().unwrap();
+        let person = crate::security_store::VerifiedDevicePerson {
+            org_id: OrgId::parse(ORG).unwrap(),
+            user_id: UserId::parse(USER).unwrap(),
+        };
+        let challenge = store.issue_challenge("tenant-g23", 100, 60).unwrap();
+        store
+            .register_oidc_device("tenant-g23", "subject", &person, &challenge.id, &challenge.nonce,
+                "g23-device", "Web", "pem", "thumb", "member", 101)
+            .unwrap();
+        let control: Vec<String> =
+            GrantKind::Control.capabilities().iter().map(|capability| capability.to_string()).collect();
+        store.replace_device_capabilities("tenant-g23", "owner", "g23-device", &control, 102).unwrap();
+        assert!(device_can_control_in(&store, "g23-device"));
+        // `workspace.write` alone used to pass; any missing part of the grant
+        // now refuses.
+        for missing in &control {
+            let partial: Vec<String> = control.iter().filter(|c| *c != missing).cloned().collect();
+            store.replace_device_capabilities("tenant-g23", "owner", "g23-device", &partial, 103).unwrap();
+            assert!(!device_can_control_in(&store, "g23-device"), "without {missing}");
+        }
+        assert!(!device_can_control_in(&store, "unknown-device"));
     }
 
     fn config() -> CollabServiceConfig {

@@ -116,6 +116,15 @@ impl PersonSessions {
         let _ = self.sync(crate::security_store::security_store().as_ref());
         self.0.read().owners.get(session).cloned().flatten()
     }
+    /// The sessions `account_id`'s partition claimed.
+    pub fn sessions_of(&self, account_id: &str) -> Vec<String> {
+        let _ = self.sync(crate::security_store::security_store().as_ref());
+        let mut sessions: Vec<String> = self.0.read().owners.iter()
+            .filter(|(_, owner)| owner.as_deref() == Some(account_id))
+            .map(|(session, _)| session.clone()).collect();
+        sessions.sort();
+        sessions
+    }
     /// A purged person's claims go with their partition (ADR-0253 §6).
     pub fn forget_person(&self, account_id: &str) -> Result<usize, &'static str> {
         let store = crate::security_store::security_store();
@@ -168,13 +177,42 @@ pub fn person_event_session(payload: &Value) -> Option<&str> {
         .or_else(|| payload.get("event").and_then(person_event_session))
 }
 
+/// Tool-less turns the Host interrupted because their person's standing
+/// ended (ADR-0253 §3), by session: the turn's end carries the reason.
+static REVOKED_TURNS: Lazy<parking_lot::Mutex<HashMap<String, &'static str>>> = Lazy::new(Default::default);
+
+/// The session's running turn is being stopped for `code`; its
+/// `session_ended` frame will say so, whatever the runtime made of the
+/// interrupt.
+pub fn mark_turn_revoked(session: &str, code: &'static str) {
+    REVOKED_TURNS.lock().insert(session.to_string(), code);
+}
+
+/// Forget a mark whose turn never reported its end (the runtime was gone).
+pub fn forget_turn_revoked(session: &str) {
+    REVOKED_TURNS.lock().remove(session);
+}
+
+fn stamp_revoked_turn(channel: &str, payload: &Value) -> Option<Value> {
+    if channel != "claude://message" || payload.get("type").and_then(Value::as_str) != Some("session_ended") {
+        return None;
+    }
+    let session = payload.get("sessionId").and_then(Value::as_str)?;
+    let code = REVOKED_TURNS.lock().remove(session)?;
+    let mut stamped = payload.clone();
+    stamped["error"] = Value::String(code.into());
+    stamped["code"] = Value::String(code.into());
+    Some(stamped)
+}
+
 /// Stamp the partition at publication, before the replay buffer: one frame
 /// per event, which every transport delivers only to the person's own brain
 /// and the devices bound to them at delivery (`person_partition::
 /// event_visible`), live and on replay alike.
 pub fn person_publish(bus: &crate::event_bus::EventBus, channel: &str, payload: &Value) {
     if let Some(account) = person_event_session(payload).and_then(|session| PERSON_SESSIONS.owner_account(session)) {
-        bus.publish_person(channel.into(), payload.clone(), account);
+        let payload = stamp_revoked_turn(channel, payload).unwrap_or_else(|| payload.clone());
+        bus.publish_person(channel.into(), payload, account);
     } else { bus.publish(channel.into(), payload.clone()); }
 }
 
@@ -243,11 +281,29 @@ mod tests {
         // may still claim it afterwards.
         assert_eq!(after.owner_account("adr0253-published"), None);
         after.bind("adr0253-published", Some(&bob)).unwrap();
+        assert_eq!(after.sessions_of(&bob.account_id), vec!["adr0253-bob", "adr0253-published"]);
         // A purge removes the person's claims and only theirs.
         assert_eq!(after.forget_person(&bob.account_id), Ok(2));
         let rejoined = PersonSessions::default();
         rejoined.bind("adr0253-bob", None).unwrap();
         assert_eq!(rejoined.bind("adr0253-operator", Some(&bob)), Err("session_partition_mismatch"));
+    }
+
+    #[test]
+    fn adr0253_a_revoked_turn_ends_with_its_reason_once() {
+        let ended = serde_json::json!({"type":"session_ended","sessionId":"adr0253-revoked","result":{"subtype":"interrupted"}});
+        assert!(stamp_revoked_turn("claude://message", &ended).is_none());
+        mark_turn_revoked("adr0253-revoked", "revoked_during_run");
+        // Only the session's end carries it, on the sidecar channel only.
+        assert!(stamp_revoked_turn("claude://message", &serde_json::json!({"type":"text","sessionId":"adr0253-revoked"})).is_none());
+        assert!(stamp_revoked_turn("agent://event", &ended).is_none());
+        let stamped = stamp_revoked_turn("claude://message", &ended).unwrap();
+        assert_eq!((stamped["error"].as_str(), stamped["code"].as_str()), (Some("revoked_during_run"), Some("revoked_during_run")));
+        assert_eq!(stamped["result"], ended["result"]);
+        assert!(stamp_revoked_turn("claude://message", &ended).is_none());
+        mark_turn_revoked("adr0253-revoked", "revoked_during_run");
+        forget_turn_revoked("adr0253-revoked");
+        assert!(stamp_revoked_turn("claude://message", &ended).is_none());
     }
 
     #[test]

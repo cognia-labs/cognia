@@ -436,6 +436,8 @@ export type DiagnosticCode =
   | "personAgentExited"
   /** A member's agent was sent an attachment it has no prompt slot for (P6e). */
   | "personAgentAttachmentUnsupported"
+  /** ADR-0253 §3: the Host stopped a member's turn or run because their standing ended mid-run. */
+  | "revokedDuringRun"
   /** ADR-0253 §8: the person has no standing in the organization. */
   | "personNotMember"
   /** ADR-0253 §4: the organization is suspended; data is kept, nothing runs. */
