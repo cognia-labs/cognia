@@ -438,7 +438,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 255
+export const CURRENT_SCHEMA_VERSION = 256
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1109,6 +1109,8 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   authAttempts: "&state, expiresAt",
   capabilityGrants:
     "&id, connectionId, providerFingerprint, accountId, workflowId, sessionId, expiresAt, [connectionId+providerFingerprint], consumerPluginId, [connectionId+consumerPluginId]",
+  // v256 (ADR-0253 §10) — usage rows whose write failed, retried until kept.
+  usageWriteOutbox: "&id, state, nextAttemptAt",
 }
 
 let databaseConnectionSequence = 0
@@ -1739,6 +1741,9 @@ export class CogniaDB extends Dexie {
   externalSyncCursors!: Table<import("./external-sync").ExternalSyncCursorRow, string>
   externalSyncSeen!: Table<import("./external-sync").ExternalSyncSeenRow, [string, string, string]>
   authAttempts!: Table<{ state: string; expiresAt: number }, string>
+  // v256 — a usage row whose write failed, kept until it is written
+  // (`lib/usage/usage-write-outbox.ts`, ADR-0253 §10).
+  usageWriteOutbox!: Table<import("@/lib/usage/usage-write-outbox").UsageWriteOutboxRow, string>
 
   messageSyncClock!: Table<MessageSyncClock, "singleton">
 

@@ -17725,6 +17725,31 @@
       },
       "additionalProperties": false
     },
+    "person_agent_usage_get": {
+      "description": "ADR-0253 §10: what the Host gateway saw on one of the caller's own agent tickets during this Host's lifetime.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens", "requests", "openRequests"],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "openRequests": {
+          "description": "Requests on the ticket that have not settled yet; their tokens are not counted until they do.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "person_agent_policy_get": {
       "type": "object",
       "additionalProperties": false,

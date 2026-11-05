@@ -62782,6 +62782,66 @@
       "outputTyped": true
     },
     {
+      "name": "person_agent_usage_get",
+      "category": "extensions",
+      "resource": "person",
+      "target": "service",
+      "operation": "read",
+      "capability": "service.internal",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "forbidden",
+      "summary": "person_agent_usage_get (service.internal)",
+      "description": "Loopback service-token command. Target: service; risk: low.",
+      "inputSchemaSource": "zod-contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "ticketId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "description": "ADR-0253 §10: what the Host gateway saw on one of the caller's own agent tickets during this Host's lifetime.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "inputTokens",
+          "outputTokens",
+          "requests",
+          "openRequests"
+        ],
+        "properties": {
+          "inputTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "requests": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "openRequests": {
+            "description": "Requests on the ticket that have not settled yet; their tokens are not counted until they do.",
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "outputTyped": true
+    },
+    {
       "name": "person_model_ticket_mint",
       "category": "extensions",
       "resource": "person",
@@ -111366,5 +111426,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "25d4532c74b95679bc92acf2b37d1bb5d3dd88032d80011e829950e3e82d42f8"
+  "catalogHash": "db5623cf1103792665b0bbaab8804183904dba5f7b88fdaffaef7e3fd8c0eb49"
 }

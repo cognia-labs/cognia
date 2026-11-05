@@ -334,6 +334,21 @@ struct TicketRecord {
     internal_bridge: bool,
     internal_bridge_audience: Option<(String, String)>,
     internal_bridge_parent_reservation: Option<String>,
+    /// ADR-0253 §10: what this ticket's requests really carried, as the
+    /// upstream reported it. Host-lifetime, like the person leases that read it.
+    tokens: TicketTokens,
+}
+
+/// The tokens a ticket's settled requests carried, and how many of its
+/// requests are still open. A person brain reads it around a member turn to
+/// book the figure an agent did not report (`person_agent_usage_get`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketTokens {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub requests: u64,
+    pub open_requests: u64,
 }
 
 /// Everything the accounting needs, behind ONE lock.
@@ -389,6 +404,7 @@ impl RouteTicketRegistry {
                     internal_bridge: false,
                     internal_bridge_audience: None,
                     internal_bridge_parent_reservation: None,
+                    tokens: TicketTokens::default(),
                 }
             })
             .collect();
@@ -500,6 +516,7 @@ impl RouteTicketRegistry {
                     internal_bridge: false,
                     internal_bridge_audience: None,
                     internal_bridge_parent_reservation: None,
+                    tokens: TicketTokens::default(),
                 });
             }
         }
@@ -885,6 +902,7 @@ impl RouteTicketRegistry {
             internal_bridge: false,
             internal_bridge_audience: None,
             internal_bridge_parent_reservation: None,
+            tokens: TicketTokens::default(),
         });
         self.persist(&inner.records)?;
         Ok(MintedTicket { ticket, secret })
@@ -1124,6 +1142,31 @@ impl RouteTicketRegistry {
                 inner.dirty = true;
             }
         }
+    }
+
+    /// Add a served request's reported tokens to its ticket's totals. Called
+    /// before the request settles, while its hold still names the ticket.
+    pub fn record_request_tokens(&self, request_id: &str, input_tokens: Option<u64>, output_tokens: Option<u64>) {
+        let mut inner = self.inner.lock();
+        let Some(ticket_id) = inner.reservations.get(request_id).map(|hold| hold.ticket_id.clone()) else {
+            return;
+        };
+        if let Some(record) = inner.records.iter_mut().find(|r| r.ticket.ticket_id == ticket_id) {
+            record.tokens.input_tokens = record.tokens.input_tokens.saturating_add(input_tokens.unwrap_or(0));
+            record.tokens.output_tokens = record.tokens.output_tokens.saturating_add(output_tokens.unwrap_or(0));
+            record.tokens.requests = record.tokens.requests.saturating_add(1);
+        }
+    }
+
+    /// A ticket's token totals, for the account that owns it only.
+    pub fn ticket_tokens(&self, ticket_id: &str, owner_account_id: &str) -> Option<TicketTokens> {
+        let inner = self.inner.lock();
+        let record = inner.records.iter().find(|r| r.ticket.ticket_id == ticket_id)?;
+        if record.ticket.owner_account_id.as_deref() != Some(owner_account_id) {
+            return None;
+        }
+        let open = inner.reservations.values().filter(|hold| hold.ticket_id == ticket_id).count() as u64;
+        Some(TicketTokens { open_requests: open, ..record.tokens })
     }
 
     /// Dispatched work may end without usage (omitted usage, cancellation or
@@ -1686,6 +1729,30 @@ mod tests {
         assert_eq!(report["members"][0]["reservedTokens"], 0);
         let ticket = p6b_member_ticket(&reg, now, "usr_p6b_other");
         assert!(reg.validate_and_reserve(&ticket.secret, now, TicketOperation::Chat, "other", 30).is_ok());
+    }
+
+    #[test]
+    fn adr0253_ticket_tokens_count_settled_requests_for_their_owner_only() {
+        let reg = registry(); let now = p6b_now("2026-10");
+        let minted = reg.person_mint_owned(mint_request(), Some(&snapshot()), now, Some("pb_owner".into()),
+            Some(MemberBinding { org_id: "org_p6b_test".into(), user_id: "usr_p6b_one".into() })).unwrap();
+        let id = minted.ticket.ticket_id.clone();
+        assert_eq!(reg.ticket_tokens(&id, "pb_owner"), Some(TicketTokens::default()));
+        reg.validate_and_reserve(&minted.secret, now, TicketOperation::Chat, "first", 10).unwrap();
+        reg.validate_and_reserve(&minted.secret, now, TicketOperation::Chat, "second", 10).unwrap();
+        reg.record_request_tokens("first", Some(16_500), Some(120));
+        reg.settle_reservation("first", 16_620);
+        assert_eq!(reg.ticket_tokens(&id, "pb_owner"),
+            Some(TicketTokens { input_tokens: 16_500, output_tokens: 120, requests: 1, open_requests: 1 }));
+        // A request that reported no output still counts what it did report.
+        reg.record_request_tokens("second", Some(10), None);
+        reg.settle_reservation("second", 10);
+        // A settled request is no longer open, and a late duplicate adds nothing.
+        reg.record_request_tokens("second", Some(10), Some(10));
+        assert_eq!(reg.ticket_tokens(&id, "pb_owner"),
+            Some(TicketTokens { input_tokens: 16_510, output_tokens: 120, requests: 2, open_requests: 0 }));
+        assert_eq!(reg.ticket_tokens(&id, "pb_other"), None);
+        assert_eq!(reg.ticket_tokens("missing", "pb_owner"), None);
     }
 
     #[test]

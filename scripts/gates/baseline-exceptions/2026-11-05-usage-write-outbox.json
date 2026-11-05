@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/convergence/inventories/durable-queues.json",
+  "measure": "members",
+  "allowGrowth": 1,
+  "owner": "lib/usage",
+  "repaymentPhase": "1",
+  "reason": "ADR-0253 §10 requires that a Host-run turn's usage row is never lost when its write fails. No existing durable queue accepts arbitrary work and the shared durable-queue primitive (ADR-0250 §6.1) is not built yet, so usageWriteOutbox keeps only rows whose write failed, on the shared decideNextAttempt curve. Phase 1 moves it onto the primitive with the other queues."
+}

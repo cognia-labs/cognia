@@ -167,3 +167,43 @@ it("persists the headless person-agent reply with its Host-held run marks", asyn
     await fixture.dispose()
   }
 })
+
+it("adr0253 reads agent tickets from the Host and books usage through the outbox", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { getDb } = await import("@/lib/db/schema")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  let captured: personRunner.PersonAgentRunnerDeps | undefined
+  const original = jest.requireActual<typeof import("./runner")>("./runner").createPersonAgentRunner
+  jest.mocked(personRunner.createPersonAgentRunner).mockImplementation((deps) => {
+    captured = deps
+    return original(deps)
+  })
+  const t = transport()
+  const calls: Array<[string, Record<string, unknown>]> = []
+  t.call = (async (command: string, args: Record<string, unknown>) => {
+    calls.push([command, args])
+    return { inputTokens: 7, outputTokens: 1, requests: 1, openRequests: 0 }
+  }) as PersonPlaneTransport["call"]
+  const stop = await installPersonAgents({ transport: t, manager, log: () => undefined })
+  try {
+    await expect(captured!.ticketTokens("ticket-1")).resolves.toMatchObject({ inputTokens: 7 })
+    expect(calls).toContainEqual(["person_agent_usage_get", { ticketId: "ticket-1" }])
+    await captured!.recordUsage({
+      sessionId: "s1",
+      messageId: "assistant-usage-booked",
+      usage: { promptTokens: 16_500, completionTokens: 9, totalTokens: 16_509 },
+      model: "m",
+      providerId: "p",
+    })
+    expect(await getDb().sessionUsage.get("assistant-usage-booked")).toMatchObject({
+      inputTokens: 16_500,
+      outputTokens: 9,
+    })
+    expect(await getDb().usageWriteOutbox.count()).toBe(0)
+  } finally {
+    await stop()
+    jest.mocked(personRunner.createPersonAgentRunner).mockImplementation(original)
+    await fixture.dispose()
+  }
+})

@@ -67,6 +67,50 @@ export interface PersonAgentLease {
   expiresAtMs: number
 }
 
+/** What the Host gateway saw on one agent ticket (`person_agent_usage_get`). */
+export interface PersonAgentTicketTokens {
+  inputTokens: number
+  outputTokens: number
+  requests: number
+  /** Requests not settled yet; their tokens are not in the totals. */
+  openRequests: number
+}
+
+/** How long a finished turn waits for its last gateway requests to settle. */
+export const PERSON_AGENT_TICKET_SETTLE_POLLS = 10
+export const PERSON_AGENT_TICKET_SETTLE_POLL_MS = 200
+
+/**
+ * ADR-0253 §10: an agent that reports zero (or no) input or output tokens is
+ * booked with what the Host gateway counted for the turn instead. Some ACP
+ * adapters (`claude-agent-acp`) report `inputTokens: 0` while the gateway
+ * charged the member thousands. Only a missing or zero figure is replaced;
+ * a figure the agent did report stands.
+ */
+export function gatewayCorrectedUsage(
+  reported: ExternalAgentTokenUsage | undefined,
+  gateway: { inputTokens: number; outputTokens: number } | undefined
+): ExternalAgentTokenUsage | undefined {
+  if (!gateway || (gateway.inputTokens <= 0 && gateway.outputTokens <= 0)) return reported
+  const promptMissing = !reported || !(reported.promptTokens > 0)
+  const completionMissing = !reported || !(reported.completionTokens > 0)
+  if (!promptMissing && !completionMissing) return reported
+  const promptTokens =
+    promptMissing && gateway.inputTokens > 0 ? gateway.inputTokens : (reported?.promptTokens ?? 0)
+  const completionTokens =
+    completionMissing && gateway.outputTokens > 0
+      ? gateway.outputTokens
+      : (reported?.completionTokens ?? 0)
+  return {
+    ...(reported ?? {}),
+    promptTokens,
+    // An OpenAI-style gateway count already includes any cached prompt tokens.
+    ...(promptMissing && gateway.inputTokens > 0 ? { promptTokensIncludeCache: true } : {}),
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+  }
+}
+
 export interface PersonAgentTurnRequest {
   session: Pick<ChatSession, "id">
   runtimeId: string
@@ -122,6 +166,8 @@ export interface PersonAgentRunnerDeps {
     model: string
     sessionId: string
   }): Promise<PersonAgentLease>
+  /** The gateway's token totals for one of this person's agent tickets. */
+  ticketTokens(ticketId: string): Promise<PersonAgentTicketTokens>
   /** Catalog launch for a runtime id, or `undefined` when it is not bundled. */
   launchFor(runtimeId: string): { config: ExternalAgentConfig; family: string } | undefined
   /** Earlier turns of a conversation as text, for a fresh process. */
@@ -178,6 +224,8 @@ export class PersonAgentTurnError extends Error {
 
 interface LiveAgent {
   agentId: string
+  /** The gateway ticket its lease minted; its totals correct the agent's report. */
+  ticketId: string
   runtimeId: string
   provider: string
   model: string
@@ -192,6 +240,8 @@ interface LiveAgent {
 interface ActiveTurn {
   actionId: string
   aborted: boolean
+  /** The ticket's totals before the turn's first request, when readable. */
+  gatewayBefore?: PersonAgentTicketTokens
 }
 
 /**
@@ -378,6 +428,7 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
     }
     return {
       agentId,
+      ticketId: lease.ticketId,
       runtimeId: request.runtimeId,
       provider: request.provider,
       model: request.model,
@@ -414,6 +465,46 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       return agent
     } finally {
       if (starting.get(sessionId) === started) starting.delete(sessionId)
+    }
+  }
+
+  async function readTicket(agent: LiveAgent): Promise<PersonAgentTicketTokens | undefined> {
+    try {
+      return await deps.ticketTokens(agent.ticketId)
+    } catch (error) {
+      deps.log("warn", `person agent ticket usage read failed: ${String(error)}`)
+      return undefined
+    }
+  }
+
+  /** The ticket's totals once none of its requests is still open, as far as it waits. */
+  async function settledTicket(agent: LiveAgent): Promise<PersonAgentTicketTokens | undefined> {
+    let tokens = await readTicket(agent)
+    for (
+      let poll = 0;
+      tokens && tokens.openRequests > 0 && poll < PERSON_AGENT_TICKET_SETTLE_POLLS;
+      poll++
+    ) {
+      await new Promise<void>((resolve) =>
+        deps.setTimer(resolve, PERSON_AGENT_TICKET_SETTLE_POLL_MS)
+      )
+      tokens = await readTicket(agent)
+    }
+    return tokens
+  }
+
+  /** What the gateway counted for one turn, when both readings exist. */
+  async function gatewayTurnTokens(
+    agent: LiveAgent,
+    turn: ActiveTurn
+  ): Promise<{ inputTokens: number; outputTokens: number } | undefined> {
+    const before = turn.gatewayBefore
+    if (!before) return undefined
+    const after = await settledTicket(agent)
+    if (!after) return undefined
+    return {
+      inputTokens: Math.max(0, after.inputTokens - before.inputTokens),
+      outputTokens: Math.max(0, after.outputTokens - before.outputTokens),
     }
   }
 
@@ -593,16 +684,22 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       await sendLive(liveReply.reset())
     }
     const final = message()
-    // Whatever became of the reply, the tokens were spent.
-    if (usage) {
+    // Whatever became of the reply, the tokens were spent. A figure the agent
+    // left at zero is the gateway's count for the turn (ADR-0253 §10).
+    const reported = usage?.tokens
+    const tokens =
+      !reported || !(reported.promptTokens > 0) || !(reported.completionTokens > 0)
+        ? gatewayCorrectedUsage(reported, await gatewayTurnTokens(agent, turn))
+        : reported
+    if (tokens) {
       await deps
         .recordUsage({
           sessionId,
           messageId: final.id,
-          usage: usage.tokens,
+          usage: tokens,
           model: request.model,
           providerId: request.provider,
-          ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
+          ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
         })
         .catch((error) => deps.log("warn", `person agent usage write failed: ${String(error)}`))
     }
@@ -708,6 +805,9 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
     agent.turn = turn
     let stream: AsyncIterator<ExternalAgentEvent>
     try {
+      // Read before the turn's first request reaches the gateway, so the
+      // difference afterwards is this turn's alone.
+      turn.gatewayBefore = await readTicket(agent)
       const history = agent.fresh
         ? await deps.history(sessionId, [request.messageId, `assistant-${request.actionId}`])
         : ""

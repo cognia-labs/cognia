@@ -7,8 +7,8 @@
   "size": {
     "modules": 136,
     "experimental": 0,
-    "tables": 400,
-    "unclaimedTables": 380,
+    "tables": 401,
+    "unclaimedTables": 381,
     "singleUserDataModules": 37,
     "settingsStateMembers": 151,
     "settingsStoreImporters": 573,

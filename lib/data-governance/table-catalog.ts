@@ -415,6 +415,7 @@ export const CORE_TABLE_NAMES = [
   "unattendedExecAudit",
   "users",
   "usageSourceStates",
+  "usageWriteOutbox",
   "vscodeExtensionRuntime",
   "wasmGrantLedger",
   "wikiArticles",
@@ -1100,6 +1101,8 @@ QUEUE_TABLES.add("managedDesktopDeletionOutbox")
 QUEUE_TABLES.add("accountSyncOutbox")
 QUEUE_TABLES.add("accountSyncInbox")
 QUEUE_TABLES.add("accountSyncState")
+// ADR-0253 §10: a usage row whose write failed, retried until it is kept.
+QUEUE_TABLES.add("usageWriteOutbox")
 
 const SECRET_TABLES = new Set<CoreTableName>([
   "tts_provider_keys",

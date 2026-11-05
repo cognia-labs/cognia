@@ -5,10 +5,11 @@ import type { ClaudeEvent, SDKMessage, SDKResultMessage } from "@cognia/agent-co
 import { applySdkEvent } from "@/lib/claude/adapter"
 import { onClaudeMessage } from "@/lib/claude/ipc"
 import { listMessages, persistMessages } from "@/lib/db/messages"
-import { recordResultUsage } from "@/lib/db/session-usage"
+import { resultUsageRow, type recordResultUsage } from "@/lib/db/session-usage"
 import { getSession } from "@/lib/db/sessions"
 import { listWorkSubmissions } from "@/lib/db/work-submissions"
 import { isTurnUsageClaimed } from "@/lib/usage/claimed-turn-usage"
+import { bookUsageRow, startUsageWriteOutbox } from "@/lib/usage/usage-write-outbox"
 import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 
@@ -28,7 +29,11 @@ interface WorkSubmissionTerminalEventDeps {
     messages: UIMessage[],
     event: SDKMessage
   ) => { messages: UIMessage[]; result?: SDKResultMessage }
-  /** Book a turn's usage row; the chat view's own `recordResultUsage` call. */
+  /**
+   * Book a turn's usage row; the chat view's own `recordResultUsage` call.
+   * Defaults to booking through the usage outbox (ADR-0253 §10), which keeps
+   * a row whose write failed until it is written.
+   */
   recordUsage?: typeof recordResultUsage
   loadSession?: typeof getSession
   onReady?: () => void
@@ -103,7 +108,7 @@ export function startWorkSubmissionTerminalEvents(
   const load = deps.loadMessages ?? listMessages
   const persist = deps.persistMessages ?? persistMessages
   const project = deps.applyEvent ?? applySdkEvent
-  const recordUsage = deps.recordUsage ?? recordResultUsage
+  const recordUsage = deps.recordUsage ?? bookResultUsage
   const loadSession = deps.loadSession ?? getSession
   /**
    * Book the turn's usage, as the chat view does for the turns it renders
@@ -265,10 +270,22 @@ export function startWorkSubmissionTerminalEvents(
       })
   }
   connect()
+  // Rows a previous run of this host could not write are retried now.
+  const stopUsageOutbox = deps.recordUsage ? () => {} : startUsageWriteOutbox()
 
   return () => {
     stopped = true
     if (retryTimer) clearTimeout(retryTimer)
     unlisten?.()
+    stopUsageOutbox()
   }
+}
+
+/** {@link recordResultUsage} through the usage outbox: a failed write is kept, not lost. */
+async function bookResultUsage(
+  args: Parameters<typeof recordResultUsage>[0]
+): ReturnType<typeof recordResultUsage> {
+  const row = resultUsageRow(args)
+  if (row) await bookUsageRow(row)
+  return row
 }

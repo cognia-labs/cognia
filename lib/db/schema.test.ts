@@ -36,13 +36,40 @@ import {
 } from "./schema"
 import type { OutboundJobRow } from "./connector-types"
 
+it("v256 adds the usage write outbox without changing v255 data", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBe(256)
+  const name = "cognia-usage-outbox-v256-upgrade"
+  const previous = new Dexie(name)
+  previous.version(255).stores({ ...CURRENT_SCHEMA, usageWriteOutbox: null })
+  await previous.open()
+  await previous.table("sessionUsage").put({ messageId: "kept", sessionId: "s", at: 1 })
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(256)
+    expect(await current.usageWriteOutbox.count()).toBe(0)
+    expect(current.usageWriteOutbox.schema.primKey.keyPath).toBe("id")
+    expect(Object.keys(current.usageWriteOutbox.schema.idxByName).sort()).toEqual([
+      "nextAttemptAt",
+      "state",
+    ])
+    expect(await current.sessionUsage.get("kept")).toMatchObject({ sessionId: "s" })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v255 adds empty external sync stores without backfilling or changing v254 data", async () => {
-  expect(CURRENT_SCHEMA_VERSION).toBe(255)
   const name = "cognia-external-sync-v255-upgrade"
   const previous = new Dexie(name)
-  previous
-    .version(254)
-    .stores({ ...CURRENT_SCHEMA, externalSyncCursors: null, externalSyncSeen: null })
+  previous.version(254).stores({
+    ...CURRENT_SCHEMA,
+    externalSyncCursors: null,
+    externalSyncSeen: null,
+    usageWriteOutbox: null,
+  })
   await previous.open()
   await previous.table("syncLeases").put({
     key: "keep",
@@ -56,7 +83,7 @@ it("v255 adds empty external sync stores without backfilling or changing v254 da
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(255)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(await current.externalSyncCursors.count()).toBe(0)
     expect(await current.externalSyncSeen.count()).toBe(0)
     expect(current.externalSyncCursors.schema.primKey.keyPath).toBe("key")

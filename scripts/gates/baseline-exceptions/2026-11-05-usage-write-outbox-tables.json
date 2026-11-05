@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:tables",
+  "allowGrowth": 1,
+  "owner": "lib/usage",
+  "repaymentPhase": "1",
+  "reason": "ADR-0253 §10 adds usageWriteOutbox (schema v256), the outbox that keeps a Host-run turn's usage row until its write succeeds. No module manifest owns the usage tables yet; the table is claimed when the usage subsystem gets its manifest, and the queue moves onto the shared durable-queue primitive in phase 1."
+}

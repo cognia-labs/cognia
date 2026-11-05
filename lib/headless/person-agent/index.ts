@@ -25,6 +25,7 @@ import {
   createPersonAgentRunner,
   type PersonAgentLease,
   type PersonAgentManager,
+  type PersonAgentTicketTokens,
   type PersonAgentRunner,
 } from "./runner"
 
@@ -76,7 +77,8 @@ export async function installPersonAgents(
   const [
     { listMessages, commitMessageDelta },
     { getSession },
-    { recordExternalAgentUsage },
+    { externalAgentUsageRow },
+    { bookUsageRow, startUsageWriteOutbox },
     { settleChatTurn },
     { hostStateRunId },
     writeSource,
@@ -84,6 +86,7 @@ export async function installPersonAgents(
     import("@/lib/db/messages"),
     import("@/lib/db/sessions"),
     import("@/lib/db/session-usage"),
+    import("@/lib/usage/usage-write-outbox"),
     import("@/lib/work-submission/chat-adapter"),
     import("@/lib/work-submission/host-adapter"),
     import("@/lib/companion/desktop-write-source"),
@@ -95,6 +98,8 @@ export async function installPersonAgents(
     broker: getExecutionBroker(),
     prepareLease: (input) =>
       deps.transport.call<PersonAgentLease>("person_agent_lease_prepare", { ...input }),
+    ticketTokens: (ticketId) =>
+      deps.transport.call<PersonAgentTicketTokens>("person_agent_usage_get", { ticketId }),
     launchFor: personAgentLaunch,
     history: async (sessionId, excluded) =>
       renderTranscript(
@@ -115,9 +120,11 @@ export async function installPersonAgents(
       await settleChatTurn({ runId: hostStateRunId(actionId), ...input })
     },
     project: (envelope) => writeSource.projectBrainRuntimeEnvelope(envelope),
+    // Through the usage outbox (ADR-0253 §10): a failed write is kept and
+    // retried, never only logged.
     recordUsage: async (input) => {
       const projectId = (await getSession(input.sessionId).catch(() => undefined))?.projectId
-      await recordExternalAgentUsage({ ...input, ...(projectId ? { projectId } : {}) })
+      await bookUsageRow(externalAgentUsageRow({ ...input, ...(projectId ? { projectId } : {}) }))
     },
     // The brain's registered publisher pipes it over the bridge; the Host
     // delivers it only to this person's devices.
@@ -144,9 +151,11 @@ export async function installPersonAgents(
     log: deps.log,
   })
   runner = installed
+  const stopUsageOutbox = startUsageWriteOutbox()
   return async () => {
     if (runner === installed) runner = null
     await installed.closeAll()
+    stopUsageOutbox()
     stopWatching()
     uninstallHost()
   }

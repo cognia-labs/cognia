@@ -4,9 +4,11 @@ import { ExecutionBroker } from "@/lib/execution/broker"
 import { createPersonProcessPlane, type PersonPlaneTransport } from "./process-plane"
 import {
   createPersonAgentRunner,
+  gatewayCorrectedUsage,
   gatewayRefusalIn,
   personAgentPrompt,
   PERSON_AGENT_IDLE_MS,
+  PERSON_AGENT_TICKET_SETTLE_POLL_MS,
   PERSON_AGENT_WORKSPACE,
   type PersonAgentManager,
   type PersonAgentRunnerDeps,
@@ -79,6 +81,12 @@ function harness(options: { holdLast?: boolean; turnLimit?: number } = {}) {
     manager,
     broker,
     prepareLease: jest.fn(async () => ({ ticketId: "t", secret: "lease-secret", expiresAtMs: 1 })),
+    ticketTokens: jest.fn(async () => ({
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+      openRequests: 0,
+    })),
     launchFor: (runtimeId) =>
       runtimeId === "claude-agent-acp"
         ? {
@@ -185,6 +193,34 @@ const replyTurn = (text = "hi") =>
     event({ type: "message_delta", sessionId: "native-1", delta: { type: "text", text } }),
     event({ type: "done", sessionId: "native-1", success: true, stopReason: "end_turn" }),
   ])
+
+describe("gatewayCorrectedUsage", () => {
+  const gateway = { inputTokens: 16_500, outputTokens: 120 }
+  it("replaces only a zero or missing figure", () => {
+    expect(
+      gatewayCorrectedUsage({ promptTokens: 0, completionTokens: 9, totalTokens: 9 }, gateway)
+    ).toEqual({
+      promptTokens: 16_500,
+      promptTokensIncludeCache: true,
+      completionTokens: 9,
+      totalTokens: 16_509,
+    })
+    expect(gatewayCorrectedUsage(undefined, gateway)).toEqual({
+      promptTokens: 16_500,
+      promptTokensIncludeCache: true,
+      completionTokens: 120,
+      totalTokens: 16_620,
+    })
+  })
+  it("keeps a full report, and keeps the report when the gateway saw nothing", () => {
+    const full = { promptTokens: 40, completionTokens: 9, totalTokens: 49 }
+    expect(gatewayCorrectedUsage(full, gateway)).toBe(full)
+    const zero = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+    expect(gatewayCorrectedUsage(zero, { inputTokens: 0, outputTokens: 0 })).toBe(zero)
+    expect(gatewayCorrectedUsage(zero, undefined)).toBe(zero)
+    expect(gatewayCorrectedUsage(undefined, undefined)).toBeUndefined()
+  })
+})
 
 describe("person agent runner", () => {
   it("p6e launches one sandboxed process with only the brokered lease", async () => {
@@ -323,6 +359,87 @@ describe("person agent runner", () => {
     await h.runner.startTurn(request({ actionId: "a2", messageId: "m2" }))
     await drain()
     expect(h.deps.recordUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it("adr0253 books the gateway's count where the agent reported zero tokens", async () => {
+    const h = harness()
+    const readings = [
+      { inputTokens: 100, outputTokens: 5, requests: 1, openRequests: 0 },
+      // The turn's last request is still settling at the first read after it.
+      { inputTokens: 100, outputTokens: 5, requests: 1, openRequests: 1 },
+      { inputTokens: 16_600, outputTokens: 125, requests: 3, openRequests: 0 },
+    ]
+    jest.mocked(h.deps.ticketTokens).mockImplementation(async () => readings.shift()!)
+    h.turns.push(
+      scripted([
+        event({
+          type: "message_delta",
+          sessionId: "native-1",
+          delta: { type: "text", text: "hi" },
+        }),
+        event({
+          type: "done",
+          sessionId: "native-1",
+          success: true,
+          // claude-agent-acp: no input tokens, while the gateway charged ~16.5K.
+          tokenUsage: { promptTokens: 0, completionTokens: 9, totalTokens: 9 },
+        }),
+      ])
+    )
+    await h.runner.startTurn(request())
+    await drain()
+    // Waiting for the open request: fire the poll timer.
+    const poll = h.timers.find((timer) => timer.ms === PERSON_AGENT_TICKET_SETTLE_POLL_MS)
+    expect(poll).toBeDefined()
+    poll!.callback()
+    await drain()
+    expect(h.deps.ticketTokens).toHaveBeenCalledWith("t")
+    expect(h.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "assistant-a1",
+        // The gateway's input for this turn; the agent's own output stands.
+        usage: {
+          promptTokens: 16_500,
+          promptTokensIncludeCache: true,
+          completionTokens: 9,
+          totalTokens: 16_509,
+        },
+      })
+    )
+  })
+
+  it("adr0253 books the gateway's count for a turn the agent reported nothing for", async () => {
+    const h = harness()
+    const readings = [
+      { inputTokens: 0, outputTokens: 0, requests: 0, openRequests: 0 },
+      { inputTokens: 900, outputTokens: 40, requests: 1, openRequests: 0 },
+    ]
+    jest.mocked(h.deps.ticketTokens).mockImplementation(async () => readings.shift()!)
+    h.turns.push(replyTurn())
+    await h.runner.startTurn(request())
+    await drain()
+    expect(h.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usage: {
+          promptTokens: 900,
+          promptTokensIncludeCache: true,
+          completionTokens: 40,
+          totalTokens: 940,
+        },
+      })
+    )
+  })
+
+  it("adr0253 keeps the agent's report when the gateway cannot be read", async () => {
+    const h = harness()
+    jest.mocked(h.deps.ticketTokens).mockRejectedValue(new Error("person_brain_stopping"))
+    const tokenUsage = { promptTokens: 0, completionTokens: 9, totalTokens: 9 }
+    h.turns.push(
+      scripted([event({ type: "done", sessionId: "native-1", success: true, tokenUsage })])
+    )
+    await h.runner.startTurn(request())
+    await drain()
+    expect(h.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ usage: tokenUsage }))
   })
 
   it("p6e settles a turn whose usage could not be written", async () => {

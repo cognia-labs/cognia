@@ -151,6 +151,26 @@ pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, te
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersonAgentUsageRequest { ticket_id: String }
+/// ADR-0253 §10: the tokens the gateway saw on one of this person's agent
+/// tickets, so the brain can book what an agent did not report. Only the
+/// ticket's owner may read it; any other ticket is simply not found.
+pub(crate) async fn person_agent_usage_get(args: Value, scope: Option<&str>, tenant: Option<&str>,
+    host: &dyn crate::rpc_host::RpcHost) -> PersonResult<Value> {
+    let person = person_caller(scope, tenant, "person_agent_usage_get")?;
+    let request: PersonAgentUsageRequest = serde_json::from_value(args)
+        .map_err(|_| RpcError::malformed("invalid person usage request".into()))?;
+    if request.ticket_id.is_empty() || request.ticket_id.len() > 128 {
+        return Err(RpcError::malformed("invalid person usage request".into()));
+    }
+    let gateway = host.gateway().ok_or_else(|| person_refusal(StatusCode::SERVICE_UNAVAILABLE, "model_access_unavailable"))?;
+    let tokens = gateway.tickets.ticket_tokens(&request.ticket_id, &person.account_id)
+        .ok_or_else(|| person_refusal(StatusCode::NOT_FOUND, "ticket_not_found"))?;
+    serde_json::to_value(tokens).map_err(|_| person_refusal(StatusCode::SERVICE_UNAVAILABLE, "model_access_unavailable"))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PersonAgentLeaseRequest {
     pub runtime_id: String, pub provider: String, pub model: String, pub session_id: Option<String>,
 }

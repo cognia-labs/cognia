@@ -6,8 +6,8 @@
     "date": "2026-11-01"
   },
   "metrics": {
-    "members": 32,
-    "dexie": 28,
+    "members": 33,
+    "dexie": 29,
     "sqlite": 2,
     "manual": 2
   },
@@ -1851,6 +1851,48 @@
       "idempotency": "[accountId+deliveryId] (unique)",
       "note": "recoverIntegrationEventProjections claims unfinished event projection steps at lib/integrations/events.ts:401 before projectStoredEvent resumes them. The event [accountId+deliveryId] unique identity prevents duplicate acceptance; projection claims use a 30s lease and failed steps retry with 30s exponential delay then deadletter at five attempts, so pending steps inside integrationEvents are durable work despite the event-table name.",
       "evidence": "e3cedc2471d3c460"
+    },
+    {
+      "key": "dexie:CogniaDB@lib/db/schema.ts/usageWriteOutbox",
+      "owner": "lib/usage",
+      "note": "bookUsageRow at lib/usage/usage-write-outbox.ts:187 commits a Host-run turn's usage row and only on failure parks it here (park, lib/usage/usage-write-outbox.ts:91); runDrain at lib/usage/usage-write-outbox.ts:148 rewrites due rows on the outbox timer and deletes each at lib/usage/usage-write-outbox.ts:167 once written, and startUsageWriteOutbox (lib/usage/usage-write-outbox.ts:267) retries every kept row, dead-lettered ones included, at each start. Retries use decideNextAttempt with forceRetryable; dead-lettered rows are kept, never deleted. ADR-0253 §10 admitted it before the shared durable-queue primitive exists.",
+      "database": "CogniaDB@lib/db/schema.ts",
+      "file": "lib/db/schema.ts",
+      "table": "usageWriteOutbox",
+      "rowType": "import(\"@/lib/usage/usage-write-outbox\").UsageWriteOutboxRow",
+      "rowFields": [
+        "attempts",
+        "createdAt",
+        "id",
+        "lastError",
+        "nextAttemptAt",
+        "row",
+        "state",
+        "updatedAt"
+      ],
+      "rowStatuses": [
+        "deadlettered",
+        "pending"
+      ],
+      "signals": [
+        "name",
+        "retry-count",
+        "due-time",
+        "status"
+      ],
+      "runner": "lib/usage/usage-write-outbox.ts",
+      "retry": "decideNextAttempt",
+      "idempotency": "id = the usage row's messageId (primary key); the write itself is idempotent on messageId",
+      "writerFunctions": [
+        "lib/usage/usage-write-outbox.ts#dexieUsageWriteOutboxStore::put"
+      ],
+      "consumerFunctions": [
+        "lib/usage/usage-write-outbox.ts#dexieUsageWriteOutboxStore::all",
+        "lib/usage/usage-write-outbox.ts#dexieUsageWriteOutboxStore::delete",
+        "lib/usage/usage-write-outbox.ts#dexieUsageWriteOutboxStore::due",
+        "lib/usage/usage-write-outbox.ts#dexieUsageWriteOutboxStore::get"
+      ],
+      "evidence": "7162528894eaf76c"
     },
     {
       "key": "sqlite:cognia-file-share/file_provider_ops",
@@ -5613,6 +5655,32 @@
         "lib/router-fusion/live/live-smoke-runner.ts#spentInDatabase"
       ],
       "evidence": "6fbda5da20542711"
+    },
+    {
+      "key": "sqlite:cognia-companion-security/person_session_owners",
+      "owner": "crates/cognia-companion-security",
+      "database": "cognia-companion-security@crates/cognia-companion-security/src/security_store.rs",
+      "file": "crates/cognia-companion-security/src/security_store.rs",
+      "table": "person_session_owners",
+      "rowType": null,
+      "rowFields": [
+        "account_id",
+        "claimed_at",
+        "session_id"
+      ],
+      "signals": [
+        "lease"
+      ],
+      "reason": "SecurityStore::claim_session_owner in crates/cognia-companion-security/src/security_store.rs records which person partition first claimed a session (ADR-0253 §5); claimed_at is the claim time, not a lease or due time, and nothing claims or retries these rows as work.",
+      "writerFunctions": [
+        "crates/cognia-companion-security/src/security_store.rs#SecurityStore::claim_session_owner",
+        "crates/cognia-companion-security/src/security_store.rs#SecurityStore::forget_person_sessions"
+      ],
+      "consumerFunctions": [
+        "crates/cognia-companion-security/src/security_store.rs#SecurityStore::claim_session_owner",
+        "crates/cognia-companion-security/src/security_store.rs#SecurityStore::session_owners"
+      ],
+      "evidence": "216239454de7ebed"
     },
     {
       "key": "sqlite:cognia-file-share/file_auth_failures",

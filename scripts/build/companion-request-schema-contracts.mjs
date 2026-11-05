@@ -429,6 +429,10 @@ const schemas = {
   }),
   // P6d: authority and provider credentials never come from the body.
   person_agent_policy_get: z.object({}).strict(),
+  // ADR-0253 §10: one of the caller's own agent tickets; any other is not found.
+  person_agent_usage_get: z.object({
+    ticketId: z.string().min(1).max(128),
+  }).strict(),
   person_agent_lease_prepare: z.object({
     runtimeId: z.string().min(1),
     provider: z.string().min(1).max(200),

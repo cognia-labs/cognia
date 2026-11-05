@@ -591,6 +591,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     // are `approval: interactive` in the manifest; the load is service-only.
     "host_secret_list",
     "person_agent_policy_get",    // P6e member-safe policy read.
+    "person_agent_usage_get",     // ADR-0253 §10 own agent ticket's tokens.
     "person_agent_lease_prepare", // P6d partition-owned brokered task.
     "person_model_ticket_mint",   // P6c person-only; service catalog still lists it.
     "org_model_credential_list",
@@ -1475,6 +1476,7 @@ pub fn known_commands() -> &'static [&'static str] {
 #[cfg(test)]
 const READ_ONLY_COMMANDS: &[&str] = &[
     "person_agent_policy_get",
+    "person_agent_usage_get",
     "org_member_usage_get",
     "org_model_credential_list",
     "org_agent_policy_get",
@@ -2703,6 +2705,7 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     // P6c internal descriptor; dedicated arm permits only person-brain.
     "person_model_ticket_mint",
     "person_agent_policy_get",    // P6e member-safe policy read.
+    "person_agent_usage_get",     // ADR-0253 §10 own agent ticket's tokens.
     "person_agent_lease_prepare", // P6d person-only task lease.
     "sandbox_preview_context",
     "sandbox_preview_create",
@@ -3842,7 +3845,7 @@ pub(super) async fn dispatch(
     // arm owns person-only authority and explicitly refuses service callers.
     if matches!(
         name,
-        "person_agent_lease_prepare" | "person_agent_policy_get"
+        "person_agent_lease_prepare" | "person_agent_policy_get" | "person_agent_usage_get"
     ) {
         return chat::dispatch(name, args, state, host, device_id, tenant_id, scope).await;
     }

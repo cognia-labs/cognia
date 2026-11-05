@@ -5347,6 +5347,7 @@ fn log_success_status(
     // A ticket request settles its reservation at the real usage (streams
     // reach here at stream end). Idempotent by request id.
     if ctx.ticket.is_some() {
+        state.tickets.record_request_tokens(&ctx.request_id, input_tokens, output_tokens);
         if ctx.ticket.as_ref().is_some_and(|ticket| ticket.member.is_some()) && (input_tokens.is_none() || output_tokens.is_none()) {
             state.tickets.org_usage_settle_unknown(&ctx.request_id, consumed.max(0) as u64);
         } else {

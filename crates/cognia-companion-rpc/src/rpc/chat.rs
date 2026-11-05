@@ -3,6 +3,7 @@ use super::*;
 pub(super) const COMMANDS: &[&str] = &[
     "person_model_ticket_mint",
     "person_agent_policy_get",
+    "person_agent_usage_get",
     "person_agent_lease_prepare",
     // ADR-0090 canonical names. Their deprecated `claude_*` aliases below run
     // the same impl bodies; the canonical four additionally carry the caller's
@@ -61,7 +62,10 @@ pub(super) async fn dispatch(
     if scope != Some("person-brain")
         && !matches!(
             name,
-            "person_model_ticket_mint" | "person_agent_lease_prepare" | "person_agent_policy_get"
+            "person_model_ticket_mint"
+                | "person_agent_lease_prepare"
+                | "person_agent_policy_get"
+                | "person_agent_usage_get"
         )
     {
         cognia_companion::person_chat::person_claim_operator_control_args(&args)
@@ -70,6 +74,9 @@ pub(super) async fn dispatch(
     let result = match name {
         "person_agent_policy_get" => {
             crate::person_execution::person_agent_policy_get(args, scope, tenant_id, host).await
+        }
+        "person_agent_usage_get" => {
+            crate::person_execution::person_agent_usage_get(args, scope, tenant_id, host).await
         }
         "person_agent_lease_prepare" => {
             crate::person_execution::person_agent_lease_prepare(args, scope, tenant_id, state, host)

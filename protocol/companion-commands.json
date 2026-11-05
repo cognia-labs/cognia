@@ -17921,6 +17921,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "person_agent_usage_get",
+      "resource": "person.agent_usage",
+      "verb": "get",
+      "arm": "person_agent_usage_get",
+      "target": "service",
+      "operation": "read",
+      "capability": "service.internal",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "forbidden",
+      "transports": ["internal"],
+      "pagination": "none",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "person_model_ticket_mint",
       "resource": "person.model_ticket",
       "verb": "mint",

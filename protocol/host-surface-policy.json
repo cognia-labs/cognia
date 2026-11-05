@@ -1102,6 +1102,10 @@
       "reason": "P6e person-only member-safe org agent coverage and Host execution availability; fresh live org standing."
     },
     {
+      "arm": "person_agent_usage_get",
+      "reason": "ADR-0253 §10 person-only token totals of one of the caller's own agent tickets, to book what an agent did not report; any other ticket is not found."
+    },
+    {
       "arm": "send_to_external_agent",
       "reason": "P6e fresh live standing and partition/run lifecycle fences; only the caller partition's bound agent process."
     },

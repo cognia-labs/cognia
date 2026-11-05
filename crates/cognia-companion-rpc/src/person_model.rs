@@ -320,6 +320,39 @@ mod tests {
         assert!(matches!(gateway.tickets.validate_and_reserve(secret, now, TicketOperation::Chat, "p6c-mid-turn", 3), Err(TicketReject::MemberUsageCapReached { .. })));
     }
 
+    #[tokio::test]
+    async fn adr0253_agent_usage_reads_only_the_callers_own_ticket() {
+        use cognia_companion::person_partition::{person_test_support::Installed, scope};
+        let _p6c_lock = PERSON_TEST_LOCK.lock().await;
+        let a = person("usr_adr0253_usage_a"); let b = person("usr_adr0253_usage_b");
+        let (_fleet, _) = Installed::new(vec![a.clone(), b.clone()]);
+        let mut host = crate::headless::HeadlessServices::stub_for_tests();
+        std::sync::Arc::get_mut(&mut host).unwrap().gateway = std::sync::Arc::new(gateway());
+        OrgCredentials::set(&a.org_id, "p6c-provider", "adr0253-usage-key", "operator", 1).unwrap();
+        let minted = person_mint(MultiTenant, &a, request("adr0253-usage"), &host.gateway, 19384).unwrap();
+        let ticket = minted["ticketId"].as_str().unwrap().to_string();
+        let read = |caller: PersonPartition, scope_name: Option<&'static str>, ticket: String| {
+            let host = host.clone();
+            async move {
+                scope(Some(caller.clone()), crate::person_execution::person_agent_usage_get(
+                    json!({"ticketId":ticket}), scope_name, Some(&caller.account_id), &host)).await
+            }
+        };
+        assert_eq!(read(a.clone(), Some("person-brain"), ticket.clone()).await.unwrap(),
+            json!({"inputTokens":0,"outputTokens":0,"requests":0,"openRequests":0}));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        host.gateway.tickets.validate_and_reserve(minted["secret"].as_str().unwrap(), now, TicketOperation::Chat, "adr0253-usage-r", 5).unwrap();
+        assert_eq!(read(a.clone(), Some("person-brain"), ticket.clone()).await.unwrap()["openRequests"], 1);
+        host.gateway.tickets.record_request_tokens("adr0253-usage-r", Some(40), Some(2));
+        host.gateway.tickets.settle_reservation("adr0253-usage-r", 42);
+        assert_eq!(read(a.clone(), Some("person-brain"), ticket.clone()).await.unwrap(),
+            json!({"inputTokens":40,"outputTokens":2,"requests":1,"openRequests":0}));
+        // Another member's ticket is simply not found; only a person brain may ask.
+        assert_error(read(b.clone(), Some("person-brain"), ticket.clone()).await, StatusCode::NOT_FOUND, "ticket_not_found");
+        assert_eq!(read(a.clone(), Some("service"), ticket.clone()).await.unwrap_err().0, StatusCode::FORBIDDEN);
+        assert!(read(a.clone(), Some("person-brain"), String::new()).await.is_err());
+    }
+
     struct PersonCaptureHost {
         script: std::path::PathBuf,
         frames: tokio::sync::mpsc::UnboundedSender<Value>,

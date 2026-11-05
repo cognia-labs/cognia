@@ -70,8 +70,8 @@ export async function upsertSessionUsage(row: SessionUsageRow): Promise<void> {
   await commitUsageRow(row)
 }
 
-/** Persist the same reported accounting attached to an external assistant turn. */
-export async function recordExternalAgentUsage(args: {
+/** The usage row an external assistant turn's reported accounting makes. */
+export function externalAgentUsageRow(args: {
   sessionId: string
   messageId: string
   usage: ExternalAgentTokenUsage
@@ -82,10 +82,10 @@ export async function recordExternalAgentUsage(args: {
   projectId?: string
   durationMs?: number
   at?: number
-}): Promise<void> {
+}): SessionUsageRow {
   const usage = externalTokenUsageToUsageInfo(args.usage)
   const costKnown = usage.totalCostUsd !== undefined
-  await upsertSessionUsage({
+  return {
     sessionId: args.sessionId,
     messageId: args.messageId,
     model: args.model,
@@ -103,7 +103,14 @@ export async function recordExternalAgentUsage(args: {
     durationMs: args.durationMs ?? 0,
     surface: "chat",
     usageBasis: "provider-reported",
-  })
+  }
+}
+
+/** Persist the same reported accounting attached to an external assistant turn. */
+export async function recordExternalAgentUsage(
+  args: Parameters<typeof externalAgentUsageRow>[0]
+): Promise<void> {
+  await upsertSessionUsage(externalAgentUsageRow(args))
 }
 
 /**
@@ -117,7 +124,14 @@ export async function recordExternalAgentUsage(args: {
  * mostly so tests can assert against the persisted shape without a second
  * Dexie read.
  */
-export async function recordResultUsage(args: {
+export async function recordResultUsage(args: ResultUsageInput): Promise<SessionUsageRow | null> {
+  const row = resultUsageRow(args)
+  if (row) await upsertSessionUsage(row)
+  return row
+}
+
+/** What {@link recordResultUsage} books for one SDK `result`. */
+export interface ResultUsageInput {
   sessionId: string
   messageId: string | undefined
   characterId?: string
@@ -139,7 +153,10 @@ export async function recordResultUsage(args: {
    * SDK's. Absent for every other turn.
    */
   ledger?: { runId: string; costUsd: number }
-}): Promise<SessionUsageRow | null> {
+}
+
+/** The row {@link recordResultUsage} writes, or `null` when there is nothing to book. */
+export function resultUsageRow(args: ResultUsageInput): SessionUsageRow | null {
   const { sessionId, messageId, characterId, model, providerId, result, ledger } = args
   if (!sessionId || !messageId) return null
   // A ledgered turn keeps its booked spend even when the result carried no
@@ -189,7 +206,6 @@ export async function recordResultUsage(args: {
       batch: args.batch,
     }),
   }
-  await upsertSessionUsage(row)
   return row
 }
 
