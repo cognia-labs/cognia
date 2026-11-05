@@ -78,7 +78,12 @@ import {
   issuesList,
   issuesUpdate,
 } from "../handlers/issues"
-import { ISSUE_STAGE_MAX, ISSUE_TRIAGE_STATES } from "@/types/issues"
+import {
+  ISSUE_PRIORITIES,
+  ISSUE_STAGE_MAX,
+  ISSUE_STATUSES,
+  ISSUE_TRIAGE_STATES,
+} from "@/types/issues"
 import { spawnTask } from "../handlers/spawn-task"
 import { browserTool, type BrowserToolOutput } from "../handlers/browser"
 import {
@@ -1609,8 +1614,8 @@ function registerUsageTools(server: McpServer, settingsGetter: SettingsGetter) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function registerIssuesTools(server: McpServer, settingsGetter: SettingsGetter) {
-  const statusSchema = z.enum(["backlog", "todo", "in_progress", "in_review", "done", "canceled"])
-  const prioritySchema = z.enum(["urgent", "high", "medium", "low", "none"])
+  const statusSchema = z.enum(ISSUE_STATUSES)
+  const prioritySchema = z.enum(ISSUE_PRIORITIES)
   const stageSchema = z.number().int().min(1).max(ISSUE_STAGE_MAX)
   const triageSchema = z.enum(ISSUE_TRIAGE_STATES)
   const assigneeSchema = z

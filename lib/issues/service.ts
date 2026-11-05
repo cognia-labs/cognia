@@ -54,6 +54,7 @@ import {
   type CreateIssueInput,
 } from "@/lib/db/issues"
 import { getDb } from "@/lib/db/schema"
+import { matchesIssueText } from "./board-model"
 import { applyIssueBulkAction, type IssueBulkAction, type IssueBulkOutcome } from "./bulk-actions"
 import type { IssueMoveError } from "./state-machine"
 import { toUnifiedIssue } from "./sources/local-source"
@@ -656,14 +657,7 @@ export async function queryIssues(query: IssueQuery = {}): Promise<Issue[]> {
     ...(projectId ? { projectId } : {}),
     ...(issueProjectId ? { issueProjectId } : {}),
   })
-  const needle = text?.trim().toLowerCase()
-  if (needle) {
-    rows = rows.filter((issue) =>
-      [issue.identifier, issue.title, issue.description ?? ""].some((field) =>
-        field.toLowerCase().includes(needle)
-      )
-    )
-  }
+  if (text?.trim()) rows = rows.filter((issue) => matchesIssueText(issue, text))
   return limit !== undefined ? rows.slice(0, Math.max(0, limit)) : rows
 }
 

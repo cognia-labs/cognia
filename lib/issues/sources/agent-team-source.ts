@@ -65,7 +65,7 @@ export function toUnifiedTeamTask(
     ...(task.description ? { description: task.description } : {}),
     status,
     statusCategory: statusCategoryOf(status),
-    priority: subAgentPriorityToIssuePriority(task.priority),
+    priority: subAgentPriorityToIssuePriority(task.priority, origin?.priority),
     // The teammate who claimed it, when one has. Forcing every row to the team
     // made per-member attribution invisible on the board even though
     // `AgentTeamTask.assignedTo` had the answer, and the tracker's own actor

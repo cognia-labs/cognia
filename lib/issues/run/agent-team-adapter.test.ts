@@ -23,7 +23,6 @@ import {
   createAgentTeamRunAdapter,
   createDefaultAgentTeamRunAdapterDeps,
   ensureAgentTeamStoreLoaded,
-  issuePriorityToSubAgentPriority,
   type AgentTeamRunAdapterDeps,
 } from "./agent-team-adapter"
 
@@ -214,14 +213,9 @@ function makeDeps(over: Partial<AgentTeamRunAdapterDeps> = {}) {
 const CTX = { runId: "run-claim", by: HUMAN } as const
 
 describe("helpers", () => {
-  it("builds hrefs, maps priorities, knows the busy statuses", () => {
+  it("builds hrefs and knows the busy statuses", () => {
     expect(agentTeamWorkspaceHref("t 1")).toBe("/squads?id=t%201")
     expect(AGENT_BRANCHES_HREF).toBe("/workspace?tab=environments")
-    expect(issuePriorityToSubAgentPriority("urgent")).toBe("critical")
-    expect(issuePriorityToSubAgentPriority("high")).toBe("high")
-    expect(issuePriorityToSubAgentPriority("medium")).toBe("normal")
-    expect(issuePriorityToSubAgentPriority("low")).toBe("low")
-    expect(issuePriorityToSubAgentPriority("none")).toBe("normal")
     expect([...BUSY_TEAM_STATUSES].sort()).toEqual(["executing", "paused", "planning"])
   })
 })

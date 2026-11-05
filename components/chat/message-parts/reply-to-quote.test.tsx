@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import type { UIMessage } from "ai"
 
 import { useChatStore } from "@/stores/chat"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 import { ReplyToQuote } from "./reply-to-quote"
+import { registerInlineLinkKind } from "@/lib/chat/inline-links"
 
 const toastError = jest.fn()
 jest.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
@@ -64,4 +65,36 @@ it("falls back to a placeholder for an empty preview", () => {
   seed([])
   render(<ReplyToQuote replyTo={{ messageId: "x", preview: "  " }} />)
   expect(screen.getByTestId("reply-to-preview")).toHaveTextContent("t:emptyPreview")
+})
+
+describe("in-app references in the quote", () => {
+  let dispose: () => void
+  beforeEach(() => {
+    dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /\b[A-Z]+-\d+\b/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: () => undefined,
+      accepts: () => true,
+    })
+  })
+  afterEach(() => act(() => dispose()))
+
+  it("links them in a plain quote", () => {
+    seed([])
+    render(<ReplyToQuote replyTo={{ messageId: "gone", preview: "fix MERC-3" }} sessionId="s1" />)
+    expect(screen.getByRole("link", { name: "MERC-3" })).toHaveAttribute(
+      "href",
+      "/issues?identifier=MERC-3"
+    )
+  })
+
+  it("keeps them as text inside a quote that is a jump button", () => {
+    seed([{ id: "m1", role: "assistant", parts: [{ type: "text", text: "hi" }] } as UIMessage])
+    useChatViewportStore.getState().registerJumpToMessage(() => true)
+    render(<ReplyToQuote replyTo={{ messageId: "m1", preview: "fix MERC-3" }} sessionId="s1" />)
+    expect(screen.queryByRole("link")).toBeNull()
+    expect(screen.getByTestId("reply-to-preview")).toHaveTextContent("fix MERC-3")
+  })
 })

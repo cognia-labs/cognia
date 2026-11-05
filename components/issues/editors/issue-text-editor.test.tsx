@@ -3,8 +3,9 @@
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 
 import userEvent from "@testing-library/user-event"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { IssueTextEditor } from "./issue-text-editor"
+import { registerInlineLinkKind } from "@/lib/chat/inline-links"
 
 function renderEditor(over: Partial<React.ComponentProps<typeof IssueTextEditor>> = {}) {
   const props: React.ComponentProps<typeof IssueTextEditor> = {
@@ -164,5 +165,58 @@ describe("IssueTextEditor", () => {
       <IssueTextEditor value="Theirs" onCommit={jest.fn()} ariaLabel="Title" testId="editor" />
     )
     expect(screen.getByTestId("editor-input")).toHaveValue("Mine")
+  })
+})
+
+describe("linkify", () => {
+  let dispose: () => void
+  beforeEach(() => {
+    dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /\b[A-Z]+-\d+\b/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: () => undefined,
+      accepts: () => true,
+    })
+  })
+  afterEach(() => act(() => dispose()))
+
+  it("links references in the shown text; a link click does not open the editor", async () => {
+    const user = userEvent.setup()
+    renderEditor({
+      value: "Blocked by MERC-2",
+      multiline: true,
+      linkify: true,
+      ariaLabel: "Description",
+    })
+    const link = screen.getByRole("link", { name: "MERC-2" })
+    link.addEventListener("click", (event) => event.preventDefault())
+    await user.click(link)
+    expect(screen.queryByTestId("editor-input")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Description" }))
+    expect(screen.getByTestId("editor-input")).toHaveValue("Blocked by MERC-2")
+  })
+
+  it("opens the editor from the keyboard", async () => {
+    const user = userEvent.setup()
+    renderEditor({ value: "MERC-2", linkify: true })
+    screen.getByRole("button", { name: "Title" }).focus()
+    await user.keyboard("{Enter}")
+    expect(screen.getByTestId("editor-input")).toHaveValue("MERC-2")
+  })
+
+  it("is read-only text with live links when disabled", async () => {
+    const user = userEvent.setup()
+    renderEditor({ value: "MERC-2", linkify: true, disabled: true })
+    expect(screen.queryByRole("button")).toBeNull()
+    expect(screen.getByRole("link", { name: "MERC-2" })).toBeInTheDocument()
+    await user.click(screen.getByTestId("editor"))
+    expect(screen.queryByTestId("editor-input")).not.toBeInTheDocument()
+  })
+
+  it("keeps the placeholder button for an empty value", () => {
+    renderEditor({ value: "", linkify: true, placeholder: "Add a description" })
+    expect(screen.getByRole("button")).toHaveTextContent("Add a description")
   })
 })

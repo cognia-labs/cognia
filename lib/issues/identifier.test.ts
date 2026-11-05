@@ -1,6 +1,7 @@
 import {
   deriveProjectKey,
   extractIssueIdentifiers,
+  isCanonicalIssueIdentifier,
   formatIssueIdentifier,
   isValidProjectKey,
   parseIssueIdentifier,
@@ -129,5 +130,17 @@ describe("extractIssueIdentifiers", () => {
 
   it("does not match GitHub refs", () => {
     expect(extractIssueIdentifiers("see owner/repo#123")).toEqual([])
+  })
+})
+
+describe("isCanonicalIssueIdentifier", () => {
+  it.each([
+    ["MERC-12", true],
+    ["MERC-0", false],
+    ["MERC-012", false],
+    ["merc-12", false],
+    ["TOOLONG-1", false],
+  ])("%s → %s", (text, expected) => {
+    expect(isCanonicalIssueIdentifier(text)).toBe(expected)
   })
 })

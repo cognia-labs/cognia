@@ -1059,10 +1059,15 @@
     "refresh": "刷新",
     "loading": "正在从 GitHub 加载评论…",
     "failed": "无法从 GitHub 读取评论，请重试。",
+    "noCredential": "没有可在此处使用的 GitHub 凭据能读取 {repository}。请连接 GitHub 账号或用 GitHub CLI 登录，然后刷新。",
+    "openConnections": "打开连接设置",
     "empty": "GitHub 上还没有评论。",
     "unknownAuthor": "未知作者",
     "edited": "已编辑",
     "open": "在 GitHub 中打开",
     "truncated": "仅显示前 1,000 条评论，其余请在 GitHub 上查看。"
+  },
+  "identifier": {
+    "notFound": "没有编号为 {identifier} 的 issue。"
   }
 }

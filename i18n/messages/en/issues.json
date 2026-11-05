@@ -1059,10 +1059,15 @@
     "refresh": "Refresh",
     "loading": "Loading comments from GitHub…",
     "failed": "Couldn't read the comments from GitHub. Try again.",
+    "noCredential": "No GitHub credential this view may use can read {repository}. Connect a GitHub account or sign in with the GitHub CLI, then refresh.",
+    "openConnections": "Open Connections",
     "empty": "No comments on GitHub yet.",
     "unknownAuthor": "Unknown author",
     "edited": "edited",
     "open": "Open on GitHub",
     "truncated": "Only the first 1,000 comments are shown. Open the issue on GitHub for the rest."
+  },
+  "identifier": {
+    "notFound": "No issue is identified as {identifier}."
   }
 }

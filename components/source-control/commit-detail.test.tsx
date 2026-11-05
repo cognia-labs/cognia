@@ -21,6 +21,7 @@ import {
   HOVER_REVEAL_REQUIRED_VARIANTS,
 } from "@/lib/ui/hover-reveal"
 import { CommitDetail } from "./commit-detail"
+import { registerInlineLinkKind } from "@/lib/chat/inline-links"
 import { useGitStore } from "@/stores/git/git-store"
 import type { GitCommit } from "@/types/git"
 
@@ -362,6 +363,35 @@ describe("CommitDetail", () => {
       "reset-hard",
     ]) {
       expect(await screen.findByTestId(id)).toHaveAttribute("data-disabled")
+    }
+  })
+})
+
+describe("CommitDetail references", () => {
+  it("links issue identifiers in the subject and body", async () => {
+    const dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /\b[A-Z]+-\d+\b/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: () => undefined,
+      accepts: () => true,
+    })
+    try {
+      render(
+        <CommitDetail
+          rootDir="/r"
+          commit={{ ...commit, summary: "fix: MERC-4", body: "Closes MERC-5" }}
+        />
+      )
+      expect(screen.getByRole("link", { name: "MERC-4" })).toHaveAttribute(
+        "href",
+        "/issues?identifier=MERC-4"
+      )
+      expect(screen.getByRole("link", { name: "MERC-5" })).toBeInTheDocument()
+      await waitFor(() => expect(filesMock).toHaveBeenCalled())
+    } finally {
+      act(() => dispose())
     }
   })
 })

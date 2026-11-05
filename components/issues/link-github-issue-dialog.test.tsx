@@ -81,7 +81,7 @@ describe("LinkGithubIssueDialog", () => {
     renderDialog({ onLinked })
     await user.type(screen.getByTestId("link-github-number"), "7")
     await user.click(screen.getByTestId("link-github-submit"))
-    await waitFor(() => expect(onLinked).toHaveBeenCalled())
+    await waitFor(() => expect(onLinked).toHaveBeenCalledWith("acme/mercury"))
   })
 
   it("stays open and reports a failed write", async () => {

@@ -18,6 +18,7 @@
 import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 
+import { InlineLinkedText } from "@/components/chat/inline-linked-text"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -34,6 +35,8 @@ export interface IssueTextEditorProps {
   testId: string
   /** Blank is refused and reverts. Titles set this; descriptions do not. */
   required?: boolean
+  /** Link issue identifiers in the shown text (D23). Descriptions set this. */
+  linkify?: boolean
 }
 
 export function IssueTextEditor({
@@ -46,6 +49,7 @@ export function IssueTextEditor({
   ariaLabel,
   testId,
   required,
+  linkify,
 }: IssueTextEditorProps) {
   const t = useTranslations("issues")
   const [editing, setEditing] = useState(false)
@@ -66,6 +70,39 @@ export function IssueTextEditor({
   function beginEdit() {
     setDraft(value)
     setEditing(true)
+  }
+
+  if ((disabled || !editing) && linkify && value) {
+    const shownClassName = cn(
+      "focus-visible:ring-ring/50 w-full rounded-md text-left focus-visible:outline-none focus-visible:ring-[3px]",
+      !disabled && "cursor-text hover:bg-accent/40",
+      multiline ? "whitespace-pre-wrap px-2 py-1.5" : "px-2 py-1",
+      className
+    )
+    // A `<button>` cannot hold the links in the text, so the shown text is a
+    // focusable region that opens the editor itself. A click on a link follows
+    // the link instead.
+    return (
+      <div
+        role={disabled ? undefined : "button"}
+        tabIndex={disabled ? undefined : 0}
+        aria-label={disabled ? undefined : ariaLabel}
+        data-testid={testId}
+        className={shownClassName}
+        onClick={(event) => {
+          if (disabled || (event.target as Element).closest("a")) return
+          beginEdit()
+        }}
+        onKeyDown={(event) => {
+          if (disabled || event.target !== event.currentTarget) return
+          if (event.key !== "Enter" && event.key !== " ") return
+          event.preventDefault()
+          beginEdit()
+        }}
+      >
+        <InlineLinkedText text={value} />
+      </div>
+    )
   }
 
   if (disabled || !editing) {

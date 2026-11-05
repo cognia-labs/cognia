@@ -20,8 +20,10 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { loggers } from "@cognia/logging"
 
+import { installIssueInlineLinks } from "@/lib/issues/inline-links"
 import { installIssueNotificationCommands, type IssueNotifyTranslate } from "@/lib/issues/notify"
 import { useAccountStore } from "@/stores/account/account-store"
+import { useProjectStore } from "@/stores/project/project-store"
 import { installCollabRefreshScheduler } from "@/lib/collab/refresh-scheduler"
 import { startCollabRuntime } from "@/lib/headless/runtimes/collab-runtime"
 
@@ -73,6 +75,17 @@ export function IssueTrackerInitializer() {
   useEffect(() => {
     if (!unlockedAccountId) return
     return startCollabRuntime(unlockedAccountId)
+  }, [unlockedAccountId])
+
+  // `MERC-12` in chat and plain text links to the issue (D16). The chat kernel
+  // cannot import the tracker, so the tracker registers its syntax with the
+  // chat's inline-link seam, following the workspace on screen.
+  useEffect(() => {
+    if (!unlockedAccountId) return
+    return installIssueInlineLinks({
+      current: () => useProjectStore.getState().activeProjectId ?? null,
+      subscribe: (listener) => useProjectStore.subscribe(listener),
+    })
   }, [unlockedAccountId])
 
   // The `issue.open` notification action needs the App Router, which only

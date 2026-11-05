@@ -9,8 +9,9 @@ jest.mock("@/lib/issues/sync-runner", () => ({
 }))
 
 import userEvent from "@testing-library/user-event"
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import { GithubCommentsSection } from "./github-comments-section"
+import { registerInlineLinkKind } from "@/lib/chat/inline-links"
 
 const target = { repoFullName: "acme/app", number: 5 }
 
@@ -65,6 +66,45 @@ describe("GithubCommentsSection", () => {
     )
   })
 
+  it("links issue identifiers in a comment", async () => {
+    const user = userEvent.setup()
+    const dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /\b[A-Z]+-\d+\b/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: () => undefined,
+      accepts: () => true,
+    })
+    try {
+      render(
+        <GithubCommentsSection
+          target={target}
+          load={async () => ({
+            truncated: false,
+            comments: [
+              {
+                id: 1,
+                author: "a",
+                authorIsBot: false,
+                body: "dup of MERC-9",
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ],
+          })}
+        />
+      )
+      await user.click(screen.getByTestId("issue-github-comments-load"))
+      expect(await screen.findByRole("link", { name: "MERC-9" })).toHaveAttribute(
+        "href",
+        "/issues?identifier=MERC-9"
+      )
+    } finally {
+      act(() => dispose())
+    }
+  })
+
   it("says when there are no comments", async () => {
     const user = userEvent.setup()
     render(
@@ -89,7 +129,12 @@ describe("GithubCommentsSection", () => {
       />
     )
     await user.click(screen.getByTestId("issue-github-comments-load"))
-    expect(await screen.findByRole("alert")).toHaveTextContent("sync.noCredential")
+    expect(await screen.findByRole("alert")).toHaveTextContent("githubComments.noCredential")
+    // Actionable: it leads to where a credential is connected.
+    expect(screen.getByRole("link", { name: "githubComments.openConnections" })).toHaveAttribute(
+      "href",
+      "/settings?section=connections"
+    )
   })
 
   it("reports any other failure", async () => {

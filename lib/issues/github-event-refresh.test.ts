@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 jest.mock("@/lib/integrations/action-runner", () => ({ integrationApiBaseUrl: jest.fn() }))
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import type { IntegrationEventEnvelope } from "@/types/plugin/plugin-integration"
 import type { IssueSyncBinding, IssueSyncProvider } from "./sync/types"
 import { GithubEventIssueRefresher, type GithubEventRefreshDeps } from "./github-event-refresh"
@@ -67,6 +68,7 @@ function setup(over: Partial<GithubEventRefreshDeps> = {}) {
       mirror: [{ repoFullName: "acme/app", issueProjectId: "ip1" }],
       imported: [],
     })),
+    runRegistered: jest.fn(async () => undefined),
     requestSync: jest.fn(),
     pendingKeys: () => [],
     removeFromMirror: jest.fn(deleteGithubIssues),
@@ -475,11 +477,80 @@ it("reports account, registration and departure failures without throwing", asyn
   }
 })
 
-it("keeps the explicit refresh API and pending repository list", async () => {
-  const { deps, refresher } = setup({
+it("keeps the pending repository list", () => {
+  const { refresher } = setup({
     pendingKeys: () => ["github-mirror:p1:acme/app", "issues:p2:acme/app", "unrelated"],
   })
   expect(refresher.pending()).toEqual(["acme/app"])
-  await refresher.refresh("ACME/APP")
-  expect(deps.requestSync).toHaveBeenCalledWith("github-mirror:ip1:acme/app", "push")
+})
+
+describe("refreshAfterWrite", () => {
+  const mirrorKey = "github-mirror:ip1:acme/app"
+  const importKey = "issues:ip2:Acme/App"
+  const bound = () =>
+    jest.fn(async () => ({
+      mirror: [
+        { repoFullName: "acme/app", issueProjectId: "ip1" },
+        { repoFullName: "acme/other", issueProjectId: "ip1" },
+      ],
+      imported: [imported],
+    }))
+
+  it("runs only the written repository's targets, incrementally and awaited", async () => {
+    const runRegistered = jest.fn(async () => ({ status: "completed" }) as never)
+    const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+    const { deps, refresher } = setup({ reconcileRegistrations: bound(), runRegistered })
+    await refresher.refreshAfterWrite("ACME/APP", credentialContext)
+    expect(runRegistered.mock.calls).toEqual([
+      [mirrorKey, { credentialContext }],
+      [importKey, { credentialContext }],
+    ])
+    expect(deps.requestSync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["failed", "GithubMirrorSyncOutcomeError"],
+    ["backoff", "GithubMirrorSyncOutcomeError"],
+  ])("rejects when the mirror run ends %s", async (status, name) => {
+    const runRegistered = jest.fn(async () => ({ status, errorCode: "rate-limited" }) as never)
+    const { refresher } = setup({ reconcileRegistrations: bound(), runRegistered })
+    await expect(refresher.refreshAfterWrite("acme/app")).rejects.toMatchObject({
+      name,
+      code: "rate-limited",
+    })
+    expect(runRegistered).toHaveBeenCalledTimes(1)
+  })
+
+  it("names an import failure as an issue sync failure", async () => {
+    const runRegistered = jest.fn(async (key: string) =>
+      key === importKey ? ({ status: "failed" } as never) : ({ status: "completed" } as never)
+    )
+    const { refresher } = setup({ reconcileRegistrations: bound(), runRegistered })
+    await expect(refresher.refreshAfterWrite("acme/app")).rejects.toMatchObject({
+      name: "IssueSyncOutcomeError",
+      code: "failed",
+    })
+  })
+
+  it("queues a push behind a run that holds the target", async () => {
+    const runRegistered = jest.fn(async () => ({ status: "busy" }) as never)
+    const { deps, refresher } = setup({ reconcileRegistrations: bound(), runRegistered })
+    await refresher.refreshAfterWrite("acme/app")
+    expect(deps.requestSync).toHaveBeenCalledWith(mirrorKey, "push")
+    expect(deps.requestSync).toHaveBeenCalledWith(importKey, "push")
+  })
+
+  it("skips a target unbound meanwhile and propagates a reconcile failure", async () => {
+    const { refresher } = setup({
+      reconcileRegistrations: bound(),
+      runRegistered: jest.fn(async () => undefined),
+    })
+    await expect(refresher.refreshAfterWrite("acme/app")).resolves.toBeUndefined()
+    const broken = setup({
+      reconcileRegistrations: jest.fn(async () => {
+        throw new Error("storage")
+      }),
+    }).refresher
+    await expect(broken.refreshAfterWrite("acme/app")).rejects.toThrow("storage")
+  })
 })

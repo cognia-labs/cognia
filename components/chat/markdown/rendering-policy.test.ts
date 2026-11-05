@@ -1,3 +1,5 @@
+import { registerInlineLinkKind } from "@/lib/chat/inline-links"
+import { rehypeInlineLinks } from "./rehype-inline-links"
 import {
   chatMarkdownSanitizeSchema,
   chatMarkdownUrlTransform,
@@ -26,7 +28,9 @@ describe("shared Markdown rendering policy", () => {
     expect(chatMarkdownSanitizeSchema.protocols?.href).toEqual(
       expect.arrayContaining(["tel", "file"])
     )
-    expect(chatStreamdownRehypePlugins).toHaveLength(2)
+    expect(chatStreamdownRehypePlugins).toHaveLength(3)
+    // In-app references are linked after sanitization, never before it.
+    expect(chatStreamdownRehypePlugins.at(-1)).toBe(rehypeInlineLinks)
   })
 
   it("keeps inline highlight, underline and abbreviation markup", () => {
@@ -51,5 +55,32 @@ describe("untrustedMarkdownUrlTransform", () => {
     ["/settings", "href", ""],
   ])("%s as %s → %s", (url, key, expected) => {
     expect(untrustedMarkdownUrlTransform(url, key)).toBe(expected)
+  })
+})
+
+describe("untrustedMarkdownUrlTransform and in-app references", () => {
+  let dispose: () => void
+  beforeEach(() => {
+    dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /x/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: (href) => /^\/issues\?identifier=([A-Z]+-\d+)$/.exec(href)?.[1],
+      accepts: () => true,
+    })
+  })
+  afterEach(() => dispose())
+
+  it("keeps a registered reference's address as a link, never as an image", () => {
+    expect(untrustedMarkdownUrlTransform("/issues?identifier=MERC-12", "href")).toBe(
+      "/issues?identifier=MERC-12"
+    )
+    expect(untrustedMarkdownUrlTransform("/issues?identifier=MERC-12", "src")).toBe("")
+  })
+
+  it("still drops any other relative target", () => {
+    expect(untrustedMarkdownUrlTransform("/issues?id=iss_1", "href")).toBe("")
+    expect(untrustedMarkdownUrlTransform("/issues?identifier=MERC-12&x=1", "href")).toBe("")
   })
 })

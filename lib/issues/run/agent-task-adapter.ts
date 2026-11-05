@@ -25,6 +25,7 @@ import type {
   IssueRunTarget,
   IssueRunVerdict,
 } from "./types"
+import { issuePriorityToAgentTaskPriority } from "@/lib/issues/sources/agent-status-map"
 import { withRunBrief } from "./types"
 
 export const AGENT_TASK_RUN_ADAPTER_ID = "agent-task"
@@ -185,20 +186,3 @@ const LIVE_ATTEMPT_STATUSES: ReadonlySet<AgentTaskAttempt["status"]> = new Set([
   "queued",
   "running",
 ])
-
-/** `IssuePriority` → `AgentTaskPriority`; `none` reads as `normal`. */
-export function issuePriorityToAgentTaskPriority(
-  priority: IssueRunTarget["issue"]["priority"]
-): AgentTask["priority"] {
-  switch (priority) {
-    case "urgent":
-      return "critical"
-    case "high":
-      return "high"
-    case "low":
-      return "low"
-    case "medium":
-    case "none":
-      return "normal"
-  }
-}

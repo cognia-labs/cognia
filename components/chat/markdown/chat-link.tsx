@@ -1,6 +1,7 @@
 "use client"
 
 import { isDocumentPrimaryClick, openCloudDocumentLink } from "@/lib/artifacts/open-chat-document"
+import Link from "next/link"
 import { Suspense, useContext, useSyncExternalStore, type AnchorHTMLAttributes } from "react"
 import { LinkHoverPreview } from "@/components/chat/link-preview/link-hover-preview"
 import { LinkSiteIcon } from "@/components/chat/link-preview/link-site-icon"
@@ -17,6 +18,11 @@ import {
   type ProjectFileReference,
 } from "@/lib/files/project-file-reference"
 import {
+  getInlineLinksRevision,
+  resolveInlineLinkHref,
+  subscribeInlineLinks,
+} from "@/lib/chat/inline-links"
+import {
   getLinkMatcher,
   getLinkMatchersRevision,
   subscribeLinkMatchers,
@@ -29,6 +35,8 @@ interface ChatLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   isStreaming?: boolean
   /** Reasoning shares Markdown styles, but does not expose links to plugins. */
   allowPlugins?: boolean
+  /** Set by `rehypeInlineLinks`: the link was found in text, not written as one. */
+  "data-inline-link"?: string
 }
 
 /**
@@ -51,8 +59,28 @@ export function ChatLink({
     getLinkMatchersRevision,
     getLinkMatchersRevision
   )
+  // Rendered references re-check whether they still name something.
+  useSyncExternalStore(subscribeInlineLinks, getInlineLinksRevision, getInlineLinksRevision)
   const linkOptions = useChatLinkOptions()
   const sessionId = useContext(ChatDocumentSessionContext)
+  // Before the project-file check: an in-app address starts with `/` too.
+  const inline = href ? resolveInlineLinkHref(href) : undefined
+  if (inline) {
+    // A reference found in text that names nothing (yet) stays plain text; one
+    // the author wrote as a link stays a link, and its page says what is missing.
+    const autolinked = props["data-inline-link"] !== undefined
+    if (autolinked && !inline.kind.accepts(inline.text)) return <>{children}</>
+    return (
+      <Link
+        href={href}
+        className="chat-link"
+        data-chat-link="app"
+        data-inline-link={inline.kind.id}
+      >
+        {children}
+      </Link>
+    )
+  }
   const target = href ? parseProjectFileReference(href, projectRoot) : null
   if (target) {
     return (

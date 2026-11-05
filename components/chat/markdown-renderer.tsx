@@ -36,6 +36,7 @@ import {
 } from "@/components/chat/markdown/rendering-policy"
 import { ArtifactCreateButton } from "@/components/artifacts/artifact-create-button"
 import { ChatLink } from "@/components/chat/markdown/chat-link"
+import { rehypeInlineLinks } from "@/components/chat/markdown/rehype-inline-links"
 import type { ProjectFileReference } from "@/lib/files/project-file-reference"
 
 // `parseTaskListItem` moved to the shared factory alongside the `li` override
@@ -135,15 +136,18 @@ const baseRemarkPlugins: RemarkPlugins = [
 ]
 const mathRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkMath]
 const untrustedRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkLimitUntrustedDepth]
+// In-app references are linked after sanitization, so their marks survive it.
 const rehypePlugins: RehypePlugins = [
   rehypeRaw,
   [rehypeSanitize, chatMarkdownSanitizeSchema],
+  rehypeInlineLinks,
   rehypeMarkdownHeadingIds,
 ]
 // Without rehype-raw, react-markdown drops HTML in the source: no element
 // (and no allow-listed `style`) from a third party reaches the DOM.
 const rehypePluginsWithoutRawHtml: RehypePlugins = [
   [rehypeSanitize, chatMarkdownSanitizeSchema],
+  rehypeInlineLinks,
   rehypeMarkdownHeadingIds,
 ]
 
@@ -591,11 +595,13 @@ function buildComponents(
         </MarkdownCodeBlockContext.Provider>
       )
     },
-    a({ href, children }) {
+    a({ href, children, ...rest }) {
+      const inlineLink = (rest as Record<string, unknown>)["data-inline-link"]
       return (
         <InlineMathLinkContext.Provider value={true}>
           <ChatLink
             href={href}
+            data-inline-link={typeof inlineLink === "string" ? inlineLink : undefined}
             projectRoot={projectRoot}
             onOpenProjectFile={onOpenProjectFile}
             messageId={messageId}

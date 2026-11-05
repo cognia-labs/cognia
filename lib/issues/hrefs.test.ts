@@ -1,4 +1,11 @@
-import { ISSUES_HREF, ISSUE_SOURCE_PARAM, agentIssuesHref, issueHref } from "./hrefs"
+import {
+  ISSUES_HREF,
+  ISSUE_SOURCE_PARAM,
+  agentIssuesHref,
+  issueHref,
+  issueIdentifierHref,
+  parseIssueIdentifierHref,
+} from "./hrefs"
 
 describe("issueHref", () => {
   it("selects the issue through the query param the page reads", () => {
@@ -21,5 +28,23 @@ describe("agentIssuesHref", () => {
     expect(new URLSearchParams(agentIssuesHref("a b").split("?")[1]).get("assignee")).toBe(
       "agent:a b"
     )
+  })
+})
+
+describe("issueIdentifierHref", () => {
+  it("names the issue by its identifier and reads back only that exact shape", () => {
+    expect(issueIdentifierHref("MERC-12")).toBe("/issues?identifier=MERC-12")
+    expect(parseIssueIdentifierHref("/issues?identifier=MERC-12")).toBe("MERC-12")
+  })
+
+  it.each([
+    "/issues?identifier=MERC-12&id=x",
+    "/issues?identifier=merc-12",
+    "/issues?identifier=MERC-0",
+    "/issues?id=MERC-12",
+    "/settings?identifier=MERC-12",
+    "https://evil.test/issues?identifier=MERC-12",
+  ])("is not an identifier link: %s", (href) => {
+    expect(parseIssueIdentifierHref(href)).toBeUndefined()
   })
 })

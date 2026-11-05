@@ -7,17 +7,21 @@ import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
  *
  * Collapsed until asked for: a read costs API quota and the panel opens for
  * every card a person clicks, so the comments load only when the person wants
- * them. Bodies render as plain text — they are third-party content.
+ * them. Bodies render as plain text — they are third-party content — with
+ * only issue identifiers linked, and only to in-app addresses (D25).
  */
 
+import Link from "next/link"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { BotIcon, MessagesSquareIcon, RefreshCwIcon } from "lucide-react"
 
+import { InlineLinkedText } from "@/components/chat/inline-linked-text"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { fetchGithubIssueComments, type GithubIssueComments } from "@/lib/issues/github-comments"
 import { isMissingGithubCredential } from "@/lib/issues/sync-runner"
+import { connectionsHref } from "@/lib/settings/deep-link"
 
 export interface GithubCommentsSectionProps {
   target: { repoFullName: string; number: number }
@@ -78,9 +82,23 @@ export function GithubCommentsSection({
         <p className="text-xs text-muted-foreground">{t("githubComments.loading")}</p>
       ) : null}
 
-      {state.status === "error" ? (
+      {state.status === "error" && state.noCredential ? (
+        // Nothing this view may use can read the repository (D22): say which,
+        // and lead to where a credential is connected. Refresh retries.
+        <div
+          role="alert"
+          data-testid="issue-github-comments-no-credential"
+          className="flex flex-col items-start gap-2 rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground"
+        >
+          <p>{t("githubComments.noCredential", { repository: target.repoFullName })}</p>
+          <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+            <Link href={connectionsHref()}>{t("githubComments.openConnections")}</Link>
+          </Button>
+        </div>
+      ) : null}
+      {state.status === "error" && !state.noCredential ? (
         <p className="text-xs text-destructive" role="alert">
-          {state.noCredential ? t("sync.noCredential") : t("githubComments.failed")}
+          {t("githubComments.failed")}
         </p>
       ) : null}
 
@@ -118,7 +136,7 @@ export function GithubCommentsSection({
                   ) : null}
                 </span>
                 <p className="whitespace-pre-wrap break-words rounded-md bg-muted/40 px-2 py-1.5 text-sm">
-                  {comment.body}
+                  <InlineLinkedText text={comment.body} />
                 </p>
               </li>
             ))}

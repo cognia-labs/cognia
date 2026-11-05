@@ -15,7 +15,7 @@
  */
 
 import type { AgentTask } from "@/types/agent/agent-task"
-import type { IssueRun } from "@/types/issues"
+import type { IssuePriority, IssueRun } from "@/types/issues"
 import { statusCategoryOf } from "@/types/issues"
 import type { IssueSourceAdapter, IssueSourceQuery, UnifiedIssueItem } from "@/types/issues/unified"
 import { makeUnifiedIssueId, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
@@ -32,6 +32,11 @@ export const AGENT_TASK_SOURCE_LABEL = "Agent Task"
 export interface OriginIssueRef {
   identifier: string
   issueProjectId: string
+  /**
+   * The dispatching issue's priority, so the row reads it back exactly when the
+   * engine still holds what it was sent (`agentTaskPriorityToIssuePriority`).
+   */
+  priority?: IssuePriority
 }
 
 /** Badge text: the source, plus the originating issue's identifier when known. */
@@ -52,7 +57,7 @@ export function toUnifiedAgentTask(task: AgentTask, origin?: OriginIssueRef): Un
     ...(task.description ? { description: task.description } : {}),
     status,
     statusCategory: statusCategoryOf(status),
-    priority: agentTaskPriorityToIssuePriority(task.priority),
+    priority: agentTaskPriorityToIssuePriority(task.priority, origin?.priority),
     assignee: { kind: "agent", id: task.agentId },
     // No meaningful author: the task was filed by whoever drove the agent.
     labelIds: [],
@@ -88,7 +93,10 @@ export async function loadOriginIssueRefs(
     .anyOf([...issueIds])
     .toArray()
   return new Map(
-    rows.map((row) => [row.id, { identifier: row.identifier, issueProjectId: row.issueProjectId }])
+    rows.map((row) => [
+      row.id,
+      { identifier: row.identifier, issueProjectId: row.issueProjectId, priority: row.priority },
+    ])
   )
 }
 

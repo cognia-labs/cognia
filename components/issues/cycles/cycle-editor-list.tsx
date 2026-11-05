@@ -46,7 +46,7 @@ import {
   deleteIssueCycleRecord,
   updateIssueCycleRecord,
 } from "@/lib/issues/service"
-import type { CycleProgress } from "@/lib/issues/relations"
+import type { CycleProgress } from "@/lib/issues/project-progress"
 import { cn } from "@/lib/utils"
 import {
   ISSUE_CYCLE_KINDS,

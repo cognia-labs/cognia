@@ -1,12 +1,10 @@
 /**
- * Delivery-container progress, derived rather than stored.
+ * Delivery-container and cycle progress, derived rather than stored.
  *
  * Progress is a pure function of the issues in a container, so storing it
- * would only create something that can drift. It was previously computed in
- * two places — `lib/db/issue-projects.ts:computeIssueProjectProgress` (one
- * query per container) and again inline in the projects console (one pass over
- * an issue list it had already loaded), and the two disagreed about what
- * `total` meant. This is the single implementation both now call.
+ * would only create something that can drift. The issue board, the projects
+ * console, the cycles console and the phone all tally through here, from the
+ * rows they already hold.
  *
  * `total` counts every issue, cancelled included, because that is what "how
  * big is this project" means. `denominator` is the work that still counts —
@@ -15,7 +13,7 @@
  * use `denominator`; inventory counts use `total`.
  */
 
-import { statusCategoryOf, type IssueStatus } from "@/types/issues"
+import { statusCategoryOf, type Issue, type IssueStatus } from "@/types/issues"
 
 export interface IssueProjectProgress {
   /** Every issue in the container, cancelled included. */
@@ -90,4 +88,32 @@ export function computeProgressFromIssues(
   const byId = new Map<string, IssueProjectProgress>()
   for (const [id, bucket] of buckets) byId.set(id, computeProgress(bucket))
   return byId
+}
+
+// ── cycles ──────────────────────────────────────────────────────────────────
+
+export interface CycleProgress {
+  total: number
+  done: number
+  points: number
+  pointsDone: number
+}
+
+/** Counts and points for one cycle, from the rows the caller already holds. */
+export function cycleProgress(
+  cycleId: string,
+  issues: readonly Pick<Issue, "cycleId" | "statusCategory" | "estimate">[]
+): CycleProgress {
+  const out: CycleProgress = { total: 0, done: 0, points: 0, pointsDone: 0 }
+  for (const issue of issues) {
+    if (issue.cycleId !== cycleId) continue
+    const points = issue.estimate ?? 0
+    out.total += 1
+    out.points += points
+    if (issue.statusCategory === "completed") {
+      out.done += 1
+      out.pointsDone += points
+    }
+  }
+  return out
 }

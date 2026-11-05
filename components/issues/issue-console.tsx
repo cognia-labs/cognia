@@ -63,7 +63,7 @@ import { followQueuedCreate } from "@/lib/issues/shared-create"
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import { listIssueCycles } from "@/lib/db/issue-cycles"
 import { buildPlanningHints } from "@/lib/issues/planning-hints"
-import { cycleProgress } from "@/lib/issues/relations"
+import { cycleProgress } from "@/lib/issues/project-progress"
 import { listLabels } from "@/lib/db/labels"
 import {
   actorKey,
@@ -87,7 +87,7 @@ import {
 } from "@/lib/issues/run/running"
 import { summarizeWakeupCues, type IssueWakeupCue } from "@/lib/issues/wakeups/model"
 import { listWorkspaceIssueWakeups } from "@/lib/issues/wakeups/service"
-import { runWorkspaceGithubSync } from "@/lib/issues/sync-runner"
+import { getGithubEventIssueRefresher } from "@/lib/issues/github-event-refresh"
 import { isSyncedResource } from "@/lib/issues/sync/bindings"
 import { summarizeSync, syncSummaryMessage } from "@/lib/issues/sync/describe"
 import { runWorkspaceIssueSync } from "@/lib/issues/sync/runner"
@@ -682,24 +682,21 @@ export function IssueConsole({
    * makes reaches the board through the GitHub source's subscription.
    * Round-tripping rather than patching the row locally is
    * deliberate: GitHub is the source of truth for these rows, and a local
-   * optimistic edit would be a second one.
+   * optimistic edit would be a second one. Only the written repository is
+   * read, from its checkpoint (D20), not the whole workspace.
    */
-  async function handleWritebackCompleted() {
-    if (projectId) {
-      // The write itself already landed; a refresh that fails only leaves the
-      // mirror stale until the next sync, which the person should know.
-      await runWorkspaceGithubSync({
-        projectId,
-        full: true,
-        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-      }).catch((cause: unknown) =>
+  async function handleWritebackCompleted(repoFullName: string) {
+    // The write itself already landed; a refresh that fails only leaves the
+    // mirror stale until the next sync, which the person should know.
+    await getGithubEventIssueRefresher()
+      .refreshAfterWrite(repoFullName, { localAuthorization: LOCAL_PERSON_RUN })
+      .catch((cause: unknown) =>
         toast.warning(
           t("writeback.refreshFailed", {
             error: cause instanceof Error ? cause.message : String(cause),
           })
         )
       )
-    }
   }
 
   /**

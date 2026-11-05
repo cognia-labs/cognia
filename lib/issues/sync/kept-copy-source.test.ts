@@ -275,7 +275,7 @@ it("pins an unprepared GitHub update's preliminary reads to its captured identit
       { by: { kind: "human" }, idempotencyKey: "pinned" }
     )
   ).resolves.toMatchObject({ status: "applied" })
-  expect(resolveReadClient).toHaveBeenCalledWith("owner/repo", connection.id)
+  expect(resolveReadClient).toHaveBeenCalledWith("owner/repo", connection.id, undefined)
   expect(request).toHaveBeenCalledTimes(1)
   expect(foreign).not.toHaveBeenCalled()
 })

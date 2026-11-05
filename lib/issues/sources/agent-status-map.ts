@@ -18,7 +18,7 @@
  * plus deep link carry the engine's own status for the detail.
  */
 
-import type { AgentTaskStatus } from "@/types/agent/agent-task"
+import type { AgentTaskPriority, AgentTaskStatus } from "@/types/agent/agent-task"
 import type { TeamTaskStatus } from "@/types/agent/agent-team"
 import type { SubAgentPriority } from "@/types/agent/sub-agent"
 import type { IssuePriority, IssueStatus } from "@/types/issues"
@@ -61,34 +61,64 @@ export function teamTaskStatusToIssueStatus(status: TeamTaskStatus): IssueStatus
   }
 }
 
-/** `AgentTaskPriority` (`low|normal|high|critical`) → `IssuePriority`. */
+// ── priority: one two-way table per engine scale ────────────────────────────
+//
+// An issue has five priorities and an agent task four, so no table alone can
+// carry every value there and back. The table makes the engine's default,
+// `normal`, read as `none` ("nobody set one"), which is what a task the board
+// did not create means. A task the board dispatched remembers its issue: when
+// that issue's priority still maps to the task's, the row shows the issue's,
+// so `medium` sent out comes back `medium` and `none` comes back `none`.
+
+/** `IssuePriority` → engine priority. `medium` and `none` both send `normal`. */
+const ISSUE_TO_ENGINE_PRIORITY = {
+  urgent: "critical",
+  high: "high",
+  medium: "normal",
+  low: "low",
+  none: "normal",
+} as const satisfies Record<IssuePriority, AgentTaskPriority>
+
+/** Engine priority → `IssuePriority`, for a row with no issue of its own. */
+const ENGINE_TO_ISSUE_PRIORITY = {
+  critical: "urgent",
+  high: "high",
+  normal: "none",
+  low: "low",
+} as const satisfies Record<AgentTaskPriority, IssuePriority>
+
+/** `IssuePriority` → `AgentTaskPriority`, for a dispatch. */
+export function issuePriorityToAgentTaskPriority(priority: IssuePriority): AgentTaskPriority {
+  return ISSUE_TO_ENGINE_PRIORITY[priority]
+}
+
+/**
+ * `IssuePriority` → `SubAgentPriority`, for a team task. The same table: the
+ * team scale's extra `background` is never chosen on the issue's behalf.
+ */
+export function issuePriorityToSubAgentPriority(priority: IssuePriority): SubAgentPriority {
+  return ISSUE_TO_ENGINE_PRIORITY[priority]
+}
+
+/**
+ * `AgentTaskPriority` → `IssuePriority`. `originPriority` is the dispatching
+ * issue's, when the row has one: it wins while it still maps to this value.
+ */
 export function agentTaskPriorityToIssuePriority(
-  priority: "low" | "normal" | "high" | "critical"
+  priority: AgentTaskPriority,
+  originPriority?: IssuePriority
 ): IssuePriority {
-  switch (priority) {
-    case "critical":
-      return "urgent"
-    case "high":
-      return "high"
-    case "normal":
-      return "medium"
-    case "low":
-      return "low"
+  if (originPriority && ISSUE_TO_ENGINE_PRIORITY[originPriority] === priority) {
+    return originPriority
   }
+  return ENGINE_TO_ISSUE_PRIORITY[priority]
 }
 
 /** `SubAgentPriority` → `IssuePriority`; `background` has no board meaning → `none`. */
-export function subAgentPriorityToIssuePriority(priority: SubAgentPriority): IssuePriority {
-  switch (priority) {
-    case "critical":
-      return "urgent"
-    case "high":
-      return "high"
-    case "normal":
-      return "medium"
-    case "low":
-      return "low"
-    case "background":
-      return "none"
-  }
+export function subAgentPriorityToIssuePriority(
+  priority: SubAgentPriority,
+  originPriority?: IssuePriority
+): IssuePriority {
+  if (priority === "background") return "none"
+  return agentTaskPriorityToIssuePriority(priority, originPriority)
 }

@@ -88,13 +88,31 @@ export function countActiveIssueFilters(filter: IssueBoardFilter): number {
   return count
 }
 
-function matchesQuery(item: UnifiedIssueItem, query: string): boolean {
-  const needle = query.trim().toLowerCase()
+/** What a free-text issue search reads. Both an `Issue` row and a board item fit. */
+export interface IssueTextFields {
+  identifier: string
+  title: string
+  description?: string
+}
+
+/**
+ * The one free-text match for issues: a case-insensitive substring of the
+ * identifier, the title or (unless `description: false`) the description. An
+ * empty or blank text matches everything. The board filter, the service's
+ * `queryIssues` (so the skill, MCP and slash command) and the create page's
+ * `#` reference picker all use it, so "find MERC" means the same everywhere.
+ */
+export function matchesIssueText(
+  item: IssueTextFields,
+  text: string | undefined,
+  options: { description?: boolean } = {}
+): boolean {
+  const needle = text?.trim().toLowerCase()
   if (!needle) return true
   return (
     item.identifier.toLowerCase().includes(needle) ||
     item.title.toLowerCase().includes(needle) ||
-    (item.description?.toLowerCase().includes(needle) ?? false)
+    (options.description !== false && (item.description?.toLowerCase().includes(needle) ?? false))
   )
 }
 
@@ -104,7 +122,7 @@ export function applyIssueFilter(
 ): UnifiedIssueItem[] {
   if (!isIssueFilterActive(filter)) return [...items]
   return items.filter((item) => {
-    if (!matchesQuery(item, filter.query)) return false
+    if (!matchesIssueText(item, filter.query)) return false
     if (filter.labelIds.length > 0 && !item.labelIds.some((id) => filter.labelIds.includes(id))) {
       return false
     }
@@ -167,12 +185,17 @@ export interface IssueBoardColumn {
   items: UnifiedIssueItem[]
 }
 
-/** All six columns in canonical order, each sorted for stable display. */
+/**
+ * All six columns in canonical order, each sorted for stable display. The
+ * status grouping (`buildIssueGroups`) does the bucketing and sorting, so a
+ * column and the list's status section can never disagree; this only adds the
+ * columns that are empty.
+ */
 export function buildIssueColumns(items: readonly UnifiedIssueItem[]): IssueBoardColumn[] {
-  return ISSUE_BOARD_COLUMN_ORDER.map((status) => ({
-    status,
-    items: sortIssueColumn(items.filter((item) => item.status === status)),
-  }))
+  const byStatus = new Map(
+    buildIssueGroups(items, "status").map((group) => [group.key, group.items])
+  )
+  return ISSUE_BOARD_COLUMN_ORDER.map((status) => ({ status, items: byStatus.get(status) ?? [] }))
 }
 
 // ── list grouping (Display menu) ────────────────────────────────────────────

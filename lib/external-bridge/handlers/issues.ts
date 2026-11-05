@@ -40,6 +40,8 @@ export type { IssueWire }
 export const MAX_ISSUE_TITLE_CHARS = 300
 export const MAX_ISSUE_BODY_CHARS = 20_000
 export const MAX_ISSUE_LIST = 200
+/** Rows `issues_list` returns when the caller names no limit. */
+export const DEFAULT_ISSUE_LIST = 50
 
 /** Every write from the bridge carries this actor, so the trail says who did it. */
 export const MCP_ISSUE_ACTOR: IssueActor = { kind: "agent", id: "mcp", label: "External agent" }
@@ -70,7 +72,7 @@ export type IssuesListResult = { ok: true; issues: IssueWire[]; total: number }
 
 export async function issuesList(input: IssuesListInput = {}): Promise<IssuesListResult> {
   const statuses = (input.statuses ?? []).filter(isIssueStatus)
-  const limit = Math.min(Math.max(1, input.limit ?? 50), MAX_ISSUE_LIST)
+  const limit = Math.min(Math.max(1, input.limit ?? DEFAULT_ISSUE_LIST), MAX_ISSUE_LIST)
   const rows = await queryIssues({
     ...(input.projectKey ? { projectKey: input.projectKey } : {}),
     ...(input.issueProjectId ? { issueProjectId: input.issueProjectId } : {}),

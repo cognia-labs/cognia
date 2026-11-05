@@ -1,8 +1,8 @@
-// Cron-driven GitHub issue mirror refresh.
+// Cron-driven issue sync: the GitHub mirror and every import binding.
 //
-// Pairs with the "Sync now" button in `components/issues/project-console.tsx`:
-// both call `runWorkspaceGithubSync`, so a schedule can never drift from the
-// manual path. The board itself never calls the network — it reads the Dexie
+// Pairs with the "Sync now" buttons on the issue board and the project page:
+// all of them call `runWorkspaceIssueSync`, so a schedule can never drift from
+// the manual path. The board itself never calls the network — it reads the Dexie
 // mirror this executor fills, which is why an expired token degrades to
 // stale-but-visible instead of a blank board.
 //

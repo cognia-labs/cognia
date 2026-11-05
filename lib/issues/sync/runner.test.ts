@@ -261,7 +261,10 @@ describe("runWorkspaceIssueSync", () => {
         listContainers: (async () => [container("p1")]) as never,
       }
     )
-    expect(runMirror).toHaveBeenCalledWith({ projectId: "w1", full: true })
+    expect(runMirror).toHaveBeenCalledWith(
+      { projectId: "w1", full: true },
+      { runtime: { registry, importBindings: expect.any(Function) } }
+    )
     expect(reconcile).toHaveBeenCalledTimes(2)
     expect(reconcile.mock.calls[0][2]).toEqual({
       full: true,
@@ -271,6 +274,39 @@ describe("runWorkspaceIssueSync", () => {
     expect(result.bindingCount).toBe(4)
     expect(result.outcomes).toHaveLength(1)
     expect(result.failures).toEqual([{ binding: bad, error: expect.any(Error) }])
+  })
+
+  it("reconciles the registration set once when the mirror is skipped", async () => {
+    const registry = new IssueSyncRegistry()
+    registry.register(provider("a", []))
+    const listContainers = jest.fn(async () => [container("p1")])
+    await runWorkspaceIssueSync(
+      { mirror: false },
+      { registry, listContainers: listContainers as never }
+    )
+    // Each reconcile reads the import bindings once; nothing is bound, so no
+    // run reads them again.
+    expect(listContainers).toHaveBeenCalledTimes(1)
+  })
+
+  it("hands the mirror phase this sweep's import side for its reconcile", async () => {
+    const registry = new IssueSyncRegistry()
+    registry.register(provider("a", []))
+    const listContainers = jest.fn(async () => [container("p1")])
+    const runMirror = jest.fn(
+      async (
+        _input: unknown,
+        deps: { runtime: { importBindings: () => Promise<IssueSyncBinding[]> } }
+      ) => {
+        await deps.runtime.importBindings()
+        return { repoCount: 0, results: [], failures: [] }
+      }
+    )
+    await runWorkspaceIssueSync(
+      {},
+      { registry, runMirror: runMirror as never, listContainers: listContainers as never }
+    )
+    expect(listContainers).toHaveBeenCalledTimes(2)
   })
 
   it("can skip the mirror and narrow to one provider", async () => {
@@ -312,7 +348,7 @@ it("carries a manual Host admission to both mirror and provider reconciliation",
     { credentialContext },
     { registry, runMirror, reconcile, listContainers: async () => [] }
   )
-  expect(runMirror).toHaveBeenCalledWith({ credentialContext })
+  expect(runMirror).toHaveBeenCalledWith({ credentialContext }, expect.anything())
   expect(reconcile).toHaveBeenCalledWith(b, registry.get("a"), {
     credentialContext,
     signal: expect.any(AbortSignal),

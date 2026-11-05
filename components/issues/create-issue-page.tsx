@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { listTakenProjectKeys } from "@/lib/db/issue-projects"
+import { matchesIssueText } from "@/lib/issues/board-model"
 import {
   createIssueProjectWithFirstIssue,
   createIssueRecord,
@@ -1165,16 +1166,13 @@ export function CreateIssuePage(props: CreateIssuePageProps) {
   }, [form.form.description, caret])
   const refSuggestions = useMemo(() => {
     if (!refMatch || !extended) return []
-    const query = refMatch.query.toLowerCase()
-    return (props.issues ?? [])
-      .filter((issue) => issue.kind === "local")
-      .filter(
-        (issue) =>
-          !query ||
-          issue.identifier.toLowerCase().includes(query) ||
-          issue.title.toLowerCase().includes(query)
-      )
-      .slice(0, 5)
+    return (
+      (props.issues ?? [])
+        .filter((issue) => issue.kind === "local")
+        // Identifier and title only: a reference is picked by what it is called.
+        .filter((issue) => matchesIssueText(issue, refMatch.query, { description: false }))
+        .slice(0, 5)
+    )
   }, [refMatch, extended, props.issues])
   const refPanelOpen =
     refSuggestions.length > 0 && refMatch !== null && refMatch.at !== refDismissedAt

@@ -41,7 +41,8 @@ export interface PublishIssueDialogProps {
   onOpenChange: (open: boolean) => void
   issue: { id: string; title: string; description?: string }
   targets: readonly PublishTarget[]
-  onPublished?: () => void
+  /** After a successful publish, with the target it went to. */
+  onPublished?: (target: PublishTarget) => void
 }
 
 export function PublishIssueDialog({
@@ -74,7 +75,7 @@ export function PublishIssueDialog({
         localAuthorization: LOCAL_PERSON_RUN,
       })
       toast.success(t("publish.success", { target: ref.label ?? targetLabel(target) }))
-      onPublished?.()
+      onPublished?.(target)
       onOpenChange(false)
     } catch (cause) {
       toast.error(

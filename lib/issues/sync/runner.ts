@@ -3,12 +3,17 @@
  *
  * Two kinds of binding coexist (spec 2026-09-06, D1):
  *   - `github-repo` in `mirror` mode keeps the ADR-0132 read-only mirror,
- *     refreshed by `runWorkspaceGithubSync` exactly as before.
+ *     refreshed by `runWorkspaceGithubSync`.
  *   - every other binding (`github-repo` in `import` mode, Lark tasklists and
  *     Bitables, plugin providers) goes through `reconcileBinding`.
  *
  * The toolbar button, the scheduler executor and the RPC all call this, so a
  * schedule can never drift from the manual path.
+ *
+ * Registrations are reconciled once per phase: the mirror phase reconciles the
+ * whole set before it runs, and the import phase reconciles again after the
+ * mirror's network wait and runs exactly that snapshot. Without a mirror phase
+ * the import reconcile is the only one.
  */
 
 import { listIssueProjects } from "@/lib/db/issue-projects"
@@ -69,19 +74,22 @@ export async function runWorkspaceIssueSync(
 ): Promise<RunWorkspaceIssueSyncResult> {
   const registry = deps.registry ?? getIssueSyncRegistry()
   const runMirror = deps.runMirror ?? runWorkspaceGithubSync
-  await reconcileIssueSyncRegistrations({
+  const runtime = {
     registry,
     importBindings: () => resolveWorkspaceSyncBindings(undefined, registry, deps.listContainers),
-  })
+  }
 
   const mirror =
     input.mirror === false
       ? { repoCount: 0, results: [], failures: [] }
-      : await runMirror({
-          ...(input.credentialContext ? { credentialContext: input.credentialContext } : {}),
-          ...(input.projectId ? { projectId: input.projectId } : {}),
-          ...(input.full ? { full: true } : {}),
-        })
+      : await runMirror(
+          {
+            ...(input.credentialContext ? { credentialContext: input.credentialContext } : {}),
+            ...(input.projectId ? { projectId: input.projectId } : {}),
+            ...(input.full ? { full: true } : {}),
+          },
+          { runtime }
+        )
 
   const registrations = new Map(
     registry
@@ -91,12 +99,9 @@ export async function runWorkspaceIssueSync(
         { provider, signal: registry.signal(provider.id, provider) },
       ])
   )
-  // Reconcile again after the mirror wait and run exactly that snapshot: a
-  // binding added meanwhile has a registration, one removed meanwhile does not.
-  const { imported } = await reconcileIssueSyncRegistrations({
-    registry,
-    importBindings: () => resolveWorkspaceSyncBindings(undefined, registry, deps.listContainers),
-  })
+  // Reconcile after the mirror wait and run exactly that snapshot: a binding
+  // added meanwhile has a registration, one removed meanwhile does not.
+  const { imported } = await reconcileIssueSyncRegistrations(runtime)
   const bindings = imported.filter(
     (binding) =>
       (input.projectId === undefined || binding.projectId === input.projectId) &&

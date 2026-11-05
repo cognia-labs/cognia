@@ -42,7 +42,7 @@ import {
 } from "@/lib/db/issues"
 import { listIssueEvents } from "@/lib/db/issue-events"
 import { getDb } from "@/lib/db/schema"
-import { openBlockers } from "@/lib/issues/relations"
+import { openBlockers } from "@/lib/issues/planning-hints"
 import { linkRunPullRequests, type LinkRunPullRequestsDeps } from "@/lib/issues/pull-requests"
 import { getIssueProject } from "@/lib/db/issue-projects"
 import {

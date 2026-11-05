@@ -10,6 +10,7 @@
  */
 
 import type { IssueSourceKind } from "@/types/issues/unified"
+import { isCanonicalIssueIdentifier } from "./identifier"
 
 export const ISSUES_HREF = "/issues"
 
@@ -37,4 +38,28 @@ export function agentIssuesHref(agentId: string): string {
 export function issueHref(issueId: string, source: IssueSourceKind = "local"): string {
   const base = `${ISSUES_HREF}?id=${encodeURIComponent(issueId)}`
   return source === "local" ? base : `${base}&${ISSUE_SOURCE_PARAM}=${encodeURIComponent(source)}`
+}
+
+/**
+ * Names a local issue by its printable identifier (`MERC-12`). Text that
+ * mentions an identifier links here (D24); the page resolves it to the issue,
+ * so the link needs no lookup when it is drawn.
+ */
+export const ISSUE_IDENTIFIER_PARAM = "identifier"
+
+export function issueIdentifierHref(identifier: string): string {
+  return `${ISSUES_HREF}?${ISSUE_IDENTIFIER_PARAM}=${encodeURIComponent(identifier)}`
+}
+
+/**
+ * The identifier an address names, only when it is exactly what
+ * `issueIdentifierHref` builds. Anything else (extra parameters, another
+ * path, a malformed identifier) is not one, so an untrusted sender cannot
+ * smuggle a different in-app target through this shape.
+ */
+export function parseIssueIdentifierHref(href: string): string | undefined {
+  const prefix = `${ISSUES_HREF}?${ISSUE_IDENTIFIER_PARAM}=`
+  if (!href.startsWith(prefix)) return undefined
+  const value = href.slice(prefix.length)
+  return isCanonicalIssueIdentifier(value) ? value : undefined
 }

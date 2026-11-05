@@ -6,9 +6,11 @@ import { GITHUB_DOT_COM, parseGithubHost } from "@/lib/github/host"
 import { integrationApiBaseUrl } from "@/lib/integrations/action-runner"
 import { pendingExternalSyncKeys, requestExternalSync } from "@/lib/external-services/sync/runtime"
 import { GITHUB_DELIVERY_PLUGIN_ID } from "./github-writeback"
-import { githubMirrorSyncTarget } from "./github-sync"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { githubMirrorSyncTarget, GithubMirrorSyncOutcomeError } from "./github-sync"
 import { issueSyncTarget, tombstoneIssueSyncRefs } from "./sync/engine"
-import { reconcileIssueSyncRegistrations } from "./sync/runtime"
+import { reconcileIssueSyncRegistrations, runRegisteredIssueSync } from "./sync/runtime"
+import { IssueSyncOutcomeError } from "./sync/types"
 
 const REFRESHING_PREFIXES = ["issues.", "issue_comment."] as const
 const DEPARTED = new Set(["issues.transferred", "issues.deleted"])
@@ -16,6 +18,7 @@ const DEPARTED = new Set(["issues.transferred", "issues.deleted"])
 export interface GithubEventRefreshDeps {
   accountHostId: (pluginId: string, connectorAccountId: string) => Promise<string | undefined>
   reconcileRegistrations: typeof reconcileIssueSyncRegistrations
+  runRegistered: typeof runRegisteredIssueSync
   requestSync: typeof requestExternalSync
   pendingKeys: typeof pendingExternalSyncKeys
   removeFromMirror: (repoFullName: string, numbers: number[]) => Promise<unknown>
@@ -38,6 +41,7 @@ function defaultDeps(): GithubEventRefreshDeps {
   return {
     accountHostId: defaultAccountHostId,
     reconcileRegistrations: reconcileIssueSyncRegistrations,
+    runRegistered: runRegisteredIssueSync,
     requestSync: requestExternalSync,
     pendingKeys: pendingExternalSyncKeys,
     removeFromMirror: deleteGithubIssues,
@@ -138,17 +142,43 @@ export class GithubEventIssueRefresher {
     ]
   }
 
-  async refresh(repoFullName: string): Promise<void> {
-    try {
-      const { mirror, imported } = await this.deps.reconcileRegistrations()
-      for (const binding of mirror.filter((b) => sameRepo(b.repoFullName, repoFullName)))
-        this.deps.requestSync(githubMirrorSyncTarget(binding).key, "push")
-      for (const binding of imported.filter(
-        (b) => b.providerId === "github" && sameRepo(b.key, repoFullName)
-      ))
-        this.deps.requestSync(issueSyncTarget(binding).key, "push")
-    } catch (error) {
-      this.deps.onError(repoFullName, error)
+  /**
+   * Read back the person's own write to one repository (D20). It takes the
+   * webhook's targets, so each binding reads only what changed since its
+   * checkpoint (the written issue, plus anything edited meanwhile) instead of
+   * re-reading the workspace. Unlike `handle` it waits and rejects: the write
+   * already landed, and a refresh that fails leaves the board stale until the
+   * next sync, which the caller should say.
+   *
+   * A target another run holds ends "busy"; that run may predate the write,
+   * so a push is queued behind it.
+   */
+  async refreshAfterWrite(
+    repoFullName: string,
+    credentialContext?: PersonalCredentialContext
+  ): Promise<void> {
+    const { mirror, imported } = await this.deps.reconcileRegistrations()
+    const targets = [
+      ...mirror
+        .filter((binding) => sameRepo(binding.repoFullName, repoFullName))
+        .map((binding) => ({ key: githubMirrorSyncTarget(binding).key, mirror: true })),
+      ...imported
+        .filter((binding) => binding.providerId === "github" && sameRepo(binding.key, repoFullName))
+        .map((binding) => ({ key: issueSyncTarget(binding).key, mirror: false })),
+    ]
+    for (const target of targets) {
+      const outcome = await this.deps.runRegistered(
+        target.key,
+        credentialContext ? { credentialContext } : {}
+      )
+      if (!outcome) continue
+      if (outcome.status === "busy") this.deps.requestSync(target.key, "push")
+      if (outcome.status === "failed" || outcome.status === "backoff") {
+        const code = outcome.errorCode ?? outcome.status
+        throw target.mirror
+          ? new GithubMirrorSyncOutcomeError(code)
+          : new IssueSyncOutcomeError(code)
+      }
     }
   }
 }

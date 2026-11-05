@@ -36,6 +36,7 @@ import {
   ISSUE_WAKEUP_INSTRUCTION_MAX,
   isActiveIssueRunStatus,
   issueWakeupEventSource,
+  statusCategoryOf,
 } from "@/types/issues"
 import type { ScheduledTask, TaskExecutionConfig, TaskTrigger } from "@/types/scheduler"
 import { definePrompt } from "@/lib/prompts/types"
@@ -57,11 +58,11 @@ export { ISSUE_WAKEUP_INSTRUCTION_MAX }
 /** The derived kinds a children-done rule listens to: a child finishing, or moving stage. */
 export const CHILDREN_DONE_KINDS = ["child_status_changed", "child_stage_changed"] as const
 
-/** Statuses whose category is terminal. Kept beside the other issue projections. */
-const TERMINAL_STATUSES: ReadonlySet<IssueStatus> = new Set(["done", "canceled"])
-
+/** A status whose category is terminal: completed or canceled, by `statusCategoryOf`. */
 export function isTerminalIssueStatus(status: IssueStatus | undefined): boolean {
-  return status !== undefined && TERMINAL_STATUSES.has(status)
+  if (status === undefined) return false
+  const category = statusCategoryOf(status)
+  return category === "completed" || category === "canceled"
 }
 
 /** How an author says when a wakeup fires. One shape per trigger family. */

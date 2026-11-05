@@ -11,8 +11,8 @@ import { z } from "zod"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
-import { ISSUE_WAKEUP_INSTRUCTION_MAX } from "@/types/issues"
-import { ISSUE_PRIORITY_VALUES, projectRefSchema, resolveWorkspaceId } from "./_core"
+import { ISSUE_PRIORITIES, ISSUE_WAKEUP_INSTRUCTION_MAX } from "@/types/issues"
+import { projectRefSchema, resolveWorkspaceId } from "./_core"
 
 const PROJECT_STATUS_VALUES = [
   "backlog",
@@ -28,7 +28,7 @@ const schema = z.object({
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(4000).optional(),
   status: z.enum(PROJECT_STATUS_VALUES).optional(),
-  priority: z.enum(ISSUE_PRIORITY_VALUES).optional(),
+  priority: z.enum(ISSUE_PRIORITIES).optional(),
   targetDate: z
     .number()
     .int()

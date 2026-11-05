@@ -59,7 +59,8 @@ export interface GithubWritebackDialogProps {
    * a write still on its way (queued for another window, waiting on a retry):
    * there is nothing new to read yet, and the trail records it when it lands.
    */
-  onCompleted?: () => void
+  /** After a write that landed, with the repository it went to. */
+  onCompleted?: (repoFullName: string) => void
 }
 
 export function GithubWritebackDialog({
@@ -143,7 +144,7 @@ export function GithubWritebackDialog({
         toast.info(t("writeback.pending"))
       } else {
         toast.success(t("writeback.success"))
-        onCompleted?.()
+        onCompleted?.(target.repoFullName)
       }
       close()
     } catch (cause) {

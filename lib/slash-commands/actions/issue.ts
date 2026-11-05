@@ -30,7 +30,14 @@ import {
   type IssueBulkAction,
   type IssueBulkOutcome,
 } from "@/lib/issues/service"
-import { ISSUE_PRIORITIES, ISSUE_STATUSES, type Issue, type IssueActor } from "@/types/issues"
+import { ISSUES_HREF, issueHref } from "@/lib/issues/hrefs"
+import {
+  ISSUE_PRIORITIES,
+  ISSUE_STATUSES,
+  statusCategoryOf,
+  type Issue,
+  type IssueActor,
+} from "@/types/issues"
 
 export interface IssueCommandResult {
   system: string
@@ -98,10 +105,6 @@ export async function dispatchIssueSubcommand(ctx: SlashContext): Promise<IssueC
 
 // Rendering
 
-function issueHref(issue: Issue): string {
-  return `/issues?id=${encodeURIComponent(issue.id)}`
-}
-
 function assigneeText(issue: Issue): string {
   if (!issue.assignee) return "unassigned"
   return (
@@ -112,12 +115,12 @@ function assigneeText(issue: Issue): string {
 
 function line(issue: Issue): string {
   const priority = issue.priority === "none" ? "" : ` · ${issue.priority}`
-  return `- [${issue.identifier}](${issueHref(issue)}) ${issue.title} · ${issue.status}${priority} · ${assigneeText(issue)}`
+  return `- [${issue.identifier}](${issueHref(issue.id)}) ${issue.title} · ${issue.status}${priority} · ${assigneeText(issue)}`
 }
 
 function card(issue: Issue): string {
   const rows = [
-    `**[${issue.identifier}](${issueHref(issue)}) ${issue.title}**`,
+    `**[${issue.identifier}](${issueHref(issue.id)}) ${issue.title}**`,
     `- Status: ${issue.status} · Priority: ${issue.priority} · Assignee: ${assigneeText(issue)}`,
   ]
   if (issue.dueDate !== undefined) {
@@ -140,14 +143,18 @@ function outcomeText(issue: Issue, what: string, outcome: IssueBulkOutcome): str
 
 // Subcommands
 
+/** "Open" is every status whose category is not terminal, by `statusCategoryOf`. */
+const OPEN_STATUSES = ISSUE_STATUSES.filter((status) => {
+  const category = statusCategoryOf(status)
+  return category !== "completed" && category !== "canceled"
+})
+
 async function commandList(args: string): Promise<IssueCommandResult> {
   const words = args.split(/\s+/).filter(Boolean)
   const status = words[0] && isIssueStatus(words[0]) ? words[0] : undefined
   const text = (status ? words.slice(1) : words).join(" ")
   const rows = await queryIssues({
-    ...(status
-      ? { statuses: [status] }
-      : { statuses: ["backlog", "todo", "in_progress", "in_review"] }),
+    ...(status ? { statuses: [status] } : { statuses: OPEN_STATUSES }),
     ...(text ? { text } : {}),
   })
   if (rows.length === 0) {
@@ -156,7 +163,7 @@ async function commandList(args: string): Promise<IssueCommandResult> {
   const shown = rows.slice(0, LIST_LIMIT)
   const more =
     rows.length > shown.length
-      ? `\n\n…and ${rows.length - shown.length} more on [the board](/issues).`
+      ? `\n\n…and ${rows.length - shown.length} more on [the board](${ISSUES_HREF}).`
       : ""
   return { system: `${shown.map(line).join("\n")}${more}` }
 }
@@ -223,7 +230,7 @@ async function commandNew(ctx: SlashContext, raw: string): Promise<IssueCommandR
       ? { origin: { kind: "chat" as const, sessionId: ctx.activeSessionId } }
       : {}),
   })
-  return { system: `✅ Created [${issue.identifier}](${issueHref(issue)}) ${issue.title}.` }
+  return { system: `✅ Created [${issue.identifier}](${issueHref(issue.id)}) ${issue.title}.` }
 }
 
 async function applyOne(issue: Issue, action: IssueBulkAction, what: string) {
@@ -298,7 +305,7 @@ async function commandChat(rest: string): Promise<IssueCommandResult> {
     prompt: issuePrompt(issue),
   })
   return {
-    system: `Opened a conversation for [${issue.identifier}](${issueHref(issue)}). Its turns are recorded on the issue.`,
+    system: `Opened a conversation for [${issue.identifier}](${issueHref(issue.id)}). Its turns are recorded on the issue.`,
   }
 }
 
@@ -336,6 +343,6 @@ async function commandPlan(ctx: SlashContext, rest: string): Promise<IssueComman
     ],
   })
   return {
-    system: `Drafted plan **${plan.title}** for [${issue.identifier}](${issueHref(issue)}). Review it with \`/plan status\`, then approve it.`,
+    system: `Drafted plan **${plan.title}** for [${issue.identifier}](${issueHref(issue.id)}). Review it with \`/plan status\`, then approve it.`,
   }
 }

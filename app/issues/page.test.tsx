@@ -26,11 +26,23 @@ jest.mock("@/hooks/ui/use-compact-layout", () => ({ useCompactLayout: () => comp
 
 let search = new URLSearchParams()
 jest.mock("next/navigation", () => ({ useSearchParams: () => search }))
+jest.mock("next-intl", () => ({
+  useTranslations: () => (key: string, values?: Record<string, unknown>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key,
+}))
+const mockToastError = jest.fn()
+jest.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args) } }))
+const mockGetIssueByIdentifier = jest.fn()
+jest.mock("@/lib/db/issues", () => ({
+  getIssueByIdentifier: (...args: unknown[]) => mockGetIssueByIdentifier(...args),
+}))
 
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import IssuesPage from "./page"
 
 beforeEach(() => {
+  mockToastError.mockReset()
+  mockGetIssueByIdentifier.mockReset()
   consoleProps = null
   mobileProps = null
   compact = false
@@ -107,5 +119,39 @@ describe("IssuesPage", () => {
   it("passes undefined when there is no container deep link", () => {
     render(<IssuesPage />)
     expect(consoleProps).toMatchObject({ initialProjectId: undefined })
+  })
+
+  it("opens the issue a ?identifier= link names, on either body", async () => {
+    mockGetIssueByIdentifier.mockResolvedValue({ id: "iss_12" })
+    search = new URLSearchParams("identifier=MERC-12")
+    render(<IssuesPage />)
+    expect(screen.queryByTestId("issue-console-stub")).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(consoleProps).toMatchObject({
+        initialSelectedId: "iss_12",
+        initialSelectedSource: "local",
+      })
+    )
+    expect(mockGetIssueByIdentifier).toHaveBeenCalledWith("MERC-12")
+
+    compact = true
+    consoleProps = null
+    render(<IssuesPage />)
+    await waitFor(() => expect(mobileProps).toMatchObject({ initialSelectedId: "iss_12" }))
+  })
+
+  it("opens the board and says so when no issue has the identifier", async () => {
+    mockGetIssueByIdentifier.mockResolvedValue(undefined)
+    search = new URLSearchParams("identifier=merc-404")
+    render(<IssuesPage />)
+    await waitFor(() => expect(consoleProps).toMatchObject({ initialSelectedId: undefined }))
+    expect(mockToastError).toHaveBeenCalledWith('identifier.notFound:{"identifier":"MERC-404"}')
+  })
+
+  it("lets an explicit ?id= win over an identifier", () => {
+    search = new URLSearchParams("id=iss_1&identifier=MERC-12")
+    render(<IssuesPage />)
+    expect(consoleProps).toMatchObject({ initialSelectedId: "iss_1" })
+    expect(mockGetIssueByIdentifier).not.toHaveBeenCalled()
   })
 })

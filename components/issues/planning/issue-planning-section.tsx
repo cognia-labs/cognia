@@ -27,7 +27,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
 import { issueHref } from "@/lib/issues/hrefs"
 import type { IssueMenuSection } from "@/lib/issues/menu-model"
-import { wouldCreateParentLoop } from "@/lib/issues/relations"
+import {
+  blockedIssues,
+  blockerRows,
+  childIssues,
+  wouldCreateParentLoop,
+} from "@/lib/issues/planning-hints"
 import { ISSUE_STAGE_MAX, isIssueStage } from "@/types/issues"
 import type { IssueCycle, IssueExternalRef } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
@@ -103,22 +108,10 @@ export function IssuePlanningSection({
   )
 
   const parent = item.parentId ? byLocalId.get(item.parentId) : undefined
-  const children = useMemo(
-    () => (localId ? locals.filter((candidate) => candidate.parentId === localId) : []),
-    [locals, localId]
-  )
-  const blockedBy = useMemo(
-    () =>
-      (item.blockedBy ?? [])
-        .map((id) => byLocalId.get(id))
-        .filter((row): row is UnifiedIssueItem => Boolean(row)),
-    [item.blockedBy, byLocalId]
-  )
-  const blocks = useMemo(
-    () =>
-      localId ? locals.filter((candidate) => (candidate.blockedBy ?? []).includes(localId)) : [],
-    [locals, localId]
-  )
+  // Relations are keyed by the local id, so the reads take local rows only.
+  const children = useMemo(() => (localId ? childIssues(localId, locals) : []), [locals, localId])
+  const blockedBy = useMemo(() => blockerRows(item, byLocalId), [item, byLocalId])
+  const blocks = useMemo(() => (localId ? blockedIssues(localId, locals) : []), [locals, localId])
   const cycle = item.cycleId ? cycles.find((candidate) => candidate.id === item.cycleId) : undefined
 
   const parentCandidates: IssuePickerCandidate[] = useMemo(

@@ -22,7 +22,7 @@ import { Progress } from "@/components/ui/progress"
 import { useDexieFirstQuery } from "@/hooks/data/use-dexie-first-query"
 import { listIssueCycles } from "@/lib/db/issue-cycles"
 import { listIssues } from "@/lib/db/issues"
-import { cycleProgress } from "@/lib/issues/relations"
+import { cycleProgress } from "@/lib/issues/project-progress"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { IssueCycle } from "@/types/issues"
 

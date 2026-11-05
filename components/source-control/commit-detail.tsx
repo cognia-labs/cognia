@@ -8,6 +8,7 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { GitBranchPlusIcon, HistoryIcon, ScanLineIcon } from "lucide-react"
+import { InlineLinkedText } from "@/components/chat/inline-linked-text"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Commit,
@@ -143,7 +144,9 @@ export function CommitDetail({
     >
       <header className="shrink-0 border-b p-3">
         <div className="flex items-start justify-between gap-2">
-          <CommitMessage className="min-w-0 flex-1">{commit.summary}</CommitMessage>
+          <CommitMessage className="min-w-0 flex-1">
+            <InlineLinkedText text={commit.summary} />
+          </CommitMessage>
           {actions && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -250,7 +253,7 @@ export function CommitDetail({
         </div>
         {commit.body && (
           <pre className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
-            {commit.body}
+            <InlineLinkedText text={commit.body} />
           </pre>
         )}
         <CommitMetadata className="mt-1.5 text-[11px]">

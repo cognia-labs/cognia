@@ -1,7 +1,9 @@
-import type { IssueStatus } from "@/types/issues"
+import type { Issue, IssueStatus } from "@/types/issues"
+import { statusCategoryOf } from "@/types/issues"
 import {
   computeProgress,
   computeProgressFromIssues,
+  cycleProgress,
   EMPTY_ISSUE_PROJECT_PROGRESS,
 } from "./project-progress"
 
@@ -76,5 +78,38 @@ describe("computeProgressFromIssues", () => {
     expect(computeProgressFromIssues(["p1"], issues).get("p1")).toEqual(
       computeProgress(issues.map((issue) => ({ status: issue.status })))
     )
+  })
+})
+
+function issue(over: Partial<Issue> & { id: string }): Issue {
+  const status = over.status ?? "todo"
+  return {
+    identifier: over.id.toUpperCase(),
+    number: 1,
+    projectId: "w1",
+    issueProjectId: "p1",
+    title: over.id,
+    status,
+    statusCategory: statusCategoryOf(status),
+    priority: "none",
+    createdBy: { kind: "human" },
+    labelIds: [],
+    order: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  }
+}
+
+describe("cycleProgress", () => {
+  it("sums counts and points for one cycle only", () => {
+    const rows = [
+      issue({ id: "a", cycleId: "c1", estimate: 3, status: "done" }),
+      issue({ id: "b", cycleId: "c1", estimate: 5 }),
+      issue({ id: "c", cycleId: "c1" }),
+      issue({ id: "d", cycleId: "c2", estimate: 8 }),
+    ]
+    expect(cycleProgress("c1", rows)).toEqual({ total: 3, done: 1, points: 8, pointsDone: 3 })
+    expect(cycleProgress("zzz", rows)).toEqual({ total: 0, done: 0, points: 0, pointsDone: 0 })
   })
 })

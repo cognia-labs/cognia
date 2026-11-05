@@ -30,7 +30,12 @@ import {
   VIDEO_RESOLUTIONS,
 } from "@/lib/ai/media/video-generation-sdk"
 import { VERIFIER_LENSES } from "@/types/agent/ultracode"
-import { ISSUE_STAGE_MAX, ISSUE_TRIAGE_STATES } from "@/types/issues"
+import {
+  ISSUE_PRIORITIES,
+  ISSUE_STAGE_MAX,
+  ISSUE_STATUSES,
+  ISSUE_TRIAGE_STATES,
+} from "@/types/issues"
 import { WORKFLOW_NODE_KINDS, type WorkflowNodeKind } from "@/types/workflow/visual"
 
 /**
@@ -533,8 +538,9 @@ export const PLAN_STATUS_VALUES: readonly PlanStatusValue[] = [
 const PlanStatus = z.enum(PLAN_STATUS_VALUES as [PlanStatusValue, ...PlanStatusValue[]])
 
 // ── Issue tracker (spec 2026-09-06 D9) ───────────────────────────────────
-const IssueStatusParam = z.enum(["backlog", "todo", "in_progress", "in_review", "done", "canceled"])
-const IssuePriorityParam = z.enum(["urgent", "high", "medium", "low", "none"])
+// The lifecycle's own lists, so a status added there is accepted here too.
+const IssueStatusParam = z.enum(ISSUE_STATUSES)
+const IssuePriorityParam = z.enum(ISSUE_PRIORITIES)
 /** Sub-issue stage (`Issue.stage`). */
 const IssueStageParam = positiveInteger().max(ISSUE_STAGE_MAX, "maxValue")
 const IssueTriageParam = z.enum(ISSUE_TRIAGE_STATES)

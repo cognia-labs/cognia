@@ -13,10 +13,12 @@
 
 import { z } from "zod"
 
+import { ISSUE_PRIORITIES } from "@/types/issues"
+
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
-import { ISSUE_PRIORITY_VALUES, resolveIssueActor, resolveWorkspaceId } from "./_core"
+import { resolveIssueActor, resolveWorkspaceId } from "./_core"
 
 const PROJECT_STATUS_VALUES = [
   "backlog",
@@ -46,7 +48,7 @@ const schema = z.object({
     .enum(PROJECT_STATUS_VALUES)
     .optional()
     .describe("Lifecycle state. Defaults to backlog."),
-  priority: z.enum(ISSUE_PRIORITY_VALUES).optional(),
+  priority: z.enum(ISSUE_PRIORITIES).optional(),
   targetDate: z.number().int().optional().describe("Target date as a unix epoch in milliseconds."),
 })
 

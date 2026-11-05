@@ -23,7 +23,7 @@ import { useClientLiveQuery } from "@/hooks/data"
 import { listIssueCycles } from "@/lib/db/issue-cycles"
 import { listIssueProjects } from "@/lib/db/issue-projects"
 import { listIssues } from "@/lib/db/issues"
-import { cycleProgress } from "@/lib/issues/relations"
+import { cycleProgress } from "@/lib/issues/project-progress"
 import { useProjectStore } from "@/stores/project/project-store"
 import type { IssueCycle, IssueProject } from "@/types/issues"
 

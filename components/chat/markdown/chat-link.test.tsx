@@ -10,6 +10,7 @@ import {
 } from "@/lib/plugin/api/link-matchers"
 import type { LinkMatcherProps } from "@/types/plugin/plugin-link-matcher"
 import { chatMarkdownUrlTransform } from "./rendering-policy"
+import { notifyInlineLinksChanged, registerInlineLinkKind } from "@/lib/chat/inline-links"
 
 jest.mock("@/components/chat/project-file-link", () => ({
   ProjectFileLink: ({
@@ -317,4 +318,56 @@ it("lets plugin link matchers win before document routing", () => {
   expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("data-plugin-link")
   fireEvent.click(screen.getByRole("link", { name: "Plan" }))
   expect(openDockDocument).not.toHaveBeenCalled()
+})
+
+describe("ChatLink in-app references", () => {
+  let known = new Set(["MERC"])
+  let dispose: () => void
+  beforeEach(() => {
+    known = new Set(["MERC"])
+    dispose = registerInlineLinkKind({
+      id: "issue",
+      pattern: /\b[A-Z]+-\d+\b/g,
+      matches: () => true,
+      href: (text) => `/issues?identifier=${text}`,
+      parseHref: (href) => /^\/issues\?identifier=([A-Z]+-\d+)$/.exec(href)?.[1],
+      accepts: (text) => known.has(text.split("-")[0]),
+    })
+  })
+  afterEach(() => act(() => dispose()))
+
+  it("renders a known reference as an in-app link, not a project file or web link", () => {
+    render(
+      <ChatLink href="/issues?identifier=MERC-12" data-inline-link="issue" projectRoot="/repo">
+        MERC-12
+      </ChatLink>
+    )
+    const link = screen.getByRole("link", { name: "MERC-12" })
+    expect(link).toHaveAttribute("href", "/issues?identifier=MERC-12")
+    expect(link).toHaveAttribute("data-chat-link", "app")
+    expect(link).not.toHaveAttribute("target")
+  })
+
+  it("keeps a found reference to an unknown project as text, and links it once known", () => {
+    render(
+      <ChatLink href="/issues?identifier=ABC-1" data-inline-link="issue">
+        ABC-1
+      </ChatLink>
+    )
+    expect(screen.queryByRole("link")).toBeNull()
+    expect(screen.getByText("ABC-1")).toBeInTheDocument()
+    act(() => {
+      known.add("ABC")
+      notifyInlineLinksChanged()
+    })
+    expect(screen.getByRole("link", { name: "ABC-1" })).toBeInTheDocument()
+  })
+
+  it("keeps a reference the author wrote as a link even when nothing matches it", () => {
+    render(<ChatLink href="/issues?identifier=ABC-1">see this</ChatLink>)
+    expect(screen.getByRole("link", { name: "see this" })).toHaveAttribute(
+      "href",
+      "/issues?identifier=ABC-1"
+    )
+  })
 })

@@ -71,6 +71,7 @@ import { IssueCommentComposer } from "./issue-comment-composer"
 import { useMenuEntryPresentation } from "./editors/menu-entry-presentation"
 import { IssuePropertyMenu } from "./editors/issue-property-menu"
 import { IssueTextEditor } from "./editors/issue-text-editor"
+import { InlineLinkedText } from "@/components/chat/inline-linked-text"
 import { GithubWritebackDialog, type GithubWritebackKind } from "./github-writeback-dialog"
 import { LinkGithubIssueDialog } from "./link-github-issue-dialog"
 import { PublishIssueDialog } from "./publish-issue-dialog"
@@ -118,8 +119,8 @@ export interface IssueDetailPanelProps {
   onAction?: (action: IssueBulkAction) => void
   onRequestDelete?: () => void
   onClose?: () => void
-  /** Fired after a GitHub write lands, so the caller can refresh the mirror. */
-  onWritebackCompleted?: () => void
+  /** Fired after a GitHub write lands, with its repository, so the caller can read it back. */
+  onWritebackCompleted?: (repoFullName: string) => void
 }
 
 export function IssueDetailPanel({
@@ -450,6 +451,7 @@ export function IssueDetailPanel({
               <IssueTextEditor
                 value={item.description ?? ""}
                 multiline
+                linkify
                 onCommit={(description) => onAction?.({ kind: "description", to: description })}
                 disabled={!onAction || !item.capabilities.canEdit}
                 placeholder={t("detail.descriptionPlaceholder")}
@@ -509,7 +511,9 @@ export function IssueDetailPanel({
               ...(localIssue.description ? { description: localIssue.description } : {}),
             }}
             targets={publishTargets}
-            onPublished={onWritebackCompleted}
+            onPublished={(target) => {
+              if (target.kind === "github") onWritebackCompleted?.(target.repoFullName)
+            }}
           />
         ) : null}
 
@@ -782,7 +786,7 @@ export function IssueDetailPanel({
                     </span>
                     {event.payload.kind === "commented" ? (
                       <p className="whitespace-pre-wrap rounded-md bg-muted/40 px-2 py-1.5 text-sm">
-                        {event.payload.body}
+                        <InlineLinkedText text={event.payload.body} />
                       </p>
                     ) : null}
                     {event.payload.kind === "run_checked_in" ? (

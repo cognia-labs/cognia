@@ -46,6 +46,7 @@ import type {
   IssueRunTarget,
   IssueRunVerdict,
 } from "./types"
+import { issuePriorityToSubAgentPriority } from "@/lib/issues/sources/agent-status-map"
 import { withRunBrief } from "./types"
 
 export const AGENT_TEAM_RUN_ADAPTER_ID = "agent-team"
@@ -482,22 +483,5 @@ export function createAgentTeamRunAdapter(
       error: `team run ended (${how}) before the task ran`,
       artifacts: await deps.collectArtifacts(run),
     }
-  }
-}
-
-/** `IssuePriority` → `SubAgentPriority`; `none` reads as `normal`. */
-export function issuePriorityToSubAgentPriority(
-  priority: IssueRunTarget["issue"]["priority"]
-): NonNullable<CreateTaskInput["priority"]> {
-  switch (priority) {
-    case "urgent":
-      return "critical"
-    case "high":
-      return "high"
-    case "low":
-      return "low"
-    case "medium":
-    case "none":
-      return "normal"
   }
 }

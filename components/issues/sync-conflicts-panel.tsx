@@ -11,10 +11,8 @@
  * places: one re-writes a local field, the other re-submits a queued patch.
  */
 
-import { useState } from "react"
 import { useTranslations } from "next-intl"
 
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useClientLiveQuery } from "@/hooks/data"
 import {
@@ -22,6 +20,7 @@ import {
   resolveSyncConflict,
   type OpenSyncConflict,
 } from "@/lib/issues/sync/conflicts"
+import { ConflictResolutionActions, useConflictResolution } from "./conflict-resolution-actions"
 
 export interface SyncConflictsPanelProps {
   /** Workspace id. Nothing renders without one. */
@@ -44,8 +43,7 @@ export function SyncConflictsPanel({
   onOpenIssue,
 }: SyncConflictsPanelProps) {
   const t = useTranslations("issues.syncConflicts")
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { busyId, error, run } = useConflictResolution()
   const conflicts = useClientLiveQuery(
     () => (projectId ? listWorkspaceSyncConflicts(projectId) : Promise.resolve([])),
     [projectId],
@@ -53,17 +51,8 @@ export function SyncConflictsPanel({
   )
   if (!conflicts?.length) return null
 
-  const resolve = async (conflict: OpenSyncConflict, kept: "local" | "remote") => {
-    setBusyId(conflict.eventId)
-    setError(null)
-    try {
-      await resolveSyncConflict(conflict, kept, { kind: "human" })
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setBusyId(null)
-    }
-  }
+  const resolve = (conflict: OpenSyncConflict, kept: "local" | "remote") =>
+    run(conflict.eventId, () => resolveSyncConflict(conflict, kept, { kind: "human" }))
 
   return (
     <Card className="border-amber-500/50" data-testid="sync-conflicts-panel">
@@ -112,26 +101,21 @@ export function SyncConflictsPanel({
                 </pre>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant={conflict.winner === "local" ? "default" : "outline"}
-                disabled={busyId === conflict.eventId}
-                onClick={() => void resolve(conflict, "local")}
-                data-testid={`sync-conflict-keep-local-${conflict.eventId}`}
-              >
-                {t("keepLocal")}
-              </Button>
-              <Button
-                size="sm"
-                variant={conflict.winner === "remote" ? "default" : "outline"}
-                disabled={busyId === conflict.eventId}
-                onClick={() => void resolve(conflict, "remote")}
-                data-testid={`sync-conflict-keep-remote-${conflict.eventId}`}
-              >
-                {t("keepRemote")}
-              </Button>
-            </div>
+            <ConflictResolutionActions
+              disabled={busyId === conflict.eventId}
+              keepLocal={{
+                label: t("keepLocal"),
+                recommended: conflict.winner === "local",
+                onSelect: () => void resolve(conflict, "local"),
+                testId: `sync-conflict-keep-local-${conflict.eventId}`,
+              }}
+              keepRemote={{
+                label: t("keepRemote"),
+                recommended: conflict.winner === "remote",
+                onSelect: () => void resolve(conflict, "remote"),
+                testId: `sync-conflict-keep-remote-${conflict.eventId}`,
+              }}
+            />
           </div>
         ))}
         {error ? (

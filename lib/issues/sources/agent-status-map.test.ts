@@ -1,9 +1,12 @@
 import type { AgentTaskStatus } from "@/types/agent/agent-task"
 import type { TeamTaskStatus } from "@/types/agent/agent-team"
+import { ISSUE_PRIORITIES } from "@/types/issues"
 import { statusCategoryOf } from "@/types/issues"
 import {
   agentTaskPriorityToIssuePriority,
   agentTaskStatusToIssueStatus,
+  issuePriorityToAgentTaskPriority,
+  issuePriorityToSubAgentPriority,
   subAgentPriorityToIssuePriority,
   teamTaskStatusToIssueStatus,
 } from "./agent-status-map"
@@ -44,15 +47,34 @@ describe("teamTaskStatusToIssueStatus", () => {
 })
 
 describe("priority projections", () => {
-  it("maps both engine scales onto IssuePriority", () => {
+  it("reads an engine's own priorities, its default as no priority", () => {
     expect(agentTaskPriorityToIssuePriority("critical")).toBe("urgent")
     expect(agentTaskPriorityToIssuePriority("high")).toBe("high")
-    expect(agentTaskPriorityToIssuePriority("normal")).toBe("medium")
+    expect(agentTaskPriorityToIssuePriority("normal")).toBe("none")
     expect(agentTaskPriorityToIssuePriority("low")).toBe("low")
     expect(subAgentPriorityToIssuePriority("critical")).toBe("urgent")
-    expect(subAgentPriorityToIssuePriority("high")).toBe("high")
-    expect(subAgentPriorityToIssuePriority("normal")).toBe("medium")
-    expect(subAgentPriorityToIssuePriority("low")).toBe("low")
+    expect(subAgentPriorityToIssuePriority("normal")).toBe("none")
     expect(subAgentPriorityToIssuePriority("background")).toBe("none")
+  })
+
+  it.each(ISSUE_PRIORITIES)("carries %s to both engines and back unchanged", (priority) => {
+    const task = issuePriorityToAgentTaskPriority(priority)
+    expect(agentTaskPriorityToIssuePriority(task, priority)).toBe(priority)
+    const team = issuePriorityToSubAgentPriority(priority)
+    expect(subAgentPriorityToIssuePriority(team, priority)).toBe(priority)
+  })
+
+  it("sends both medium and none as the engine default", () => {
+    expect(issuePriorityToAgentTaskPriority("medium")).toBe("normal")
+    expect(issuePriorityToAgentTaskPriority("none")).toBe("normal")
+    expect(issuePriorityToAgentTaskPriority("urgent")).toBe("critical")
+    expect(issuePriorityToSubAgentPriority("low")).toBe("low")
+  })
+
+  it("ignores an origin priority the engine's value no longer matches", () => {
+    // The issue went urgent after dispatch; the task still says normal.
+    expect(agentTaskPriorityToIssuePriority("normal", "urgent")).toBe("none")
+    expect(subAgentPriorityToIssuePriority("high", "medium")).toBe("high")
+    expect(subAgentPriorityToIssuePriority("background", "medium")).toBe("none")
   })
 })

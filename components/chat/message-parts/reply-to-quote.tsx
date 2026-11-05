@@ -16,6 +16,7 @@ import { CornerUpLeftIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { MessageReplyTo } from "@cognia/agent-config-types"
 
+import { InlineLinkedText } from "@/components/chat/inline-linked-text"
 import { resolveMessageSpeaker, type SpeakerSource } from "@/lib/chat/speaker"
 import { cn } from "@/lib/utils"
 import { useChatStore } from "@/stores/chat"
@@ -49,6 +50,8 @@ export function ReplyToQuote({ replyTo, sessionId, className }: ReplyToQuoteProp
   }, [jump, replyTo.messageId, t])
 
   const preview = replyTo.preview.trim()
+  // A quote that jumps is a button, which cannot hold links; a plain quote
+  // links the references in its text (D23).
   const body = (
     <>
       <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
@@ -58,7 +61,7 @@ export function ReplyToQuote({ replyTo, sessionId, className }: ReplyToQuoteProp
         </span>
       ) : null}
       <span className="min-w-0 truncate" data-testid="reply-to-preview">
-        {preview || t("emptyPreview")}
+        {preview ? canJump ? preview : <InlineLinkedText text={preview} /> : t("emptyPreview")}
       </span>
     </>
   )

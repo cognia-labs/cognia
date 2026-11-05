@@ -10,13 +10,15 @@ import { toMirrorRow, type OctokitLike } from "@/lib/github/issues"
 import { claimSyncLease } from "@/lib/db/sync-leases"
 import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import { runExternalSync } from "@/lib/external-services/sync/core"
 import {
   githubMirrorSyncTarget,
   prepareGithubMirrorSync,
-  syncRepoIssues,
   syncWorkspaceRepos,
   GithubMirrorSyncOutcomeError,
   type SyncRepoIssuesDeps,
+  type SyncRepoIssuesInput,
+  type SyncRepoIssuesResult,
 } from "./github-sync"
 
 const fixture = createDbTestFixture({ seeded: false })
@@ -61,6 +63,32 @@ const deps = (client: OctokitLike, over: Partial<SyncRepoIssuesDeps> = {}): Sync
   now: () => NOW,
   ...over,
 })
+/** One repo's run, as the registered factory executes it. */
+async function syncRepoIssues(
+  input: SyncRepoIssuesInput,
+  syncDeps: SyncRepoIssuesDeps = {}
+): Promise<SyncRepoIssuesResult> {
+  const { target, driver, result, clearPurgedCheckpoint } = await prepareGithubMirrorSync(
+    input,
+    syncDeps
+  )
+  try {
+    const outcome = await runExternalSync(target, driver, {
+      mode: input.full ? "full" : "auto",
+      now: syncDeps.now,
+    })
+    return {
+      ...result,
+      status: outcome.status,
+      truncated: outcome.truncated ?? false,
+      ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+    }
+  } finally {
+    await clearPurgedCheckpoint()
+  }
+}
+const runWith = (syncDeps: SyncRepoIssuesDeps) => (input: SyncRepoIssuesInput) =>
+  syncRepoIssues(input, syncDeps)
 async function cache(number: number, over: Record<string, unknown> = {}) {
   await upsertGithubIssues([toMirrorRow(rawIssue(number, over), { ...INPUT, syncedAt: NOW })])
 }
@@ -361,7 +389,7 @@ it("two independent mirror runs exclude each other and busy is not a workspace f
   const first = syncRepoIssues(INPUT, deps(client))
   await started
   try {
-    const second = await syncWorkspaceRepos({ bindings: [INPUT] }, deps(client))
+    const second = await syncWorkspaceRepos({ bindings: [INPUT] }, runWith(deps(client)))
     expect(second.results[0].status).toBe("busy")
     expect(second.failures).toEqual([])
   } finally {
@@ -412,14 +440,14 @@ describe("syncWorkspaceRepos", () => {
   const bindings = [INPUT, { repoFullName: "o/b", issueProjectId: "p2" }]
   it("syncs each binding and propagates full mode", async () => {
     const { client, calls } = octokit([{ data: [rawIssue(1)] }])
-    const result = await syncWorkspaceRepos({ bindings, full: true }, deps(client))
+    const result = await syncWorkspaceRepos({ bindings, full: true }, runWith(deps(client)))
     expect(result.results.map((r) => r.repoFullName)).toEqual(["o/r", "o/b"])
     expect(result.failures).toEqual([])
     expect(calls.every((call) => call.since === "1970-01-01T00:00:00.000Z")).toBe(true)
   })
   it("reports typed outcomes and keeps going when one repository fails", async () => {
     const { client } = octokit([{ status: 429, headers: { "retry-after": "60" } }, { data: [] }])
-    const result = await syncWorkspaceRepos({ bindings }, deps(client))
+    const result = await syncWorkspaceRepos({ bindings }, runWith(deps(client)))
     expect(result.results.map((r) => r.status)).toEqual(["backoff", "completed"])
     expect(result.failures[0]).toMatchObject({
       repoFullName: "o/r",
@@ -432,14 +460,26 @@ describe("syncWorkspaceRepos", () => {
     expect(
       await syncWorkspaceRepos(
         { bindings: [INPUT] },
-        {
+        runWith({
           resolveOctokit: async () => {
             throw error
           },
-        }
+        })
       )
     ).toEqual({ results: [], failures: [{ repoFullName: "o/r", error }] })
-    expect(await syncWorkspaceRepos({ bindings: [] }, {})).toEqual({ results: [], failures: [] })
+    expect(await syncWorkspaceRepos({ bindings: [] }, runWith({}))).toEqual({
+      results: [],
+      failures: [],
+    })
+  })
+  it("skips a repo whose registered run returns nothing", async () => {
+    const run = jest.fn(async (input: SyncRepoIssuesInput) =>
+      input.repoFullName === "o/r" ? undefined : syncRepoIssues(input, deps(octokit([{}]).client))
+    )
+    const result = await syncWorkspaceRepos({ bindings }, run)
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(result.results.map((r) => r.repoFullName)).toEqual(["o/b"])
+    expect(result.failures).toEqual([])
   })
 })
 

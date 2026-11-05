@@ -16,13 +16,11 @@
 import { z } from "zod"
 
 import type { IssueBulkAction } from "@/lib/issues/bulk-actions"
-import { ISSUE_STAGE_MAX } from "@/types/issues"
+import { ISSUE_PRIORITIES, ISSUE_STAGE_MAX, ISSUE_STATUSES } from "@/types/issues"
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
 import { buildConfirmSurface } from "../_shared/confirm-surface"
 import {
-  ISSUE_PRIORITY_VALUES,
-  ISSUE_STATUS_VALUES,
   applyIssueAction,
   describeOutcome,
   issueRefSchema,
@@ -37,12 +35,12 @@ const schema = z.object({
   title: z.string().min(1).max(200).optional().describe("Replacement title."),
   description: z.string().max(4000).optional().describe("Replacement description."),
   status: z
-    .enum(ISSUE_STATUS_VALUES)
+    .enum(ISSUE_STATUSES)
     .optional()
     .describe(
       "Board column to move to. Refused while an agent run holds the issue: the runtime owns in_progress until its run settles."
     ),
-  priority: z.enum(ISSUE_PRIORITY_VALUES).optional().describe("New priority."),
+  priority: z.enum(ISSUE_PRIORITIES).optional().describe("New priority."),
   assignee: z
     .object({
       kind: z.enum(["human", "agent", "team"]).describe("human is the local user."),

@@ -16,16 +16,14 @@ import {
 import { getDb } from "@/lib/db/schema"
 import type { GithubIssueMirrorRow } from "@/lib/db/github-issue-mirror-types"
 import type { DerivedDataTarget } from "@/lib/external-services/derived-data-registry"
-import { runExternalSync } from "@/lib/external-services/sync/core"
 import type {
   ExternalSyncDriver,
   ExternalSyncOutcome,
   ExternalSyncTarget,
 } from "@/lib/external-services/sync/types"
+import { adoptStoredSyncIdentity, clearEmptyOfflineDeferral, isSyncOffline } from "./sync/engine"
 
 export interface SyncRepoIssuesDeps {
-  /** Workspace sweeps execute only a still-registered, freshly resolved target. */
-  runRegistered?: (input: SyncRepoIssuesInput) => Promise<SyncRepoIssuesResult | undefined>
   resolveOctokit?: (repoFullName: string) => Promise<OctokitLike>
   resolveReadClient?: (
     repoFullName: string,
@@ -96,7 +94,6 @@ export async function prepareGithubMirrorSync(
 ) {
   const target = githubMirrorSyncTarget(input)
   const table = getDb().externalSyncCursors
-  const stored = await table.get(target.key)
   // A purge during credential preparation must also fence a factory without rows/cursors yet.
   const fences = new Map(
     (await getDb().integrationAudit.where("kind").equals("github-mirror.purge").toArray()).map(
@@ -122,8 +119,8 @@ export async function prepareGithubMirrorSync(
         throw new GithubMirrorDataPurged()
     }
   }
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    target.connectionRef = stored?.connectionRef
+  if (isSyncOffline()) {
+    await adoptStoredSyncIdentity(target)
   } else {
     const client = deps.resolveOctokit
       ? { octokit: await deps.resolveOctokit(input.repoFullName) }
@@ -138,18 +135,7 @@ export async function prepareGithubMirrorSync(
       const { getAuthConnection } = await import("@/lib/db/auth-connections")
       providerPluginId = (await getAuthConnection(target.connectionRef))?.ownerPluginId ?? undefined
     }
-    // Match the import engine: an empty offline deferral has no credential identity yet.
-    await getDb().transaction("rw", table, async () => {
-      const current = await table.get(target.key)
-      if (
-        current?.owner === target.owner &&
-        current.deferredOffline &&
-        !current.cursor &&
-        !current.generation &&
-        current.connectionRef !== target.connectionRef
-      )
-        await table.delete(target.key)
-    })
+    await clearEmptyOfflineDeferral(target)
   }
   Object.assign(target, { consumerPluginId, providerPluginId, mirrorRunToken: crypto.randomUUID() })
   await getDb().transaction("rw", table, getDb().integrationAudit, async () => {
@@ -278,31 +264,6 @@ export async function prepareGithubMirrorSync(
   return { target, driver, result, clearPurgedCheckpoint }
 }
 
-export async function syncRepoIssues(
-  input: SyncRepoIssuesInput,
-  deps: SyncRepoIssuesDeps = {}
-): Promise<SyncRepoIssuesResult> {
-  const { target, driver, result, clearPurgedCheckpoint } = await prepareGithubMirrorSync(
-    input,
-    deps
-  )
-  let outcome: ExternalSyncOutcome
-  try {
-    outcome = await runExternalSync(target, driver, {
-      mode: input.full ? "full" : "auto",
-      now: deps.now,
-    })
-  } finally {
-    await clearPurgedCheckpoint()
-  }
-  return {
-    ...result,
-    status: outcome.status,
-    truncated: outcome.truncated ?? false,
-    ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
-  }
-}
-
 export interface SyncWorkspaceReposInput {
   /** Every (repo, container) pair bound in the workspace. */
   bindings: ReadonlyArray<{ repoFullName: string; issueProjectId: string }>
@@ -318,10 +279,14 @@ export interface SyncWorkspaceReposResult {
  * Sync every bound repo. One repo failing must not abandon the rest — a single
  * revoked installation should not leave the whole board stale, and the caller
  * needs to know which repo to complain about.
+ *
+ * `run` executes one repo's sync; workspace sweeps pass the registered target
+ * (`runRegisteredIssueSync`), which resolves the binding and credential afresh
+ * and returns nothing for a binding removed meanwhile.
  */
 export async function syncWorkspaceRepos(
   input: SyncWorkspaceReposInput,
-  deps: SyncRepoIssuesDeps
+  run: (input: SyncRepoIssuesInput) => Promise<SyncRepoIssuesResult | undefined>
 ): Promise<SyncWorkspaceReposResult> {
   const results: SyncRepoIssuesResult[] = []
   const failures: Array<{ repoFullName: string; error: unknown }> = []
@@ -329,9 +294,7 @@ export async function syncWorkspaceRepos(
   for (const binding of input.bindings) {
     try {
       const target = { ...binding, ...(input.full ? { full: true } : {}) }
-      const result = deps.runRegistered
-        ? await deps.runRegistered(target)
-        : await syncRepoIssues(target, deps)
+      const result = await run(target)
       if (!result) continue
       results.push(result)
       // Busy is a successful exclusion, just like the import runner.

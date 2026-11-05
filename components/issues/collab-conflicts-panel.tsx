@@ -1,15 +1,14 @@
 "use client"
 
-import { useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
 
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { CollabFieldClash } from "@/lib/collab/client"
 import { listUsers } from "@/lib/db/identity"
 import { listCollabConflicts } from "@/lib/db/mobile-outbound-queue"
 import { resolveCollabConflict } from "@/lib/issues/service"
+import { ConflictResolutionActions, useConflictResolution } from "./conflict-resolution-actions"
 
 const FIELD_LABEL_KEYS = new Set(["title", "body", "description", "status", "priority", "assignee"])
 
@@ -23,8 +22,7 @@ function displayValue(value: unknown): string | null {
 
 export function CollabConflictsPanel() {
   const t = useTranslations("issues.conflicts")
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { busyId, error, run } = useConflictResolution()
   const conflicts = useLiveQuery(() => listCollabConflicts(), [])
   const authorIds = [
     ...new Set(
@@ -77,18 +75,6 @@ export function CollabConflictsPanel() {
     </div>
   )
 
-  const act = async (id: string, action: () => Promise<unknown>) => {
-    setBusyId(id)
-    setError(null)
-    try {
-      await action()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setBusyId(null)
-    }
-  }
-
   return (
     <Card className="border-amber-500/50" data-testid="collab-conflicts-panel">
       <CardHeader className="pb-2">
@@ -121,23 +107,20 @@ export function CollabConflictsPanel() {
                 </div>
               </div>
             )}
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busyId === row.id}
-                onClick={() => void act(row.id, () => resolveCollabConflict(row.id, "discard"))}
-              >
-                {t("discard")}
-              </Button>
-              <Button
-                size="sm"
-                disabled={busyId === row.id}
-                onClick={() => void act(row.id, () => resolveCollabConflict(row.id, "rebase"))}
-              >
-                {t("resubmit")}
-              </Button>
-            </div>
+            <ConflictResolutionActions
+              disabled={busyId === row.id}
+              // Resubmitting is keeping this device's change; discarding it is
+              // taking the server's.
+              keepLocal={{
+                label: t("resubmit"),
+                recommended: true,
+                onSelect: () => void run(row.id, () => resolveCollabConflict(row.id, "rebase")),
+              }}
+              keepRemote={{
+                label: t("discard"),
+                onSelect: () => void run(row.id, () => resolveCollabConflict(row.id, "discard")),
+              }}
+            />
           </div>
         ))}
         {error ? (

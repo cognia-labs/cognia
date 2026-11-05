@@ -25,17 +25,6 @@ import type { Issue, IssueActor, IssueProject } from "@/types/issues"
 import type { IssueBulkAction, IssueBulkOutcome } from "@/lib/issues/bulk-actions"
 import type { BuiltInSkillContext } from "../types"
 
-export const ISSUE_STATUS_VALUES = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "done",
-  "canceled",
-] as const
-
-export const ISSUE_PRIORITY_VALUES = ["urgent", "high", "medium", "low", "none"] as const
-
 export const issueRefSchema = z
   .string()
   .min(1)

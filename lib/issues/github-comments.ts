@@ -4,13 +4,14 @@
  * The mirror stores `commentCount` only, and nothing in the app read an
  * issue's comments, so the discussion on GitHub was invisible from the board.
  * This is an on-demand read — opened by the person looking at the issue, never
- * mirrored into Dexie — through the same read credential the mirror sync uses
- * (a connected account first, the `gh` CLI second).
+ * mirrored into Dexie — through the mirror sync's own read client
+ * (`resolveGithubSyncReadClient`, D22): a connected account first, the `gh`
+ * CLI second, and a personal credential only where the run's admission allows
+ * it (ADR-0243). Nothing it may use throws `MissingGithubCredentialError`.
  */
 
-import { createResolveOctokit } from "@/lib/ai/agent/team/pr-feedback/resolvers"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { hasNextPage, type OctokitLike } from "@/lib/github/issues"
-import { MissingGithubCredentialError } from "./sync-runner"
 
 /** 10 × 100 comments. Past that the panel says the list was cut short. */
 const MAX_COMMENT_PAGES = 10
@@ -40,19 +41,20 @@ interface RawComment {
 }
 
 export interface FetchGithubIssueCommentsDeps {
-  resolveOctokit: (
+  resolveReadClient: (
     repoFullName: string,
-    credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
-  ) => Promise<OctokitLike | null>
+    connectionRef: undefined,
+    credentialContext?: PersonalCredentialContext
+  ) => Promise<{ octokit: OctokitLike }>
 }
 
 const DEFAULT_DEPS: FetchGithubIssueCommentsDeps = {
-  resolveOctokit: (repoFullName, credentialContext) =>
-    (
-      createResolveOctokit(undefined, credentialContext) as (
-        name: string
-      ) => Promise<OctokitLike | null>
-    )(repoFullName),
+  resolveReadClient: async (repoFullName, connectionRef, credentialContext) =>
+    (await import("./sync/providers/github")).resolveGithubSyncReadClient(
+      repoFullName,
+      connectionRef,
+      credentialContext
+    ),
 }
 
 function toComment(raw: RawComment): GithubIssueComment | null {
@@ -71,18 +73,22 @@ function toComment(raw: RawComment): GithubIssueComment | null {
 
 /**
  * Every comment on `owner/repo#number`, oldest first. Throws
- * `MissingGithubCredentialError` when no credential can read the repository,
- * so the panel can say "connect an account" rather than "no comments".
+ * `MissingGithubCredentialError` when no credential this run may use can read
+ * the repository, so the panel can say "connect an account" rather than "no
+ * comments".
  */
 export async function fetchGithubIssueComments(
   target: { repoFullName: string; number: number },
   deps: FetchGithubIssueCommentsDeps = DEFAULT_DEPS,
-  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
+  credentialContext?: PersonalCredentialContext
 ): Promise<GithubIssueComments> {
   const [owner, repo] = target.repoFullName.split("/")
   if (!owner || !repo) throw new Error(`Not an "owner/repository" name: ${target.repoFullName}`)
-  const octokit = await deps.resolveOctokit(target.repoFullName, credentialContext)
-  if (!octokit) throw new MissingGithubCredentialError(target.repoFullName)
+  const { octokit } = await deps.resolveReadClient(
+    target.repoFullName,
+    undefined,
+    credentialContext
+  )
 
   const comments: GithubIssueComment[] = []
   for (let page = 1; page <= MAX_COMMENT_PAGES; page += 1) {

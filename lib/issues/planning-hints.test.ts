@@ -1,8 +1,18 @@
 import { statusCategoryOf } from "@/types/issues"
-import type { IssueCycle, IssueStatus } from "@/types/issues"
+import type { Issue, IssueCycle, IssueStatus } from "@/types/issues"
 import type { UnifiedIssueItem } from "@/types/issues/unified"
 import { FULL_ISSUE_CAPABILITIES, READ_ONLY_ISSUE_CAPABILITIES } from "@/types/issues/unified"
-import { buildPlanningHints, hasPlanningBadges } from "./planning-hints"
+import {
+  blockedIssues,
+  blockerRows,
+  buildPlanningHints,
+  childIssues,
+  dueState,
+  DUE_SOON_WINDOW_MS,
+  hasPlanningBadges,
+  openBlockers,
+  wouldCreateParentLoop,
+} from "./planning-hints"
 
 const DAY = 24 * 60 * 60 * 1000
 const NOW = new Date("2026-09-06T12:00:00Z").getTime()
@@ -117,5 +127,101 @@ describe("hasPlanningBadges", () => {
         subIssues: { total: 2, done: 0 },
       })
     ).toBe(true)
+  })
+})
+
+// ── relation reads (moved from relations.ts) ────────────────────────────────
+
+function issue(over: Partial<Issue> & { id: string }): Issue {
+  const status = over.status ?? "todo"
+  return {
+    identifier: over.id.toUpperCase(),
+    number: 1,
+    projectId: "w1",
+    issueProjectId: "p1",
+    title: over.id,
+    status,
+    statusCategory: statusCategoryOf(status),
+    priority: "none",
+    createdBy: { kind: "human" },
+    labelIds: [],
+    order: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  }
+}
+
+const byId = (rows: Issue[]) => new Map(rows.map((row) => [row.id, row]))
+
+describe("blockers", () => {
+  it("lists only open, existing blockers", () => {
+    const rows = [
+      issue({ id: "a" }),
+      issue({ id: "b", status: "done" }),
+      issue({ id: "c", status: "canceled" }),
+    ]
+    const target = issue({ id: "t", blockedBy: ["a", "b", "c", "ghost"] })
+    expect(openBlockers(target, byId(rows)).map((row) => row.id)).toEqual(["a"])
+    expect(openBlockers(issue({ id: "u", blockedBy: ["b"] }), byId(rows))).toEqual([])
+    expect(openBlockers(issue({ id: "v" }), byId(rows))).toEqual([])
+  })
+
+  it("lists every present blocker for the panel, finished ones included, in order", () => {
+    const rows = [issue({ id: "a" }), issue({ id: "b", status: "done" })]
+    const target = issue({ id: "t", blockedBy: ["b", "ghost", "a"] })
+    expect(blockerRows(target, byId(rows)).map((row) => row.id)).toEqual(["b", "a"])
+    expect(blockerRows(issue({ id: "u" }), byId(rows))).toEqual([])
+  })
+
+  it("derives the blocks side", () => {
+    const rows = [issue({ id: "a" }), issue({ id: "b", blockedBy: ["a"] }), issue({ id: "c" })]
+    expect(blockedIssues("a", rows).map((row) => row.id)).toEqual(["b"])
+  })
+})
+
+describe("hierarchy", () => {
+  it("lists direct children only", () => {
+    const rows = [
+      issue({ id: "p" }),
+      issue({ id: "a", parentId: "p", status: "done" }),
+      issue({ id: "b", parentId: "p" }),
+      issue({ id: "g", parentId: "a", status: "done" }),
+    ]
+    expect(childIssues("p", rows).map((row) => row.id)).toEqual(["a", "b"])
+    expect(childIssues("b", rows)).toEqual([])
+  })
+
+  it("detects a parent loop before the write refuses it", () => {
+    const rows = [
+      issue({ id: "a" }),
+      issue({ id: "b", parentId: "a" }),
+      issue({ id: "c", parentId: "b" }),
+    ]
+    const map = byId(rows)
+    expect(wouldCreateParentLoop("a", "a", map)).toBe(true)
+    expect(wouldCreateParentLoop("a", "c", map)).toBe(true)
+    expect(wouldCreateParentLoop("c", "a", map)).toBe(false)
+    expect(wouldCreateParentLoop("a", "ghost", map)).toBe(false)
+  })
+})
+
+describe("dueState", () => {
+  const now = new Date("2026-09-06T15:00:00").getTime()
+
+  it("reads the calendar, not the clock", () => {
+    expect(dueState(issue({ id: "x" }), now)).toBe("none")
+    expect(dueState(issue({ id: "x", dueDate: now - 2 * DAY }), now)).toBe("overdue")
+    expect(dueState(issue({ id: "x", dueDate: now - 60_000 }), now)).toBe("today")
+    expect(dueState(issue({ id: "x", dueDate: now + 60_000 }), now)).toBe("today")
+    expect(dueState(issue({ id: "x", dueDate: now + DUE_SOON_WINDOW_MS - 1 }), now)).toBe("soon")
+    expect(dueState(issue({ id: "x", dueDate: now + 30 * DAY }), now)).toBe("later")
+  })
+
+  it("never shouts overdue on a finished issue", () => {
+    expect(dueState(issue({ id: "x", dueDate: now - 5 * DAY, status: "done" }), now)).toBe("met")
+    expect(dueState(issue({ id: "x", dueDate: now - 5 * DAY, status: "canceled" }), now)).toBe(
+      "met"
+    )
   })
 })

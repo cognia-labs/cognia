@@ -694,6 +694,40 @@ export async function tombstoneIssueSyncRefs(
   return count
 }
 
+/** A sync started with no network defers without resolving credentials. */
+export function isSyncOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false
+}
+
+/**
+ * Offline, a run keeps the credential identity its stored checkpoint already
+ * carries: resolving a new one may need a request (an App token does).
+ */
+export async function adoptStoredSyncIdentity(target: ExternalSyncTarget): Promise<void> {
+  const stored = await getDb().externalSyncCursors.get(target.key)
+  if (stored?.owner === target.owner) target.connectionRef = stored.connectionRef
+}
+
+/**
+ * A first offline request stores a deferral with no credential identity or
+ * checkpoint. Once the real identity is known, replace only that empty
+ * deferral; one with a cursor or generation keeps its identity.
+ */
+export async function clearEmptyOfflineDeferral(target: ExternalSyncTarget): Promise<void> {
+  const table = getDb().externalSyncCursors
+  await getDb().transaction("rw", table, async () => {
+    const stored = await table.get(target.key)
+    if (
+      stored?.owner === target.owner &&
+      stored.deferredOffline &&
+      !stored.cursor &&
+      !stored.generation &&
+      stored.connectionRef !== target.connectionRef
+    )
+      await table.delete(target.key)
+  })
+}
+
 export async function prepareIssueSync(
   binding: IssueSyncBinding,
   provider: IssueSyncProvider,
@@ -719,11 +753,8 @@ export async function prepareIssueSync(
     truncated: false,
   }
   const target = issueSyncTarget(binding)
-  const offline = typeof navigator !== "undefined" && navigator.onLine === false
-  if (offline) {
-    // Deferral must not resolve credentials (an App token may require a request).
-    const stored = await getDb().externalSyncCursors.get(target.key)
-    if (stored?.owner === target.owner) target.connectionRef = stored.connectionRef
+  if (isSyncOffline()) {
+    await adoptStoredSyncIdentity(target)
   } else if (!options.signal?.aborted && provider.prepare) {
     const prepared = await provider.prepare(binding, credentialContext)
     provider = prepared.provider
@@ -738,20 +769,7 @@ export async function prepareIssueSync(
         prepared.consumerKind
       )
     }
-    // A first offline request has no credential identity or checkpoint yet.
-    // Replace only that empty deferral when the real identity becomes known.
-    const table = getDb().externalSyncCursors
-    await getDb().transaction("rw", table, async () => {
-      const stored = await table.get(target.key)
-      if (
-        stored?.owner === target.owner &&
-        stored.deferredOffline &&
-        !stored.cursor &&
-        !stored.generation &&
-        stored.connectionRef !== target.connectionRef
-      )
-        await table.delete(target.key)
-    })
+    await clearEmptyOfflineDeferral(target)
   }
   const mentioned = new Set<string>()
   const ownedIssues = async () =>

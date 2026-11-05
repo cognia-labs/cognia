@@ -88,7 +88,7 @@ describe("PublishIssueDialog", () => {
     expect(mockPublish).toHaveBeenCalledWith("i1", github, { kind: "human" }, undefined, {
       localAuthorization: LOCAL_PERSON_RUN,
     })
-    expect(props.onPublished).toHaveBeenCalled()
+    expect(props.onPublished).toHaveBeenCalledWith(github)
     expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining("acme/app#9"))
   })
 

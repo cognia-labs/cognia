@@ -214,6 +214,15 @@ describe("runWorkspaceGithubSync", () => {
     expect(hasExternalSyncRegistration("github-mirror:a:acme/one")).toBe(true)
   })
 
+  it("reconciles with the sweep's import side when one is passed", async () => {
+    const importBindings = jest.fn(async () => [])
+    await runWorkspaceGithubSync(
+      { projectId: "ws-1" },
+      { resolveBindings: async () => [], runtime: { importBindings } }
+    )
+    expect(importBindings).toHaveBeenCalledTimes(1)
+  })
+
   it.each(["earlier target", "credential preparation"])(
     "does not restart B unbound during %s",
     async (window) => {

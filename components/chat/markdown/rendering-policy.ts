@@ -1,4 +1,6 @@
 import rehypeRaw from "rehype-raw"
+import { resolveInlineLinkHref } from "@/lib/chat/inline-links"
+import { rehypeInlineLinks } from "./rehype-inline-links"
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize"
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize"
 import type { StreamdownProps } from "streamdown"
@@ -109,9 +111,13 @@ export function chatMarkdownUrlTransform(url: string, key?: string): string {
  * web and mail links only, and inline images only from the web or a data URL.
  * Relative, `file:` and `tel:` targets are dropped: the chat resolves those
  * against the user's project or OS, which a sender must not be able to steer.
+ * A registered in-app reference (`lib/chat/inline-links.ts`) is the exception.
  */
 export function untrustedMarkdownUrlTransform(url: string, key?: string): string {
   if (/^data:image\//i.test(url)) return key === "src" ? url : ""
+  // The one relative target allowed: a registered in-app reference, which
+  // names an object by its printable id and nothing else (D25).
+  if (resolveInlineLinkHref(url)) return key === "src" ? "" : url
   const colon = url.indexOf(":")
   if (colon === -1) return ""
   const protocol = url.slice(0, colon).toLowerCase()
@@ -120,8 +126,12 @@ export function untrustedMarkdownUrlTransform(url: string, key?: string): string
   return ""
 }
 
-/** Streamdown raw parsing with the finalized renderer's safe allow-list. */
+/**
+ * Streamdown raw parsing with the finalized renderer's safe allow-list. In-app
+ * references are linked after sanitization, so their marks survive it.
+ */
 export const chatStreamdownRehypePlugins: NonNullable<StreamdownProps["rehypePlugins"]> = [
   rehypeRaw,
   [rehypeSanitize, chatMarkdownSanitizeSchema],
+  rehypeInlineLinks,
 ]

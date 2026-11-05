@@ -44,7 +44,8 @@ export interface LinkGithubIssueDialogProps {
   issueId: string
   /** Repos bound to this issue's container — the only legal targets. */
   repos: readonly string[]
-  onLinked?: () => void
+  /** After the link is saved, with the repository it points into. */
+  onLinked?: (repoFullName: string) => void
 }
 
 export function LinkGithubIssueDialog({
@@ -75,7 +76,7 @@ export function LinkGithubIssueDialog({
         { kind: "human" }
       )
       setNumber("")
-      onLinked?.()
+      onLinked?.(selectedRepo)
       onOpenChange(false)
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))

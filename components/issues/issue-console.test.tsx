@@ -229,10 +229,11 @@ jest.mock("@/lib/issues/sources/registry", () => {
   return { getIssueSourceRegistry: () => registry }
 })
 
-const mockRunSync = jest.fn().mockResolvedValue({ repoCount: 0, results: [], failures: [] })
-jest.mock("@/lib/issues/sync-runner", () => ({
-  runWorkspaceGithubSync: (...a: unknown[]) => mockRunSync(...a),
-  isMissingGithubCredential: () => false,
+const mockRefreshAfterWrite = jest.fn(async (..._a: unknown[]) => {})
+jest.mock("@/lib/issues/github-event-refresh", () => ({
+  getGithubEventIssueRefresher: () => ({
+    refreshAfterWrite: (...a: unknown[]) => mockRefreshAfterWrite(...a),
+  }),
 }))
 const mockRunIssueSync = jest.fn(async (..._a: unknown[]) => ({
   bindingCount: 0,
@@ -374,7 +375,6 @@ beforeEach(() => {
   squadRunsForTest = new Map()
   viewerForTest = { selfKey: "human:self", agentKeys: [] }
   mockListAll.mockResolvedValue({ items: [], errors: [] })
-  mockRunSync.mockResolvedValue({ repoCount: 0, results: [], failures: [] })
 })
 
 it("disables manual sync with the disconnected source reason", async () => {
@@ -391,7 +391,7 @@ it("disables manual sync with the disconnected source reason", async () => {
   ).find((action) => action.id === "sync")!
   expect(sync).toMatchObject({ disabled: true, label: "sync.sourceDisconnected" })
   await act(async () => sync.onSelect())
-  expect(mockRunSync).not.toHaveBeenCalled()
+  expect(mockRunIssueSync).not.toHaveBeenCalled()
 })
 
 describe("IssueConsole", () => {
@@ -1110,14 +1110,14 @@ describe("IssueConsole", () => {
     })
 
     it("says so when the refetch after a write-back fails, without re-reading", async () => {
-      mockRunSync.mockRejectedValueOnce(new Error("offline"))
+      mockRefreshAfterWrite.mockRejectedValueOnce(new Error("offline"))
       mockListAll.mockResolvedValue({ items: [item()], errors: [] })
       render(<IssueConsole />)
       await screen.findByTestId("board-stub")
       callProp(boardProps, "onSelect", "local:i1")
       await screen.findByTestId("detail-stub")
       await act(async () => {
-        await (detailProps.onWritebackCompleted as () => Promise<void>)()
+        await (detailProps.onWritebackCompleted as (repo: string) => Promise<void>)("acme/app")
       })
       // The live read already follows the mirror; nothing re-subscribes.
       expect(mockListAll).toHaveBeenCalledTimes(1)
@@ -1169,20 +1169,20 @@ describe("IssueConsole", () => {
       expect(toastCalls).toContainEqual(["error", "Unknown issue status 'x'"])
     })
 
-    it("round-trips a GitHub write-back through a full sync", async () => {
+    it("reads a GitHub write-back back from the written repository only", async () => {
       mockListAll.mockResolvedValue({ items: [item()], errors: [] })
       render(<IssueConsole />)
       await screen.findByTestId("board-stub")
       callProp(boardProps, "onSelect", "local:i1")
       await screen.findByTestId("detail-stub")
       await act(async () => {
-        await (detailProps.onWritebackCompleted as () => Promise<void>)()
+        await (detailProps.onWritebackCompleted as (repo: string) => Promise<void>)("acme/app")
       })
-      expect(mockRunSync).toHaveBeenCalledWith({
-        projectId: "w1",
-        full: true,
-        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      expect(mockRefreshAfterWrite).toHaveBeenCalledWith("acme/app", {
+        localAuthorization: LOCAL_PERSON_RUN,
       })
+      expect(mockRunIssueSync).not.toHaveBeenCalled()
+      expect(toastCalls.some(([kind]) => kind === "warning")).toBe(false)
     })
   })
 

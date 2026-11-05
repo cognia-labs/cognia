@@ -9,24 +9,22 @@
 
 import { z } from "zod"
 
+import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/types/issues"
+
 import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
-import {
-  ISSUE_PRIORITY_VALUES,
-  ISSUE_STATUS_VALUES,
-  resolveWorkspaceId,
-  summariseIssue,
-} from "./_core"
+import { resolveWorkspaceId, summariseIssue } from "./_core"
+
+/** Rows returned when the model asks for no limit, and the most it may ask for. */
+const ISSUE_LIST_DEFAULT_LIMIT = 25
+const ISSUE_LIST_MAX_LIMIT = 100
 
 const schema = z.object({
   status: z
-    .array(z.enum(ISSUE_STATUS_VALUES))
+    .array(z.enum(ISSUE_STATUSES))
     .optional()
     .describe("Keep only these board columns. Omit for every column."),
-  priority: z
-    .array(z.enum(ISSUE_PRIORITY_VALUES))
-    .optional()
-    .describe("Keep only these priorities."),
+  priority: z.array(z.enum(ISSUE_PRIORITIES)).optional().describe("Keep only these priorities."),
   issueProject: z
     .string()
     .optional()
@@ -38,7 +36,13 @@ const schema = z.object({
       "Who the issue is on. 'agents' covers both agent and squad assignees. Defaults to 'any'."
     ),
   query: z.string().optional().describe("Case-insensitive match on identifier, title or body."),
-  limit: z.number().int().min(1).max(100).optional().describe("Rows to return. Defaults to 25."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(ISSUE_LIST_MAX_LIMIT)
+    .optional()
+    .describe(`Rows to return. Defaults to ${ISSUE_LIST_DEFAULT_LIMIT}.`),
 })
 
 const skill: BuiltInSkill<typeof schema> = {
@@ -56,7 +60,15 @@ const skill: BuiltInSkill<typeof schema> = {
   mcpToolName: "issue_list",
   inputSchema: schema,
   execute: async (args, ctx) => {
-    const { listIssues } = await import("@/lib/db/issues")
+    const [{ queryIssues }, { toUnifiedIssue }, { matchesViewScope }, { SELF_ACTOR_KEY }] =
+      await Promise.all([
+        import("@/lib/issues/service"),
+        import("@/lib/issues/sources/local-source"),
+        import("@/lib/issues/views"),
+        import("@/lib/issues/run/running"),
+      ])
+    // "Me" is the local person, as the board's own "Assigned to me" scope reads it.
+    const viewer = { selfKey: SELF_ACTOR_KEY, agentKeys: [] }
     const workspaceId = await resolveWorkspaceId(ctx)
 
     let issueProjectId: string | undefined
@@ -65,38 +77,31 @@ const skill: BuiltInSkill<typeof schema> = {
       issueProjectId = (await resolveIssueProject(args.issueProject, workspaceId)).id
     }
 
-    const needle = args.query?.trim().toLowerCase()
     const priorities = args.priority?.length ? new Set<string>(args.priority) : undefined
+    // The same query the MCP `issues_list` and the `/issue list` command run;
+    // only the assignee and priority narrowing is this tool's own.
     const rows = (
-      await listIssues({
+      await queryIssues({
         projectId: workspaceId,
         ...(issueProjectId ? { issueProjectId } : {}),
         ...(args.status?.length ? { statuses: args.status } : {}),
+        ...(args.query?.trim() ? { text: args.query } : {}),
       })
     ).filter((row) => {
       if (priorities && !priorities.has(row.priority)) return false
       switch (args.assignee) {
         case "me":
-          if (row.assigneeKind !== "human") return false
-          break
+          return matchesViewScope(toUnifiedIssue(row), "assigned-to-me", viewer)
         case "agents":
-          if (row.assigneeKind !== "agent" && row.assigneeKind !== "team") return false
-          break
+          return row.assigneeKind === "agent" || row.assigneeKind === "team"
         case "unassigned":
-          if (row.assigneeKind !== undefined) return false
-          break
+          return row.assigneeKind === undefined
         default:
-          break
+          return true
       }
-      if (!needle) return true
-      return (
-        row.identifier.toLowerCase().includes(needle) ||
-        row.title.toLowerCase().includes(needle) ||
-        (row.description?.toLowerCase().includes(needle) ?? false)
-      )
     })
 
-    const limit = args.limit ?? 25
+    const limit = args.limit ?? ISSUE_LIST_DEFAULT_LIMIT
     return {
       workspaceId,
       total: rows.length,

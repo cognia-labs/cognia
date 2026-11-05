@@ -116,6 +116,7 @@ it("passes the confirmation through as the approval — nothing else may", async
   })
   expect(mockToastSuccess).toHaveBeenCalledWith("writeback.success")
   expect(onCompleted).toHaveBeenCalledTimes(1)
+  expect(onCompleted).toHaveBeenCalledWith(TARGET.repoFullName)
   expect(props.onOpenChange).toHaveBeenCalledWith(false)
 })
 

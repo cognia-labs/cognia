@@ -1,6 +1,7 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
-jest.mock("@/lib/ai/agent/team/pr-feedback/resolvers", () => ({
-  createResolveOctokit: () => async () => null,
+const mockResolveGithubSyncReadClient = jest.fn()
+jest.mock("./sync/providers/github", () => ({
+  resolveGithubSyncReadClient: (...args: unknown[]) => mockResolveGithubSyncReadClient(...args),
 }))
 jest.mock("@/lib/db/github-issue-mirror", () => ({ githubMirrorId: jest.fn() }))
 
@@ -45,7 +46,7 @@ describe("fetchGithubIssueComments", () => {
     ])
     const result = await fetchGithubIssueComments(
       { repoFullName: "acme/app", number: 5 },
-      { resolveOctokit: async () => client }
+      { resolveReadClient: async () => ({ octokit: client }) }
     )
     expect(request).toHaveBeenCalledWith(
       "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
@@ -83,17 +84,22 @@ describe("fetchGithubIssueComments", () => {
     const { client, request } = octokit(pages)
     const result = await fetchGithubIssueComments(
       { repoFullName: "acme/app", number: 5 },
-      { resolveOctokit: async () => client }
+      { resolveReadClient: async () => ({ octokit: client }) }
     )
     expect(request).toHaveBeenCalledTimes(10)
     expect(result.truncated).toBe(true)
   })
 
   it("reports a missing credential as such", async () => {
+    const { MissingGithubCredentialError } = await import("./sync-runner")
     await expect(
       fetchGithubIssueComments(
         { repoFullName: "acme/app", number: 5 },
-        { resolveOctokit: async () => null }
+        {
+          resolveReadClient: async (repo) => {
+            throw new MissingGithubCredentialError(repo)
+          },
+        }
       )
     ).rejects.toMatchObject({ name: "MissingGithubCredentialError" })
   })
@@ -102,7 +108,7 @@ describe("fetchGithubIssueComments", () => {
     await expect(
       fetchGithubIssueComments(
         { repoFullName: "nope", number: 5 },
-        { resolveOctokit: async () => null }
+        { resolveReadClient: jest.fn() }
       )
     ).rejects.toThrow("owner/repository")
   })
@@ -110,11 +116,20 @@ describe("fetchGithubIssueComments", () => {
 
 it("forwards local-view admission rather than granting it in the reader", async () => {
   const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
-  const resolveOctokit = jest.fn(async () => octokit([]).client)
+  const resolveReadClient = jest.fn(async () => ({ octokit: octokit([]).client }))
   await fetchGithubIssueComments(
     { repoFullName: "o/r", number: 1 },
-    { resolveOctokit },
+    { resolveReadClient },
     credentialContext
   )
-  expect(resolveOctokit).toHaveBeenCalledWith("o/r", credentialContext)
+  expect(resolveReadClient).toHaveBeenCalledWith("o/r", undefined, credentialContext)
+})
+
+it("reads through the mirror's gated read client by default", async () => {
+  const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
+  mockResolveGithubSyncReadClient.mockResolvedValue({ octokit: octokit([]).client })
+  await expect(
+    fetchGithubIssueComments({ repoFullName: "o/r", number: 1 }, undefined, credentialContext)
+  ).resolves.toEqual({ comments: [], truncated: false })
+  expect(mockResolveGithubSyncReadClient).toHaveBeenCalledWith("o/r", undefined, credentialContext)
 })

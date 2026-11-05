@@ -31,6 +31,11 @@ jest.mock("@/lib/issues/notify", () => ({
   installIssueNotificationCommands: (...args: unknown[]) =>
     mockInstallIssueNotificationCommands(...args),
 }))
+const mockStopInlineLinks = jest.fn()
+const mockInstallIssueInlineLinks = jest.fn((..._args: unknown[]) => mockStopInlineLinks)
+jest.mock("@/lib/issues/inline-links", () => ({
+  installIssueInlineLinks: (...args: unknown[]) => mockInstallIssueInlineLinks(...args),
+}))
 const mockPush = jest.fn()
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }))
 jest.mock("next-intl", () => ({
@@ -161,6 +166,23 @@ describe("IssueTrackerInitializer", () => {
     await waitFor(() => expect(mockRegisterLocalIssueSource).toHaveBeenCalledTimes(1))
     rerender(<IssueTrackerInitializer />)
     expect(mockRegisterLocalIssueSource).toHaveBeenCalledTimes(1)
+  })
+
+  it("links issue identifiers in chat only once an account is unlocked", () => {
+    const { unmount } = render(<IssueTrackerInitializer />)
+    expect(mockInstallIssueInlineLinks).not.toHaveBeenCalled()
+    unmount()
+    unlockedAccountId = "acct-1"
+    const mounted = render(<IssueTrackerInitializer />)
+    expect(mockInstallIssueInlineLinks).toHaveBeenCalledTimes(1)
+    const workspace = mockInstallIssueInlineLinks.mock.calls[0]![0] as {
+      current(): string | null
+      subscribe(listener: () => void): () => void
+    }
+    expect(workspace.current()).toBeNull()
+    expect(typeof workspace.subscribe(() => {})).toBe("function")
+    mounted.unmount()
+    expect(mockStopInlineLinks).toHaveBeenCalledTimes(1)
   })
 
   it("renders nothing", () => {

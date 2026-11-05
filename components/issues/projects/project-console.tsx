@@ -110,8 +110,8 @@ export function ProjectConsole({ initialSelectedId }: ProjectConsoleProps) {
 
   /**
    * One pass over the issues the page already holds, rather than one query per
-   * container. `computeIssueProjectProgress` exists for callers that hold only
-   * an id; both now share the same tally.
+   * container: the same tally (`lib/issues/project-progress.ts`) the issue
+   * board's rail uses.
    */
   const progressById = useMemo(
     () =>

@@ -1,12 +1,12 @@
 /**
- * The production entry point for refreshing the GitHub mirror.
+ * The GitHub mirror's half of a workspace sweep.
  *
  * `lib/issues/github-sync.ts` is deliberately dependency-injected and knows
  * nothing about where repos come from or how a token is obtained. This module
- * supplies both, so the scheduler executor and the manual "Sync now" button run
- * exactly the same code path — a difference between the two would show up as
- * "the button works but the schedule doesn't", which is the kind of bug that
- * survives for months.
+ * supplies both. Every caller reaches it through `runWorkspaceIssueSync`
+ * (`lib/issues/sync/runner.ts`): the toolbar button, the scheduler executor and
+ * the RPC run exactly the same path, so a schedule can never drift from the
+ * manual button.
  *
  * Credentials use the import provider's resolver, which returns the client and
  * its Host connection together (or a gh CLI fallback with a named lock).
@@ -20,7 +20,11 @@ import {
   type SyncRepoIssuesDeps,
   type SyncWorkspaceReposResult,
 } from "./github-sync"
-import { reconcileIssueSyncRegistrations, runRegisteredIssueSync } from "./sync/runtime"
+import {
+  reconcileIssueSyncRegistrations,
+  runRegisteredIssueSync,
+  type IssueSyncRuntimeDeps,
+} from "./sync/runtime"
 
 export interface WorkspaceGithubBinding {
   repoFullName: string
@@ -76,6 +80,12 @@ export interface RunWorkspaceGithubSyncDeps {
   /** Test/legacy override; production resolves the exact credential source too. */
   resolveOctokitOrNull?: (repoFullName: string) => Promise<OctokitLike | null>
   sync?: typeof syncWorkspaceRepos
+  /**
+   * The import side of the registration set. A workspace sweep passes its own
+   * so the one reconcile before the mirror registers every binding kind with
+   * the deps that sweep runs it with.
+   */
+  runtime?: Pick<IssueSyncRuntimeDeps, "registry" | "importBindings">
 }
 
 export interface RunWorkspaceGithubSyncResult extends SyncWorkspaceReposResult {
@@ -118,7 +128,7 @@ export async function runWorkspaceGithubSync(
 ): Promise<RunWorkspaceGithubSyncResult> {
   const resolveBindings = deps.resolveBindings ?? resolveWorkspaceGithubBindings
   const bindings = await resolveBindings(input.projectId)
-  const syncDeps: SyncRepoIssuesDeps = deps.resolveOctokitOrNull
+  const mirrorDeps: SyncRepoIssuesDeps = deps.resolveOctokitOrNull
     ? {
         resolveOctokit: async (repoFullName) => {
           const octokit = await deps.resolveOctokitOrNull!(repoFullName)
@@ -128,19 +138,22 @@ export async function runWorkspaceGithubSync(
       }
     : {}
   await reconcileIssueSyncRegistrations({
+    ...deps.runtime,
     mirrorBindings: () => resolveBindings(),
-    mirrorDeps: syncDeps,
+    mirrorDeps,
   })
-  syncDeps.runRegistered = async (binding) => {
-    const result = await runRegisteredIssueSync(githubMirrorSyncTarget(binding).key, {
-      full: binding.full,
-      credentialContext: input.credentialContext,
-    })
-    return result && "repoFullName" in result ? result : undefined
-  }
   if (bindings.length === 0) return { repoCount: 0, results: [], failures: [] }
 
   const sync = deps.sync ?? syncWorkspaceRepos
-  const result = await sync({ bindings, ...(input.full ? { full: true } : {}) }, syncDeps)
+  const result = await sync(
+    { bindings, ...(input.full ? { full: true } : {}) },
+    async (binding) => {
+      const outcome = await runRegisteredIssueSync(githubMirrorSyncTarget(binding).key, {
+        full: binding.full,
+        credentialContext: input.credentialContext,
+      })
+      return outcome && "repoFullName" in outcome ? outcome : undefined
+    }
+  )
   return { repoCount: bindings.length, ...result }
 }

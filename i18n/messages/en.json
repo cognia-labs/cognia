@@ -24222,11 +24222,16 @@
       "failed": "Couldn't read the comments from GitHub. Try again.",
       "load": "Load comments",
       "loading": "Loading comments from GitHub…",
+      "noCredential": "No GitHub credential this view may use can read {repository}. Connect a GitHub account or sign in with the GitHub CLI, then refresh.",
       "open": "Open on GitHub",
+      "openConnections": "Open Connections",
       "refresh": "Refresh",
       "section": "GitHub conversation",
       "truncated": "Only the first 1,000 comments are shown. Open the issue on GitHub for the rest.",
       "unknownAuthor": "Unknown author"
+    },
+    "identifier": {
+      "notFound": "No issue is identified as {identifier}."
     },
     "import": {
       "browse": "Choose file",

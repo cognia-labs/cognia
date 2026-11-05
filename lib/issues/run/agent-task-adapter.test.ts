@@ -9,7 +9,6 @@ import {
   agentTaskArtifacts,
   buildAgentTaskDescription,
   createAgentTaskRunAdapter,
-  issuePriorityToAgentTaskPriority,
   sessionHref,
   type AgentTaskRunAdapterDeps,
 } from "./agent-task-adapter"
@@ -151,12 +150,7 @@ describe("helpers", () => {
     ).toBe("Issue MERC-1: Fix the thing")
   })
 
-  it("maps priorities and builds artifacts from attempts with sessions", () => {
-    expect(issuePriorityToAgentTaskPriority("urgent")).toBe("critical")
-    expect(issuePriorityToAgentTaskPriority("high")).toBe("high")
-    expect(issuePriorityToAgentTaskPriority("medium")).toBe("normal")
-    expect(issuePriorityToAgentTaskPriority("low")).toBe("low")
-    expect(issuePriorityToAgentTaskPriority("none")).toBe("normal")
+  it("builds artifacts from attempts with sessions", () => {
     expect(sessionHref("s 1")).toBe("/?session=s%201")
     expect(agentTaskArtifacts([attempt(), attempt({ attemptNo: 2, sessionId: "s2" })])).toEqual([
       { label: "Session (attempt 2)", href: "/?session=s2" },

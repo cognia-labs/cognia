@@ -120,15 +120,28 @@ export function parseIssueIdentifier(
   return { projectKey: match[1], issueNumber }
 }
 
+/** Candidate identifiers in free text; `isCanonicalIssueIdentifier` has the last word. */
+export const ISSUE_IDENTIFIER_TEXT_PATTERN = /\b[A-Z][A-Z0-9]{1,4}-\d+\b/g
+
 /**
- * Find every local identifier mentioned in free text — used to linkify commit
- * messages, IM replies and issue descriptions. Returns unique matches in the
- * order they appear.
+ * Whether a candidate is exactly what `formatIssueIdentifier` would print:
+ * `MERC-0` and `MERC-012` look like identifiers but name no issue.
+ */
+export function isCanonicalIssueIdentifier(text: string): boolean {
+  const parsed = parseIssueIdentifier(text)
+  return (
+    parsed !== undefined && formatIssueIdentifier(parsed.projectKey, parsed.issueNumber) === text
+  )
+}
+
+/**
+ * Find every local identifier mentioned in free text. Returns unique matches
+ * in the order they appear.
  */
 export function extractIssueIdentifiers(text: string): string[] {
   const seen = new Set<string>()
-  for (const match of text.matchAll(/\b([A-Z][A-Z0-9]{1,4}-\d+)\b/g)) {
-    seen.add(match[1])
+  for (const match of text.matchAll(ISSUE_IDENTIFIER_TEXT_PATTERN)) {
+    seen.add(match[0])
   }
   return [...seen]
 }

@@ -98,6 +98,15 @@ describe("toUnifiedAgentTask", () => {
     expect(toUnifiedAgentTask(task({ description: "" })).description).toBeUndefined()
   })
 
+  it("reads a dispatched task's priority back as its issue's, and a native default as none", () => {
+    const origin = { identifier: "MERC-2", issueProjectId: "ip-1", priority: "medium" as const }
+    expect(toUnifiedAgentTask(task({ priority: "normal" }), origin).priority).toBe("medium")
+    expect(toUnifiedAgentTask(task({ priority: "normal" })).priority).toBe("none")
+    expect(
+      toUnifiedAgentTask(task({ priority: "high" }), { ...origin, priority: "medium" }).priority
+    ).toBe("high")
+  })
+
   it("inherits the originating issue's container and badges its identifier", () => {
     const item = toUnifiedAgentTask(task(), { identifier: "MERC-2", issueProjectId: "ip-1" })
     expect(item.issueProjectId).toBe("ip-1")
@@ -163,7 +172,7 @@ describe("list", () => {
     expect(items[0].issueProjectId).toBe(project.id)
     expect(await loadOriginIssueRefs([])).toEqual(new Map())
     expect(await loadOriginIssueRefs([issue.id, "nope"])).toEqual(
-      new Map([[issue.id, { identifier: "MERC-1", issueProjectId: project.id }]])
+      new Map([[issue.id, { identifier: "MERC-1", issueProjectId: project.id, priority: "none" }]])
     )
   })
 
