@@ -17,7 +17,8 @@
  *
  * Fields that an existing rule already owns follow that rule:
  * - `runtimes` carry one adapter per host — ADR-0250 §2's adapter matrix as
- *   data. The brain adapter keeps `HeadlessRuntime.start`'s signature.
+ *   data. The brain adapter keeps `HeadlessRuntime.start`'s signature and
+ *   names the brain profiles (`HeadlessHost`) it starts on.
  * - `settings.keys` only declare which flat `AppSettings` keys the module
  *   owns; the wire stays `packages/agent-config-types/src/settings-sync.ts`.
  * - `capabilityContributions` produce `AgentCapabilityGrantV1` only
@@ -26,15 +27,17 @@
  * - `tables` only declare ownership; the schema stays in `CURRENT_SCHEMA`.
  *
  * The registries generated from these fields arrive registry by registry
- * (§13). `searchProviders`, `slashCommands` and `settingsSections` (M1) and
- * `nav` (M2) are generated (`scripts/build/gen-module-registry.mjs`) and read
- * by their shells; every other field is shape-checked by the gate and read by
- * nothing yet.
+ * (§13). `searchProviders`, `slashCommands` and `settingsSections` (M1), and
+ * `nav` and `runtimes` (M2) are generated (`scripts/build/gen-module-registry.mjs`)
+ * and read by their shells and hosts; every other field is shape-checked by the
+ * gate and read by nothing yet.
  */
 
 import type { ComponentType } from "react"
 
 import type { SlashContext } from "@cognia/plugin-contract/lib/slash-commands/builtin"
+import type { BootCapability } from "@/lib/boot/capabilities"
+import type { HeadlessHost, HeadlessRuntime } from "@/lib/headless/types"
 import type { GlobalSearchProvider } from "@/lib/global-search/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
 import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
@@ -63,11 +66,90 @@ export interface ModuleAcceptance {
   realSmoke: "pending" | `passed:${string}`
 }
 
-/** A runtime behaviour with one assembly per host (ADR-0250 §2 adapter matrix). */
+/**
+ * The renderer boot groups a runtime may wait for (`lib/boot/capabilities.ts`):
+ * each deferred initializer group mounts a `ModuleRuntimeHost` for its own.
+ */
+export type ModuleRuntimeBoot = Extract<
+  BootCapability,
+  "core-chat" | "workflow-automation" | "integrations" | "knowledge-agents"
+>
+
+/** A started runtime's teardown. */
+export type ModuleRuntimeTeardown = () => void | Promise<void>
+
+/** What a renderer runtime (`desktop`, `mobile`) is started with. */
+export interface RendererRuntimeContext {
+  host: Exclude<ModuleHost, "brain">
+  /** The unlocked local account; the runtime restarts when it changes. */
+  accountId: string
+  log: (level: "info" | "warn" | "error", message: string) => void
+}
+
+/** What a brain adapter's module exports: `HeadlessRuntime.start`, unchanged. */
+export interface BrainRuntimeAdapter {
+  start: HeadlessRuntime["start"]
+}
+
+/** What a desktop or mobile adapter's module exports. */
+export interface RendererRuntimeAdapter {
+  start(
+    ctx: RendererRuntimeContext
+  ): ModuleRuntimeTeardown | void | Promise<ModuleRuntimeTeardown | void>
+}
+
+/**
+ * A runtime behaviour with one assembly per host (ADR-0250 §2 adapter matrix).
+ *
+ * An adapter is a module specifier, not a lazy entry: `./runtime/brain`
+ * (beside the manifest) or `@/lib/…`. The generator writes each host's lazy
+ * import into that host's registry only (`lib/modules/generated/<host>.ts`),
+ * so a brain never reaches a desktop adapter through a manifest, and the
+ * headless-registry gate never mistakes a desktop-only effect for one the
+ * brain calls.
+ *
+ * Dormancy (Rule 7): an `experimental` module's runtimes start on no host
+ * (`isActiveModule`), and `lib/modules/runtimes.test.ts` pins it.
+ */
 export interface ModuleRuntime {
+  /** Kebab-case, unique across the brain roster and every module. */
   name: string
   criticality: "required" | "optional"
-  adapters: Partial<Record<ModuleHost, LazyModule>>
+  /** The renderer group it waits for; absent means the main boot cluster. */
+  boot?: ModuleRuntimeBoot
+  adapters: {
+    /**
+     * The brain assembly and the brain profiles it starts on. Naming
+     * `person-brain` widens what one member's partition process does, so the
+     * runtime must also join `PERSON_BRAIN_RUNTIMES`.
+     */
+    brain?: { module: string; hosts: readonly HeadlessHost[] }
+    desktop?: string
+    mobile?: string
+  }
+  /** Why each host without an adapter has none. Every missing host needs one. */
+  absent?: Partial<Record<ModuleHost, string>>
+}
+
+/** One runtime as a host's generated registry lists it. */
+interface ModuleRuntimeEntryBase {
+  /** The contributing module, and its stage: an `experimental` one starts nothing. */
+  module: string
+  stage: ModuleStage
+  name: string
+  criticality: ModuleRuntime["criticality"]
+}
+
+/** A brain runtime in `lib/modules/generated/brain.ts`. */
+export interface BrainRuntimeEntry extends ModuleRuntimeEntryBase {
+  hosts: readonly HeadlessHost[]
+  load: LazyModule<BrainRuntimeAdapter>
+}
+
+/** A renderer runtime in `lib/modules/generated/{desktop,mobile}.ts`. */
+export interface RendererRuntimeEntry extends ModuleRuntimeEntryBase {
+  boot?: ModuleRuntimeBoot
+  load: LazyModule<RendererRuntimeAdapter>
 }
 
 /** An implementation of a kernel capability port (`ocr`, `speech`, `forge`, …). */
@@ -245,7 +327,12 @@ export interface ModuleNavEntry {
   }
 }
 
-/** A side effect that needs React context, the router, i18n or toasts. Not a runtime. */
+/**
+ * A side effect that needs React context, the router, i18n or toasts. Not a
+ * runtime. The gate checks each is named once and lazy; no module declares
+ * one yet, so no shell mounts them until the first contributor brings the
+ * host that renders them (ADR-0250 §14, M2: the `pet` pilot).
+ */
 export interface ModuleEffect {
   name: string
   load: LazyModule

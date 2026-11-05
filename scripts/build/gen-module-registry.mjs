@@ -3,8 +3,10 @@
  * Generate the feature module registries (ADR-0250 §14).
  *
  * Reads every `lib/<id>/module.ts` and `components/<id>/module.ui.ts` and
- * writes `lib/modules/generated/host.ts` and `components/modules/generated/ui.ts`
- * (see `scripts/gates/lib/module-manifests.mjs` for their shape). Both files
+ * writes `lib/modules/generated/host.ts`, one runtime registry per host
+ * (`lib/modules/generated/{brain,desktop,mobile}.ts`) and
+ * `components/modules/generated/ui.ts` (see
+ * `scripts/gates/lib/module-manifests.mjs` for their shape). Both files
  * are gitignored, so every entry point that compiles the app runs this first:
  * postinstall, predev, prebuild, prestorybook, `scripts/test/jest.mjs`,
  * `scripts/gates/typecheck-root.mjs` and the CLI builds (which the brain's
@@ -51,7 +53,7 @@ export function computeModuleRegistries(root = REPO_ROOT) {
           ? validateHostManifest(value, kind.id)
           : validateUiManifest(value, kind.id)
     for (const error of [...readErrors, ...shapeErrors]) errors.push(`${file}: ${error}`)
-    ;(kind.layer === "host" ? host : ui).push({ id: kind.id, file })
+    ;(kind.layer === "host" ? host : ui).push({ id: kind.id, file, value })
   }
   return { errors, files: renderRegistries({ host, ui }) }
 }

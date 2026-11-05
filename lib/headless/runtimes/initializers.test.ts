@@ -108,6 +108,9 @@ describe("initializer batch headless smoke", () => {
     await whenSeeded()
     __resetHeadlessRuntimesForTesting()
     await import("./initializers")
+    // The Squad bootstrap is the `squads` module's runtime since ADR-0250 §14
+    // M2; the roster registers it from the module registry right after.
+    await import("./modules")
     const pruneCost = jest.mocked(costHistory.pruneProviderCostOlderThan)
     pruneCost.mockClear()
 

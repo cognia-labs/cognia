@@ -12,6 +12,7 @@ import { BackgroundTaskInitializer } from "./background-task-initializer"
 import { BotRuntimeInitializer } from "./bot-runtime-initializer"
 import { CodeAdoptionTrackerInitializer } from "./code-adoption-tracker-initializer"
 import { GoalVerificationInitializer } from "./goal-verification-initializer"
+import { ModuleRuntimeHost } from "./module-runtime-host"
 
 export function WorkflowAutomationBootInitializers() {
   useEffect(() => markBootCapabilityReady("workflow-automation"), [])
@@ -26,6 +27,8 @@ export function WorkflowAutomationBootInitializers() {
       <A2UISurfacePersistenceInitializer />
       <SchedulerInitializer />
       <WorkflowRuntimeProvider />
+      {/* Module runtimes that wait for this group (ADR-0250 §14). */}
+      <ModuleRuntimeHost boot="workflow-automation" />
     </>
   )
 }

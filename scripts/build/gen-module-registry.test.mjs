@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
 
-import { GENERATED_HOST, GENERATED_UI } from "../gates/lib/module-manifests.mjs"
+import { GENERATED_FILES, GENERATED_HOST, GENERATED_RUNTIMES } from "../gates/lib/module-manifests.mjs"
 import { generateModuleRegistries } from "./gen-module-registry.mjs"
 
 const MANIFEST = `import { defineHostModule } from "@/lib/modules/define"
@@ -20,17 +20,60 @@ function tree(files) {
   return root
 }
 
-test("writes both registries, then leaves them alone when nothing changed", () => {
+test("writes every registry, then leaves them alone when nothing changed", () => {
   const root = tree({ "lib/modules/define.ts": "", "lib/crew/module.ts": MANIFEST })
   try {
     const first = generateModuleRegistries({ root })
     assert.equal(first.ok, true)
-    assert.deepEqual(first.stale.sort(), [GENERATED_UI, GENERATED_HOST].sort())
+    assert.deepEqual(first.stale.sort(), [...GENERATED_FILES].sort())
     assert.match(readFileSync(join(root, GENERATED_HOST), "utf8"), /HOST_MODULES = \[crewModule\]/)
     const written = statSync(join(root, GENERATED_HOST)).mtimeMs
     const second = generateModuleRegistries({ root })
     assert.deepEqual(second.stale, [])
     assert.equal(statSync(join(root, GENERATED_HOST)).mtimeMs, written)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("writes each host's runtime adapters into that host's registry only", () => {
+  const root = tree({
+    "lib/modules/define.ts": "",
+    "lib/crew/module.ts": `import { defineHostModule } from "@/lib/modules/define"
+export default defineHostModule({
+  id: "crew",
+  kind: "module",
+  stage: "beta",
+  runtimes: [
+    {
+      name: "crew-sync",
+      criticality: "required",
+      boot: "integrations",
+      adapters: {
+        brain: { module: "./runtime/brain", hosts: ["brain", "person-brain"] },
+        desktop: "@/lib/crew/runtime/desktop",
+      },
+      absent: { mobile: "The phone keeps no crew roster." },
+    },
+  ],
+})
+`,
+  })
+  try {
+    assert.equal(generateModuleRegistries({ root }).ok, true)
+    const read = (host) => readFileSync(join(root, GENERATED_RUNTIMES[host]), "utf8")
+    const brain = read("brain")
+    assert.match(brain, /export const BRAIN_RUNTIMES: readonly BrainRuntimeEntry\[\] = \[/)
+    assert.match(brain, /hosts: \["brain","person-brain"\],/)
+    assert.match(brain, /load: \(\) => import\("@\/lib\/crew\/runtime\/brain"\),/)
+    assert.doesNotMatch(brain, /desktop/)
+    const desktop = read("desktop")
+    assert.match(desktop, /boot: "integrations",/)
+    assert.match(desktop, /load: \(\) => import\("@\/lib\/crew\/runtime\/desktop"\),/)
+    assert.doesNotMatch(desktop, /runtime\/brain/)
+    assert.match(read("mobile"), /export const MOBILE_RUNTIMES: readonly RendererRuntimeEntry\[\] = \[\]/)
+    // The host-neutral registry holds the manifests, whose adapters are only specifiers.
+    assert.doesNotMatch(readFileSync(join(root, GENERATED_HOST), "utf8"), /runtime\//)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

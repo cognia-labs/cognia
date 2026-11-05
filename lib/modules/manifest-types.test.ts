@@ -28,7 +28,12 @@ describe("manifest-types", () => {
         {
           name: "pet-proactive",
           criticality: "optional",
-          adapters: { desktop: () => import("./define") },
+          boot: "knowledge-agents",
+          adapters: {
+            brain: { module: "./runtime/brain", hosts: ["brain", "person-brain"] },
+            desktop: "./runtime/desktop",
+          },
+          absent: { mobile: "The phone has no pet window." },
         },
       ],
       settings: { keys: ["petEnabled"] },
@@ -71,7 +76,8 @@ describe("manifest-types", () => {
       flags: { proactiveChat: { default: false } },
       messages: "pet",
     }
-    expect(manifest.runtimes?.[0]?.adapters.desktop).toBeInstanceOf(Function)
+    // Adapters are specifiers; the generator writes each host's lazy import.
+    expect(manifest.runtimes?.[0]?.adapters.desktop).toBe("./runtime/desktop")
   })
 
   it("accepts a UI manifest", () => {

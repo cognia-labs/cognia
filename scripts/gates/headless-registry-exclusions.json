@@ -108,6 +108,10 @@
       "symbols": ["attachManagedIdeBroker"],
       "reason": "The Tauri-event-bound entry point; the brain uses the sibling attachManagedIdeBrokerTransport (lib/plugin/ide/broker-runtime.ts:1184) with the companion transport plus content upload/redeem, registered as `managed-ide-broker` in lib/headless/runtimes/managed-ide-broker.ts. One subsystem, two host-specific attach points — not a gap."
     },
+    "components/providers/initializers/module-runtime-host.tsx": {
+      "symbols": ["rendererRuntimes", "startModuleRuntimes"],
+      "reason": "A host-split pair: this starts the desktop and mobile adapters of the module manifests' runtimes (ADR-0250 §14), and its brain half, lib/headless/runtimes/modules.ts, registers every brain adapter into the headless registry. A runtime without a brain adapter says why in its manifest's absent.brain, which the module gate requires."
+    },
     "components/providers/initializers/media-generation-initializer.tsx": {
       "symbols": ["startVideoJobReconciler"],
       "reason": "ADR-0205 deliberately separates the renderer's durable Dexie video queue from the caller-driven CLI/headless API. videos.get / videos.content pass an explicit provider snapshot to the in-memory engine (lib/ai/operations/handlers/video-job-bridge.ts); the default VideoJobHost.getSnapshot throws because this host has no implicit provider settings. This renderer sweeper calls engine.poll without a snapshot, which would settle generating headless jobs as failed, not advance them. The renderer installs its own snapshot, asset and Dexie adapters before sweeping; the brain must retain the explicit-request polling contract recorded in lib/headless/runtimes/index.ts."
@@ -289,7 +293,7 @@
       "reason": "Reads how a conversation left its right-rail dock (ADR-0214 D9) so a conversation switch restores it. Renderer layout state with no host work."
     }
   },
-  "pendingCeiling": 31,
+  "pendingCeiling": 30,
   "pending": {
     "components/providers/initializers/anthropic-usage-scheduler-initializer.tsx": {
       "symbols": ["startUsageScheduler"],
@@ -355,12 +359,6 @@
       "symbols": ["initializeProviderCatalog"],
       "phase": "phase 1",
       "reason": "Seeds the bundled models.dev snapshot into the account database and refreshes it when older than 7 days (lib/ai/providers/models-dev-sync.ts). This is host-neutral catalog maintenance. A cloud brain with no desktop ever attached keeps an empty or stale provider catalog for the models it routes."
-    },
-    "components/providers/initializers/online-eval-initializer.tsx": {
-      "symbols": ["startOnlineEvalScheduler"],
-      "phase": "phase 2",
-      "blockedBy": "a headless span feed: the eval-online log transport and the agentTraces writer, neither of which the headless roster configures",
-      "reason": "Drains the online-evaluation queue. The brain runs turns whose spans should be evaluated too, but its producer (the eval-online transport bootstrapLogger configures for the renderer) and its span store (the Dexie agentTraces table the renderer-side trace transport fills) do not exist there. Register the consumer together with a headless span feed, never before."
     },
     "components/providers/initializers/openrouter-catalog-initializer.tsx": {
       "symbols": ["refreshOpenRouterCatalogIfStale"],

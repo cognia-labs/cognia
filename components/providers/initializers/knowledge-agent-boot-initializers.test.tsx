@@ -1,10 +1,11 @@
 import { render } from "@testing-library/react"
 
-// The real one renders null. The Squad bootstrap is the only thing that
-// hydrates definitions, installs the runtime and recovers live runs, so a
-// group that dropped it would boot with no Squads and no way to start one.
-jest.mock("./squad-bootstrap-initializer", () => ({
-  SquadBootstrapInitializer: () => <span data-boot="agent-team" />,
+// The real one renders null. It starts this group's module runtimes, among
+// them the Squad bootstrap, the only thing that hydrates definitions, installs
+// the runtime and recovers live runs: a group that dropped it would boot with
+// no Squads and no way to start one.
+jest.mock("./module-runtime-host", () => ({
+  ModuleRuntimeHost: ({ boot }: { boot?: string }) => <span data-boot={`modules:${boot}`} />,
 }))
 jest.mock("./external-agent-initializer", () => ({
   ExternalAgentInitializer: () => <span data-boot="external-agent" />,
@@ -55,7 +56,7 @@ it("mounts knowledge and agent workers and reports readiness", () => {
   ).toEqual([
     "cloud-identity",
     "external-agent",
-    "agent-team",
+    "modules:knowledge-agents",
     "memory",
     "ocr",
     "twin",

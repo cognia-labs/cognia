@@ -28,4 +28,19 @@ describe("squads module manifest", () => {
     const { searchProviders } = await squads.searchProviders()
     expect(searchProviders.map((provider) => provider.id)).toEqual(["builtin.squads"])
   })
+
+  it("runs the Squad bootstrap on every host from one adapter, waiting for its boot group", () => {
+    expect(squads.runtimes).toEqual([
+      {
+        name: "agent-team-runtime",
+        criticality: "optional",
+        boot: "knowledge-agents",
+        adapters: {
+          brain: { module: "./runtime/squad-bootstrap", hosts: ["brain"] },
+          desktop: "./runtime/squad-bootstrap",
+          mobile: "./runtime/squad-bootstrap",
+        },
+      },
+    ])
+  })
 })

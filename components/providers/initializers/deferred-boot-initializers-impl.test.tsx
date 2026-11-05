@@ -48,6 +48,11 @@ const mockInstallPhantomGuard = jest.fn(() => mockStopPhantomGuard)
 jest.mock("@/lib/chat/phantom-run-runtime", () => ({
   installDefaultPhantomRunGuard: () => mockInstallPhantomGuard(),
 }))
+// The real one renders null; stubbed so a group that dropped its module
+// runtimes (ADR-0250 §14) fails here.
+jest.mock("./module-runtime-host", () => ({
+  ModuleRuntimeHost: ({ boot }: { boot?: string }) => <span data-boot={`modules:${boot}`} />,
+}))
 const mockMarkReady = jest.fn()
 jest.mock("@/lib/boot/capabilities", () => ({
   markBootCapabilityReady: (...args: unknown[]) => mockMarkReady(...args),
@@ -81,6 +86,7 @@ describe("DeferredBootInitializersImpl", () => {
       "project-repository",
       "gateway",
       "code-adoption",
+      "modules:core-chat",
     ])
     expect(mockMarkReady).toHaveBeenCalledWith("core-chat")
     expect(recoverDirectRuns).toHaveBeenCalledTimes(1)

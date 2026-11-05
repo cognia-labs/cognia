@@ -9,6 +9,7 @@
 import type { HostModuleManifest, UiModuleManifest } from "./manifest-types"
 
 export type {
+  BrainRuntimeAdapter,
   HostModuleManifest,
   LazyModule,
   ModuleAcceptance,
@@ -20,12 +21,15 @@ export type {
   ModuleNavEntry,
   ModulePortProvision,
   ModuleRuntime,
+  ModuleRuntimeBoot,
   ModuleSearchProvidersModule,
   ModuleSettingsSection,
   ModuleSettingsSectionModule,
   ModuleSlashCommand,
   ModuleSlashCommandModule,
   ModuleStage,
+  RendererRuntimeAdapter,
+  RendererRuntimeContext,
   UiModuleManifest,
 } from "./manifest-types"
 

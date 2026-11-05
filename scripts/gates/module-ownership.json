@@ -54,6 +54,7 @@
       "api": [
         "lib/agent-team/apply-squad-template.ts",
         "lib/agent-team/binding-candidates.ts",
+        "lib/agent-team/bootstrap.ts",
         "lib/agent-team/create-squad.ts",
         "lib/agent-team/project-plugin-template.ts",
         "lib/agent-team/publish-template-to-platform.ts",

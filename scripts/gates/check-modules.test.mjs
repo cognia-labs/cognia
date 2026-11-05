@@ -24,7 +24,16 @@ import {
   validateHostManifest,
   validateUiManifest,
 } from "./check-modules.mjs"
-import { GENERATED_HOST, GENERATED_UI, renderRegistries } from "./lib/module-manifests.mjs"
+import {
+  BRAIN_PROFILES,
+  EFFECT_FIELDS,
+  GENERATED_HOST,
+  GENERATED_UI,
+  MODULE_HOSTS,
+  RUNTIME_BOOTS,
+  RUNTIME_FIELDS,
+  renderRegistries,
+} from "./lib/module-manifests.mjs"
 import { createContext } from "./convergence/counter.mjs"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -128,6 +137,25 @@ test("the gate's field lists match lib/modules/manifest-types.ts", () => {
   assert.deepEqual([...UI_FIELDS].sort(), fields("UiModuleManifest"))
   assert.deepEqual([...SLASH_COMMAND_FIELDS].sort(), fields("ModuleSlashCommand"))
   assert.deepEqual([...SETTINGS_SECTION_FIELDS].sort(), fields("ModuleSettingsSection"))
+  assert.deepEqual([...RUNTIME_FIELDS].sort(), fields("ModuleRuntime"))
+  assert.deepEqual([...EFFECT_FIELDS].sort(), fields("ModuleEffect"))
+  // The string unions the runtime vocabulary mirrors.
+  const union = (text, name) =>
+    [
+      ...new RegExp(`type ${name}\\s*=([^\\n]*(?:\\n\\s*\\|[^\\n]*)*)`)
+        .exec(text)[1]
+        .matchAll(/"([^"]+)"/g),
+    ]
+      .map((match) => match[1])
+      .sort()
+  assert.deepEqual([...MODULE_HOSTS].sort(), union(source, "ModuleHost"))
+  const headless = readFileSync(join(REPO_ROOT, "lib/headless/types.ts"), "utf8")
+  assert.deepEqual([...BRAIN_PROFILES].sort(), union(headless, "HeadlessHost"))
+  const boot = /type ModuleRuntimeBoot = Extract<[\s\S]*?>/.exec(source)[0]
+  assert.deepEqual(
+    [...RUNTIME_BOOTS].sort(),
+    [...boot.matchAll(/"([^"]+)"/g)].map((match) => match[1]).sort()
+  )
 })
 
 test("codeownerHandles reads every assigned handle and ignores comments", () => {
@@ -614,6 +642,127 @@ test("validateHostManifest checks nav entries against the catalog's vocabulary",
       "crew"
     ).includes('nav[1].id "crew" is listed twice')
   )
+})
+
+test("validateHostManifest checks runtimes: identity, adapters per host, and why a host has none", () => {
+  const runtimes = (list) =>
+    validateHostManifest({ id: "crew", kind: "module", stage: "beta", runtimes: list }, "crew")
+  assert.deepEqual(
+    runtimes([
+      {
+        name: "crew-sync",
+        criticality: "required",
+        boot: "knowledge-agents",
+        adapters: {
+          brain: { module: "./runtime/sync", hosts: ["brain", "person-brain"] },
+          desktop: "./runtime/sync",
+          mobile: "@/lib/crew/runtime/sync",
+        },
+      },
+      {
+        name: "crew-watch",
+        criticality: "optional",
+        adapters: { desktop: "./runtime/watch" },
+        absent: { brain: "Watches the desktop's window focus.", mobile: "No windows." },
+      },
+    ]),
+    []
+  )
+  const errors = runtimes([
+    {
+      name: "Crew Sync",
+      criticality: "sometimes",
+      boot: "later",
+      order: 1,
+      adapters: {
+        brain: { module: "crew-runtime", hosts: ["desktop"] },
+        desktop: () => {},
+        tv: "./x",
+      },
+      absent: { desktop: "has one anyway" },
+    },
+    { name: "crew-watch", criticality: "optional", adapters: {} },
+    {
+      name: "crew-watch",
+      criticality: "optional",
+      adapters: { brain: { module: "./b", hosts: [] } },
+    },
+    {
+      name: "crew-boot",
+      criticality: "optional",
+      boot: "integrations",
+      adapters: { brain: { module: "./b", hosts: ["brain"] } },
+      absent: { desktop: "x", mobile: "y" },
+    },
+  ])
+  for (const expected of [
+    'runtimes[0]: unknown field "order"',
+    "runtimes[0].name is lower-case kebab",
+    "runtimes[0].criticality is one of required, optional",
+    "runtimes[0].boot is one of core-chat, workflow-automation, integrations, knowledge-agents",
+    'runtimes[0].adapters: unknown field "tv"',
+    'runtimes[0].adapters.brain.module is a "./…" or "@/…" module specifier',
+    "runtimes[0].adapters.brain.hosts lists the brain profiles it starts on (brain, person-brain)",
+    'runtimes[0].adapters.desktop is a "./…" or "@/…" module specifier',
+    "runtimes[0].absent.desktop explains a host that has an adapter",
+    "runtimes[0] has no mobile adapter; say why in absent.mobile",
+    "runtimes[1].adapters names at least one host",
+    "runtimes[1] has no brain adapter; say why in absent.brain",
+    'runtimes[2].name "crew-watch" is listed twice',
+    "runtimes[2].adapters.brain.hosts lists the brain profiles it starts on (brain, person-brain)",
+    "runtimes[3].boot orders renderer runtimes; it has no desktop or mobile adapter",
+  ])
+    assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
+})
+
+test("validateUiManifest checks effects: named once each, loaded lazily", () => {
+  const effects = (list) => validateUiManifest({ id: "crew", effects: list }, "crew")
+  assert.deepEqual(effects([{ name: "crew-title", load: { $lazy: "./title" } }]), [])
+  const errors = effects([
+    { name: "crew-title", load: "./title" },
+    { name: "crew-title", load: { $lazy: "./title" }, when: "always" },
+    { name: "Title", load: { $lazy: "./x" } },
+  ])
+  for (const expected of [
+    'effects[1]: unknown field "when"',
+    'effects[1].name "crew-title" is listed twice',
+    "effects[2].name is lower-case kebab",
+  ])
+    assert.ok(errors.includes(expected), `missing: ${expected}\n${errors.join("\n")}`)
+  assert.ok(errors.some((error) => error.startsWith("effects[0].load is a lazy entry")))
+})
+
+test("runtime adapters resolve from their manifest and export start; names are unique across modules", () => {
+  const runtime = (name, adapters, absent) =>
+    `runtimes: [{ name: "${name}", criticality: "optional", adapters: ${adapters}${absent ? `, absent: ${absent}` : ""} }]`
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ modules: "kernel" }),
+    "lib/modules/define.ts": DEFINE,
+    "lib/crew/module.ts": hostManifest(
+      "crew",
+      runtime(
+        "crew-sync",
+        '{ brain: { module: "./runtime/brain", hosts: ["brain"] }, desktop: "@/lib/crew/runtime/desktop", mobile: "./runtime/missing" }'
+      )
+    ),
+    "lib/crew/runtime/brain.ts": "export async function start() {}\n",
+    "lib/crew/runtime/desktop.ts": "export const begin = () => undefined\n",
+    "lib/pet/module.ts": hostManifest(
+      "pet",
+      runtime(
+        "crew-sync",
+        '{ desktop: "./runtime/renderer" }',
+        '{ brain: "No pet on a Host.", mobile: "No pet window on a phone." }'
+      )
+    ),
+    "lib/pet/runtime/renderer.ts": "const start = () => undefined\nexport { start }\n",
+  })
+  const errors = result.errors.filter((error) => error.includes("runtime"))
+  assert.deepEqual(errors.sort(), [
+    "lib/crew/module.ts: runtimes[0].adapters.desktop: lib/crew/runtime/desktop.ts exports no `start`",
+    'lib/crew/module.ts: runtimes[0].adapters.mobile: "./runtime/missing" does not resolve',
+    'lib/pet/module.ts: runtime crew-sync is also contributed by "crew"',
+  ])
 })
 
 test("validateUiManifest checks slots against the canonical points; nav is a host field", () => {

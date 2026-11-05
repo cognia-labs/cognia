@@ -185,27 +185,8 @@ registerHeadlessRuntime({
 })
 
 // ── A9: agent team runtime (squad bootstrap) ────────────────────────────────
-// The same bootstrap the desktop mounts: store hydration, runtime adapters,
-// legacy history import, interrupt + durable-run recovery and recovery arming.
-// The brain used to install only the adapters, so a team run interrupted by a
-// brain restart was never recovered (and workflow resume now leaves `__team__:`
-// runs to this coordinator).
-
-registerHeadlessRuntime({
-  name: "agent-team-runtime",
-  criticality: "optional",
-  hosts: ["brain"],
-  start: async (ctx) => {
-    const { runSquadBootstrap } = await import("@/lib/agent-team/bootstrap")
-    const handle = runSquadBootstrap()
-    void handle.done.then((outcome) => {
-      if (!outcome.ok) {
-        ctx.log("warn", `agent team bootstrap failed at ${outcome.failedStage ?? "unknown stage"}`)
-      }
-    })
-    return () => handle.dispose()
-  },
-})
+// Declared by the `squads` module manifest (`lib/squads/module.ts`) since
+// ADR-0250 §14 M2, and registered from it by `./modules.ts`.
 
 // ── A10: external-agent rehydrate (ACP clients route via the transport seam)
 

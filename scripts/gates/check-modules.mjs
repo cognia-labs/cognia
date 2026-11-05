@@ -218,7 +218,9 @@ function collectManifests(ctx, files) {
     const lazyErrors = lazyEntries(value)
       .filter(({ spec }) => !resolveModule(ctx, spec, file))
       .map(({ at, spec }) => `${at}: lazy entry "${spec}" does not resolve`)
-    for (const message of [...readErrors, ...shapeErrors, ...lazyErrors])
+    const adapterErrors =
+      hostMatch && !shapeErrors.length ? runtimeAdapterErrors(ctx, file, value) : []
+    for (const message of [...readErrors, ...shapeErrors, ...lazyErrors, ...adapterErrors])
       errors.push(`${file}: ${message}`)
     if (!value) continue
     if (hostMatch) {
@@ -249,7 +251,8 @@ function collectManifests(ctx, files) {
       "id",
       "settings section "
     ),
-    ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry ")
+    ...duplicateContributions(host, (manifest) => manifest.nav, "id", "navigation entry "),
+    ...duplicateContributions(host, (manifest) => manifest.runtimes, "name", "runtime ")
   )
   return { host, ui, errors, warnings }
 }
@@ -278,6 +281,50 @@ export function constStringList(ctx, file, name) {
   return undefined
 }
 
+/** Whether a module exports `start`: a function, a `const`, or a re-export. */
+export function exportsStart(sourceFile) {
+  const exported = (node) =>
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+  for (const statement of sourceFile.statements) {
+    if (
+      ts.isFunctionDeclaration(statement) &&
+      statement.name?.text === "start" &&
+      exported(statement)
+    )
+      return true
+    if (ts.isVariableStatement(statement) && exported(statement))
+      for (const declaration of statement.declarationList.declarations)
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === "start") return true
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.some((element) => element.name.text === "start")
+    )
+      return true
+  }
+  return false
+}
+
+/** Each runtime adapter resolves from its manifest and exports `start`. */
+function runtimeAdapterErrors(ctx, file, manifest) {
+  const errors = []
+  ;(manifest.runtimes ?? []).forEach((runtime, index) => {
+    for (const host of ["brain", "desktop", "mobile"]) {
+      const adapter = runtime.adapters?.[host]
+      if (adapter === undefined) continue
+      const spec = host === "brain" ? adapter.module : adapter
+      const at = `runtimes[${index}].adapters.${host}`
+      const target = resolveModule(ctx, spec, file)
+      if (!target) errors.push(`${at}: "${spec}" does not resolve`)
+      else if (!exportsStart(ctx.ast(target))) errors.push(`${at}: ${target} exports no \`start\``)
+    }
+  })
+  return errors
+}
+
 /** Two modules contributing the same slash command, section or nav id would shadow each other. */
 function duplicateContributions(manifests, list, key, label) {
   const errors = []
@@ -301,7 +348,8 @@ function duplicateContributions(manifests, list, key, label) {
  */
 export function registryErrors(ctx, manifests) {
   if (!ctx.exists("lib/modules/define.ts")) return []
-  const entries = (map) => [...map].map(([id, { file }]) => ({ id, file }))
+  const entries = (map) =>
+    [...map].map(([id, { file, manifest }]) => ({ id, file, value: manifest }))
   const expected = renderRegistries({ host: entries(manifests.host), ui: entries(manifests.ui) })
   const errors = []
   for (const [file, content] of Object.entries(expected)) {

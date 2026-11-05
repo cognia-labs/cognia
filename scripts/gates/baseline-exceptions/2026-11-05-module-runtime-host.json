@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/headless-registry-exclusions.json",
+  "measure": "excludedSymbols",
+  "allowGrowth": 2,
+  "owner": "lib/modules",
+  "repaymentPhase": "2",
+  "reason": "ADR-0250 §14 M2 moves runtimes into module manifests. The renderer half, components/providers/initializers/module-runtime-host.tsx, calls rendererRuntimes and startModuleRuntimes; its brain half, lib/headless/runtimes/modules.ts, registers every brain adapter, so the two symbols are a reviewed host-split decision, not debt. The same change retired the online-eval pending row (ceiling 31 to 30) and the Squad bootstrap initializer; phase 2 empties the initializer directory this exclusion list covers."
+}

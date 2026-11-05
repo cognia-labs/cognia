@@ -25,4 +25,15 @@ describe("eval module manifest", () => {
     expect("searchProviders" in evalModule).toBe(false)
     expect("slashCommands" in evalModule).toBe(false)
   })
+
+  it("drains the online-evaluation queue on the renderer hosts and says why not on the brain", () => {
+    const [runtime] = evalModule.runtimes
+    expect(runtime).toMatchObject({
+      name: "online-eval",
+      criticality: "optional",
+      adapters: { desktop: "./runtime/online-eval", mobile: "./runtime/online-eval" },
+    })
+    expect(runtime.adapters).not.toHaveProperty("brain")
+    expect(runtime.absent?.brain).toMatch(/span feed/)
+  })
 })

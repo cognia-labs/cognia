@@ -24,6 +24,7 @@ import { ensurePlanStepRecovery } from "@/lib/agent/plan/step-recovery"
 import { recoverStaleDirectChatExecutionRuns } from "@/lib/execution/direct-chat-run"
 import { installDefaultPhantomRunGuard } from "@/lib/chat/phantom-run-runtime"
 import { startRendererWorkOutbox } from "@/lib/work-submission/bootstrap"
+import { ModuleRuntimeHost } from "./module-runtime-host"
 
 /**
  * The core-chat capability chunk (ADR-0068 C3). Its initializers mount in
@@ -141,6 +142,8 @@ export function DeferredBootInitializersImpl() {
         other host with no update discovery whatsoever.
       */}
       <UpdateCenterInitializer />
+      {/* Module runtimes that wait for this group (ADR-0250 §14). */}
+      <ModuleRuntimeHost boot="core-chat" />
     </>
   )
 }

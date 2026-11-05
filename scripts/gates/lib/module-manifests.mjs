@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { join, posix } from "node:path"
 
 import ts from "typescript"
 
@@ -91,6 +91,20 @@ export const NAV_ENTRY_FIELDS = [
 ]
 /** Fields of `ModuleNavEntry.mobileShortcut`. */
 export const MOBILE_SHORTCUT_FIELDS = ["after"]
+/** Fields of `ModuleRuntime`, its brain adapter, and of `ModuleEffect`. */
+export const RUNTIME_FIELDS = ["name", "criticality", "boot", "adapters", "absent"]
+export const BRAIN_ADAPTER_FIELDS = ["module", "hosts"]
+export const EFFECT_FIELDS = ["name", "load"]
+/** `ModuleHost`, `HeadlessHost` and `ModuleRuntimeBoot` (`lib/modules/manifest-types.ts`). */
+export const MODULE_HOSTS = ["brain", "desktop", "mobile"]
+export const BRAIN_PROFILES = ["brain", "person-brain"]
+export const RUNTIME_BOOTS = [
+  "core-chat",
+  "workflow-automation",
+  "integrations",
+  "knowledge-agents",
+]
+export const CRITICALITIES = ["required", "optional"]
 /** `SidebarNavMeta.group` and `SidebarNavCategory` (`types/shell/sidebar.ts`). */
 export const NAV_GROUPS = ["feature", "auxiliary"]
 export const NAV_CATEGORIES = ["explore", "agents", "spaces", "insights", "system", "you"]
@@ -100,7 +114,13 @@ export const STAGES = ["kernel", "stable", "beta", "experimental", "deprecated"]
 /** Where the generator writes. Gitignored: a committed aggregate would conflict in a shared tree. */
 export const GENERATED_HOST = "lib/modules/generated/host.ts"
 export const GENERATED_UI = "components/modules/generated/ui.ts"
-export const GENERATED_FILES = [GENERATED_HOST, GENERATED_UI]
+/** One runtime registry per host, holding only that host's adapters. */
+export const GENERATED_RUNTIMES = {
+  brain: "lib/modules/generated/brain.ts",
+  desktop: "lib/modules/generated/desktop.ts",
+  mobile: "lib/modules/generated/mobile.ts",
+}
+export const GENERATED_FILES = [GENERATED_HOST, ...Object.values(GENERATED_RUNTIMES), GENERATED_UI]
 export const GENERATOR = "scripts/build/gen-module-registry.mjs"
 
 const HOST_MANIFEST = /^lib\/([^/]+)\/module\.ts$/
@@ -109,6 +129,9 @@ const SLASH_NAME = /^[a-z][a-z0-9-]*$/
 const SECTION_ID = /^[a-z][a-zA-Z0-9-]*$/
 const NAV_ID = /^[a-z][a-z0-9-]*$/
 const NAV_ROUTE = /^\/[a-z0-9][a-z0-9/-]*$/
+const RUNTIME_NAME = /^[a-z][a-z0-9-]*$/
+/** An adapter specifier: beside the manifest (`./…`) or rooted (`@/…`), never a package. */
+const ADAPTER_SPEC = /^(\.\/|@\/)[A-Za-z0-9_./-]+$/
 
 // ------------------------------------------------------------------ read
 
@@ -356,6 +379,103 @@ function navErrors(entries, vocabulary) {
   return errors
 }
 
+/**
+ * `runtimes`: identity, criticality and one adapter per host, each a module
+ * specifier rather than a lazy entry (see `ModuleRuntime`). A host without an
+ * adapter says why in `absent`; that the specifiers resolve and export `start`
+ * is checked by the module gate, which can read the tree.
+ */
+function runtimeErrors(runtimes) {
+  if (!Array.isArray(runtimes)) return ["runtimes is a list of runtimes"]
+  const errors = []
+  const names = new Set()
+  runtimes.forEach((runtime, index) => {
+    const at = `runtimes[${index}]`
+    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+      errors.push(`${at} is not an object`)
+      return
+    }
+    errors.push(...unknownFields(runtime, RUNTIME_FIELDS, at))
+    if (!RUNTIME_NAME.test(runtime.name ?? "")) errors.push(`${at}.name is lower-case kebab`)
+    else if (names.has(runtime.name)) errors.push(`${at}.name "${runtime.name}" is listed twice`)
+    names.add(runtime.name)
+    if (!CRITICALITIES.includes(runtime.criticality))
+      errors.push(`${at}.criticality is one of ${CRITICALITIES.join(", ")}`)
+    if (runtime.boot !== undefined && !RUNTIME_BOOTS.includes(runtime.boot))
+      errors.push(`${at}.boot is one of ${RUNTIME_BOOTS.join(", ")}`)
+    const adapters = runtime.adapters
+    if (!adapters || typeof adapters !== "object" || Array.isArray(adapters)) {
+      errors.push(`${at}.adapters maps hosts to adapters`)
+      return
+    }
+    errors.push(...unknownFields(adapters, MODULE_HOSTS, `${at}.adapters`))
+    const present = MODULE_HOSTS.filter((host) => adapters[host] !== undefined)
+    if (!present.length) errors.push(`${at}.adapters names at least one host`)
+    const brain = adapters.brain
+    if (brain !== undefined) {
+      if (!brain || typeof brain !== "object" || Array.isArray(brain)) {
+        errors.push(`${at}.adapters.brain is { module, hosts }`)
+      } else {
+        errors.push(...unknownFields(brain, BRAIN_ADAPTER_FIELDS, `${at}.adapters.brain`))
+        if (!ADAPTER_SPEC.test(brain.module ?? ""))
+          errors.push(`${at}.adapters.brain.module is a "./…" or "@/…" module specifier`)
+        if (
+          !isStringArray(brain.hosts) ||
+          !brain.hosts.length ||
+          brain.hosts.some((host) => !BRAIN_PROFILES.includes(host)) ||
+          new Set(brain.hosts).size !== brain.hosts.length
+        )
+          errors.push(
+            `${at}.adapters.brain.hosts lists the brain profiles it starts on (${BRAIN_PROFILES.join(", ")})`
+          )
+      }
+    }
+    for (const host of ["desktop", "mobile"])
+      if (adapters[host] !== undefined && !ADAPTER_SPEC.test(adapters[host]))
+        errors.push(`${at}.adapters.${host} is a "./…" or "@/…" module specifier`)
+    if (
+      runtime.boot !== undefined &&
+      adapters.desktop === undefined &&
+      adapters.mobile === undefined
+    )
+      errors.push(`${at}.boot orders renderer runtimes; it has no desktop or mobile adapter`)
+    const absent = runtime.absent ?? {}
+    if (typeof absent !== "object" || Array.isArray(absent)) {
+      errors.push(`${at}.absent maps hosts to reasons`)
+      return
+    }
+    errors.push(...unknownFields(absent, MODULE_HOSTS, `${at}.absent`))
+    for (const host of MODULE_HOSTS) {
+      const has = adapters[host] !== undefined
+      if (!has && !isText(absent[host]))
+        errors.push(`${at} has no ${host} adapter; say why in absent.${host}`)
+      if (has && absent[host] !== undefined)
+        errors.push(`${at}.absent.${host} explains a host that has an adapter`)
+    }
+  })
+  return errors
+}
+
+/** `effects`: named once each, loaded lazily. Nothing mounts them yet (see `ModuleEffect`). */
+function effectErrors(effects) {
+  if (!Array.isArray(effects)) return ["effects is a list of effects"]
+  const errors = []
+  const names = new Set()
+  effects.forEach((effect, index) => {
+    const at = `effects[${index}]`
+    if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
+      errors.push(`${at} is not an object`)
+      return
+    }
+    errors.push(...unknownFields(effect, EFFECT_FIELDS, at))
+    if (!RUNTIME_NAME.test(effect.name ?? "")) errors.push(`${at}.name is lower-case kebab`)
+    else if (names.has(effect.name)) errors.push(`${at}.name "${effect.name}" is listed twice`)
+    names.add(effect.name)
+    if (!isLazy(effect.load)) errors.push(`${at}.load is a lazy entry \`() => import("…")\``)
+  })
+  return errors
+}
+
 /** The module's own slots: each a canonical extension point holding a lazy entry. */
 function slotErrors(slots, extensionPoints) {
   if (!slots || typeof slots !== "object" || Array.isArray(slots))
@@ -400,6 +520,7 @@ export function validateHostManifest(manifest, id, vocabulary = {}) {
   if (manifest.slashCommands !== undefined)
     errors.push(...slashCommandErrors(manifest.slashCommands))
   if (manifest.nav !== undefined) errors.push(...navErrors(manifest.nav, vocabulary))
+  if (manifest.runtimes !== undefined) errors.push(...runtimeErrors(manifest.runtimes))
   if (manifest.messages !== undefined && !isText(manifest.messages))
     errors.push("messages is an i18n namespace")
   return errors
@@ -417,6 +538,7 @@ export function validateUiManifest(manifest, id, vocabulary = {}) {
     errors.push(...settingsSectionErrors(manifest.settingsSections, vocabulary.iconNames))
   if (manifest.slots !== undefined)
     errors.push(...slotErrors(manifest.slots, vocabulary.extensionPoints))
+  if (manifest.effects !== undefined) errors.push(...effectErrors(manifest.effects))
   return errors
 }
 
@@ -472,18 +594,84 @@ function renderList(constName, entries, suffix) {
   ].join("\n")
 }
 
+/** An adapter specifier as the `@/` import a registry writes: `./x` is beside the manifest. */
+export function adapterImport(manifestFile, spec) {
+  if (spec.startsWith("@/")) return spec
+  return `@/${posix.normalize(posix.join(posix.dirname(manifestFile), spec))}`
+}
+
+/** One host's runtimes, in module id order and then manifest order. */
+export function runtimeEntries(host, modules) {
+  const out = []
+  for (const { id, file, value } of [...modules].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const runtime of Array.isArray(value?.runtimes) ? value.runtimes : []) {
+      const adapter = runtime?.adapters?.[host]
+      if (adapter === undefined) continue
+      const spec = host === "brain" ? adapter.module : adapter
+      out.push({
+        module: id,
+        stage: value.stage,
+        name: runtime.name,
+        criticality: runtime.criticality,
+        ...(host === "brain" ? { hosts: adapter.hosts } : {}),
+        ...(host !== "brain" && runtime.boot !== undefined ? { boot: runtime.boot } : {}),
+        load: adapterImport(file, spec),
+      })
+    }
+  }
+  return out
+}
+
+const RUNTIME_REGISTRY = {
+  brain: { constName: "BRAIN_RUNTIMES", type: "BrainRuntimeEntry" },
+  desktop: { constName: "DESKTOP_RUNTIMES", type: "RendererRuntimeEntry" },
+  mobile: { constName: "MOBILE_RUNTIMES", type: "RendererRuntimeEntry" },
+}
+
+function renderRuntimes(host, modules) {
+  const { constName, type } = RUNTIME_REGISTRY[host]
+  const rows = runtimeEntries(host, modules).map((entry) => {
+    const fields = Object.entries(entry).map(([key, value]) =>
+      key === "load"
+        ? `    load: () => import(${JSON.stringify(value)}),`
+        : `    ${key}: ${JSON.stringify(value)},`
+    )
+    return ["  {", ...fields, "  },"].join("\n")
+  })
+  return [
+    `${HEADER("lib/<id>/module.ts")}`,
+    "//",
+    `// The ${host} adapters of every module's \`runtimes\`, and nothing for any other`,
+    "// host: each host imports only its own registry.",
+    "",
+    `import type { ${type} } from "@/lib/modules/manifest-types"`,
+    "",
+    rows.length
+      ? `export const ${constName}: readonly ${type}[] = [\n${rows.join("\n")}\n]`
+      : `export const ${constName}: readonly ${type}[] = []`,
+    "",
+  ].join("\n")
+}
+
 /**
- * The generated registries for a set of manifests, keyed by path. Both hold
- * the manifests themselves — data plus lazy entries — so importing a registry
- * loads no feature code.
+ * The generated registries for a set of manifests, keyed by path. `host.ts`
+ * and `ui.ts` hold the manifests themselves — data plus lazy entries — so
+ * importing a registry loads no feature code.
  *
- * `host.ts` is host-neutral: every field it carries in M1 (search providers,
- * slash commands) applies on every host. M2 splits it into
- * `{brain,desktop,mobile}.ts` with `runtimes.adapters`, the first per-host field.
+ * `host.ts` is host-neutral: every field it carries applies on every host,
+ * and `runtimes` keeps it so, because a manifest names its adapters by
+ * specifier. Each host's adapters go into that host's own registry,
+ * `{brain,desktop,mobile}.ts`, which is where a lazy import of one is written.
+ *
+ * `host` entries carry the manifest's `value` (as `readManifest` returns it)
+ * for the runtime registries; without one a module contributes no runtime.
  */
 export function renderRegistries({ host, ui }) {
   return {
-    [GENERATED_HOST]: `${HEADER("lib/<id>/module.ts")}\n//\n// Host-neutral until phase M2 splits it per host.\n\n${renderList("HOST_MODULES", host, "Module")}\n`,
+    [GENERATED_HOST]: `${HEADER("lib/<id>/module.ts")}\n//\n// Host-neutral: per-host runtime adapters are in ./brain.ts, ./desktop.ts and ./mobile.ts.\n\n${renderList("HOST_MODULES", host, "Module")}\n`,
+    ...Object.fromEntries(
+      Object.entries(GENERATED_RUNTIMES).map(([name, file]) => [file, renderRuntimes(name, host)])
+    ),
     [GENERATED_UI]: `${HEADER("components/<id>/module.ui.ts")}\n\n${renderList("UI_MODULES", ui, "Ui")}\n`,
   }
 }

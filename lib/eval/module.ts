@@ -66,6 +66,22 @@ export default defineHostModule({
     "evalScores",
     "evalTasks",
   ],
+  // The online-evaluation drain (`lib/ai/eval/online/scheduler.ts`). It
+  // replaced the renderer's `OnlineEvalInitializer`.
+  runtimes: [
+    {
+      name: "online-eval",
+      criticality: "optional",
+      adapters: {
+        desktop: "./runtime/online-eval",
+        mobile: "./runtime/online-eval",
+      },
+      absent: {
+        brain:
+          "The queue's producer and span store exist only in the renderer: the eval-online log transport bootstrapLogger configures, and the Dexie agentTraces table the renderer-side trace transport fills. A consumer alone would start a worker with nothing to consume, so the brain gets one together with a headless span feed, never before.",
+      },
+    },
+  ],
   nav: [
     {
       id: "eval",

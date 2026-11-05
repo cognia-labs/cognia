@@ -28,6 +28,22 @@ export default defineHostModule({
   // The Squad review count the chat composer and the context workbench show.
   api: ["hooks/squads/use-pending-squad-reviews.ts"],
   searchProviders: () => import("./search-provider"),
+  // The ordered Squad bootstrap (ADR-0169) on every host, from one
+  // host-neutral adapter. It replaced the desktop's `SquadBootstrapInitializer`
+  // and the brain roster's own registration; the name stays the one brain
+  // operators restart it by.
+  runtimes: [
+    {
+      name: "agent-team-runtime",
+      criticality: "optional",
+      boot: "knowledge-agents",
+      adapters: {
+        brain: { module: "./runtime/squad-bootstrap", hosts: ["brain"] },
+        desktop: "./runtime/squad-bootstrap",
+        mobile: "./runtime/squad-bootstrap",
+      },
+    },
+  ],
   // Pinned on the rail by default (`DEFAULT_PINNED_IDS`) and on a fresh
   // phone's grid (`DEFAULT_GLANCE_MOBILE_SHORTCUTS`): both are layouts over
   // ids, which stay valid while the destination lives here.

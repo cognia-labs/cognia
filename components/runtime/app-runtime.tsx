@@ -27,7 +27,7 @@ import { TelemetrySessionInitializer } from "@/components/providers/initializers
 import { ApprovalJournalInitializer } from "@/components/providers/initializers/approval-journal-initializer"
 import { AuditRetentionInitializer } from "@/components/providers/initializers/audit-retention-initializer"
 import { StorageRetentionInitializer } from "@/components/providers/initializers/storage-retention-initializer"
-import { OnlineEvalInitializer } from "@/components/providers/initializers/online-eval-initializer"
+import { ModuleRuntimeHost } from "@/components/providers/initializers/module-runtime-host"
 import { StoragePersistenceInitializer } from "@/components/providers/initializers/storage-persistence-initializer"
 import { ProjectStoreInitializer } from "@/components/providers/initializers/project-store-initializer"
 import { PromptOverridesInitializer } from "@/components/providers/initializers/prompt-overrides-initializer"
@@ -265,7 +265,12 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                             <PlatformDesktopInitializers />
                             <AuditRetentionInitializer />
                             <StorageRetentionInitializer />
-                            <OnlineEvalInitializer />
+                            {/* Module runtimes of the main boot cluster: every
+                             * module manifest's desktop (or, on Capacitor,
+                             * mobile) adapter that waits for no deferred
+                             * group, such as eval's online drain
+                             * (ADR-0250 §14). */}
+                            <ModuleRuntimeHost />
                             <StoragePersistenceInitializer />
                             {/* Badges the installed PWA icon with the unread
                               chat count. Needs the post-unlock Dexie, so it

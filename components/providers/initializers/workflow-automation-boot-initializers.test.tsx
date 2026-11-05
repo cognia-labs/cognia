@@ -21,6 +21,11 @@ jest.mock("@/components/scheduler/scheduler-initializer", () => ({
 jest.mock("@/components/providers/workflow-runtime-provider", () => ({
   WorkflowRuntimeProvider: () => <span data-boot="workflow" />,
 }))
+// The real one renders null; stubbed so a group that dropped its module
+// runtimes (ADR-0250 §14) fails here.
+jest.mock("./module-runtime-host", () => ({
+  ModuleRuntimeHost: ({ boot }: { boot?: string }) => <span data-boot={`modules:${boot}`} />,
+}))
 const mockMarkReady = jest.fn()
 jest.mock("@/lib/boot/capabilities", () => ({
   markBootCapabilityReady: (...args: unknown[]) => mockMarkReady(...args),
@@ -42,6 +47,7 @@ it("mounts workflow automation in deterministic order and reports readiness", ()
     "a2ui",
     "scheduler",
     "workflow",
+    "modules:workflow-automation",
   ])
   expect(mockMarkReady).toHaveBeenCalledWith("workflow-automation")
 })
