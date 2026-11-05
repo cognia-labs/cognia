@@ -438,6 +438,8 @@ export type DiagnosticCode =
   | "personAgentAttachmentUnsupported"
   /** ADR-0253 §3: the Host stopped a member's turn or run because their standing ended mid-run. */
   | "revokedDuringRun"
+  /** ADR-0253 §7: the Host restarted while a member's turn ran, and did not retry it. */
+  | "hostRestarted"
   /** ADR-0253 §8: the person has no standing in the organization. */
   | "personNotMember"
   /** ADR-0253 §4: the organization is suspended; data is kept, nothing runs. */

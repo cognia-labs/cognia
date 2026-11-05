@@ -876,6 +876,75 @@ pub async fn prune_execution_records(directory: std::path::PathBuf, backend: Arc
         .map_err(Problem::from)
 }
 
+/// Why a member run a previous Host process left behind was ended (ADR-0253 §7).
+pub const HOST_RESTARTED: &str = "host_restarted";
+
+/// One execution record [`retire_runs_after_restart`] ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetiredRun {
+    pub agent_id: String,
+    pub binding: PlacementBinding,
+    /// The member partition the run belonged to; `None` for a device's run.
+    pub person: Option<crate::person_partition::PersonPartition>,
+    /// The run's process was still alive and had to be stopped.
+    pub stopped: bool,
+}
+
+/// Boot reconciliation of execution records (ADR-0253 §7, G24). Runs before
+/// the Host admits a member: no lease, watchdog or brain of the previous
+/// process survives a restart, so every member run on record is ended here,
+/// its process stopped if it is somehow still alive, its record retired and an
+/// audit entry written. A device's run whose process is gone is retired too;
+/// one that is still alive keeps its record, as `prune_execution_records`
+/// would. A run that will not stop keeps its record, so a later prune or purge
+/// still finds it.
+pub async fn retire_runs_after_restart(directory: std::path::PathBuf,
+    backend: Arc<dyn cognia_external_agent::exec_backend::ExecBackend>, timeout: Duration) -> Result<Vec<RetiredRun>, Problem> {
+    use cognia_external_agent::process::ExternalAgentProcessState::{Stopped, Failed};
+    let root = directory.clone();
+    let records = tokio::task::spawn_blocking(move || ExecutionBindings(root.join("companion/execution-bindings.json")).read())
+        .await.unwrap_or_else(|_| Err(unavailable("execution_binding_store_unavailable")))
+        .map_err(Problem::from)?;
+    let mut retired = Vec::new();
+    for (key, binding) in records {
+        let Some(id) = key.strip_prefix("external-agent:") else { continue };
+        let person = person_execution_owner(&binding);
+        let live = !matches!(backend.status(id).await, None | Some(Stopped | Failed));
+        if live && person.is_none() { continue; }
+        if live {
+            let stopped = tokio::time::timeout(timeout, async {
+                backend.kill(id).await?;
+                loop {
+                    if matches!(backend.status(id).await, None | Some(Stopped | Failed)) { return Ok::<_, String>(()); }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }).await;
+            if !matches!(stopped, Ok(Ok(()))) {
+                log::warn!("member run {id} from a previous Host process did not stop; its record is kept");
+                continue;
+            }
+        }
+        retired.push(RetiredRun { agent_id: id.to_owned(), binding, person, stopped: live });
+    }
+    let store_root = directory.clone();
+    let removals: Vec<(String, PlacementBinding)> = retired.iter()
+        .map(|run| (record_key("spawn_external_agent", &run.agent_id), run.binding.clone())).collect();
+    tokio::task::spawn_blocking(move || {
+        let store = ExecutionBindings(store_root.join("companion/execution-bindings.json"));
+        for (key, binding) in removals { store.remove(&key, &binding)?; }
+        Ok(())
+    }).await.unwrap_or_else(|_| Err(unavailable("execution_binding_store_unavailable")))
+        .map_err(Problem::from)?;
+    for run in &retired {
+        person_execution_lease_revoke(&run.agent_id, &run.binding);
+        let Some(person) = &run.person else { continue };
+        crate::audit::record_async("person_run_ended", "host-boot", "service", "deny",
+            json!({ "accountId": person.account_id, "agentId": run.agent_id, "kind": "sandboxed",
+                "code": HOST_RESTARTED, "stopped": run.stopped })).await;
+    }
+    Ok(retired)
+}
+
 /// P6d purge holds person_execution_lock. Kill through the same backend and
 /// wait for terminal state before removing any directory or authority record.
 pub async fn person_stop_execution(directory: Option<&std::path::Path>, person: &crate::person_partition::PersonPartition,
@@ -1010,30 +1079,32 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use cognia_external_agent::exec_backend::ExecBackend;
+    use cognia_external_agent::process::{ExternalAgentEventSink, ExternalAgentProcessState, ExternalAgentSpawnConfig};
+    /// Runs by id with the state and placement each reports.
+    struct Runs(Mutex<HashMap<String, (ExternalAgentProcessState, PlacementBinding)>>);
+    #[async_trait::async_trait]
+    impl ExecBackend for Runs {
+        async fn spawn(&self, _: ExternalAgentSpawnConfig, _: Arc<dyn ExternalAgentEventSink>) -> Result<String, String> { unreachable!() }
+        async fn send(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+        async fn kill(&self, id: &str) -> Result<(), String> {
+            self.0.lock().get_mut(id).ok_or("unknown")?.0 = ExternalAgentProcessState::Stopped;
+            Ok(())
+        }
+        async fn kill_all(&self) -> Result<(), String> { unreachable!() }
+        async fn status(&self, id: &str) -> Option<ExternalAgentProcessState> { self.0.lock().get(id).map(|run| run.0.clone()) }
+        async fn list(&self) -> Vec<String> { self.0.lock().keys().cloned().collect() }
+        async fn is_running(&self, _: &str) -> Result<bool, String> { unreachable!() }
+        async fn get_info(&self, id: &str) -> Result<Value, String> {
+            Ok(json!({ "placement": { "binding": self.0.lock().get(id).ok_or("unknown")?.1 } }))
+        }
+        async fn set_running(&self, _: &str) -> Result<(), String> { unreachable!() }
+        async fn set_failed(&self, _: &str) -> Result<(), String> { unreachable!() }
+        fn kind(&self) -> &'static str { "adr0253-runs" }
+    }
+
     #[tokio::test]
     async fn adr0253_a_workspace_removal_stops_only_the_placers_runs_there() {
-        use cognia_external_agent::exec_backend::ExecBackend;
-        use cognia_external_agent::process::{ExternalAgentEventSink, ExternalAgentProcessState, ExternalAgentSpawnConfig};
-        struct Runs(Mutex<HashMap<String, (ExternalAgentProcessState, PlacementBinding)>>);
-        #[async_trait::async_trait]
-        impl ExecBackend for Runs {
-            async fn spawn(&self, _: ExternalAgentSpawnConfig, _: Arc<dyn ExternalAgentEventSink>) -> Result<String, String> { unreachable!() }
-            async fn send(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
-            async fn kill(&self, id: &str) -> Result<(), String> {
-                self.0.lock().get_mut(id).ok_or("unknown")?.0 = ExternalAgentProcessState::Stopped;
-                Ok(())
-            }
-            async fn kill_all(&self) -> Result<(), String> { unreachable!() }
-            async fn status(&self, id: &str) -> Option<ExternalAgentProcessState> { self.0.lock().get(id).map(|run| run.0.clone()) }
-            async fn list(&self) -> Vec<String> { self.0.lock().keys().cloned().collect() }
-            async fn is_running(&self, _: &str) -> Result<bool, String> { unreachable!() }
-            async fn get_info(&self, id: &str) -> Result<Value, String> {
-                Ok(json!({ "placement": { "binding": self.0.lock().get(id).ok_or("unknown")?.1 } }))
-            }
-            async fn set_running(&self, _: &str) -> Result<(), String> { unreachable!() }
-            async fn set_failed(&self, _: &str) -> Result<(), String> { unreachable!() }
-            fn kind(&self) -> &'static str { "adr0253-runs" }
-        }
         let temp = tempfile::tempdir().unwrap();
         let placed = |user: &str, workspace: &str, run: &str| PlacementBinding {
             org_id: "org_adr0253_ws".into(), workspace_id: workspace.into(), actor_user_id: user.into(), run_id: run.into() };
@@ -1061,6 +1132,74 @@ mod tests {
         }
         forget_run_stop_reason("adr0253-ada-a");
         assert_eq!(run_stop_reason("adr0253-ada-a"), None);
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_restart_retires_every_member_run_and_only_dead_device_runs() {
+        let temp = tempfile::tempdir().unwrap();
+        let ada = crate::person_partition::PersonPartition::new("org_adr0253_boot".into(), "usr_ada".into());
+        let member = |run: &str| PlacementBinding { org_id: ada.org_id.clone(), workspace_id: format!("person:{}", ada.account_id),
+            actor_user_id: ada.user_id.clone(), run_id: run.into() };
+        let device = |run: &str| PlacementBinding { org_id: ada.org_id.clone(), workspace_id: "ws_a".into(),
+            actor_user_id: "usr_bob".into(), run_id: run.into() };
+        let runs = [
+            // Still alive somehow: stopped, then retired.
+            ("adr0253-boot-live", member("1"), Some(ExternalAgentProcessState::Running)),
+            // Its process went with the old Host.
+            ("adr0253-boot-gone", member("2"), None),
+            ("adr0253-device-live", device("3"), Some(ExternalAgentProcessState::Running)),
+            ("adr0253-device-done", device("4"), Some(ExternalAgentProcessState::Stopped)),
+        ];
+        let store = ExecutionBindings(temp.path().join("companion/execution-bindings.json"));
+        let backend = Arc::new(Runs(Mutex::new(HashMap::new())));
+        for (id, binding, state) in &runs {
+            store.insert(&format!("external-agent:{id}"), binding).unwrap();
+            if let Some(state) = state { backend.0.lock().insert(id.to_string(), (state.clone(), binding.clone())); }
+        }
+        // A shell record is not an agent run and is left alone.
+        store.insert("task-shell:adr0253-shell", &member("5")).unwrap();
+        let mut retired = retire_runs_after_restart(temp.path().into(), backend.clone(), Duration::from_secs(5)).await.unwrap();
+        retired.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        assert_eq!(retired, vec![
+            RetiredRun { agent_id: "adr0253-boot-gone".into(), binding: member("2"), person: Some(ada.clone()), stopped: false },
+            RetiredRun { agent_id: "adr0253-boot-live".into(), binding: member("1"), person: Some(ada.clone()), stopped: true },
+            RetiredRun { agent_id: "adr0253-device-done".into(), binding: device("4"), person: None, stopped: false },
+        ]);
+        assert_eq!(backend.0.lock()["adr0253-boot-live"].0, ExternalAgentProcessState::Stopped);
+        assert_eq!(backend.0.lock()["adr0253-device-live"].0, ExternalAgentProcessState::Running);
+        let left = store.read().unwrap();
+        let mut keys: Vec<_> = left.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["external-agent:adr0253-device-live", "task-shell:adr0253-shell"]);
+        // A second boot finds nothing more to do.
+        assert!(retire_runs_after_restart(temp.path().into(), backend, Duration::from_secs(5)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_member_run_that_will_not_stop_keeps_its_record() {
+        struct Stuck;
+        #[async_trait::async_trait]
+        impl ExecBackend for Stuck {
+            async fn spawn(&self, _: ExternalAgentSpawnConfig, _: Arc<dyn ExternalAgentEventSink>) -> Result<String, String> { unreachable!() }
+            async fn send(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+            async fn kill(&self, _: &str) -> Result<(), String> { Err("daemon unreachable".into()) }
+            async fn kill_all(&self) -> Result<(), String> { unreachable!() }
+            async fn status(&self, _: &str) -> Option<ExternalAgentProcessState> { Some(ExternalAgentProcessState::Running) }
+            async fn list(&self) -> Vec<String> { vec![] }
+            async fn is_running(&self, _: &str) -> Result<bool, String> { unreachable!() }
+            async fn get_info(&self, _: &str) -> Result<Value, String> { unreachable!() }
+            async fn set_running(&self, _: &str) -> Result<(), String> { unreachable!() }
+            async fn set_failed(&self, _: &str) -> Result<(), String> { unreachable!() }
+            fn kind(&self) -> &'static str { "adr0253-stuck" }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let ada = crate::person_partition::PersonPartition::new("org_adr0253_stuck".into(), "usr_ada".into());
+        let binding = PlacementBinding { org_id: ada.org_id.clone(), workspace_id: format!("person:{}", ada.account_id),
+            actor_user_id: ada.user_id.clone(), run_id: "1".into() };
+        let store = ExecutionBindings(temp.path().join("companion/execution-bindings.json"));
+        store.insert("external-agent:adr0253-stuck", &binding).unwrap();
+        assert!(retire_runs_after_restart(temp.path().into(), Arc::new(Stuck), Duration::from_millis(200)).await.unwrap().is_empty());
+        assert_eq!(store.read().unwrap().len(), 1);
     }
 
     #[test]

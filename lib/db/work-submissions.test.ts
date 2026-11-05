@@ -163,6 +163,28 @@ describe("work submission storage", () => {
       expect(await claimWorkSubmission("submission-1", "runner-b", NOW + 1)).toBeUndefined()
     })
 
+    it("claims past a live lease only when told its holder is gone (ADR-0253 §7)", async () => {
+      await seed(
+        submission({
+          dispatchState: "dispatched",
+          leaseOwner: "host-state",
+          leaseExpiresAt: NOW + 10_000,
+        })
+      )
+      expect(await claimWorkSubmission("submission-1", "host-state", NOW + 1)).toBeUndefined()
+      const claimed = await claimWorkSubmission("submission-1", "host-state", NOW + 1, undefined, {
+        previousOwnerGone: true,
+      })
+      expect(claimed).toMatchObject({ dispatchState: "claimed", takeoverRequired: true })
+      // A settled row stays settled whatever the caller says.
+      await getDb().workSubmissions.update("submission-1", { dispatchState: "settled" })
+      expect(
+        await claimWorkSubmission("submission-1", "host-state", NOW + 2, undefined, {
+          previousOwnerGone: true,
+        })
+      ).toBeUndefined()
+    })
+
     it("refuses a dispatched takeover when the prior runtime renewed before the CAS", async () => {
       await seed(
         submission({

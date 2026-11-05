@@ -413,6 +413,9 @@ impl BrainSupervisor {
         if self.person {
             env.push(("COGNIA_BRAIN_PROFILE".into(), "person".into()));
             env.push(("COGNIA_PERSON_CHAT".into(), "tool-less".into())); // P6c A-D Host contract.
+            // ADR-0253 §7: a turn this partition's brain left in flight before
+            // this instant was interrupted by the Host restarting.
+            env.push(("COGNIA_HOST_BOOTED_AT".into(), cognia_companion::person_partition::host_booted_at_ms().to_string()));
             // P6d: Host capability advertisement. The TS brain deliberately
             // does not consume COGNIA_PERSON_EXECUTION until P6e (Rule 7).
             if cognia_companion::host_surface_gate::person_execution_available().await {
@@ -598,6 +601,7 @@ impl BrainSupervisor {
             cmd.env_remove("COGNIA_BRAIN_PROFILE");
             cmd.env_remove("COGNIA_PERSON_EXECUTION"); // P6d never inherit the operator environment.
             cmd.env_remove("COGNIA_PERSON_CHAT"); // P6c is advertised only by this supervisor.
+            cmd.env_remove("COGNIA_HOST_BOOTED_AT"); // ADR-0253 §7: only this supervisor says when the Host started.
             if withhold_unpaired_collab_url(
                 std::env::var("COGNIA_COLLAB_URL").ok().as_deref(),
                 std::env::var("COGNIA_COLLAB_ORG_ID").ok().as_deref(),
@@ -1087,6 +1091,7 @@ pub(crate) mod tests {
         let mut expected = build_brain_env(&config, "token");
         expected.push(("COGNIA_BRAIN_PROFILE".into(), "person".into()));
         expected.push(("COGNIA_PERSON_CHAT".into(), "tool-less".into()));
+        expected.push(("COGNIA_HOST_BOOTED_AT".into(), cognia_companion::person_partition::host_booted_at_ms().to_string()));
         assert_eq!(person.child_env("token").await, expected);
         let token = person.mint_token().unwrap();
         assert!(cognia_companion::jwt::verify(&person.state.secret.read(), &token, "service").is_err());

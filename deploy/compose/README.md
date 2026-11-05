@@ -1321,13 +1321,25 @@ lose admission, while their data and key remain until an operator purges them.
 Set these environment variables on the `cognia-server` container (for example,
 with a local Compose override's `environment` map):
 
-| Variable                        | Default | Meaning                                                                            |
-| ------------------------------- | ------- | ---------------------------------------------------------------------------------- |
-| `COGNIA_PERSON_BRAIN_IDLE_SECS` | `900`   | Stop a person brain after this many idle seconds.                                  |
-| `COGNIA_PERSON_BRAINS_MAX`      | `8`     | Maximum active person supervisors; evict the least recently used idle brain first. |
+| Variable                             | Default | Meaning                                                                                                    |
+| ------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `COGNIA_PERSON_BRAIN_IDLE_SECS`      | `900`   | Stop a person brain after this many idle seconds.                                                          |
+| `COGNIA_PERSON_BRAINS_MAX`           | `8`     | Maximum active person supervisors; evict the least recently used idle brain first.                         |
+| `COGNIA_PERSON_RESUME_AFTER_RESTART` | off     | `1`, `true` or `on`: run a member turn the Host's restart interrupted again, unless the organization says. |
 
-Both values must be positive integers; invalid configuration leaves the fleet
-uninstalled and Host data refused. In-flight requests prevent eviction and
+The first two must be positive integers; invalid configuration leaves the fleet
+uninstalled and Host data refused.
+
+A Host restart ends every member run the previous process left behind (ADR-0253
+§7). Before it admits anyone, the Host stops any such run still alive, retires
+its execution record and writes a `person_run_ended` audit entry with
+`host_restarted`. When the member's brain next starts, which is when one of
+their devices reconnects, it ends the interrupted turn with `host_restarted`,
+or, when the organization's agent policy (`resumeAfterRestart`, set by an owner
+or admin on the Host's organization page) or this variable says so, notes in
+the conversation that the turn is being retried and sends it again with the
+transcript as history. A retry is at-least-once: something the first attempt
+already did outside the Host may happen twice. In-flight requests prevent eviction and
 purge. If every slot is busy, another person receives retryable
 `503 person_brain_capacity`; if hello does not arrive within the brain ready
 timeout, the request receives retryable `503 person_brain_starting`. The full

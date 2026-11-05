@@ -1011,8 +1011,14 @@ async function resolveHostStateService(
   const key = `${active.accountId}:${active.targetId}:${authoritativeHostId}:${authorization}`
   if (hostStateAuthority?.key === key) return hostStateAuthority.service
   if (hostStateAuthority) await hostStateAuthority.service.stop()
+  // ADR-0253 §7: a member's brain finishes what a Host restart interrupted.
+  const hostRestart =
+    authorization === "person-partition"
+      ? (await import("@/lib/headless/person-restart")).createPersonHostRestartRecovery()
+      : undefined
   const service = createHostStateService({
     ...(authorization === "person-partition" ? { authorization } : {}),
+    ...(hostRestart ? { hostRestart } : {}),
     accountId: active.accountId,
     runtimeTargetId: active.targetId,
     hostId: authoritativeHostId,

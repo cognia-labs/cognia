@@ -7,16 +7,18 @@
 //     didn't run instead of only an is_error tool_result.
 //   • rate-limit — the claude.ai subscription rate limit is restrictive
 //     (`allowed_warning` / `rejected`).
+//   • host-restarted — a member's brain retried the turn above after the Host
+//     restarted (ADR-0253 §7); the first attempt's effects may repeat.
 // The message list swaps these markers in for the normal MessageRenderer so they
 // show no avatar / actions / usage chrome.
 
 import { useTranslations } from "next-intl"
-import { ShieldAlertIcon, GaugeIcon } from "lucide-react"
+import { ShieldAlertIcon, GaugeIcon, RotateCcwIcon } from "lucide-react"
 import type { UIMessage } from "ai"
 
 export interface SessionNoticePartData {
   type: "session-notice"
-  variant: "permission-denied" | "rate-limit"
+  variant: "permission-denied" | "rate-limit" | "host-restarted"
   toolName?: string
   reason?: string
   status?: string
@@ -38,19 +40,26 @@ export function SessionNoticeMarker({ message }: { message: UIMessage }) {
   const part = message.parts[0] as unknown as SessionNoticePartData
 
   const isDenied = part.variant === "permission-denied"
-  const Icon = isDenied ? ShieldAlertIcon : GaugeIcon
+  const isRestart = part.variant === "host-restarted"
+  const Icon = isRestart ? RotateCcwIcon : isDenied ? ShieldAlertIcon : GaugeIcon
 
-  const label = isDenied ? t("permissionDenied.label") : t("rateLimit.label")
-  const detail = isDenied
-    ? part.toolName
-      ? t("permissionDenied.detail", { tool: part.toolName })
-      : (part.reason ?? "")
-    : part.resetsAt
-      ? t("rateLimit.detailWithReset", {
-          status: t(`rateLimit.status.${part.status === "rejected" ? "rejected" : "warning"}`),
-          time: new Date(part.resetsAt * 1000).toLocaleTimeString(),
-        })
-      : t(`rateLimit.status.${part.status === "rejected" ? "rejected" : "warning"}`)
+  const label = isRestart
+    ? t("hostRestarted.label")
+    : isDenied
+      ? t("permissionDenied.label")
+      : t("rateLimit.label")
+  const detail = isRestart
+    ? t("hostRestarted.detail")
+    : isDenied
+      ? part.toolName
+        ? t("permissionDenied.detail", { tool: part.toolName })
+        : (part.reason ?? "")
+      : part.resetsAt
+        ? t("rateLimit.detailWithReset", {
+            status: t(`rateLimit.status.${part.status === "rejected" ? "rejected" : "warning"}`),
+            time: new Date(part.resetsAt * 1000).toLocaleTimeString(),
+          })
+        : t(`rateLimit.status.${part.status === "rejected" ? "rejected" : "warning"}`)
 
   return (
     <div

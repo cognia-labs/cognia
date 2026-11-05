@@ -460,6 +460,9 @@ const schemas = {
     ...orgScope,
     allowedAgents: z.array(z.string().min(1)),
     defaultAgent: z.string().min(1).nullable(),
+    // ADR-0253 §7: absent keeps the organization's choice, null follows the
+    // operator's default, a boolean is the organization's choice.
+    resumeAfterRestart: z.boolean().nullable().optional(),
   }),
   fs_read_workspace_file_versioned: z.object({
     root: z.string(),

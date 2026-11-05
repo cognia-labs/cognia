@@ -43,3 +43,10 @@ export const RateLimit: Story = {
     }),
   },
 }
+
+// A member's turn retried after the Host restarted (ADR-0253 §7).
+export const HostRestarted: Story = {
+  args: {
+    message: message({ type: "session-notice", variant: "host-restarted" }),
+  },
+}

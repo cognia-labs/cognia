@@ -762,7 +762,11 @@ interface RateLimitInfo {
 /** Structured payload for the synthetic `session-notice` system message. */
 export interface SessionNoticePartData {
   type: "session-notice"
-  variant: "permission-denied" | "rate-limit"
+  /**
+   * `host-restarted` is written by a member's brain, never by this adapter:
+   * the turn above it is being retried after the Host restarted (ADR-0253 §7).
+   */
+  variant: "permission-denied" | "rate-limit" | "host-restarted"
   uuid?: string
   // permission-denied
   toolName?: string

@@ -57,6 +57,29 @@ pub struct AgentPolicy {
     pub default_agent: Option<String>,
     pub updated_at: Option<i64>,
     pub updated_by: Option<String>,
+    /// Whether a member turn a Host restart interrupted is retried
+    /// (ADR-0253 §7). `None` follows the operator's default
+    /// ([`resume_after_restart_default`]). Absent in policies stored before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_after_restart: Option<bool>,
+}
+
+/// The operator's default for [`AgentPolicy::resume_after_restart`]:
+/// `COGNIA_PERSON_RESUME_AFTER_RESTART`, off unless set to `1`, `true` or `on`.
+pub fn resume_after_restart_default() -> bool {
+    std::env::var("COGNIA_PERSON_RESUME_AFTER_RESTART")
+        .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+}
+
+/// How `set` changes [`AgentPolicy::resume_after_restart`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumeChoice {
+    /// Leave what the organization chose.
+    Keep,
+    /// Follow the operator's default again.
+    Default,
+    /// The organization's own choice.
+    Set(bool),
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +98,12 @@ pub struct PolicyView {
     pub default_agent: Option<String>,
     pub updated_at: Option<i64>,
     pub updated_by: Option<String>,
+    /// What applies: the organization's choice, else the operator's default.
+    pub resume_after_restart: bool,
+    /// The organization's own choice; `None` follows the operator's default.
+    pub resume_after_restart_choice: Option<bool>,
+    /// The operator's default, so an administrator sees what `None` means.
+    pub resume_after_restart_default: bool,
 }
 
 fn validate(allowed: &[String], default: Option<&str>) -> Result<(), String> {
@@ -90,10 +119,15 @@ fn validate(allowed: &[String], default: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-pub fn set(org: &str, allowed: Vec<String>, default: Option<String>, user: &str, now: i64) -> Result<PolicyView, String> {
+pub fn set(org: &str, allowed: Vec<String>, default: Option<String>, resume: ResumeChoice, user: &str, now: i64) -> Result<PolicyView, String> {
     validate_org(org)?;
     validate(&allowed, default.as_deref())?;
-    let policy = AgentPolicy { allowed_agents: allowed, default_agent: default, updated_at: Some(now), updated_by: Some(user.into()) };
+    let resume_after_restart = match resume {
+        ResumeChoice::Keep => stored(org)?.resume_after_restart,
+        ResumeChoice::Default => None,
+        ResumeChoice::Set(value) => Some(value),
+    };
+    let policy = AgentPolicy { allowed_agents: allowed, default_agent: default, updated_at: Some(now), updated_by: Some(user.into()), resume_after_restart };
     let output = view(org, policy.clone())?;
     let raw = serde_json::to_string(&policy).map_err(|_| "cannot encode organization agent policy")?;
     secret_store::set(SERVICE, org, &raw).map_err(|_| "organization agent policy store unavailable")?;
@@ -102,11 +136,14 @@ pub fn set(org: &str, allowed: Vec<String>, default: Option<String>, user: &str,
 
 pub fn get(org: &str) -> Result<PolicyView, String> {
     validate_org(org)?;
-    let policy = match secret_store::get(SERVICE, org)? {
+    view(org, stored(org)?)
+}
+
+fn stored(org: &str) -> Result<AgentPolicy, String> {
+    Ok(match secret_store::get(SERVICE, org)? {
         Some(raw) => serde_json::from_str(&raw).map_err(|_| "invalid organization agent policy")?,
         None => AgentPolicy::default(),
-    };
-    view(org, policy)
+    })
 }
 
 fn view(org: &str, policy: AgentPolicy) -> Result<PolicyView, String> {
@@ -123,7 +160,10 @@ fn view(org: &str, policy: AgentPolicy) -> Result<PolicyView, String> {
     };
     let bundled_agents = AGENT_PROVIDERS.iter().map(|(runtime, _)| availability((*runtime).into())).collect();
     let allowed_agents = policy.allowed_agents.into_iter().map(availability).collect();
-    Ok(PolicyView { allowed_agents, bundled_agents, default_agent: policy.default_agent, updated_at: policy.updated_at, updated_by: policy.updated_by })
+    let resume_after_restart_default = resume_after_restart_default();
+    Ok(PolicyView { allowed_agents, bundled_agents, default_agent: policy.default_agent, updated_at: policy.updated_at, updated_by: policy.updated_by,
+        resume_after_restart: policy.resume_after_restart.unwrap_or(resume_after_restart_default),
+        resume_after_restart_choice: policy.resume_after_restart, resume_after_restart_default })
 }
 
 #[cfg(test)]
@@ -155,7 +195,7 @@ mod tests {
         assert_eq!(empty["bundledAgents"].as_array().unwrap().len(), AGENT_PROVIDERS.len());
         assert!(empty["allowedAgents"].as_array().unwrap().is_empty());
         OrgCredentials::set(org, "openai", "p6b-bundle-secret", "operator", 1).unwrap();
-        let policy = set(org, vec!["pi".into()], Some("pi".into()), "operator", 2).unwrap();
+        let policy = set(org, vec!["pi".into()], Some("pi".into()), ResumeChoice::Keep, "operator", 2).unwrap();
         let output = serde_json::to_value(policy).unwrap();
         for (agent, (id, family)) in output["bundledAgents"].as_array().unwrap().iter().zip(AGENT_PROVIDERS) {
             assert_eq!(agent["runtimeId"], *id);
@@ -186,10 +226,10 @@ mod tests {
     #[test]
     fn p6a_policy_validation_coverage_and_org_isolation() {
         let org = "org_p6a_policy";
-        assert!(set(org, vec!["not-bundled".into()], None, "operator", 1).is_err());
-        assert!(set(org, vec!["pi".into()], Some("codex-acp".into()), "operator", 1).is_err());
-        assert!(set(org, vec!["pi".into(), "pi".into()], None, "operator", 1).is_err());
-        let policy = set(org, vec!["codex-acp".into(), "pi".into(), "claude-agent-acp".into(), "gemini-cli".into(), "kiro-cli".into(), "droid".into()], Some("pi".into()), "operator", 2).unwrap();
+        assert!(set(org, vec!["not-bundled".into()], None, ResumeChoice::Keep, "operator", 1).is_err());
+        assert!(set(org, vec!["pi".into()], Some("codex-acp".into()), ResumeChoice::Keep, "operator", 1).is_err());
+        assert!(set(org, vec!["pi".into(), "pi".into()], None, ResumeChoice::Keep, "operator", 1).is_err());
+        let policy = set(org, vec!["codex-acp".into(), "pi".into(), "claude-agent-acp".into(), "gemini-cli".into(), "kiro-cli".into(), "droid".into()], Some("pi".into()), ResumeChoice::Keep, "operator", 2).unwrap();
         assert!(policy.allowed_agents.iter().all(|agent| !agent.available));
         OrgCredentials::set(org, "openai", "p6a-policy-secret", "operator", 3).unwrap();
         let covered = get(org).unwrap();
@@ -200,5 +240,53 @@ mod tests {
         assert!(get("org_p6a_other_policy").unwrap().allowed_agents.is_empty());
         OrgCredentials::delete(org, "openai").unwrap();
         assert!(get(org).unwrap().allowed_agents.iter().all(|agent| !agent.available));
+    }
+
+    #[test]
+    fn adr0253_resume_after_restart_follows_the_operator_until_the_org_chooses() {
+        // The only test that touches this variable.
+        let previous = std::env::var_os("COGNIA_PERSON_RESUME_AFTER_RESTART");
+        struct Restore(Option<std::ffi::OsString>);
+        impl Drop for Restore { fn drop(&mut self) { match self.0.take() {
+            Some(value) => std::env::set_var("COGNIA_PERSON_RESUME_AFTER_RESTART", value),
+            None => std::env::remove_var("COGNIA_PERSON_RESUME_AFTER_RESTART"),
+        } } }
+        let _restore = Restore(previous);
+        std::env::remove_var("COGNIA_PERSON_RESUME_AFTER_RESTART");
+        assert!(!resume_after_restart_default());
+        for (value, on) in [("1", true), ("true", true), (" ON ", true), ("0", false), ("yes", false), ("", false)] {
+            std::env::set_var("COGNIA_PERSON_RESUME_AFTER_RESTART", value);
+            assert_eq!(resume_after_restart_default(), on, "{value:?}");
+        }
+        let org = "org_adr0253_resume";
+        std::env::set_var("COGNIA_PERSON_RESUME_AFTER_RESTART", "1");
+        let view = get(org).unwrap();
+        assert!(view.resume_after_restart && view.resume_after_restart_default);
+        assert_eq!(view.resume_after_restart_choice, None);
+        let chosen = set(org, vec!["pi".into()], None, ResumeChoice::Set(false), "admin", 1).unwrap();
+        assert!(!chosen.resume_after_restart);
+        assert_eq!(chosen.resume_after_restart_choice, Some(false));
+        // Changing the agents keeps the organization's choice.
+        let kept = set(org, vec![], None, ResumeChoice::Keep, "admin", 2).unwrap();
+        assert_eq!(kept.resume_after_restart_choice, Some(false));
+        assert!(!get(org).unwrap().resume_after_restart);
+        let wire = serde_json::to_value(get(org).unwrap()).unwrap();
+        assert_eq!((wire["resumeAfterRestart"].clone(), wire["resumeAfterRestartChoice"].clone(), wire["resumeAfterRestartDefault"].clone()),
+            (serde_json::json!(false), serde_json::json!(false), serde_json::json!(true)));
+        let followed = set(org, vec![], None, ResumeChoice::Default, "admin", 3).unwrap();
+        assert!(followed.resume_after_restart);
+        assert_eq!(followed.resume_after_restart_choice, None);
+        std::env::remove_var("COGNIA_PERSON_RESUME_AFTER_RESTART");
+        assert!(!get(org).unwrap().resume_after_restart);
+    }
+
+    #[test]
+    fn adr0253_a_policy_stored_before_resume_existed_still_reads() {
+        let old: AgentPolicy = serde_json::from_str(r#"{"allowedAgents":["pi"],"defaultAgent":null,"updatedAt":1,"updatedBy":"admin"}"#).unwrap();
+        assert_eq!(old.resume_after_restart, None);
+        assert!(!serde_json::to_string(&old).unwrap().contains("resumeAfterRestart"));
+        let chosen = AgentPolicy { resume_after_restart: Some(true), ..old };
+        let round: AgentPolicy = serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(round.resume_after_restart, Some(true));
     }
 }

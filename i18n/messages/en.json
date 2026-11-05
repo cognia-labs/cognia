@@ -10669,6 +10669,10 @@
       "turns": "Turns"
     },
     "sessionNotice": {
+      "hostRestarted": {
+        "detail": "The Host restarted during this turn, so it is running again. Anything the first attempt already did may happen twice.",
+        "label": "Retried after the Host restarted"
+      },
       "permissionDenied": {
         "detail": "{tool} was not allowed to run",
         "label": "Tool blocked"
@@ -16035,6 +16039,15 @@
         "defaultPlaceholder": "Choose a default",
         "hint": "Members pick from these agents. Any org key can serve a brokered agent, so one marked No key runs once a key is added; one marked Not available here can't run on this Host.",
         "noKey": "No key",
+        "resume": {
+          "end": "End the interrupted turn",
+          "followDefault": "Use the Host's setting ({state})",
+          "hint": "Running it again starts the turn over from the member's message, after a note in the conversation. Anything the first attempt already did, such as editing files or calling a service, may happen a second time.",
+          "label": "When the Host restarts mid-turn",
+          "off": "end it",
+          "on": "run again",
+          "retry": "Run the interrupted turn again"
+        },
         "save": "Save agents",
         "saved": "Saved the agents for {host}",
         "saving": "Saving…",
@@ -16534,6 +16547,10 @@
       "hostDataUnavailable": {
         "hint": "This Host is shared by an organization, and it doesn't keep chats, files and other personal data separate per member yet. Use your own device or the shared workspace for this until that ships.",
         "label": "Not available on this shared Host"
+      },
+      "hostRestarted": {
+        "hint": "The Host restarted while this was running, so the turn ended. What was already written is kept. Send the message again to run it now; anything the first attempt already did outside the Host was not undone.",
+        "label": "Stopped because the Host restarted"
       },
       "hostSessionRefused": {
         "hint": "The paired host refused this new chat — usually this device doesn't have Agent Control on that host. Ask the host's owner to grant it, then start the chat again.",

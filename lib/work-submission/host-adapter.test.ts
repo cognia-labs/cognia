@@ -20,10 +20,15 @@ import {
   acceptHostStateChatTurn,
   bindHostStateChatTurnContext,
   claimHostStateChatTurnForDispatch,
+  failHostStateTurnAfterRestart,
+  HOST_RESTARTED,
   HOST_STATE_ATTACHMENT_REFS_DETAIL,
   hostStateRunId,
   hostStateSubmissionId,
+  listHostStateTurnsInterruptedBefore,
   markHostStateChatTurnStarted,
+  permitHostStateRedispatchAfterRestart,
+  revokeHostStateRedispatchPermit,
   type HostAdapterDeps,
 } from "./host-adapter"
 
@@ -330,5 +335,111 @@ describe("HostState redrive of an earlier attempt", () => {
       await claimHostStateChatTurnForDispatch("action-1", LATER + 1, deps({ listRunEvents }))
     ).toBe("owned_elsewhere")
     expect(listRunEvents).not.toHaveBeenCalled()
+  }, 30_000)
+})
+
+describe("after a Host restart (ADR-0253 §7)", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    await acceptHostStateChatTurn(action(), deps())
+    // The previous Host claimed the turn, handed it off and restarted.
+    expect(await claimHostStateChatTurnForDispatch("action-1", NOW, deps())).toBe("claimed")
+    expect(await markHostStateChatTurnStarted("action-1", NOW, deps())).toBe(true)
+  }, 30_000)
+
+  it("sends a permitted turn again past its dead lease and its tool activity, once", async () => {
+    const abortPrevious = jest.fn(async () => undefined)
+    const listRunEvents = jest.fn(async () => [{ type: "tool.started" }] as never)
+    permitHostStateRedispatchAfterRestart("action-1")
+    // Still inside the old lease, with a tool already run: the organization
+    // chose at-least-once, and the runtime that held it is gone.
+    expect(
+      await claimHostStateChatTurnForDispatch(
+        "action-1",
+        NOW + 1,
+        deps({ abortPrevious, listRunEvents })
+      )
+    ).toBe("claimed")
+    expect(listRunEvents).not.toHaveBeenCalled()
+    expect(abortPrevious).not.toHaveBeenCalled()
+    expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
+      dispatchState: "claimed",
+      attemptCount: 2,
+    })
+    // The permit was spent: the next claim is fenced as before.
+    expect(await claimHostStateChatTurnForDispatch("action-1", NOW + 2, deps())).toBe(
+      "owned_elsewhere"
+    )
+  }, 30_000)
+
+  it("a revoked permit lets nothing through", async () => {
+    permitHostStateRedispatchAfterRestart("action-1")
+    revokeHostStateRedispatchPermit("action-1")
+    expect(await claimHostStateChatTurnForDispatch("action-1", NOW + 1, deps())).toBe(
+      "owned_elsewhere"
+    )
+  }, 30_000)
+
+  it("lists the open turns accepted before the Host booted, oldest first, with their words", async () => {
+    await acceptHostStateChatTurn(
+      action(
+        { kind: "message.enqueue", messageId: "message-2", text: "and then", attachments: [] },
+        { actionId: "action-2" }
+      ),
+      deps()
+    )
+    const bootedAt = Date.now() + 60_000
+    const turns = await listHostStateTurnsInterruptedBefore("session-1", bootedAt, deps())
+    expect(turns).toEqual([
+      expect.objectContaining({
+        submissionId: "work:hoststate:action-1",
+        actionId: "action-1",
+        sessionId: "session-1",
+        messageId: "message-1",
+        text: "hello from mobile",
+        attachments: false,
+      }),
+      expect.objectContaining({ actionId: "action-2", messageId: "message-2", text: "and then" }),
+    ])
+    // Accepted after the boot: this Host's own, not the previous one's.
+    await expect(listHostStateTurnsInterruptedBefore("session-1", 0, deps())).resolves.toEqual([])
+    await expect(
+      listHostStateTurnsInterruptedBefore("session-other", bootedAt, deps())
+    ).resolves.toEqual([])
+  }, 30_000)
+
+  it("marks a turn whose attachments cannot be sent again, and leaves unreadable words null", async () => {
+    await bindHostStateChatTurnContext(
+      action({
+        kind: "message.enqueue",
+        messageId: "message-1",
+        text: "look",
+        attachments: [{ ref: "upload:u1", name: "shot.png", mediaType: "image/png", size: 3 }],
+      }),
+      { model: "m" },
+      deps()
+    )
+    const bootedAt = Date.now() + 60_000
+    const [withFiles] = await listHostStateTurnsInterruptedBefore("session-1", bootedAt, deps())
+    expect(withFiles).toMatchObject({ attachments: true, text: "hello from mobile" })
+    // Another key cannot open the frozen input.
+    const [unreadable] = await listHostStateTurnsInterruptedBefore("session-1", bootedAt, {
+      loadKey: async () => new Uint8Array(32).fill(7),
+    })
+    expect(unreadable).toMatchObject({ actionId: "action-1", messageId: null, text: null })
+  }, 30_000)
+
+  it("ends a turn it will not retry as host_restarted, and only once", async () => {
+    expect(await failHostStateTurnAfterRestart("work:hoststate:action-1", NOW + 5)).toBe(true)
+    expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
+      dispatchState: "settled",
+      terminalOutcome: "failed",
+      errorCode: HOST_RESTARTED,
+    })
+    expect(await failHostStateTurnAfterRestart("work:hoststate:action-1", NOW + 6)).toBe(false)
+    await expect(
+      listHostStateTurnsInterruptedBefore("session-1", Date.now() + 60_000, deps())
+    ).resolves.toEqual([])
   }, 30_000)
 })

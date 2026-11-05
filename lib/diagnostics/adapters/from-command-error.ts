@@ -76,6 +76,9 @@ const COMMAND_CODE_TO_DIAGNOSTIC: Readonly<Record<string, DiagnosticCode>> = {
   // ADR-0253 §3: the Host stopped the turn or run because the member's
   // standing ended while it ran.
   revoked_during_run: "revokedDuringRun",
+  // ADR-0253 §7: the Host restarted mid-turn and the organization does not
+  // retry interrupted turns (`resumeAfterRestart`).
+  host_restarted: "hostRestarted",
   // The organization gateway could not account a member's usage; it says so
   // rather than spend unmetered, and it passes.
   member_usage_unavailable: "serviceUnavailable",

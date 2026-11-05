@@ -157,4 +157,17 @@ describe("person agent policy", () => {
     expect("modelPricing" in plain).toBe(false)
     expect(currentPersonModelPricing()).toEqual({})
   })
+
+  it("adr0253 resumes after a restart only when the Host says exactly true", async () => {
+    const call = jest.fn().mockResolvedValueOnce({ ...policy, resumeAfterRestart: true })
+    await expect(fetchPersonAgentPolicy({ call })).resolves.toEqual({
+      ...policy,
+      resumeAfterRestart: true,
+    })
+    for (const value of [false, "true", 1, null, undefined]) {
+      call.mockResolvedValueOnce({ ...policy, resumeAfterRestart: value })
+      const read = await fetchPersonAgentPolicy({ call })
+      expect("resumeAfterRestart" in read).toBe(false)
+    }
+  })
 })

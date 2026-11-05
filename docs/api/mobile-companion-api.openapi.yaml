@@ -102599,6 +102599,10 @@ paths:
                     - type: string
                       minLength: 1
                     - type: "null"
+                resumeAfterRestart:
+                  type:
+                    - boolean
+                    - "null"
               required:
                 - allowedAgents
                 - defaultAgent

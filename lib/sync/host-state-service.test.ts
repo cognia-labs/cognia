@@ -62,7 +62,9 @@ import {
   hostStateDispatchBackoffMs,
   installHostStateSync,
   installHostStateSyncForTarget,
+  type HostRestartRecovery,
 } from "./host-state-service"
+import type { InterruptedHostStateTurn } from "@/lib/work-submission/host-adapter"
 import { replaceSessionTranscript } from "@/lib/db/messages"
 import { refusedHostMessageOf, refusedHostMessageId } from "@/lib/chat/refused-host-message"
 import { syncMessages } from "./handlers/messages"
@@ -1212,6 +1214,236 @@ describe("HostStateService", () => {
     expect(state.decisions.map((item) => item.status)).toEqual(["interrupted"])
     expect(state.activeTurn).toBeNull()
     await second.stop()
+  })
+
+  describe("after a Host restart (ADR-0253 §7)", () => {
+    // The envelope's turn started on 2026-08-14; the Host booted after it.
+    const bootedAt = Date.parse("2026-09-01T00:00:00.000Z")
+    const turn = (
+      actionId: string,
+      messageId: string,
+      text: string,
+      extra: Partial<InterruptedHostStateTurn> = {}
+    ): InterruptedHostStateTurn => ({
+      submissionId: `work:hoststate:${actionId}`,
+      actionId,
+      sessionId: "session-1",
+      messageId,
+      text,
+      attachments: false,
+      createdAt: 50,
+      ...extra,
+    })
+    type RecoveryMock = {
+      [K in keyof HostRestartRecovery]: HostRestartRecovery[K] extends (...args: infer A) => infer R
+        ? jest.Mock<R, A>
+        : HostRestartRecovery[K]
+    }
+    const recovery = (overrides: Partial<RecoveryMock> = {}): RecoveryMock => ({
+      bootedAt,
+      interruptedTurns: jest.fn(async (_sessionId: string) => [
+        turn("action-1", "m1", "first words"),
+        turn("action-2", "m2", "second words"),
+      ]),
+      resumeEnabled: jest.fn(async () => false),
+      fail: jest.fn(async (_turn: InterruptedHostStateTurn): Promise<void> => {}),
+      markRetry: jest.fn(async (_turn: InterruptedHostStateTurn): Promise<void> => {}),
+      permit: jest.fn(),
+      revoke: jest.fn(),
+      ...overrides,
+    })
+
+    /** A turn running (`action-1`) with `action-2` queued behind it, then the Host gone. */
+    async function interruptedConversation(): Promise<void> {
+      const first = createHostStateService({
+        ...scope,
+        hostId,
+        ownerId: "brain-a",
+        now: () => 100,
+        dispatchRuntime: jest.fn(async () => undefined),
+        publish: jest.fn(async () => undefined),
+      })
+      await first.start({ now: 0, heartbeat: false })
+      const send = (actionId: string, messageId: string, text: string) =>
+        first.submit(
+          {
+            ...scope,
+            actions: [
+              action(
+                { kind: "message.enqueue", messageId, text, attachments: [] },
+                { actionId, clientSeq: Number(messageId.slice(1)) }
+              ),
+            ],
+          },
+          owner
+        )
+      await send("action-1", "m1", "first words")
+      await first.projectRuntimeEnvelope(
+        runtimeEnvelope({ kind: "lifecycle", phase: "started" }, "evt-start")
+      )
+      await send("action-2", "m2", "second words")
+      await flush()
+      const before = (await first.snapshot({ ...scope, channel })).state as {
+        turn: string
+        queue: { actionId: string }[]
+      }
+      expect(before.turn).toBe("running")
+      expect(before.queue.map((item) => item.actionId)).toEqual(["action-2"])
+      await first.stop()
+    }
+
+    async function restartWith(hostRestart: HostRestartRecovery, dispatchRuntime = jest.fn()) {
+      const second = createHostStateService({
+        ...scope,
+        hostId,
+        ownerId: "brain-b",
+        now: () => 200,
+        dispatchRuntime,
+        publish: jest.fn(async () => undefined),
+        hostRestart,
+      })
+      const status = await second.start({ now: HOST_STATE_LEASE_TTL_MS + 1, heartbeat: false })
+      await second.restartSettled()
+      const snapshot = await second.snapshot({ ...scope, channel })
+      await second.stop()
+      return {
+        status,
+        state: snapshot.state as unknown as Record<string, unknown>,
+        dispatchRuntime,
+      }
+    }
+
+    it("ends the interrupted turn host_restarted and drops what queued behind it, when off", async () => {
+      await interruptedConversation()
+      const hostRestart = recovery()
+      const { status, state, dispatchRuntime } = await restartWith(hostRestart)
+
+      expect(status.recovery).toBe("ready")
+      expect(state).toMatchObject({ turn: "retryable-error", turnErrorCode: "host_restarted" })
+      expect(state.queue).toEqual([])
+      expect(
+        (state.operations as HostStateOperation[]).find((item) => item.actionId === "action-2")
+      ).toMatchObject({ status: "failed", errorCode: "host_restarted" })
+      expect(hostRestart.fail.mock.calls.map(([item]) => item.actionId)).toEqual([
+        "action-1",
+        "action-2",
+      ])
+      expect(hostRestart.markRetry).not.toHaveBeenCalled()
+      expect(hostRestart.permit).not.toHaveBeenCalled()
+      expect(dispatchRuntime).not.toHaveBeenCalled()
+    })
+
+    it("retries the started turn below a notice and delivers the queued one, when on", async () => {
+      await interruptedConversation()
+      const order: string[] = []
+      const hostRestart = recovery({
+        resumeEnabled: jest.fn(async () => true),
+        markRetry: jest.fn(async (item: InterruptedHostStateTurn) => {
+          order.push(`notice:${item.actionId}`)
+        }),
+      })
+      const dispatchRuntime = jest.fn(async (sent: HostStateAction) => {
+        order.push(`dispatch:${sent.actionId}`)
+      })
+      const { state } = await restartWith(hostRestart, dispatchRuntime)
+
+      // The notice is written before the turn is sent again; the queued
+      // message never started, so it needs none.
+      expect(order).toEqual(["notice:action-1", "dispatch:action-1", "dispatch:action-2"])
+      expect(hostRestart.permit.mock.calls).toEqual([["action-1"], ["action-2"]])
+      expect(hostRestart.fail).not.toHaveBeenCalled()
+      const [[retried], [delivered]] = dispatchRuntime.mock.calls
+      expect(retried).toMatchObject({
+        channel,
+        sessionId: "session-1",
+        actionId: "action-1",
+        clientId: "host-restart",
+        action: { kind: "message.enqueue", messageId: "m1", text: "first words", attachments: [] },
+      })
+      expect(delivered).toMatchObject({
+        actionId: "action-2",
+        clientId: "web-a",
+        action: { kind: "message.enqueue", messageId: "m2", text: "second words" },
+      })
+      // Until the retried turn starts, the member sees why the first one ended.
+      expect(state).toMatchObject({ turn: "retryable-error", turnErrorCode: "host_restarted" })
+    })
+
+    it("ends a turn it cannot send again even when on", async () => {
+      await interruptedConversation()
+      const hostRestart = recovery({
+        resumeEnabled: jest.fn(async () => true),
+        interruptedTurns: jest.fn(async (_sessionId: string) => [
+          turn("action-1", "m1", "first words", { attachments: true }),
+          turn("action-2", "m2", "second words"),
+        ]),
+      })
+      const { dispatchRuntime } = await restartWith(hostRestart)
+
+      expect(hostRestart.fail.mock.calls.map(([item]) => item.actionId)).toEqual(["action-1"])
+      expect(hostRestart.markRetry).not.toHaveBeenCalled()
+      expect(dispatchRuntime.mock.calls.map(([sent]) => sent.actionId)).toEqual(["action-2"])
+    })
+
+    it("ends a retry the dispatcher could not send, and takes its permit back", async () => {
+      await interruptedConversation()
+      const hostRestart = recovery({ resumeEnabled: jest.fn(async () => true) })
+      const dispatchRuntime = jest
+        .fn()
+        .mockRejectedValueOnce(new Error("runtime offline"))
+        .mockRejectedValueOnce(new HostStateDispatchAbandonedError("model_access_unavailable"))
+      const { state } = await restartWith(hostRestart, dispatchRuntime)
+
+      expect(hostRestart.revoke.mock.calls).toEqual([["action-1"], ["action-2"]])
+      // The dispatcher ends an abandoned turn itself; only the first is ours to end.
+      expect(hostRestart.fail.mock.calls.map(([item]) => item.actionId)).toEqual(["action-1"])
+      expect(
+        (state.operations as HostStateOperation[]).find((item) => item.actionId === "action-2")
+      ).toMatchObject({ status: "failed", errorCode: "model_access_unavailable" })
+    })
+
+    it("ends interrupted turns when the policy cannot be read", async () => {
+      await interruptedConversation()
+      const hostRestart = recovery({
+        resumeEnabled: jest.fn(async () => {
+          throw new Error("host unreachable")
+        }),
+      })
+      const { dispatchRuntime } = await restartWith(hostRestart)
+      expect(hostRestart.fail).toHaveBeenCalledTimes(2)
+      expect(dispatchRuntime).not.toHaveBeenCalled()
+    })
+
+    it("keeps the runtime-loss code when the brain, not the Host, lost the turn", async () => {
+      await interruptedConversation()
+      const hostRestart = recovery({
+        bootedAt: Date.parse("2026-01-01T00:00:00.000Z"),
+        interruptedTurns: jest.fn(
+          async (_sessionId: string): Promise<InterruptedHostStateTurn[]> => []
+        ),
+      })
+      const { state } = await restartWith(hostRestart)
+      expect(state.turn).toBe("retryable-error")
+      expect("turnErrorCode" in state).toBe(false)
+      // A crashed brain under a live Host keeps its queue for the next start.
+      expect((state.queue as { actionId: string }[]).map((item) => item.actionId)).toEqual([
+        "action-2",
+      ])
+      expect(hostRestart.resumeEnabled).not.toHaveBeenCalled()
+      expect(hostRestart.fail).not.toHaveBeenCalled()
+    })
+
+    it("closes a stale submission of a conversation with nothing in flight, never resending it", async () => {
+      const first = createHostStateService({ ...scope, hostId, ownerId: "brain-a", now: () => 100 })
+      await first.start({ now: 0, heartbeat: false })
+      await first.snapshot({ ...scope, channel })
+      await first.stop()
+      const hostRestart = recovery({ resumeEnabled: jest.fn(async () => true) })
+      const { state, dispatchRuntime } = await restartWith(hostRestart)
+      expect(state.turn).toBe("idle")
+      expect(hostRestart.fail).toHaveBeenCalledTimes(2)
+      expect(dispatchRuntime).not.toHaveBeenCalled()
+    })
   })
 
   it("a failed turn keeps the runtime's code, never its message", async () => {

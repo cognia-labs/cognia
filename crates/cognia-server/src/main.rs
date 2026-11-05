@@ -2710,6 +2710,9 @@ async fn run_serve(
     browser_listener_port: Option<u16>,
     mdns_requested: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // ADR-0253 §7: fix this process's boot time before any person brain is
+    // told it, so every one of them compares against the same instant.
+    cognia_companion::person_partition::host_booted_at_ms();
     // ADR-0224 A10: before anything starts, settle a pending update.
     cognia_external_agent::person_workspace::person_workspace_max_bytes()?; // P6d boot validation, even without a brain.
     let execution_setting = match std::env::var("COGNIA_EXECUTION") {
@@ -2973,6 +2976,34 @@ async fn run_serve(
         Ok(_) => {}
         Err(error) => {
             log::warn!("orphan reap skipped: {error}");
+        }
+    }
+    // ADR-0253 §7: before any member is admitted, end what the previous
+    // process left on record. No lease, watchdog or brain of it survives, so a
+    // member run found here can only be finished, never resumed in place; the
+    // member's brain settles the turn (`host_restarted`) or, where the
+    // organization asked for it, retries it.
+    let execution_root = plugin_storage_dir(&data_dir)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| data_dir.clone());
+    match cognia_companion::host_surface_gate::retire_runs_after_restart(
+        execution_root,
+        exec.clone(),
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    {
+        Ok(retired) if !retired.is_empty() => {
+            let members = retired.iter().filter(|run| run.person.is_some()).count();
+            log::info!(
+                "retired {} execution record(s) from a previous run ({members} member run(s) ended: host_restarted)",
+                retired.len()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("execution record reconciliation skipped: {}", error.code);
         }
     }
     cognia_companion::browser_gateway::install_workspace_runtime_control_from_env()

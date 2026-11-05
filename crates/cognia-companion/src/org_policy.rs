@@ -114,6 +114,15 @@ struct Args {
     api_key: Option<String>,
     allowed_agents: Option<Vec<String>>,
     default_agent: Option<String>,
+    /// Absent keeps the organization's choice, `null` returns to the
+    /// operator's default, a boolean is the organization's choice (ADR-0253 §7).
+    #[serde(default, deserialize_with = "present")]
+    resume_after_restart: Option<Option<bool>>,
+}
+
+/// Tells a field sent as `null` apart from one not sent at all.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Option<bool>>, D::Error> {
+    Option::<bool>::deserialize(deserializer).map(Some)
 }
 
 pub async fn dispatch(command: &str, args: Value, device: &str, tenant: Option<&str>, scope: Option<&str>) -> Result<Value, (StatusCode, Json<RpcError>)> {
@@ -154,8 +163,16 @@ async fn dispatch_in_mode(mode: DeploymentMode, command: &str, args: Value, devi
                 Ok(Value::Null)
             },
             "org_agent_policy_get" => serde_json::to_value(crate::org_agent_policy::get(&org)?).map_err(|_| "cannot encode policy".into()),
-            "org_agent_policy_set" => serde_json::to_value(crate::org_agent_policy::set(&org,
-                input.allowed_agents.ok_or("allowedAgents is required")?, input.default_agent, &user, now)?).map_err(|_| "cannot encode policy".into()),
+            "org_agent_policy_set" => {
+                use crate::org_agent_policy::ResumeChoice;
+                let resume = match input.resume_after_restart {
+                    None => ResumeChoice::Keep,
+                    Some(None) => ResumeChoice::Default,
+                    Some(Some(value)) => ResumeChoice::Set(value),
+                };
+                serde_json::to_value(crate::org_agent_policy::set(&org,
+                    input.allowed_agents.ok_or("allowedAgents is required")?, input.default_agent, resume, &user, now)?).map_err(|_| "cannot encode policy".into())
+            },
             _ => Err("unknown organization command".into()),
         }
     }).await.map_err(|_| RpcError::internal("organization command worker failed".into()))?;
@@ -519,6 +536,15 @@ mod tests {
                 assert!(serde_json::from_value::<Args>(input).is_err());
             }
         }
+    }
+
+    #[test]
+    fn adr0253_resume_after_restart_tells_absent_from_null() {
+        let parse = |value: Value| serde_json::from_value::<Args>(value).map(|args| args.resume_after_restart);
+        assert_eq!(parse(json!({"allowedAgents":[]})).unwrap(), None);
+        assert_eq!(parse(json!({"allowedAgents":[],"resumeAfterRestart":null})).unwrap(), Some(None));
+        assert_eq!(parse(json!({"allowedAgents":[],"resumeAfterRestart":true})).unwrap(), Some(Some(true)));
+        assert!(parse(json!({"allowedAgents":[],"resumeAfterRestart":"yes"})).is_err());
     }
 
     #[tokio::test]

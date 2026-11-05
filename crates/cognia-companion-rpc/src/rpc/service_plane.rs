@@ -3955,6 +3955,7 @@ mod tests {
             &a.org_id,
             vec!["pi".into()],
             Some("pi".into()),
+            cognia_companion::org_agent_policy::ResumeChoice::Keep,
             "operator",
             1,
         )

@@ -116,8 +116,12 @@ fn person_policy_view(policy: cognia_companion::org_agent_policy::PolicyView, av
     for provider in keyed {
         offer(provider, models(provider), false);
     }
+    // ADR-0253 §7: whether this partition's brain retries a turn a Host
+    // restart interrupted. The resolved value only; the choice is the admin's.
+    let resume_after_restart = policy.resume_after_restart;
     json!({"allowedAgents": policy.allowed_agents, "defaultAgent": policy.default_agent,
-        "execution": if available { "sandboxed" } else { "none" }, "models": served, "modelNames": names, "modelPricing": prices, "usage": usage})
+        "execution": if available { "sandboxed" } else { "none" }, "models": served, "modelNames": names, "modelPricing": prices, "usage": usage,
+        "resumeAfterRestart": resume_after_restart})
 }
 pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, tenant: Option<&str>,
     host: &dyn crate::rpc_host::RpcHost) -> PersonResult<Value> {
@@ -410,7 +414,8 @@ mod tests {
         use cognia_companion::org_agent_policy::{PolicyView, AgentAvailability};
         let view = person_policy_view(PolicyView { allowed_agents: vec![AgentAvailability {
             runtime_id: "pi".into(), available: true, providers: vec!["provider".into()] }],
-            bundled_agents: vec![], default_agent: Some("pi".into()), updated_at: Some(1), updated_by: Some("admin".into()) }, true,
+            bundled_agents: vec![], default_agent: Some("pi".into()), updated_at: Some(1), updated_by: Some("admin".into()),
+            resume_after_restart: true, resume_after_restart_choice: Some(true), resume_after_restart_default: false }, true,
             Some(json!({"month":"2026-10","spentTokens":5,"reservedTokens":1,"monthlyTokens":100})),
             &["provider".into(), "chat-only".into(), "unserved".into()],
             &|provider| match provider {
@@ -427,7 +432,9 @@ mod tests {
                 "chat-only":{"chat-model":"Chat Model"}},
             // ADR-0253 §10: only the prices served models' deployments give.
             "modelPricing":{"provider":{"plain":{"promptPer1M":0.6,"completionPer1M":2.2}}},
-            "usage":{"month":"2026-10","spentTokens":5,"reservedTokens":1,"monthlyTokens":100}}));
+            "usage":{"month":"2026-10","spentTokens":5,"reservedTokens":1,"monthlyTokens":100},
+            // ADR-0253 §7: the resolved value, never who chose it.
+            "resumeAfterRestart":true}));
         assert!(person_policy_request(&json!({})).is_ok());
         for request in [json!({"orgId":"foreign"}), json!(null), json!([])] {
             assert!(person_policy_request(&request).is_err());
@@ -454,7 +461,7 @@ mod tests {
         let person = PersonPartition::new("org_p6e_workspace_failure".into(), "usr_p6e_workspace_failure".into());
         let _standing = person_standing_test_support::Installed::new(&person.org_id);
         cognia_companion::org_credentials::OrgCredentials::set(&person.org_id, "p6d-provider", "private-key", "operator", 1).unwrap();
-        cognia_companion::org_agent_policy::set(&person.org_id, vec!["pi".into()], Some("pi".into()), "operator", 1).unwrap();
+        cognia_companion::org_agent_policy::set(&person.org_id, vec!["pi".into()], Some("pi".into()), cognia_companion::org_agent_policy::ResumeChoice::Keep, "operator", 1).unwrap();
         let gateway = gateway(); gateway.person_test_listener(19385);
         let minted = person_lease_mint(&person, PersonAgentLeaseRequest { runtime_id: "pi".into(),
             provider: "p6d-provider".into(), model: "p6d-model".into(), session_id: None }, &gateway).unwrap();
@@ -585,7 +592,7 @@ mod tests {
     fn p6d_lease_member_override_cap_and_cross_partition_runtime_fences() {
         let gateway = gateway(); let a = person("usr_p6d_lease_a"); let b = person("usr_p6d_lease_b");
         cognia_companion::org_credentials::OrgCredentials::set(&a.org_id,"p6d-provider","p6d-org-lease-key","operator",1).unwrap();
-        cognia_companion::org_agent_policy::set(&a.org_id,vec!["pi".into(),"codex-acp".into()],Some("pi".into()),"operator",1).unwrap();
+        cognia_companion::org_agent_policy::set(&a.org_id,vec!["pi".into(),"codex-acp".into()],Some("pi".into()),cognia_companion::org_agent_policy::ResumeChoice::Keep,"operator",1).unwrap();
         let minted = person_lease_mint(&a,request("pi"),&gateway).unwrap();
         assert!(!minted.to_string().contains("p6d-org-lease-key"));
         let secret = minted["secret"].as_str().unwrap(); let task = minted["ticketId"].as_str().unwrap();
@@ -613,7 +620,7 @@ mod tests {
     fn p6d_unknown_model_and_quota_details_are_precise() {
         let gateway = gateway(); let a = PersonPartition::new("org_p6d_model_refusal".into(),"usr_p6d_model_refusal".into());
         cognia_companion::org_credentials::OrgCredentials::set(&a.org_id,"p6d-provider","key","operator",1).unwrap();
-        cognia_companion::org_agent_policy::set(&a.org_id,vec!["pi".into()],None,"operator",1).unwrap();
+        cognia_companion::org_agent_policy::set(&a.org_id,vec!["pi".into()],None,cognia_companion::org_agent_policy::ResumeChoice::Keep,"operator",1).unwrap();
         let mut unknown = request("pi"); unknown.model = "unknown".into();
         let refused = person_lease_mint(&a,unknown,&gateway).unwrap_err();
         assert_eq!((refused.0, refused.1.code.as_str()), (StatusCode::SERVICE_UNAVAILABLE, "model_access_unavailable"));

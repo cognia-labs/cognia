@@ -30,6 +30,15 @@ impl PersonPartition {
     }
 }
 
+/// When this Host process started, in ms since the epoch. A person brain the
+/// Host starts is told it (`COGNIA_HOST_BOOTED_AT`), so the brain can tell a
+/// turn the Host's restart interrupted from one its own crash lost
+/// (ADR-0253 §7). The serve path reads it first thing at boot.
+pub fn host_booted_at_ms() -> i64 {
+    static BOOTED: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *BOOTED.get_or_init(|| chrono::Utc::now().timestamp_millis())
+}
+
 tokio::task_local! { static PARTITION: Option<PersonPartition>; }
 pub fn current() -> Option<PersonPartition> {
     PARTITION.try_with(Clone::clone).ok().flatten()

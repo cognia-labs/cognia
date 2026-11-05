@@ -1,4 +1,4 @@
-import { initializePersonChat, personChatCapability } from "./person-chat"
+import { initializePersonChat, personChatCapability, personHostBootedAt } from "./person-chat"
 
 afterEach(() => initializePersonChat("brain", {}))
 
@@ -25,4 +25,17 @@ it("p6e reads sandboxed execution only from a person brain with the exact Host v
   expect(personChatCapability().execution).toBe("none")
   initializePersonChat("person-brain", { COGNIA_PERSON_EXECUTION: "yes" })
   expect(personChatCapability().execution).toBe("none")
+})
+
+it("adr0253 reads the Host boot time only from a person brain, as a plain positive integer", () => {
+  initializePersonChat("person-brain", { COGNIA_HOST_BOOTED_AT: "1767225600000" })
+  expect(personHostBootedAt()).toBe(1767225600000)
+  initializePersonChat("brain", { COGNIA_HOST_BOOTED_AT: "1767225600000" })
+  expect(personHostBootedAt()).toBeNull()
+  for (const value of ["", "0", "-5", "1.5", "1e12", " 17", "99999999999999999"]) {
+    initializePersonChat("person-brain", { COGNIA_HOST_BOOTED_AT: value })
+    expect(personHostBootedAt()).toBeNull()
+  }
+  initializePersonChat("person-brain", {})
+  expect(personHostBootedAt()).toBeNull()
 })

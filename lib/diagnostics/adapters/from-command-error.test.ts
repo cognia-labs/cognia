@@ -174,8 +174,12 @@ describe("multi-tenant Host refusals", () => {
     expect(DIAGNOSTIC_CODES.personAgentAttachmentUnsupported.retryable).toBe(false)
     expect(diagnose("revoked_during_run")).toBe("revokedDuringRun")
     expect(DIAGNOSTIC_CODES.revokedDuringRun.retryable).toBe(false)
+    // ADR-0253 §7: a Host restart ends the turn; sending it again is safe.
+    expect(diagnose("host_restarted")).toBe("hostRestarted")
+    expect(DIAGNOSTIC_CODES.hostRestarted.retryable).toBe(true)
     // Turn outcomes, not Host refusals.
     expect(isHostRefusalCode("person_agent_exited")).toBe(false)
+    expect(isHostRefusalCode("host_restarted")).toBe(false)
   })
 
   it("maps the gateway's usage-accounting outage to a passing service problem", () => {

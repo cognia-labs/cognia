@@ -136,6 +136,72 @@ describe("OrgModelsSection", () => {
     )
   })
 
+  describe("what a Host restart does to a member's turn (ADR-0253 §7)", () => {
+    const restartAware = (choice: boolean | null, hostDefault: boolean): OrgAgentPolicy => ({
+      ...policy,
+      resumeAfterRestart: choice ?? hostDefault,
+      resumeAfterRestartChoice: choice,
+      resumeAfterRestartDefault: hostDefault,
+    })
+
+    it("an admin picks to run interrupted turns again, with the warning beside it", async () => {
+      const d = deps({ getPolicy: jest.fn(async () => restartAware(null, false)) })
+      render(<OrgModelsSection row={row} deps={d} />)
+      const resume = await screen.findByTestId("org-agents-resume")
+      expect(resume).toHaveTextContent("may happen a second time")
+      const user = userEvent.setup()
+      await user.click(screen.getByTestId("org-agent-resume"))
+      expect(await screen.findByRole("option", { name: "Use the Host's setting (end it)" }))
+      await user.click(screen.getByRole("option", { name: "Run the interrupted turn again" }))
+      await user.click(screen.getByTestId("org-agents-save"))
+      await waitFor(() =>
+        expect(d.setPolicy).toHaveBeenCalledWith("org", {
+          allowedAgents: ["claude-agent-acp"],
+          defaultAgent: "claude-agent-acp",
+          resumeAfterRestart: true,
+        })
+      )
+    })
+
+    it("returns to the Host's own setting by sending null", async () => {
+      const d = deps({ getPolicy: jest.fn(async () => restartAware(false, true)) })
+      render(<OrgModelsSection row={row} deps={d} />)
+      await screen.findByTestId("org-agents-resume")
+      const user = userEvent.setup()
+      await user.click(screen.getByTestId("org-agent-resume"))
+      await user.click(
+        await screen.findByRole("option", { name: "Use the Host's setting (run again)" })
+      )
+      await user.click(screen.getByTestId("org-agents-save"))
+      await waitFor(() =>
+        expect(d.setPolicy).toHaveBeenCalledWith("org", {
+          allowedAgents: ["claude-agent-acp"],
+          defaultAgent: "claude-agent-acp",
+          resumeAfterRestart: null,
+        })
+      )
+    })
+
+    it("changing the agents leaves the organization's restart choice as it is", async () => {
+      const d = deps({ getPolicy: jest.fn(async () => restartAware(true, false)) })
+      render(<OrgModelsSection row={row} deps={d} />)
+      await userEvent.click(await screen.findByTestId("org-agent-codex-acp"))
+      await userEvent.click(screen.getByTestId("org-agents-save"))
+      await waitFor(() =>
+        expect(d.setPolicy).toHaveBeenCalledWith("org", {
+          allowedAgents: ["claude-agent-acp", "codex-acp"],
+          defaultAgent: "claude-agent-acp",
+        })
+      )
+    })
+
+    it("a Host that predates the choice is neither offered nor sent it", async () => {
+      render(<OrgModelsSection row={row} deps={deps()} />)
+      await screen.findByTestId("org-models-agents")
+      expect(screen.queryByTestId("org-agents-resume")).not.toBeInTheDocument()
+    })
+  })
+
   it("sends a new key, clears the field, and reads the list again", async () => {
     const d = deps()
     render(<OrgModelsSection row={row} deps={d} />)

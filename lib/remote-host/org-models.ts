@@ -39,6 +39,21 @@ export interface OrgAgentPolicy {
   defaultAgent: string | null
   updatedAt?: number | null
   updatedBy?: string | null
+  /**
+   * ADR-0253 §7: whether a member turn a Host restart interrupted is run
+   * again, as it applies now. Absent from a Host older than §7, which never
+   * retries and must not be sent the setting.
+   */
+  resumeAfterRestart?: boolean
+  /** The organization's own choice; `null` follows the Host's default. */
+  resumeAfterRestartChoice?: boolean | null
+  /** The Host operator's default, what `null` means here. */
+  resumeAfterRestartDefault?: boolean
+}
+
+/** Whether the Host reads `resumeAfterRestart` (ADR-0253 §7). */
+export function supportsResumeAfterRestart(policy: OrgAgentPolicy): boolean {
+  return typeof policy.resumeAfterRestartDefault === "boolean"
 }
 
 export interface OrgModelsDeps {
@@ -99,9 +114,20 @@ export function getOrgAgentPolicy(
   return call<OrgAgentPolicy>(hostRef, "org_agent_policy_get", {}, deps)
 }
 
+export interface OrgAgentPolicyWrite {
+  allowedAgents: string[]
+  defaultAgent: string | null
+  /**
+   * Absent keeps the organization's choice, `null` returns to the Host's
+   * default, a boolean is the organization's own. Send it only to a Host that
+   * reads it ({@link supportsResumeAfterRestart}): an older one refuses it.
+   */
+  resumeAfterRestart?: boolean | null
+}
+
 export function setOrgAgentPolicy(
   hostRef: string,
-  policy: { allowedAgents: string[]; defaultAgent: string | null },
+  policy: OrgAgentPolicyWrite,
   deps: OrgModelsDeps = {}
 ): Promise<OrgAgentPolicy> {
   return call<OrgAgentPolicy>(
@@ -110,6 +136,9 @@ export function setOrgAgentPolicy(
     {
       allowedAgents: policy.allowedAgents,
       ...(policy.defaultAgent ? { defaultAgent: policy.defaultAgent } : {}),
+      ...(policy.resumeAfterRestart !== undefined
+        ? { resumeAfterRestart: policy.resumeAfterRestart }
+        : {}),
     },
     deps
   )

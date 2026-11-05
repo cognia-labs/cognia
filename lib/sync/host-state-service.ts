@@ -24,6 +24,7 @@ import {
   type HostStateDecisionKind,
   type HostStateMutation,
   type HostStateOperation,
+  type HostStateQueuedMessage,
   type HostStateRecoveryStatus,
   type HostStateSnapshotRequest,
   type HostStateSnapshot,
@@ -45,6 +46,7 @@ import {
 } from "@/lib/sync/host-state-offered-actions"
 import { sessionIndexChannel, sessionStateChannel } from "@cognia/agent-config-types/host-state"
 import type { HostStateTitleGenerator } from "./host-state-title"
+import type { InterruptedHostStateTurn } from "@/lib/work-submission/host-adapter"
 import type { Transport } from "@/lib/tauri/transport-types"
 import { loggers } from "@cognia/logging"
 import { createDiagnostic, type CogniaDiagnostic } from "@cognia/diagnostics"
@@ -740,6 +742,48 @@ export interface HostStateServiceOptions {
    * Injectable so the channel commit can be tested without a model.
    */
   generateTitle?: HostStateTitleGenerator
+  /**
+   * A member's brain started by a Host that restarted under it (ADR-0253 §7).
+   * Recovery then ends the turns the previous Host left in flight as
+   * `host_restarted`, or sends them again where the organization asked for
+   * that. Absent everywhere else, where recovery is what it always was.
+   */
+  hostRestart?: HostRestartRecovery
+}
+
+/**
+ * What recovery needs to finish a member's turns after a Host restart
+ * (ADR-0253 §7). The person brain supplies it (`lib/headless/person-restart.ts`).
+ */
+export interface HostRestartRecovery {
+  /** When the Host booted. A turn accepted before it was the previous Host's. */
+  bootedAt: number
+  /** The conversation's turns accepted before {@link bootedAt} that never settled. */
+  interruptedTurns(sessionId: string): Promise<InterruptedHostStateTurn[]>
+  /** Whether the organization asked for interrupted turns to be retried. */
+  resumeEnabled(): Promise<boolean>
+  /** End a turn that will not be retried, as `host_restarted`. */
+  fail(turn: InterruptedHostStateTurn): Promise<void>
+  /** Tell the transcript the turn is being retried, before it is sent again. */
+  markRetry(turn: InterruptedHostStateTurn): Promise<void>
+  /** Let the dispatcher claim the turn's submission once more, and take that back. */
+  permit(actionId: string): void
+  revoke(actionId: string): void
+}
+
+/** The ADR-0253 §7 error code a turn the Host's restart ended carries. */
+export const HOST_STATE_HOST_RESTARTED = "host_restarted"
+
+/** One conversation whose turns a Host restart interrupted. */
+interface RestartedChannel {
+  channel: string
+  sessionId: string
+  /** Turns the previous Host had started, oldest first. */
+  attempted: InterruptedHostStateTurn[]
+  /** Messages still waiting behind them, in queue order. Never started. */
+  queued: HostStateQueuedMessage[]
+  /** Every interrupted submission, by action id. */
+  submissions: Map<string, InterruptedHostStateTurn>
 }
 
 export interface HostStateService {
@@ -766,6 +810,12 @@ export interface HostStateService {
   ): Promise<HostStateSubmitResponse>
   status(): Promise<HostStateStatus>
   recover(): Promise<{ dispatched: number; broadcast: number }>
+  /**
+   * Resolves once the turns a Host restart interrupted have been ended or sent
+   * again (ADR-0253 §7). That runs after `start()` reports, so a device's
+   * first read never waits on an agent starting.
+   */
+  restartSettled(): Promise<void>
   /**
    * Retry what has come due: failed dispatches past their `nextDispatchAt`,
    * and rows stranded past {@link HOST_STATE_REDRIVE_GRACE_MS}. The lease
@@ -1547,6 +1597,8 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
   /** Actions whose dispatch is running now, so a sweep never sends one twice. */
   const inFlight = new Set<string>()
   let sweeping: Promise<void> | null = null
+  /** The turns a Host restart interrupted, being ended or sent again. */
+  let restartWork: Promise<void> = Promise.resolve()
 
   const assertRequestScope = (accountId: string, runtimeTargetId: string): void => {
     if (accountId !== options.accountId || runtimeTargetId !== options.runtimeTargetId) {
@@ -1612,7 +1664,17 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
           // the dead owner's turn and marked lost the moment it started.
           const unsettled = await settleOrphanedTurns()
           const redriven = await redrive(await listPendingHostStateActions(), { startup: true })
-          recovery = unsettled + redriven.failedRows > 0 ? "degraded" : "ready"
+          recovery = unsettled.failed + redriven.failedRows > 0 ? "degraded" : "ready"
+          // After the ledger, so a retried turn is never read back as a
+          // stranded action; in the background, so no device read waits on an
+          // agent starting (ADR-0253 §7).
+          if (unsettled.restarted.length > 0) {
+            restartWork = finishRestartedTurns(unsettled.restarted).catch((error) =>
+              loggers.sync.error("[host-state] finishing turns a Host restart interrupted failed", {
+                error: error instanceof Error ? error.message : String(error),
+              })
+            )
+          }
         } catch (error) {
           recovery = "degraded"
           loggers.sync.error("[host-state] recovery failed; serving degraded", {
@@ -1816,6 +1878,10 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
     async recover() {
       const result = await redrive(await listPendingHostStateActions(), { startup: false })
       return { dispatched: result.dispatched, broadcast: result.broadcast }
+    },
+
+    restartSettled() {
+      return restartWork
     },
 
     sweep() {
@@ -2375,13 +2441,18 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
    * and lands the turn on `retryable-error` — resumable, because the
    * conversation itself survived.
    */
-  async function settleOrphanedTurns(): Promise<number> {
+  async function settleOrphanedTurns(): Promise<{
+    failed: number
+    restarted: RestartedChannel[]
+  }> {
     if (generation === null) throw new Error("host_state_lease_missing")
     const channels = await listHostStateSessionChannels()
     let failed = 0
+    const restarted: RestartedChannel[] = []
     for (const channel of channels) {
       try {
-        await settleOrphanedTurn(channel)
+        const interrupted = await settleOrphanedTurn(channel)
+        if (interrupted) restarted.push(interrupted)
       } catch (error) {
         failed += 1
         loggers.sync.error("[host-state] settling an orphaned turn failed", {
@@ -2390,21 +2461,30 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
         })
       }
     }
-    return failed
+    return { failed, restarted }
   }
 
-  async function settleOrphanedTurn(channel: string): Promise<void> {
+  async function settleOrphanedTurn(channel: string): Promise<RestartedChannel | null> {
     if (generation === null) throw new Error("host_state_lease_missing")
     const snapshot = await getHostStateSnapshot(channel)
-    if (snapshot.state.kind !== "session") return
-    const { turn } = snapshot.state
+    if (snapshot.state.kind !== "session") return null
+    const session = snapshot.state
+    const { turn } = session
+    const restart = options.hostRestart
     if (
       turn !== "queued" &&
       turn !== "running" &&
       turn !== "awaiting-decision" &&
       turn !== "stopping"
     ) {
-      return
+      // Nothing was in flight, so a submission the previous Host left open
+      // describes no turn anyone is waiting on. Close it; never send it again.
+      if (restart) {
+        for (const stale of await restart.interruptedTurns(session.sessionId)) {
+          await restart.fail(stale)
+        }
+      }
+      return null
     }
     const envelopeId = `recovery:${generation}:${channel}`
     await commitHostStateRuntimeProjection({
@@ -2420,6 +2500,187 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
         revision: state.revision + 1,
       }),
       now: now(),
+    })
+    const row = await getHostStateAction(generation, `runtime:${envelopeId}`)
+    if (row) await processRow(row)
+    if (!restart) return null
+    // ADR-0253 §7: a turn the previous Host held is one its restart
+    // interrupted, and the member is told so rather than that the runtime
+    // went away. A brain that crashed under a live Host keeps the code above.
+    const interrupted = await restart.interruptedTurns(session.sessionId)
+    const startedBefore = (session.activeTurn?.startedAt ?? Infinity) < restart.bootedAt
+    if (interrupted.length === 0 && !startedBefore) return null
+    const restartedId = `recovery:${generation}:${channel}:host-restarted`
+    await commitHostStateRuntimeProjection({
+      hostId: options.hostId,
+      hostGeneration: generation,
+      ownerId: options.ownerId,
+      channel,
+      envelopeId: restartedId,
+      envelopeDigest: hostStateDigest({
+        recovery: generation,
+        channel,
+        code: HOST_STATE_HOST_RESTARTED,
+      }),
+      mutation: (state) => ({
+        kind: "turn.settled",
+        turn: "retryable-error",
+        errorCode: HOST_STATE_HOST_RESTARTED,
+        revision: state.revision + 1,
+      }),
+      now: now(),
+    })
+    const restartedRow = await getHostStateAction(generation, `runtime:${restartedId}`)
+    if (restartedRow) await processRow(restartedRow)
+    const queuedIds = new Set(session.queue.map((item) => item.actionId))
+    return {
+      channel,
+      sessionId: session.sessionId,
+      attempted: interrupted.filter((item) => !queuedIds.has(item.actionId)),
+      queued: session.queue,
+      submissions: new Map(interrupted.map((item) => [item.actionId, item])),
+    }
+  }
+
+  /**
+   * End or retry what a Host restart interrupted (ADR-0253 §7).
+   *
+   * Off (the default): every interrupted turn ends `host_restarted` and the
+   * messages queued behind it are dropped with the same code, so nothing is
+   * left reading as pending. On: a turn the previous Host had started is sent
+   * again after the transcript says so, since a tool effect of its first
+   * attempt may repeat; queued messages, which never started, are simply
+   * delivered. A turn whose words cannot be read back, or whose attachments
+   * were already consumed, ends `host_restarted` either way.
+   */
+  async function finishRestartedTurns(channels: readonly RestartedChannel[]): Promise<void> {
+    const restart = options.hostRestart
+    if (!restart) return
+    const resume = await restart.resumeEnabled().catch((error) => {
+      loggers.sync.warn("[host-state] resumeAfterRestart unreadable; ending interrupted turns", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    })
+    for (const channel of channels) {
+      try {
+        await finishRestartedChannel(restart, channel, resume)
+      } catch (error) {
+        loggers.sync.error("[host-state] finishing an interrupted conversation failed", {
+          channel: channel.channel,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+  }
+
+  async function finishRestartedChannel(
+    restart: HostRestartRecovery,
+    channel: RestartedChannel,
+    resume: boolean
+  ): Promise<void> {
+    for (const turn of channel.attempted) {
+      if (!resume || turn.text === null || turn.messageId === null || turn.attachments) {
+        await restart.fail(turn)
+        continue
+      }
+      await restart.markRetry(turn)
+      await redispatchAfterRestart(restart, channel, turn, {
+        actionId: turn.actionId,
+        clientId: "host-restart",
+        messageId: turn.messageId,
+        text: turn.text,
+        attachments: [],
+      })
+    }
+    for (const item of channel.queued) {
+      const submission = channel.submissions.get(item.actionId)
+      if (!resume) {
+        if (submission) await restart.fail(submission)
+        await dropQueuedAfterRestart(channel.channel, item.actionId)
+        continue
+      }
+      await redispatchAfterRestart(restart, channel, submission ?? null, item)
+    }
+  }
+
+  async function redispatchAfterRestart(
+    restart: HostRestartRecovery,
+    channel: RestartedChannel,
+    submission: InterruptedHostStateTurn | null,
+    message: Pick<
+      HostStateQueuedMessage,
+      "actionId" | "clientId" | "messageId" | "text" | "attachments" | "mentions" | "promptPreamble"
+    >
+  ): Promise<void> {
+    if (generation === null) throw new Error("host_state_lease_missing")
+    const queued = channel.queued.some((item) => item.actionId === message.actionId)
+    const giveUp = async () => {
+      if (submission) await restart.fail(submission)
+      if (queued) await dropQueuedAfterRestart(channel.channel, message.actionId)
+    }
+    if (!options.dispatchRuntime) return giveUp()
+    const action: HostStateAction = {
+      channel: channel.channel,
+      accountId: options.accountId,
+      runtimeTargetId: options.runtimeTargetId,
+      hostId: options.hostId,
+      hostGeneration: generation,
+      sessionId: channel.sessionId,
+      clientId: message.clientId,
+      clientSeq: 0,
+      actionId: message.actionId,
+      createdAt: now(),
+      action: {
+        kind: "message.enqueue",
+        messageId: message.messageId,
+        text: message.text,
+        attachments: message.attachments,
+        ...(message.mentions ? { mentions: message.mentions } : {}),
+        ...(message.promptPreamble ? { promptPreamble: message.promptPreamble } : {}),
+      },
+    }
+    restart.permit(message.actionId)
+    try {
+      await options.dispatchRuntime(action)
+    } catch (error) {
+      restart.revoke(message.actionId)
+      loggers.sync.warn("[host-state] a turn interrupted by a Host restart was not sent again", {
+        actionId: message.actionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // The dispatcher already ended an abandoned turn with its own code.
+      if (error instanceof HostStateDispatchAbandonedError) {
+        if (queued) await dropQueuedAfterRestart(channel.channel, message.actionId, error.code)
+        return
+      }
+      await giveUp()
+    }
+  }
+
+  async function dropQueuedAfterRestart(
+    channel: string,
+    actionId: string,
+    errorCode: string = HOST_STATE_HOST_RESTARTED
+  ): Promise<void> {
+    if (generation === null) throw new Error("host_state_lease_missing")
+    const envelopeId = `restart-drop:${generation}:${actionId}`
+    const at = now()
+    await commitHostStateRuntimeProjection({
+      hostId: options.hostId,
+      hostGeneration: generation,
+      ownerId: options.ownerId,
+      channel,
+      envelopeId,
+      envelopeDigest: hostStateDigest({ restartDrop: generation, actionId, errorCode }),
+      mutation: (state) => ({
+        kind: "message.dropped",
+        actionId,
+        errorCode,
+        at,
+        revision: state.revision + 1,
+      }),
+      now: at,
     })
     const row = await getHostStateAction(generation, `runtime:${envelopeId}`)
     if (row) await processRow(row)

@@ -30,11 +30,14 @@ import type { SendOptions } from "@cognia/agent-config-types"
 import {
   claimWorkSubmission,
   getWorkSubmission,
+  getWorkSubmissionBundle,
+  listWorkSubmissions,
   type WorkSubmissionRow,
 } from "@/lib/db/work-submissions"
 
 import { chatIdempotencyKey } from "./chat-adapter"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { openWorkSubmissionPayload, type WorkSubmissionCryptoDeps } from "./crypto"
 import { planWorkSubmissionRecovery, type WorkRecoveryDeps } from "./recovery"
 import {
   acceptWorkSubmission,
@@ -202,6 +205,8 @@ export async function claimHostStateChatTurnForDispatch(
   deps: HostAdapterDeps = {}
 ): Promise<HostStateTurnDispatchClaim> {
   const submissionId = hostStateSubmissionId(actionId)
+  // Consumed here whatever the row says, so a permit never outlives its claim.
+  const afterRestart = restartRedispatchPermits.delete(actionId)
   let row: WorkSubmissionRow | undefined
   try {
     row = await getWorkSubmission(submissionId)
@@ -214,27 +219,34 @@ export async function claimHostStateChatTurnForDispatch(
   // back to an unfenced send: the work outbox owns the row and will decide.
   try {
     if (row.dispatchState === "settled") return "owned_elsewhere"
-    // A live lease is a live owner. Planning against its row could settle a
-    // turn that owner is handing off right now.
-    if (
-      (row.dispatchState === "claimed" || row.dispatchState === "dispatched") &&
-      (row.leaseExpiresAt ?? 0) > now
-    ) {
-      return "owned_elsewhere"
+    if (!afterRestart) {
+      // A live lease is a live owner. Planning against its row could settle a
+      // turn that owner is handing off right now.
+      if (
+        (row.dispatchState === "claimed" || row.dispatchState === "dispatched") &&
+        (row.leaseExpiresAt ?? 0) > now
+      ) {
+        return "owned_elsewhere"
+      }
+      const plan = await planWorkSubmissionRecovery(row, deps)
+      if (plan.action === "recovery_required") {
+        await settleWorkSubmissionWithoutTranscript(
+          submissionId,
+          "recovery_required",
+          now,
+          plan.reason
+        )
+        return "recovery_required"
+      }
     }
-    const plan = await planWorkSubmissionRecovery(row, deps)
-    if (plan.action === "recovery_required") {
-      await settleWorkSubmissionWithoutTranscript(
-        submissionId,
-        "recovery_required",
-        now,
-        plan.reason
-      )
-      return "recovery_required"
-    }
-    const claimed = await claimWorkSubmission(submissionId, "host-state", now)
+    // After a Host restart the organization chose at-least-once: the turn is
+    // sent again whatever its first attempt did, and the lease it held died
+    // with the Host. Its runtime went too, so there is nothing to stop first.
+    const claimed = await claimWorkSubmission(submissionId, "host-state", now, undefined, {
+      previousOwnerGone: afterRestart,
+    })
     if (!claimed) return "owned_elsewhere"
-    if (claimed.takeoverRequired) {
+    if (claimed.takeoverRequired && !afterRestart) {
       try {
         await (deps.abortPrevious ?? abortSubmissionSession)(claimed)
       } catch (error) {
@@ -259,4 +271,125 @@ async function abortSubmissionSession(submission: WorkSubmissionRow): Promise<vo
   if (!submission.sessionId) return
   const { interruptSession } = await import("@/lib/claude/ipc")
   await interruptSession(submission.sessionId)
+}
+
+// ── ADR-0253 §7: member turns a Host restart interrupted ────────────────────
+
+/** Why a member turn the Host's restart interrupted ended. */
+export const HOST_RESTARTED = "host_restarted"
+
+/** Action ids whose next claim may pass the replay-safety plan, once. */
+const restartRedispatchPermits = new Set<string>()
+
+/**
+ * Let the next {@link claimHostStateChatTurnForDispatch} of `actionId` claim
+ * its submission again although an earlier attempt may have had effects.
+ *
+ * Only the restart recovery calls this, and only for an organization that
+ * asked for interrupted turns to be retried (`resumeAfterRestart`): that is an
+ * explicit choice of at-least-once over the parked resume this module would
+ * otherwise require. The transcript says so before the turn is sent again.
+ */
+export function permitHostStateRedispatchAfterRestart(actionId: string): void {
+  restartRedispatchPermits.add(actionId)
+}
+
+/** Drop a permit whose dispatch never reached its claim. */
+export function revokeHostStateRedispatchPermit(actionId: string): void {
+  restartRedispatchPermits.delete(actionId)
+}
+
+/** One HostState chat turn accepted before the Host restarted, still open. */
+export interface InterruptedHostStateTurn {
+  submissionId: string
+  actionId: string
+  sessionId: string
+  /** The member's message; `null` when the frozen input cannot be read. */
+  messageId: string | null
+  text: string | null
+  /** The turn carried attachment refs, which the frozen input cannot resend. */
+  attachments: boolean
+  createdAt: number
+}
+
+/**
+ * The HostState chat turns of `sessionId` accepted before `bootedAt` that
+ * never settled, oldest first.
+ *
+ * A Host restart is the only thing that leaves one: the brain that held it
+ * went with the Host, and a member's brain runs no outbox that would settle it
+ * later. The text comes from the frozen input, which is what the turn sent.
+ */
+export async function listHostStateTurnsInterruptedBefore(
+  sessionId: string,
+  bootedAt: number,
+  deps: WorkSubmissionCryptoDeps & { list?: typeof listWorkSubmissions } = {}
+): Promise<InterruptedHostStateTurn[]> {
+  const rows = await (deps.list ?? listWorkSubmissions)({
+    sessionId,
+    dispatchStates: ["pending", "blocked", "claimed", "dispatched"],
+    limit: 1000,
+  })
+  const open = rows
+    .filter(
+      (row) =>
+        row.sourceKind === "chat" &&
+        row.runId.startsWith("hoststate:") &&
+        typeof row.triggerId === "string" &&
+        row.createdAt < bootedAt
+    )
+    .sort((a, b) => a.createdAt - b.createdAt)
+  return Promise.all(open.map((row) => readInterruptedTurn(row, sessionId, deps)))
+}
+
+async function readInterruptedTurn(
+  row: WorkSubmissionRow,
+  sessionId: string,
+  deps: WorkSubmissionCryptoDeps
+): Promise<InterruptedHostStateTurn> {
+  const turn: InterruptedHostStateTurn = {
+    submissionId: row.id,
+    actionId: row.triggerId!,
+    sessionId,
+    messageId: null,
+    text: null,
+    attachments: false,
+    createdAt: row.createdAt,
+  }
+  try {
+    const bundle = await getWorkSubmissionBundle(row.id)
+    if (!bundle?.inputBatch) return turn
+    const input = JSON.parse(
+      await openWorkSubmissionPayload(
+        bundle.inputBatch.envelope,
+        { accountId: row.accountId, submissionId: row.id, kind: "input-batch" },
+        deps
+      )
+    ) as { content?: unknown; visibleMessageIds?: unknown }
+    const messageId = Array.isArray(input.visibleMessageIds) ? input.visibleMessageIds[0] : null
+    if (typeof input.content !== "string" || typeof messageId !== "string") return turn
+    let attachments = false
+    if (bundle.contextBundle) {
+      const context = JSON.parse(
+        await openWorkSubmissionPayload(
+          bundle.contextBundle.envelope,
+          { accountId: row.accountId, submissionId: row.id, kind: "context-bundle" },
+          deps
+        )
+      ) as { detail?: Record<string, unknown> }
+      const refs = context.detail?.[HOST_STATE_ATTACHMENT_REFS_DETAIL]
+      attachments = typeof refs === "number" && refs > 0
+    }
+    return { ...turn, messageId, text: input.content, attachments }
+  } catch {
+    return turn
+  }
+}
+
+/** End an interrupted turn the Host will not retry, as `host_restarted`. */
+export async function failHostStateTurnAfterRestart(
+  submissionId: string,
+  now = Date.now()
+): Promise<boolean> {
+  return settleWorkSubmissionWithoutTranscript(submissionId, "failed", now, HOST_RESTARTED)
 }

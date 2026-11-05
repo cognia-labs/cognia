@@ -2678,6 +2678,10 @@
     "turns": "Turns"
   },
   "sessionNotice": {
+    "hostRestarted": {
+      "detail": "The Host restarted during this turn, so it is running again. Anything the first attempt already did may happen twice.",
+      "label": "Retried after the Host restarted"
+    },
     "permissionDenied": {
       "detail": "{tool} was not allowed to run",
       "label": "Tool blocked"

@@ -3610,6 +3610,31 @@ it("routes advanced session operations through the admitted native-session servi
   ).rejects.toThrow("identities")
 })
 
+it("adr0253 a member's brain recovers a Host restart only once told when its Host booted", async () => {
+  const { initializePersonChat } = await import("@/lib/headless/person-chat")
+  const payload = (hostId: string) => ({
+    callerAccountId: "local-default",
+    authoritativeHostId: hostId,
+    runtimeTargetId: "target-a",
+    callerDeviceId: "member-restart",
+    callerDeviceGrants: ["client.write"],
+    callerPartition: true,
+  })
+  const lastOptions = () =>
+    mockCreateHostStateService.mock.calls.at(-1)![0] as { hostRestart?: { bootedAt: number } }
+  try {
+    initializePersonChat("person-brain", { COGNIA_HOST_BOOTED_AT: "1767225600000" })
+    await dispatchCommand("host_state_status", payload("host-person-restart-a"), undefined, true)
+    expect(lastOptions().hostRestart?.bootedAt).toBe(1767225600000)
+    // An older Host does not say, and recovery stays what it was.
+    initializePersonChat("person-brain", {})
+    await dispatchCommand("host_state_status", payload("host-person-restart-b"), undefined, true)
+    expect(lastOptions().hostRestart).toBeUndefined()
+  } finally {
+    initializePersonChat("brain", {})
+  }
+})
+
 it("partition manifest and session negotiation share Host chat opt-in", async () => {
   const { initializePersonChat } = await import("@/lib/headless/person-chat")
   const { __resetRemoteAttachForTests } = await import("./remote-attach-registry")

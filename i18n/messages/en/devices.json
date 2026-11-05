@@ -730,7 +730,16 @@
       "save": "Save agents",
       "saving": "Saving…",
       "saved": "Saved the agents for {host}",
-      "updated": "Updated {when}"
+      "updated": "Updated {when}",
+      "resume": {
+        "label": "When the Host restarts mid-turn",
+        "followDefault": "Use the Host's setting ({state})",
+        "retry": "Run the interrupted turn again",
+        "end": "End the interrupted turn",
+        "on": "run again",
+        "off": "end it",
+        "hint": "Running it again starts the turn over from the member's message, after a note in the conversation. Anything the first attempt already did, such as editing files or calling a service, may happen a second time."
+      }
     },
     "usage": {
       "title": "Monthly usage",

@@ -501,6 +501,10 @@
       "label": "The agent can't read this attachment",
       "hint": "Agents on a shared Host can read text and images, but not documents such as PDFs. Remove the document, or paste the parts you need as text."
     },
+    "hostRestarted": {
+      "label": "Stopped because the Host restarted",
+      "hint": "The Host restarted while this was running, so the turn ended. What was already written is kept. Send the message again to run it now; anything the first attempt already did outside the Host was not undone."
+    },
     "revokedDuringRun": {
       "label": "Stopped because your access changed",
       "hint": "Your membership or role in this organization changed while this was running, so the Host stopped it. What was already written is kept. Anything it had already done outside the Host was not undone."

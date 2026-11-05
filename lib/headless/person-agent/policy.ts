@@ -66,6 +66,11 @@ export interface PersonAgentPolicy {
   modelPricing?: PersonModelPricing
   /** P6g: null when the Host keeps no usage ledger, or is older than P6g. */
   usage: PersonOwnUsage | null
+  /**
+   * ADR-0253 §7: retry a turn a Host restart interrupted, rather than end it
+   * `host_restarted`. Present only when on; a Host older than §7 never says.
+   */
+  resumeAfterRestart?: true
 }
 
 export type PersonAgentResolution =
@@ -185,6 +190,7 @@ export async function fetchPersonAgentPolicy(
     ...(Object.keys(modelNames).length > 0 ? { modelNames } : {}),
     ...(Object.keys(modelPricing).length > 0 ? { modelPricing } : {}),
     usage: readUsage(policy.usage),
+    ...(policy.resumeAfterRestart === true ? { resumeAfterRestart: true as const } : {}),
   }
 }
 

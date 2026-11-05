@@ -66,4 +66,12 @@ describe("SessionNoticeMarker", () => {
     )
     expect(screen.getByText(/rateLimit\.status\.warning/)).toBeInTheDocument()
   })
+
+  it("adr0253 says a retried turn follows a Host restart and may repeat effects", () => {
+    render(<SessionNoticeMarker message={notice({ variant: "host-restarted" })} />)
+    const marker = screen.getByTestId("session-notice-host-restarted")
+    expect(marker).toHaveAttribute("aria-label", "hostRestarted.label")
+    expect(screen.getByText("hostRestarted.label")).toBeInTheDocument()
+    expect(screen.getByText(/hostRestarted\.detail/)).toBeInTheDocument()
+  })
 })

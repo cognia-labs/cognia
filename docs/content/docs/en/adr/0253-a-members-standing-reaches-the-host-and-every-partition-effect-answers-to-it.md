@@ -108,6 +108,8 @@ At boot, before admitting members, the Host compares its execution records and i
 
 An organization may instead ask that interrupted turns resume. The organization agent policy gains `resumeAfterRestart` (owner or admin, like the rest of that policy). The operator sets the default with `COGNIA_PERSON_RESUME_AFTER_RESTART`, which is off unless set. When it is on, the person's brain starts a fresh agent in the same personal workspace, replays the transcript as history, marks the transcript that the turn is being retried because the Host restarted, and dispatches the interrupted user turn again. This is at-least-once: a tool effect the first attempt already made may be made again. The marker tells the member so.
 
+The Host tells each person brain when it booted. A turn the brain accepted before that instant was interrupted by the restart, which is how the brain tells it apart from a turn its own crash lost (that one keeps the runtime-loss code). The brain settles or retries interrupted turns when it next starts, which is when one of the member's devices reconnects. Messages queued behind the interrupted turn never started: with resume off they are dropped with `host_restarted`, with it on they are delivered in order. A turn whose words cannot be read back from the work ledger, or whose attachments were already consumed, ends `host_restarted` either way.
+
 Reattaching the original agent is rejected. The records hold no container, lease or ACP session id, the sandbox daemon terminates an agent when its socket drops, and no bundled agent is driven through ACP `session/load` today. Making all three hold would change the sandbox daemon and every agent adapter for a case that the replay covers.
 
 ### 8. Errors a member can see are distinct

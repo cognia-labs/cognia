@@ -2678,6 +2678,10 @@
     "turns": "轮次"
   },
   "sessionNotice": {
+    "hostRestarted": {
+      "detail": "本轮运行时主机重启了，因此重新运行。第一次尝试已经执行的操作可能会再执行一次。",
+      "label": "主机重启后重试"
+    },
     "permissionDenied": {
       "detail": "{tool} 未被允许运行",
       "label": "工具被拦截"

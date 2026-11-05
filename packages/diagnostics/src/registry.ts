@@ -973,6 +973,14 @@ export const DIAGNOSTIC_CODES: Readonly<Record<DiagnosticCode, DiagnosticCodeSpe
     actions: [{ kind: "dismiss" }],
     icon: "key",
   },
+  hostRestarted: {
+    severity: "warning",
+    // Sending the message again starts a fresh turn on the restarted Host.
+    retryable: true,
+    persistent: false,
+    actions: [{ kind: "retry" }, { kind: "dismiss" }],
+    icon: "server",
+  },
   credentialDeliveryRefused: {
     severity: "warning",
     retryable: false,

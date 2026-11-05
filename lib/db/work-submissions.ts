@@ -251,7 +251,14 @@ export async function claimWorkSubmission(
   id: string,
   leaseOwner: string,
   now: number,
-  ttlMs = WORK_SUBMISSION_LEASE_TTL_MS
+  ttlMs = WORK_SUBMISSION_LEASE_TTL_MS,
+  options: {
+    /**
+     * The lease holder is known to be gone though its lease has not run out:
+     * the Host restarted under it (ADR-0253 §7). Only that caller passes it.
+     */
+    previousOwnerGone?: boolean
+  } = {}
 ): Promise<ClaimedWorkSubmission | undefined> {
   return withDbReopenRetry(() => {
     const db = getDb()
@@ -259,6 +266,7 @@ export async function claimWorkSubmission(
       const row = await db.workSubmissions.get(id)
       if (!row) return undefined
       const leaseHeld =
+        !options.previousOwnerGone &&
         (row.dispatchState === "claimed" || row.dispatchState === "dispatched") &&
         (row.leaseExpiresAt ?? 0) > now
       const claimable =

@@ -12,6 +12,7 @@ import {
   setOrgCredential,
   setOrgDefaultCap,
   setOrgMemberCap,
+  supportsResumeAfterRestart,
   type OrgModelsDeps,
 } from "./org-models"
 
@@ -72,6 +73,32 @@ describe("organization models over the management channel", () => {
       allowedAgents: ["pi"],
       defaultAgent: "pi",
     })
+  })
+
+  it("adr0253 sends the restart choice only when given, and null to follow the Host", async () => {
+    call.mockResolvedValue({ allowedAgents: [], bundledAgents: [], defaultAgent: null })
+    for (const [resumeAfterRestart, sent] of [
+      [true, { resumeAfterRestart: true }],
+      [false, { resumeAfterRestart: false }],
+      [null, { resumeAfterRestart: null }],
+      [undefined, {}],
+    ] as const) {
+      await setOrgAgentPolicy(
+        HOST,
+        { allowedAgents: ["pi"], defaultAgent: null, resumeAfterRestart },
+        deps()
+      )
+      expect(call).toHaveBeenLastCalledWith("org_agent_policy_set", {
+        allowedAgents: ["pi"],
+        ...sent,
+      })
+    }
+  })
+
+  it("adr0253 a Host that reports the default reads the restart choice", () => {
+    const base = { allowedAgents: [], bundledAgents: [], defaultAgent: null }
+    expect(supportsResumeAfterRestart(base)).toBe(false)
+    expect(supportsResumeAfterRestart({ ...base, resumeAfterRestartDefault: false })).toBe(true)
   })
 
   it("reads the month's usage and tolerates a partial answer", async () => {

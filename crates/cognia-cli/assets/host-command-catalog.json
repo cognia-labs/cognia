@@ -60648,7 +60648,10 @@
           "bundledAgents",
           "defaultAgent",
           "updatedAt",
-          "updatedBy"
+          "updatedBy",
+          "resumeAfterRestart",
+          "resumeAfterRestartChoice",
+          "resumeAfterRestartDefault"
         ],
         "properties": {
           "allowedAgents": {
@@ -60720,6 +60723,21 @@
               "string",
               "null"
             ]
+          },
+          "resumeAfterRestart": {
+            "description": "ADR-0253 §7: whether a member turn a Host restart interrupted is retried. The organization's choice, else the operator's default.",
+            "type": "boolean"
+          },
+          "resumeAfterRestartChoice": {
+            "description": "The organization's own choice; null follows the operator's default (COGNIA_PERSON_RESUME_AFTER_RESTART).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resumeAfterRestartDefault": {
+            "description": "The operator's default, off unless COGNIA_PERSON_RESUME_AFTER_RESTART is set.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -60763,6 +60781,12 @@
                 "type": "null"
               }
             ]
+          },
+          "resumeAfterRestart": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -60779,7 +60803,10 @@
           "bundledAgents",
           "defaultAgent",
           "updatedAt",
-          "updatedBy"
+          "updatedBy",
+          "resumeAfterRestart",
+          "resumeAfterRestartChoice",
+          "resumeAfterRestartDefault"
         ],
         "properties": {
           "allowedAgents": {
@@ -60851,6 +60878,21 @@
               "string",
               "null"
             ]
+          },
+          "resumeAfterRestart": {
+            "description": "ADR-0253 §7: whether a member turn a Host restart interrupted is retried. The organization's choice, else the operator's default.",
+            "type": "boolean"
+          },
+          "resumeAfterRestartChoice": {
+            "description": "The organization's own choice; null follows the operator's default (COGNIA_PERSON_RESUME_AFTER_RESTART).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resumeAfterRestartDefault": {
+            "description": "The operator's default, off unless COGNIA_PERSON_RESUME_AFTER_RESTART is set.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -62809,6 +62851,10 @@
                 "minimum": 0
               }
             }
+          },
+          "resumeAfterRestart": {
+            "description": "ADR-0253 §7: whether this partition's brain retries a turn a Host restart interrupted. The resolved value only, never who chose it.",
+            "type": "boolean"
           }
         }
       },
@@ -111459,5 +111505,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "687c1256349a6ad04e0c362cbc225f62dd63ef045359e37731ae975900a7254e"
+  "catalogHash": "d05cc550f4437b30c26c34854b145ec93caae4d971e47fb496a45f201cb9f314"
 }
