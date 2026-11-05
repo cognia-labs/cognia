@@ -3,10 +3,11 @@ import type { PlatformBinding } from "@/types/connectors/binding"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { evaluateFetchTarget } from "@cognia/network-guard"
 import { getDb } from "@/lib/db/schema"
-import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
+import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import { getCredentialsGeneration } from "@/lib/connectors/credentials-events"
 import { fetchAttachment } from "@/lib/connectors/attachment-fetcher"
+import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import {
   connectorsAttachmentRead,
   connectorsHttpRequest,
@@ -139,13 +140,6 @@ const AVATAR_HOSTS: Partial<Record<PlatformKind, readonly string[]>> = {
   "qq-official": ["qlogo.cn", "qqchannel-profile-1251316161.file.myqcloud.com"],
   discord: ["cdn.discordapp.com", "media.discordapp.net"],
   slack: ["slack-edge.com", "secure.gravatar.com"],
-  lark: [
-    "feishucdn.com",
-    "larksuitecdn.com",
-    "byteimg.com",
-    "feishu.cn",
-    "sf1-ttcdn-tos.pstatp.com",
-  ],
   wecom: ["qpic.cn", "qlogo.cn"],
   "wechat-personal": ["qpic.cn", "qlogo.cn"],
   "wechat-oa": ["qpic.cn", "qlogo.cn"],
@@ -159,7 +153,7 @@ function publicUrl(
   if (typeof value !== "string" || value.length > 4096) return undefined
   try {
     const url = new URL(value)
-    const trusted = AVATAR_HOSTS[platform]?.some(
+    const trusted = (AVATAR_HOSTS[platform] ?? connectorVendor(platform)?.avatar?.hosts)?.some(
       (host) => url.hostname === host || url.hostname.endsWith(`.${host}`)
     )
     if (
@@ -176,7 +170,7 @@ function publicUrl(
   }
 }
 
-interface AvatarSource {
+export interface AvatarSource {
   url: string
   headers?: Record<string, string>
   revision?: string
@@ -255,76 +249,14 @@ async function resolveSource(
   if (!active()) return undefined
   const settings = record(adapter.settings) ?? {}
   const encode = encodeURIComponent
-  if (platform === "lark") {
-    const [appId, appSecret] = await Promise.all([
-      connectorsKeyringGet(adapterId, "appId"),
-      connectorsKeyringGet(adapterId, "appSecret"),
-    ])
-    if (!appId || !appSecret || !active()) return undefined
-    const { larkTenantRequest } = await import("@/lib/connectors/adapters/lark/http")
-    const tenantRequest = (path: string, purpose: "service-data" | "adapter-admin") =>
-      larkTenantRequest({ appId, appSecret }, "GET", path, undefined, purpose, {
-        avatarPolicy: true,
-      })
-    if (target.actorKind === "bot" || target.remoteIdType === "app_id") {
-      const whoami = record(adapter.lastWhoamiResult)
-      const own = remoteId === appId || (whoami?.appId === appId && whoami.openId === remoteId)
-      if (!own && target.remoteIdType !== "app_id") {
-        const siblings = await listAdapterInstancesByType("lark")
-        if (!active()) return undefined
-        for (const sibling of siblings) {
-          const identity = sibling.lastWhoamiResult
-          if (identity?.openId !== remoteId || !identity.botAvatar) continue
-          const confirmedAppId = await connectorsKeyringGet(sibling.id, "appId")
-          if (!active()) return undefined
-          const safe =
-            confirmedAppId === identity.appId
-              ? publicUrl(platform, identity.botAvatar, true)
-              : undefined
-          if (safe) return { url: safe }
-        }
-      }
-      // Only the verified self bot may use bot/v3/info. Never substitute its
-      // picture for an unknown bot's open_id or query contact users with app_id.
-      if (own || target.remoteIdType !== "app_id") {
-        const bot = record(record(await tenantRequest("/bot/v3/info", "adapter-admin"))?.bot)
-        if (!active()) return undefined
-        if (own || bot?.open_id === remoteId) {
-          const safe = publicUrl(platform, bot?.avatar_url, true)
-          return safe ? { url: safe } : undefined
-        }
-        return undefined
-      }
-      const app = record(
-        record(
-          record(
-            await tenantRequest(
-              `/application/v6/applications/${encode(remoteId)}?lang=zh_cn`,
-              "service-data"
-            )
-          )?.data
-        )?.app
-      )
-      const safe = publicUrl(platform, app?.avatar_url, true)
-      return safe ? { url: safe } : undefined
-    }
-    const result = record(
-      await tenantRequest(
-        kind === "user"
-          ? `/contact/v3/users/${encode(remoteId)}?user_id_type=open_id`
-          : `/im/v1/chats/${encode(remoteId)}`,
-        "service-data"
-      )
-    )
-    const data = record(result?.data)
-    const avatar = record(record(data?.user)?.avatar)
-    const url =
-      kind === "user"
-        ? (str(avatar?.avatar_240) ?? str(avatar?.avatar_72) ?? str(avatar?.avatar_640))
-        : data?.avatar
-    const safe = publicUrl(platform, url, true)
-    return safe ? { url: safe } : undefined
-  }
+  const vendor = connectorVendor(platform)?.avatar
+  if (vendor)
+    return vendor.resolve({
+      target,
+      adapter,
+      active,
+      publicUrl: (value, providerResponse) => publicUrl(platform, value, providerResponse),
+    })
   if (platform === "dingtalk") {
     if (kind !== "user") return undefined
     const ref = target.remoteIdType === "staff_id" ? undefined : await conversationRef()

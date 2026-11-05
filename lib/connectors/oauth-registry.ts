@@ -5,18 +5,19 @@
  * Maps platform kind to the async function that completes the OAuth code
  * exchange and stores the resulting credentials in the keyring.
  *
- * Telegram and Discord do not use OAuth. Slack and Lark both route to
- * platform-specific completion handlers that resolve the adapter row,
+ * Telegram and Discord do not use OAuth. Slack and the contributed vendors
+ * route to platform-specific completion handlers that resolve the adapter row,
  * exchange the code, store credentials in the keyring, and stamp connected
  * metadata back onto the adapter settings.
  *
  * The ConnectorDeepLinkRouter calls the registered handler after
  * validating the OAuth state parameter — state is also forwarded into
  * the handler so platform handlers can decode `adapterId` from a
- * platform-specific state shape (Lark uses `lark:<adapterId>:<nonce>`).
+ * platform-specific state shape (`<platform>:<adapterId>:<nonce>`).
  */
 
 import type { PlatformKind } from "@/types/connectors/platform-kind"
+import { connectorVendors } from "./vendor-contribution"
 
 /** sessionStorage/localStorage key shared by the OAuth `state` producer (connector config forms) and the deep-link validator (ConnectorDeepLinkRouter) — the two must never drift. */
 export { CONNECTOR_OAUTH_STATE_KEY } from "./oauth-state"
@@ -41,20 +42,11 @@ oauthRegistry.set("slack", async (code: string, state: string): Promise<void> =>
 })
 
 // ---------------------------------------------------------------------------
-// Lark — fully wired at ADR-0009 v41 / A4 (D2).
-// Routes cognia://connector/oauth/lark?code=...&state=lark:<adapterId>:<nonce>
-// through `handleLarkOAuth`. The handler:
-//   1. Parses `adapterId` out of state.
-//   2. Loads the adapter row + decrypts the app secret from keyring.
-//   3. Claims the Rust-owned pending authorization and PKCE verifier.
-//   4. Calls /open-apis/authen/v2/oauth/token with client credentials and PKCE
-//      to swap the code for a user_access_token + refresh_token.
-//   5. Persists tokens in keyring under `<adapterId>:user_token` +
-//      `<adapterId>:user_refresh_token`.
-//   6. Stamps `connectedUser` metadata onto the adapter row.
+// Contributed vendors (ADR-0250 §14): a vendor that completes an OAuth code
+// exchange supplies `completeOAuth` in its `adapters/<vendor>/contribution.ts`
+// (Lark: the send-as-user flow in `lib/auth-providers/feishu/oauth-handler.ts`).
 // ---------------------------------------------------------------------------
 
-oauthRegistry.set("lark", async (code: string, state: string): Promise<void> => {
-  const { handleLarkOAuth } = await import("@/lib/auth-providers/feishu/oauth-handler")
-  await handleLarkOAuth(code, { state })
-})
+for (const vendor of connectorVendors()) {
+  if (vendor.completeOAuth) oauthRegistry.set(vendor.platform as PlatformKind, vendor.completeOAuth)
+}

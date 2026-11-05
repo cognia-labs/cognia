@@ -5,12 +5,6 @@
  * and that unsupported types return null.
  */
 
-import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
-jest.mock("@/lib/auth-providers/feishu/auth", () => {
-  const actual = jest.requireActual("@/lib/auth-providers/feishu/auth")
-  return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
-})
-
 import { invoke } from "@tauri-apps/api/core"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 
@@ -76,7 +70,6 @@ import {
   buildAdapterFromRow,
   buildDiscordAdapter,
   buildSlackAdapter,
-  buildLarkAdapter,
   buildOneBotAdapter,
   buildMatrixAdapter,
   buildDingTalkAdapter,
@@ -160,14 +153,6 @@ function makeLarkBotInfoResp(openId: string) {
     status: 200,
     headers: {},
     body: JSON.stringify({ code: 0, bot: { open_id: openId, app_name: "cognia-bot" } }),
-  }
-}
-
-function makeLarkTatResp() {
-  return {
-    status: 200,
-    headers: {},
-    body: JSON.stringify({ code: 0, tenant_access_token: "t-test-tat", expire: 7200 }),
   }
 }
 
@@ -691,141 +676,6 @@ describe("buildSlackAdapter", () => {
 })
 
 // ---------------------------------------------------------------------------
-// buildLarkAdapter — selfBotOpenId resolution
-// ---------------------------------------------------------------------------
-
-describe("buildLarkAdapter", () => {
-  it.each([
-    ["invalid", "fill"],
-    ["default", "default"],
-    ["compact", "compact"],
-    ["fill", "fill"],
-  ])("passes normalized persisted %s width into the running adapter", async (width, expected) => {
-    await buildLarkAdapter(
-      makeRow({
-        type: "lark",
-        settings: {
-          selfBotOpenId: "ou_cached",
-          cardPresentation: { theme: "purple", showElapsed: false, width },
-        },
-      })
-    )
-    expect(mockCreateLarkAdapter).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cardPresentation: expect.objectContaining({
-          theme: "purple",
-          showElapsed: false,
-          width: expected,
-        }),
-      })
-    )
-  })
-  it("passes selfBotOpenId resolved from bot/v3/info into createLarkAdapter", async () => {
-    mockInvoke.mockImplementation(async (cmd: string, args: unknown) => {
-      if (cmd === "connectors_keyring_get") return "lark-cred-value"
-      if (cmd === "connectors_http_request") {
-        const url = (args as { req?: { url?: string } })?.req?.url ?? ""
-        if (url.includes("tenant_access_token")) return makeLarkTatResp()
-        return makeLarkBotInfoResp("ou_bot_open_001")
-      }
-      return null
-    })
-
-    const row = makeRow({
-      id: "lk-10",
-      type: "lark",
-      transportMode: "gateway",
-      settings: { transport: "long-connection" },
-      credentialsRef: {
-        keyringService: "com.cognia.platforms",
-        accounts: ["appId", "appSecret", "encryptKey", "verificationToken"],
-      },
-    })
-    await buildLarkAdapter(row)
-
-    const callArgs = mockCreateLarkAdapter.mock.calls[0][0] as {
-      id: string
-      selfBotOpenId: string
-      transport: string
-      appId: () => Promise<string>
-    }
-    expect(callArgs.id).toBe("lk-10")
-    expect(callArgs.selfBotOpenId).toBe("ou_bot_open_001")
-    expect(callArgs.transport).toBe("long-connection")
-    expect(typeof callArgs.appId).toBe("function")
-  })
-
-  it("falls back to empty selfBotOpenId when bot/v3/info throws", async () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {})
-    mockInvoke.mockImplementation(async (cmd: string, args: unknown) => {
-      if (cmd === "connectors_keyring_get") return "lark-cred"
-      if (cmd === "connectors_http_request") {
-        const url = (args as { req?: { url?: string } })?.req?.url ?? ""
-        if (url.includes("tenant_access_token")) return makeLarkTatResp()
-        throw new Error("network error")
-      }
-      return null
-    })
-
-    const row = makeRow({ id: "lk-11", type: "lark", transportMode: "gateway" })
-    await buildLarkAdapter(row)
-
-    const callArgs = mockCreateLarkAdapter.mock.calls[0][0] as { selfBotOpenId: string }
-    expect(callArgs.selfBotOpenId).toBe("")
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("lk-11"))
-    warnSpy.mockRestore()
-  })
-
-  it("uses webhook transport when settings.transport is webhook", async () => {
-    mockInvoke.mockImplementation(async (cmd: string, args: unknown) => {
-      if (cmd === "connectors_keyring_get") return "lark-cred"
-      if (cmd === "connectors_http_request") {
-        const url = (args as { req?: { url?: string } })?.req?.url ?? ""
-        if (url.includes("tenant_access_token")) return makeLarkTatResp()
-        return makeLarkBotInfoResp("ou_wh_bot")
-      }
-      return null
-    })
-
-    const row = makeRow({
-      id: "lk-12",
-      type: "lark",
-      transportMode: "webhook",
-      settings: { transport: "webhook" },
-    })
-    await buildLarkAdapter(row)
-
-    const callArgs = mockCreateLarkAdapter.mock.calls[0][0] as { transport: string }
-    expect(callArgs.transport).toBe("webhook")
-  })
-
-  it("credential factories resolve fresh values from keyring on each call", async () => {
-    let callCount = 0
-    mockInvoke.mockImplementation(async (cmd: string, args: unknown) => {
-      if (cmd === "connectors_keyring_get") {
-        callCount++
-        return `CRED-${callCount}`
-      }
-      if (cmd === "connectors_http_request") {
-        const url = (args as { req?: { url?: string } })?.req?.url ?? ""
-        if (url.includes("tenant_access_token")) return makeLarkTatResp()
-        return makeLarkBotInfoResp("ou_fresh")
-      }
-      return null
-    })
-
-    const row = makeRow({ id: "lk-13", type: "lark", transportMode: "gateway" })
-    await buildLarkAdapter(row)
-
-    const callArgs = mockCreateLarkAdapter.mock.calls[0][0] as {
-      appId: () => Promise<string>
-    }
-    const cred = await callArgs.appId()
-    expect(cred).toMatch(/^CRED-/)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // buildOneBotAdapter — no API call required
 // ---------------------------------------------------------------------------
 
@@ -883,20 +733,4 @@ describe("buildOneBotAdapter", () => {
     const callArgs = mockCreateOneBotAdapter.mock.calls[0][0] as { selfBotUin: string }
     expect(callArgs.selfBotUin).toBe("")
   })
-})
-
-it("labels registry self-bot discovery as adapter administration", async () => {
-  mockInvoke.mockImplementation(async (cmd: string, args: { req?: { url?: string } }) => {
-    if (cmd === "connectors_keyring_get") return "purpose-registry-credential"
-    if (cmd === "connectors_http_request")
-      return args.req?.url?.includes("tenant_access_token")
-        ? makeLarkTatResp()
-        : makeLarkBotInfoResp("ou_purpose")
-    return null
-  })
-  await buildLarkAdapter(makeRow({ id: "purpose-registry", type: "lark", settings: {} }))
-  expect(getTenantToken).toHaveBeenCalledWith(
-    { appId: "purpose-registry-credential", appSecret: "purpose-registry-credential" },
-    "adapter-admin"
-  )
 })

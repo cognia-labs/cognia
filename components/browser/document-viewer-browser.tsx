@@ -44,7 +44,7 @@ import {
 } from "@/lib/browser/document-viewer-session"
 import { getDocsProvider } from "@/lib/docs-providers/registry"
 import { classifyCloudDocumentUrl } from "@/lib/docs-providers/document-url"
-import { LARK_HOST_SUFFIXES } from "@/lib/twin/ingest/lark-url"
+import { LARK_HOST_SUFFIXES } from "@/lib/docs-providers/providers/lark/url"
 import { isTauri } from "@/lib/tauri"
 import { openExternal } from "@/lib/tauri/opener"
 import { cn } from "@/lib/utils"

@@ -42,7 +42,9 @@ import {
 } from "@/components/docs-providers/docs-provider-notice"
 import { openUrl } from "@/lib/native/opener"
 import { connectionsHref } from "@/lib/settings/deep-link"
-import { DocsProviderError, larkDocsProvider, googleDocsProvider } from "@/lib/docs-providers"
+import { DocsProviderError } from "@/lib/docs-providers"
+import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
+import { googleDocsProvider } from "@/lib/docs-providers/providers/google"
 import { listDocsProviders } from "@/lib/docs-providers/registry"
 import type { DocsProvider, DocsProviderAccount } from "@/lib/docs-providers/types"
 import {

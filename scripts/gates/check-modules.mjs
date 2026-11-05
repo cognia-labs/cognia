@@ -100,9 +100,24 @@ const UI_LAYERS = new Set(["app", "components", "hooks"])
  * directories where its vendor implementations belong. Files under an
  * implementation directory are not framework code.
  */
+// A catalog is the one list of implementations a framework reads (beside the
+// implementations, `_`-prefixed so the framework may import it). It may import
+// framework files and each implementation's `entry` file, nothing else, so it
+// stays a list and never becomes a way around G8.
 export const VENDOR_FRAMEWORKS = [
-  { path: "lib/connectors/", implementations: ["lib/connectors/adapters/"] },
-  { path: "lib/docs-providers/", implementations: ["lib/docs-providers/providers/"] },
+  {
+    path: "lib/connectors/",
+    implementations: ["lib/connectors/adapters/"],
+    catalogs: [{ file: "lib/connectors/adapters/_vendors.ts", entry: "contribution.ts" }],
+  },
+  {
+    path: "lib/docs-providers/",
+    implementations: ["lib/docs-providers/providers/"],
+    catalogs: [
+      { file: "lib/docs-providers/providers/_builtin.ts", entry: "index.ts" },
+      { file: "lib/docs-providers/providers/_document-urls.ts", entry: "document-url.ts" },
+    ],
+  },
   { path: "lib/issues/sync/", implementations: ["lib/issues/sync/providers/"] },
   { path: "lib/data/", implementations: ["lib/data/destinations/"] },
   { path: "lib/scheduler/", implementations: [] },
@@ -481,6 +496,23 @@ function frameworkOf(file) {
   return framework
 }
 
+/** The framework and catalog entry when `file` is a vendor catalog. */
+function catalogOf(file) {
+  for (const framework of VENDOR_FRAMEWORKS)
+    for (const catalog of framework.catalogs ?? [])
+      if (catalog.file === file) return { framework, catalog }
+  return null
+}
+
+/** Whether a catalog may import `target`: a framework file or one implementation's entry. */
+function catalogMayImport({ framework, catalog }, target) {
+  if (!target.startsWith(framework.path)) return false
+  const implementation = framework.implementations.find((prefix) => target.startsWith(prefix))
+  if (!implementation) return true
+  const [segment, entry, ...rest] = target.slice(implementation.length).split("/")
+  return !segment.startsWith("_") && entry === catalog.entry && rest.length === 0
+}
+
 // ------------------------------------------------------------------ run
 
 /** Compute every measure. Pure over `ctx`, so fixtures can drive it. */
@@ -512,6 +544,7 @@ export function computeModules(ctx) {
   for (const file of files) {
     const source = owners.get(file)
     const framework = frameworkOf(file)
+    const catalog = catalogOf(file)
     if (framework && VENDOR_SEGMENT.test(file.slice(framework.path.length)))
       vendorNeutral.push(`${file} :: vendor file`)
     for (const record of importsIn(ctx, file)) {
@@ -528,6 +561,8 @@ export function computeModules(ctx) {
         const vendorPath = outside && VENDOR_SEGMENT.test(target)
         if (implementation || vendorPath) vendorNeutral.push(`${file} :: imports ${target}`)
       }
+      if (catalog && !catalogMayImport(catalog, target))
+        vendorNeutral.push(`${file} :: catalog imports ${target}`)
       if (record.typeOnly || !source) continue
       const destination = owners.get(target)
       if (!destination || destination.node === source.node) continue

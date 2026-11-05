@@ -23,6 +23,7 @@
 
 import type { AdapterSelfIdentitySnapshot } from "@/lib/db/connector-types"
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
+import { connectorVendor } from "./vendor-contribution"
 
 export interface SelfIdentityInput {
   /** The platform's id for the account this instance authenticates as. */
@@ -105,8 +106,14 @@ const IDENTITY_PROBES: Record<string, () => Promise<(id: string, o: object) => P
     matrix: async () => (await import("@/lib/connectors/whoami/matrix-whoami")).probeMatrixIdentity,
     "qq-official": async () =>
       (await import("@/lib/connectors/whoami/qq-official-whoami")).probeQQOfficialIdentity,
-    lark: async () => (await import("@/lib/connectors/adapters/lark/whoami")).probeBotIdentity,
   }
+
+/** A built-in probe, or the one a contributed vendor supplies. */
+function identityProbe(
+  type: string
+): (() => Promise<(id: string, o: object) => Promise<unknown>>) | undefined {
+  return IDENTITY_PROBES[type] ?? connectorVendor(type)?.loadIdentityProbe
+}
 
 /**
  * Whether this platform's adapter confirms its own identity when it starts.
@@ -125,7 +132,7 @@ const IDENTITY_PROBES: Record<string, () => Promise<(id: string, o: object) => P
  * fail-closed set, which is the right incentive.
  */
 export function hasIdentityProbe(type: string): boolean {
-  return type in IDENTITY_PROBES
+  return identityProbe(type) !== undefined
 }
 
 /**
@@ -149,7 +156,7 @@ export async function confirmSelfIdentityOnStart(
   adapterId: string,
   type: string
 ): Promise<AdapterSelfIdentitySnapshot | undefined> {
-  const load = IDENTITY_PROBES[type]
+  const load = identityProbe(type)
   if (!load) return undefined
   try {
     const probe = await load()

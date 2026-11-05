@@ -3,10 +3,10 @@ import {
   docsProviderPrefixes,
   getDocsProvider,
   getDocsProviderByPrefix,
-  googleDocsProvider,
-  larkDocsProvider,
   listDocsProviders,
 } from "./index"
+import { larkDocsProvider } from "./providers/lark"
+import { googleDocsProvider } from "./providers/google"
 import * as registry from "./registry"
 
 beforeEach(() => __resetDocsProvidersForTests())

@@ -7,19 +7,16 @@
  */
 
 import { __clearDocsProvidersForTests, getDocsProvider, registerDocsProvider } from "./registry"
-import { larkDocsProvider } from "./providers/lark"
-import { googleDocsProvider } from "./providers/google"
+import { BUILTIN_DOCS_PROVIDERS } from "./providers/_builtin"
 
 export * from "./types"
 export * from "./registry"
 export { clampDocText, truncationMarker } from "./limits"
 export * from "./oauth-deep-link"
-export { larkDocsProvider } from "./providers/lark"
-export { googleDocsProvider } from "./providers/google"
 
 function registerBuiltinDocsProviders(): void {
   // Preserve registered providers and their active reads across dependency reloads.
-  for (const provider of [larkDocsProvider, googleDocsProvider]) {
+  for (const provider of BUILTIN_DOCS_PROVIDERS) {
     if (!getDocsProvider(provider.id)) registerDocsProvider(provider)
   }
 }

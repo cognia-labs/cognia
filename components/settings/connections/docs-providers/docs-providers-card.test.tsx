@@ -12,8 +12,8 @@ jest.mock("sonner", () => ({
 }))
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn(async () => undefined) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstancesByType: jest.fn() }))
-jest.mock("@/lib/docs-providers", () => ({
-  ...jest.requireActual("@/lib/docs-providers/types"),
+jest.mock("@/lib/docs-providers", () => jest.requireActual("@/lib/docs-providers/types"))
+jest.mock("@/lib/docs-providers/providers/lark", () => ({
   larkDocsProvider: {
     id: "lark",
     mentionPrefix: "lark:",
@@ -28,6 +28,8 @@ jest.mock("@/lib/docs-providers", () => ({
     }),
     subscribeAccounts: jest.fn(() => jest.fn()),
   },
+}))
+jest.mock("@/lib/docs-providers/providers/google", () => ({
   googleDocsProvider: { id: "google", mentionPrefix: "gdoc:", hosts: ["tauri"] },
 }))
 // The card asks `docsProviderReach`, which asks the host profile. Driving the
@@ -73,7 +75,8 @@ jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
 import { toast } from "sonner"
 import { openUrl } from "@/lib/native/opener"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import { DocsProviderError, larkDocsProvider } from "@/lib/docs-providers"
+import { DocsProviderError } from "@/lib/docs-providers"
+import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import {
   getGoogleDocsSettings,

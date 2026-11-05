@@ -411,6 +411,29 @@ export const route = (p: string) => (p === "lark" ? lark : p === "permission-mat
   ])
 })
 
+test("G8: a vendor catalog may import framework files and implementation entries only", () => {
+  const result = run({
+    [OWNERSHIP_FILE]: ownership({ connectors: "module" }),
+    "lib/connectors/vendor-contribution.ts": `import { CONNECTOR_VENDORS } from "./adapters/_vendors"
+export const all = () => CONNECTOR_VENDORS
+`,
+    "lib/connectors/adapters/_vendors.ts": `import type { Contribution } from "../types"
+import { lark } from "./lark/contribution"
+import { slack } from "./slack/index"
+import { helper } from "./_shared/helper"
+export const CONNECTOR_VENDORS: Contribution[] = [lark, slack, helper]
+`,
+    "lib/connectors/types.ts": "export type Contribution = number\n",
+    "lib/connectors/adapters/lark/contribution.ts": "export const lark = 1\n",
+    "lib/connectors/adapters/slack/index.ts": "export const slack = 2\n",
+    "lib/connectors/adapters/_shared/helper.ts": "export const helper = 3\n",
+  })
+  assert.deepEqual(result.measures.vendorNeutral, [
+    "lib/connectors/adapters/_vendors.ts :: catalog imports lib/connectors/adapters/_shared/helper.ts",
+    "lib/connectors/adapters/_vendors.ts :: catalog imports lib/connectors/adapters/slack/index.ts",
+  ])
+})
+
 // ------------------------------------------------------------ compare and main
 
 const MEASURES = {

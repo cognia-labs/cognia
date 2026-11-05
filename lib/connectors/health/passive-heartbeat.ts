@@ -7,7 +7,7 @@
  * (Telegram long-poll loop, Discord Gateway socket, Slack Socket Mode)
  * — when the transport detaches, `health()` flips to "degraded".
  *
- * **Passive** transports (Lark webhook, OneBot reverse-WS) don't have
+ * **Passive** transports (a vendor's webhook mode, OneBot reverse-WS) don't have
  * that property. They sit idle waiting for the platform / client to
  * push events. From the adapter's point of view, "no events for an
  * hour" and "we're working fine, traffic is quiet" look identical.
@@ -19,8 +19,8 @@
  *     reason omitted.
  *   - If >5 min and we're inside a configured quiet window: state =
  *     "running", reason = "quiet_hours_silent".
- *   - Otherwise we attempt a lightweight liveness ping (Lark
- *     `/bot/v3/info`, OneBot `connectors_health` running count). On
+ *   - Otherwise we attempt a lightweight liveness ping (the vendor's
+ *     contributed ping, OneBot `connectors_health` running count). On
  *     ping success: state = "running", reason = "idle". On ping
  *     failure: state = "degraded", reason carries the failure detail.
  *
@@ -32,12 +32,8 @@ import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { AdapterHealthState } from "@/types/connectors/adapter"
 import { getDb } from "@/lib/db/schema"
 import { isInQuietHours } from "@/lib/connectors/outbound-runner"
-import {
-  connectorsHttpRequest,
-  connectorsHealth,
-  connectorsKeyringGet,
-} from "@/lib/connectors/tauri/commands"
-import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
+import { connectorsHealth } from "@/lib/connectors/tauri/commands"
+import { connectorVendor } from "@/lib/connectors/vendor-contribution"
 import { getRunningAdapter } from "@/lib/connectors/lifecycle"
 
 export const PASSIVE_HEARTBEAT_INTERVAL_MS = 60_000
@@ -45,7 +41,8 @@ export const IDLE_THRESHOLD_MS = 5 * 60 * 1000
 
 export interface PassiveProbeOverrides {
   lastInboundAt?: (adapterId: string) => Promise<number | null>
-  larkPing?: (row: AdapterInstanceRow) => Promise<boolean>
+  /** Replaces a contributed vendor's passive-transport ping. */
+  vendorPing?: (row: AdapterInstanceRow) => Promise<boolean>
   onebotPing?: () => Promise<boolean>
   gatewayPing?: (row: AdapterInstanceRow) => Promise<boolean>
   /** Override `isInQuietHours` to make tests deterministic. */
@@ -58,11 +55,7 @@ export interface PassiveProbeOverrides {
  */
 export function isPassiveTransport(row: AdapterInstanceRow): boolean {
   if (row.type === "onebot") return true
-  if (row.type === "lark") {
-    const settings = (row.settings ?? {}) as { transport?: string }
-    return settings.transport === "webhook"
-  }
-  return false
+  return connectorVendor(row.type)?.passiveTransport?.applies(row) === true
 }
 
 /** Gateway/socket transports need the same periodic health probe and redial. */
@@ -101,26 +94,6 @@ async function fetchLastInboundAt(adapterId: string): Promise<number | null> {
     return newest?.at ?? null
   } catch {
     return null
-  }
-}
-
-async function pingLark(row: AdapterInstanceRow): Promise<boolean> {
-  try {
-    const appId = (await connectorsKeyringGet(row.id, "appId")) ?? ""
-    const appSecret = (await connectorsKeyringGet(row.id, "appSecret")) ?? ""
-    if (!appId || !appSecret) return false
-    const tat = await getTenantToken({ appId, appSecret }, "adapter-admin")
-    if (!tat) return false
-    const resp = await connectorsHttpRequest({
-      url: "https://open.feishu.cn/open-apis/bot/v3/info",
-      method: "GET",
-      headers: { Authorization: `Bearer ${tat}` },
-      timeoutMs: 5_000,
-    })
-    if (resp.status >= 200 && resp.status < 300) return true
-    return false
-  } catch {
-    return false
   }
 }
 
@@ -192,11 +165,12 @@ export async function deriveHeartbeat(
     }
   }
 
+  const vendorPassive = connectorVendor(row.type)?.passiveTransport
   let pingOk = false
-  if (row.type === "lark") {
-    pingOk = await (options.probeOverrides?.larkPing
-      ? options.probeOverrides.larkPing(row)
-      : pingLark(row))
+  if (vendorPassive) {
+    pingOk = await (options.probeOverrides?.vendorPing
+      ? options.probeOverrides.vendorPing(row)
+      : vendorPassive.ping(row))
   } else if (row.type === "onebot") {
     pingOk = await (options.probeOverrides?.onebotPing
       ? options.probeOverrides.onebotPing()
@@ -212,14 +186,13 @@ export async function deriveHeartbeat(
   }
   return {
     state: "degraded",
-    reason:
-      row.type === "lark"
-        ? "lark_ping_failed"
-        : row.type === "onebot"
-          ? "onebot_no_client"
-          : isGatewayTransport(row)
-            ? "gateway_probe_failed"
-            : "ping_failed",
+    reason: vendorPassive
+      ? vendorPassive.failureReason
+      : row.type === "onebot"
+        ? "onebot_no_client"
+        : isGatewayTransport(row)
+          ? "gateway_probe_failed"
+          : "ping_failed",
     lastInboundAt,
     pingOk: false,
   }

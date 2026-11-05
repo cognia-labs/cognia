@@ -87,7 +87,8 @@ import { Composer } from "./composer"
 import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import type { DataAdapter } from "@/lib/data-hooks/types"
 import { useChatStore } from "@/stores/chat"
-import { DocsProviderError, larkDocsProvider } from "@/lib/docs-providers"
+import { DocsProviderError } from "@/lib/docs-providers"
+import { larkDocsProvider } from "@/lib/docs-providers/providers/lark"
 import type { ChatSession } from "@cognia/agent-config-types"
 
 searchState.provider = larkDocsProvider

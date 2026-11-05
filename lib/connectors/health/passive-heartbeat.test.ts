@@ -164,7 +164,7 @@ describe("deriveHeartbeat", () => {
       now,
       probeOverrides: {
         lastInboundAt: async () => now - 10 * 60_000,
-        larkPing: async () => true,
+        vendorPing: async () => true,
       },
     })
     expect(derived.state).toBe("running")
@@ -178,7 +178,7 @@ describe("deriveHeartbeat", () => {
       now,
       probeOverrides: {
         lastInboundAt: async () => now - 10 * 60_000,
-        larkPing: async () => false,
+        vendorPing: async () => false,
       },
     })
     expect(derived.state).toBe("degraded")
@@ -245,7 +245,7 @@ describe("recordPassiveProbe", () => {
     // still under the 5 min idle threshold for the early-return path.
     await recordPassiveProbe(row, 1_000_000_000, 5 * 60_000, {
       lastInboundAt: async () => 999_999_900, // 100 ms ago
-      larkPing: async () => true,
+      vendorPing: async () => true,
     })
     expect(mockHeartbeatPut).toHaveBeenCalledTimes(1)
     const call = mockHeartbeatPut.mock.calls[0][0] as {
@@ -264,7 +264,7 @@ describe("recordPassiveProbe", () => {
     const row = makeRow({ type: "lark", settings: { transport: "webhook" } })
     await recordPassiveProbe(row, 1_000_000_000, 5 * 60_000, {
       lastInboundAt: async () => 1_000_000_000 - 10 * 60_000, // 10 min ago
-      larkPing: async () => false,
+      vendorPing: async () => false,
       isInQuietHours: () => false,
     })
     expect(mockHeartbeatPut).toHaveBeenCalledTimes(1)

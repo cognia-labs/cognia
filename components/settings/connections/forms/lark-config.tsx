@@ -55,7 +55,7 @@ import type { ConnectorControlReach } from "@/lib/connectors/control-reach"
 import { connectorWebhookPath, LARK_OAUTH_RELAY_PATH } from "@/lib/connectors/server-transport"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import { defaultTriggerPolicyFor } from "@/types/connectors/policy"
-import { refreshSelfBotOpenId } from "@/lib/connectors/adapter-registry"
+import { refreshSelfBotOpenId } from "@/lib/connectors/adapters/lark/build"
 import { useConnectorIngress, type ConnectorIngress } from "@/hooks/use-connector-ingress"
 import { WebhookUrlCard } from "@/components/settings/connections/forms/shared/webhook-url-card"
 import {

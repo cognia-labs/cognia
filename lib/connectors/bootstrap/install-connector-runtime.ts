@@ -92,10 +92,7 @@ import {
 } from "@/lib/connectors/lifecycle"
 import { installConnectorHousekeepingSchedule } from "@/lib/connectors/housekeeping-scheduler"
 import type { DailyScheduleHandle } from "@/lib/connectors/daily-schedule"
-import {
-  startBindRequestExpirySweep,
-  startLarkSurfaceSweep,
-} from "@/lib/connectors/adapters/lark/surface-schedule"
+import { connectorVendors, type ConnectorVendorService } from "@/lib/connectors/vendor-contribution"
 import { startSlaEscalationSweep } from "@/lib/connectors/escalation/schedule"
 import { startWorkflowExecutionBridge } from "@/lib/execution/workflow-bridge"
 import { startJobExecutionBridge } from "@/lib/execution/job-bridge"
@@ -346,8 +343,8 @@ export function installConnectorRuntime(
   // reverse-WS). Single source of truth for both "does the inbound server
   // need to start" and "which registrations to reap on teardown".
   const serverAdapterIds = new Set<string>()
-  let larkSurfaceSweep: DailyScheduleHandle | null = null
-  let larkBindRequestSweep: DailyScheduleHandle | null = null
+  // Services contributed vendors start with the runtime (ADR-0250 §14).
+  let vendorServices: ConnectorVendorService[] = []
   let slaEscalationSweep: DailyScheduleHandle | null = null
   let heartbeatSweep: HeartbeatSweepHandle | null = null
   let resumeReconnect: ResumeReconnectHandle | null = null
@@ -496,10 +493,8 @@ export function installConnectorRuntime(
       ac.abort()
       stopWorkflowApprovalRecovery?.()
       stopWorkflowApprovalRecovery = null
-      larkSurfaceSweep?.dispose()
-      larkSurfaceSweep = null
-      larkBindRequestSweep?.dispose()
-      larkBindRequestSweep = null
+      for (const service of vendorServices) service.dispose()
+      vendorServices = []
       slaEscalationSweep?.dispose()
       slaEscalationSweep = null
       heartbeatSweep?.dispose()
@@ -846,15 +841,11 @@ export function installConnectorRuntime(
       heartbeatSweep = startHeartbeatSweep()
     }
 
-    // The Lark chat-surface backoff had no driver: `listDueChatSurfaces`
-    // selects rows whose retry is due, but only adapter start, a live
-    // `bot.added`, and the settings button ever called it — so a surface that
-    // failed once stayed failed until a restart. The bind-request sweep
-    // likewise: without it an expired code stayed `pending` and kept being
-    // offered to operators that `approveBindRequest` would then reject.
+    // Vendor sweeps (Lark: the chat-surface retry and the bind-request expiry)
+    // need a driver that outlives any one adapter; they run with the runtime
+    // and stop on its teardown.
     if (!cancelled) {
-      larkSurfaceSweep = startLarkSurfaceSweep()
-      larkBindRequestSweep = startBindRequestExpirySweep()
+      vendorServices = connectorVendors().flatMap((vendor) => vendor.startRuntimeServices?.() ?? [])
       // SLA escalation chain (slice 1B): the runtime-owning host is the only
       // place overdue conversations are escalated (desktop + headless brain
       // share this path); disposed with the runtime so a released lease can

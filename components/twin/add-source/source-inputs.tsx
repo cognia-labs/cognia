@@ -40,7 +40,7 @@ import {
   type IngestError,
   type StagedSource,
 } from "@/lib/twin/ingest/stage"
-import { parseLarkDocUrl } from "@/lib/twin/ingest/lark-url"
+import { parseLarkDocUrl } from "@/lib/docs-providers/providers/lark/url"
 import { LarkAccountPicker } from "../lark-account-picker"
 import type { TwinSourceFormat } from "@/types/twin"
 

@@ -1,4 +1,4 @@
-import { isLarkDocUrl, isLarkResourceUrl, parseLarkDocUrl, parseLarkResourceUrl } from "./lark-url"
+import { isLarkDocUrl, isLarkResourceUrl, parseLarkDocUrl, parseLarkResourceUrl } from "./url"
 
 describe("parseLarkDocUrl", () => {
   it("uses a known document kind for opaque search-result tokens without widening URL detection", () => {

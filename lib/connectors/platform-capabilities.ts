@@ -40,9 +40,9 @@
 
 import type { Capability } from "@/types/connectors/capability"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
+import { connectorVendor } from "./vendor-contribution"
 import { DINGTALK_CAPS } from "./adapters/dingtalk/capability"
 import { DISCORD_CAPS } from "./adapters/discord/capability"
-import { LARK_CAPS } from "./adapters/lark/capability"
 import { MATRIX_CAPS } from "./adapters/matrix/capability"
 import { ONEBOT_CAPS } from "./adapters/onebot/capability"
 import { QQ_OFFICIAL_CAPS } from "./adapters/qq-official/capability"
@@ -56,7 +56,6 @@ const PLATFORM_CAPABILITIES: Partial<Record<PlatformKind, readonly Capability[]>
   telegram: TELEGRAM_CAPS,
   discord: DISCORD_CAPS,
   slack: SLACK_CAPS,
-  lark: LARK_CAPS,
   onebot: ONEBOT_CAPS,
   dingtalk: DINGTALK_CAPS,
   wecom: WECOM_CAPS,
@@ -71,5 +70,5 @@ const PLATFORM_CAPABILITIES: Partial<Record<PlatformKind, readonly Capability[]>
  * Unknown / capability-less platforms return an empty array.
  */
 export function getPlatformCapabilities(platform: PlatformKind): readonly Capability[] {
-  return PLATFORM_CAPABILITIES[platform] ?? []
+  return PLATFORM_CAPABILITIES[platform] ?? connectorVendor(platform)?.capabilities ?? []
 }
