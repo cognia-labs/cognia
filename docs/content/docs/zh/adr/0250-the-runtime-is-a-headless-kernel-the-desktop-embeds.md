@@ -205,7 +205,7 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
 | M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 已完成（2026-11-05）：基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
-| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads`、`eval` 两个试点已落地，G2 已改为阻断；飞书三层已落地：协议包、认证层，以及不再 import 任何飞书文件的框架（14 处比较 `lark` 字面量仍记在基线里）；G3 和 G4 还没做 |
+| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。已完成（2026-11-05）：生成器、三份注册表和 `squads`、`eval` 两个试点已落地；飞书三层已落地：协议包、认证层，以及不再 import 任何飞书文件的框架（14 处比较 `lark` 字面量仍记在基线里）；G2、G3、G4 已改为阻断 |
 | 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
 | M3. 内核汇点（与阶段 3 同期） | 设置键归属；能力端口，先做 `ocr`、`speech`（试点）和 `docs-provider`；能力授予贡献（先过 ADR-0198）；提示词贡献 | 设置 store 的引用文件数、`build-options` 触达的子系统数都在下降 |
 | 3. 工作主干 | 运行表引用台账；统一状态词表；ADR-0247 的承诺 | 所有运行都在台账里 |
@@ -289,7 +289,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 - **一个厂商的全套一起分发。** "一键安装某厂商全套"用 cogset（ADR-0209）组合，这是分发层的打包，不是代码依赖。
 - 同样的拆法适用于 Google（协议库、`auth.google`、Drive 备份和 Docs）、GitHub（由 `octokit-factory` 和 `auth-app` 组成的协议库、GitHub 连接、`forge` 实现、`backup-github`、runner），以及各家订阅（协议库、账号登录，再加订阅、余额、模型目录三个端口的实现）。
 
-**门禁。** G1、G2 和 G6–G8 合在一个门禁里运行：`scripts/gates/check-modules.mjs`（`pnpm audit:modules`），注册在 `scripts/gates/check-all.mjs`。它用 `scripts/gates/convergence/counter.mjs` 的源码读取器和解析器读取源码、解析 import。它的棘轮是过渡归属表 `scripts/gates/module-ownership.json` 和 `scripts/gates/modules-baseline.json`，两者都登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。G5 在 M1 并入；G3 和 G4 在 M1 后续并入。下表的数字是门禁在 M0 时自己的计数，标明 M1 的是 M1 时的计数。
+**门禁。** G1、G2 和 G6–G8 合在一个门禁里运行：`scripts/gates/check-modules.mjs`（`pnpm audit:modules`），注册在 `scripts/gates/check-all.mjs`。它用 `scripts/gates/convergence/counter.mjs` 的源码读取器和解析器读取源码、解析 import。它的棘轮是过渡归属表 `scripts/gates/module-ownership.json` 和 `scripts/gates/modules-baseline.json`，两者都登记在 `scripts/gates/baseline-growth.json`，与合并基准比较（§11）。G5、G3 和 G4 在 M1 并入。下表的数字是门禁在 M0 时自己的计数，标明 M1 的是 M1 时的计数。
 
 - **外壳的贡献工具包。** 外壳把模块构建贡献时要用的文件，作为 `api` 列在归属表里：设置分区工具包（`components/settings/common/`）、搜索 provider 辅助函数、移动端 spot 图标。import 这些文件不算 G2 违规边；import 外壳的其他文件仍然算。
 - **生成的注册表**是唯一被允许的"内核 → 模块" import，因为它们负责收集各个模块。G5 检查它们，它们不算 G1、G2、G6 的源文件。
@@ -298,8 +298,8 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | --- | --- | --- | --- |
 | G1 归属 | 每个非测试源文件恰好有一个所有者；`owner` 与 `.github/CODEOWNERS` 一致 | 过渡归属表的行数，只降不升 | M0，阻断 |
 | G2 方向 | 基础层 → 上层、内核 → 模块 / 插件候选 / 外壳、模块 → 外壳的值 import。内核成员的 app、components、hooks 文件算作它的界面模块 | 违规边按"文件 → 所有者"取指纹（M0 时 1,124；M1 列出外壳工具包后为 1,088），只降不升 | M0 只报告；自 M1 起阻断 |
-| G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件；不新增 barrel | 违规 import，只降不升 | M1 |
-| G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用 | 不一致为 0 | M1 |
+| G3 公开接口 | 跨模块 import 只能到达 `dependsOn` 目标的 `api` 文件，或 `types/**`；`api` 文件不能是 barrel（只有一条再导出的文件，即代码搬进 package 后留在原路径的转发文件，不算）。只判进出有 manifest 的模块的 import；仍在过渡表里的子系统等有了 manifest 再纳入，在此之前它的行（kernel 成员则为其 UI 模块）可以列 `api` | 违规 import，按 `文件 -> 目标` 记指纹（M1 时为 0），只降不升 | M1 |
+| G4 声明与实际一致 | `dependsOn`、`tables`、`settings.keys` 与实际的 import、表访问、键读取一致；brain 适配器在 brain 的模块图里被调用（沿用 `check-headless-registry` 的规则：要被调用，可达不算）；`runtime-initializers` 的每一项已迁移或已归为副作用。M1 里：`dependsOn` 恰好等于 manifest 所在模块的文件实际 import 到的模块；声明的表或键必须存在、被本模块文件访问，且只有一个认领者。运行时相关的条款等 manifest 有了 `runtimes` 和 `effects`（M2）再生效 | 不一致为 0 | M1 |
 | G5 生成 | manifest 只含数据，懒加载入口都能解析；贡献项形状正确、图标在图标目录里、模块之间不冲突；生成的注册表与生成器输出一致，所以没有手写条目 | 0 | 每迁一份注册表启用一份：自 M1 起覆盖设置分区、搜索 provider 和 slash 命令 |
 | G6 环 | `dependsOn` 图无环；`lib/` 层所有者图里最大强连通分量的大小（168；分析按原始目录数出的是 150） | 只降不升 | M0 |
 | G7 规模与加载 | 模块数、`experimental` 数、表数、`SettingsState` 成员数、设置 store 的引用文件数（573，含类型 import），以及从 M1 起生成的注册表在 manifest 之外急加载的文件数（M1 时为 1：`lib/modules/define.ts`） | 只降不升；例外要有记录 | M0 |
