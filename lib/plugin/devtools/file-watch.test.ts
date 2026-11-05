@@ -326,3 +326,88 @@ describe("startPluginFileWatch", () => {
     await handle.stop()
   })
 })
+
+describe("startPluginFileWatch reload overlap", () => {
+  function deferred() {
+    let resolve!: () => void
+    const promise = new Promise<void>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+
+  it("never runs two reloads of one plugin at once, and replays a change made mid-reload", async () => {
+    const gates = [deferred(), deferred()]
+    let running = 0
+    let maxRunning = 0
+    const calls: number[] = []
+    const h = harness(async (pluginId, attempt) => {
+      running += 1
+      maxRunning = Math.max(maxRunning, running)
+      calls.push(attempt)
+      await gates[calls.length - 1]?.promise
+      running -= 1
+      return { ok: true, pluginId } as never
+    })
+    const handle = await startPluginFileWatch([plugin({ id: "ok" })], h.deps)
+
+    h.emit({ type: "modify", path: "/plugins/ok/index.js", timestamp: 1 })
+    await flush()
+    expect(calls).toEqual([1])
+
+    // Two more saves while the first reload is still running.
+    h.emit({ type: "modify", path: "/plugins/ok/index.js", timestamp: 2 })
+    await flush()
+    h.emit({ type: "modify", path: "/plugins/ok/index.js", timestamp: 3 })
+    await flush()
+    expect(maxRunning).toBe(1)
+    expect(calls).toEqual([1])
+
+    gates[0].resolve()
+    await flush()
+    // Both mid-reload saves collapse into exactly one follow-up reload.
+    expect(calls).toEqual([1, 2])
+    gates[1].resolve()
+    await flush()
+    expect(calls).toEqual([1, 2])
+    expect(maxRunning).toBe(1)
+    await handle.stop()
+  })
+
+  it("does not replay a mid-reload change once the watch is stopped", async () => {
+    const gate = deferred()
+    const calls: number[] = []
+    const h = harness(async (pluginId, attempt) => {
+      calls.push(attempt)
+      await gate.promise
+      return { ok: true, pluginId } as never
+    })
+    const handle = await startPluginFileWatch([plugin({ id: "ok" })], h.deps)
+    h.emit({ type: "modify", path: "/plugins/ok/index.js", timestamp: 1 })
+    await flush()
+    h.emit({ type: "modify", path: "/plugins/ok/index.js", timestamp: 2 })
+    await flush()
+    await handle.stop()
+    gate.resolve()
+    await flush()
+    expect(calls).toEqual([1])
+  })
+
+  it("still reloads different plugins in parallel", async () => {
+    const gate = deferred()
+    const calls: string[] = []
+    const h = harness(async (pluginId) => {
+      calls.push(pluginId)
+      await gate.promise
+      return { ok: true, pluginId } as never
+    })
+    const handle = await startPluginFileWatch([plugin({ id: "a" }), plugin({ id: "b" })], h.deps)
+    h.emit({ type: "modify", path: "/plugins/a/x.js", timestamp: 1 })
+    h.emit({ type: "modify", path: "/plugins/b/x.js", timestamp: 1 })
+    await flush()
+    expect(calls).toEqual(["a", "b"])
+    gate.resolve()
+    await flush()
+    await handle.stop()
+  })
+})

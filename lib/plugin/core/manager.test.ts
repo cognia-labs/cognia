@@ -8320,6 +8320,100 @@ describe("PluginManager", () => {
       expect(coordinator.isProviderDraining("reloadable")).toBe(false)
     })
 
+    it("runs overlapping reloads of one plugin one after another and leaves it enabled", async () => {
+      const plugin: Plugin = {
+        manifest: { ...createManifest("overlap"), type: "frontend" },
+        status: "enabled",
+        source: "dev",
+        path: "/plugins/overlap",
+        config: {},
+      }
+      mockGetState.mockReturnValue({ plugins: { overlap: plugin } })
+      const manager = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleCoordinator: new PluginLifecycleCoordinator(),
+      })
+      // Each operation is serialized against the others, as withLifecycleLock
+      // does for the real ones, and takes a few ticks like real teardown does.
+      let lock: Promise<void> = Promise.resolve()
+      const order: string[] = []
+      const op = (name: string, apply: () => void) => async () => {
+        const run = lock.then(async () => {
+          order.push(name)
+          for (let i = 0; i < 3; i++) await Promise.resolve()
+          apply()
+        })
+        lock = run
+        await run
+      }
+      let loaded = true
+      jest.spyOn(manager, "disablePlugin").mockImplementation(
+        op("disable", () => {
+          plugin.status = "disabled"
+        })
+      )
+      jest.spyOn(manager, "unloadPlugin").mockImplementation(
+        op("unload", () => {
+          loaded = false
+        })
+      )
+      jest.spyOn(manager, "enablePlugin").mockImplementation(
+        op("enable", () => {
+          plugin.status = "enabled"
+          loaded = true
+        })
+      )
+
+      await Promise.all([
+        manager.reloadPlugin("overlap", "first"),
+        manager.reloadPlugin("overlap", "second"),
+      ])
+      expect(order).toEqual(["disable", "unload", "enable", "disable", "unload", "enable"])
+      expect(plugin.status).toBe("enabled")
+      expect(loaded).toBe(true)
+
+      // A reload that arrives while the first one is re-enabling reads the
+      // plugin as disabled. Unserialized, it skipped re-enabling and queued an
+      // unload behind that enable: status "enabled", runtime unloaded.
+      order.length = 0
+      const first = manager.reloadPlugin("overlap", "first")
+      while (!order.includes("enable")) await Promise.resolve()
+      const second = manager.reloadPlugin("overlap", "second")
+      await Promise.all([first, second])
+      expect(order).toEqual(["disable", "unload", "enable", "disable", "unload", "enable"])
+      expect(plugin.status).toBe("enabled")
+      expect(loaded).toBe(true)
+    })
+
+    it("runs the next queued reload after one fails", async () => {
+      const plugin: Plugin = {
+        manifest: { ...createManifest("flaky"), type: "frontend" },
+        status: "enabled",
+        source: "dev",
+        path: "/plugins/flaky",
+        config: {},
+      }
+      mockGetState.mockReturnValue({ plugins: { flaky: plugin } })
+      const manager = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleCoordinator: new PluginLifecycleCoordinator(),
+      })
+      jest
+        .spyOn(manager, "disablePlugin")
+        .mockRejectedValueOnce(new Error("teardown failed"))
+        .mockResolvedValue(undefined)
+      jest.spyOn(manager, "unloadPlugin").mockResolvedValue(undefined)
+      const enable = jest.spyOn(manager, "enablePlugin").mockResolvedValue(undefined)
+
+      const first = manager.reloadPlugin("flaky", "first")
+      const second = manager.reloadPlugin("flaky", "second")
+
+      await expect(first).rejects.toThrow("teardown failed")
+      await expect(second).resolves.toBeUndefined()
+      expect(enable).toHaveBeenCalledTimes(1)
+      expect(enable).toHaveBeenCalledWith("flaky", "second")
+    })
+
     it("refuses to reload a dirty generation before touching the runtime", async () => {
       const plugin: Plugin = {
         manifest: { ...createManifest("dirty-reload"), type: "frontend" },

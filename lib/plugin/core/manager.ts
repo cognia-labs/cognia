@@ -956,6 +956,17 @@ export class PluginManager {
   private enableInFlight: Map<string, Promise<void>> = new Map()
 
   /**
+   * Tail of the per-plugin `reloadPlugin` queue. Each step of a reload is
+   * serialized by `withLifecycleLock`, but the reload as a whole is not: a
+   * second reload that read the plugin as `disabled` mid-way through the first
+   * skipped re-enabling and queued an unload behind the first one's enable,
+   * leaving the plugin `enabled` with no runtime. File-watch saves and a CLI
+   * dev session can each ask for a reload of the same plugin, so reloads of one
+   * plugin run one after another.
+   */
+  private reloadQueue: Map<string, Promise<void>> = new Map()
+
+  /**
    * Per-plugin lifecycle serialization (W6.4). Enable/disable/unload/
    * uninstall for the SAME plugin chain onto one queue so transitions can't
    * interleave (e.g. an enable racing a disable and re-registering half the
@@ -1547,6 +1558,19 @@ export class PluginManager {
   }
 
   async reloadPlugin(pluginId: string, reason = "hot-reload"): Promise<void> {
+    const previous = this.reloadQueue.get(pluginId) ?? Promise.resolve()
+    const run = previous.then(() => this.runPluginReload(pluginId, reason))
+    // The queue only orders reloads; one failing must not fail the next.
+    const tail = run.catch(() => undefined)
+    this.reloadQueue.set(pluginId, tail)
+    try {
+      await run
+    } finally {
+      if (this.reloadQueue.get(pluginId) === tail) this.reloadQueue.delete(pluginId)
+    }
+  }
+
+  private async runPluginReload(pluginId: string, reason: string): Promise<void> {
     const reservation = this.reservePluginRuntimeGraph(pluginId)
     try {
       const lifecycle = await this.lifecycleState.read(pluginId)

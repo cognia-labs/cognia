@@ -182,6 +182,12 @@ export async function startPluginFileWatch(
 
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   const attempts = new Map<string, number>()
+  // One reload per plugin at a time. A save that settles while that plugin is
+  // still reloading is remembered and replayed once, after it finishes: running
+  // it alongside would overlap two teardown/activation sequences of the same
+  // plugin, and dropping it would leave the edit unloaded.
+  const reloading = new Set<string>()
+  const changedDuringReload = new Set<string>()
   let stopped = false
 
   const unlisten = await deps.listen(FILE_CHANGE_EVENT, (payload) => {
@@ -195,6 +201,10 @@ export async function startPluginFileWatch(
       pluginId,
       setTimeout(() => {
         pending.delete(pluginId)
+        if (reloading.has(pluginId)) {
+          changedDuringReload.add(pluginId)
+          return
+        }
         void runReload(pluginId)
       }, deps.debounceMs)
     )
@@ -202,6 +212,16 @@ export async function startPluginFileWatch(
 
   async function runReload(pluginId: string): Promise<void> {
     if (stopped) return
+    reloading.add(pluginId)
+    try {
+      await reloadOnce(pluginId)
+    } finally {
+      reloading.delete(pluginId)
+    }
+    if (!stopped && changedDuringReload.delete(pluginId)) void runReload(pluginId)
+  }
+
+  async function reloadOnce(pluginId: string): Promise<void> {
     const attempt = (attempts.get(pluginId) ?? 0) + 1
     attempts.set(pluginId, attempt)
     deps.record({
@@ -246,6 +266,7 @@ export async function startPluginFileWatch(
       stopped = true
       for (const timer of pending.values()) clearTimeout(timer)
       pending.clear()
+      changedDuringReload.clear()
       unlisten()
       await deps.stopWatch()
     },

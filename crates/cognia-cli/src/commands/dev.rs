@@ -3,7 +3,8 @@
 //!
 //! Listens for changes to source files (`src/`, `wit/`, `Cargo.toml`,
 //! `plugin.json`). On each event it debounces 250 ms, then runs the
-//! per-type build. If `--reload-url` is passed (or the CLI auto-discovers
+//! per-type build. Writes the build itself makes (see [`BuildOutputs`]) are
+//! not changes: counting them rebuilt and reloaded in an endless loop. If `--reload-url` is passed (or the CLI auto-discovers
 //! a running cognia from the endpoint file), the latest bundle is POSTed
 //! to the CLI bridge so the host hot-reloads in place.
 //!
@@ -34,6 +35,7 @@ use crate::commands::acp::is_loopback_host;
 use crate::engine::bridge_client::{
     load_endpoint_from, post_json, post_json_with_timeout, EndpointFile,
 };
+use crate::engine::frontend_build;
 use crate::shared::{
     clear_process_interrupt, read_plugin_manifest, request_process_interrupt, ProcessInterrupted,
 };
@@ -177,6 +179,7 @@ pub fn run(
     );
     let mut heartbeat = HeartbeatGuard::start(reload_endpoint.as_ref(), &session_id);
 
+    let mut outputs = BuildOutputs::for_plugin(&crate_root, &manifest);
     let mut attempt = 1_u64;
     panel.set_status("Building initial plugin");
     let started = Instant::now();
@@ -189,6 +192,7 @@ pub fn run(
         ui,
     );
     build_active.store(false, Ordering::SeqCst);
+    outputs.refresh(&crate_root);
     panel.record_build(&initial_outcome, started.elapsed());
     if let Err(error) = &initial_outcome {
         panel.println_above(format!(
@@ -211,7 +215,7 @@ pub fn run(
         }
         match rx.recv_timeout(DEBOUNCE) {
             Ok(Ok(event)) => {
-                if should_rebuild(&event) {
+                if should_rebuild(&event, &outputs) {
                     pending = true;
                     last_change = Instant::now();
                     panel.set_status("Change detected, debouncing");
@@ -247,6 +251,8 @@ pub fn run(
                         ui,
                     );
                     build_active.store(false, Ordering::SeqCst);
+                    // plugin.json may have changed which files the build writes.
+                    outputs.refresh(&crate_root);
                     ui.flags.quiet = prior_quiet;
                     let elapsed = started.elapsed();
                     panel.record_build(&outcome, elapsed);
@@ -504,11 +510,65 @@ fn dev_build_error_message(err: &anyhow::Error) -> String {
     err.to_string()
 }
 
-fn should_rebuild(event: &notify::Event) -> bool {
+/// Files the dev loop's own build writes under the plugin root.
+///
+/// The watch list includes `dist/` and the manifest's entry directories, which
+/// is right for plugins whose entries an outside tool builds there (python,
+/// hybrid, vscode-extension). A frontend build writes into that same `dist/`
+/// on every run, even when nothing changed, so without this every build queued
+/// the event for the next one. The bundle under `target/cognia/` is excluded
+/// for every type in case a manifest path points there.
+#[derive(Debug, Default)]
+struct BuildOutputs {
+    files: std::collections::HashSet<PathBuf>,
+    /// The frontend build's throwaway `@import` stylesheet lives here under a
+    /// random name with [`frontend_build::STYLES_INPUT_PREFIX`].
+    styles_input_dir: Option<PathBuf>,
+    bundle_dir: PathBuf,
+}
+
+impl BuildOutputs {
+    fn for_plugin(crate_root: &Path, manifest: &serde_json::Value) -> Self {
+        let mut outputs = Self {
+            bundle_dir: crate_root.join("target").join("cognia"),
+            ..Self::default()
+        };
+        if manifest.get("type").and_then(|value| value.as_str()) == Some("frontend") {
+            outputs.files = frontend_build::build_output_paths(crate_root, manifest)
+                .into_iter()
+                .collect();
+            outputs.styles_input_dir = Some(crate_root.join("dist"));
+        }
+        outputs
+    }
+
+    /// Recompute from the current plugin.json, keeping the previous set when
+    /// it cannot be read (the next build reports that error itself).
+    fn refresh(&mut self, crate_root: &Path) {
+        if let Ok((manifest, _)) = read_plugin_manifest(crate_root) {
+            *self = Self::for_plugin(crate_root, &manifest);
+        }
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        if path.starts_with(&self.bundle_dir) || self.files.contains(path) {
+            return true;
+        }
+        self.styles_input_dir.as_deref().is_some_and(|dir| {
+            path.parent() == Some(dir)
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(frontend_build::STYLES_INPUT_PREFIX))
+        })
+    }
+}
+
+fn should_rebuild(event: &notify::Event, outputs: &BuildOutputs) -> bool {
     matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-    )
+    ) && (event.paths.is_empty() || event.paths.iter().any(|path| !outputs.contains(path)))
 }
 
 fn watch_paths_for(crate_root: &Path, manifest: &serde_json::Value) -> Vec<PathBuf> {
@@ -1246,10 +1306,137 @@ mod tests {
         let access = notify::Event::new(EventKind::Access(notify::event::AccessKind::Open(
             notify::event::AccessMode::Any,
         )));
-        assert!(should_rebuild(&create));
-        assert!(should_rebuild(&modify));
-        assert!(should_rebuild(&remove));
-        assert!(!should_rebuild(&access));
+        let outputs = BuildOutputs::default();
+        assert!(should_rebuild(&create, &outputs));
+        assert!(should_rebuild(&modify, &outputs));
+        assert!(should_rebuild(&remove, &outputs));
+        assert!(!should_rebuild(&access, &outputs));
+    }
+
+    fn frontend_plugin() -> (tempfile::TempDir, PathBuf, serde_json::Value) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::write(root.join("src/index.ts"), "export default {}").unwrap();
+        let manifest = serde_json::json!({
+            "id": "demo", "version": "1.0.0", "type": "frontend", "main": "dist/index.js"
+        });
+        std::fs::write(root.join("plugin.json"), manifest.to_string()).unwrap();
+        (tmp, root, manifest)
+    }
+
+    fn modified(path: PathBuf) -> notify::Event {
+        notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path)
+    }
+
+    #[test]
+    fn frontend_build_writes_do_not_trigger_a_rebuild() {
+        let (_tmp, root, manifest) = frontend_plugin();
+        let outputs = BuildOutputs::for_plugin(&root, &manifest);
+        for rel in [
+            "dist/index.js",
+            "dist/index.css",
+            "dist/styles.bundle.css",
+            "dist/.cognia-styles-0b6f.css",
+            "target/cognia/demo-1.0.0.zip",
+        ] {
+            assert!(
+                !should_rebuild(&modified(root.join(rel)), &outputs),
+                "{rel} is a build output"
+            );
+        }
+        assert!(should_rebuild(
+            &modified(root.join("src/index.ts")),
+            &outputs
+        ));
+        assert!(should_rebuild(
+            &modified(root.join("plugin.json")),
+            &outputs
+        ));
+        // One real edit in a batch with build writes still counts.
+        let mixed = modified(root.join("dist/index.js")).add_path(root.join("src/index.ts"));
+        assert!(should_rebuild(&mixed, &outputs));
+    }
+
+    #[test]
+    fn externally_built_entries_in_dist_still_trigger_a_rebuild() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let manifest = serde_json::json!({
+            "id": "demo", "version": "1.0.0", "type": "hybrid",
+            "main": "dist/index.js", "pythonMain": "main.py"
+        });
+        let outputs = BuildOutputs::for_plugin(&root, &manifest);
+        assert!(should_rebuild(
+            &modified(root.join("dist/index.js")),
+            &outputs
+        ));
+        assert!(!should_rebuild(
+            &modified(root.join("target/cognia/demo-1.0.0.zip")),
+            &outputs
+        ));
+    }
+
+    /// The loop's real failure: a watcher on `dist/` sees the build's own
+    /// rewrite of `dist/index.js` (esbuild replaces it even when the source is
+    /// unchanged), and each such event started the next build.
+    #[test]
+    fn a_rewritten_bundle_seen_by_the_real_watcher_is_ignored() {
+        let (_tmp, root, manifest) = frontend_plugin();
+        std::fs::write(root.join("dist/index.js"), "module.exports = {}").unwrap();
+        let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
+        let mut watcher = notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        })
+        .unwrap();
+        for path in watch_paths_for(&root, &manifest) {
+            if path.exists() {
+                watcher.watch(&path, RecursiveMode::Recursive).unwrap();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        while rx.try_recv().is_ok() {}
+        let outputs = BuildOutputs::for_plugin(&root, &manifest);
+
+        // What a no-op rebuild does: esbuild rewrites the same bytes.
+        std::fs::write(root.join("dist/index.js"), "module.exports = {}").unwrap();
+        std::fs::write(root.join("dist/styles.bundle.css"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut build_events = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(left) {
+                Ok(Ok(event)) => build_events.push(event),
+                _ => break,
+            }
+        }
+        assert!(
+            build_events.iter().any(|event| event
+                .paths
+                .iter()
+                .any(|path| path == &root.join("dist/index.js"))),
+            "the watcher reports the rewritten bundle: {build_events:?}"
+        );
+        let triggering: Vec<_> = build_events
+            .iter()
+            .filter(|event| should_rebuild(event, &outputs))
+            .collect();
+        assert!(
+            triggering.is_empty(),
+            "build writes triggered: {triggering:?}"
+        );
+
+        std::fs::write(
+            root.join("src/index.ts"),
+            "export default { changed: true }",
+        )
+        .unwrap();
+        let edit = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        let mut edits = vec![edit];
+        while let Ok(Ok(event)) = rx.recv_timeout(Duration::from_millis(200)) {
+            edits.push(event);
+        }
+        assert!(edits.iter().any(|event| should_rebuild(event, &outputs)));
     }
 
     #[test]

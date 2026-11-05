@@ -283,6 +283,35 @@ fn resolve_ts_entry(crate_root: &Path, manifest: &serde_json::Value) -> Result<P
     )
 }
 
+/// Name prefix of the throwaway `@import` stylesheet `bundle_styles` writes
+/// into `dist/` and removes again.
+pub(crate) const STYLES_INPUT_PREFIX: &str = ".cognia-styles-";
+
+/// Every file under `crate_root` that a frontend build writes: each esbuild
+/// outfile, the `.css` sibling esbuild emits next to it when the entry imports
+/// CSS, and the combined `dist/styles.bundle.css`. The throwaway styles input
+/// is matched by [`STYLES_INPUT_PREFIX`] instead, since its name is random.
+///
+/// `cognia plugin dev` watches `dist/` (other plugin types keep externally
+/// built entries there) and uses this to tell its own writes from an edit.
+pub(crate) fn build_output_paths(crate_root: &Path, manifest: &serde_json::Value) -> Vec<PathBuf> {
+    // The source-resolving plan is what `dev` builds; without a TS entry that
+    // build fails before esbuild writes anything, and the main-only plan still
+    // names the same fixed outputs.
+    let entries = build_plan(crate_root, manifest, true)
+        .or_else(|_| build_plan(crate_root, manifest, false))
+        .map(|plan| plan.entries.into_values().collect::<Vec<_>>())
+        .unwrap_or_else(|_| vec!["dist/index.js".to_string()]);
+    let mut paths = Vec::new();
+    for output in entries {
+        let file = crate_root.join(output);
+        paths.push(file.with_extension("css"));
+        paths.push(file);
+    }
+    paths.push(crate_root.join("dist/styles.bundle.css"));
+    paths
+}
+
 pub(crate) fn build_only(crate_root: &Path, manifest: &serde_json::Value) -> Result<()> {
     let mut plan = build_plan(crate_root, manifest, true)?;
     run_esbuild(crate_root, &mut plan)
@@ -421,7 +450,10 @@ fn bundle_styles(root: &Path, plan: &mut FrontendBuildPlan) -> Result<()> {
             "styles output would overwrite an authored stylesheet; keep sources outside dist/styles.bundle.css"
         );
     }
-    let input = root.join(format!("dist/.cognia-styles-{}.css", uuid::Uuid::new_v4()));
+    let input = root.join(format!(
+        "dist/{STYLES_INPUT_PREFIX}{}.css",
+        uuid::Uuid::new_v4()
+    ));
     let imports = styles
         .iter()
         .map(|source| {
@@ -927,6 +959,36 @@ mod tests {
         assert!(archive.by_name("dist/entries/src/utils.cjs").is_ok());
         let escaping = json!({"main":"src/index.ts", "library":{"modules":{"utils":{"entry":"../escape.cjs"}}}});
         assert!(build_plan(root, &escaping, false).is_err());
+    }
+
+    #[test]
+    fn build_output_paths_name_every_file_the_build_writes() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/index.ts"), "export default {}").unwrap();
+        let manifest = json!({"id":"demo", "version":"1.0.0", "main":"dist/index.js",
+            "library":{"modules":{"utils":{"entry":"src/utils.cjs"}}}});
+        let paths = build_output_paths(root, &manifest);
+        for rel in [
+            "dist/index.js",
+            "dist/index.css",
+            "dist/entries/src/utils.cjs",
+            "dist/entries/src/utils.css",
+            "dist/styles.bundle.css",
+        ] {
+            assert!(paths.contains(&root.join(rel)), "missing {rel}");
+        }
+        assert!(!paths.contains(&root.join("src/index.ts")));
+    }
+
+    #[test]
+    fn build_output_paths_fall_back_to_the_fixed_outputs() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let paths = build_output_paths(root, &json!({"main":"../escape.ts"}));
+        assert!(paths.contains(&root.join("dist/index.js")));
+        assert!(paths.contains(&root.join("dist/styles.bundle.css")));
     }
 
     #[test]
