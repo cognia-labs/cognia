@@ -34,7 +34,7 @@ workspace-runtime-exec = ["dep:reqwest", "dep:cognia-net"]
 test-support = []
 
 [dependencies]
-cognia-core = { path = "../cognia-core", features = ["workspace-env-async"] }
+cognia-core = { path = "../cognia-core", features = ["workspace-env-async", "deployment"] }
 cognia-sandboxd = { path = "../cognia-sandboxd", default-features = false }
 cognia-exec-sandbox = { path = "../cognia-exec-sandbox" }
 tauri = { workspace = true, optional = true }

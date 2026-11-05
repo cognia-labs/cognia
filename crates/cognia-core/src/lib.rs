@@ -10,6 +10,8 @@
 //! several of them deliberately headless.
 
 pub mod command_error;
+#[cfg(feature = "deployment")]
+pub mod deployment;
 pub mod fs_atomic;
 pub mod host_runtime;
 pub mod installed;

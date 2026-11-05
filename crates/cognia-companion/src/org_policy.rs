@@ -20,6 +20,16 @@ pub fn person_revoke_provider(org: &str, provider: &str) {
     if let Some(registry) = ORG_USAGE_REGISTRY.read().clone() { registry.person_revoke_provider(org, provider); }
 }
 
+/// ADR-0253 §6: a purge removes the member's usage. No ledger installed
+/// (a desktop Host, or a server without member accounting) has nothing to
+/// remove.
+pub fn person_forget_usage(org: &str, user: &str) -> Result<(), String> {
+    match ORG_USAGE_REGISTRY.read().clone() {
+        Some(registry) => registry.org_member_usage_forget(org, user),
+        None => Ok(()),
+    }
+}
+
 /// One member's own spend and cap for the current month (P6g), for that
 /// member's person brain only. `None` when no usage ledger is installed or it
 /// cannot be read; never another person's row.

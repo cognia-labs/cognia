@@ -9,7 +9,10 @@
  * `desktop-sync-source` rejects pulls unless `unlockedAccountId` matches the
  * request's `account_id`.
  */
-import { installPartitionArtifactKeyBase } from "@/lib/accounts/partition-artifact-keys"
+import {
+  clearPartitionArtifactKeyBase,
+  installPartitionArtifactKeyBase,
+} from "@/lib/accounts/partition-artifact-keys"
 import { LocalAccountRegistry } from "@/lib/accounts/account-db"
 import type { PasswordVerifierRecord } from "@/lib/accounts/account-types"
 import { unlockAccountForHost, useAccountStore } from "@/stores/account/account-store"
@@ -76,11 +79,25 @@ export async function ensureHeadlessAccount(
     await unlockAccountForHost(localAccountId, accountContentKey)
     if (opts.partitionArtifactKeys) {
       await installPartitionArtifactKeyBase(localAccountId, accountContentKey)
+      forgetPartitionKeysWhenLocked(localAccountId)
     }
   } finally {
     if (ownsAccountContentKey) accountContentKey.fill(0)
   }
   return localAccountId
+}
+
+/**
+ * The partition's key base lives only while its account is unlocked
+ * (ADR-0253 §6): a lock, or another account taking its place, forgets it.
+ */
+function forgetPartitionKeysWhenLocked(localAccountId: string): void {
+  const unsubscribe = useAccountStore.subscribe((state) => {
+    if (state.locked || state.unlockedAccountId !== localAccountId) {
+      clearPartitionArtifactKeyBase()
+      unsubscribe()
+    }
+  })
 }
 
 function decodeHeadlessAccountContentKey(): Uint8Array {

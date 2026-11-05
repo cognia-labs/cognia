@@ -356,6 +356,17 @@ pub struct RouteTicketRegistry {
     usage_store: Mutex<std::sync::Arc<dyn MemberUsageStore>>,
 }
 
+/// Revoke one ticket and drop everything that could still use it.
+fn revoke_record(record: &mut TicketRecord) {
+    record.ticket.revoked = true;
+    record.internal_bridge = false;
+    record.internal_bridge_audience = None;
+    record.internal_bridge_parent_reservation = None;
+    record.secret = None;
+    record.provider_overrides.clear();
+    record.task_client = None;
+}
+
 const MIN_TTL_MS: i64 = 60_000;
 const MAX_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const DEFAULT_TTL_MS: i64 = 12 * 60 * 60 * 1000;
@@ -409,6 +420,33 @@ impl RouteTicketRegistry {
         inner.usage_dirty = true;
         *self.usage_store.lock() = store;
         inner.usage_unavailable = false;
+        Ok(())
+    }
+
+    /// ADR-0253 §6: a purged member leaves no usage behind. Revokes every
+    /// ticket bound to them, drops their open holds (so no late settlement
+    /// writes a row back), and removes their monthly rows and cap override.
+    /// Persisted before it returns; on a store failure nothing in memory has
+    /// changed except the revocations, which stay.
+    pub fn org_member_usage_forget(&self, org: &str, user: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock();
+        let bound = |member: &MemberBinding| member.org_id == org && member.user_id == user;
+        let mut revoked = 0;
+        for record in &mut inner.records {
+            if !record.ticket.revoked && record.ticket.member.as_ref().is_some_and(|member| bound(member)) {
+                revoke_record(record);
+                revoked += 1;
+            }
+        }
+        inner.dirty |= revoked > 0;
+        inner.reservations.retain(|_, hold| !hold.member_month.as_ref().is_some_and(|(member, _)| bound(member)));
+        if inner.usage_unavailable { return Err("organization usage store unavailable".into()); }
+        let Some(mut usage) = inner.usage.orgs.get(org).cloned() else { return Ok(()) };
+        usage.overrides.remove(user);
+        for rows in usage.months.values_mut() { rows.remove(user); }
+        usage.months.retain(|_, rows| !rows.is_empty());
+        self.usage_store.lock().save_org(org, &usage)?;
+        inner.usage.orgs.insert(org.into(), usage);
         Ok(())
     }
 
@@ -1407,13 +1445,7 @@ impl RouteTicketRegistry {
                     entry.id == provider || entry.deployment_id.as_deref() == Some(provider)
                 })
             {
-                record.ticket.revoked = true;
-                record.internal_bridge = false;
-                record.internal_bridge_audience = None;
-                record.internal_bridge_parent_reservation = None;
-                record.secret = None;
-                record.provider_overrides.clear();
-                record.task_client = None;
+                revoke_record(record);
                 count += 1;
             }
         }
@@ -1686,6 +1718,39 @@ mod tests {
         assert_eq!(reg.org_member_usage_get("org_p6b_test", "2026-10", &[]).unwrap()["members"][0]["reservedTokens"], 30);
         reg.release_reservation("two"); reg.settle_reservation("one", 15);
         assert_eq!(reg.org_member_usage_get("org_p6b_test", "2026-10", &[]).unwrap()["members"][0]["spentTokens"], 15);
+    }
+
+    #[test]
+    fn adr0253_forgetting_a_member_removes_rows_override_holds_and_tickets() {
+        use crate::org_usage::{InMemoryMemberUsageStore, MemberUsageStore};
+        let store = std::sync::Arc::new(InMemoryMemberUsageStore::default());
+        let reg = registry(); reg.attach_usage_store(store.clone()).unwrap();
+        reg.org_usage_cap_set("org_p6b_test", Some("usr_p6b_one"), Some(Some(500))).unwrap();
+        let now = p6b_now("2026-10");
+        let gone = p6b_member_ticket(&reg, now, "usr_p6b_one");
+        let kept = p6b_member_ticket(&reg, now, "usr_p6b_two");
+        for (ticket, request) in [(&gone, "gone-settled"), (&kept, "kept-settled")] {
+            reg.validate_and_reserve(&ticket.secret, now, TicketOperation::Chat, request, 20).unwrap();
+            reg.settle_reservation(request, 12);
+        }
+        reg.validate_and_reserve(&gone.secret, now, TicketOperation::Chat, "gone-open", 10).unwrap();
+        reg.org_member_usage_forget("org_p6b_test", "usr_p6b_one").unwrap();
+        // Persisted at once, not at the next flush.
+        let persisted = store.load().unwrap();
+        let org = &persisted.orgs["org_p6b_test"];
+        assert!(!org.months["2026-10"].contains_key("usr_p6b_one"));
+        assert_eq!(org.months["2026-10"]["usr_p6b_two"].spent, 12);
+        assert!(!org.overrides.contains_key("usr_p6b_one"));
+        // The open hold is gone, so a late settlement writes nothing back.
+        reg.settle_reservation("gone-open", 10);
+        let report = reg.org_member_usage_get("org_p6b_test", "2026-10", &[]).unwrap();
+        assert!(!report.to_string().contains("usr_p6b_one"));
+        // Their ticket no longer reserves; the other member's still does.
+        assert!(reg.validate_and_reserve(&gone.secret, now, TicketOperation::Chat, "after", 1).is_err());
+        reg.validate_and_reserve(&kept.secret, now, TicketOperation::Chat, "kept-after", 1).unwrap();
+        // Forgetting is idempotent, and an org without a ledger has nothing to forget.
+        reg.org_member_usage_forget("org_p6b_test", "usr_p6b_one").unwrap();
+        reg.org_member_usage_forget("org_unknown", "usr_unknown").unwrap();
     }
 
     #[test]

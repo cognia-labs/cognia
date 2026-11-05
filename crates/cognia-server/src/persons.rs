@@ -10,7 +10,13 @@ const METADATA_SERVICE: &str = "com.cognia.person-brains";
 const CONTENT_KEY_SERVICE: &str = "com.cognia.account-content";
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Metadata { org: String, user: String, #[serde(default)] data_generation: Option<String> }
+struct Metadata {
+    org: String, user: String, #[serde(default)] data_generation: Option<String>,
+    /// ADR-0253 §6: set before a purge removes anything, cleared only by the
+    /// purge's last step. A Host that restarts mid-purge resumes it at boot,
+    /// and nothing starts the person meanwhile.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")] purging: bool,
+}
 struct Usage {
     in_flight: AtomicUsize,
     last_used_ms: AtomicI64,
@@ -73,9 +79,11 @@ async fn wait_stopped(stopped: Option<watch::Receiver<bool>>) {
     // A joiner that went away with the runtime has nothing left to wait for.
     if let Some(mut stopped) = stopped { let _ = stopped.wait_for(|done| *done).await; }
 }
-/// Clears a purge's marker however the purge ends, including cancellation.
-struct PurgeMarker(Arc<AtomicBool>);
-impl Drop for PurgeMarker { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
+/// Clears a purge's marker however the purge ends, including cancellation,
+/// until the purge has recorded itself durably: from then on only a finished
+/// purge (which removes the entry) lets the person start again.
+struct PurgeMarker { flag: Arc<AtomicBool>, durable: bool }
+impl Drop for PurgeMarker { fn drop(&mut self) { if !self.durable { self.flag.store(false, Ordering::SeqCst); } } }
 /// What one locked pass of `acquire` decided.
 enum Admission { Ready(RequestGuard), Wait(watch::Receiver<bool>) }
 
@@ -89,6 +97,9 @@ pub struct Fleet {
     people: parking_lot::RwLock<BTreeMap<String, PersonPartition>>,
     active_accounts: parking_lot::RwLock<BTreeMap<String, Arc<PersonBrainAuthority>>>,
     data_scopes: parking_lot::RwLock<BTreeMap<String, PersonReceiptScope>>,
+    /// People whose purge a previous run of the Host recorded but did not
+    /// finish; [`Fleet::resume_interrupted_purges`] takes them once.
+    interrupted_purges: parking_lot::Mutex<Vec<PersonPartition>>,
     idle: Duration,
     maximum: usize,
     stopping: AtomicBool,
@@ -137,6 +148,7 @@ impl Fleet {
         if valid_account(&template.account_id) { return Err("operator account uses the reserved person namespace".into()); }
         let mut entries = BTreeMap::new();
         let mut data_scopes = BTreeMap::new();
+        let mut interrupted_purges = Vec::new();
         let root = template.data_dir.join("persons");
         if root.exists() {
             for directory in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
@@ -153,13 +165,19 @@ impl Fleet {
                     }
                     let last = std::fs::read_to_string(directory.path().join("last-used"))
                         .ok().and_then(|s| s.parse().ok()).unwrap_or(0);
-                    entries.insert(account, Self::entry(person, last));
+                    let entry = Self::entry(person.clone(), last);
+                    if metadata.purging {
+                        entry.purging.store(true, Ordering::SeqCst);
+                        interrupted_purges.push(person);
+                    }
+                    entries.insert(account, entry);
                 }
             }
         }
         let people = entries.iter().map(|(account, entry)| (account.clone(), entry.person.clone())).collect();
         let fleet = Arc::new(Self { template, state, ledger, entries: Mutex::new(entries), snapshots: Default::default(),
-            people: parking_lot::RwLock::new(people), active_accounts: Default::default(), data_scopes: parking_lot::RwLock::new(data_scopes), idle, maximum, stopping: AtomicBool::new(false), person_exec,
+            people: parking_lot::RwLock::new(people), active_accounts: Default::default(), data_scopes: parking_lot::RwLock::new(data_scopes),
+            interrupted_purges: parking_lot::Mutex::new(interrupted_purges), idle, maximum, stopping: AtomicBool::new(false), person_exec,
             #[cfg(test)] records_root: Default::default() });
         Ok(fleet)
     }
@@ -177,6 +195,32 @@ impl Fleet {
                 fleet.reap().await;
             }
         })
+    }
+    /// Finish the purges a previous run of the Host recorded but did not
+    /// complete (ADR-0253 §6). Each runs on its own task; one that fails again
+    /// stays recorded, keeps its person from starting, and is retried at the
+    /// next boot or by the operator.
+    pub fn resume_interrupted_purges(self: &Arc<Self>) {
+        let people = std::mem::take(&mut *self.interrupted_purges.lock());
+        for person in people {
+            let fleet = Arc::clone(self);
+            tokio::spawn(async move {
+                match fleet.purge(&person).await {
+                    Ok(()) => log::info!("resumed person partition purge finished: {}", person.account_id),
+                    Err(code) => log::error!("resumed person partition purge failed ({code}): {}", person.account_id),
+                }
+            });
+        }
+    }
+    /// Record the purge durably before anything is removed.
+    fn record_purge(&self, person: &PersonPartition) -> Result<(), &'static str> {
+        let root = self.template.data_dir.join("persons").join(&person.account_id);
+        // The boot scan finds a recorded purge through the partition directory.
+        std::fs::create_dir_all(&root).map_err(|_| "person_brain_unavailable")?;
+        let data_generation = self.data_scopes.read().get(&person.account_id).map(|scope| scope.data_generation.clone());
+        let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation, purging: true })
+            .map_err(|_| "person_brain_unavailable")?;
+        cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")
     }
     fn refresh(&self, entries: &BTreeMap<String, Entry>) {
         *self.snapshots.write() = entries.values().map(|entry| PersonBrainStatus {
@@ -249,7 +293,7 @@ impl Fleet {
     /// the lock released, after which the pass runs again on fresh state.
     fn admit_locked(&self, entries: &mut BTreeMap<String, Entry>, person: &PersonPartition) -> Result<Admission, &'static str> {
         if let Some(entry) = entries.get(&person.account_id) {
-            if entry.purging.load(Ordering::SeqCst) { return Err("person_brain_unavailable"); }
+            if entry.purging.load(Ordering::SeqCst) { return Err("person_purging"); }
             // The person's previous brain is still going; its data is in use.
             if let Some(stopped) = entry.pending_stop() { return Ok(Admission::Wait(stopped)); }
         }
@@ -279,7 +323,7 @@ impl Fleet {
             let key = cognia_companion_rpc::headless::get_or_create_account_content_key(&person.account_id).map_err(|_| "person_brain_unavailable")?;
             let receipt_scope = if key_existed { self.data_scopes.read().get(&person.account_id).cloned() } else { None }
                 .unwrap_or_else(|| PersonReceiptScope { account_id: person.account_id.clone(), data_generation: uuid::Uuid::new_v4().to_string() });
-            let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()) }).map_err(|_| "person_brain_unavailable")?;
+            let metadata = serde_json::to_string(&Metadata { org: person.org_id.clone(), user: person.user_id.clone(), data_generation: Some(receipt_scope.data_generation.clone()), purging: false }).map_err(|_| "person_brain_unavailable")?;
             cognia_secrets::secret_store::set(METADATA_SERVICE, &person.account_id, &metadata).map_err(|_| "person_brain_unavailable")?;
             self.data_scopes.write().insert(person.account_id.clone(), receipt_scope);
             let mut config = self.template.clone();
@@ -367,18 +411,22 @@ impl PersonBrainFleet for Fleet {
             // Purges of one person are serialized by its execution lock.
             let entry = entries.entry(person.account_id.clone()).or_insert_with(|| Self::entry(person.clone(), 0));
             entry.purging.store(true, Ordering::SeqCst);
-            (PurgeMarker(entry.purging.clone()), self.stop_entry(entry))
+            (PurgeMarker { flag: entry.purging.clone(), durable: false }, self.stop_entry(entry))
         };
+        let mut marker = marker;
+        let recorded = self.record_purge(person);
+        marker.durable = recorded.is_ok();
         wait_stopped(stopped).await;
-        let result = self.purge_stopped(person).await;
+        let result = match recorded { Ok(()) => self.purge_stopped(person).await, Err(code) => Err(code) };
         let mut entries = self.entries.lock().await;
         if result.is_ok() {
             entries.remove(&person.account_id);
             self.people.write().remove(&person.account_id);
             self.data_scopes.write().remove(&person.account_id);
-        } else if entries.get(&person.account_id).is_some_and(|entry| entry.task.is_none() && entry.stopped.is_none()
+        } else if !marker.durable && entries.get(&person.account_id).is_some_and(|entry| entry.task.is_none() && entry.stopped.is_none()
             && !self.people.read().contains_key(&person.account_id)) {
-            // A placeholder for a person the fleet never knew.
+            // A placeholder for a person the fleet never knew, whose purge
+            // was never recorded. A recorded one keeps refusing the person.
             entries.remove(&person.account_id);
         }
         drop(marker);
@@ -411,6 +459,16 @@ impl Fleet {
         cognia_companion::audit::record_async("person_execution_purge", "local-operator", "service", "allow",
             serde_json::json!({"accountId":person.account_id,"stoppedRuns":stopped})).await;
         self.ledger.purge_person_receipts(&person.account_id).map_err(|_| "person_brain_unavailable")?;
+        // ADR-0253 §6: what the Host keeps about the person outside the data
+        // root goes too. Each step is idempotent, so a resumed purge repeats it.
+        cognia_companion::person_chat::PERSON_SESSIONS.forget_person(&person.account_id)?;
+        cognia_companion::org_policy::person_forget_usage(&person.org_id, &person.user_id).map_err(|error| {
+            log::error!("person usage could not be removed: {error}");
+            "person_brain_unavailable"
+        })?;
+        let redacted = self.state.event_bus.forget_partition(&person.account_id);
+        cognia_companion::audit::record_async("person_partition_forget", "local-operator", "service", "allow",
+            serde_json::json!({"accountId":person.account_id,"redactedFrames":redacted})).await;
         // Destroy the DEK before removing any data; a partially failed purge
         // remains inaccessible and may be retried idempotently.
         cognia_secrets::secret_store::delete(CONTENT_KEY_SERVICE, &person.account_id).map_err(|_| "person_brain_unavailable")?;
@@ -623,7 +681,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!purging.is_finished());
         // Nothing restarts the member being removed...
-        assert_eq!(fleet.acquire(&a).await.err(), Some("person_brain_unavailable"));
+        assert_eq!(fleet.acquire(&a).await.err(), Some("person_purging"));
         // ...and nobody else waits for the purge.
         let _b_socket = install_person_socket_for_testing(&fleet.state, &b.account_id);
         drop(tokio::time::timeout(Duration::from_secs(5), fleet.acquire(&b)).await.unwrap().unwrap());
@@ -632,14 +690,21 @@ mod tests {
         assert!(fleet.entries.lock().await.get(&a.account_id).is_none());
         assert!(fleet.person(&a.account_id).is_none());
         assert!(!temp.path().join("persons").join(&a.account_id).exists());
-        // A cancelled purge leaves no marker behind.
+        // A cancelled purge was already recorded (ADR-0253 §6): the person
+        // stays refused until a purge finishes, and the record says so.
         let c = person("slow-purge-c");
         let exit = slow_to_stop(&fleet, &c).await;
         let cancelled = { let fleet = fleet.clone(); let c = c.clone(); tokio::spawn(async move { fleet.purge(&c).await }) };
         tokio::time::sleep(Duration::from_millis(50)).await;
         cancelled.abort(); let _ = cancelled.await;
-        assert!(!fleet.entries.lock().await.get(&c.account_id).unwrap().purging.load(Ordering::SeqCst));
-        drop(exit); fleet.shutdown().await;
+        assert!(fleet.entries.lock().await.get(&c.account_id).unwrap().purging.load(Ordering::SeqCst));
+        assert_eq!(fleet.acquire(&c).await.err(), Some("person_purging"));
+        let recorded: Metadata = serde_json::from_str(&cognia_secrets::secret_store::get(METADATA_SERVICE, &c.account_id).unwrap().unwrap()).unwrap();
+        assert!(recorded.purging);
+        drop(exit);
+        tokio::time::timeout(Duration::from_secs(15), fleet.purge(&c)).await.unwrap().unwrap();
+        assert!(fleet.entries.lock().await.get(&c.account_id).is_none());
+        fleet.shutdown().await;
     }
 
     #[tokio::test]
@@ -678,6 +743,58 @@ mod tests {
         attempt.abort(); let _ = attempt.await;
         assert_eq!(fleet.entries.lock().await.get(&a.account_id).unwrap().usage.in_flight.load(Ordering::SeqCst), 0);
         fleet.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn adr0253_a_recorded_purge_refuses_the_person_and_finishes_after_a_restart() {
+        let _slot = lock_slot().await; clear_socket_for_testing();
+        // The session fence writes through the installed store; hold it.
+        let _store_guard = cognia_companion::security_store::test_guard();
+        struct Restore(Option<Arc<cognia_companion::security_store::SecurityStore>>);
+        impl Drop for Restore { fn drop(&mut self) { cognia_companion::security_store::install_security_store(self.0.take()); } }
+        let _restore = Restore(cognia_companion::security_store::security_store());
+        cognia_companion::security_store::install_security_store(Some(cognia_companion::security_store::SecurityStore::in_memory().unwrap()));
+        let temp = tempfile::tempdir().unwrap(); let fleet = fixture(temp.path(), 2);
+        let gone = person("adr0253-purge-gone"); let kept = person("adr0253-purge-kept");
+        // A Host that stopped mid-purge: the purge is recorded, the data and
+        // the key are still there.
+        fleet.record_purge(&gone).unwrap();
+        cognia_companion_rpc::headless::get_or_create_account_content_key(&gone.account_id).unwrap();
+        let root = temp.path().join("persons").join(&gone.account_id);
+        std::fs::write(root.join("encrypted-data"), "ciphertext").unwrap();
+        fleet.shutdown().await;
+        let restarted = fixture(temp.path(), 2);
+        let _socket = install_person_socket_for_testing(&restarted.state, &gone.account_id);
+        assert_eq!(restarted.acquire(&gone).await.err(), Some("person_purging"), "nothing starts them meanwhile");
+        // What the Host keeps about them outside the data root.
+        let bus = &restarted.state.event_bus;
+        let frame = bus.publish_person("claude://message".into(), serde_json::json!({"text":"private"}), gone.account_id.clone());
+        bus.publish_person("claude://message".into(), serde_json::json!({"text":"kept"}), kept.account_id.clone());
+        let sessions = &cognia_companion::person_chat::PERSON_SESSIONS;
+        sessions.bind("adr0253-purge-gone-session", Some(&gone)).unwrap();
+        sessions.bind("adr0253-purge-kept-session", Some(&kept)).unwrap();
+        assert_eq!(restarted.interrupted_purges.lock().len(), 1);
+        restarted.resume_interrupted_purges();
+        assert!(restarted.interrupted_purges.lock().is_empty(), "taken once");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while cognia_secrets::secret_store::get(METADATA_SERVICE, &gone.account_id).unwrap().is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("resumed purge finishes");
+        assert!(!root.exists());
+        assert!(cognia_secrets::secret_store::get(CONTENT_KEY_SERVICE, &gone.account_id).unwrap().is_none());
+        assert_eq!(sessions.owner_account("adr0253-purge-gone-session"), None);
+        assert_eq!(sessions.owner_account("adr0253-purge-kept-session"), Some(kept.account_id.clone()));
+        let cognia_companion::event_bus::SubscribeResult::Ok { replay, .. } = bus.subscribe(Some(frame.seq - 1), now_ms()) else {
+            panic!("replay");
+        };
+        assert_eq!(replay[0].seq, frame.seq);
+        assert_eq!(replay[0].payload, serde_json::Value::Null);
+        assert_eq!(replay[1].payload, serde_json::json!({"text":"kept"}));
+        // Afterwards the person may start again, with an empty partition.
+        restarted.acquire(&gone).await.map(drop).unwrap();
+        assert!(!root.join("encrypted-data").exists());
+        restarted.shutdown().await;
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
-//! P6c ephemeral chat ownership. Independent of task-local dispatch: sidecar
-//! readers and replay consumers run in other tasks. Never evict bindings while
-//! the shared sidecar or its replay frames can still exist.
+//! P6c chat ownership, durable since ADR-0253 §5. Independent of task-local
+//! dispatch: sidecar readers and replay consumers run in other tasks. A claim
+//! is removed only with its person's partition (purge), never while the
+//! shared sidecar or its replay frames can still name the session.
 use std::collections::HashMap;
 use parking_lot::RwLock;
 use once_cell::sync::Lazy;
@@ -24,37 +25,112 @@ pub fn person_caller(principal: &DeviceContext, command: &str) -> Result<PersonP
     })
 }
 
+/// ADR-0253 §5 session fence: which person partition owns a session id
+/// (`Some(account)`), or the operator (`None`). Claims write through to the
+/// installed security store, so a Host restart keeps every fence; without a
+/// store (a desktop Host, unit tests) they live in memory only. A claim is
+/// synchronous: callers fence before any await, so a member's first send and
+/// an operator control cannot both win.
 #[derive(Default)]
-pub struct PersonSessions(RwLock<HashMap<String, Option<PersonPartition>>>);
+pub struct PersonSessions(RwLock<Claims>);
+#[derive(Default)]
+struct Claims {
+    /// The store these claims were loaded from; another store reloads them.
+    store: Option<std::sync::Weak<crate::security_store::SecurityStore>>,
+    owners: HashMap<String, Option<String>>,
+}
+type Store = std::sync::Arc<crate::security_store::SecurityStore>;
+fn same_store(loaded: &Option<std::sync::Weak<crate::security_store::SecurityStore>>, store: Option<&Store>) -> bool {
+    match (loaded.as_ref().and_then(std::sync::Weak::upgrade), store) {
+        (Some(loaded), Some(store)) => std::sync::Arc::ptr_eq(&loaded, store),
+        (None, None) => loaded.is_none(),
+        _ => false,
+    }
+}
 pub static PERSON_SESSIONS: Lazy<PersonSessions> = Lazy::new(PersonSessions::default);
 impl PersonSessions {
-    pub fn bind(&self, session: &str, person: Option<&PersonPartition>) -> Result<(), &'static str> {
-        let mut sessions = self.0.write();
-        if let Some(owner) = sessions.get(session) {
-            if owner.as_ref().map(|p| &p.account_id) != person.map(|p| &p.account_id) {
-                return Err("host_surface_forbidden");
-            }
-        } else { sessions.insert(session.into(), person.cloned()); }
+    /// Load the installed store's claims the first time it is seen.
+    fn sync(&self, store: Option<&Store>) -> Result<(), &'static str> {
+        if same_store(&self.0.read().store, store) { return Ok(()); }
+        let mut claims = self.0.write();
+        if same_store(&claims.store, store) { return Ok(()); }
+        let mut owners = HashMap::new();
+        if let Some(store) = store {
+            owners.extend(store.session_owners().map_err(|error| {
+                log::error!("person session claims could not be loaded: {error}");
+                "person_storage_failed"
+            })?);
+        }
+        *claims = Claims { store: store.map(std::sync::Arc::downgrade), owners };
         Ok(())
     }
+    /// Claim `session` for `person` (`None`: the operator), or confirm the
+    /// claim on record is theirs.
+    pub fn bind(&self, session: &str, person: Option<&PersonPartition>) -> Result<(), &'static str> {
+        let store = crate::security_store::security_store();
+        self.sync(store.as_ref())?;
+        let wanted = person.map(|p| p.account_id.clone());
+        let mut claims = self.0.write();
+        let owner = match claims.owners.get(session) {
+            Some(owner) => owner.clone(),
+            None => {
+                let owner = match &store {
+                    Some(store) => store.claim_session_owner(session, wanted.as_deref(), chrono::Utc::now().timestamp())
+                        .map_err(|error| {
+                            log::error!("person session claim could not be recorded: {error}");
+                            "person_storage_failed"
+                        })?,
+                    None => wanted.clone(),
+                };
+                claims.owners.insert(session.into(), owner.clone());
+                owner
+            }
+        };
+        if owner != wanted { return Err("host_surface_forbidden"); }
+        Ok(())
+    }
+    /// The caller may drive `session`: it is theirs, or it is unclaimed and
+    /// the caller is the operator.
     pub fn check(&self, session: &str, person: Option<&PersonPartition>) -> Result<(), &'static str> {
-        let sessions = self.0.read();
-        match sessions.get(session) {
-            Some(owner) if owner.as_ref().map(|p| &p.account_id) == person.map(|p| &p.account_id) => Ok(()),
+        self.sync(crate::security_store::security_store().as_ref())?;
+        let claims = self.0.read();
+        let wanted = person.map(|p| &p.account_id);
+        match claims.owners.get(session) {
+            Some(owner) if owner.as_ref() == wanted => Ok(()),
             None if person.is_none() => Ok(()),
             _ => Err("host_surface_forbidden"),
         }
     }
     fn check_existing(&self, session: &str, person: Option<&PersonPartition>) -> Result<(), &'static str> {
-        let sessions = self.0.read();
-        if let Some(owner) = sessions.get(session) {
-            if owner.as_ref().map(|p| &p.account_id) != person.map(|p| &p.account_id) { return Err("host_surface_forbidden"); }
+        self.sync(crate::security_store::security_store().as_ref())?;
+        let claims = self.0.read();
+        if let Some(owner) = claims.owners.get(session) {
+            if owner.as_ref() != person.map(|p| &p.account_id) { return Err("host_surface_forbidden"); }
         }
         Ok(())
     }
-    pub fn owner(&self, session: &str) -> Option<PersonPartition> { self.0.read().get(session).cloned().flatten() }
-    fn observe(&self, session: &str) -> Option<PersonPartition> {
-        self.0.write().entry(session.into()).or_insert(None).clone()
+    /// The person partition that claimed `session`, if one did. Never records
+    /// a claim: an unclaimed session's frames are published as the operator's.
+    /// A store that cannot be read leaves the claims already loaded in force.
+    pub fn owner_account(&self, session: &str) -> Option<String> {
+        let _ = self.sync(crate::security_store::security_store().as_ref());
+        self.0.read().owners.get(session).cloned().flatten()
+    }
+    /// A purged person's claims go with their partition (ADR-0253 §6).
+    pub fn forget_person(&self, account_id: &str) -> Result<usize, &'static str> {
+        let store = crate::security_store::security_store();
+        self.sync(store.as_ref())?;
+        let removed = match &store {
+            Some(store) => store.forget_person_sessions(account_id).map_err(|error| {
+                log::error!("person session claims could not be removed: {error}");
+                "person_storage_failed"
+            })?,
+            None => 0,
+        };
+        let mut claims = self.0.write();
+        let before = claims.owners.len();
+        claims.owners.retain(|_, owner| owner.as_deref() != Some(account_id));
+        Ok(removed.max(before - claims.owners.len()))
     }
 }
 
@@ -97,8 +173,8 @@ pub fn person_event_session(payload: &Value) -> Option<&str> {
 /// and the devices bound to them at delivery (`person_partition::
 /// event_visible`), live and on replay alike.
 pub fn person_publish(bus: &crate::event_bus::EventBus, channel: &str, payload: &Value) {
-    if let Some(person) = person_event_session(payload).and_then(|session| PERSON_SESSIONS.observe(session)) {
-        person_publish_to(bus, channel, payload, &person);
+    if let Some(account) = person_event_session(payload).and_then(|session| PERSON_SESSIONS.owner_account(session)) {
+        bus.publish_person(channel.into(), payload.clone(), account);
     } else { bus.publish(channel.into(), payload.clone()); }
 }
 
@@ -130,7 +206,7 @@ pub fn person_connection_visible(frame: &crate::event_bus::EventFrame, device: &
     // Defence for another Host publisher that retained a session id but did
     // not stamp routing. Never apply the service sidecar visibility exception.
     if frame.partition_account_id.is_none()
-        && person_event_session(&frame.payload).and_then(|session| PERSON_SESSIONS.owner(session)).is_some() {
+        && person_event_session(&frame.payload).and_then(|session| PERSON_SESSIONS.owner_account(session)).is_some() {
         return false;
     }
     if frame.partition_account_id.is_some() {
@@ -142,6 +218,37 @@ pub fn person_connection_visible(frame: &crate::event_bus::EventFrame, device: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adr0253_session_claims_survive_a_restart_and_publishing_never_claims() {
+        use crate::security_store::SecurityStore;
+        let _guard = crate::security_store::test_guard();
+        let previous = crate::security_store::security_store();
+        struct Restore(Option<std::sync::Arc<SecurityStore>>);
+        impl Drop for Restore { fn drop(&mut self) { crate::security_store::install_security_store(self.0.take()); } }
+        let _restore = Restore(previous);
+        crate::security_store::install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        let bob = PersonPartition::new("org_adr0253".into(), "usr_adr0253_bob".into());
+        let before = PersonSessions::default();
+        before.bind("adr0253-bob", Some(&bob)).unwrap();
+        before.bind("adr0253-operator", None).unwrap();
+        // A restart: a new fence over the same store keeps every claim.
+        let after = PersonSessions::default();
+        assert_eq!(after.bind("adr0253-bob", None), Err("host_surface_forbidden"));
+        assert_eq!(after.check("adr0253-bob", None), Err("host_surface_forbidden"));
+        after.check("adr0253-bob", Some(&bob)).unwrap();
+        assert_eq!(after.bind("adr0253-operator", Some(&bob)), Err("host_surface_forbidden"));
+        assert_eq!(after.owner_account("adr0253-bob"), Some(bob.account_id.clone()));
+        // Seeing a session id while publishing records no owner, so a member
+        // may still claim it afterwards.
+        assert_eq!(after.owner_account("adr0253-published"), None);
+        after.bind("adr0253-published", Some(&bob)).unwrap();
+        // A purge removes the person's claims and only theirs.
+        assert_eq!(after.forget_person(&bob.account_id), Ok(2));
+        let rejoined = PersonSessions::default();
+        rejoined.bind("adr0253-bob", None).unwrap();
+        assert_eq!(rejoined.bind("adr0253-operator", Some(&bob)), Err("host_surface_forbidden"));
+    }
 
     #[test]
     fn person_events_publish_once_however_many_devices_the_person_has() {

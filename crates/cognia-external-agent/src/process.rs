@@ -364,8 +364,8 @@ impl ExternalAgentProcessManager {
         mut config: ExternalAgentSpawnConfig,
         sink: Arc<dyn ExternalAgentEventSink>,
     ) -> Result<String, String> {
-        if crate::spawn_authority::execution_admission().is_some()
-            || std::env::var("COGNIA_DEPLOYMENT_MODE").is_ok_and(|mode| mode == "multi-tenant") {
+        if host_process_refused(crate::spawn_authority::execution_admission().is_some(),
+            cognia_core::deployment::deployment_mode()) {
             return Err("execution_isolation_unavailable: multi-tenant execution cannot use a Host process".into());
         }
         crate::dsh_runtime::normalize_managed_launch(&mut config)?;
@@ -978,6 +978,13 @@ fn configure_kimi_environment(
         .retain(|key, _| !key.starts_with("KIMI_") || crate::presets::kimi_env_key(key));
 }
 
+/// A tenant's execution, or any execution on a multi-tenant Host, never runs
+/// as a Host process. The mode is read through the shared parser, so an alias
+/// or an invalid value refuses here exactly as it does everywhere else.
+fn host_process_refused(admitted_tenant_execution: bool, mode: cognia_core::deployment::DeploymentMode) -> bool {
+    admitted_tenant_execution || mode == cognia_core::deployment::DeploymentMode::MultiTenant
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1039,6 +1046,17 @@ mod tests {
         let error = with_execution_admission(Some(decision), manager.spawn(echo_config("tenant"), Arc::new(CollectorSink::default()))).await.unwrap_err();
         assert!(error.starts_with("execution_isolation_unavailable:"));
         assert!(manager.list().await.is_empty());
+    }
+    #[test]
+    fn host_process_refusal_reads_the_shared_mode() {
+        use cognia_core::deployment::{mode_from, DeploymentMode};
+        assert!(super::host_process_refused(true, DeploymentMode::SingleUser));
+        assert!(!super::host_process_refused(false, mode_from(None)));
+        // The aliases and the fail-closed default the old exact match missed.
+        for value in ["multi-tenant", "cloud", "Multi-Tenant", "multi_tenant", "typo"] {
+            assert!(super::host_process_refused(false, mode_from(Some(value))), "{value}");
+        }
+        assert!(!super::host_process_refused(false, mode_from(Some("single-user"))));
     }
     #[cfg(unix)]
     #[tokio::test]

@@ -1292,6 +1292,50 @@ impl SecurityStore {
         Ok(ids)
     }
 
+    /// ADR-0253 §5: claim a session for a person partition (`Some(account)`)
+    /// or the operator (`None`). The first claim wins and is durable; the
+    /// answer is the owner on record afterwards, so the caller compares it
+    /// with the owner it asked for.
+    pub fn claim_session_owner(
+        &self,
+        session_id: &str,
+        account_id: Option<&str>,
+        now: i64,
+    ) -> Result<Option<String>, SecurityStoreError> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO person_session_owners (session_id, account_id, claimed_at)
+             VALUES (?1, ?2, ?3)",
+            params![session_id, account_id, now],
+        )?;
+        let owner: Option<String> = tx.query_row(
+            "SELECT account_id FROM person_session_owners WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(owner)
+    }
+
+    /// Every session claim on record: session id and its owner (`None` is the
+    /// operator). Loaded once per store by the Host's session fence.
+    pub fn session_owners(&self) -> Result<Vec<(String, Option<String>)>, SecurityStoreError> {
+        let conn = self.conn.lock();
+        let mut query = conn.prepare("SELECT session_id, account_id FROM person_session_owners")?;
+        let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// A purged person's session claims go with their partition.
+    pub fn forget_person_sessions(&self, account_id: &str) -> Result<usize, SecurityStoreError> {
+        Ok(self.conn.lock().execute(
+            "DELETE FROM person_session_owners WHERE account_id = ?1",
+            params![account_id],
+        )?)
+    }
+
     /// Legacy carriers identify a device by id alone. Ambiguous ids cannot
     /// resolve a tenant or a person; HTTP remains explicitly tenant-bound.
     pub fn unambiguous_device_tenant(&self, device_id: &str) -> Result<Option<String>, SecurityStoreError> {
@@ -4418,10 +4462,45 @@ CREATE INDEX IF NOT EXISTS idx_audit_tenant_created ON audit_events(tenant_id, c
 CREATE INDEX IF NOT EXISTS idx_audit_device_authorization
     ON audit_events(tenant_id, target_id)
     WHERE action GLOB 'device.*' OR action IN ('browser.registered', 'worker.registered');
+-- ADR-0253 §5: which person partition (or, with a NULL account, the
+-- operator) owns a session on a multi-tenant Host. Survives restarts.
+CREATE TABLE IF NOT EXISTS person_session_owners (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    account_id TEXT,
+    claimed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_person_session_owners_account
+    ON person_session_owners(account_id);
 "#;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adr0253_session_claims_are_first_wins_durable_and_purged_per_person() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("security.db");
+        let store = super::SecurityStore::open(&path).unwrap();
+        assert_eq!(store.claim_session_owner("s-member", Some("pb_a"), 1).unwrap(), Some("pb_a".into()));
+        // A later claim never takes it over; the answer is the owner on record.
+        assert_eq!(store.claim_session_owner("s-member", None, 2).unwrap(), Some("pb_a".into()));
+        assert_eq!(store.claim_session_owner("s-operator", None, 3).unwrap(), None);
+        assert_eq!(store.claim_session_owner("s-other", Some("pb_b"), 4).unwrap(), Some("pb_b".into()));
+        drop(store);
+        let reopened = super::SecurityStore::open(&path).unwrap();
+        let mut owners = reopened.session_owners().unwrap();
+        owners.sort();
+        assert_eq!(owners, vec![
+            ("s-member".to_string(), Some("pb_a".to_string())),
+            ("s-operator".to_string(), None),
+            ("s-other".to_string(), Some("pb_b".to_string())),
+        ]);
+        assert_eq!(reopened.forget_person_sessions("pb_a").unwrap(), 1);
+        assert_eq!(reopened.forget_person_sessions("pb_a").unwrap(), 0);
+        let mut owners = reopened.session_owners().unwrap();
+        owners.sort();
+        assert_eq!(owners, vec![("s-operator".to_string(), None), ("s-other".to_string(), Some("pb_b".to_string()))]);
+    }
+
     #[test]
     fn p5_receipts_are_partition_lifetime_scoped_and_purge_keeps_legacy_storage() {
         let store = SecurityStore::in_memory().unwrap();

@@ -3259,6 +3259,7 @@ async fn run_serve(
                     Ok(fleet) => {
                         cognia_companion::person_partition::install(Some(fleet.clone()));
                         fleet.start_idle_reaper();
+                        fleet.resume_interrupted_purges();
                         person_fleet = Some(fleet);
                     }
                     Err(error) => log::error!("person-brain fleet unavailable; Host data remains refused: {error}"),

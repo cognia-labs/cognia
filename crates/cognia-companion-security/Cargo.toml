@@ -53,6 +53,7 @@ uuid = { workspace = true, features = ["v4"] }
 parking_lot.workspace = true
 once_cell.workspace = true
 log.workspace = true
+cognia-core = { path = "../cognia-core", features = ["deployment"] }
 tracing.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }

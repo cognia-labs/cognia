@@ -61,6 +61,11 @@ const REQUEST_SCOPED_RETENTION_MS: i64 = 2 * 60 * 1000;
 /// full replay buffer while holding its mutex on every publish.
 const PRUNE_INTERVAL_MS: i64 = 1000;
 
+/// The partition stamp of a frame whose person was purged
+/// ([`EventBus::forget_partition`]). No partition account id is empty, so no
+/// connection's visibility check accepts it.
+pub const PURGED_PARTITION: &str = "";
+
 /// Broadcast channel depth — must be a power of two per tokio's requirement.
 /// 256 slots give a comfortable burst margin before slow subscribers lag.
 const BROADCAST_CAPACITY: usize = 256;
@@ -222,6 +227,29 @@ impl EventBus {
         account_id: String,
     ) -> EventFrame {
         self.publish_targeted(event_type, payload, None, Some(account_id))
+    }
+
+    /// ADR-0253 §6: a purged person's frames leave the replay history.
+    ///
+    /// Each frame is redacted in place rather than removed, so the ring's
+    /// sequence, and with it every other client's resync decision (which reads
+    /// the oldest retained frame), is unchanged. A redacted frame keeps its
+    /// sequence and type, carries no payload, and is stamped with
+    /// [`PURGED_PARTITION`], which no brain or device holds, so no transport
+    /// delivers it. The person's brain subscriptions are dropped too. Returns
+    /// how many frames were redacted.
+    pub fn forget_partition(&self, account_id: &str) -> usize {
+        let mut subscribers = self.person_subscribers.lock();
+        subscribers.retain(|subscriber| subscriber.account_id != account_id);
+        let mut redacted = 0;
+        for frame in self.buffer.lock().iter_mut() {
+            if frame.partition_account_id.as_deref() == Some(account_id) {
+                frame.payload = Value::Null;
+                frame.partition_account_id = Some(PURGED_PARTITION.to_owned());
+                redacted += 1;
+            }
+        }
+        redacted
     }
 
     fn publish_targeted(&self, event_type: String, payload: Value, destination: Option<String>, partition_account_id: Option<String>) -> EventFrame {
@@ -693,6 +721,32 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn adr0253_forgetting_a_partition_redacts_its_frames_in_place() {
+        let bus = EventBus::new();
+        let gone = bus.publish_person("claude://message".into(), json!({"text":"private"}), "pb_gone".into());
+        let operator = bus.publish("claude://message".into(), json!({"text":"operator"}));
+        let kept = bus.publish_person("claude://message".into(), json!({"text":"kept"}), "pb_kept".into());
+        let SubscribeResult::Ok { mut receiver, .. } = bus.subscribe_person(None, now_ms(), "pb_gone") else {
+            panic!("person subscription");
+        };
+        assert_eq!(bus.forget_partition("pb_gone"), 1);
+        assert_eq!(bus.forget_partition("pb_gone"), 0, "idempotent");
+        let SubscribeResult::Ok { replay, .. } = bus.subscribe(Some(0), now_ms()) else { panic!("replay") };
+        // Same sequence, so no other client's cursor is affected.
+        assert_eq!(replay.iter().map(|frame| frame.seq).collect::<Vec<_>>(), vec![gone.seq, operator.seq, kept.seq]);
+        assert_eq!(replay[0].payload, Value::Null);
+        assert_eq!(replay[0].partition_account_id.as_deref(), Some(PURGED_PARTITION));
+        assert_eq!(replay[1].payload, json!({"text":"operator"}));
+        assert_eq!(replay[2].payload, json!({"text":"kept"}));
+        assert_eq!(replay[2].partition_account_id.as_deref(), Some("pb_kept"));
+        // A cursor at the purged frame still replays rather than resyncing.
+        assert!(matches!(bus.subscribe(Some(gone.seq), now_ms()), SubscribeResult::Ok { .. }));
+        // The person's brain subscription is gone with them.
+        bus.publish_person("claude://message".into(), json!({}), "pb_gone".into());
+        assert!(matches!(receiver.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)));
+    }
 
     #[test]
     fn person_stdout_survives_bursts_beyond_broadcast_and_replay_capacity() {

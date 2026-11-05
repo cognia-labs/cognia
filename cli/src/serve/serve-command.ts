@@ -37,6 +37,7 @@ import {
   type RemoteWorkerDescriptor,
 } from "@/lib/ai/agent/team/workers/remote-worker-runtime"
 import { WorkerRpcPool } from "@/lib/ai/agent/team/workers/worker-rpc-pool"
+import { clearPartitionArtifactKeyBase } from "@/lib/accounts/partition-artifact-keys"
 import { loadMessageResolver } from "@/lib/headless/i18n"
 import { installFakeIndexedDb } from "@/lib/headless/node-indexeddb"
 import { setTransport } from "@/lib/tauri"
@@ -351,6 +352,8 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   out.write("serve: shutting down…\n")
   uninstallRuntimeControl()
   await runtimes.stop()
+  // A stopping person brain forgets its partition key base (ADR-0253 §6).
+  if (personBrain) clearPartitionArtifactKeyBase()
   collabReader?.stop()
   uninstallWorkerRuntime()
   workerPool.close()

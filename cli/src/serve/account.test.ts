@@ -68,6 +68,31 @@ describe("ensureHeadlessAccount", () => {
     process.env.COGNIA_ACCOUNT_CONTENT_KEY = "33".repeat(32)
   })
 
+  it("forgets the partition key base when the account locks (ADR-0253 §6)", async () => {
+    clearPartitionArtifactKeyBase()
+    await ensureHeadlessAccount("local_acct_locking", {
+      accountContentKey: new Uint8Array(32).fill(0x55),
+      partitionArtifactKeys: true,
+    })
+    expect(hasPartitionArtifactKeys("local_acct_locking")).toBe(true)
+    useAccountStore.setState({ locked: true })
+    expect(hasPartitionArtifactKeys("local_acct_locking")).toBe(false)
+    useAccountStore.setState({ locked: false })
+    process.env.COGNIA_ACCOUNT_CONTENT_KEY = "33".repeat(32)
+  })
+
+  it("forgets the partition key base when another account takes its place", async () => {
+    clearPartitionArtifactKeyBase()
+    await ensureHeadlessAccount("local_acct_replaced", {
+      accountContentKey: new Uint8Array(32).fill(0x66),
+      partitionArtifactKeys: true,
+    })
+    expect(hasPartitionArtifactKeys("local_acct_replaced")).toBe(true)
+    useAccountStore.setState({ unlockedAccountId: "local_acct_someone_else" })
+    expect(hasPartitionArtifactKeys("local_acct_replaced")).toBe(false)
+    process.env.COGNIA_ACCOUNT_CONTENT_KEY = "33".repeat(32)
+  })
+
   it("fails closed when the supervisor did not provide a content key", async () => {
     delete process.env.COGNIA_ACCOUNT_CONTENT_KEY
     await expect(ensureHeadlessAccount("local_acct_missing_key")).rejects.toThrow(

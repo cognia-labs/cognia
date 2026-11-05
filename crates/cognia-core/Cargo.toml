@@ -24,6 +24,9 @@ workspace-env-async = ["dep:tokio"]
 # `shutdown_signal` — resolve on SIGINT/SIGTERM, for the desktop and the
 # headless server alike.
 signal = ["dep:tokio", "dep:log", "tokio/signal", "tokio/macros"]
+# `deployment` — the single-user / multi-tenant mode and its fail-closed
+# parser (ADR-0253 §1).
+deployment = ["dep:log"]
 
 [dependencies]
 # ADR-0175. `CommandError` converts into the plane-level `Problem`.
