@@ -64,7 +64,7 @@ jest.mock("@/components/agent/workspace/team-run-controls", () => ({
     <div data-testid="run-controls">{status}</div>
   ),
 }))
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => 0 }))
+jest.mock("@/hooks/data/use-client-live-query", () => ({ useClientLiveQuery: () => 0 }))
 // The overview's run list is the cockpit's projection, with its own suite.
 let mockRuns: Array<Record<string, unknown>> = []
 jest.mock("@/hooks/agent-runs/use-agent-runs", () => ({
