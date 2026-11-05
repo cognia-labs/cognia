@@ -5,9 +5,9 @@
  * and that unsupported types return null.
  */
 
-import { getTenantToken } from "./adapters/lark/auth"
-jest.mock("./adapters/lark/auth", () => {
-  const actual = jest.requireActual("./adapters/lark/auth")
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
+jest.mock("@/lib/auth-providers/feishu/auth", () => {
+  const actual = jest.requireActual("@/lib/auth-providers/feishu/auth")
   return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
 })
 

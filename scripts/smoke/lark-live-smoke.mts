@@ -178,7 +178,7 @@ setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknow
 const { createLarkAdapter } = await import("../../lib/connectors/adapters/lark/index")
 const { probeBotIdentity } = await import("../../lib/connectors/adapters/lark/whoami")
 const { larkTenantRequest } = await import("../../lib/connectors/adapters/lark/http")
-const { getTenantToken } = await import("../../lib/connectors/adapters/lark/auth")
+const { getTenantToken } = await import("@/lib/auth-providers/feishu/auth")
 const { getDb } = await import("../../lib/db/schema")
 // The contract module itself, not the `types/connectors/event` shim: tsx loads
 // the shim as CommonJS, and its `export *` re-exports are invisible to this ESM

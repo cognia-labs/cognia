@@ -292,9 +292,9 @@ work at all:
 
 | Part | Slack | Lark |
 | --- | --- | --- |
-| Authorize (mint + persist state) | `adapters/slack/oauth-begin.ts` | `adapters/lark/oauth-begin.ts` |
-| Durable pending record | `adapters/slack/oauth-pending.ts` | `adapters/lark/oauth-pending.ts` |
-| Complete (validate + exchange) | `adapters/slack/oauth-handler.ts` | `adapters/lark/oauth-handler.ts` |
+| Authorize (mint + persist state) | `adapters/slack/oauth-begin.ts` | `lib/auth-providers/feishu/oauth-begin.ts` |
+| Durable pending record | `adapters/slack/oauth-pending.ts` | `lib/auth-providers/feishu/oauth-pending.ts` |
+| Complete (validate + exchange) | `adapters/slack/oauth-handler.ts` | `lib/auth-providers/feishu/oauth-handler.ts` |
 
 The pending record lives in the connectors secret store, **not** in `sessionStorage`. A headless brain's
 Web Storage is an in-memory shim and the browser that opened the settings dialog is a different process,

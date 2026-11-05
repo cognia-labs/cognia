@@ -27,7 +27,7 @@ import { connectorsHttpRequest, connectorsKeyringGet } from "@/lib/connectors/ta
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { buildSelfIdentity } from "@/lib/connectors/self-identity"
 import type { AdapterSelfIdentitySnapshot } from "@/lib/db/connector-types"
-import { getTenantToken } from "./auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 
 const LARK_BOT_INFO_URL = "https://open.feishu.cn/open-apis/bot/v3/info"
 

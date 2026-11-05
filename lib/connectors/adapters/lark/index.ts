@@ -80,8 +80,12 @@ import {
   serializeUrgent,
   sniffReceiveId,
 } from "./serialize"
-import { fetchLarkUserInfo, getTenantToken, getUserAccessToken } from "./auth"
-import { withTatRefresh, withUserTokenRefresh } from "./auth-retry"
+import {
+  fetchLarkUserInfo,
+  getTenantToken,
+  getUserAccessToken,
+} from "@/lib/auth-providers/feishu/auth"
+import { withTatRefresh, withUserTokenRefresh } from "@/lib/auth-providers/feishu/auth-retry"
 import { createLarkChatManagement } from "./chat-management"
 import { resolveLarkMediaKeys } from "./upload"
 import { isLarkResultTemplatePayload } from "./result-card"

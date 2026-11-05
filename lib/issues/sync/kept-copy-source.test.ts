@@ -9,17 +9,17 @@ import { purgeDerivedData } from "@/lib/external-services/derived-data-registry"
 import { reconcileBinding } from "./engine"
 import { captureIssueSyncSource, resolveIssueResourceSource } from "./kept-copy-source"
 import { createLarkTaskSyncProvider } from "./providers/lark-task"
-import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { createLarkBitableSyncProvider } from "./providers/lark-bitable"
 import { listPublishTargets, publishIssue } from "@/lib/issues/publish"
 import { createGithubSyncProvider } from "./providers/github"
 import { IssueSyncRegistry } from "./registry"
 import { createIssue } from "@/lib/db/issues"
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import type { IssueSyncBinding, IssueSyncProvider } from "./types"
 
-jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
-  ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
+jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/authed-api"),
   withLarkAuthedApi: jest.fn(),
 }))
 

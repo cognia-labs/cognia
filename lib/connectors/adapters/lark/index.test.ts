@@ -6,9 +6,9 @@ import "fake-indexeddb/auto"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
-import { getTenantToken } from "./auth"
-jest.mock("./auth", () => {
-  const actual = jest.requireActual("./auth")
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
+jest.mock("@/lib/auth-providers/feishu/auth", () => {
+  const actual = jest.requireActual("@/lib/auth-providers/feishu/auth")
   return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
 })
 

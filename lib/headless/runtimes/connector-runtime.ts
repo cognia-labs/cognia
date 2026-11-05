@@ -66,7 +66,7 @@ async function completeLarkOAuthCallback(
     return
   }
   try {
-    const { handleLarkOAuth } = await import("@/lib/connectors/adapters/lark/oauth-handler")
+    const { handleLarkOAuth } = await import("@/lib/auth-providers/feishu/oauth-handler")
     await handleLarkOAuth(payload.code, { state: payload.state })
     log("info", "[connector-bus] Lark OAuth completed")
   } catch (error) {

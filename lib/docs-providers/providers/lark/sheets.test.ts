@@ -1,4 +1,4 @@
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { MAX_SHEET_COLS, MAX_SHEET_ROWS, MAX_SHEET_TABS } from "@/lib/docs-providers/limits"
 import { readLarkSpreadsheet } from "./sheets"
 

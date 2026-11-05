@@ -43,7 +43,7 @@ import {
 } from "@/lib/external-services/catalog"
 import { subscribeConnectionPrompts, resolveConnectionPrompt } from "./connection-prompts"
 import { revokeConsumerAccess } from "./revoke-consumer-access"
-import { reconcileLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { reconcileLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 
 jest.mock("@/lib/external-services/runtime-profile", () => ({

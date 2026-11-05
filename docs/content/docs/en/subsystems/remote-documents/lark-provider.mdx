@@ -33,7 +33,7 @@ reads the keyring — that happens inside the auth harness.
 
 `lib/twin/ingest/lark-doc-fetcher.ts` owned the only implementation of "resolve the best Lark identity,
 refresh silently, fall back to the bot". Rather than copy it for spreadsheets and Bitable, it was extracted to
-`lib/connectors/adapters/lark/authed-api.ts` and the fetcher rewritten onto it. Its existing 41 tests pin that
+`lib/auth-providers/feishu/authed-api.ts` and the fetcher rewritten onto it. Its existing 41 tests pin that
 the behaviour did not move.
 
 ```ts

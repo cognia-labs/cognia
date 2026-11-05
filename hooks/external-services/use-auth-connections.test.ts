@@ -13,11 +13,11 @@ import {
 } from "@/lib/plugin/auth/auth-provider-registry"
 import { useAuthConnections } from "./use-auth-connections"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
-import { listLarkConnections } from "@/lib/connectors/adapters/lark/host-auth"
+import { listLarkConnections } from "@/lib/auth-providers/feishu/host-auth"
 import { useHostProfile } from "@/hooks/use-host-profile"
 
 jest.mock("@/hooks/use-host-profile", () => ({ useHostProfile: jest.fn(() => "desktop") }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   listLarkConnections: jest.fn(async () => []),
 }))
 

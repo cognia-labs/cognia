@@ -24,7 +24,7 @@
  */
 
 import { LarkApiError, readAllLarkPages, type LarkPage } from "@cognia/feishu-protocol"
-import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi, type LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { isTauri } from "@/lib/tauri"

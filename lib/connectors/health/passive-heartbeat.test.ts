@@ -47,7 +47,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsKeyringGet: jest.fn().mockResolvedValue("token"),
 }))
 
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/auth", () => ({
   getTenantToken: jest.fn().mockResolvedValue("fake-tat"),
 }))
 
@@ -387,7 +387,7 @@ describe("OneBot transport-specific idle health", () => {
 })
 
 it("labels the passive Lark heartbeat as adapter administration", async () => {
-  const { getTenantToken } = await import("@/lib/connectors/adapters/lark/auth")
+  const { getTenantToken } = await import("@/lib/auth-providers/feishu/auth")
   const { connectorsHttpRequest } = await import("@/lib/connectors/tauri/commands")
   jest.mocked(getTenantToken).mockClear()
   jest.mocked(connectorsHttpRequest).mockResolvedValue({ status: 200, headers: {}, body: "{}" })

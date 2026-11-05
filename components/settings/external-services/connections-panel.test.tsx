@@ -49,7 +49,7 @@ import { revokeConsumerAccess } from "@/lib/plugin/auth/revoke-consumer-access"
 import { ConnectionsPanel } from "./connections-panel"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
 
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   listLarkConnections: jest.fn(async () => []),
 }))
 jest.mock("@/lib/auth-providers/google/host-auth", () => ({

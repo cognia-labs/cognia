@@ -12,7 +12,7 @@ import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { inspect } from "node:util"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
 
 jest.mock("@/lib/docs-providers/registry", () => ({
@@ -153,7 +153,7 @@ jest.mock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({ execLarkCli: jest
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
 }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => {
@@ -175,8 +175,8 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
     accessToken: "connected-user",
   })),
 }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
-  ...jest.requireActual("@/lib/connectors/adapters/lark/auth"),
+jest.mock("@/lib/auth-providers/feishu/auth", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/auth"),
   getUserAccessToken: jest.fn(),
   getTenantAccessToken: jest.fn(),
   refreshUserToken: jest.fn(),
@@ -191,7 +191,7 @@ import {
   getTenantAccessToken,
   getUserAccessToken,
   refreshUserToken,
-} from "@/lib/connectors/adapters/lark/auth"
+} from "@/lib/auth-providers/feishu/auth"
 
 const isTauriMock = isTauri as jest.Mock
 const getAdapterInstanceMock = getAdapterInstance as jest.Mock
@@ -307,7 +307,7 @@ it("resolves grid Wiki metadata without pretending it is a Twin document", async
   }))
   await expect(
     resolveLarkWikiNode(
-      { get } as unknown as import("@/lib/connectors/adapters/lark/authed-api").LarkAuthedApi,
+      { get } as unknown as import("@/lib/auth-providers/feishu/authed-api").LarkAuthedApi,
       "wiki-token"
     )
   ).resolves.toEqual({ token: "base-token", objType: "bitable", title: "Wiki base" })

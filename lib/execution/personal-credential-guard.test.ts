@@ -340,8 +340,8 @@ const REVIEWED: Record<string, string[]> = {
     "resolveGithubReadTokenForRepo",
   ],
   "lib/connectors/adapter-registry.ts": ["keyring-user-token", "keyring-user-token"],
-  "lib/connectors/adapters/lark/auth-retry.ts": ["connectorsLarkUserAuth", "refreshUserToken"],
-  "lib/connectors/adapters/lark/authed-api.ts": [
+  "lib/auth-providers/feishu/auth-retry.ts": ["connectorsLarkUserAuth", "refreshUserToken"],
+  "lib/auth-providers/feishu/authed-api.ts": [
     "connectorsLarkUserAuth",
     "getCredentials",
     "withUserTokenRefresh",
@@ -360,9 +360,9 @@ const REVIEWED: Record<string, string[]> = {
   // person's explicit account-setup protocol. The native wrapper is an exit,
   // not an exemption for additional callers.
   "lib/connectors/tauri/commands.ts": ["native-lark-user-auth"],
-  "lib/connectors/adapters/lark/auth.ts": Array<string>(4).fill("connectorsLarkUserAuth"),
-  "lib/connectors/adapters/lark/oauth-begin.ts": ["connectorsLarkUserAuth"],
-  "lib/connectors/adapters/lark/oauth-handler.ts": [
+  "lib/auth-providers/feishu/auth.ts": Array<string>(4).fill("connectorsLarkUserAuth"),
+  "lib/auth-providers/feishu/oauth-begin.ts": ["connectorsLarkUserAuth"],
+  "lib/auth-providers/feishu/oauth-handler.ts": [
     "connectorsLarkUserAuth",
     "connectorsLarkUserAuth",
     "connectorsLarkUserAuth",
@@ -370,7 +370,7 @@ const REVIEWED: Record<string, string[]> = {
   // The driver releases user OAuth only with the manager's opaque, per-request
   // authorization. Metadata/epoch reconciliation and disconnect remain internal;
   // legacy user_info hydration separately calls admitPersonalCredential.
-  "lib/connectors/adapters/lark/host-auth.ts": [
+  "lib/auth-providers/feishu/host-auth.ts": [
     ...Array<string>(6).fill("connectorsLarkUserAuth"),
     "refreshUserToken",
     "registerHostAuthProviderService",

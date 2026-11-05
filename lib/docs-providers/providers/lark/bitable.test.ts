@@ -1,4 +1,4 @@
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { MAX_BITABLE_ROWS, MAX_BITABLE_TABLES } from "@/lib/docs-providers/limits"
 import { bitableColumns, readLarkBitable } from "./bitable"
 

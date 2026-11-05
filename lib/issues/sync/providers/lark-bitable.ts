@@ -14,7 +14,7 @@
  */
 
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { assertIssueSyncSource, readIssueSyncSource } from "../kept-copy-source"
 import type {
   Issue,
@@ -188,7 +188,7 @@ export function createLarkBitableSyncProvider(
             const resource = binding.resource
             if (resource.kind !== "lark-bitable") throw new Error("Invalid Lark binding")
             const { resolveLarkConnection, larkConnectionAdapter } =
-              await import("@/lib/connectors/adapters/lark/host-auth")
+              await import("@/lib/auth-providers/feishu/host-auth")
             const restored = binding.connectionRef
               ? await larkConnectionAdapter(binding.connectionRef)
               : undefined

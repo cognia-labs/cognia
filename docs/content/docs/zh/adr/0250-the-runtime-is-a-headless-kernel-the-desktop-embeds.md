@@ -205,7 +205,7 @@ shadow 模式要等对应门禁显示全覆盖后，才按类别切到 enforce�
 | 0b. 修复（并行，不等 S1） | router-fusion outbox，含行升级和到期唤醒；cron 分歧和被吞掉的失败；不再写入后备；持久化外发授权的来源；host-parity 新增的 26 项；扩大无头注册表门禁 | `dev` 上所有门禁为绿；每项修复都有测试 |
 | M0. 模块摸底（与 0b 并行，约一周） | manifest 类型 `defineHostModule` 和 `defineUiModule`；过渡归属表；G1、G6、G7、G8 作为棘轮，G2 只报告；`lib/sync/tombstones.ts` 搬进 `lib/db` | 已完成（2026-11-05）：基线已提交，并与合并基准比较 |
 | 1. 原语 | 持久化队列和限流器；所有队列和业务上限迁移；原生背压列入清单 | 队列和业务上限清单清空；ADR-0248 落在限流器上 |
-| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads`、`eval` 两个试点已落地，G2 已改为阻断；飞书协议包已落地；飞书认证层、框架厂商中立、G3 和 G4 还没做 |
+| M1. 首批注册表和试点（与阶段 1 同期） | 生成器支持设置分区、搜索 provider 和 slash 命令；试点 `squads`、`eval`，然后是飞书三层；G2、G3、G4 改为阻断 | 试点新增设置分区、搜索 provider 或 slash 命令时，不改任何手写的中央文件；`packages/feishu-protocol` 已建立，框架目录不再 import 飞书适配器。进行中：自 2026-11-05 起，生成器、三份注册表和 `squads`、`eval` 两个试点已落地，G2 已改为阻断；飞书协议包和认证层已落地；框架厂商中立、G3 和 G4 还没做 |
 | 2. 内核移出 UI | 由注册表启动单一属主的 WebView 内核，配套适配器矩阵和大数据量账户的存储预算；抽出聊天引擎；每个运行时初始化器迁移完成，或以物理原因排除；插件契约切换，宿主 API 迁到各自的模块。模块线 M2 在同一阶段完成：`runtimes.adapters` 和 `effects` 取代"初始化器 + 无头"两处维护，表归属从 manifest 读取，只有单一使用者的数据模块随属主搬走；试点 `pet` | 未说明的缺口为 0；内核读取 UI store 为 0；`lib`→`hooks`/`components` 为 0；host-parity 只剩物理原因；第一方插件迁到新契约；`runtime-initializers` 清单清空；基础层 → 模块的边为 0 |
 | M3. 内核汇点（与阶段 3 同期） | 设置键归属；能力端口，先做 `ocr`、`speech`（试点）和 `docs-provider`；能力授予贡献（先过 ADR-0198）；提示词贡献 | 设置 store 的引用文件数、`build-options` 触达的子系统数都在下降 |
 | 3. 工作主干 | 运行表引用台账；统一状态词表；ADR-0247 的承诺 | 所有运行都在台账里 |
@@ -284,7 +284,7 @@ M 开头的各行是 §14 的模块线。它们与内核各阶段并行，遵循
 | 3. 业务实现 | 每个能力端口一个：IM 适配器、云文档、issue 同步、日历、备份、OCR | 归端口所在的模块，或者做成插件 | 凭据只经 ADR-0246 的授权连接获取；只 import 协议库；业务实现之间互不 import |
 
 - 协议库做成包而不是库插件，是因为 ADR-0246 还没有定义库插件怎样服务业务插件（接口版本、账号范围）。它不持有凭据、没有状态，所以可以放心共用。
-- **飞书先做（M1）。** `packages/feishu-protocol` 包含部署定义、scope、PKCE、OAuth 与 tenant token 请求、响应信封、错误码和分页，HTTP 传输由调用方传入。宿主的 token 缓存、用户 token 刷新和重试包装跟凭据放在一起（`lib/connectors/adapters/lark/auth.ts`、`auth-retry.ts`），等认证层迁移时再动。这个包只走源码，通过 `@cognia/feishu-protocol` 路径别名解析。它暂时不进 pnpm workspace：新增 workspace 成员会在锁文件里多一个 importer，导致插件 authoring kit 的 pin 失效。下次重建 kit 时再加入。
+- **飞书先做（M1）。** `packages/feishu-protocol` 包含部署定义、scope、PKCE、OAuth 与 tenant token 请求、响应信封、错误码和分页，HTTP 传输由调用方传入。认证层在 `lib/auth-providers/feishu/`，与 `auth.google` 并列：token 缓存、用户 token 刷新与重试包装、OAuth 发起、待处理记录和回调、宿主连接 provider，以及云文档、issue 同步、Twin 读取时使用的鉴权 API。它调用的 connectors 宿主桥（connectors crate 的 Tauri 绑定、事件监听、服务入口和凭据轮换事件）只依赖基础层，所以归属表把它归到 `tauri`，把 connector OAuth 的 state key 和 scope 审计归到 `oauth`。这次迁移没有新增 G2 边，还偿还了 8 条。这个包只走源码，通过 `@cognia/feishu-protocol` 路径别名解析。它暂时不进 pnpm workspace：新增 workspace 成员会在锁文件里多一个 importer，导致插件 authoring kit 的 pin 失效。下次重建 kit 时再加入。
 - **框架与厂商无关。** IM、云文档、issue 同步、备份、调度这些框架里，不出现厂商名，也不 import 厂商实现。厂商专用的行为，比如飞书的运行展示驱动，由业务实现以贡献的形式提供。由 G8 把守。
 - **一个厂商的全套一起分发。** "一键安装某厂商全套"用 cogset（ADR-0209）组合，这是分发层的打包，不是代码依赖。
 - 同样的拆法适用于 Google（协议库、`auth.google`、Drive 备份和 Docs）、GitHub（由 `octokit-factory` 和 `auth-app` 组成的协议库、GitHub 连接、`forge` 实现、`backup-github`、runner），以及各家订阅（协议库、账号登录，再加订阅、余额、模型目录三个端口的实现）。

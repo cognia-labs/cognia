@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import type { LarkConnectedUser } from "@/lib/connectors/adapters/lark/oauth-handler"
+import type { LarkConnectedUser } from "@/lib/auth-providers/feishu/oauth-handler"
 import { Label } from "@/components/ui/label"
 import {
   Select,

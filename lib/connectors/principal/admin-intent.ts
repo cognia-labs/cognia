@@ -18,7 +18,7 @@
 
 import type { FeishuPrincipalStatus } from "@/lib/db/connector-types"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { beginLarkOAuth } from "@/lib/connectors/adapters/lark/oauth-begin"
+import { beginLarkOAuth } from "@/lib/auth-providers/feishu/oauth-begin"
 import { beginSlackOAuth } from "@/lib/connectors/adapters/slack/oauth-begin"
 import {
   connectorOAuthRelayPath,

@@ -1,7 +1,7 @@
 /**
  * Brain half of the Slack OAuth v2 flow — the authorize step.
  *
- * Mirrors `adapters/lark/oauth-begin.ts` deliberately: the flow is driven end
+ * Mirrors `lib/auth-providers/feishu/oauth-begin.ts` deliberately: the flow is driven end
  * to end by the brain (ADR-0059 host parity), this module mints the `state` and
  * persists it, and `oauth-handler.ts` spends it when the relay hands the code
  * back. Both run in the same process on both hosts.

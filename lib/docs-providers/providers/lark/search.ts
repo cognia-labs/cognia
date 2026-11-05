@@ -11,7 +11,7 @@
  * `drive:drive:readonly`, or `search:docs:read`.
  */
 
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import type { RemoteDocKind, RemoteDocRef } from "@/lib/docs-providers/types"
 
 export const LARK_DOC_SEARCH_PATH = "/open-apis/suite/docs-api/search/object"

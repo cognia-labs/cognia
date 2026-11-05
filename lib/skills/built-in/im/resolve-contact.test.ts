@@ -8,7 +8,7 @@ import { getSharedBuiltInSkillRegistry } from "../registry"
 import "./resolve-contact"
 import { resolveChatCapableAdapter } from "./_helpers"
 import { createLarkChatManagement } from "@/lib/connectors/adapters/lark/chat-management"
-import { getUserAccessToken } from "@/lib/connectors/adapters/lark/auth"
+import { getUserAccessToken } from "@/lib/auth-providers/feishu/auth"
 
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({
@@ -29,7 +29,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 jest.mock("../context", () => ({
   resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "other" }] }),
 }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/auth", () => ({
   getUserAccessToken: jest.fn(),
   getTenantAccessToken: jest.fn(),
 }))

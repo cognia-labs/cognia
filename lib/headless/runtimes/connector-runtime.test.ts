@@ -42,7 +42,7 @@ const mockSubscribe = transport.subscribe as jest.Mock
 const mockTauriInvoke = invoke as jest.Mock
 const mockHandleLarkOAuth = jest.fn()
 
-jest.mock("@/lib/connectors/adapters/lark/oauth-handler", () => ({
+jest.mock("@/lib/auth-providers/feishu/oauth-handler", () => ({
   handleLarkOAuth: (...args: unknown[]) => mockHandleLarkOAuth(...args),
 }))
 

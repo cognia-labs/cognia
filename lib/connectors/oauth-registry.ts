@@ -55,6 +55,6 @@ oauthRegistry.set("slack", async (code: string, state: string): Promise<void> =>
 // ---------------------------------------------------------------------------
 
 oauthRegistry.set("lark", async (code: string, state: string): Promise<void> => {
-  const { handleLarkOAuth } = await import("./adapters/lark/oauth-handler")
+  const { handleLarkOAuth } = await import("@/lib/auth-providers/feishu/oauth-handler")
   await handleLarkOAuth(code, { state })
 })

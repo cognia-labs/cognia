@@ -23,7 +23,7 @@ import { resolveLarkAuth } from "@/lib/skills/built-in/lark/auth-bridge"
 import { execLarkCli } from "@/lib/skills/built-in/lark/exec-lark-cli"
 import { recordedRunMetadata, resolveRunActingIdentity } from "@/lib/execution/acting-authority"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { createUnattendedPark } from "@/lib/claude/unattended-park"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
@@ -79,7 +79,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   ),
   connectorsLarkUserAuth: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/auth", () => ({
   getTenantToken: jest.fn(async () => "tenant"),
 }))
 

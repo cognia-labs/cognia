@@ -37,7 +37,7 @@ import {
   connectorsHealth,
   connectorsKeyringGet,
 } from "@/lib/connectors/tauri/commands"
-import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { getRunningAdapter } from "@/lib/connectors/lifecycle"
 
 export const PASSIVE_HEARTBEAT_INTERVAL_MS = 60_000

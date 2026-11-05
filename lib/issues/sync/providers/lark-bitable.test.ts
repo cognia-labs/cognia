@@ -1,12 +1,9 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
-import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import type { IssueProject, LarkBitableFieldMap } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
-import {
-  resolveLarkConnection,
-  larkConnectionAdapter,
-} from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveLarkConnection, larkConnectionAdapter } from "@/lib/auth-providers/feishu/host-auth"
 import {
   bitableFieldsFromIssue,
   bitableFieldsFromPatch,
@@ -28,10 +25,10 @@ it("describes its built-in resource without migrating its account binding", () =
   ).toEqual({ key: "account:app:table", label: "Backlog" })
 })
 
-jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
+jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   resolveLarkConnection: jest.fn(),
   larkConnectionAdapter: jest.fn(),
 }))

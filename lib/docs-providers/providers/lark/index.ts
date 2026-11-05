@@ -13,11 +13,8 @@
 
 import { hasLarkDocumentSearchScope } from "@cognia/feishu-protocol"
 import { admitPersonalCredential } from "@/lib/execution/personal-credential"
-import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import {
-  listLarkConnections,
-  larkConnectionAdapter,
-} from "@/lib/connectors/adapters/lark/host-auth"
+import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
+import { listLarkConnections, larkConnectionAdapter } from "@/lib/auth-providers/feishu/host-auth"
 import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { localTransport } from "@/lib/tauri/transport-instance"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"

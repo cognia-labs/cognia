@@ -26,11 +26,11 @@ import {
   LarkAccessError,
   withLarkAuthedApi,
   type LarkAuthedApi,
-} from "@/lib/connectors/adapters/lark/authed-api"
+} from "@/lib/auth-providers/feishu/authed-api"
 import { parseLarkDocUrl, type LarkDocRef, type LarkDocRefKind } from "./lark-url"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import type { DocsProviderAccountBinding } from "@/lib/docs-providers/types"
 import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
 import {

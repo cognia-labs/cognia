@@ -1,7 +1,7 @@
 /**
  * Pending-authorization store for the Slack OAuth v2 flow.
  *
- * Mirrors `adapters/lark/oauth-pending.ts`, and for the same reason: the
+ * Mirrors `lib/auth-providers/feishu/oauth-pending.ts`, and for the same reason: the
  * authorize step and the completion step run in different call stacks and,
  * because the relay bounces through a browser, potentially across a restart.
  * The `state` for a durable CSRF check and the exact `redirect_uri` sent to

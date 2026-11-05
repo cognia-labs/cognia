@@ -233,9 +233,9 @@ emit: async (event: NormalizedInboundEvent) => {
 
 | 部分 | Slack | Lark |
 | --- | --- | --- |
-| 发起（铸造并持久化 state） | `adapters/slack/oauth-begin.ts` | `adapters/lark/oauth-begin.ts` |
-| 持久 pending 记录 | `adapters/slack/oauth-pending.ts` | `adapters/lark/oauth-pending.ts` |
-| 完成（校验 + 兑换） | `adapters/slack/oauth-handler.ts` | `adapters/lark/oauth-handler.ts` |
+| 发起（铸造并持久化 state） | `adapters/slack/oauth-begin.ts` | `lib/auth-providers/feishu/oauth-begin.ts` |
+| 持久 pending 记录 | `adapters/slack/oauth-pending.ts` | `lib/auth-providers/feishu/oauth-pending.ts` |
+| 完成（校验 + 兑换） | `adapters/slack/oauth-handler.ts` | `lib/auth-providers/feishu/oauth-handler.ts` |
 
 pending 记录存在连接器 secret store 里，**而不是** `sessionStorage`。headless brain 的 Web Storage 是内存垫片，且打开设置对话框的浏览器是另一个进程 —— 写在那里的 state，需要花掉它的那个进程根本看不见。渲染端 `CONNECTOR_OAUTH_STATE_KEY` 那份副本只是桌面端的预检；持久记录才是权威的 CSRF 校验，并且在兑换之前就被花掉（clear-on-use），所以重放的回跳无法搭上它。
 

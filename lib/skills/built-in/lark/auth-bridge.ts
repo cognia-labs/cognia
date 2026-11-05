@@ -2,7 +2,7 @@
  * Lark-cli auth bridge (ADR-0026).
  *
  * Pulls credentials out of the existing Lark adapter OAuth flow
- * (`lib/connectors/adapters/lark/auth.ts` + `oauth-handler.ts`) and
+ * (`lib/auth-providers/feishu/auth.ts` + `oauth-handler.ts`) and
  * shapes them into env vars the `lark-cli` binary expects so we don't
  * force users to run `lark-cli config init` / `auth login` again.
  *
@@ -25,7 +25,7 @@
 
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
-import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import { resolveBuiltInSkillRunScope, resolveBuiltInSkillSessionBinding } from "../context"
@@ -35,7 +35,7 @@ import {
   resolveLarkRunIdentity,
 } from "./acting-identity"
 import type { BuiltInSkillContext } from "../types"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 
 export type LarkAuthIdentity = "user" | "bot"

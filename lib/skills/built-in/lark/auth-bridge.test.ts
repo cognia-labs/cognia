@@ -20,11 +20,11 @@ import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import { resolveLarkAuth } from "./auth-bridge"
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantAccessToken } from "@/lib/auth-providers/feishu/auth"
 import { resolveBuiltInSkillSessionBinding } from "../context"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 jest.mock("@/lib/db/adapter-instances", () => ({
@@ -51,7 +51,7 @@ jest.mock("../context", () => ({
   resolveBuiltInSkillSessionBinding: jest.fn(),
   resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "alice" }] }),
 }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => {
+jest.mock("@/lib/auth-providers/feishu/auth", () => {
   const getTenantAccessToken = jest.fn()
   return {
     getTenantAccessToken,

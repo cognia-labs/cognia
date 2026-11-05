@@ -49,7 +49,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { addIssueProjectResource } from "@/lib/db/issue-projects"
 import { syncGithubIssueSchedule } from "@/lib/issues/github-sync-schedule"

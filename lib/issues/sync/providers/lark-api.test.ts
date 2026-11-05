@@ -1,12 +1,12 @@
 import { LarkApiError } from "@cognia/feishu-protocol"
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { ExternalSyncRateLimited } from "@/lib/external-services/sync/types"
 import { assertIssueSyncSource } from "../kept-copy-source"
-import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 jest.mock("../kept-copy-source", () => ({ assertIssueSyncSource: jest.fn() }))
-jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
-  ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
+jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/authed-api"),
   withLarkAuthedApi: jest.fn(),
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({

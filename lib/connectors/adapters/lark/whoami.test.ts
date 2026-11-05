@@ -9,16 +9,16 @@
  *   - clock injection: `lastWhoamiAt` honours the optional `now` shim.
  */
 
-import { getTenantToken } from "./auth"
-jest.mock("./auth", () => {
-  const actual = jest.requireActual("./auth")
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
+jest.mock("@/lib/auth-providers/feishu/auth", () => {
+  const actual = jest.requireActual("@/lib/auth-providers/feishu/auth")
   return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
 })
 
 import "fake-indexeddb/auto"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { connectorsHttpRequest, connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
-import { clearTokenCache } from "./auth"
+import { clearTokenCache } from "@/lib/auth-providers/feishu/auth"
 import { LarkWhoamiError, probeBotIdentity } from "./whoami"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 

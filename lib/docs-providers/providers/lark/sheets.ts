@@ -22,7 +22,7 @@ import {
   truncationMarker,
 } from "@/lib/docs-providers/limits"
 import { renderCsvSections, type CsvSection } from "@/lib/docs-providers/csv"
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import { sheetRange } from "./a1"
 
 interface SheetMetaResponse {

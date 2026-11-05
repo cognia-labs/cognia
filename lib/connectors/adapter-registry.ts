@@ -34,7 +34,7 @@ import { createWechatOaAdapter } from "./adapters/wechat-oa"
 import { getWechatOaAccessToken } from "./adapters/wechat-oa/auth"
 import { createDingTalkAdapter } from "./adapters/dingtalk"
 import { getDingTalkAccessToken } from "./adapters/dingtalk/auth"
-import { getTenantToken } from "./adapters/lark/auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { normalizeQuickCommandList } from "@/lib/connectors/quick-commands"
 import { buildPluginAdapter } from "@/lib/connectors/plugin-connector-registry"
 

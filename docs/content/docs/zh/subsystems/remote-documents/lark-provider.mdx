@@ -28,7 +28,7 @@ return rows
 
 ## 一份鉴权 harness
 
-「解析最佳飞书身份、静默刷新、回落机器人」此前只在 `lib/twin/ingest/lark-doc-fetcher.ts` 里实现过一次。与其为电子表格和多维表格复制一份，不如把它抽到 `lib/connectors/adapters/lark/authed-api.ts` 并改写 fetcher 使用它。fetcher 原有的 41 个测试钉死了行为未发生位移。
+「解析最佳飞书身份、静默刷新、回落机器人」此前只在 `lib/twin/ingest/lark-doc-fetcher.ts` 里实现过一次。与其为电子表格和多维表格复制一份，不如把它抽到 `lib/auth-providers/feishu/authed-api.ts` 并改写 fetcher 使用它。fetcher 原有的 41 个测试钉死了行为未发生位移。
 
 ```ts
 export async function withLarkAuthedApi<T>(

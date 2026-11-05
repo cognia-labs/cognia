@@ -9,7 +9,7 @@ import { listServiceConnections, listCapabilityGrants } from "@/lib/db/external-
 import { listPlugins } from "@/lib/db/plugins"
 import { buildConnectionViews } from "@/lib/external-services/connection-view"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
-import { listLarkConnections } from "@/lib/connectors/adapters/lark/host-auth"
+import { listLarkConnections } from "@/lib/auth-providers/feishu/host-auth"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import {

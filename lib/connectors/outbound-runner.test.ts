@@ -3161,7 +3161,7 @@ describe("round 5: personal outbound producer identity", () => {
         }
       ),
     })
-    const { getUserAccessToken } = await import("./adapters/lark/auth")
+    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
     const adapter = makeAdapter(id, async (_request, options) => {
       const context = {
         sessionId: options?.executionIdentity?.sessionId,

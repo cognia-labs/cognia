@@ -3,7 +3,7 @@
  * to keep the deep-link registry pointed at the real platform handlers.
  *
  * Lark exchange is exercised end-to-end in
- * `lib/connectors/adapters/lark/oauth-handler.test.ts` with mocked Dexie +
+ * `lib/auth-providers/feishu/oauth-handler.test.ts` with mocked Dexie +
  * keyring + http; this file just verifies the registry shape so the
  * deep-link router resolves the right handler.
  */

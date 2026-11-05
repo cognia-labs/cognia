@@ -7,7 +7,7 @@
  * taxonomy to the provider taxonomy.
  */
 
-import { LarkAccessError } from "@/lib/connectors/adapters/lark/authed-api"
+import { LarkAccessError } from "@/lib/auth-providers/feishu/authed-api"
 import {
   ConnectionUnavailableError,
   ConnectionRevisionChanged,

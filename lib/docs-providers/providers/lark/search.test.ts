@@ -1,5 +1,5 @@
-import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import { LarkAccessError } from "@/lib/connectors/adapters/lark/authed-api"
+import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
+import { LarkAccessError } from "@/lib/auth-providers/feishu/authed-api"
 import {
   LARK_DOC_SEARCH_PATH,
   LARK_SEARCH_DOCS_TYPES,

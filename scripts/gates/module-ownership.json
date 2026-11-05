@@ -897,6 +897,41 @@
       "why": "Built-in skill of its feature (analysis §11.1 skills)."
     },
     {
+      "prefix": "lib/connectors/tauri/",
+      "owner": "tauri",
+      "why": "Tauri bindings of the connectors crate (keyring, HTTP bridge, Lark user-auth store). Connector host bridge: depends only on the foundation (lib/tauri, lib/platform, lib/db) and is used by kernel auth providers and frameworks, so it sits in the foundation beside lib/tauri, not in the IM module (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/device-plane.ts",
+      "owner": "tauri",
+      "why": "Decides which connector commands ride the device transport. Connector host bridge: depends only on the foundation (lib/tauri, lib/platform, lib/db) and is used by kernel auth providers and frameworks, so it sits in the foundation beside lib/tauri, not in the IM module (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/events.ts",
+      "owner": "tauri",
+      "why": "Tauri event listener for connector events. Connector host bridge: depends only on the foundation (lib/tauri, lib/platform, lib/db) and is used by kernel auth providers and frameworks, so it sits in the foundation beside lib/tauri, not in the IM module (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/server-transport.ts",
+      "owner": "tauri",
+      "why": "The connectors server's port, ingress base and webhook/OAuth relay paths. Connector host bridge: depends only on the foundation (lib/tauri, lib/platform, lib/db) and is used by kernel auth providers and frameworks, so it sits in the foundation beside lib/tauri, not in the IM module (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/credentials-events.ts",
+      "owner": "tauri",
+      "why": "Credentials-rotated events the keyring bridge emits. Connector host bridge: depends only on the foundation (lib/tauri, lib/platform, lib/db) and is used by kernel auth providers and frameworks, so it sits in the foundation beside lib/tauri, not in the IM module (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/oauth-state.ts",
+      "owner": "oauth",
+      "why": "The connector OAuth state key, shared by auth providers and IM OAuth (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
+      "prefix": "lib/connectors/oauth-scope-audit.ts",
+      "owner": "oauth",
+      "why": "Granted-scope audit written at OAuth completion by auth providers and IM OAuth (ADR-0250 §14; Feishu auth layer, M1)."
+    },
+    {
       "prefix": "lib/skills/built-in/lark/",
       "owner": "connectors",
       "why": "Built-in skill of its feature (analysis §11.1 skills)."

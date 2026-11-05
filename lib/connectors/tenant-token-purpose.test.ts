@@ -5,7 +5,7 @@ import { globSync } from "glob"
 import ts from "typescript"
 
 const ROOT = join(__dirname, "..", "..")
-const TOKEN_ENTRY = "lib/connectors/adapters/lark/auth.ts"
+const TOKEN_ENTRY = "lib/auth-providers/feishu/auth.ts"
 const PURPOSES = new Set(["transport", "service-data", "adapter-admin"])
 const LABELLED_HELPERS = new Set(["larkTenantRequest", "withTatRefresh", "getTenantToken"])
 

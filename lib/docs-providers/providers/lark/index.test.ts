@@ -1,4 +1,4 @@
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   listLarkConnections: jest.fn(),
   larkConnectionAdapter: jest.fn(),
 }))
@@ -6,8 +6,8 @@ jest.mock("@/lib/tauri/transport-instance", () => ({
   localTransport: { subscribe: jest.fn(() => jest.fn()) },
   transport: { subscribe: jest.fn(() => jest.fn()) },
 }))
-jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
-  ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
+jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/authed-api"),
   withLarkAuthedApi: jest.fn(),
 }))
 jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
@@ -16,10 +16,7 @@ jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
 }))
 
 import { LarkApiError } from "@cognia/feishu-protocol"
-import {
-  listLarkConnections,
-  larkConnectionAdapter,
-} from "@/lib/connectors/adapters/lark/host-auth"
+import { listLarkConnections, larkConnectionAdapter } from "@/lib/auth-providers/feishu/host-auth"
 import { ConnectionRevisionChanged } from "@/lib/plugin/auth/connection-manager"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
@@ -30,7 +27,7 @@ import {
   LarkAccessError,
   withLarkAuthedApi,
   type LarkAuthedApi,
-} from "@/lib/connectors/adapters/lark/authed-api"
+} from "@/lib/auth-providers/feishu/authed-api"
 import { LarkIngestError, fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { DocsProviderError } from "@/lib/docs-providers/types"

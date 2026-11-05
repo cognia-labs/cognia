@@ -2660,7 +2660,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     expect(delivery).toMatchObject({
       actingIdentity: { rootRunId: origin!.id, trigger: "requester" },
     })
-    const { getUserAccessToken } = await import("./adapters/lark/auth")
+    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
     const context = { sessionId: resumed.sessionId!, executionRunId: delivery.id, delivery: true }
     expect(await getUserAccessToken("adapter_lark", { ...context, larkContext: context })).toBe(
       "owner-token"

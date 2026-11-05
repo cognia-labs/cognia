@@ -25,7 +25,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 const mockWithApi = jest.fn(async (_opts: unknown, fn: (api: unknown) => Promise<unknown>) =>
   fn({})
 )
-jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
+jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
   withLarkAuthedApi: (...a: unknown[]) =>
     mockWithApi(...(a as [unknown, (api: unknown) => Promise<unknown>])),
 }))

@@ -2,11 +2,11 @@ import { spawnSync } from "node:child_process"
 import { resolveLarkAuth } from "./auth-bridge"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
-import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
-import { resolveLarkConnection } from "@/lib/connectors/adapters/lark/host-auth"
+import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
+import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({ resolveLarkConnection: jest.fn() }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 jest.mock("@/lib/db/adapter-instances", () => ({
@@ -14,7 +14,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
   listAdapterInstancesByType: jest.fn(),
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsKeyringGet: jest.fn() }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({ getTenantToken: jest.fn() }))
+jest.mock("@/lib/auth-providers/feishu/auth", () => ({ getTenantToken: jest.fn() }))
 jest.mock("@/lib/execution/acting-authority", () => ({
   observeTenantServiceData: jest.fn(),
   snapshotActingAuthority: jest.fn(async () => undefined),

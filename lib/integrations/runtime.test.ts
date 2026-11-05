@@ -8,12 +8,12 @@ import { installExternalSyncRuntime } from "@/lib/external-services/sync/runtime
 import { syncExternalSyncRenewalSchedule } from "@/lib/external-services/sync/renewal"
 import { startIntegrationRuntime } from "./runtime"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
-import { startLarkHostAuth } from "@/lib/connectors/adapters/lark/host-auth"
+import { startLarkHostAuth } from "@/lib/auth-providers/feishu/host-auth"
 import { startGoogleHostAuth } from "@/lib/auth-providers/google/host-auth"
 jest.mock("@/lib/auth-providers/google/host-auth", () => ({
   startGoogleHostAuth: jest.fn(() => jest.fn()),
 }))
-jest.mock("@/lib/connectors/adapters/lark/host-auth", () => ({
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   startLarkHostAuth: jest.fn(() => jest.fn()),
 }))
 
